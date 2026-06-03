@@ -1,16 +1,16 @@
-﻿{
-    "name": "@agent-anything/platform",
-    "version": "0.0.0",
-    "description": "AgentAnything platform package for runtime, tools, evidence, permissions, reports, and storage contracts.",
-    "main": "dist/index.js",
-    "scripts": {
-        "build": "tsc -p tsconfig.json",
-        "typecheck": "tsc -p tsconfig.json --noEmit",
-        "test": "vitest run --passWithNoTests"
-    },
-    "keywords": [],
-    "author": "",
-    "license": "Apache-2.0",
-    "packageManager": "pnpm@10.33.0",
-    "types": "dist/index.d.ts"
+{
+  "name": "@agent-anything/platform",
+  "version": "0.0.0",
+  "description": "AgentAnything platform package for runtime, tools, evidence, permissions, reports, and storage contracts.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@10.33.0",
+  "types": "dist/index.d.ts"
 }
