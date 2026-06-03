@@ -1,19 +1,19 @@
-{
-  "name": "agent-anything",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "build": "pnpm -r run build",
-    "test": "pnpm -r run test",
-    "typecheck": "pnpm -r run typecheck"
-  },
-  "keywords": [],
-  "author": "vincent",
-  "license": "ISC",
-  "packageManager": "pnpm@10.33.0",
-  "devDependencies": {
-    "typescript": "^5.0.0",
-    "vitest": "^2.0.0"
-  }
+﻿{
+    "name": "agent-anything",
+    "version": "0.0.0",
+    "description": "A TypeScript platform for building tool-using AI agent products with structured tasks, permissions, evidence, and reports.",
+    "scripts": {
+        "build": "pnpm -r run build",
+        "test": "pnpm -r run test",
+        "typecheck": "pnpm -r run typecheck"
+    },
+    "keywords": [],
+    "author": "vincent",
+    "license": "Apache-2.0",
+    "packageManager": "pnpm@10.33.0",
+    "devDependencies": {
+        "typescript": "^5.0.0",
+        "vitest": "^2.0.0"
+    },
+    "private": true
 }

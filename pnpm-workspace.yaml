@@ -1,4 +1,3 @@
 packages:
   - "platform"
-  - "platform/packages/*"
   - "products/*"
