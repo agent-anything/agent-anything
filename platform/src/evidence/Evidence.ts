@@ -1,4 +1,5 @@
 import type { Metadata } from "../shared/types";
+import type { EvidenceSource } from "./EvidenceSource";
 
 export type EvidenceSensitivity = "normal" | "sensitive";
 
@@ -9,11 +10,4 @@ export interface Evidence<TContent = unknown> {
   content: TContent;
   sensitivity: EvidenceSensitivity;
   metadata: Metadata;
-}
-
-export interface EvidenceSource {
-  kind: "toolResult";
-  toolCallId: string;
-  toolName: string;
-  metadata?: Metadata;
 }

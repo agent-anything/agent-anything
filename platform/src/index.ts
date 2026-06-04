@@ -1,18 +1,25 @@
 export type {
   ArtifactRef,
-  EvidenceRef,
   ISODateTimeString,
   Metadata,
 } from "./shared/types";
 
 export type { AgentTask } from "./core/task";
 export type {
+  AgentRuntimeDependencies,
+  CreateDefaultRuntimeInput,
+  PlanToolCalls,
   RuntimeError,
   RuntimeErrorCode,
   RuntimeLimits,
   RuntimeOptions,
   RuntimeResult,
   RuntimeStatus,
+} from "./core/runtime";
+export {
+  AgentRuntime,
+  createDefaultRuntime,
+  defaultRuntimeLimits,
 } from "./core/runtime";
 
 export type {
@@ -23,15 +30,32 @@ export type {
   ToolResultStatus,
   ToolRisk,
 } from "./tools";
+export { ToolRegistry } from "./tools";
 
 export type {
+  CreatePermissionRequestInput,
   PermissionDecision,
   PermissionDecisionStatus,
   PermissionMode,
+  PermissionRisk,
   PermissionRequest,
+  ResolvePermissionDecisionInput,
+} from "./permission";
+export {
+  createPermissionRequest,
+  resolvePermissionDecision,
 } from "./permission";
 
-export type { Evidence, EvidenceSensitivity, EvidenceSource } from "./evidence";
-export type { Report, ReportSection } from "./report";
+export type {
+  BuildEvidenceInput,
+  Evidence,
+  EvidenceRef,
+  EvidenceSensitivity,
+  EvidenceSource,
+} from "./evidence";
+export { EvidenceBuilder } from "./evidence";
+export type { GenerateReportInput, Report, ReportSection } from "./report";
+export { ReportGenerator } from "./report";
 export type { StoragePort, StoredArtifact, StoredArtifactKind } from "./storage";
+export { InMemoryStorage } from "./storage";
 export type { Scenario, ScenarioExpectation } from "./scenarios";

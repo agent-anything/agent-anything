@@ -1,4 +1,5 @@
 import type { EvidenceRef, ISODateTimeString, Metadata } from "../shared/types";
+import type { ReportSection } from "./ReportSection";
 
 export interface Report {
   id: string;
@@ -8,11 +9,4 @@ export interface Report {
   evidenceRefs: EvidenceRef[];
   createdAt: ISODateTimeString;
   metadata: Metadata;
-}
-
-export interface ReportSection {
-  title: string;
-  content: string;
-  evidenceRefs: EvidenceRef[];
-  metadata?: Metadata;
 }
