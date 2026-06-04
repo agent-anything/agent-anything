@@ -1,0 +1,16 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "pnpm: build",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["--filter", "net-doctor...", "build"],
+      "options": {
+        "cwd": "${workspaceFolder}/../.."
+      },
+      "group": "build",
+      "problemMatcher": "$tsc"
+    }
+  ]
+}

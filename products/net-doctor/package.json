@@ -1,19 +1,48 @@
 {
-  "name": "@agent-anything/net-doctor",
+  "name": "net-doctor",
+  "displayName": "NetDoctor",
   "version": "0.0.0",
+  "publisher": "agent-anything",
+  "type": "module",
   "description": "NetDoctor, a VS Code-based network diagnostic agent built on AgentAnything.",
-  "main": "dist/index.js",
+  "categories": [
+    "Other"
+  ],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "activationEvents": [
+    "onCommand:netDoctor.diagnoseTarget"
+  ],
+  "main": "./dist/extension.js",
+  "types": "./dist/extension.d.ts",
+  "contributes": {
+    "commands": [
+      {
+        "command": "netDoctor.diagnoseTarget",
+        "title": "NetDoctor: Diagnose Target"
+      }
+    ]
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "vscode:prepublish": "pnpm run build"
   },
-  "keywords": [],
+  "keywords": [
+    "agent",
+    "network",
+    "diagnostics",
+    "vscode"
+  ],
   "author": "",
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.33.0",
-  "types": "dist/index.d.ts",
-    "dependencies": {
-        "@agent-anything/platform": "workspace:*"
-    }
+  "dependencies": {
+    "@agent-anything/platform": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1"
+  }
 }
