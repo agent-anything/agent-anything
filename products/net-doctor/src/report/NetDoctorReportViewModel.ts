@@ -174,9 +174,18 @@ function createNextSteps(input: {
     ];
   }
 
+  const dns = findEvidence(input.evidence, "dnsLookup");
   const tcp = findEvidence(input.evidence, "tcpConnect");
   const http = findEvidence(input.evidence, "httpReachability");
   const proxy = findEvidence(input.evidence, "proxyConfig");
+
+  if (dns && getArrayLength(dns.content, "addresses") === 0) {
+    return [
+      "Verify the target hostname is correct and expected to resolve from this network.",
+      "Check whether VPN, enterprise DNS, or DNS suffix configuration is required for this target.",
+      "Run the diagnosis again after DNS, VPN, or network changes.",
+    ];
+  }
 
   if (tcp && getBoolean(tcp.content, "reachable") === false) {
     return [

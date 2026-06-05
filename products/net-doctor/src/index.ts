@@ -16,6 +16,10 @@ export {
   type NetDoctorReportViewModel,
 } from "./report/index.js";
 export {
+  LocalNetDoctorStorage,
+  type NetDoctorTaskHistoryEntry,
+} from "./storage/index.js";
+export {
   createDnsLookupTool,
   createHttpReachabilityTool,
   createProxyConfigTool,

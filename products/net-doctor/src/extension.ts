@@ -2,13 +2,13 @@ import * as vscode from "vscode";
 import {
   createDefaultRuntime,
   type Evidence,
-  InMemoryStorage,
   ToolRegistry,
   type RuntimeResult,
 } from "@agent-anything/platform";
 import { NetDoctorEvidenceBuilder } from "./evidence/index.js";
 import { createNetDoctorTask } from "./input/index.js";
 import { openReportPanel } from "./report/index.js";
+import { LocalNetDoctorStorage } from "./storage/index.js";
 import { registerNetDoctorTools } from "./tools/index.js";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -56,7 +56,7 @@ export function activate(context: vscode.ExtensionContext): void {
             title: "NetDoctor is diagnosing target...",
             cancellable: false,
           },
-          async () => runDiagnosis(target, symptom),
+          async () => runDiagnosis(target, symptom, context.globalStorageUri.fsPath),
         );
 
         writeRuntimeResult(output, result);
@@ -86,6 +86,7 @@ export function deactivate(): void {
 async function runDiagnosis(
   target: string,
   symptom: string,
+  storageRoot: string,
 ): Promise<{
   task: ReturnType<typeof createNetDoctorTask>;
   result: RuntimeResult;
@@ -97,7 +98,8 @@ async function runDiagnosis(
   });
   const toolRegistry = new ToolRegistry();
   registerNetDoctorTools(toolRegistry);
-  const storage = new InMemoryStorage();
+  const storage = new LocalNetDoctorStorage(storageRoot, task.id);
+  await storage.storeTask(task);
 
   const runtime = createDefaultRuntime({
     toolRegistry,
@@ -110,6 +112,7 @@ async function runDiagnosis(
     },
   });
   const result = await runtime.run(task);
+  await storage.storeRuntimeResult(result);
 
   return {
     task,

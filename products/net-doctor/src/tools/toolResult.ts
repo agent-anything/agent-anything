@@ -3,7 +3,7 @@ import type { Metadata, ToolCall, ToolResult } from "@agent-anything/platform";
 export function createSucceededToolResult<TOutput>(
   call: ToolCall,
   output: TOutput,
-  metadata: Metadata = {},
+  metadata: Metadata = call.metadata,
 ): ToolResult<TOutput> {
   const now = new Date().toISOString();
 
@@ -23,7 +23,7 @@ export function createFailedToolResult<TOutput = unknown>(
   call: ToolCall,
   code: string,
   message: string,
-  metadata: Metadata = {},
+  metadata: Metadata = call.metadata,
 ): ToolResult<TOutput> {
   const now = new Date().toISOString();
 
