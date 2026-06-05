@@ -6,6 +6,7 @@ import {
   type RuntimeResult,
 } from "@agent-anything/platform";
 import { createNetDoctorTask } from "./input/index.js";
+import { openReportPanel } from "./report/index.js";
 import { registerNetDoctorTools } from "./tools/index.js";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -57,8 +58,12 @@ export function activate(context: vscode.ExtensionContext): void {
         );
 
         writeRuntimeResult(output, result);
+        openReportPanel({
+          taskInput: result.task.input,
+          result: result.result,
+        });
         await vscode.window.showInformationMessage(
-          `NetDoctor diagnosis ${result.status}.`,
+          `NetDoctor diagnosis ${result.result.status}.`,
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : "Diagnosis failed.";
@@ -78,7 +83,10 @@ export function deactivate(): void {
 async function runDiagnosis(
   target: string,
   symptom: string,
-): Promise<RuntimeResult> {
+): Promise<{
+  task: ReturnType<typeof createNetDoctorTask>;
+  result: RuntimeResult;
+}> {
   const task = createNetDoctorTask({
     target,
     symptom,
@@ -96,22 +104,27 @@ async function runDiagnosis(
     },
   });
 
-  return runtime.run(task);
+  return {
+    task,
+    result: await runtime.run(task),
+  };
 }
 
 function writeRuntimeResult(
   output: vscode.OutputChannel,
-  result: RuntimeResult,
+  result: {
+    result: RuntimeResult;
+  },
 ): void {
-  output.appendLine(`Status: ${result.status}`);
-  output.appendLine(`Report: ${result.reportRef ?? "(none)"}`);
-  output.appendLine(`Evidence: ${result.evidenceRefs.join(", ") || "(none)"}`);
-  output.appendLine(`Artifacts: ${result.artifactRefs.join(", ") || "(none)"}`);
+  output.appendLine(`Status: ${result.result.status}`);
+  output.appendLine(`Report: ${result.result.reportRef ?? "(none)"}`);
+  output.appendLine(`Evidence: ${result.result.evidenceRefs.join(", ") || "(none)"}`);
+  output.appendLine(`Artifacts: ${result.result.artifactRefs.join(", ") || "(none)"}`);
 
-  if (result.errors.length > 0) {
+  if (result.result.errors.length > 0) {
     output.appendLine("");
     output.appendLine("Errors:");
-    for (const error of result.errors) {
+    for (const error of result.result.errors) {
       output.appendLine(`- ${error.code}: ${error.message}`);
     }
   }

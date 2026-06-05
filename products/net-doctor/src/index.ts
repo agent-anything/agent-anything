@@ -6,6 +6,13 @@ export {
   type CreateNetDoctorTaskInput,
 } from "./input/index.js";
 export {
+  createNetDoctorReportViewModel,
+  openReportPanel,
+  renderReportHtml,
+  type NetDoctorReportCheck,
+  type NetDoctorReportViewModel,
+} from "./report/index.js";
+export {
   createDnsLookupTool,
   createHttpReachabilityTool,
   createProxyConfigTool,
