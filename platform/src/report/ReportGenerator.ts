@@ -1,7 +1,7 @@
-import type { AgentTask } from "../core/task";
-import type { Evidence } from "../evidence";
-import type { Metadata } from "../shared/types";
-import type { Report } from "./Report";
+import type { AgentTask } from "../core/task/index.js";
+import type { Evidence } from "../evidence/index.js";
+import type { Metadata } from "../shared/types.js";
+import type { Report } from "./Report.js";
 
 export interface GenerateReportInput {
   task: AgentTask;

@@ -1,4 +1,4 @@
-import type { ISODateTimeString, Metadata } from "../../shared/types";
+import type { ISODateTimeString, Metadata } from "../../shared/types.js";
 
 export interface AgentTask<TInput = unknown> {
   id: string;

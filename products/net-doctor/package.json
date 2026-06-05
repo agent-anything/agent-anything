@@ -43,6 +43,7 @@
     "@agent-anything/platform": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^25.9.1"
+    "@types/node": "^25.9.1",
+    "@types/vscode": "^1.120.0"
   }
 }

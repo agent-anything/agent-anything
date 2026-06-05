@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { Evidence } from "../evidence";
-import type { Report } from "../report";
-import { InMemoryStorage } from "./InMemoryStorage";
-import type { StoragePort } from "./StoragePort";
+import type { Evidence } from "../evidence/index.js";
+import type { Report } from "../report/index.js";
+import { InMemoryStorage } from "./InMemoryStorage.js";
+import type { StoragePort } from "./StoragePort.js";
 
 describe("InMemoryStorage", () => {
   it("stores a report artifact", async () => {

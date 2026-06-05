@@ -1,5 +1,5 @@
-export type { ToolRisk } from "./ToolRisk";
-export type { ToolCall } from "./ToolCall";
-export type { ToolDefinition } from "./ToolDefinition";
-export type { ToolResult, ToolResultError, ToolResultStatus } from "./ToolResult";
-export { ToolRegistry } from "./ToolRegistry";
+export type { ToolRisk } from "./ToolRisk.js";
+export type { ToolCall } from "./ToolCall.js";
+export type { ToolDefinition } from "./ToolDefinition.js";
+export type { ToolResult, ToolResultError, ToolResultStatus } from "./ToolResult.js";
+export { ToolRegistry } from "./ToolRegistry.js";

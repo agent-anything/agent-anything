@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ToolResult } from "../tools";
-import { EvidenceBuilder } from "./EvidenceBuilder";
+import type { ToolResult } from "../tools/index.js";
+import { EvidenceBuilder } from "./EvidenceBuilder.js";
 
 describe("EvidenceBuilder", () => {
   it("builds evidence from a successful tool result", () => {

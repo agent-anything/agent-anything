@@ -1,5 +1,5 @@
-import type { Metadata } from "../shared/types";
-import type { PermissionRisk } from "./PermissionRisk";
+import type { Metadata } from "../shared/types.js";
+import type { PermissionRisk } from "./PermissionRisk.js";
 
 export interface PermissionRequest {
   id: string;

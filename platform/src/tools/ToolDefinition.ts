@@ -1,7 +1,7 @@
-import type { Metadata } from "../shared/types";
-import type { ToolCall } from "./ToolCall";
-import type { ToolResult } from "./ToolResult";
-import type { ToolRisk } from "./ToolRisk";
+import type { Metadata } from "../shared/types.js";
+import type { ToolCall } from "./ToolCall.js";
+import type { ToolResult } from "./ToolResult.js";
+import type { ToolRisk } from "./ToolRisk.js";
 
 export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   name: string;

@@ -1,7 +1,7 @@
-import type { Metadata } from "../shared/types";
-import type { ToolCall } from "./ToolCall";
-import type { ToolDefinition } from "./ToolDefinition";
-import type { ToolResult } from "./ToolResult";
+import type { Metadata } from "../shared/types.js";
+import type { ToolCall } from "./ToolCall.js";
+import type { ToolDefinition } from "./ToolDefinition.js";
+import type { ToolResult } from "./ToolResult.js";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition>();

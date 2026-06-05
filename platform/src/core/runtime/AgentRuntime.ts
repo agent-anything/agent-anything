@@ -1,16 +1,16 @@
-import type { AgentTask } from "../task";
-import type { Evidence, EvidenceBuilder } from "../../evidence";
+import type { AgentTask } from "../task/index.js";
+import type { Evidence, EvidenceBuilder } from "../../evidence/index.js";
 import {
   createPermissionRequest,
   resolvePermissionDecision,
-} from "../../permission";
-import type { ReportGenerator } from "../../report";
-import type { StoragePort } from "../../storage";
-import type { ToolCall, ToolRegistry, ToolResult } from "../../tools";
-import type { Metadata } from "../../shared/types";
-import type { RuntimeError, RuntimeErrorCode } from "./RuntimeError";
-import type { RuntimeOptions } from "./RuntimeOptions";
-import type { RuntimeResult } from "./RuntimeResult";
+} from "../../permission/index.js";
+import type { ReportGenerator } from "../../report/index.js";
+import type { StoragePort } from "../../storage/index.js";
+import type { ToolCall, ToolRegistry, ToolResult } from "../../tools/index.js";
+import type { Metadata } from "../../shared/types.js";
+import type { RuntimeError, RuntimeErrorCode } from "./RuntimeError.js";
+import type { RuntimeOptions } from "./RuntimeOptions.js";
+import type { RuntimeResult } from "./RuntimeResult.js";
 
 export type PlanToolCalls = (
   task: AgentTask,

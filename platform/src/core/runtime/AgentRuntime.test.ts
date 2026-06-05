@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { Evidence } from "../../evidence";
-import { EvidenceBuilder } from "../../evidence";
-import type { Report } from "../../report";
-import { ReportGenerator } from "../../report";
-import { InMemoryStorage, type StoragePort } from "../../storage";
+import type { Evidence } from "../../evidence/index.js";
+import { EvidenceBuilder } from "../../evidence/index.js";
+import type { Report } from "../../report/index.js";
+import { ReportGenerator } from "../../report/index.js";
+import { InMemoryStorage, type StoragePort } from "../../storage/index.js";
 import {
   ToolRegistry,
   type ToolCall,
   type ToolDefinition,
   type ToolResult,
-} from "../../tools";
-import type { AgentTask } from "../task";
-import { AgentRuntime } from "./AgentRuntime";
-import { createDefaultRuntime } from "./createDefaultRuntime";
-import type { RuntimeOptions } from "./RuntimeOptions";
+} from "../../tools/index.js";
+import type { AgentTask } from "../task/index.js";
+import { AgentRuntime } from "./AgentRuntime.js";
+import { createDefaultRuntime } from "./createDefaultRuntime.js";
+import type { RuntimeOptions } from "./RuntimeOptions.js";
 
 describe("AgentRuntime", () => {
   it("runs a minimal task successfully", async () => {

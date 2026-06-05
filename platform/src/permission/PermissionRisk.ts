@@ -1,3 +1,3 @@
-import type { ToolRisk } from "../tools";
+import type { ToolRisk } from "../tools/index.js";
 
 export type PermissionRisk = ToolRisk;

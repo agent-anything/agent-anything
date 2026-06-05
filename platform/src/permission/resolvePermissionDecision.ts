@@ -1,7 +1,7 @@
-import type { ISODateTimeString } from "../shared/types";
-import type { PermissionDecision } from "./PermissionDecision";
-import type { PermissionMode } from "./PermissionMode";
-import type { PermissionRequest } from "./PermissionRequest";
+import type { ISODateTimeString } from "../shared/types.js";
+import type { PermissionDecision } from "./PermissionDecision.js";
+import type { PermissionMode } from "./PermissionMode.js";
+import type { PermissionRequest } from "./PermissionRequest.js";
 
 export interface ResolvePermissionDecisionInput {
   permissionMode: PermissionMode;

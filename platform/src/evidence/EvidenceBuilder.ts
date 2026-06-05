@@ -1,6 +1,6 @@
-import type { Metadata } from "../shared/types";
-import type { ToolResult } from "../tools";
-import type { Evidence, EvidenceSensitivity } from "./Evidence";
+import type { Metadata } from "../shared/types.js";
+import type { ToolResult } from "../tools/index.js";
+import type { Evidence, EvidenceSensitivity } from "./Evidence.js";
 
 export interface BuildEvidenceInput {
   toolResult: ToolResult;

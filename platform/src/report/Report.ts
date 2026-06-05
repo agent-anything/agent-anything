@@ -1,5 +1,5 @@
-import type { EvidenceRef, ISODateTimeString, Metadata } from "../shared/types";
-import type { ReportSection } from "./ReportSection";
+import type { EvidenceRef, ISODateTimeString, Metadata } from "../shared/types.js";
+import type { ReportSection } from "./ReportSection.js";
 
 export interface Report {
   id: string;

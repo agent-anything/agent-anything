@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "../shared/types";
+import type { ISODateTimeString } from "../shared/types.js";
 
 export type PermissionDecisionStatus = "allowed" | "denied";
 

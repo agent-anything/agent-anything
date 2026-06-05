@@ -1,1 +1,1 @@
-export type { AgentTask } from "./AgentTask";
+export type { AgentTask } from "./AgentTask.js";

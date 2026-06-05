@@ -1,4 +1,4 @@
-import type { EvidenceRef, Metadata } from "../shared/types";
+import type { EvidenceRef, Metadata } from "../shared/types.js";
 
 export interface ReportSection {
   title: string;

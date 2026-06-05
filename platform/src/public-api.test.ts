@@ -5,7 +5,7 @@ import {
   ToolRegistry,
   type AgentTask,
   type ToolDefinition,
-} from "./index";
+} from "./index.js";
 
 describe("Phase1 public API", () => {
   it("runs the minimal Phase1 flow through public exports", async () => {

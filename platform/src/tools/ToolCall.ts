@@ -1,5 +1,5 @@
-import type { Metadata } from "../shared/types";
-import type { ToolRisk } from "./ToolRisk";
+import type { Metadata } from "../shared/types.js";
+import type { ToolRisk } from "./ToolRisk.js";
 
 export interface ToolCall<TInput = unknown> {
   id: string;

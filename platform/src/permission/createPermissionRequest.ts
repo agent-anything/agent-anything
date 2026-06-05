@@ -1,6 +1,6 @@
-import type { Metadata } from "../shared/types";
-import type { ToolCall } from "../tools";
-import type { PermissionRequest } from "./PermissionRequest";
+import type { Metadata } from "../shared/types.js";
+import type { ToolCall } from "../tools/index.js";
+import type { PermissionRequest } from "./PermissionRequest.js";
 
 export interface CreatePermissionRequestInput {
   id: string;

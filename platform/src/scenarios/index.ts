@@ -1,1 +1,1 @@
-export type { Scenario, ScenarioExpectation } from "./Scenario";
+export type { Scenario, ScenarioExpectation } from "./Scenario.js";

@@ -1,4 +1,4 @@
-import type { ArtifactRef, ISODateTimeString, Metadata } from "../shared/types";
+import type { ArtifactRef, ISODateTimeString, Metadata } from "../shared/types.js";
 
 export type StoredArtifactKind = "report" | "evidence";
 

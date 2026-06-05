@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createPermissionRequest } from "./createPermissionRequest";
-import { resolvePermissionDecision } from "./resolvePermissionDecision";
+import { createPermissionRequest } from "./createPermissionRequest.js";
+import { resolvePermissionDecision } from "./resolvePermissionDecision.js";
 
 describe("Phase1 permission mode", () => {
   it("creates a structured permission request from a risky tool call", () => {

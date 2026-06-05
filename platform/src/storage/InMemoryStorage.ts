@@ -1,7 +1,7 @@
-import type { Evidence } from "../evidence";
-import type { Report } from "../report";
-import type { StoragePort } from "./StoragePort";
-import type { StoredArtifact, StoredArtifactKind } from "./StoredArtifact";
+import type { Evidence } from "../evidence/index.js";
+import type { Report } from "../report/index.js";
+import type { StoragePort } from "./StoragePort.js";
+import type { StoredArtifact, StoredArtifactKind } from "./StoredArtifact.js";
 
 export class InMemoryStorage implements StoragePort {
   private readonly artifacts = new Map<string, StoredArtifact>();

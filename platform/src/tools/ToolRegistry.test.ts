@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { ToolRegistry } from "./ToolRegistry";
-import type { ToolCall } from "./ToolCall";
-import type { ToolDefinition } from "./ToolDefinition";
+import { ToolRegistry } from "./ToolRegistry.js";
+import type { ToolCall } from "./ToolCall.js";
+import type { ToolDefinition } from "./ToolDefinition.js";
 
 describe("ToolRegistry", () => {
   it("registers and finds one tool", () => {

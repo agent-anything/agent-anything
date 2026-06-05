@@ -2,9 +2,9 @@ export type {
   ArtifactRef,
   ISODateTimeString,
   Metadata,
-} from "./shared/types";
+} from "./shared/types.js";
 
-export type { AgentTask } from "./core/task";
+export type { AgentTask } from "./core/task/index.js";
 export type {
   AgentRuntimeDependencies,
   CreateDefaultRuntimeInput,
@@ -15,12 +15,12 @@ export type {
   RuntimeOptions,
   RuntimeResult,
   RuntimeStatus,
-} from "./core/runtime";
+} from "./core/runtime/index.js";
 export {
   AgentRuntime,
   createDefaultRuntime,
   defaultRuntimeLimits,
-} from "./core/runtime";
+} from "./core/runtime/index.js";
 
 export type {
   ToolCall,
@@ -29,8 +29,8 @@ export type {
   ToolResultError,
   ToolResultStatus,
   ToolRisk,
-} from "./tools";
-export { ToolRegistry } from "./tools";
+} from "./tools/index.js";
+export { ToolRegistry } from "./tools/index.js";
 
 export type {
   CreatePermissionRequestInput,
@@ -40,11 +40,11 @@ export type {
   PermissionRisk,
   PermissionRequest,
   ResolvePermissionDecisionInput,
-} from "./permission";
+} from "./permission/index.js";
 export {
   createPermissionRequest,
   resolvePermissionDecision,
-} from "./permission";
+} from "./permission/index.js";
 
 export type {
   BuildEvidenceInput,
@@ -52,10 +52,10 @@ export type {
   EvidenceRef,
   EvidenceSensitivity,
   EvidenceSource,
-} from "./evidence";
-export { EvidenceBuilder } from "./evidence";
-export type { GenerateReportInput, Report, ReportSection } from "./report";
-export { ReportGenerator } from "./report";
-export type { StoragePort, StoredArtifact, StoredArtifactKind } from "./storage";
-export { InMemoryStorage } from "./storage";
-export type { Scenario, ScenarioExpectation } from "./scenarios";
+} from "./evidence/index.js";
+export { EvidenceBuilder } from "./evidence/index.js";
+export type { GenerateReportInput, Report, ReportSection } from "./report/index.js";
+export { ReportGenerator } from "./report/index.js";
+export type { StoragePort, StoredArtifact, StoredArtifactKind } from "./storage/index.js";
+export { InMemoryStorage } from "./storage/index.js";
+export type { Scenario, ScenarioExpectation } from "./scenarios/index.js";

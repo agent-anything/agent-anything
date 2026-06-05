@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { AgentTask } from "../core/task";
-import type { Evidence } from "../evidence";
-import { ReportGenerator } from "./ReportGenerator";
+import type { AgentTask } from "../core/task/index.js";
+import type { Evidence } from "../evidence/index.js";
+import { ReportGenerator } from "./ReportGenerator.js";
 
 describe("ReportGenerator", () => {
   it("generates a report from task metadata and evidence refs", () => {

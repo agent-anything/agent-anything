@@ -1,12 +1,12 @@
-import { EvidenceBuilder } from "../../evidence";
-import type { PermissionMode } from "../../permission";
-import { ReportGenerator } from "../../report";
-import type { Metadata } from "../../shared/types";
-import type { StoragePort } from "../../storage";
-import type { ToolCall, ToolRegistry } from "../../tools";
-import type { AgentTask } from "../task";
-import { AgentRuntime, type PlanToolCalls } from "./AgentRuntime";
-import type { RuntimeLimits } from "./RuntimeLimits";
+import { EvidenceBuilder } from "../../evidence/index.js";
+import type { PermissionMode } from "../../permission/index.js";
+import { ReportGenerator } from "../../report/index.js";
+import type { Metadata } from "../../shared/types.js";
+import type { StoragePort } from "../../storage/index.js";
+import type { ToolCall, ToolRegistry } from "../../tools/index.js";
+import type { AgentTask } from "../task/index.js";
+import { AgentRuntime, type PlanToolCalls } from "./AgentRuntime.js";
+import type { RuntimeLimits } from "./RuntimeLimits.js";
 
 export const defaultRuntimeLimits: RuntimeLimits = {
   maxToolCalls: 5,

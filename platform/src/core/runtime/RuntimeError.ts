@@ -1,4 +1,4 @@
-import type { Metadata } from "../../shared/types";
+import type { Metadata } from "../../shared/types.js";
 
 export type RuntimeErrorCode =
   | "permission_denied"

@@ -1,5 +1,5 @@
-import type { ArtifactRef, EvidenceRef, Metadata } from "../../shared/types";
-import type { RuntimeError } from "./RuntimeError";
+import type { ArtifactRef, EvidenceRef, Metadata } from "../../shared/types.js";
+import type { RuntimeError } from "./RuntimeError.js";
 
 export type RuntimeStatus = "succeeded" | "failed";
 

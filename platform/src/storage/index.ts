@@ -1,3 +1,3 @@
-export type { StoragePort } from "./StoragePort";
-export type { StoredArtifact, StoredArtifactKind } from "./StoredArtifact";
-export { InMemoryStorage } from "./InMemoryStorage";
+export type { StoragePort } from "./StoragePort.js";
+export type { StoredArtifact, StoredArtifactKind } from "./StoredArtifact.js";
+export { InMemoryStorage } from "./InMemoryStorage.js";
