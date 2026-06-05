@@ -9,7 +9,7 @@ describe("renderReportHtml", () => {
     expect(html).toContain("NetDoctor Report");
     expect(html).toContain("succeeded");
     expect(html).toContain("example.com");
-    expect(html).toContain("NetDoctor completed the Phase1 diagnosis flow.");
+    expect(html).toContain("did not find an obvious DNS, TCP, HTTP, or proxy blocker");
   });
 
   it("renders failed report", () => {
@@ -26,9 +26,24 @@ describe("renderReportHtml", () => {
   });
 
   it("renders evidence references", () => {
-    const html = renderReportHtml(createModel({ evidenceRefs: ["evidence_001"] }));
+    const html = renderReportHtml(
+      createModel({
+        evidence: [
+          {
+            id: "evidence_001",
+            toolName: "netDoctor.dnsLookup",
+            evidenceKind: "dnsLookup",
+            summary: "example.com resolved to 1 address.",
+            sensitivity: "normal",
+            content: {},
+          },
+        ],
+        evidenceRefs: ["evidence_001"],
+      }),
+    );
 
     expect(html).toContain("evidence_001");
+    expect(html).toContain("example.com resolved to 1 address.");
   });
 
   it("does not expose raw metadata by default", () => {
@@ -51,12 +66,16 @@ function createModel(
       {
         name: "DNS lookup",
         toolName: "netDoctor.dnsLookup",
+        evidenceId: null,
+        summary: null,
+        sensitivity: null,
       },
     ],
+    evidence: [],
     evidenceRefs: [],
     artifactRefs: [],
     reportRef: "artifact_report_report_task_001",
-    conclusion: "NetDoctor completed the Phase1 diagnosis flow.",
+    conclusion: "NetDoctor completed the Phase1 diagnosis flow and did not find an obvious DNS, TCP, HTTP, or proxy blocker in the collected evidence.",
     nextSteps: ["Review the checks performed."],
     errors: [],
     ...overrides,

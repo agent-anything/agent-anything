@@ -11,9 +11,6 @@
   "engines": {
     "vscode": "^1.90.0"
   },
-  "activationEvents": [
-    "onCommand:netDoctor.diagnoseTarget"
-  ],
   "main": "./dist/extension.js",
   "types": "./dist/extension.d.ts",
   "contributes": {

@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import {
   createDefaultRuntime,
+  type Evidence,
   InMemoryStorage,
   ToolRegistry,
   type RuntimeResult,
@@ -62,6 +63,7 @@ export function activate(context: vscode.ExtensionContext): void {
         openReportPanel({
           taskInput: result.task.input,
           result: result.result,
+          evidence: result.evidence,
         });
         await vscode.window.showInformationMessage(
           `NetDoctor diagnosis ${result.result.status}.`,
@@ -87,6 +89,7 @@ async function runDiagnosis(
 ): Promise<{
   task: ReturnType<typeof createNetDoctorTask>;
   result: RuntimeResult;
+  evidence: Evidence[];
 }> {
   const task = createNetDoctorTask({
     target,
@@ -94,21 +97,26 @@ async function runDiagnosis(
   });
   const toolRegistry = new ToolRegistry();
   registerNetDoctorTools(toolRegistry);
+  const storage = new InMemoryStorage();
 
   const runtime = createDefaultRuntime({
     toolRegistry,
     permissionMode: "allowAll",
-    storage: new InMemoryStorage(),
+    storage,
     evidenceBuilder: new NetDoctorEvidenceBuilder(),
     metadata: {
       source: "vscode-extension",
       product: "net-doctor",
     },
   });
+  const result = await runtime.run(task);
 
   return {
     task,
-    result: await runtime.run(task),
+    result,
+    evidence: result.evidenceRefs
+      .map((id) => storage.getEvidence(id))
+      .filter((item): item is Evidence => item !== undefined),
   };
 }
 

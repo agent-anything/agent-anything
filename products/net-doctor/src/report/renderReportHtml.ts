@@ -33,6 +33,11 @@ export function renderReportHtml(model: NetDoctorReportViewModel): string {
     </section>
 
     <section>
+      <h2>Key Evidence</h2>
+      ${renderEvidence(model)}
+    </section>
+
+    <section>
       <h2>Evidence References</h2>
       ${renderStringList(model.evidenceRefs)}
     </section>
@@ -64,8 +69,25 @@ function renderChecks(model: NetDoctorReportViewModel): string {
 
   return `<ul>${model.checks
     .map(
-      (check) =>
-        `<li>${escapeHtml(check.name)} <span class="muted">(${escapeHtml(check.toolName)})</span></li>`,
+      (check) => `<li>
+        <div>${escapeHtml(check.name)} <span class="muted">(${escapeHtml(check.toolName)})</span></div>
+        ${check.summary === null ? '<div class="muted">No evidence summary available.</div>' : `<div>${escapeHtml(check.summary)}${renderSensitivity(check.sensitivity)}</div>`}
+      </li>`,
+    )
+    .join("")}</ul>`;
+}
+
+function renderEvidence(model: NetDoctorReportViewModel): string {
+  if (model.evidence.length === 0) {
+    return '<p class="muted">(none)</p>';
+  }
+
+  return `<ul>${model.evidence
+    .map(
+      (evidence) => `<li>
+        <div><code>${escapeHtml(evidence.id)}</code> <span class="muted">(${escapeHtml(evidence.evidenceKind)})</span>${renderSensitivity(evidence.sensitivity)}</div>
+        <div>${escapeHtml(evidence.summary)}</div>
+      </li>`,
     )
     .join("")}</ul>`;
 }
@@ -84,6 +106,14 @@ function renderErrors(model: NetDoctorReportViewModel): string {
       )
       .join("")}</ul>
   </section>`;
+}
+
+function renderSensitivity(sensitivity: string | null): string {
+  if (sensitivity !== "sensitive") {
+    return "";
+  }
+
+  return ' <span class="muted">(sensitive)</span>';
 }
 
 function renderStringList(items: string[]): string {
