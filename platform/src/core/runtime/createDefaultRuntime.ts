@@ -18,6 +18,7 @@ export interface CreateDefaultRuntimeInput {
   toolRegistry: ToolRegistry;
   permissionMode: PermissionMode;
   storage: StoragePort;
+  evidenceBuilder?: EvidenceBuilder;
   limits?: Partial<RuntimeLimits>;
   metadata?: Metadata;
   planToolCalls?: PlanToolCalls;
@@ -29,7 +30,7 @@ export function createDefaultRuntime(
   return new AgentRuntime(
     {
       toolRegistry: input.toolRegistry,
-      evidenceBuilder: new EvidenceBuilder(),
+      evidenceBuilder: input.evidenceBuilder ?? new EvidenceBuilder(),
       reportGenerator: new ReportGenerator(),
       storage: input.storage,
       planToolCalls: input.planToolCalls ?? readToolCallsFromTaskInput,

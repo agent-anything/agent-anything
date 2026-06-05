@@ -1,5 +1,8 @@
 export type { NetDoctorInput, NormalizedTarget } from "./input/index.js";
 export {
+  NetDoctorEvidenceBuilder,
+} from "./evidence/index.js";
+export {
   createNetDoctorTask,
   parseSymptom,
   parseTarget,

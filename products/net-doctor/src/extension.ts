@@ -5,6 +5,7 @@ import {
   ToolRegistry,
   type RuntimeResult,
 } from "@agent-anything/platform";
+import { NetDoctorEvidenceBuilder } from "./evidence/index.js";
 import { createNetDoctorTask } from "./input/index.js";
 import { openReportPanel } from "./report/index.js";
 import { registerNetDoctorTools } from "./tools/index.js";
@@ -98,6 +99,7 @@ async function runDiagnosis(
     toolRegistry,
     permissionMode: "allowAll",
     storage: new InMemoryStorage(),
+    evidenceBuilder: new NetDoctorEvidenceBuilder(),
     metadata: {
       source: "vscode-extension",
       product: "net-doctor",
