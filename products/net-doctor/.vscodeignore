@@ -1,7 +1,14 @@
 src/**
+.vscode/**
+release/**
 *.ts
 tsconfig.json
-.vscode/**
-node_modules/**
+*.vsix
+
 dist/**/*.map
-!dist/**
+dist/**/*.d.ts
+dist/**/*.test.js
+dist/**/*.test.js.map
+dist/**/*.test.d.ts
+
+node_modules/**

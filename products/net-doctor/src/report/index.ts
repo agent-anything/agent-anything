@@ -1,4 +1,9 @@
 export {
+  openDiagnosisPanel,
+  type NetDoctorDiagnosisResult,
+  type RunNetDoctorDiagnosis,
+} from "./DiagnosisPanel.js";
+export {
   createNetDoctorReportViewModel,
   type NetDoctorReportCheck,
   type NetDoctorReportViewModel,

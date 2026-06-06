@@ -23,9 +23,13 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:extension": "pnpm run build && esbuild src/extension.ts --bundle --platform=node --format=esm --external:vscode --outfile=dist/extension.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "vscode:prepublish": "pnpm run build"
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license",
+    "package:list": "vsce ls --tree --no-dependencies",
+    "release:check": "pnpm run typecheck && pnpm run test && pnpm run build:extension && pnpm run package",
+    "vscode:prepublish": "pnpm run build:extension"
   },
   "keywords": [
     "agent",
@@ -41,6 +45,8 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
-    "@types/vscode": "^1.120.0"
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.0"
   }
 }

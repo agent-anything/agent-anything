@@ -7,7 +7,10 @@ import {
 } from "@agent-anything/platform";
 import { NetDoctorEvidenceBuilder } from "./evidence/index.js";
 import { createNetDoctorTask } from "./input/index.js";
-import { openReportPanel } from "./report/index.js";
+import {
+  openDiagnosisPanel,
+  type NetDoctorDiagnosisResult,
+} from "./report/index.js";
 import { LocalNetDoctorStorage } from "./storage/index.js";
 import { registerNetDoctorTools } from "./tools/index.js";
 
@@ -16,63 +19,37 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const diagnoseCommand = vscode.commands.registerCommand(
     "netDoctor.diagnoseTarget",
-    async () => {
-      const target = await vscode.window.showInputBox({
-        title: "NetDoctor",
-        prompt: "Enter a domain, URL, host, or host:port.",
-        placeHolder: "example.com",
-        ignoreFocusOut: true,
-        validateInput(value) {
-          return value.trim().length === 0 ? "Target is required." : null;
+    () => {
+      openDiagnosisPanel({
+        async runDiagnosis(target, symptom) {
+          output.show(true);
+          output.clear();
+          output.appendLine("NetDoctor diagnosis started.");
+          output.appendLine(`Target: ${target}`);
+          output.appendLine(`Symptom: ${symptom}`);
+          output.appendLine("");
+
+          return vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: "NetDoctor is diagnosing target...",
+              cancellable: false,
+            },
+            async () => runDiagnosis(target, symptom, context.globalStorageUri.fsPath),
+          );
+        },
+        async onResult(result) {
+          writeRuntimeResult(output, result);
+          await vscode.window.showInformationMessage(
+            `NetDoctor diagnosis ${result.result.status}.`,
+          );
+        },
+        async onError(error) {
+          const message = error instanceof Error ? error.message : "Diagnosis failed.";
+          output.appendLine(`Error: ${message}`);
+          await vscode.window.showErrorMessage(`NetDoctor failed: ${message}`);
         },
       });
-
-      if (target === undefined) {
-        return;
-      }
-
-      const symptom = await vscode.window.showInputBox({
-        title: "NetDoctor",
-        prompt: "Describe the symptom.",
-        placeHolder: "Cannot connect",
-        ignoreFocusOut: true,
-      });
-
-      if (symptom === undefined) {
-        return;
-      }
-
-      output.show(true);
-      output.clear();
-      output.appendLine("NetDoctor diagnosis started.");
-      output.appendLine(`Target: ${target}`);
-      output.appendLine(`Symptom: ${symptom}`);
-      output.appendLine("");
-
-      try {
-        const result = await vscode.window.withProgress(
-          {
-            location: vscode.ProgressLocation.Notification,
-            title: "NetDoctor is diagnosing target...",
-            cancellable: false,
-          },
-          async () => runDiagnosis(target, symptom, context.globalStorageUri.fsPath),
-        );
-
-        writeRuntimeResult(output, result);
-        openReportPanel({
-          taskInput: result.task.input,
-          result: result.result,
-          evidence: result.evidence,
-        });
-        await vscode.window.showInformationMessage(
-          `NetDoctor diagnosis ${result.result.status}.`,
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Diagnosis failed.";
-        output.appendLine(`Error: ${message}`);
-        await vscode.window.showErrorMessage(`NetDoctor failed: ${message}`);
-      }
     },
   );
 
@@ -88,7 +65,7 @@ async function runDiagnosis(
   symptom: string,
   storageRoot: string,
 ): Promise<{
-  task: ReturnType<typeof createNetDoctorTask>;
+  taskInput: NetDoctorDiagnosisResult["taskInput"];
   result: RuntimeResult;
   evidence: Evidence[];
 }> {
@@ -115,7 +92,7 @@ async function runDiagnosis(
   await storage.storeRuntimeResult(result);
 
   return {
-    task,
+    taskInput: task.input,
     result,
     evidence: result.evidenceRefs
       .map((id) => storage.getEvidence(id))

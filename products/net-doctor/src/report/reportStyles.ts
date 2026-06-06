@@ -85,4 +85,8 @@ export const reportStyles = `
   .muted {
     color: var(--vscode-descriptionForeground);
   }
+
+  .artifact-summary {
+    margin: 0 0 8px;
+  }
 `;
