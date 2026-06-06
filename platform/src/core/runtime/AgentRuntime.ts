@@ -1,5 +1,5 @@
 import type { AgentTask } from "../task/index.js";
-import type { Evidence, EvidenceBuilder } from "../../evidence/index.js";
+import type { Evidence, EvidenceBuilderPort } from "../../evidence/index.js";
 import {
   createPermissionRequest,
   resolvePermissionDecision,
@@ -18,7 +18,7 @@ export type PlanToolCalls = (
 
 export interface AgentRuntimeDependencies {
   toolRegistry: ToolRegistry;
-  evidenceBuilder: EvidenceBuilder;
+  evidenceBuilder: EvidenceBuilderPort;
   reportGenerator: ReportGenerator;
   storage: StoragePort;
   planToolCalls: PlanToolCalls;

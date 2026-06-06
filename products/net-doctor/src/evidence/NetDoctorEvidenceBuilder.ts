@@ -1,6 +1,7 @@
 import type {
   BuildEvidenceInput,
   Evidence,
+  EvidenceBuilderPort,
   EvidenceSensitivity,
   ToolResult,
 } from "@agent-anything/platform";
@@ -11,7 +12,7 @@ import type {
   TcpConnectOutput,
 } from "../tools/index.js";
 
-export class NetDoctorEvidenceBuilder {
+export class NetDoctorEvidenceBuilder implements EvidenceBuilderPort {
   buildFromToolResult(input: BuildEvidenceInput): Evidence[] {
     const { toolResult } = input;
     const evidence = createEvidence(toolResult);

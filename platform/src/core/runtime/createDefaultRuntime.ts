@@ -1,4 +1,4 @@
-import { EvidenceBuilder } from "../../evidence/index.js";
+import { EvidenceBuilder, type EvidenceBuilderPort } from "../../evidence/index.js";
 import type { PermissionMode } from "../../permission/index.js";
 import { ReportGenerator } from "../../report/index.js";
 import type { Metadata } from "../../shared/types.js";
@@ -18,7 +18,7 @@ export interface CreateDefaultRuntimeInput {
   toolRegistry: ToolRegistry;
   permissionMode: PermissionMode;
   storage: StoragePort;
-  evidenceBuilder?: EvidenceBuilder;
+  evidenceBuilder?: EvidenceBuilderPort;
   limits?: Partial<RuntimeLimits>;
   metadata?: Metadata;
   planToolCalls?: PlanToolCalls;

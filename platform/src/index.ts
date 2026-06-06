@@ -49,6 +49,7 @@ export {
 export type {
   BuildEvidenceInput,
   Evidence,
+  EvidenceBuilderPort,
   EvidenceRef,
   EvidenceSensitivity,
   EvidenceSource,

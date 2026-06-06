@@ -10,7 +10,11 @@ export interface BuildEvidenceInput {
   metadata?: Metadata;
 }
 
-export class EvidenceBuilder {
+export interface EvidenceBuilderPort {
+  buildFromToolResult(input: BuildEvidenceInput): Evidence[];
+}
+
+export class EvidenceBuilder implements EvidenceBuilderPort {
   buildFromToolResult(input: BuildEvidenceInput): Evidence[] {
     const { toolResult } = input;
 
