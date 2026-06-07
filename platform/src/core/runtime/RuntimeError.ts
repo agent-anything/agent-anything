@@ -8,6 +8,8 @@ export type RuntimeErrorCode =
   | "tool_timeout"
   | "tool_interrupted"
   | "evidence_creation_failed"
+  | "planner_failed"
+  | "context_update_failed"
   | "report_generation_failed"
   | "storage_failed"
   | "runtime_limit_exceeded"

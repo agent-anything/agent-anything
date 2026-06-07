@@ -35,20 +35,31 @@ export {
   RuntimeEventRecorder,
 } from "./core/events/index.js";
 export type {
+  AgentLoopDependencies,
+  AgentLoopResult,
+  AgentLoopStatus,
   AgentRuntimeDependencies,
   CreateDefaultRuntimeInput,
+  ExecuteToolInput,
   PlanToolCalls,
+  RunAgentLoopInput,
   RuntimeError,
   RuntimeErrorCode,
   RuntimeLimits,
   RuntimeOptions,
   RuntimeResult,
   RuntimeStatus,
+  ToolExecutionBoundaryDependencies,
+  ToolExecutionFailed,
+  ToolExecutionOutcome,
+  ToolExecutionSucceeded,
 } from "./core/runtime/index.js";
 export {
+  AgentLoop,
   AgentRuntime,
   createDefaultRuntime,
   defaultRuntimeLimits,
+  ToolExecutionBoundary,
 } from "./core/runtime/index.js";
 
 export type {
