@@ -1,5 +1,15 @@
 export type { NetDoctorInput, NormalizedTarget } from "./input/index.js";
 export {
+  buildNetDoctorProviderRequest,
+  buildNetDoctorPlannerPrompt,
+  createNetDoctorPlanner,
+  isNetDoctorToolName,
+  netDoctorPlannerCapability,
+  netDoctorToolNames,
+  parseNetDoctorProviderResponse,
+  type NetDoctorToolName,
+} from "./agent/index.js";
+export {
   NetDoctorEvidenceBuilder,
 } from "./evidence/index.js";
 export {
