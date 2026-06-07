@@ -11,3 +11,7 @@ export {
 export { openReportPanel } from "./ReportPanel.js";
 export { renderReportHtml } from "./renderReportHtml.js";
 export { reportStyles } from "./reportStyles.js";
+export {
+  netDoctorSummaryTemplate,
+  networkEvidenceTemplate,
+} from "./templates/index.js";

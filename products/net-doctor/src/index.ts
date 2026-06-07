@@ -10,6 +10,8 @@ export {
 } from "./input/index.js";
 export {
   createNetDoctorReportViewModel,
+  netDoctorSummaryTemplate,
+  networkEvidenceTemplate,
   openReportPanel,
   renderReportHtml,
   type NetDoctorReportCheck,
