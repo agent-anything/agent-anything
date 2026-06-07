@@ -1,16 +1,13 @@
 import type { AgentTask } from "../task/index.js";
 import type { Evidence, EvidenceBuilderPort } from "../../evidence/index.js";
-import {
-  createPermissionRequest,
-  resolvePermissionDecision,
-} from "../../permission/index.js";
 import type { ReportGenerator } from "../../report/index.js";
 import type { StoragePort } from "../../storage/index.js";
-import type { ToolCall, ToolRegistry, ToolResult } from "../../tools/index.js";
+import type { ToolCall, ToolRegistry } from "../../tools/index.js";
 import type { Metadata } from "../../shared/types.js";
-import type { RuntimeError, RuntimeErrorCode } from "./RuntimeError.js";
+import type { RuntimeError } from "./RuntimeError.js";
 import type { RuntimeOptions } from "./RuntimeOptions.js";
 import type { RuntimeResult } from "./RuntimeResult.js";
+import { ToolExecutionBoundary } from "./ToolExecutionBoundary.js";
 
 export type PlanToolCalls = (
   task: AgentTask,
@@ -22,13 +19,22 @@ export interface AgentRuntimeDependencies {
   reportGenerator: ReportGenerator;
   storage: StoragePort;
   planToolCalls: PlanToolCalls;
+  toolExecutionBoundary?: ToolExecutionBoundary;
 }
 
 export class AgentRuntime {
+  private readonly toolExecutionBoundary: ToolExecutionBoundary;
+
   constructor(
     private readonly dependencies: AgentRuntimeDependencies,
     private readonly defaultOptions: RuntimeOptions,
-  ) {}
+  ) {
+    this.toolExecutionBoundary = dependencies.toolExecutionBoundary
+      ?? new ToolExecutionBoundary({
+        toolRegistry: dependencies.toolRegistry,
+        evidenceBuilder: dependencies.evidenceBuilder,
+      });
+  }
 
   async run(
     task: AgentTask,
@@ -92,62 +98,20 @@ export class AgentRuntime {
         });
       }
 
-      if (toolCall.risk === "risky") {
-        const permissionRequest = createPermissionRequest({
-          id: `permission_request_${toolCall.id}`,
-          taskId: task.id,
-          toolCall,
-          reason: `Tool ${toolCall.toolName} is marked as risky.`,
-          metadata: {
-            source: "agent-runtime",
-          },
-        });
-        const decision = resolvePermissionDecision({
-          permissionMode: options.permissionMode,
-          request: permissionRequest,
-        });
+      const execution = await this.toolExecutionBoundary.execute({
+        task,
+        toolCall,
+        options,
+      });
 
-        if (decision.status === "denied") {
-          return createFailedRuntimeResult(task, [
-            {
-              code: "permission_denied",
-              message: decision.reason,
-              metadata: {
-                requestId: decision.requestId,
-                toolCallId: toolCall.id,
-                toolName: toolCall.toolName,
-              },
-            },
-          ], {
-            metadata: runtimeMetadata,
-            startedAt,
-          });
-        }
-      }
-
-      const toolResult = await this.dependencies.toolRegistry.execute(toolCall);
-      if (toolResult.status === "failed") {
-        return createFailedRuntimeResult(task, [toToolRuntimeError(toolResult)], {
+      if (execution.status === "failed") {
+        return createFailedRuntimeResult(task, execution.errors, {
           metadata: runtimeMetadata,
           startedAt,
         });
       }
 
-      try {
-        evidence.push(
-          ...this.dependencies.evidenceBuilder.buildFromToolResult({
-            toolResult,
-          }),
-        );
-      } catch (error) {
-        return createFailedRuntimeResult(task, [toRuntimeError(error, {
-          code: "evidence_creation_failed",
-          message: "Failed to build evidence from tool result.",
-        })], {
-          metadata: runtimeMetadata,
-          startedAt,
-        });
-      }
+      evidence.push(...execution.evidence);
     }
 
     let report;
@@ -241,23 +205,6 @@ function validateRuntimeOptions(options: RuntimeOptions): RuntimeError | null {
   }
 
   return null;
-}
-
-function toToolRuntimeError(toolResult: ToolResult): RuntimeError {
-  const code =
-    toolResult.error?.code === "tool_not_found"
-      ? "tool_not_found"
-      : "tool_execution_failed";
-
-  return {
-    code,
-    message: toolResult.error?.message ?? "Tool execution failed.",
-    metadata: {
-      toolCallId: toolResult.toolCallId,
-      toolName: toolResult.toolName,
-      ...toolResult.error?.metadata,
-    },
-  };
 }
 
 function toRuntimeError(
