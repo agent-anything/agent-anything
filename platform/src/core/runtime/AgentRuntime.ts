@@ -230,6 +230,16 @@ function validateRuntimeOptions(options: RuntimeOptions): RuntimeError | null {
     };
   }
 
+  if (options.limits.maxIterations < 0) {
+    return {
+      code: "invalid_runtime_options",
+      message: "maxIterations must be greater than or equal to 0.",
+      metadata: {
+        maxIterations: options.limits.maxIterations,
+      },
+    };
+  }
+
   return null;
 }
 

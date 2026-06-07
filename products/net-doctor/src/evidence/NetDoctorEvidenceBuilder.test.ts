@@ -20,7 +20,7 @@ describe("NetDoctorEvidenceBuilder", () => {
     expect(evidence).toMatchObject({
       id: "evidence_tool_call_001",
       summary: "example.com resolved to 1 address.",
-      sensitivity: "normal",
+      sensitivity: "public",
       metadata: {
         evidenceKind: "dnsLookup",
       },
@@ -43,7 +43,7 @@ describe("NetDoctorEvidenceBuilder", () => {
       content: {
         reachable: false,
       },
-      sensitivity: "normal",
+      sensitivity: "public",
     });
   });
 
@@ -67,7 +67,7 @@ describe("NetDoctorEvidenceBuilder", () => {
     });
   });
 
-  it("marks configured proxy evidence as sensitive without exposing values", () => {
+  it("marks configured proxy evidence as private without exposing values", () => {
     const evidence = buildEvidence({
       toolName: "netDoctor.proxyConfig",
       output: {
@@ -87,7 +87,7 @@ describe("NetDoctorEvidenceBuilder", () => {
 
     expect(evidence).toMatchObject({
       summary: "Proxy environment configuration is present (HTTPS_PROXY).",
-      sensitivity: "sensitive",
+      sensitivity: "private",
       content: {
         variables: [
           {
@@ -104,7 +104,7 @@ describe("NetDoctorEvidenceBuilder", () => {
     expect(evidence.summary).not.toContain("http://");
   });
 
-  it("can describe failed tool results when called directly", () => {
+  it("does not create evidence from failed tool results", () => {
     const builder = new NetDoctorEvidenceBuilder();
     const evidence = builder.buildFromToolResult({
       toolResult: {
@@ -117,12 +117,7 @@ describe("NetDoctorEvidenceBuilder", () => {
       },
     });
 
-    expect(evidence[0]).toMatchObject({
-      summary: "DNS lookup failed: getaddrinfo ENOTFOUND example.invalid.",
-      metadata: {
-        evidenceKind: "toolFailure",
-      },
-    });
+    expect(evidence).toEqual([]);
   });
 });
 

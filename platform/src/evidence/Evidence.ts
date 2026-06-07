@@ -1,7 +1,7 @@
 import type { Metadata } from "../shared/types.js";
 import type { EvidenceSource } from "./EvidenceSource.js";
 
-export type EvidenceSensitivity = "normal" | "sensitive";
+export type EvidenceSensitivity = "public" | "private" | "secret" | "restricted";
 
 export interface Evidence<TContent = unknown> {
   id: string;

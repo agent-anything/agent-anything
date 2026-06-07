@@ -112,11 +112,14 @@ function renderErrors(model: NetDoctorReportViewModel): string {
 }
 
 function renderSensitivity(sensitivity: string | null): string {
-  if (sensitivity !== "sensitive") {
+  if (
+    sensitivity === null ||
+    sensitivity === "public"
+  ) {
     return "";
   }
 
-  return ' <span class="muted">(sensitive)</span>';
+  return ` <span class="muted">(${escapeHtml(sensitivity)})</span>`;
 }
 
 function renderStringList(items: string[]): string {

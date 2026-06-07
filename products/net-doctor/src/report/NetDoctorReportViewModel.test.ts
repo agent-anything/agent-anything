@@ -133,7 +133,7 @@ function createEvidence(input: {
     },
     summary: input.summary,
     content: input.content,
-    sensitivity: input.sensitivity ?? "normal",
+    sensitivity: input.sensitivity ?? "public",
     metadata: {
       evidenceKind: input.evidenceKind,
     },

@@ -18,7 +18,7 @@ export class EvidenceBuilder implements EvidenceBuilderPort {
   buildFromToolResult(input: BuildEvidenceInput): Evidence[] {
     const { toolResult } = input;
 
-    if (toolResult.status !== "succeeded") {
+    if (!hasUsableOutput(toolResult)) {
       return [];
     }
 
@@ -49,9 +49,34 @@ function createEvidenceId(toolResult: ToolResult): string {
 }
 
 function createSummary(toolResult: ToolResult): string {
-  return `Evidence from ${toolResult.toolName}.`;
+  return toolResult.status === "partial"
+    ? `Partial evidence from ${toolResult.toolName}.`
+    : `Evidence from ${toolResult.toolName}.`;
 }
 
 function getSensitivityFromMetadata(metadata: Metadata): EvidenceSensitivity {
-  return metadata.sensitivity === "sensitive" ? "sensitive" : "normal";
+  return isEvidenceSensitivity(metadata.sensitivity)
+    ? metadata.sensitivity
+    : "public";
+}
+
+function hasUsableOutput(toolResult: ToolResult): boolean {
+  if (toolResult.output === null) {
+    return false;
+  }
+
+  return (
+    toolResult.status === "succeeded" ||
+    toolResult.status === "partial" ||
+    toolResult.status === "interrupted"
+  );
+}
+
+function isEvidenceSensitivity(value: unknown): value is EvidenceSensitivity {
+  return (
+    value === "public" ||
+    value === "private" ||
+    value === "secret" ||
+    value === "restricted"
+  );
 }

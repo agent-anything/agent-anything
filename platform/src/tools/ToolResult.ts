@@ -1,6 +1,13 @@
 import type { ISODateTimeString, Metadata } from "../shared/types.js";
 
-export type ToolResultStatus = "succeeded" | "failed";
+export type ToolResultStatus =
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "timeout"
+  | "skipped"
+  | "partial"
+  | "interrupted";
 
 export interface ToolResult<TOutput = unknown> {
   toolCallId: string;

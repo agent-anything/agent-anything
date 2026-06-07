@@ -51,16 +51,8 @@ function createEvidence(
   content: unknown;
   sensitivity: EvidenceSensitivity;
 } | null {
-  if (toolResult.status === "failed") {
-    return {
-      kind: "toolFailure",
-      summary: `${toToolLabel(toolResult.toolName)} failed: ${toolResult.error?.message ?? "unknown error"}.`,
-      content: {
-        status: toolResult.status,
-        error: toolResult.error,
-      },
-      sensitivity: "normal",
-    };
+  if (toolResult.status !== "succeeded" || toolResult.output === null) {
+    return null;
   }
 
   switch (toolResult.toolName) {
@@ -77,7 +69,7 @@ function createEvidence(
         kind: "genericToolResult",
         summary: `Evidence from ${toolResult.toolName}.`,
         content: toolResult.output,
-        sensitivity: "normal",
+        sensitivity: "public",
       };
   }
 }
@@ -93,7 +85,7 @@ function mapDnsEvidence(output: DnsLookupOutput) {
     kind: "dnsLookup",
     summary,
     content: output,
-    sensitivity: "normal" as const,
+    sensitivity: "public" as const,
   };
 }
 
@@ -104,7 +96,7 @@ function mapTcpEvidence(output: TcpConnectOutput) {
       ? `TCP ${output.host}:${output.port} is reachable.`
       : `TCP ${output.host}:${output.port} did not connect within ${output.timeoutMs}ms.`,
     content: output,
-    sensitivity: "normal" as const,
+    sensitivity: "public" as const,
   };
 }
 
@@ -119,7 +111,7 @@ function mapHttpEvidence(output: HttpReachabilityOutput) {
       ? `${output.url} is reachable (${status}).`
       : `${output.url} is not reachable (${status}).`,
     content: output,
-    sensitivity: "normal" as const,
+    sensitivity: "public" as const,
   };
 }
 
@@ -134,25 +126,10 @@ function mapProxyEvidence(output: ProxyConfigOutput) {
       ? `Proxy environment configuration is present (${configuredVariables.join(", ")}).`
       : "No proxy environment variables are configured.",
     content: output,
-    sensitivity: output.hasProxy ? "sensitive" as const : "normal" as const,
+    sensitivity: output.hasProxy ? "private" as const : "public" as const,
   };
 }
 
 function readOutput<TOutput>(toolResult: ToolResult): TOutput {
   return toolResult.output as TOutput;
-}
-
-function toToolLabel(toolName: string): string {
-  switch (toolName) {
-    case "netDoctor.dnsLookup":
-      return "DNS lookup";
-    case "netDoctor.tcpConnect":
-      return "TCP connectivity check";
-    case "netDoctor.httpReachability":
-      return "HTTP reachability check";
-    case "netDoctor.proxyConfig":
-      return "Proxy configuration check";
-    default:
-      return toolName;
-  }
 }

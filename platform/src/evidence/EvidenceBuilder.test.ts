@@ -25,7 +25,7 @@ describe("EvidenceBuilder", () => {
         content: {
           records: ["93.184.216.34"],
         },
-        sensitivity: "normal",
+        sensitivity: "public",
         metadata: {
           createdFrom: "tool_call_001",
         },
@@ -45,22 +45,42 @@ describe("EvidenceBuilder", () => {
     });
   });
 
-  it("does not create misleading evidence for failed tool results", () => {
+  it("does not create misleading evidence for unusable tool results", () => {
     const builder = new EvidenceBuilder();
 
-    const evidence = builder.buildFromToolResult({
+    for (const status of ["failed", "cancelled", "timeout", "skipped"] as const) {
+      const evidence = builder.buildFromToolResult({
+        toolResult: {
+          ...createSuccessfulToolResult(),
+          status,
+          output: null,
+          error: {
+            code: `${status}_tool`,
+            message: `Tool ${status}.`,
+          },
+        },
+      });
+
+      expect(evidence).toEqual([]);
+    }
+  });
+
+  it("builds evidence from partial tool results with usable output", () => {
+    const builder = new EvidenceBuilder();
+
+    const [evidence] = builder.buildFromToolResult({
       toolResult: {
         ...createSuccessfulToolResult(),
-        status: "failed",
-        output: null,
-        error: {
-          code: "dns_failed",
-          message: "DNS lookup failed.",
-        },
+        status: "partial",
       },
     });
 
-    expect(evidence).toEqual([]);
+    expect(evidence).toMatchObject({
+      summary: "Partial evidence from net.lookupDns.",
+      content: {
+        records: ["93.184.216.34"],
+      },
+    });
   });
 
   it("marks sensitivity from tool result metadata", () => {
@@ -70,12 +90,12 @@ describe("EvidenceBuilder", () => {
       toolResult: {
         ...createSuccessfulToolResult(),
         metadata: {
-          sensitivity: "sensitive",
+          sensitivity: "private",
         },
       },
     });
 
-    expect(evidence?.sensitivity).toBe("sensitive");
+    expect(evidence?.sensitivity).toBe("private");
   });
 
   it("produces stable evidence references", () => {

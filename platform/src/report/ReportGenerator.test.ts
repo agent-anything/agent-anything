@@ -107,7 +107,7 @@ function createEvidence(): Evidence {
     content: {
       records: ["93.184.216.34"],
     },
-    sensitivity: "normal",
+    sensitivity: "public",
     metadata: {
       createdFrom: "tool_call_001",
     },

@@ -120,7 +120,7 @@ function createEvidence(): Evidence {
       host: "example.com",
       addresses: [{ address: "93.184.216.34", family: 4 }],
     },
-    sensitivity: "normal",
+    sensitivity: "public",
     metadata: {
       evidenceKind: "dnsLookup",
     },

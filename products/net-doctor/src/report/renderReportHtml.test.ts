@@ -34,7 +34,7 @@ describe("renderReportHtml", () => {
             toolName: "netDoctor.dnsLookup",
             evidenceKind: "dnsLookup",
             summary: "example.com resolved to 1 address.",
-            sensitivity: "normal",
+            sensitivity: "public",
             content: {},
           },
         ],

@@ -266,6 +266,7 @@ function createOptions(): RuntimeOptions {
       maxToolCalls: 5,
       maxDurationMs: 30000,
       maxConsecutiveFailures: 1,
+      maxIterations: 5,
     },
     permissionMode: "allowAll",
     metadata: {

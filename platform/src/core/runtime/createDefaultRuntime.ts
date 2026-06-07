@@ -12,6 +12,7 @@ export const defaultRuntimeLimits: RuntimeLimits = {
   maxToolCalls: 5,
   maxDurationMs: 30000,
   maxConsecutiveFailures: 1,
+  maxIterations: 5,
 };
 
 export interface CreateDefaultRuntimeInput {

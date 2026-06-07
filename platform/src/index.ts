@@ -6,6 +6,35 @@ export type {
 
 export type { AgentTask } from "./core/task/index.js";
 export type {
+  ContextManager,
+  ContextMessage,
+  ContextMessageRole,
+  ContextSnapshot,
+  ContextUpdate,
+  Observation,
+  ObservationSource,
+} from "./core/context/index.js";
+export { InMemoryContextManager } from "./core/context/index.js";
+export type {
+  CallToolPlanStep,
+  FinalPlanStep,
+  Planner,
+  PlannerInput,
+  PlanStep,
+  PlanStepKind,
+  StopPlanStep,
+} from "./core/planner/index.js";
+export type {
+  EmitRuntimeEventInput,
+  RuntimeEvent,
+  RuntimeEventName,
+  RuntimeEventSubscriber,
+} from "./core/events/index.js";
+export {
+  RuntimeEventEmitter,
+  RuntimeEventRecorder,
+} from "./core/events/index.js";
+export type {
   AgentRuntimeDependencies,
   CreateDefaultRuntimeInput,
   PlanToolCalls,
