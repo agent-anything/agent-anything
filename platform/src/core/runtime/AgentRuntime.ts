@@ -7,6 +7,7 @@ import type { Metadata } from "../../shared/types.js";
 import type { RuntimeError } from "./RuntimeError.js";
 import type { RuntimeOptions } from "./RuntimeOptions.js";
 import type { RuntimeResult } from "./RuntimeResult.js";
+import type { AgentLoop } from "./AgentLoop.js";
 import { ToolExecutionBoundary } from "./ToolExecutionBoundary.js";
 
 export type PlanToolCalls = (
@@ -19,6 +20,7 @@ export interface AgentRuntimeDependencies {
   reportGenerator: ReportGenerator;
   storage: StoragePort;
   planToolCalls: PlanToolCalls;
+  agentLoop?: AgentLoop;
   toolExecutionBoundary?: ToolExecutionBoundary;
 }
 
@@ -48,6 +50,13 @@ export class AgentRuntime {
     const invalidOptionsError = validateRuntimeOptions(options);
     if (invalidOptionsError) {
       return createFailedRuntimeResult(task, [invalidOptionsError], {
+        metadata: runtimeMetadata,
+        startedAt,
+      });
+    }
+
+    if (this.dependencies.agentLoop) {
+      return this.runAgentLoop(task, options, {
         metadata: runtimeMetadata,
         startedAt,
       });
@@ -114,6 +123,68 @@ export class AgentRuntime {
       evidence.push(...execution.evidence);
     }
 
+    return this.completeRuntimeWithEvidence(task, evidence, {
+      metadata: runtimeMetadata,
+      startedAt,
+      artifactRefs,
+    });
+  }
+
+  private async runAgentLoop(
+    task: AgentTask,
+    options: RuntimeOptions,
+    runtime: {
+      metadata: Metadata;
+      startedAt: number;
+    },
+  ): Promise<RuntimeResult> {
+    const loopResult = await this.dependencies.agentLoop!.run({
+      task,
+      options,
+    });
+
+    if (loopResult.status !== "completed") {
+      return createFailedRuntimeResult(task, loopResult.errors.length > 0
+        ? loopResult.errors
+        : [
+          {
+            code: "runtime_limit_exceeded",
+            message: loopResult.stopReason ?? "Agent loop stopped before completion.",
+            metadata: {
+              loopStatus: loopResult.status,
+              stopReason: loopResult.stopReason,
+            },
+          },
+        ], {
+        evidenceRefs: loopResult.evidence.map((item) => item.id),
+        metadata: {
+          ...runtime.metadata,
+          ...loopResult.metadata,
+        },
+        startedAt: runtime.startedAt,
+      });
+    }
+
+    return this.completeRuntimeWithEvidence(task, loopResult.evidence, {
+      metadata: {
+        ...runtime.metadata,
+        ...loopResult.metadata,
+      },
+      startedAt: runtime.startedAt,
+      artifactRefs: [],
+    });
+  }
+
+  private async completeRuntimeWithEvidence(
+    task: AgentTask,
+    evidence: Evidence[],
+    runtime: {
+      metadata: Metadata;
+      startedAt: number;
+      artifactRefs: string[];
+    },
+  ): Promise<RuntimeResult> {
+    const artifactRefs = [...runtime.artifactRefs];
     let report;
     try {
       report = this.dependencies.reportGenerator.generate({
@@ -126,8 +197,9 @@ export class AgentRuntime {
         message: "Failed to generate report.",
       })], {
         evidenceRefs: evidence.map((item) => item.id),
-        metadata: runtimeMetadata,
-        startedAt,
+        artifactRefs,
+        metadata: runtime.metadata,
+        startedAt: runtime.startedAt,
       });
     }
 
@@ -147,7 +219,7 @@ export class AgentRuntime {
         evidenceRefs: evidence.map((item) => item.id),
         artifactRefs,
         errors: [],
-        metadata: createRuntimeMetadata(runtimeMetadata, startedAt),
+        metadata: createRuntimeMetadata(runtime.metadata, runtime.startedAt),
       };
     } catch (error) {
       return createFailedRuntimeResult(task, [toRuntimeError(error, {
@@ -156,8 +228,8 @@ export class AgentRuntime {
       })], {
         evidenceRefs: evidence.map((item) => item.id),
         artifactRefs,
-        metadata: runtimeMetadata,
-        startedAt,
+        metadata: runtime.metadata,
+        startedAt: runtime.startedAt,
       });
     }
   }

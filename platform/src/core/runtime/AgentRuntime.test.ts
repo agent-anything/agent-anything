@@ -4,6 +4,8 @@ import { EvidenceBuilder } from "../../evidence/index.js";
 import type { Report } from "../../report/index.js";
 import { ReportGenerator } from "../../report/index.js";
 import { InMemoryStorage, type StoragePort } from "../../storage/index.js";
+import { InMemoryContextManager } from "../context/index.js";
+import type { PlanStep, PlannerInput } from "../planner/index.js";
 import {
   ToolRegistry,
   type ToolCall,
@@ -12,7 +14,9 @@ import {
 } from "../../tools/index.js";
 import type { AgentTask } from "../task/index.js";
 import { AgentRuntime } from "./AgentRuntime.js";
+import { AgentLoop } from "./AgentLoop.js";
 import { createDefaultRuntime } from "./createDefaultRuntime.js";
+import { ToolExecutionBoundary } from "./ToolExecutionBoundary.js";
 import type { RuntimeOptions } from "./RuntimeOptions.js";
 
 describe("AgentRuntime", () => {
@@ -238,6 +242,72 @@ describe("AgentRuntime", () => {
       ],
     });
   });
+
+  it("uses AgentLoop when one is provided", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("net.lookupDns"));
+    const storage = new InMemoryStorage();
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [],
+      storage,
+      agentLoop: createLoop(registry, (input) => {
+        return input.context.observations.length === 0
+          ? createCallToolPlanStep(createToolCall("net.lookupDns"))
+          : createFinalPlanStep({
+            conclusion: "Loop completed.",
+          });
+      }),
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result.status).toBe("succeeded");
+    expect(result.evidenceRefs).toEqual(["evidence_tool_call_001"]);
+    expect(result.reportRef).toBe("artifact_report_report_task_001");
+    expect(storage.getArtifact("artifact_evidence_evidence_tool_call_001")).toMatchObject({
+      kind: "evidence",
+    });
+  });
+
+  it("preserves deterministic Phase1 path when no AgentLoop is provided", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("net.lookupDns"));
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [createToolCall("net.lookupDns")],
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result.status).toBe("succeeded");
+    expect(result.evidenceRefs).toEqual(["evidence_tool_call_001"]);
+  });
+
+  it("converts failed AgentLoopResult into failed RuntimeResult", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("net.lookupDns"));
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [],
+      agentLoop: createLoop(registry, () => {
+        throw new Error("Planner failed.");
+      }),
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result).toMatchObject({
+      status: "failed",
+      reportRef: null,
+      errors: [
+        {
+          code: "planner_failed",
+          message: "Planner failed.",
+        },
+      ],
+    });
+  });
 });
 
 function createRuntime(input: {
@@ -247,6 +317,7 @@ function createRuntime(input: {
   evidenceBuilder?: EvidenceBuilder;
   reportGenerator?: ReportGenerator;
   storage?: StoragePort;
+  agentLoop?: AgentLoop;
 }): AgentRuntime {
   return new AgentRuntime(
     {
@@ -255,6 +326,7 @@ function createRuntime(input: {
       reportGenerator: input.reportGenerator ?? new ReportGenerator(),
       storage: input.storage ?? new InMemoryStorage(),
       planToolCalls: () => input.toolCalls,
+      agentLoop: input.agentLoop,
     },
     input.options ?? createOptions(),
   );
@@ -272,6 +344,44 @@ function createOptions(): RuntimeOptions {
     metadata: {
       source: "test",
     },
+  };
+}
+
+function createLoop(
+  toolRegistry: ToolRegistry,
+  plan: (input: PlannerInput) => PlanStep,
+): AgentLoop {
+  return new AgentLoop({
+    planner: {
+      async plan(input) {
+        return plan(input);
+      },
+    },
+    contextManager: new InMemoryContextManager(),
+    toolExecutionBoundary: new ToolExecutionBoundary({
+      toolRegistry,
+      evidenceBuilder: new EvidenceBuilder(),
+    }),
+  });
+}
+
+function createCallToolPlanStep(toolCall: ToolCall): PlanStep {
+  return {
+    id: `plan_step_${toolCall.id}`,
+    kind: "callTool",
+    toolCall,
+    reason: "Need diagnostic evidence.",
+    metadata: {},
+  };
+}
+
+function createFinalPlanStep(finalOutput: unknown): PlanStep {
+  return {
+    id: "plan_step_final",
+    kind: "final",
+    finalOutput,
+    reason: "Enough evidence collected.",
+    metadata: {},
   };
 }
 
