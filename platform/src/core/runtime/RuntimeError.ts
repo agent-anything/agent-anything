@@ -2,6 +2,7 @@ import type { Metadata } from "../../shared/types.js";
 
 export type RuntimeErrorCode =
   | "permission_denied"
+  | "permission_service_failed"
   | "tool_not_found"
   | "tool_execution_failed"
   | "tool_cancelled"

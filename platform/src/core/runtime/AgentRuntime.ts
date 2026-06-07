@@ -4,6 +4,7 @@ import type { ReportGenerator } from "../../report/index.js";
 import type { StoragePort } from "../../storage/index.js";
 import type { ToolCall, ToolRegistry } from "../../tools/index.js";
 import type { Metadata } from "../../shared/types.js";
+import type { PermissionService } from "../../permission/index.js";
 import type { RuntimeError } from "./RuntimeError.js";
 import type { RuntimeOptions } from "./RuntimeOptions.js";
 import type { RuntimeResult } from "./RuntimeResult.js";
@@ -21,6 +22,7 @@ export interface AgentRuntimeDependencies {
   storage: StoragePort;
   planToolCalls: PlanToolCalls;
   agentLoop?: AgentLoop;
+  permissionService?: PermissionService;
   toolExecutionBoundary?: ToolExecutionBoundary;
 }
 
@@ -35,6 +37,7 @@ export class AgentRuntime {
       ?? new ToolExecutionBoundary({
         toolRegistry: dependencies.toolRegistry,
         evidenceBuilder: dependencies.evidenceBuilder,
+        permissionService: dependencies.permissionService,
       });
   }
 

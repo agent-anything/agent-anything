@@ -108,6 +108,57 @@ describe("Phase1 public API", () => {
       ],
     });
   });
+
+  it("uses injected permission service through public exports", async () => {
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register({
+      ...createLookupDnsTool(),
+      name: "shell.runCommand",
+      risk: "risky",
+    });
+
+    const runtime = createDefaultRuntime({
+      toolRegistry,
+      permissionMode: "denyAll",
+      storage: new InMemoryStorage(),
+      permissionService: {
+        async decide(request) {
+          return {
+            requestId: request.id,
+            status: "allowed",
+            reason: "Allowed by public API test service.",
+            decidedAt: "2026-06-07T00:00:00.000Z",
+          };
+        },
+      },
+    });
+
+    const result = await runtime.run({
+      id: "task_001",
+      kind: "net-doctor.diagnose",
+      input: {
+        toolCalls: [
+          {
+            id: "tool_call_001",
+            toolName: "shell.runCommand",
+            input: {
+              command: "echo hello",
+            },
+            risk: "risky",
+            metadata: {
+              taskId: "task_001",
+            },
+          },
+        ],
+      },
+      createdAt: "2026-06-04T00:00:00.000Z",
+      metadata: {
+        source: "public-api-test",
+      },
+    });
+
+    expect(result.status).toBe("succeeded");
+  });
 });
 
 function createLookupDnsTool(): ToolDefinition {

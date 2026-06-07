@@ -3,7 +3,8 @@ import type { AgentTask } from "../task/index.js";
 import type { Evidence, EvidenceBuilderPort } from "../../evidence/index.js";
 import {
   createPermissionRequest,
-  resolvePermissionDecision,
+  createPermissionServiceFromMode,
+  type PermissionService,
 } from "../../permission/index.js";
 import type { ToolCall, ToolRegistry, ToolResult } from "../../tools/index.js";
 import type { RuntimeError } from "./RuntimeError.js";
@@ -12,6 +13,7 @@ import type { RuntimeOptions } from "./RuntimeOptions.js";
 export interface ToolExecutionBoundaryDependencies {
   toolRegistry: ToolRegistry;
   evidenceBuilder: EvidenceBuilderPort;
+  permissionService?: PermissionService;
 }
 
 export interface ExecuteToolInput {
@@ -43,7 +45,7 @@ export class ToolExecutionBoundary {
   ) {}
 
   async execute(input: ExecuteToolInput): Promise<ToolExecutionOutcome> {
-    const permissionError = this.checkPermission(input);
+    const permissionError = await this.checkPermission(input);
     if (permissionError) {
       return {
         status: "failed",
@@ -103,7 +105,7 @@ export class ToolExecutionBoundary {
     };
   }
 
-  private checkPermission(input: ExecuteToolInput): RuntimeError | null {
+  private async checkPermission(input: ExecuteToolInput): Promise<RuntimeError | null> {
     if (input.toolCall.risk !== "risky") {
       return null;
     }
@@ -117,10 +119,24 @@ export class ToolExecutionBoundary {
         source: "tool-execution-boundary",
       },
     });
-    const decision = resolvePermissionDecision({
-      permissionMode: input.options.permissionMode,
-      request: permissionRequest,
-    });
+    let decision;
+    try {
+      const permissionService = this.dependencies.permissionService
+        ?? createPermissionServiceFromMode(input.options.permissionMode);
+      decision = await permissionService.decide(permissionRequest);
+    } catch (error) {
+      return {
+        code: "permission_service_failed",
+        message: error instanceof Error
+          ? error.message
+          : "Permission service failed.",
+        metadata: {
+          requestId: permissionRequest.id,
+          toolCallId: input.toolCall.id,
+          toolName: input.toolCall.toolName,
+        },
+      };
+    }
 
     if (decision.status === "allowed") {
       return null;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EvidenceBuilder } from "../../evidence/index.js";
+import type { PermissionService } from "../../permission/index.js";
 import {
   ToolRegistry,
   type ToolCall,
@@ -184,12 +185,75 @@ describe("ToolExecutionBoundary", () => {
     });
     expect(executed).toBe(false);
   });
+
+  it("uses injected permission service to allow risky tools", async () => {
+    let executed = false;
+    const boundary = createBoundary(createToolResult("succeeded"), {
+      onExecute: () => {
+        executed = true;
+      },
+      permissionService: {
+        async decide(request) {
+          return {
+            requestId: request.id,
+            status: "allowed",
+            reason: "Allowed by test service.",
+            decidedAt: "2026-06-07T00:00:00.000Z",
+          };
+        },
+      },
+    });
+
+    const outcome = await boundary.execute(
+      createExecuteInput({
+        toolCall: createToolCall({
+          risk: "risky",
+        }),
+        options: {
+          ...createOptions(),
+          permissionMode: "denyAll",
+        },
+      }),
+    );
+
+    expect(outcome.status).toBe("succeeded");
+    expect(executed).toBe(true);
+  });
+
+  it("maps permission service failure to structured runtime error", async () => {
+    const boundary = createBoundary(createToolResult("succeeded"), {
+      permissionService: {
+        async decide() {
+          throw new Error("Permission UI failed.");
+        },
+      },
+    });
+
+    const outcome = await boundary.execute(
+      createExecuteInput({
+        toolCall: createToolCall({
+          risk: "risky",
+        }),
+      }),
+    );
+
+    expect(outcome).toMatchObject({
+      status: "failed",
+      errors: [
+        {
+          code: "permission_service_failed",
+          message: "Permission UI failed.",
+        },
+      ],
+    });
+  });
 });
 
 function createBoundary(
   toolResult: ToolResult,
   options: {
     onExecute?: () => void;
+    permissionService?: PermissionService;
   } = {},
 ): ToolExecutionBoundary {
   const registry = new ToolRegistry();
@@ -198,6 +262,7 @@ function createBoundary(
   return new ToolExecutionBoundary({
     toolRegistry: registry,
     evidenceBuilder: new EvidenceBuilder(),
+    permissionService: options.permissionService,
   });
 }
 

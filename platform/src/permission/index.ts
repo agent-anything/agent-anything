@@ -5,6 +5,9 @@ export type {
   PermissionDecision,
   PermissionDecisionStatus,
 } from "./PermissionDecision.js";
+export type { PermissionService } from "./PermissionService.js";
+export type { PermissionServiceResult } from "./PermissionServiceResult.js";
+export { createPermissionServiceFromMode } from "./createPermissionServiceFromMode.js";
 export {
   createPermissionRequest,
   type CreatePermissionRequestInput,

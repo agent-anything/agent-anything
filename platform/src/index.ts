@@ -79,10 +79,13 @@ export type {
   PermissionMode,
   PermissionRisk,
   PermissionRequest,
+  PermissionService,
+  PermissionServiceResult,
   ResolvePermissionDecisionInput,
 } from "./permission/index.js";
 export {
   createPermissionRequest,
+  createPermissionServiceFromMode,
   resolvePermissionDecision,
 } from "./permission/index.js";
 
