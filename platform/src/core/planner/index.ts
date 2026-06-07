@@ -7,3 +7,9 @@ export type {
   PlanStepKind,
   StopPlanStep,
 } from "./PlanStep.js";
+export {
+  ProviderBackedPlanner,
+  type BuildProviderRequest,
+  type ParseProviderResponse,
+  type ProviderBackedPlannerInput,
+} from "./ProviderBackedPlanner.js";

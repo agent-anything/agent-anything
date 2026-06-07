@@ -16,14 +16,18 @@ export type {
 } from "./core/context/index.js";
 export { InMemoryContextManager } from "./core/context/index.js";
 export type {
+  BuildProviderRequest,
   CallToolPlanStep,
   FinalPlanStep,
+  ParseProviderResponse,
   Planner,
   PlannerInput,
   PlanStep,
   PlanStepKind,
+  ProviderBackedPlannerInput,
   StopPlanStep,
 } from "./core/planner/index.js";
+export { ProviderBackedPlanner } from "./core/planner/index.js";
 export type {
   EmitRuntimeEventInput,
   RuntimeEvent,
