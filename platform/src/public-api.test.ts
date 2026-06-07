@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   createDefaultRuntime,
   InMemoryStorage,
+  ReportTemplateRegistry,
+  ReportTemplateRenderer,
   ToolRegistry,
   type AgentTask,
   type ToolDefinition,
@@ -158,6 +160,14 @@ describe("Phase1 public API", () => {
     });
 
     expect(result.status).toBe("succeeded");
+  });
+
+  it("exposes report template APIs through public exports", () => {
+    const registry = new ReportTemplateRegistry();
+    const renderer = new ReportTemplateRenderer({ registry });
+
+    expect(registry).toBeInstanceOf(ReportTemplateRegistry);
+    expect(renderer).toBeInstanceOf(ReportTemplateRenderer);
   });
 });
 

@@ -116,8 +116,25 @@ export type {
   EvidenceSource,
 } from "./evidence/index.js";
 export { EvidenceBuilder } from "./evidence/index.js";
-export type { GenerateReportInput, Report, ReportSection } from "./report/index.js";
-export { ReportGenerator } from "./report/index.js";
+export type {
+  GenerateReportInput,
+  Report,
+  ReportSection,
+  ReportTemplate,
+  ReportTemplateOutput,
+  ReportTemplateRendererInput,
+  TemplateRenderError,
+  TemplateRenderFailed,
+  TemplateRenderInput,
+  TemplateRenderResult,
+  TemplateRenderStatus,
+  TemplateRenderSucceeded,
+} from "./report/index.js";
+export {
+  ReportGenerator,
+  ReportTemplateRegistry,
+  ReportTemplateRenderer,
+} from "./report/index.js";
 export type { StoragePort, StoredArtifact, StoredArtifactKind } from "./storage/index.js";
 export { InMemoryStorage } from "./storage/index.js";
 export type { Scenario, ScenarioExpectation } from "./scenarios/index.js";
