@@ -90,6 +90,20 @@ export {
 } from "./permission/index.js";
 
 export type {
+  FakeProviderInput,
+  Provider,
+  ProviderCapabilities,
+  ProviderError,
+  ProviderMessage,
+  ProviderMessageRole,
+  ProviderRequest,
+  ProviderResponse,
+  ProviderResponseStatus,
+  ProviderUsage,
+} from "./providers/index.js";
+export { FakeProvider } from "./providers/index.js";
+
+export type {
   BuildEvidenceInput,
   Evidence,
   EvidenceBuilderPort,
