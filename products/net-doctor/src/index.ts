@@ -44,8 +44,11 @@ export {
 export {
   createDnsLookupTool,
   createHttpReachabilityTool,
+  createNetDoctorToolAdapters,
   createProxyConfigTool,
   createTcpConnectTool,
+  NetDoctorToolDefinitionAdapter,
+  registerNetDoctorToolAdapters,
   registerNetDoctorTools,
 } from "./tools/index.js";
 export type {
