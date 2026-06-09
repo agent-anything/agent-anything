@@ -147,6 +147,26 @@ export class AgentRuntime {
       options,
     });
 
+    if (loopResult.status === "stopped") {
+      return createFailedRuntimeResult(task, [
+        {
+          code: "agent_loop_stopped",
+          message: loopResult.stopReason ?? "Agent loop stopped before completion.",
+          metadata: {
+            loopStatus: loopResult.status,
+            stopReason: loopResult.stopReason,
+          },
+        },
+      ], {
+        evidenceRefs: loopResult.evidence.map((item) => item.id),
+        metadata: {
+          ...runtime.metadata,
+          ...loopResult.metadata,
+        },
+        startedAt: runtime.startedAt,
+      });
+    }
+
     if (loopResult.status !== "completed") {
       return createFailedRuntimeResult(task, loopResult.errors.length > 0
         ? loopResult.errors

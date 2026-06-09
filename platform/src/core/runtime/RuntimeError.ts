@@ -13,6 +13,7 @@ export type RuntimeErrorCode =
   | "context_update_failed"
   | "report_generation_failed"
   | "storage_failed"
+  | "agent_loop_stopped"
   | "runtime_limit_exceeded"
   | "invalid_runtime_options";
 
