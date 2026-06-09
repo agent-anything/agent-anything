@@ -21,11 +21,13 @@ import {
 import { NetDoctorEvidenceBuilder } from "../../evidence/index.js";
 import { netDoctorSummaryTemplate } from "../../report/templates/index.js";
 import { registerNetDoctorTools } from "../../tools/index.js";
+import type { NetDoctorRuntimeConfig } from "../config/index.js";
 import { createNetDoctorPlanner } from "../planner/index.js";
 
 export interface CreateNetDoctorAgentRuntimeInput {
   provider: Provider;
   storage: StoragePort;
+  config?: NetDoctorRuntimeConfig;
   permissionMode?: PermissionMode;
   permissionService?: PermissionService;
   limits?: Partial<RuntimeLimits>;
@@ -68,12 +70,17 @@ export function createNetDoctorAgentRuntime(
     {
       limits: {
         ...defaultRuntimeLimits,
+        ...input.config?.limits,
         ...input.limits,
       },
-      permissionMode: input.permissionMode ?? "allowAll",
+      permissionMode: input.permissionMode ?? input.config?.permissionMode ?? "allowAll",
       metadata: {
         product: "net-doctor",
         runtime: "phase2-agent",
+        providerId: input.config?.providerId,
+        model: input.config?.model,
+        providerTimeoutMs: input.config?.providerTimeoutMs,
+        ...input.config?.metadata,
         ...input.metadata,
       },
     },
