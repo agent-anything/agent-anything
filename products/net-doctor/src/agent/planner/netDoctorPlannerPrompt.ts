@@ -1,5 +1,6 @@
 import type { PlannerInput, ToolCall } from "@agent-anything/platform";
 import type { NetDoctorInput } from "../../input/index.js";
+import { redactNetDoctorPromptText } from "./netDoctorPromptRedaction.js";
 
 export const netDoctorPlannerCapability = "net-doctor.tool-planning";
 
@@ -31,8 +32,8 @@ export function buildNetDoctorPlannerPrompt(input: PlannerInput): string {
     "- Do not request raw secrets, credentials, tokens, or proxy values.",
     "- Use observation summaries and evidence refs only.",
     "",
-    `Target: ${taskInput.target?.normalized ?? "(unknown)"}`,
-    `Symptom: ${taskInput.symptom ?? "(none)"}`,
+    `Target: ${redactNetDoctorPromptText(taskInput.target?.normalized ?? "(unknown)")}`,
+    `Symptom: ${redactNetDoctorPromptText(taskInput.symptom ?? "(none)")}`,
     "",
     "Available tools:",
     ...toolCalls.map((toolCall) => `- ${toolCall.toolName}`),
@@ -59,7 +60,7 @@ function formatObservations(input: PlannerInput): string[] {
       ? "no evidence refs"
       : `evidence refs: ${observation.evidenceRefs.join(", ")}`;
 
-    return `- ${observation.summary} (${refs})`;
+    return `- ${redactNetDoctorPromptText(observation.summary)} (${redactNetDoctorPromptText(refs)})`;
   });
 }
 
@@ -68,7 +69,9 @@ function formatEvidenceRefs(input: PlannerInput): string[] {
     return ["- (none)"];
   }
 
-  return input.context.evidenceRefs.map((evidenceRef) => `- ${evidenceRef}`);
+  return input.context.evidenceRefs.map((evidenceRef) =>
+    `- ${redactNetDoctorPromptText(evidenceRef)}`,
+  );
 }
 
 function readNetDoctorInput(input: unknown): Partial<NetDoctorInput> {

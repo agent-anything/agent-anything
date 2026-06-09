@@ -25,6 +25,22 @@ describe("NetDoctor planner request", () => {
     expect(request.messages[1]?.content).not.toContain("93.184.216.34");
     expect(request.messages[1]?.content).not.toContain("http://user:password@proxy.local:8080");
   });
+
+  it("redacts sensitive task and context text before provider request creation", () => {
+    const request = buildNetDoctorProviderRequest(createPlannerInput({
+      target: "https://user:password@example.com?token=abc123",
+      symptom: "Authorization failed with Bearer abc.def.ghi",
+      observationSummary: "Proxy URL http://user:password@proxy.local:8080 was detected.",
+      evidenceRef: "evidence_token_abc123",
+    }));
+    const content = request.messages[1]?.content ?? "";
+
+    expect(content).toContain("[REDACTED]");
+    expect(content).not.toContain("user:password");
+    expect(content).not.toContain("Bearer abc.def.ghi");
+    expect(content).not.toContain("http://user:password@proxy.local:8080");
+    expect(content).not.toContain("evidence_token_abc123");
+  });
 });
 
 describe("NetDoctor provider response parser", () => {
@@ -135,32 +151,40 @@ describe("createNetDoctorPlanner", () => {
   });
 });
 
-function createPlannerInput(): PlannerInput {
+function createPlannerInput(input: {
+  target?: string;
+  symptom?: string;
+  observationSummary?: string;
+  evidenceRef?: string;
+} = {}): PlannerInput {
   return {
     task: {
       id: "task_001",
       kind: "net-doctor.diagnose",
-      input: createTaskInput(),
+      input: createTaskInput(input),
       createdAt: "2026-06-07T00:00:00.000Z",
       metadata: {
         product: "net-doctor",
       },
     },
-    context: createContext(),
+    context: createContext(input),
     metadata: {},
   };
 }
 
-function createTaskInput(): NetDoctorInput & { toolCalls: ToolCall[] } {
+function createTaskInput(input: {
+  target?: string;
+  symptom?: string;
+} = {}): NetDoctorInput & { toolCalls: ToolCall[] } {
   return {
     target: {
-      raw: "https://example.com",
+      raw: input.target ?? "https://example.com",
       host: "example.com",
       port: 443,
       protocol: "https",
-      normalized: "https://example.com",
+      normalized: input.target ?? "https://example.com",
     },
-    symptom: "Browser cannot reach the service.",
+    symptom: input.symptom ?? "Browser cannot reach the service.",
     toolCalls: [
       createToolCall("tool_call_dns_lookup", "netDoctor.dnsLookup"),
       createToolCall("tool_call_tcp_connect", "netDoctor.tcpConnect"),
@@ -188,7 +212,12 @@ function createToolCall(id: string, toolName: string): ToolCall {
   };
 }
 
-function createContext(): ContextSnapshot {
+function createContext(input: {
+  observationSummary?: string;
+  evidenceRef?: string;
+} = {}): ContextSnapshot {
+  const evidenceRef = input.evidenceRef ?? "evidence_dns";
+
   return {
     taskId: "task_001",
     messages: [],
@@ -200,9 +229,9 @@ function createContext(): ContextSnapshot {
           id: "tool_call_dns_lookup",
           metadata: {},
         },
-        summary: "DNS lookup returned one address.",
+        summary: input.observationSummary ?? "DNS lookup returned one address.",
         toolResultRef: "tool_call_dns_lookup",
-        evidenceRefs: ["evidence_dns"],
+        evidenceRefs: [evidenceRef],
         metadata: {},
       },
       {
@@ -218,7 +247,7 @@ function createContext(): ContextSnapshot {
         metadata: {},
       },
     ],
-    evidenceRefs: ["evidence_dns", "evidence_proxy"],
+    evidenceRefs: [evidenceRef, "evidence_proxy"],
     metadata: {},
   };
 }
