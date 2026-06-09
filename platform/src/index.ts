@@ -67,6 +67,10 @@ export {
 } from "./core/runtime/index.js";
 
 export type {
+  FunctionToolAdapterInput,
+  FunctionToolHandler,
+  ToolAdapter,
+  ToolAdapterContext,
   ToolCall,
   ToolDefinition,
   ToolResult,
@@ -74,7 +78,11 @@ export type {
   ToolResultStatus,
   ToolRisk,
 } from "./tools/index.js";
-export { ToolRegistry } from "./tools/index.js";
+export {
+  FunctionToolAdapter,
+  ToolAdapterRegistry,
+  ToolRegistry,
+} from "./tools/index.js";
 
 export type {
   CreatePermissionRequestInput,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createDefaultRuntime,
+  FunctionToolAdapter,
   InMemoryStorage,
   Redactor,
   ReportTemplateRegistry,
@@ -183,6 +184,31 @@ describe("Phase1 public API", () => {
         token: "[REDACTED]",
       },
       redacted: true,
+    });
+  });
+
+  it("exposes tool adapter APIs through public exports", async () => {
+    const adapter = new FunctionToolAdapter({
+      name: "example.echo",
+      risk: "safe",
+      handler(call) {
+        return call.input;
+      },
+    });
+
+    await expect(adapter.toToolDefinition().execute({
+      id: "tool_call_001",
+      toolName: "example.echo",
+      input: {
+        message: "hello",
+      },
+      risk: "safe",
+      metadata: {},
+    })).resolves.toMatchObject({
+      status: "succeeded",
+      output: {
+        message: "hello",
+      },
     });
   });
 });
