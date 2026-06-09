@@ -6,13 +6,18 @@ import type { Report } from "./Report.js";
 export interface GenerateReportInput {
   task: AgentTask;
   evidence: Evidence[];
+  finalOutput?: unknown;
   id?: string;
   title?: string;
   createdAt?: string;
   metadata?: Metadata;
 }
 
-export class ReportGenerator {
+export interface ReportGeneratorPort {
+  generate(input: GenerateReportInput): Report | Promise<Report>;
+}
+
+export class ReportGenerator implements ReportGeneratorPort {
   generate(input: GenerateReportInput): Report {
     const evidenceRefs = input.evidence.map((evidence) => evidence.id);
 

@@ -2,11 +2,13 @@ export type { NetDoctorInput, NormalizedTarget } from "./input/index.js";
 export {
   buildNetDoctorProviderRequest,
   buildNetDoctorPlannerPrompt,
+  createNetDoctorAgentRuntime,
   createNetDoctorPlanner,
   isNetDoctorToolName,
   netDoctorPlannerCapability,
   netDoctorToolNames,
   parseNetDoctorProviderResponse,
+  type CreateNetDoctorAgentRuntimeInput,
   type NetDoctorToolName,
 } from "./agent/index.js";
 export {

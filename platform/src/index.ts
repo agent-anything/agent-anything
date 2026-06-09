@@ -119,6 +119,7 @@ export { EvidenceBuilder } from "./evidence/index.js";
 export type {
   GenerateReportInput,
   Report,
+  ReportGeneratorPort,
   ReportSection,
   ReportTemplate,
   ReportTemplateOutput,

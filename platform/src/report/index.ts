@@ -1,6 +1,10 @@
 export type { Report } from "./Report.js";
 export type { ReportSection } from "./ReportSection.js";
-export { ReportGenerator, type GenerateReportInput } from "./ReportGenerator.js";
+export {
+  ReportGenerator,
+  type GenerateReportInput,
+  type ReportGeneratorPort,
+} from "./ReportGenerator.js";
 export type {
   ReportTemplate,
   ReportTemplateOutput,

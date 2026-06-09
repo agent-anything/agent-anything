@@ -8,3 +8,7 @@ export {
   parseNetDoctorProviderResponse,
   type NetDoctorToolName,
 } from "./planner/index.js";
+export {
+  createNetDoctorAgentRuntime,
+  type CreateNetDoctorAgentRuntimeInput,
+} from "./runtime/index.js";

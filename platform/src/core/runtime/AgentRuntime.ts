@@ -1,6 +1,6 @@
 import type { AgentTask } from "../task/index.js";
 import type { Evidence, EvidenceBuilderPort } from "../../evidence/index.js";
-import type { ReportGenerator } from "../../report/index.js";
+import type { ReportGeneratorPort } from "../../report/index.js";
 import type { StoragePort } from "../../storage/index.js";
 import type { ToolCall, ToolRegistry } from "../../tools/index.js";
 import type { Metadata } from "../../shared/types.js";
@@ -18,7 +18,7 @@ export type PlanToolCalls = (
 export interface AgentRuntimeDependencies {
   toolRegistry: ToolRegistry;
   evidenceBuilder: EvidenceBuilderPort;
-  reportGenerator: ReportGenerator;
+  reportGenerator: ReportGeneratorPort;
   storage: StoragePort;
   planToolCalls: PlanToolCalls;
   agentLoop?: AgentLoop;
@@ -130,6 +130,7 @@ export class AgentRuntime {
       metadata: runtimeMetadata,
       startedAt,
       artifactRefs,
+      finalOutput: null,
     });
   }
 
@@ -175,6 +176,7 @@ export class AgentRuntime {
       },
       startedAt: runtime.startedAt,
       artifactRefs: [],
+      finalOutput: loopResult.finalOutput,
     });
   }
 
@@ -185,14 +187,16 @@ export class AgentRuntime {
       metadata: Metadata;
       startedAt: number;
       artifactRefs: string[];
+      finalOutput: unknown;
     },
   ): Promise<RuntimeResult> {
     const artifactRefs = [...runtime.artifactRefs];
     let report;
     try {
-      report = this.dependencies.reportGenerator.generate({
+      report = await this.dependencies.reportGenerator.generate({
         task,
         evidence,
+        finalOutput: runtime.finalOutput,
       });
     } catch (error) {
       return createFailedRuntimeResult(task, [toRuntimeError(error, {
