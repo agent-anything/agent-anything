@@ -136,6 +136,21 @@ export {
   ReportTemplateRegistry,
   ReportTemplateRenderer,
 } from "./report/index.js";
+export type {
+  BaseRedactionRule,
+  KeyRedactionRule,
+  PatternRedactionRule,
+  RedactInput,
+  Redaction,
+  RedactionResult,
+  RedactionRule,
+  RedactionRuleKind,
+  RedactorInput,
+} from "./redaction/index.js";
+export {
+  defaultRedactionRules,
+  Redactor,
+} from "./redaction/index.js";
 export type { StoragePort, StoredArtifact, StoredArtifactKind } from "./storage/index.js";
 export { InMemoryStorage } from "./storage/index.js";
 export type { Scenario, ScenarioExpectation } from "./scenarios/index.js";

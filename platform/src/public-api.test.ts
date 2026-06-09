@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDefaultRuntime,
   InMemoryStorage,
+  Redactor,
   ReportTemplateRegistry,
   ReportTemplateRenderer,
   ToolRegistry,
@@ -168,6 +169,21 @@ describe("Phase1 public API", () => {
 
     expect(registry).toBeInstanceOf(ReportTemplateRegistry);
     expect(renderer).toBeInstanceOf(ReportTemplateRenderer);
+  });
+
+  it("exposes redaction APIs through public exports", () => {
+    const redactor = new Redactor();
+
+    expect(redactor.redact({
+      value: {
+        token: "secret",
+      },
+    })).toMatchObject({
+      value: {
+        token: "[REDACTED]",
+      },
+      redacted: true,
+    });
   });
 });
 
