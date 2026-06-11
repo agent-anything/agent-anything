@@ -8,6 +8,7 @@ export interface CreateNetDoctorTaskInput {
   symptom?: string;
   taskId?: string;
   createdAt?: string;
+  source?: string;
 }
 
 export function createNetDoctorTask(
@@ -34,7 +35,7 @@ export function createNetDoctorTask(
     createdAt: input.createdAt ?? new Date().toISOString(),
     metadata: {
       product: "net-doctor",
-      source: "vscode-extension",
+      source: input.source ?? "net-doctor",
     },
   };
 }

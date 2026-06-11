@@ -1,0 +1,22 @@
+{
+  "name": "@agent-anything/net-doctor-cli",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "net-doctor": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@agent-anything/platform": "workspace:*",
+    "net-doctor": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1"
+  }
+}

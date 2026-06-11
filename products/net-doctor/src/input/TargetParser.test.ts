@@ -127,7 +127,7 @@ describe("parseTarget", () => {
       createdAt: "2026-06-04T00:00:00.000Z",
       metadata: {
         product: "net-doctor",
-        source: "vscode-extension",
+        source: "net-doctor",
       },
     });
   });

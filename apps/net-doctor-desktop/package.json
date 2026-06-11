@@ -1,0 +1,21 @@
+{
+  "name": "@agent-anything/net-doctor-desktop",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "main": "./dist/main/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-renderer-assets.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@agent-anything/platform": "workspace:*",
+    "net-doctor": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "electron": "^42.4.0"
+  }
+}

@@ -72,6 +72,7 @@ async function runDiagnosis(
   const task = createNetDoctorTask({
     target,
     symptom,
+    source: "vscode-extension",
   });
   const toolRegistry = new ToolRegistry();
   registerNetDoctorTools(toolRegistry);

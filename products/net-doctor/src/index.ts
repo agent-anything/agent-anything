@@ -30,13 +30,14 @@ export {
 } from "./input/index.js";
 export {
   createNetDoctorReportViewModel,
-  netDoctorSummaryTemplate,
-  networkEvidenceTemplate,
-  openReportPanel,
-  renderReportHtml,
   type NetDoctorReportCheck,
   type NetDoctorReportViewModel,
-} from "./report/index.js";
+} from "./report/NetDoctorReportViewModel.js";
+export { renderReportHtml } from "./report/renderReportHtml.js";
+export {
+  netDoctorSummaryTemplate,
+  networkEvidenceTemplate,
+} from "./report/templates/index.js";
 export {
   LocalNetDoctorStorage,
   type NetDoctorTaskHistoryEntry,

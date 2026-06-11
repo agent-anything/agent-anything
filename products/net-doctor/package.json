@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "publisher": "agent-anything",
   "type": "module",
-  "description": "NetDoctor, a VS Code-based network diagnostic agent built on AgentAnything.",
+  "description": "NetDoctor, a host-agnostic network diagnostic agent built on AgentAnything.",
   "categories": [
     "Other"
   ],
@@ -13,6 +13,16 @@
   },
   "main": "./dist/extension.js",
   "types": "./dist/extension.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./extension": {
+      "types": "./dist/extension.d.ts",
+      "import": "./dist/extension.js"
+    }
+  },
   "contributes": {
     "commands": [
       {
