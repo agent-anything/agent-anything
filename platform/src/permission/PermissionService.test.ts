@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { createDenyPermissionService } from "./createDenyPermissionService.js";
 import { createPermissionServiceFromMode } from "./createPermissionServiceFromMode.js";
+import { createTrustedPermissionService } from "./createTrustedPermissionService.js";
 import type { PermissionRequest } from "./PermissionRequest.js";
 
-describe("createPermissionServiceFromMode", () => {
-  it("preserves trusted behavior", async () => {
-    const service = createPermissionServiceFromMode("trusted");
+describe("permission service defaults", () => {
+  it("creates a trusted permission service", async () => {
+    const service = createTrustedPermissionService();
 
     const decision = await service.request(createRequest());
 
@@ -15,8 +17,8 @@ describe("createPermissionServiceFromMode", () => {
     });
   });
 
-  it("preserves deny behavior", async () => {
-    const service = createPermissionServiceFromMode("deny");
+  it("creates a deny permission service", async () => {
+    const service = createDenyPermissionService();
 
     const decision = await service.request(createRequest());
 
@@ -25,6 +27,29 @@ describe("createPermissionServiceFromMode", () => {
       status: "denied",
       code: "permission_mode_denied",
       reason: "Denied by permissionMode: deny.",
+    });
+  });
+
+  it("selects trusted and deny services from permission mode", async () => {
+    await expect(createPermissionServiceFromMode("trusted").request(createRequest()))
+      .resolves.toMatchObject({
+        status: "granted",
+      });
+
+    await expect(createPermissionServiceFromMode("deny").request(createRequest()))
+      .resolves.toMatchObject({
+        status: "denied",
+        code: "permission_mode_denied",
+      });
+  });
+
+  it("returns unavailable for ask mode without a host prompt service", async () => {
+    const service = createPermissionServiceFromMode("ask");
+
+    await expect(service.request(createRequest())).resolves.toMatchObject({
+      status: "denied",
+      code: "permission_unavailable",
+      reason: "Denied because permissionMode: ask requires a host-provided prompt service.",
     });
   });
 });

@@ -103,8 +103,10 @@ export type {
   ResolvePermissionDecisionInput,
 } from "./permission/index.js";
 export {
+  createDenyPermissionService,
   createPermissionRequest,
   createPermissionServiceFromMode,
+  createTrustedPermissionService,
   resolvePermissionDecision,
 } from "./permission/index.js";
 

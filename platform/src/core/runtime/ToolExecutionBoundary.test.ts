@@ -3,6 +3,10 @@ import { EvidenceBuilder } from "../../evidence/index.js";
 import type { PolicyPort } from "../../governance/index.js";
 import type { PermissionService } from "../../permission/index.js";
 import {
+  FakePermissionService,
+  FakePolicyPort,
+} from "../../testing/index.js";
+import {
   ToolRegistry,
   type ToolCall,
   type ToolDefinition,
@@ -194,28 +198,22 @@ describe("ToolExecutionBoundary", () => {
       onExecute: () => {
         executed = true;
       },
-      policyPort: {
-        async evaluate(input) {
-          return {
-            checkId: input.id,
-            status: "denied",
-            code: "policy_denied",
-            reason: "Policy denies risky tool.",
-            decidedAt: "2026-06-12T00:00:00.000Z",
-          };
-        },
-      },
-      permissionService: {
-        async request(request) {
-          permissionRequested = true;
-          return {
-            requestId: request.id,
-            status: "granted",
-            reason: "Allowed by test service.",
-            decidedAt: "2026-06-12T00:00:00.000Z",
-          };
-        },
-      },
+      policyPort: new FakePolicyPort((input) => ({
+        checkId: input.id,
+        status: "denied",
+        code: "policy_denied",
+        reason: "Policy denies risky tool.",
+        decidedAt: "2026-06-12T00:00:00.000Z",
+      })),
+      permissionService: new FakePermissionService((request) => {
+        permissionRequested = true;
+        return {
+          requestId: request.id,
+          status: "granted",
+          reason: "Allowed by test service.",
+          decidedAt: "2026-06-12T00:00:00.000Z",
+        };
+      }),
     });
 
     const outcome = await boundary.execute(
@@ -241,15 +239,11 @@ describe("ToolExecutionBoundary", () => {
 
   it("blocks risky tools when policy requires review", async () => {
     const boundary = createBoundary(createToolResult("succeeded"), {
-      policyPort: {
-        async evaluate(input) {
-          return {
-            checkId: input.id,
-            status: "requires_review",
-            decidedAt: "2026-06-12T00:00:00.000Z",
-          };
-        },
-      },
+      policyPort: new FakePolicyPort((input) => ({
+        checkId: input.id,
+        status: "requires_review",
+        decidedAt: "2026-06-12T00:00:00.000Z",
+      })),
     });
 
     const outcome = await boundary.execute(
@@ -272,11 +266,9 @@ describe("ToolExecutionBoundary", () => {
 
   it("maps policy port failure to structured runtime error", async () => {
     const boundary = createBoundary(createToolResult("succeeded"), {
-      policyPort: {
-        async evaluate() {
-          throw new Error("Policy service failed.");
-        },
-      },
+      policyPort: new FakePolicyPort(() => {
+        throw new Error("Policy service failed.");
+      }),
     });
 
     const outcome = await boundary.execute(
@@ -304,16 +296,12 @@ describe("ToolExecutionBoundary", () => {
       onExecute: () => {
         executed = true;
       },
-      permissionService: {
-        async request(request) {
-          return {
-            requestId: request.id,
-            status: "granted",
-            reason: "Allowed by test service.",
-            decidedAt: "2026-06-07T00:00:00.000Z",
-          };
-        },
-      },
+      permissionService: new FakePermissionService((request) => ({
+        requestId: request.id,
+        status: "granted",
+        reason: "Allowed by test service.",
+        decidedAt: "2026-06-07T00:00:00.000Z",
+      })),
     });
 
     const outcome = await boundary.execute(
@@ -334,11 +322,9 @@ describe("ToolExecutionBoundary", () => {
 
   it("maps permission service failure to structured runtime error", async () => {
     const boundary = createBoundary(createToolResult("succeeded"), {
-      permissionService: {
-        async request() {
-          throw new Error("Permission UI failed.");
-        },
-      },
+      permissionService: new FakePermissionService(() => {
+        throw new Error("Permission UI failed.");
+      }),
     });
 
     const outcome = await boundary.execute(

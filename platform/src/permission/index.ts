@@ -13,7 +13,9 @@ export type {
 } from "./PermissionDecision.js";
 export type { PermissionService } from "./PermissionService.js";
 export type { PermissionServiceResult } from "./PermissionServiceResult.js";
+export { createDenyPermissionService } from "./createDenyPermissionService.js";
 export { createPermissionServiceFromMode } from "./createPermissionServiceFromMode.js";
+export { createTrustedPermissionService } from "./createTrustedPermissionService.js";
 export {
   createPermissionRequest,
   type CreatePermissionRequestInput,

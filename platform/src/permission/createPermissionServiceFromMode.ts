@@ -1,17 +1,18 @@
 import type { PermissionMode } from "./PermissionMode.js";
-import type { PermissionRequestInput } from "./PermissionRequest.js";
 import type { PermissionService } from "./PermissionService.js";
-import { resolvePermissionDecision } from "./resolvePermissionDecision.js";
+import { createDenyPermissionService } from "./createDenyPermissionService.js";
+import { createTrustedPermissionService } from "./createTrustedPermissionService.js";
+import { createUnavailablePermissionService } from "./createUnavailablePermissionService.js";
 
 export function createPermissionServiceFromMode(
   permissionMode: PermissionMode,
 ): PermissionService {
-  return {
-    async request(request: PermissionRequestInput) {
-      return resolvePermissionDecision({
-        permissionMode,
-        request,
-      });
-    },
-  };
+  switch (permissionMode) {
+    case "trusted":
+      return createTrustedPermissionService();
+    case "ask":
+      return createUnavailablePermissionService();
+    case "deny":
+      return createDenyPermissionService();
+  }
 }
