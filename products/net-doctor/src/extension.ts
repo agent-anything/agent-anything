@@ -108,7 +108,7 @@ function writeRuntimeResult(
   },
 ): void {
   output.appendLine(`Status: ${result.result.status}`);
-  output.appendLine(`Report: ${result.result.reportRef ?? "(none)"}`);
+  output.appendLine(`Output: ${formatOutput(result.result.output)}`);
   output.appendLine(`Evidence: ${result.result.evidenceRefs.join(", ") || "(none)"}`);
   output.appendLine(`Artifacts: ${result.result.artifactRefs.join(", ") || "(none)"}`);
 
@@ -119,4 +119,8 @@ function writeRuntimeResult(
       output.appendLine(`- ${error.code}: ${error.message}`);
     }
   }
+}
+
+function formatOutput(output: unknown): string {
+  return output === null ? "(none)" : JSON.stringify(output);
 }

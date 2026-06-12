@@ -64,13 +64,17 @@ describe("mapRuntimeEventToNetDoctorProgress", () => {
   it("maps task completion and failure", () => {
     expect(
       mapRuntimeEventToNetDoctorProgress(createEvent("task.completed", {
-        reportRef: "artifact_report_001",
+        output: {
+          conclusion: "Done.",
+        },
         evidenceRefs: ["evidence_dns"],
       })),
     ).toMatchObject({
       phase: "completed",
       status: "succeeded",
-      reportRef: "artifact_report_001",
+      output: {
+        conclusion: "Done.",
+      },
       evidenceRefs: ["evidence_dns"],
     });
 

@@ -3,10 +3,17 @@ import type { RuntimeError } from "./RuntimeError.js";
 
 export type RuntimeStatus = "succeeded" | "failed" | "blocked" | "cancelled";
 
-export interface RuntimeResult {
+export interface RuntimeOutputSpec {
+  format: "json";
+  schema?: unknown;
+  metadata: Metadata;
+}
+
+export interface RuntimeResult<TOutput = unknown> {
   taskId: string;
   status: RuntimeStatus;
-  reportRef: ArtifactRef | null;
+  output: TOutput | null;
+  outputSpec: RuntimeOutputSpec;
   evidenceRefs: EvidenceRef[];
   artifactRefs: ArtifactRef[];
   errors: RuntimeError[];

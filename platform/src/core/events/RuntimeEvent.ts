@@ -15,8 +15,7 @@ export type RuntimeEventName =
   | "tool.finished"
   | "observation.created"
   | "context.updated"
-  | "evidence.created"
-  | "report.created";
+  | "evidence.created";
 
 export interface RuntimeEvent<TPayload = Metadata> {
   id: string;

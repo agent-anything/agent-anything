@@ -1,6 +1,5 @@
 import type { AgentTask } from "../task/index.js";
 import type { Evidence, EvidenceBuilderPort } from "../../evidence/index.js";
-import type { ReportGeneratorPort } from "../../report/index.js";
 import type { StoragePort } from "../../storage/index.js";
 import type { ToolCall, ToolRegistry } from "../../tools/index.js";
 import type { Metadata } from "../../shared/types.js";
@@ -8,7 +7,7 @@ import type { PermissionService } from "../../permission/index.js";
 import type { PolicyPort } from "../../governance/index.js";
 import type { RuntimeError } from "./RuntimeError.js";
 import type { RuntimeOptions } from "./RuntimeOptions.js";
-import type { RuntimeResult } from "./RuntimeResult.js";
+import type { RuntimeOutputSpec, RuntimeResult } from "./RuntimeResult.js";
 import type { AgentLoop } from "./AgentLoop.js";
 import { ToolExecutionBoundary } from "./ToolExecutionBoundary.js";
 
@@ -19,7 +18,6 @@ export type PlanToolCalls = (
 export interface AgentRuntimeDependencies {
   toolRegistry: ToolRegistry;
   evidenceBuilder: EvidenceBuilderPort;
-  reportGenerator: ReportGeneratorPort;
   storage: StoragePort;
   planToolCalls: PlanToolCalls;
   agentLoop?: AgentLoop;
@@ -57,6 +55,7 @@ export class AgentRuntime {
     if (invalidOptionsError) {
       return createFailedRuntimeResult(task, [invalidOptionsError], {
         metadata: runtimeMetadata,
+        outputSpec: resolveOutputSpec(options),
         startedAt,
       });
     }
@@ -77,6 +76,7 @@ export class AgentRuntime {
         message: "Failed to create deterministic tool call plan.",
       })], {
         metadata: runtimeMetadata,
+        outputSpec: resolveOutputSpec(options),
         startedAt,
       });
     }
@@ -93,6 +93,7 @@ export class AgentRuntime {
         },
       ], {
         metadata: runtimeMetadata,
+        outputSpec: resolveOutputSpec(options),
         startedAt,
       });
     }
@@ -109,6 +110,7 @@ export class AgentRuntime {
           },
         ], {
           metadata: runtimeMetadata,
+          outputSpec: resolveOutputSpec(options),
           startedAt,
         });
       }
@@ -122,6 +124,7 @@ export class AgentRuntime {
       if (execution.status === "failed") {
         return createRuntimeResult(task, "failed", execution.errors, {
           metadata: runtimeMetadata,
+          outputSpec: resolveOutputSpec(options),
           startedAt,
         });
       }
@@ -129,6 +132,7 @@ export class AgentRuntime {
       if (execution.status === "blocked") {
         return createRuntimeResult(task, "blocked", execution.errors, {
           metadata: runtimeMetadata,
+          outputSpec: resolveOutputSpec(options),
           startedAt,
         });
       }
@@ -140,7 +144,8 @@ export class AgentRuntime {
       metadata: runtimeMetadata,
       startedAt,
       artifactRefs,
-      finalOutput: null,
+      output: null,
+      outputSpec: resolveOutputSpec(options),
     });
   }
 
@@ -173,6 +178,7 @@ export class AgentRuntime {
           ...runtime.metadata,
           ...loopResult.metadata,
         },
+        outputSpec: resolveOutputSpec(options),
         startedAt: runtime.startedAt,
       });
     }
@@ -184,6 +190,7 @@ export class AgentRuntime {
           ...runtime.metadata,
           ...loopResult.metadata,
         },
+        outputSpec: resolveOutputSpec(options),
         startedAt: runtime.startedAt,
       });
     }
@@ -217,7 +224,8 @@ export class AgentRuntime {
       },
       startedAt: runtime.startedAt,
       artifactRefs: [],
-      finalOutput: loopResult.finalOutput,
+      output: loopResult.finalOutput,
+      outputSpec: resolveOutputSpec(options),
     });
   }
 
@@ -228,42 +236,22 @@ export class AgentRuntime {
       metadata: Metadata;
       startedAt: number;
       artifactRefs: string[];
-      finalOutput: unknown;
+      output: unknown;
+      outputSpec: RuntimeOutputSpec;
     },
   ): Promise<RuntimeResult> {
     const artifactRefs = [...runtime.artifactRefs];
-    let report;
-    try {
-      report = await this.dependencies.reportGenerator.generate({
-        task,
-        evidence,
-        finalOutput: runtime.finalOutput,
-      });
-    } catch (error) {
-      return createFailedRuntimeResult(task, [toRuntimeError(error, {
-        code: "report_generation_failed",
-        message: "Failed to generate report.",
-      })], {
-        evidenceRefs: evidence.map((item) => item.id),
-        artifactRefs,
-        metadata: runtime.metadata,
-        startedAt: runtime.startedAt,
-      });
-    }
-
     try {
       for (const item of evidence) {
         const artifact = await this.dependencies.storage.storeEvidence(item);
         artifactRefs.push(artifact.id);
       }
 
-      const reportArtifact = await this.dependencies.storage.storeReport(report);
-      artifactRefs.push(reportArtifact.id);
-
       return {
         taskId: task.id,
         status: "succeeded",
-        reportRef: reportArtifact.id,
+        output: runtime.output,
+        outputSpec: runtime.outputSpec,
         evidenceRefs: evidence.map((item) => item.id),
         artifactRefs,
         errors: [],
@@ -277,6 +265,7 @@ export class AgentRuntime {
         evidenceRefs: evidence.map((item) => item.id),
         artifactRefs,
         metadata: runtime.metadata,
+        outputSpec: runtime.outputSpec,
         startedAt: runtime.startedAt,
       });
     }
@@ -345,6 +334,7 @@ function createFailedRuntimeResult(
     evidenceRefs?: string[];
     artifactRefs?: string[];
     metadata: Metadata;
+    outputSpec?: RuntimeOutputSpec;
     startedAt: number;
   },
 ): RuntimeResult {
@@ -359,17 +349,26 @@ function createRuntimeResult(
     evidenceRefs?: string[];
     artifactRefs?: string[];
     metadata: Metadata;
+    outputSpec?: RuntimeOutputSpec;
     startedAt: number;
   },
 ): RuntimeResult {
   return {
     taskId: task.id,
     status,
-    reportRef: null,
+    output: null,
+    outputSpec: options.outputSpec ?? resolveOutputSpec(),
     evidenceRefs: options.evidenceRefs ?? [],
     artifactRefs: options.artifactRefs ?? [],
     errors,
     metadata: createRuntimeMetadata(options.metadata, options.startedAt),
+  };
+}
+
+function resolveOutputSpec(options?: RuntimeOptions): RuntimeOutputSpec {
+  return options?.outputSpec ?? {
+    format: "json",
+    metadata: {},
   };
 }
 

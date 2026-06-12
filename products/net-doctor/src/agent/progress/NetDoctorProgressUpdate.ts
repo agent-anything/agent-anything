@@ -5,7 +5,6 @@ export type NetDoctorProgressPhase =
   | "planning"
   | "tool"
   | "observing"
-  | "reporting"
   | "completed"
   | "failed";
 
@@ -22,7 +21,7 @@ export interface NetDoctorProgressUpdate {
   message: string;
   toolName: string | null;
   evidenceRefs: string[];
-  reportRef: string | null;
+  output: unknown | null;
   errorCode: string | null;
   metadata: Metadata;
 }

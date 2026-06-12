@@ -237,6 +237,43 @@ describe("ToolExecutionBoundary", () => {
     expect(executed).toBe(false);
   });
 
+  it("runs policy before permission and execution on allow path", async () => {
+    const order: string[] = [];
+    const boundary = createBoundary(createToolResult("succeeded"), {
+      onExecute: () => {
+        order.push("execute");
+      },
+      policyPort: new FakePolicyPort((input) => {
+        order.push("policy");
+        return {
+          checkId: input.id,
+          status: "allowed",
+          decidedAt: "2026-06-12T00:00:00.000Z",
+        };
+      }),
+      permissionService: new FakePermissionService((request) => {
+        order.push("permission");
+        return {
+          requestId: request.id,
+          status: "granted",
+          reason: "Allowed by test service.",
+          decidedAt: "2026-06-12T00:00:00.000Z",
+        };
+      }),
+    });
+
+    const outcome = await boundary.execute(
+      createExecuteInput({
+        toolCall: createToolCall({
+          risk: "risky",
+        }),
+      }),
+    );
+
+    expect(outcome.status).toBe("succeeded");
+    expect(order).toEqual(["policy", "permission", "execute"]);
+  });
+
   it("blocks risky tools when policy requires review", async () => {
     const boundary = createBoundary(createToolResult("succeeded"), {
       policyPort: new FakePolicyPort((input) => ({
@@ -318,6 +355,72 @@ describe("ToolExecutionBoundary", () => {
 
     expect(outcome.status).toBe("succeeded");
     expect(executed).toBe(true);
+  });
+
+  it("blocks risky tools when permission service denies", async () => {
+    let executed = false;
+    const boundary = createBoundary(createToolResult("succeeded"), {
+      onExecute: () => {
+        executed = true;
+      },
+      permissionService: new FakePermissionService((request) => ({
+        requestId: request.id,
+        status: "denied",
+        code: "permission_denied",
+        reason: "Denied by test service.",
+        decidedAt: "2026-06-12T00:00:00.000Z",
+      })),
+    });
+
+    const outcome = await boundary.execute(
+      createExecuteInput({
+        toolCall: createToolCall({
+          risk: "risky",
+        }),
+      }),
+    );
+
+    expect(outcome).toMatchObject({
+      status: "blocked",
+      errors: [
+        {
+          code: "permission_denied",
+          message: "Denied by test service.",
+        },
+      ],
+    });
+    expect(executed).toBe(false);
+  });
+
+  it("blocks ask mode when no host permission service is available", async () => {
+    let executed = false;
+    const boundary = createBoundary(createToolResult("succeeded"), {
+      onExecute: () => {
+        executed = true;
+      },
+    });
+
+    const outcome = await boundary.execute(
+      createExecuteInput({
+        toolCall: createToolCall({
+          risk: "risky",
+        }),
+        options: {
+          ...createOptions(),
+          permissionMode: "ask",
+        },
+      }),
+    );
+
+    expect(outcome).toMatchObject({
+      status: "blocked",
+      errors: [
+        {
+          code: "permission_unavailable",
+        },
+      ],
+    });
+    expect(executed).toBe(false);
   });
 
   it("maps permission service failure to structured runtime error", async () => {

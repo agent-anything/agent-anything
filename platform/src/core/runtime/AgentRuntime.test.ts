@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Evidence } from "../../evidence/index.js";
 import { EvidenceBuilder } from "../../evidence/index.js";
-import type { Report } from "../../report/index.js";
-import { ReportGenerator } from "../../report/index.js";
+import type { PolicyPort } from "../../governance/index.js";
+import type { PermissionService } from "../../permission/index.js";
 import { InMemoryStorage, type StoragePort } from "../../storage/index.js";
+import {
+  FakePermissionService,
+  FakePolicyPort,
+} from "../../testing/index.js";
 import { InMemoryContextManager } from "../context/index.js";
 import type { PlanStep, PlannerInput } from "../planner/index.js";
 import {
@@ -31,11 +35,14 @@ describe("AgentRuntime", () => {
     const result = await runtime.run(createTask());
 
     expect(result.status).toBe("succeeded");
-    expect(result.reportRef).toBe("artifact_report_report_task_001");
+    expect(result.output).toBeNull();
+    expect(result.outputSpec).toEqual({
+      format: "json",
+      metadata: {},
+    });
     expect(result.evidenceRefs).toEqual(["evidence_tool_call_001"]);
     expect(result.artifactRefs).toEqual([
       "artifact_evidence_evidence_tool_call_001",
-      "artifact_report_report_task_001",
     ]);
     expect(result.errors).toEqual([]);
   });
@@ -91,6 +98,170 @@ describe("AgentRuntime", () => {
     expect(executionCount).toBe(0);
   });
 
+  it("maps policy denial to blocked RuntimeResult", async () => {
+    let executionCount = 0;
+    const registry = new ToolRegistry();
+    registry.register(
+      createFakeTool("shell.runCommand", {
+        risk: "risky",
+        onExecute: () => {
+          executionCount += 1;
+        },
+      }),
+    );
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [createToolCall("shell.runCommand", { risk: "risky" })],
+      policyPort: new FakePolicyPort((input) => ({
+        checkId: input.id,
+        status: "denied",
+        code: "policy_denied",
+        reason: "Policy blocked shell execution.",
+        decidedAt: "2026-06-12T00:00:00.000Z",
+      })),
+      permissionService: new FakePermissionService(),
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result).toMatchObject({
+      status: "blocked",
+      output: null,
+      errors: [
+        {
+          code: "policy_denied",
+          message: "Policy blocked shell execution.",
+        },
+      ],
+    });
+    expect(executionCount).toBe(0);
+  });
+
+  it("maps policy review to blocked RuntimeResult", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("shell.runCommand", { risk: "risky" }));
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [createToolCall("shell.runCommand", { risk: "risky" })],
+      policyPort: new FakePolicyPort((input) => ({
+        checkId: input.id,
+        status: "requires_review",
+        decidedAt: "2026-06-12T00:00:00.000Z",
+      })),
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result).toMatchObject({
+      status: "blocked",
+      errors: [
+        {
+          code: "policy_review_required",
+        },
+      ],
+    });
+  });
+
+  it("maps policy failure to failed RuntimeResult", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("shell.runCommand", { risk: "risky" }));
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [createToolCall("shell.runCommand", { risk: "risky" })],
+      policyPort: new FakePolicyPort(() => {
+        throw new Error("Policy backend failed.");
+      }),
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result).toMatchObject({
+      status: "failed",
+      errors: [
+        {
+          code: "policy_check_failed",
+          message: "Policy backend failed.",
+        },
+      ],
+    });
+  });
+
+  it("maps ask mode without host permission service to blocked RuntimeResult", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("shell.runCommand", { risk: "risky" }));
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [createToolCall("shell.runCommand", { risk: "risky" })],
+      options: {
+        ...createOptions(),
+        permissionMode: "ask",
+      },
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result).toMatchObject({
+      status: "blocked",
+      errors: [
+        {
+          code: "permission_unavailable",
+        },
+      ],
+    });
+  });
+
+  it("maps permission service denial to blocked RuntimeResult", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("shell.runCommand", { risk: "risky" }));
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [createToolCall("shell.runCommand", { risk: "risky" })],
+      permissionService: new FakePermissionService((request) => ({
+        requestId: request.id,
+        status: "denied",
+        code: "permission_denied",
+        reason: "Denied by host permission service.",
+        decidedAt: "2026-06-12T00:00:00.000Z",
+      })),
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result).toMatchObject({
+      status: "blocked",
+      errors: [
+        {
+          code: "permission_denied",
+          message: "Denied by host permission service.",
+        },
+      ],
+    });
+  });
+
+  it("maps permission service failure to failed RuntimeResult", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("shell.runCommand", { risk: "risky" }));
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [createToolCall("shell.runCommand", { risk: "risky" })],
+      permissionService: new FakePermissionService(() => {
+        throw new Error("Permission service failed.");
+      }),
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result).toMatchObject({
+      status: "failed",
+      errors: [
+        {
+          code: "permission_check_failed",
+          message: "Permission service failed.",
+        },
+      ],
+    });
+  });
+
   it("returns structured failure when a tool fails", async () => {
     const registry = new ToolRegistry();
     registry.register(
@@ -115,7 +286,7 @@ describe("AgentRuntime", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      reportRef: null,
+      output: null,
       errors: [
         {
           code: "tool_execution_failed",
@@ -146,33 +317,6 @@ describe("AgentRuntime", () => {
         {
           code: "runtime_evidence_creation_failed",
           message: "Evidence builder failed.",
-        },
-      ],
-    });
-  });
-
-  it("returns structured failure when report generation fails", async () => {
-    const registry = new ToolRegistry();
-    registry.register(createFakeTool("net.lookupDns"));
-    const runtime = createRuntime({
-      toolRegistry: registry,
-      toolCalls: [createToolCall("net.lookupDns")],
-      reportGenerator: {
-        generate() {
-          throw new Error("Report generator failed.");
-        },
-      } as ReportGenerator,
-    });
-
-    const result = await runtime.run(createTask());
-
-    expect(result).toMatchObject({
-      status: "failed",
-      evidenceRefs: ["evidence_tool_call_001"],
-      errors: [
-        {
-          code: "report_generation_failed",
-          message: "Report generator failed.",
         },
       ],
     });
@@ -263,8 +407,10 @@ describe("AgentRuntime", () => {
     const result = await runtime.run(createTask());
 
     expect(result.status).toBe("succeeded");
+    expect(result.output).toEqual({
+      conclusion: "Loop completed.",
+    });
     expect(result.evidenceRefs).toEqual(["evidence_tool_call_001"]);
-    expect(result.reportRef).toBe("artifact_report_report_task_001");
     expect(storage.getArtifact("artifact_evidence_evidence_tool_call_001")).toMatchObject({
       kind: "evidence",
     });
@@ -299,7 +445,7 @@ describe("AgentRuntime", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      reportRef: null,
+      output: null,
       errors: [
         {
           code: "provider_planner_failed",
@@ -315,18 +461,20 @@ function createRuntime(input: {
   toolCalls: ToolCall[];
   options?: RuntimeOptions;
   evidenceBuilder?: EvidenceBuilder;
-  reportGenerator?: ReportGenerator;
   storage?: StoragePort;
   agentLoop?: AgentLoop;
+  policyPort?: PolicyPort;
+  permissionService?: PermissionService;
 }): AgentRuntime {
   return new AgentRuntime(
     {
       toolRegistry: input.toolRegistry,
       evidenceBuilder: input.evidenceBuilder ?? new EvidenceBuilder(),
-      reportGenerator: input.reportGenerator ?? new ReportGenerator(),
       storage: input.storage ?? new InMemoryStorage(),
       planToolCalls: () => input.toolCalls,
       agentLoop: input.agentLoop,
+      policyPort: input.policyPort,
+      permissionService: input.permissionService,
     },
     input.options ?? createOptions(),
   );

@@ -19,7 +19,7 @@ export interface NetDoctorTaskHistoryEntry {
   createdAt: string;
   updatedAt: string;
   taskDir: string;
-  reportRef: string | null;
+  output: unknown | null;
   evidenceRefs: string[];
   artifactRefs: string[];
 }
@@ -47,7 +47,7 @@ export class LocalNetDoctorStorage implements StoragePort {
       createdAt: task.createdAt,
       updatedAt: new Date().toISOString(),
       taskDir: this.taskDir,
-      reportRef: null,
+      output: null,
       evidenceRefs: [],
       artifactRefs: [],
     });
@@ -129,7 +129,7 @@ export class LocalNetDoctorStorage implements StoragePort {
 
     existing.status = result.status;
     existing.updatedAt = new Date().toISOString();
-    existing.reportRef = result.reportRef;
+    existing.output = result.output;
     existing.evidenceRefs = result.evidenceRefs;
     existing.artifactRefs = result.artifactRefs;
     await writeJson(this.historyPath, history);
@@ -198,7 +198,7 @@ function isHistoryEntry(value: unknown): value is NetDoctorTaskHistoryEntry {
     typeof record.createdAt === "string" &&
     typeof record.updatedAt === "string" &&
     typeof record.taskDir === "string" &&
-    (typeof record.reportRef === "string" || record.reportRef === null) &&
+    "output" in record &&
     Array.isArray(record.evidenceRefs) &&
     Array.isArray(record.artifactRefs)
   );

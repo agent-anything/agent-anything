@@ -24,7 +24,7 @@ export interface RunNetDoctorCliInput {
 export interface RunNetDoctorCliResult {
   status: RuntimeResult["status"];
   exitCode: number;
-  reportRef: string | null;
+  output: RuntimeResult["output"];
   evidenceRefs: string[];
 }
 
@@ -69,7 +69,7 @@ export async function runNetDoctorCli(
 
   write(`Result: ${result.status}`);
   write(`Conclusion: ${viewModel.conclusion}`);
-  write(`Report: ${result.reportRef ?? "(none)"}`);
+  write(`Output: ${formatOutput(result.output)}`);
 
   if (result.errors.length > 0) {
     for (const error of result.errors) {
@@ -80,7 +80,11 @@ export async function runNetDoctorCli(
   return {
     status: result.status,
     exitCode: result.status === "succeeded" ? 0 : 1,
-    reportRef: result.reportRef,
+    output: result.output,
     evidenceRefs: result.evidenceRefs,
   };
+}
+
+function formatOutput(output: unknown): string {
+  return output === null ? "(none)" : JSON.stringify(output);
 }

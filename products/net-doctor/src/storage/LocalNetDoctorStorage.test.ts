@@ -23,7 +23,9 @@ describe("LocalNetDoctorStorage", () => {
     const evidenceArtifact = await storage.storeEvidence(createEvidence());
     const reportArtifact = await storage.storeReport(createReport());
     await storage.storeRuntimeResult(createRuntimeResult({
-      reportRef: reportArtifact.id,
+      output: {
+        conclusion: "Storage test completed.",
+      },
       evidenceRefs: ["evidence_001"],
       artifactRefs: [evidenceArtifact.id, reportArtifact.id],
     }));
@@ -54,7 +56,9 @@ describe("LocalNetDoctorStorage", () => {
         taskId: "task_001",
         target: "example.com",
         status: "succeeded",
-        reportRef: reportArtifact.id,
+        output: {
+          conclusion: "Storage test completed.",
+        },
         evidenceRefs: ["evidence_001"],
         artifactRefs: [evidenceArtifact.id, reportArtifact.id],
       },
@@ -147,7 +151,11 @@ function createRuntimeResult(
   return {
     taskId: "task_001",
     status: "succeeded",
-    reportRef: null,
+    output: null,
+    outputSpec: {
+      format: "json",
+      metadata: {},
+    },
     evidenceRefs: [],
     artifactRefs: [],
     errors: [],

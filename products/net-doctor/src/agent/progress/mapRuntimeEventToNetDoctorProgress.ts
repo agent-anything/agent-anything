@@ -70,19 +70,12 @@ export function mapRuntimeEventToNetDoctorProgress(
         message: "Updated diagnosis context.",
         evidenceRefs: readStringArray(payload, "evidenceRefs"),
       });
-    case "report.created":
-      return createUpdate(event, {
-        phase: "reporting",
-        status: "succeeded",
-        message: "Created NetDoctor report.",
-        reportRef: readString(payload, "reportRef"),
-      });
     case "task.completed":
       return createUpdate(event, {
         phase: "completed",
         status: "succeeded",
         message: "NetDoctor diagnosis completed.",
-        reportRef: readString(payload, "reportRef"),
+        output: payload.output ?? null,
         evidenceRefs: readStringArray(payload, "evidenceRefs"),
       });
     case "task.failed":
@@ -106,7 +99,7 @@ function createUpdate(
     message: string;
     toolName?: string | null;
     evidenceRefs?: string[];
-    reportRef?: string | null;
+    output?: unknown | null;
     errorCode?: string | null;
   },
 ): NetDoctorProgressUpdate {
@@ -118,7 +111,7 @@ function createUpdate(
     message: input.message,
     toolName: input.toolName ?? null,
     evidenceRefs: input.evidenceRefs ?? [],
-    reportRef: input.reportRef ?? null,
+    output: input.output ?? null,
     errorCode: input.errorCode ?? null,
     metadata: {
       runtimeEventId: event.id,

@@ -45,13 +45,9 @@ export function renderReportHtml(model: NetDoctorReportViewModel): string {
     <section>
       <h2>Stored Artifacts</h2>
       <p class="artifact-summary">
-        <span class="muted">Report Artifact</span><br>
-        ${model.reportRef === null ? '<span class="muted">(none)</span>' : `<code>${escapeHtml(model.reportRef)}</code>`}
-      </p>
-      <p class="artifact-summary">
         <span class="muted">Evidence Artifacts</span>
       </p>
-      ${renderStringList(getEvidenceArtifactRefs(model))}
+      ${renderStringList(model.artifactRefs)}
     </section>
 
     ${renderErrors(model)}
@@ -128,10 +124,6 @@ function renderStringList(items: string[]): string {
   }
 
   return `<ul>${items.map((item) => `<li><code>${escapeHtml(item)}</code></li>`).join("")}</ul>`;
-}
-
-function getEvidenceArtifactRefs(model: NetDoctorReportViewModel): string[] {
-  return model.artifactRefs.filter((artifactRef) => artifactRef !== model.reportRef);
 }
 
 function escapeHtml(value: string): string {

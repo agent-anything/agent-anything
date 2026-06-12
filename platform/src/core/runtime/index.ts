@@ -1,7 +1,7 @@
 export type { RuntimeLimits } from "./RuntimeLimits.js";
 export type { RuntimeError, RuntimeErrorCode } from "./RuntimeError.js";
 export type { RuntimeOptions } from "./RuntimeOptions.js";
-export type { RuntimeResult, RuntimeStatus } from "./RuntimeResult.js";
+export type { RuntimeOutputSpec, RuntimeResult, RuntimeStatus } from "./RuntimeResult.js";
 export type { ExecutionAccess, RuntimeAccessProfile } from "./RuntimeAccessProfile.js";
 export {
   AgentLoop,

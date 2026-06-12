@@ -63,7 +63,7 @@ export async function runDesktopDiagnosis(
 
   return {
     status: result.status,
-    reportRef: result.reportRef,
+    output: result.output,
     conclusion: viewModel.conclusion,
     evidenceRefs: result.evidenceRefs,
     errors: result.errors.map((error) => ({

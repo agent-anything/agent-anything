@@ -57,13 +57,10 @@ describe("NetDoctor Phase2 agent scenarios", () => {
       "evidence_tool_call_dns_lookup",
       "evidence_tool_call_tcp_connect",
     ]);
-    expect(storage.getReport("report_task_phase2")).toMatchObject({
-      title: "NetDoctor diagnosis for example.com",
-      evidenceRefs: [
-        "evidence_tool_call_dns_lookup",
-        "evidence_tool_call_tcp_connect",
-      ],
+    expect(result.output).toEqual({
+      conclusion: "DNS resolves and TCP is reachable.",
     });
+    expect(storage.getReport("report_task_phase2")).toBeUndefined();
   });
 
   it("makes first observation visible to the second provider request", async () => {

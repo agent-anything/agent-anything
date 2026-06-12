@@ -16,7 +16,7 @@ export interface DesktopDiagnosisRequest {
 
 export interface DesktopDiagnosisResult {
   status: RuntimeResult["status"];
-  reportRef: string | null;
+  output: RuntimeResult["output"];
   conclusion: string;
   evidenceRefs: string[];
   errors: Array<{

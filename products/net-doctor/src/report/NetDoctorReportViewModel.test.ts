@@ -63,7 +63,6 @@ describe("createNetDoctorReportViewModel", () => {
       taskInput: createTaskInput(),
       result: createRuntimeResult({
         status: "failed",
-        reportRef: null,
         errors: [
           {
             code: "tool_execution_failed",
@@ -106,7 +105,11 @@ function createRuntimeResult(
   return {
     taskId: "task_001",
     status: "succeeded",
-    reportRef: "artifact_report_report_task_001",
+    output: null,
+    outputSpec: {
+      format: "json",
+      metadata: {},
+    },
     evidenceRefs: [],
     artifactRefs: [],
     errors: [],

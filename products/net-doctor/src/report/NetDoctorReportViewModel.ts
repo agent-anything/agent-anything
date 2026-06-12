@@ -9,7 +9,7 @@ export interface NetDoctorReportViewModel {
   evidence: NetDoctorReportEvidence[];
   evidenceRefs: string[];
   artifactRefs: string[];
-  reportRef: string | null;
+  output: unknown;
   conclusion: string;
   nextSteps: string[];
   errors: Array<{
@@ -59,9 +59,10 @@ export function createNetDoctorReportViewModel(input: {
     evidence,
     evidenceRefs: input.result.evidenceRefs,
     artifactRefs: input.result.artifactRefs,
-    reportRef: input.result.reportRef,
+    output: input.result.output,
     conclusion: createConclusion({
       status: input.result.status,
+      output: input.result.output,
       evidence,
       errors: input.result.errors,
     }),
@@ -120,6 +121,7 @@ function toCheckName(toolName: string): string {
 
 function createConclusion(input: {
   status: RuntimeResult["status"];
+  output: RuntimeResult["output"];
   evidence: NetDoctorReportEvidence[];
   errors: RuntimeResult["errors"];
 }): string {
@@ -131,6 +133,11 @@ function createConclusion(input: {
     }
 
     return "NetDoctor could not complete the Phase1 diagnosis flow.";
+  }
+
+  const outputConclusion = getOutputConclusion(input.output);
+  if (outputConclusion) {
+    return outputConclusion;
   }
 
   const dns = findEvidence(input.evidence, "dnsLookup");
@@ -159,6 +166,25 @@ function createConclusion(input: {
   }
 
   return "NetDoctor could not complete the Phase1 diagnosis flow.";
+}
+
+function getOutputConclusion(output: unknown): string | null {
+  if (typeof output === "string" && output.trim() !== "") {
+    return output;
+  }
+
+  if (!isRecord(output)) {
+    return null;
+  }
+
+  return readString(output, "diagnosis") ??
+    readString(output, "conclusion") ??
+    readString(output, "summary");
+}
+
+function readString(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === "string" && value.trim() !== "" ? value : null;
 }
 
 function createNextSteps(input: {

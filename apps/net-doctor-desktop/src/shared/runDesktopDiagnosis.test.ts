@@ -30,7 +30,9 @@ describe("runDesktopDiagnosis", () => {
     });
 
     expect(result.status).toBe("succeeded");
-    expect(result.reportRef).toMatch(/^artifact_report_report_task_/);
+    expect(result.output).toEqual({
+      conclusion: "Desktop test completed.",
+    });
     expect(result.errors).toEqual([]);
   });
 });

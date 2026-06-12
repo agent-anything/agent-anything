@@ -54,7 +54,9 @@ describe("createNetDoctorAgentRuntime", () => {
     expect(result).toMatchObject({
       taskId: "task_001",
       status: "succeeded",
-      reportRef: "artifact_report_report_task_001",
+      output: {
+        conclusion: "DNS resolved successfully.",
+      },
       evidenceRefs: ["evidence_tool_call_dns_lookup"],
       errors: [],
       metadata: {
@@ -63,31 +65,16 @@ describe("createNetDoctorAgentRuntime", () => {
         testRun: "phase2-runtime-composition",
       },
     });
+    expect(result.artifactRefs).toEqual([
+      "artifact_evidence_evidence_tool_call_dns_lookup",
+    ]);
     expect(storage.getEvidence("evidence_tool_call_dns_lookup")).toMatchObject({
       summary: "example.com resolved to 1 address.",
       metadata: {
         evidenceKind: "dnsLookup",
       },
     });
-    const report = storage.getReport("report_task_001");
-    expect(report).toMatchObject({
-      title: "NetDoctor diagnosis for example.com",
-      evidenceRefs: ["evidence_tool_call_dns_lookup"],
-      metadata: {
-        product: "net-doctor",
-        template: "summary",
-      },
-    });
-    expect(report?.sections[0]).toMatchObject({
-      title: "Diagnosis",
-      content: expect.stringContaining("Conclusion: DNS resolved successfully."),
-      evidenceRefs: ["evidence_tool_call_dns_lookup"],
-    });
-    expect(report?.sections[1]).toMatchObject({
-      title: "Evidence Summary",
-      content: "- example.com resolved to 1 address.",
-      evidenceRefs: ["evidence_tool_call_dns_lookup"],
-    });
+    expect(storage.getReport("report_task_001")).toBeUndefined();
     expect(provider.requests()).toHaveLength(2);
     expect(provider.requests()[1]?.messages[1]?.content).toContain(
       "example.com resolved to 1 address.",

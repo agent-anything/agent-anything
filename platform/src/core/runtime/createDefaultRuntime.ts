@@ -1,7 +1,6 @@
 import { EvidenceBuilder, type EvidenceBuilderPort } from "../../evidence/index.js";
 import type { PermissionMode, PermissionService } from "../../permission/index.js";
 import type { PolicyPort } from "../../governance/index.js";
-import { ReportGenerator } from "../../report/index.js";
 import type { Metadata } from "../../shared/types.js";
 import type { StoragePort } from "../../storage/index.js";
 import type { ToolCall, ToolRegistry } from "../../tools/index.js";
@@ -35,7 +34,6 @@ export function createDefaultRuntime(
     {
       toolRegistry: input.toolRegistry,
       evidenceBuilder: input.evidenceBuilder ?? new EvidenceBuilder(),
-      reportGenerator: new ReportGenerator(),
       storage: input.storage,
       planToolCalls: input.planToolCalls ?? readToolCallsFromTaskInput,
       policyPort: input.policyPort,

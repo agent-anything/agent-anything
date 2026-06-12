@@ -51,12 +51,16 @@ describe("Phase1 public API", () => {
     const result = await runtime.run(task);
 
     expect(result.status).toBe("succeeded");
-    expect(result.reportRef).toBe("artifact_report_report_task_001");
+    expect(result.output).toBeNull();
+    expect(result.outputSpec).toEqual({
+      format: "json",
+      metadata: {},
+    });
     expect(result.evidenceRefs).toEqual(["evidence_tool_call_001"]);
     expect(result.errors).toEqual([]);
-    expect(storage.getArtifact("artifact_report_report_task_001")).toMatchObject({
-      kind: "report",
-      ref: "memory://report/report_task_001",
+    expect(storage.getArtifact("artifact_evidence_evidence_tool_call_001")).toMatchObject({
+      kind: "evidence",
+      ref: "memory://evidence/evidence_tool_call_001",
     });
   });
 
@@ -100,7 +104,7 @@ describe("Phase1 public API", () => {
 
     expect(result).toMatchObject({
       status: "blocked",
-      reportRef: null,
+      output: null,
       errors: [
         {
           code: "permission_mode_denied",

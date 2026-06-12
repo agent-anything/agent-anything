@@ -53,6 +53,7 @@ export type {
   RuntimeErrorCode,
   RuntimeLimits,
   RuntimeOptions,
+  RuntimeOutputSpec,
   RuntimeResult,
   RuntimeStatus,
   ToolExecutionBoundaryDependencies,

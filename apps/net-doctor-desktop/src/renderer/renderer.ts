@@ -40,7 +40,7 @@ async function runDiagnosis(): Promise<void> {
     const conclusion = document.createElement("p");
     conclusion.textContent = result.conclusion;
     const report = document.createElement("p");
-    report.textContent = `Report: ${result.reportRef ?? "(none)"}`;
+    report.textContent = `Output: ${formatOutput(result.output)}`;
     resultPanel.classList.add(result.status === "succeeded" ? "success" : "failed");
     resultPanel.append(title, conclusion, report);
 
@@ -61,6 +61,10 @@ async function runDiagnosis(): Promise<void> {
   } finally {
     runButton.disabled = false;
   }
+}
+
+function formatOutput(output: unknown): string {
+  return output === null ? "(none)" : JSON.stringify(output);
 }
 
 function resolvePermissionPreset(
