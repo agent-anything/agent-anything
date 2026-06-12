@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  createAnonymousIdentityProvider,
+  createAuditRecord,
   createDefaultRuntime,
+  createDefaultWorkspaceResolver,
+  createTelemetryRecord,
   FunctionToolAdapter,
   InMemoryStorage,
   Redactor,
@@ -10,6 +14,7 @@ import {
   type AgentTask,
   type ToolDefinition,
 } from "./index.js";
+import * as publicApi from "./index.js";
 
 describe("Phase1 public API", () => {
   it("runs the minimal Phase1 flow through public exports", async () => {
@@ -214,6 +219,57 @@ describe("Phase1 public API", () => {
         message: "hello",
       },
     });
+  });
+
+  it("exposes Phase3.1 audit, telemetry, workspace, and identity contracts", async () => {
+    const auditRecord = createAuditRecord({
+      id: "audit_001",
+      taskId: "task_001",
+      eventName: "task.completed",
+      timestamp: "2026-06-12T00:00:00.000Z",
+      subject: {
+        kind: "user",
+        id: "user_001",
+        metadata: {},
+      },
+      action: "runtime.complete",
+      target: {
+        kind: "task",
+        id: "task_001",
+        metadata: {},
+      },
+      outcome: "succeeded",
+    });
+    const telemetryRecord = createTelemetryRecord({
+      id: "telemetry_001",
+      taskId: "task_001",
+      eventName: "task.completed",
+      timestamp: "2026-06-12T00:00:00.000Z",
+      counters: {
+        toolCalls: 1,
+      },
+    });
+    const workspace = await createDefaultWorkspaceResolver().resolve({
+      taskId: "task_001",
+      cwd: "D:/projects/example",
+      metadata: {},
+    });
+    const identity = await createAnonymousIdentityProvider().resolve({
+      taskId: "task_001",
+      metadata: {},
+    });
+
+    expect(auditRecord.outcome).toBe("succeeded");
+    expect(telemetryRecord.counters.toolCalls).toBe(1);
+    expect(workspace.id).toBe("workspace_local");
+    expect(identity.kind).toBe("anonymous");
+  });
+
+  it("does not expose testing fakes through public exports", () => {
+    expect("FakeAuditPort" in publicApi).toBe(false);
+    expect("FakeTelemetryPort" in publicApi).toBe(false);
+    expect("FakeWorkspaceResolver" in publicApi).toBe(false);
+    expect("FakeIdentityProvider" in publicApi).toBe(false);
   });
 });
 

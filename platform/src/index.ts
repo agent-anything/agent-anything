@@ -4,6 +4,43 @@ export type {
   Metadata,
 } from "./shared/types.js";
 
+export type {
+  AuditOutcome,
+  AuditPort,
+  AuditRecord,
+  AuditSubject,
+  AuditTarget,
+  CreateAuditRecordInput,
+} from "./audit/index.js";
+export { createAuditRecord } from "./audit/index.js";
+
+export type {
+  CreateTelemetryRecordInput,
+  TelemetryCounters,
+  TelemetryDimensions,
+  TelemetryDimensionValue,
+  TelemetryPort,
+  TelemetryRecord,
+} from "./telemetry/index.js";
+export { createTelemetryRecord } from "./telemetry/index.js";
+
+export type {
+  CreateDefaultWorkspaceResolverInput,
+  ResolveWorkspaceInput,
+  WorkspaceContext,
+  WorkspaceResolver,
+} from "./workspace/index.js";
+export { createDefaultWorkspaceResolver } from "./workspace/index.js";
+
+export type {
+  CreateAnonymousIdentityProviderInput,
+  IdentityKind,
+  IdentityProvider,
+  IdentityRef,
+  ResolveIdentityInput,
+} from "./identity/index.js";
+export { createAnonymousIdentityProvider } from "./identity/index.js";
+
 export type { AgentTask } from "./core/task/index.js";
 export type {
   ContextManager,
