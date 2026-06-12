@@ -1,21 +1,15 @@
 import type { Metadata } from "../../shared/types.js";
 
 export type RuntimeErrorCode =
-  | "permission_denied"
-  | "permission_service_failed"
-  | "tool_not_found"
-  | "tool_execution_failed"
-  | "tool_cancelled"
-  | "tool_timeout"
-  | "tool_interrupted"
-  | "evidence_creation_failed"
-  | "planner_failed"
-  | "context_update_failed"
-  | "report_generation_failed"
-  | "storage_failed"
-  | "agent_loop_stopped"
-  | "runtime_limit_exceeded"
-  | "invalid_runtime_options";
+  | `provider_${string}`
+  | `tool_${string}`
+  | `policy_${string}`
+  | `permission_${string}`
+  | `audit_${string}`
+  | `storage_${string}`
+  | `report_${string}`
+  | `context_${string}`
+  | `runtime_${string}`;
 
 export interface RuntimeError {
   code: RuntimeErrorCode;

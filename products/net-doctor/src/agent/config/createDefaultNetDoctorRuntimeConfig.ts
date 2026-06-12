@@ -9,7 +9,7 @@ export function createDefaultNetDoctorRuntimeConfig(): NetDoctorRuntimeConfig {
     limits: {
       ...defaultRuntimeLimits,
     },
-    permissionMode: "allowAll",
+    permissionMode: "trusted",
     metadata: {
       product: "net-doctor",
       runtime: "phase2-agent",

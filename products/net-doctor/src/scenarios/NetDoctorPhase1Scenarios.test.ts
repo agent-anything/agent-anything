@@ -214,7 +214,7 @@ describe("NetDoctor Phase1 mock scenarios", () => {
       });
       const runtime = createDefaultRuntime({
         toolRegistry: registry,
-        permissionMode: "allowAll",
+        permissionMode: "trusted",
         storage,
         evidenceBuilder: new NetDoctorEvidenceBuilder(),
         metadata: {

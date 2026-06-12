@@ -73,7 +73,7 @@ export function createNetDoctorAgentRuntime(
         ...input.config?.limits,
         ...input.limits,
       },
-      permissionMode: input.permissionMode ?? input.config?.permissionMode ?? "allowAll",
+      permissionMode: input.permissionMode ?? input.config?.permissionMode ?? "trusted",
       metadata: {
         product: "net-doctor",
         runtime: "phase2-agent",

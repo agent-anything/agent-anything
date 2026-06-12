@@ -131,7 +131,7 @@ describe("NetDoctor Phase2 agent scenarios", () => {
       evidenceRefs: ["evidence_tool_call_dns_lookup"],
       errors: [
         {
-          code: "agent_loop_stopped",
+          code: "runtime_agent_loop_stopped",
           message: "DNS produced enough evidence to stop.",
         },
       ],
@@ -164,14 +164,14 @@ describe("NetDoctor Phase2 agent scenarios", () => {
       status: "failed",
       errors: [
         {
-          code: "planner_failed",
+          code: "provider_planner_failed",
           message: "Provider unavailable.",
         },
       ],
     });
   });
 
-  it("returns planner_failed for malformed provider output", async () => {
+  it("returns provider_planner_failed for malformed provider output", async () => {
     const runtime = createNetDoctorAgentRuntime({
       provider: new FakeProvider({
         responses: [providerOutput("not-json")],
@@ -186,7 +186,7 @@ describe("NetDoctor Phase2 agent scenarios", () => {
       status: "failed",
       errors: [
         {
-          code: "planner_failed",
+          code: "provider_planner_failed",
           message: "Provider output was not valid JSON.",
         },
       ],
@@ -347,7 +347,7 @@ function providerOutput(output: unknown): ProviderResponse {
 
 function createDenyPermissionService(): PermissionService {
   return {
-    async decide(request) {
+    async request(request) {
       return {
         requestId: request.id,
         status: "denied",

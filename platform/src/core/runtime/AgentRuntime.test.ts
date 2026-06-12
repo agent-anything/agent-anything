@@ -45,7 +45,7 @@ describe("AgentRuntime", () => {
     registry.register(createFakeTool("net.lookupDns"));
     const runtime = createDefaultRuntime({
       toolRegistry: registry,
-      permissionMode: "allowAll",
+      permissionMode: "trusted",
       storage: new InMemoryStorage(),
     });
 
@@ -74,7 +74,7 @@ describe("AgentRuntime", () => {
       toolCalls: [createToolCall("shell.runCommand", { risk: "risky" })],
       options: {
         ...createOptions(),
-        permissionMode: "denyAll",
+        permissionMode: "deny",
       },
     });
 
@@ -82,7 +82,7 @@ describe("AgentRuntime", () => {
 
     expect(result.status).toBe("failed");
     expect(result.errors[0]).toMatchObject({
-      code: "permission_denied",
+      code: "permission_mode_denied",
       metadata: {
         toolCallId: "tool_call_001",
         toolName: "shell.runCommand",
@@ -144,7 +144,7 @@ describe("AgentRuntime", () => {
       status: "failed",
       errors: [
         {
-          code: "evidence_creation_failed",
+          code: "runtime_evidence_creation_failed",
           message: "Evidence builder failed.",
         },
       ],
@@ -202,7 +202,7 @@ describe("AgentRuntime", () => {
       artifactRefs: [],
       errors: [
         {
-          code: "storage_failed",
+          code: "storage_write_failed",
           message: "Storage failed.",
         },
       ],
@@ -302,7 +302,7 @@ describe("AgentRuntime", () => {
       reportRef: null,
       errors: [
         {
-          code: "planner_failed",
+          code: "provider_planner_failed",
           message: "Planner failed.",
         },
       ],
@@ -340,7 +340,7 @@ function createOptions(): RuntimeOptions {
       maxConsecutiveFailures: 1,
       maxIterations: 5,
     },
-    permissionMode: "allowAll",
+    permissionMode: "trusted",
     metadata: {
       source: "test",
     },

@@ -84,7 +84,7 @@ export class ToolExecutionBoundary {
         toolResult,
         errors: [
           {
-            code: "evidence_creation_failed",
+            code: "runtime_evidence_creation_failed",
             message: error instanceof Error
               ? error.message
               : "Failed to build evidence from tool result.",
@@ -123,10 +123,10 @@ export class ToolExecutionBoundary {
     try {
       const permissionService = this.dependencies.permissionService
         ?? createPermissionServiceFromMode(input.options.permissionMode);
-      decision = await permissionService.decide(permissionRequest);
+      decision = await permissionService.request(permissionRequest);
     } catch (error) {
       return {
-        code: "permission_service_failed",
+        code: "permission_check_failed",
         message: error instanceof Error
           ? error.message
           : "Permission service failed.",
@@ -138,12 +138,12 @@ export class ToolExecutionBoundary {
       };
     }
 
-    if (decision.status === "allowed") {
+    if (decision.status === "granted") {
       return null;
     }
 
     return {
-      code: "permission_denied",
+      code: decision.code ?? "permission_denied",
       message: decision.reason,
       metadata: {
         requestId: decision.requestId,

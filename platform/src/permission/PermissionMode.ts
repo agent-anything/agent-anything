@@ -1,1 +1,1 @@
-export type PermissionMode = "allowAll" | "denyAll";
+export type PermissionMode = "trusted" | "ask" | "deny";

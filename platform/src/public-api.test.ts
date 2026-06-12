@@ -19,7 +19,7 @@ describe("Phase1 public API", () => {
     const storage = new InMemoryStorage();
     const runtime = createDefaultRuntime({
       toolRegistry,
-      permissionMode: "allowAll",
+      permissionMode: "trusted",
       storage,
     });
 
@@ -70,7 +70,7 @@ describe("Phase1 public API", () => {
 
     const runtime = createDefaultRuntime({
       toolRegistry,
-      permissionMode: "denyAll",
+      permissionMode: "deny",
       storage: new InMemoryStorage(),
     });
 
@@ -103,7 +103,7 @@ describe("Phase1 public API", () => {
       reportRef: null,
       errors: [
         {
-          code: "permission_denied",
+          code: "permission_mode_denied",
           metadata: {
             toolCallId: "tool_call_001",
             toolName: "shell.runCommand",
@@ -123,13 +123,13 @@ describe("Phase1 public API", () => {
 
     const runtime = createDefaultRuntime({
       toolRegistry,
-      permissionMode: "denyAll",
+      permissionMode: "deny",
       storage: new InMemoryStorage(),
       permissionService: {
-        async decide(request) {
+        async request(request) {
           return {
             requestId: request.id,
-            status: "allowed",
+            status: "granted",
             reason: "Allowed by public API test service.",
             decidedAt: "2026-06-07T00:00:00.000Z",
           };

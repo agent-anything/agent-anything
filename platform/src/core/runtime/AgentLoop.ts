@@ -65,7 +65,7 @@ export class AgentLoop {
         });
       } catch (error) {
         const runtimeError = toRuntimeError(error, {
-          code: "planner_failed",
+          code: "provider_planner_failed",
           message: "Planner failed to create a plan step.",
         });
         this.emit("planner.finished", task.id, {

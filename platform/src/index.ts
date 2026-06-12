@@ -86,20 +86,38 @@ export {
 
 export type {
   CreatePermissionRequestInput,
+  ExecutionAccess,
   PermissionDecision,
+  PermissionDecisionCode,
   PermissionDecisionStatus,
   PermissionMode,
   PermissionRisk,
   PermissionRequest,
+  PermissionRequestInput,
   PermissionService,
   PermissionServiceResult,
+  PermissionSubject,
+  PermissionTarget,
   ResolvePermissionDecisionInput,
+  RuntimeAccessProfile,
 } from "./permission/index.js";
 export {
   createPermissionRequest,
   createPermissionServiceFromMode,
   resolvePermissionDecision,
 } from "./permission/index.js";
+
+export type {
+  PolicyCheckInput,
+  PolicyDecision,
+  PolicyDecisionCode,
+  PolicyDecisionStatus,
+  PolicyPort,
+  PolicyRisk,
+  PolicySubject,
+  PolicyTarget,
+  PolicyWorkspace,
+} from "./governance/index.js";
 
 export type {
   FakeProviderInput,

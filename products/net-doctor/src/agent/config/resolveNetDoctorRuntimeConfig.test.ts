@@ -25,7 +25,7 @@ describe("resolveNetDoctorRuntimeConfig", () => {
       maxToolCalls: 6,
       maxDurationMs: 60000,
       maxConsecutiveFailures: 2,
-      permissionMode: "denyAll",
+      permissionMode: "deny",
       metadata: {
         source: "test",
       },
@@ -44,7 +44,7 @@ describe("resolveNetDoctorRuntimeConfig", () => {
         maxDurationMs: 60000,
         maxConsecutiveFailures: 2,
       },
-      permissionMode: "denyAll",
+      permissionMode: "deny",
       metadata: {
         product: "net-doctor",
         runtime: "phase2-agent",

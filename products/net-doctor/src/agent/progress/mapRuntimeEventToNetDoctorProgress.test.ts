@@ -13,13 +13,13 @@ describe("mapRuntimeEventToNetDoctorProgress", () => {
     expect(
       mapRuntimeEventToNetDoctorProgress(createEvent("planner.finished", {
         status: "failed",
-        errorCode: "planner_failed",
+        errorCode: "provider_planner_failed",
       })),
     ).toMatchObject({
       phase: "planning",
       status: "failed",
       message: "Provider planning failed.",
-      errorCode: "planner_failed",
+      errorCode: "provider_planner_failed",
     });
   });
 
@@ -76,12 +76,12 @@ describe("mapRuntimeEventToNetDoctorProgress", () => {
 
     expect(
       mapRuntimeEventToNetDoctorProgress(createEvent("task.failed", {
-        errorCode: "planner_failed",
+        errorCode: "provider_planner_failed",
       })),
     ).toMatchObject({
       phase: "failed",
       status: "failed",
-      errorCode: "planner_failed",
+      errorCode: "provider_planner_failed",
     });
   });
 

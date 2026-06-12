@@ -81,7 +81,7 @@ async function runDiagnosis(
 
   const runtime = createDefaultRuntime({
     toolRegistry,
-    permissionMode: "allowAll",
+    permissionMode: "trusted",
     storage,
     evidenceBuilder: new NetDoctorEvidenceBuilder(),
     metadata: {

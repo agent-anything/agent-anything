@@ -70,7 +70,7 @@ export class AgentRuntime {
       toolCalls = await this.dependencies.planToolCalls(task);
     } catch (error) {
       return createFailedRuntimeResult(task, [toRuntimeError(error, {
-        code: "invalid_runtime_options",
+        code: "runtime_invalid_options",
         message: "Failed to create deterministic tool call plan.",
       })], {
         metadata: runtimeMetadata,
@@ -150,7 +150,7 @@ export class AgentRuntime {
     if (loopResult.status === "stopped") {
       return createFailedRuntimeResult(task, [
         {
-          code: "agent_loop_stopped",
+          code: "runtime_agent_loop_stopped",
           message: loopResult.stopReason ?? "Agent loop stopped before completion.",
           metadata: {
             loopStatus: loopResult.status,
@@ -250,7 +250,7 @@ export class AgentRuntime {
       };
     } catch (error) {
       return createFailedRuntimeResult(task, [toRuntimeError(error, {
-        code: "storage_failed",
+        code: "storage_write_failed",
         message: "Failed to store runtime artifacts.",
       })], {
         evidenceRefs: evidence.map((item) => item.id),
@@ -265,7 +265,7 @@ export class AgentRuntime {
 function validateRuntimeOptions(options: RuntimeOptions): RuntimeError | null {
   if (options.limits.maxToolCalls < 0) {
     return {
-      code: "invalid_runtime_options",
+      code: "runtime_invalid_options",
       message: "maxToolCalls must be greater than or equal to 0.",
       metadata: {
         maxToolCalls: options.limits.maxToolCalls,
@@ -275,7 +275,7 @@ function validateRuntimeOptions(options: RuntimeOptions): RuntimeError | null {
 
   if (options.limits.maxDurationMs < 0) {
     return {
-      code: "invalid_runtime_options",
+      code: "runtime_invalid_options",
       message: "maxDurationMs must be greater than or equal to 0.",
       metadata: {
         maxDurationMs: options.limits.maxDurationMs,
@@ -285,7 +285,7 @@ function validateRuntimeOptions(options: RuntimeOptions): RuntimeError | null {
 
   if (options.limits.maxConsecutiveFailures < 0) {
     return {
-      code: "invalid_runtime_options",
+      code: "runtime_invalid_options",
       message: "maxConsecutiveFailures must be greater than or equal to 0.",
       metadata: {
         maxConsecutiveFailures: options.limits.maxConsecutiveFailures,
@@ -295,7 +295,7 @@ function validateRuntimeOptions(options: RuntimeOptions): RuntimeError | null {
 
   if (options.limits.maxIterations < 0) {
     return {
-      code: "invalid_runtime_options",
+      code: "runtime_invalid_options",
       message: "maxIterations must be greater than or equal to 0.",
       metadata: {
         maxIterations: options.limits.maxIterations,

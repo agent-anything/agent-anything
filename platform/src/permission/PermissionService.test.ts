@@ -3,27 +3,28 @@ import { createPermissionServiceFromMode } from "./createPermissionServiceFromMo
 import type { PermissionRequest } from "./PermissionRequest.js";
 
 describe("createPermissionServiceFromMode", () => {
-  it("preserves allowAll behavior", async () => {
-    const service = createPermissionServiceFromMode("allowAll");
+  it("preserves trusted behavior", async () => {
+    const service = createPermissionServiceFromMode("trusted");
 
-    const decision = await service.decide(createRequest());
+    const decision = await service.request(createRequest());
 
     expect(decision).toMatchObject({
       requestId: "permission_request_001",
-      status: "allowed",
-      reason: "Allowed by Phase1 permissionMode: allowAll.",
+      status: "granted",
+      reason: "Granted by permissionMode: trusted.",
     });
   });
 
-  it("preserves denyAll behavior", async () => {
-    const service = createPermissionServiceFromMode("denyAll");
+  it("preserves deny behavior", async () => {
+    const service = createPermissionServiceFromMode("deny");
 
-    const decision = await service.decide(createRequest());
+    const decision = await service.request(createRequest());
 
     expect(decision).toMatchObject({
       requestId: "permission_request_001",
       status: "denied",
-      reason: "Denied by Phase1 permissionMode: denyAll.",
+      code: "permission_mode_denied",
+      reason: "Denied by permissionMode: deny.",
     });
   });
 });
@@ -32,6 +33,7 @@ function createRequest(): PermissionRequest {
   return {
     id: "permission_request_001",
     taskId: "task_001",
+    action: "tool.execute",
     toolCallId: "tool_call_001",
     toolName: "shell.runCommand",
     risk: "risky",

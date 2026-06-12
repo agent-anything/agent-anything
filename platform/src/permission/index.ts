@@ -1,12 +1,19 @@
 export type { PermissionMode } from "./PermissionMode.js";
 export type { PermissionRisk } from "./PermissionRisk.js";
-export type { PermissionRequest } from "./PermissionRequest.js";
+export type {
+  PermissionRequest,
+  PermissionRequestInput,
+  PermissionSubject,
+  PermissionTarget,
+} from "./PermissionRequest.js";
 export type {
   PermissionDecision,
+  PermissionDecisionCode,
   PermissionDecisionStatus,
 } from "./PermissionDecision.js";
 export type { PermissionService } from "./PermissionService.js";
 export type { PermissionServiceResult } from "./PermissionServiceResult.js";
+export type { ExecutionAccess, RuntimeAccessProfile } from "./RuntimeAccessProfile.js";
 export { createPermissionServiceFromMode } from "./createPermissionServiceFromMode.js";
 export {
   createPermissionRequest,

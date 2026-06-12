@@ -170,7 +170,7 @@ describe("ToolExecutionBoundary", () => {
         }),
         options: {
           ...createOptions(),
-          permissionMode: "denyAll",
+          permissionMode: "deny",
         },
       }),
     );
@@ -179,7 +179,7 @@ describe("ToolExecutionBoundary", () => {
       status: "failed",
       errors: [
         {
-          code: "permission_denied",
+          code: "permission_mode_denied",
         },
       ],
     });
@@ -193,10 +193,10 @@ describe("ToolExecutionBoundary", () => {
         executed = true;
       },
       permissionService: {
-        async decide(request) {
+        async request(request) {
           return {
             requestId: request.id,
-            status: "allowed",
+            status: "granted",
             reason: "Allowed by test service.",
             decidedAt: "2026-06-07T00:00:00.000Z",
           };
@@ -211,7 +211,7 @@ describe("ToolExecutionBoundary", () => {
         }),
         options: {
           ...createOptions(),
-          permissionMode: "denyAll",
+          permissionMode: "deny",
         },
       }),
     );
@@ -223,7 +223,7 @@ describe("ToolExecutionBoundary", () => {
   it("maps permission service failure to structured runtime error", async () => {
     const boundary = createBoundary(createToolResult("succeeded"), {
       permissionService: {
-        async decide() {
+        async request() {
           throw new Error("Permission UI failed.");
         },
       },
@@ -241,7 +241,7 @@ describe("ToolExecutionBoundary", () => {
       status: "failed",
       errors: [
         {
-          code: "permission_service_failed",
+          code: "permission_check_failed",
           message: "Permission UI failed.",
         },
       ],
@@ -326,7 +326,7 @@ function createOptions(): RuntimeOptions {
       maxConsecutiveFailures: 1,
       maxIterations: 5,
     },
-    permissionMode: "allowAll",
+    permissionMode: "trusted",
     metadata: {},
   };
 }

@@ -118,7 +118,7 @@ describe("AgentLoop", () => {
       status: "failed",
       errors: [
         {
-          code: "planner_failed",
+          code: "provider_planner_failed",
           message: "Planner exploded.",
         },
       ],
@@ -179,7 +179,7 @@ function createOptions(): RuntimeOptions {
       maxConsecutiveFailures: 1,
       maxIterations: 5,
     },
-    permissionMode: "allowAll",
+    permissionMode: "trusted",
     metadata: {},
   };
 }
