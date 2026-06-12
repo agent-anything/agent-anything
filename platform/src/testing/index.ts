@@ -34,3 +34,7 @@ export {
   FakePluginRegistry,
   type FakePluginRegistryHandler,
 } from "./FakePluginRegistry.js";
+export {
+  FakeEnterpriseStoragePort,
+  type FakeEnterpriseStoragePortHandler,
+} from "./FakeEnterpriseStoragePort.js";

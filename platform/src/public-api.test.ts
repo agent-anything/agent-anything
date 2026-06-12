@@ -7,6 +7,7 @@ import {
   createTelemetryRecord,
   FunctionToolAdapter,
   InMemoryStorage,
+  type EnterpriseStoragePort,
   McpRegistry,
   McpToolAdapter,
   PluginRegistry,
@@ -367,6 +368,38 @@ describe("Phase1 public API", () => {
     ]);
   });
 
+  it("exposes Phase3.1 enterprise storage contracts", async () => {
+    const storage: EnterpriseStoragePort = {
+      async storeArtifact(input) {
+        return {
+          id: "enterprise_artifact_001",
+          kind: input.kind,
+          ref: input.ref,
+          workspaceId: input.workspaceId,
+          retentionPolicyRef: input.retentionPolicyRef,
+          accessPolicyRef: input.accessPolicyRef,
+          auditRef: input.auditRef ?? null,
+          createdAt: "2026-06-13T00:00:00.000Z",
+          metadata: input.metadata,
+        };
+      },
+    };
+
+    await expect(storage.storeArtifact({
+      kind: "evidence",
+      ref: "memory://evidence/evidence_001",
+      workspaceId: "workspace_001",
+      retentionPolicyRef: "retention_30_days",
+      accessPolicyRef: "access_private",
+      auditRef: null,
+      metadata: {},
+    })).resolves.toMatchObject({
+      workspaceId: "workspace_001",
+      retentionPolicyRef: "retention_30_days",
+      accessPolicyRef: "access_private",
+    });
+  });
+
   it("does not expose testing fakes through public exports", () => {
     expect("FakeAuditPort" in publicApi).toBe(false);
     expect("FakeTelemetryPort" in publicApi).toBe(false);
@@ -375,6 +408,7 @@ describe("Phase1 public API", () => {
     expect("FakeRemoteToolPort" in publicApi).toBe(false);
     expect("FakeMcpConnectionPort" in publicApi).toBe(false);
     expect("FakePluginRegistry" in publicApi).toBe(false);
+    expect("FakeEnterpriseStoragePort" in publicApi).toBe(false);
   });
 });
 

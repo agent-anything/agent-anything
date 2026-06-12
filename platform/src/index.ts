@@ -163,6 +163,14 @@ export {
 } from "./plugins/index.js";
 
 export type {
+  AccessPolicyRef,
+  EnterpriseStoragePort,
+  EnterpriseStoredArtifact,
+  RetentionPolicyRef,
+  StoreEnterpriseArtifactInput,
+} from "./enterprise-storage/index.js";
+
+export type {
   CreatePermissionRequestInput,
   PermissionDecision,
   PermissionDecisionCode,
