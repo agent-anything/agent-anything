@@ -60,7 +60,6 @@ describe("NetDoctor Phase2 agent scenarios", () => {
     expect(result.output).toEqual({
       conclusion: "DNS resolves and TCP is reachable.",
     });
-    expect(storage.getReport("report_task_phase2")).toBeUndefined();
   });
 
   it("makes first observation visible to the second provider request", async () => {

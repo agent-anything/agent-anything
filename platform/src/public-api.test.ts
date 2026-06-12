@@ -8,8 +8,6 @@ import {
   FunctionToolAdapter,
   InMemoryStorage,
   Redactor,
-  ReportTemplateRegistry,
-  ReportTemplateRenderer,
   ToolRegistry,
   type AgentTask,
   type ToolDefinition,
@@ -171,14 +169,6 @@ describe("Phase1 public API", () => {
     });
 
     expect(result.status).toBe("succeeded");
-  });
-
-  it("exposes report template APIs through public exports", () => {
-    const registry = new ReportTemplateRegistry();
-    const renderer = new ReportTemplateRenderer({ registry });
-
-    expect(registry).toBeInstanceOf(ReportTemplateRegistry);
-    expect(renderer).toBeInstanceOf(ReportTemplateRenderer);
   });
 
   it("exposes redaction APIs through public exports", () => {

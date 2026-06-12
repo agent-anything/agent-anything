@@ -4,7 +4,7 @@ import type { ToolRisk } from "../../tools/index.js";
 export type PolicyRisk = ToolRisk;
 
 export interface PolicySubject {
-  kind: "user" | "agent" | "service";
+  kind: "user" | "agent" | "service" | "anonymous";
   id?: string;
   displayName?: string;
   roles?: string[];
@@ -12,7 +12,7 @@ export interface PolicySubject {
 }
 
 export interface PolicyTarget {
-  kind: "tool" | "provider" | "report" | "storage" | "system" | "remote_tool";
+  kind: "tool" | "provider" | "storage" | "system" | "remote_tool";
   name?: string;
   resource?: string;
   metadata?: Metadata;

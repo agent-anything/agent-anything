@@ -1,4 +1,5 @@
-import type { Evidence, ReportSection, ReportTemplate } from "@agent-anything/platform";
+import type { Evidence } from "@agent-anything/platform";
+import type { NetDoctorReportSection, ReportTemplate } from "./ReportTemplate.js";
 import {
   createEvidenceSummary,
   getEvidenceKind,
@@ -20,7 +21,7 @@ export const networkEvidenceTemplate: ReportTemplate = {
   },
 };
 
-function createNetworkEvidenceSections(evidence: Evidence[]): ReportSection[] {
+function createNetworkEvidenceSections(evidence: Evidence[]): NetDoctorReportSection[] {
   if (evidence.length === 0) {
     return [
       {

@@ -12,6 +12,5 @@ export interface Scenario<TInput = unknown> {
 
 export interface ScenarioExpectation {
   status: RuntimeStatus;
-  reportRequired: boolean;
   minEvidenceCount: number;
 }

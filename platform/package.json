@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/platform",
   "version": "0.0.0",
-  "description": "AgentAnything platform package for runtime, tools, evidence, permissions, reports, and storage contracts.",
+  "description": "AgentAnything platform package for runtime, tools, evidence, permissions, governance, and storage contracts.",
   "type": "module",
   "main": "./dist/index.js",
   "exports": {

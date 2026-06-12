@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AgentTask, Evidence, Report, RuntimeResult } from "@agent-anything/platform";
+import type { AgentTask, Evidence, RuntimeResult } from "@agent-anything/platform";
 import type { NetDoctorInput } from "../input/index.js";
 import { LocalNetDoctorStorage } from "./LocalNetDoctorStorage.js";
 
@@ -15,19 +15,18 @@ describe("LocalNetDoctorStorage", () => {
     }
   });
 
-  it("stores task, evidence, report, runtime result, and task history", async () => {
+  it("stores task, evidence, runtime result, and task history", async () => {
     const root = await createTempDir();
     const storage = new LocalNetDoctorStorage(root, "task_001");
 
     await storage.storeTask(createTask());
     const evidenceArtifact = await storage.storeEvidence(createEvidence());
-    const reportArtifact = await storage.storeReport(createReport());
     await storage.storeRuntimeResult(createRuntimeResult({
       output: {
         conclusion: "Storage test completed.",
       },
       evidenceRefs: ["evidence_001"],
-      artifactRefs: [evidenceArtifact.id, reportArtifact.id],
+      artifactRefs: [evidenceArtifact.id],
     }));
 
     expect(await expectJson(join(root, "tasks", "task_001", "task.json"))).toMatchObject({
@@ -43,9 +42,6 @@ describe("LocalNetDoctorStorage", () => {
         id: "evidence_001",
       },
     ]);
-    expect(await expectJson(join(root, "tasks", "task_001", "report.json"))).toMatchObject({
-      id: "report_001",
-    });
     expect(
       await expectJson(join(root, "tasks", "task_001", "runtime-result.json")),
     ).toMatchObject({
@@ -60,7 +56,7 @@ describe("LocalNetDoctorStorage", () => {
           conclusion: "Storage test completed.",
         },
         evidenceRefs: ["evidence_001"],
-        artifactRefs: [evidenceArtifact.id, reportArtifact.id],
+        artifactRefs: [evidenceArtifact.id],
       },
     ]);
   });
@@ -127,20 +123,6 @@ function createEvidence(): Evidence {
     sensitivity: "public",
     metadata: {
       evidenceKind: "dnsLookup",
-    },
-  };
-}
-
-function createReport(): Report {
-  return {
-    id: "report_001",
-    taskId: "task_001",
-    title: "Report for net-doctor.diagnose",
-    sections: [],
-    evidenceRefs: ["evidence_001"],
-    createdAt: "2026-06-06T00:00:01.000Z",
-    metadata: {
-      generator: "test",
     },
   };
 }

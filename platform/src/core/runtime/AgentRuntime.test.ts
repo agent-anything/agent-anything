@@ -1,13 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { Evidence } from "../../evidence/index.js";
 import { EvidenceBuilder } from "../../evidence/index.js";
+import type { AuditPort } from "../../audit/index.js";
+import type { IdentityProvider } from "../../identity/index.js";
 import type { PolicyPort } from "../../governance/index.js";
 import type { PermissionService } from "../../permission/index.js";
 import { InMemoryStorage, type StoragePort } from "../../storage/index.js";
+import type { TelemetryPort } from "../../telemetry/index.js";
 import {
+  FakeAuditPort,
+  FakeIdentityProvider,
   FakePermissionService,
   FakePolicyPort,
+  FakeTelemetryPort,
+  FakeWorkspaceResolver,
 } from "../../testing/index.js";
+import type { WorkspaceResolver } from "../../workspace/index.js";
 import { InMemoryContextManager } from "../context/index.js";
 import type { PlanStep, PlannerInput } from "../planner/index.js";
 import {
@@ -262,6 +270,202 @@ describe("AgentRuntime", () => {
     });
   });
 
+  it("records optional audit and telemetry events during runtime execution", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("shell.runCommand", { risk: "risky" }));
+    const auditPort = new FakeAuditPort();
+    const telemetryPort = new FakeTelemetryPort();
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [createToolCall("shell.runCommand", { risk: "risky" })],
+      auditPort,
+      telemetryPort,
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result.status).toBe("succeeded");
+    expect(auditPort.records.map((record) => record.eventName)).toEqual([
+      "task.started",
+      "policy.checked",
+      "permission.resolved",
+      "task.completed",
+    ]);
+    expect(telemetryPort.records.map((record) => record.eventName)).toEqual([
+      "runtime.policy.checked",
+      "runtime.permission.resolved",
+      "runtime.task.completed",
+    ]);
+  });
+
+  it("does not fail runtime when optional audit or telemetry recording fails", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("net.lookupDns"));
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [createToolCall("net.lookupDns")],
+      auditPort: new FakeAuditPort(() => {
+        throw new Error("Audit failed.");
+      }),
+      telemetryPort: new FakeTelemetryPort(() => {
+        throw new Error("Telemetry failed.");
+      }),
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result.status).toBe("succeeded");
+  });
+
+  it("fails runtime when required audit recording fails", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("net.lookupDns"));
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [createToolCall("net.lookupDns")],
+      auditPort: new FakeAuditPort(() => {
+        throw new Error("Audit failed.");
+      }),
+      options: {
+        ...createOptions(),
+        auditMode: "required",
+      },
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result).toMatchObject({
+      status: "failed",
+      errors: [
+        {
+          code: "audit_required_failed",
+          message: "Audit failed.",
+        },
+      ],
+    });
+  });
+
+  it("fails runtime when required telemetry recording fails", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("net.lookupDns"));
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [createToolCall("net.lookupDns")],
+      telemetryPort: new FakeTelemetryPort(() => {
+        throw new Error("Telemetry failed.");
+      }),
+      options: {
+        ...createOptions(),
+        telemetryMode: "required",
+      },
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result).toMatchObject({
+      status: "failed",
+      errors: [
+        {
+          code: "runtime_telemetry_required_failed",
+          message: "Telemetry failed.",
+        },
+      ],
+    });
+  });
+
+  it("passes workspace and identity context into policy checks", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("shell.runCommand", { risk: "risky" }));
+    const policyPort = new FakePolicyPort();
+    const workspaceResolver = new FakeWorkspaceResolver({
+      id: "workspace_001",
+      name: "Workspace 001",
+      rootRef: "D:/projects/example",
+      policyRefs: ["policy_workspace"],
+      metadata: {
+        trustLevel: "restricted",
+      },
+    });
+    const identityProvider = new FakeIdentityProvider({
+      id: "user_001",
+      kind: "user",
+      displayName: "Test User",
+      metadata: {
+        role: "tester",
+      },
+    });
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [createToolCall("shell.runCommand", { risk: "risky" })],
+      policyPort,
+      workspaceResolver,
+      identityProvider,
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result.status).toBe("succeeded");
+    expect(policyPort.checks[0]).toMatchObject({
+      subject: {
+        kind: "user",
+        id: "user_001",
+        displayName: "Test User",
+      },
+      workspace: {
+        id: "workspace_001",
+        trustLevel: "restricted",
+      },
+    });
+  });
+
+  it("maps workspace resolver failure to runtime failure", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("net.lookupDns"));
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [createToolCall("net.lookupDns")],
+      workspaceResolver: new FakeWorkspaceResolver(() => {
+        throw new Error("Workspace unavailable.");
+      }),
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result).toMatchObject({
+      status: "failed",
+      errors: [
+        {
+          code: "runtime_workspace_resolution_failed",
+          message: "Workspace unavailable.",
+        },
+      ],
+    });
+  });
+
+  it("maps identity provider failure to runtime failure", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createFakeTool("net.lookupDns"));
+    const runtime = createRuntime({
+      toolRegistry: registry,
+      toolCalls: [createToolCall("net.lookupDns")],
+      identityProvider: new FakeIdentityProvider(() => {
+        throw new Error("Identity unavailable.");
+      }),
+    });
+
+    const result = await runtime.run(createTask());
+
+    expect(result).toMatchObject({
+      status: "failed",
+      errors: [
+        {
+          code: "runtime_identity_resolution_failed",
+          message: "Identity unavailable.",
+        },
+      ],
+    });
+  });
+
   it("returns structured failure when a tool fails", async () => {
     const registry = new ToolRegistry();
     registry.register(
@@ -330,9 +534,6 @@ describe("AgentRuntime", () => {
       toolCalls: [createToolCall("net.lookupDns")],
       storage: {
         async storeEvidence() {
-          throw new Error("Storage failed.");
-        },
-        async storeReport() {
           throw new Error("Storage failed.");
         },
       },
@@ -465,6 +666,10 @@ function createRuntime(input: {
   agentLoop?: AgentLoop;
   policyPort?: PolicyPort;
   permissionService?: PermissionService;
+  auditPort?: AuditPort;
+  telemetryPort?: TelemetryPort;
+  workspaceResolver?: WorkspaceResolver;
+  identityProvider?: IdentityProvider;
 }): AgentRuntime {
   return new AgentRuntime(
     {
@@ -475,6 +680,10 @@ function createRuntime(input: {
       agentLoop: input.agentLoop,
       policyPort: input.policyPort,
       permissionService: input.permissionService,
+      auditPort: input.auditPort,
+      telemetryPort: input.telemetryPort,
+      workspaceResolver: input.workspaceResolver,
+      identityProvider: input.identityProvider,
     },
     input.options ?? createOptions(),
   );

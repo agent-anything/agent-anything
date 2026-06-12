@@ -7,7 +7,6 @@ export type RuntimeErrorCode =
   | `permission_${string}`
   | `audit_${string}`
   | `storage_${string}`
-  | `report_${string}`
   | `context_${string}`
   | `runtime_${string}`;
 

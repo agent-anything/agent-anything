@@ -3,7 +3,6 @@ import { join } from "node:path";
 import type {
   AgentTask,
   Evidence,
-  Report,
   RuntimeResult,
   StoragePort,
   StoredArtifact,
@@ -26,7 +25,6 @@ export interface NetDoctorTaskHistoryEntry {
 
 export class LocalNetDoctorStorage implements StoragePort {
   private readonly evidence = new Map<string, Evidence>();
-  private readonly reports = new Map<string, Report>();
   private readonly artifacts = new Map<string, StoredArtifact>();
 
   constructor(
@@ -59,14 +57,6 @@ export class LocalNetDoctorStorage implements StoragePort {
     await this.updateHistoryResult(result);
   }
 
-  async storeReport(report: Report): Promise<StoredArtifact> {
-    await this.ensureTaskDir();
-    this.reports.set(report.id, report);
-    await writeJson(this.taskFilePath("report.json"), report);
-
-    return this.storeArtifact("report", report.id, "report.json");
-  }
-
   async storeEvidence(evidence: Evidence): Promise<StoredArtifact> {
     await this.ensureTaskDir();
     this.evidence.set(evidence.id, evidence);
@@ -81,10 +71,6 @@ export class LocalNetDoctorStorage implements StoragePort {
 
   getEvidence(id: string): Evidence | undefined {
     return this.evidence.get(id);
-  }
-
-  getReport(id: string): Report | undefined {
-    return this.reports.get(id);
   }
 
   getArtifact(id: string): StoredArtifact | undefined {

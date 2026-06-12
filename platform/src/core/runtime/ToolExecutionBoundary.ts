@@ -1,16 +1,24 @@
 import type { Observation } from "../context/index.js";
 import type { AgentTask } from "../task/index.js";
+import { createAuditRecord, type AuditPort } from "../../audit/index.js";
 import type { Evidence, EvidenceBuilderPort } from "../../evidence/index.js";
 import {
   createAllowAllPolicyPort,
+  type PolicyDecision,
   type PolicyPort,
+  type PolicySubject,
+  type PolicyWorkspace,
 } from "../../governance/index.js";
+import type { IdentityRef } from "../../identity/index.js";
 import {
   createPermissionRequest,
   createPermissionServiceFromMode,
+  type PermissionDecision,
   type PermissionService,
 } from "../../permission/index.js";
+import { createTelemetryRecord, type TelemetryPort } from "../../telemetry/index.js";
 import type { ToolCall, ToolRegistry, ToolResult } from "../../tools/index.js";
+import type { WorkspaceContext } from "../../workspace/index.js";
 import type { RuntimeError } from "./RuntimeError.js";
 import type { RuntimeOptions } from "./RuntimeOptions.js";
 
@@ -19,12 +27,16 @@ export interface ToolExecutionBoundaryDependencies {
   evidenceBuilder: EvidenceBuilderPort;
   policyPort?: PolicyPort;
   permissionService?: PermissionService;
+  auditPort?: AuditPort;
+  telemetryPort?: TelemetryPort;
 }
 
 export interface ExecuteToolInput {
   task: AgentTask;
   toolCall: ToolCall;
   options: RuntimeOptions;
+  workspace?: WorkspaceContext;
+  identity?: IdentityRef;
 }
 
 export type ToolExecutionOutcome =
@@ -130,7 +142,9 @@ export class ToolExecutionBoundary {
         id: checkId,
         taskId: input.task.id,
         action: "tool.execute",
+        subject: mapIdentityToPolicySubject(input.identity),
         risk: input.toolCall.risk,
+        workspace: mapWorkspaceToPolicyWorkspace(input.workspace),
         target: {
           kind: "tool",
           name: input.toolCall.toolName,
@@ -140,6 +154,10 @@ export class ToolExecutionBoundary {
           source: "tool-execution-boundary",
         },
       });
+      const recordError = await this.recordPolicyDecision(input, decision);
+      if (recordError) {
+        return recordError;
+      }
 
       if (decision.status === "allowed") {
         return null;
@@ -226,6 +244,11 @@ export class ToolExecutionBoundary {
       };
     }
 
+    const recordError = await this.recordPermissionDecision(input, decision);
+    if (recordError) {
+      return recordError;
+    }
+
     if (decision.status === "granted") {
       return null;
     }
@@ -246,6 +269,226 @@ export class ToolExecutionBoundary {
       ],
     };
   }
+
+  private async recordPolicyDecision(
+    input: ExecuteToolInput,
+    decision: PolicyDecision,
+  ): Promise<ToolExecutionFailed | null> {
+    const auditError = await this.recordAudit(input, {
+      id: `audit_policy_checked_${input.toolCall.id}`,
+      eventName: "policy.checked",
+      action: "policy.check",
+      outcome: decision.status === "allowed" ? "succeeded" : "blocked",
+      payload: {
+        checkId: decision.checkId,
+        decisionStatus: decision.status,
+        code: decision.code ?? null,
+        toolCallId: input.toolCall.id,
+        toolName: input.toolCall.toolName,
+      },
+    });
+    if (auditError) {
+      return auditError;
+    }
+
+    return this.recordTelemetry(input, {
+      id: `telemetry_policy_checked_${input.toolCall.id}`,
+      eventName: "runtime.policy.checked",
+      dimensions: {
+        decisionStatus: decision.status,
+        code: decision.code ?? null,
+        toolName: input.toolCall.toolName,
+      },
+      counters: {
+        policyChecks: 1,
+      },
+    });
+  }
+
+  private async recordPermissionDecision(
+    input: ExecuteToolInput,
+    decision: PermissionDecision,
+  ): Promise<ToolExecutionFailed | null> {
+    const auditError = await this.recordAudit(input, {
+      id: `audit_permission_resolved_${input.toolCall.id}`,
+      eventName: "permission.resolved",
+      action: "permission.resolve",
+      outcome: decision.status === "granted" ? "succeeded" : "blocked",
+      payload: {
+        requestId: decision.requestId,
+        decisionStatus: decision.status,
+        code: decision.code ?? null,
+        permissionMode: input.options.permissionMode,
+        toolCallId: input.toolCall.id,
+        toolName: input.toolCall.toolName,
+      },
+    });
+    if (auditError) {
+      return auditError;
+    }
+
+    return this.recordTelemetry(input, {
+      id: `telemetry_permission_resolved_${input.toolCall.id}`,
+      eventName: "runtime.permission.resolved",
+      dimensions: {
+        decisionStatus: decision.status,
+        code: decision.code ?? null,
+        permissionMode: input.options.permissionMode,
+        toolName: input.toolCall.toolName,
+      },
+      counters: {
+        permissionDecisions: 1,
+      },
+    });
+  }
+
+  private async recordAudit(
+    input: ExecuteToolInput,
+    event: {
+      id: string;
+      eventName: string;
+      action: string;
+      outcome: "succeeded" | "failed" | "blocked" | "cancelled";
+      payload: Record<string, unknown>;
+    },
+  ): Promise<ToolExecutionFailed | null> {
+    if (!this.dependencies.auditPort) {
+      return null;
+    }
+
+    try {
+      await this.dependencies.auditPort.record(createAuditRecord({
+        id: event.id,
+        taskId: input.task.id,
+        eventName: event.eventName,
+        timestamp: new Date().toISOString(),
+        actorRef: input.identity?.id ?? null,
+        workspaceId: input.workspace?.id ?? null,
+        subject: {
+          kind: input.identity?.kind ?? "agent",
+          id: input.identity?.id ?? "agent",
+          metadata: input.identity?.metadata ?? {},
+        },
+        action: event.action,
+        target: {
+          kind: "tool",
+          id: input.toolCall.id,
+          metadata: {
+            toolName: input.toolCall.toolName,
+          },
+        },
+        outcome: event.outcome,
+        payload: event.payload,
+        metadata: {
+          source: "tool-execution-boundary",
+        },
+      }));
+      return null;
+    } catch (error) {
+      if ((input.options.auditMode ?? "optional") !== "required") {
+        return null;
+      }
+
+      return {
+        status: "failed",
+        toolResult: null,
+        errors: [
+          {
+            code: "audit_required_failed",
+            message: error instanceof Error ? error.message : "Required audit recording failed.",
+            metadata: {
+              eventName: event.eventName,
+              toolCallId: input.toolCall.id,
+              toolName: input.toolCall.toolName,
+            },
+          },
+        ],
+      };
+    }
+  }
+
+  private async recordTelemetry(
+    input: ExecuteToolInput,
+    event: {
+      id: string;
+      eventName: string;
+      counters: Record<string, number>;
+      dimensions: Record<string, string | number | boolean | null>;
+    },
+  ): Promise<ToolExecutionFailed | null> {
+    if (!this.dependencies.telemetryPort) {
+      return null;
+    }
+
+    try {
+      await this.dependencies.telemetryPort.record(createTelemetryRecord({
+        id: event.id,
+        taskId: input.task.id,
+        eventName: event.eventName,
+        timestamp: new Date().toISOString(),
+        counters: event.counters,
+        dimensions: event.dimensions,
+      }));
+      return null;
+    } catch (error) {
+      if ((input.options.telemetryMode ?? "optional") !== "required") {
+        return null;
+      }
+
+      return {
+        status: "failed",
+        toolResult: null,
+        errors: [
+          {
+            code: "runtime_telemetry_required_failed",
+            message: error instanceof Error ? error.message : "Required telemetry recording failed.",
+            metadata: {
+              eventName: event.eventName,
+              toolCallId: input.toolCall.id,
+              toolName: input.toolCall.toolName,
+            },
+          },
+        ],
+      };
+    }
+  }
+}
+
+function mapIdentityToPolicySubject(identity: IdentityRef | undefined): PolicySubject | undefined {
+  if (!identity) {
+    return undefined;
+  }
+
+  return {
+    kind: identity.kind,
+    id: identity.id,
+    displayName: identity.displayName,
+    metadata: identity.metadata,
+  };
+}
+
+function mapWorkspaceToPolicyWorkspace(workspace: WorkspaceContext | undefined): PolicyWorkspace | undefined {
+  if (!workspace) {
+    return undefined;
+  }
+
+  return {
+    id: workspace.id,
+    trustLevel: typeof workspace.metadata.trustLevel === "string" &&
+      (
+        workspace.metadata.trustLevel === "trusted" ||
+        workspace.metadata.trustLevel === "restricted" ||
+        workspace.metadata.trustLevel === "unknown"
+      )
+      ? workspace.metadata.trustLevel
+      : undefined,
+    metadata: {
+      name: workspace.name,
+      rootRef: workspace.rootRef,
+      policyRefs: workspace.policyRefs,
+      ...workspace.metadata,
+    },
+  };
 }
 
 function isGovernedToolCall(toolCall: ToolCall): boolean {

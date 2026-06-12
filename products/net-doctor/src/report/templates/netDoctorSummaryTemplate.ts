@@ -1,4 +1,4 @@
-import type { ReportTemplate } from "@agent-anything/platform";
+import type { ReportTemplate } from "./ReportTemplate.js";
 import {
   createEvidenceSummary,
   getEvidenceRefs,

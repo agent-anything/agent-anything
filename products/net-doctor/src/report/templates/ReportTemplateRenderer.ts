@@ -1,9 +1,11 @@
-import type { EvidenceRef } from "../../shared/types.js";
-import type { Report } from "../Report.js";
-import type { ReportTemplateOutput } from "./ReportTemplate.js";
+import type { EvidenceRef } from "@agent-anything/platform";
+import type {
+  NetDoctorReport,
+  ReportTemplateOutput,
+  TemplateRenderInput,
+  TemplateRenderResult,
+} from "./ReportTemplate.js";
 import type { ReportTemplateRegistry } from "./ReportTemplateRegistry.js";
-import type { TemplateRenderInput } from "./TemplateRenderInput.js";
-import type { TemplateRenderResult } from "./TemplateRenderResult.js";
 
 export interface ReportTemplateRendererInput {
   registry: ReportTemplateRegistry;
@@ -23,14 +25,14 @@ export class ReportTemplateRenderer {
         status: "failed",
         report: null,
         error: {
-          code: "report_template_missing",
+          code: "net_doctor_report_template_missing",
           message: `Report template '${input.templateId}' was not found.`,
           metadata: {
             templateId: input.templateId,
           },
         },
         metadata: {
-          renderer: "phase2-report-template-renderer",
+          renderer: "net-doctor-report-template-renderer",
           templateId: input.templateId,
         },
       };
@@ -43,7 +45,7 @@ export class ReportTemplateRenderer {
       report: createReport(input, output),
       error: null,
       metadata: {
-        renderer: "phase2-report-template-renderer",
+        renderer: "net-doctor-report-template-renderer",
         templateId: input.templateId,
       },
     };
@@ -53,7 +55,7 @@ export class ReportTemplateRenderer {
 function createReport(
   input: TemplateRenderInput,
   output: ReportTemplateOutput,
-): Report {
+): NetDoctorReport {
   const evidenceRefs = collectEvidenceRefs(input);
 
   return {
@@ -64,7 +66,7 @@ function createReport(
     evidenceRefs,
     createdAt: input.createdAt,
     metadata: {
-      renderer: "phase2-report-template-renderer",
+      renderer: "net-doctor-report-template-renderer",
       templateId: input.templateId,
       ...input.metadata,
       ...output.metadata,

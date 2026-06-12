@@ -1,26 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Evidence } from "../evidence/index.js";
-import type { Report } from "../report/index.js";
 import { InMemoryStorage } from "./InMemoryStorage.js";
 import type { StoragePort } from "./StoragePort.js";
 
 describe("InMemoryStorage", () => {
-  it("stores a report artifact", async () => {
-    const storage = new InMemoryStorage();
-
-    const artifact = await storage.storeReport(createReport());
-
-    expect(artifact).toMatchObject({
-      id: "artifact_report_report_001",
-      kind: "report",
-      ref: "memory://report/report_001",
-      metadata: {
-        contentType: "application/json",
-        storage: "in-memory",
-      },
-    });
-  });
-
   it("stores an evidence artifact", async () => {
     const storage = new InMemoryStorage();
 
@@ -40,8 +23,8 @@ describe("InMemoryStorage", () => {
   it("returns stable references", async () => {
     const storage = new InMemoryStorage();
 
-    const first = await storage.storeReport(createReport());
-    const second = await storage.storeReport(createReport());
+    const first = await storage.storeEvidence(createEvidence());
+    const second = await storage.storeEvidence(createEvidence());
 
     expect(first.id).toBe(second.id);
     expect(first.ref).toBe(second.ref);
@@ -50,13 +33,13 @@ describe("InMemoryStorage", () => {
   it("reads back artifacts when using in-memory storage", async () => {
     const storage = new InMemoryStorage();
 
-    const artifact = await storage.storeReport(createReport());
+    const artifact = await storage.storeEvidence(createEvidence());
 
     expect(storage.getArtifact(artifact.id)).toMatchObject({
-      id: "artifact_report_report_001",
+      id: "artifact_evidence_evidence_001",
     });
-    expect(storage.getReport("report_001")).toMatchObject({
-      id: "report_001",
+    expect(storage.getEvidence("evidence_001")).toMatchObject({
+      id: "evidence_001",
     });
   });
 
@@ -68,20 +51,6 @@ describe("InMemoryStorage", () => {
     expect(artifact.kind).toBe("evidence");
   });
 });
-
-function createReport(): Report {
-  return {
-    id: "report_001",
-    taskId: "task_001",
-    title: "Report for net-doctor.diagnose",
-    sections: [],
-    evidenceRefs: ["evidence_001"],
-    createdAt: "2026-06-04T00:00:00.000Z",
-    metadata: {
-      generator: "test",
-    },
-  };
-}
 
 function createEvidence(): Evidence {
   return {

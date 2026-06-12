@@ -74,7 +74,6 @@ describe("createNetDoctorAgentRuntime", () => {
         evidenceKind: "dnsLookup",
       },
     });
-    expect(storage.getReport("report_task_001")).toBeUndefined();
     expect(provider.requests()).toHaveLength(2);
     expect(provider.requests()[1]?.messages[1]?.content).toContain(
       "example.com resolved to 1 address.",

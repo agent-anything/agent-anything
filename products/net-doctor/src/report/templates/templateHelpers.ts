@@ -1,5 +1,6 @@
-import type { Evidence, TemplateRenderInput } from "@agent-anything/platform";
+import type { Evidence } from "@agent-anything/platform";
 import type { NetDoctorInput } from "../../input/index.js";
+import type { TemplateRenderInput } from "./ReportTemplate.js";
 
 export function getNetDoctorInput(input: TemplateRenderInput): Partial<NetDoctorInput> {
   if (!isRecord(input.task.input)) {

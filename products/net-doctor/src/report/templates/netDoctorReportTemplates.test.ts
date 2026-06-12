@@ -1,9 +1,9 @@
 import {
   ReportTemplateRegistry,
   ReportTemplateRenderer,
-  type Evidence,
   type TemplateRenderInput,
-} from "@agent-anything/platform";
+} from "./index.js";
+import type { Evidence } from "@agent-anything/platform";
 import { describe, expect, it } from "vitest";
 import { netDoctorSummaryTemplate } from "./netDoctorSummaryTemplate.js";
 import { networkEvidenceTemplate } from "./networkEvidenceTemplate.js";

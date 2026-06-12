@@ -1,10 +1,14 @@
 import type { AgentTask } from "../task/index.js";
+import { createAuditRecord, type AuditPort } from "../../audit/index.js";
 import type { Evidence, EvidenceBuilderPort } from "../../evidence/index.js";
+import type { IdentityProvider, IdentityRef } from "../../identity/index.js";
 import type { StoragePort } from "../../storage/index.js";
+import { createTelemetryRecord, type TelemetryPort } from "../../telemetry/index.js";
 import type { ToolCall, ToolRegistry } from "../../tools/index.js";
 import type { Metadata } from "../../shared/types.js";
 import type { PermissionService } from "../../permission/index.js";
 import type { PolicyPort } from "../../governance/index.js";
+import type { WorkspaceContext, WorkspaceResolver } from "../../workspace/index.js";
 import type { RuntimeError } from "./RuntimeError.js";
 import type { RuntimeOptions } from "./RuntimeOptions.js";
 import type { RuntimeOutputSpec, RuntimeResult } from "./RuntimeResult.js";
@@ -23,7 +27,16 @@ export interface AgentRuntimeDependencies {
   agentLoop?: AgentLoop;
   policyPort?: PolicyPort;
   permissionService?: PermissionService;
+  auditPort?: AuditPort;
+  telemetryPort?: TelemetryPort;
+  workspaceResolver?: WorkspaceResolver;
+  identityProvider?: IdentityProvider;
   toolExecutionBoundary?: ToolExecutionBoundary;
+}
+
+interface RuntimeContext {
+  workspace?: WorkspaceContext;
+  identity?: IdentityRef;
 }
 
 export class AgentRuntime {
@@ -39,6 +52,8 @@ export class AgentRuntime {
         evidenceBuilder: dependencies.evidenceBuilder,
         policyPort: dependencies.policyPort,
         permissionService: dependencies.permissionService,
+        auditPort: dependencies.auditPort,
+        telemetryPort: dependencies.telemetryPort,
       });
   }
 
@@ -53,7 +68,30 @@ export class AgentRuntime {
 
     const invalidOptionsError = validateRuntimeOptions(options);
     if (invalidOptionsError) {
-      return createFailedRuntimeResult(task, [invalidOptionsError], {
+      const result = createFailedRuntimeResult(task, [invalidOptionsError], {
+        metadata: runtimeMetadata,
+        outputSpec: resolveOutputSpec(options),
+        startedAt,
+      });
+      return this.finalizeRuntimeResult(task, result, options, {}, startedAt);
+    }
+
+    const contextResult = await this.resolveRuntimeContext(task, options, startedAt);
+    if ("result" in contextResult) {
+      return this.finalizeRuntimeResult(task, contextResult.result, options, {}, startedAt);
+    }
+
+    const context = contextResult.context;
+    const taskStartedError = await this.recordTaskAudit(task, {
+      eventName: "task.started",
+      action: "runtime.start",
+      outcome: "succeeded",
+      payload: {
+        taskKind: task.kind,
+      },
+    }, options, context);
+    if (taskStartedError) {
+      return createFailedRuntimeResult(task, [taskStartedError], {
         metadata: runtimeMetadata,
         outputSpec: resolveOutputSpec(options),
         startedAt,
@@ -64,6 +102,7 @@ export class AgentRuntime {
       return this.runAgentLoop(task, options, {
         metadata: runtimeMetadata,
         startedAt,
+        context,
       });
     }
 
@@ -71,7 +110,7 @@ export class AgentRuntime {
     try {
       toolCalls = await this.dependencies.planToolCalls(task);
     } catch (error) {
-      return createFailedRuntimeResult(task, [toRuntimeError(error, {
+      const result = createFailedRuntimeResult(task, [toRuntimeError(error, {
         code: "runtime_invalid_options",
         message: "Failed to create deterministic tool call plan.",
       })], {
@@ -79,10 +118,11 @@ export class AgentRuntime {
         outputSpec: resolveOutputSpec(options),
         startedAt,
       });
+      return this.finalizeRuntimeResult(task, result, options, context, startedAt);
     }
 
     if (toolCalls.length > options.limits.maxToolCalls) {
-      return createFailedRuntimeResult(task, [
+      const result = createFailedRuntimeResult(task, [
         {
           code: "runtime_limit_exceeded",
           message: `Tool call count ${toolCalls.length} exceeds maxToolCalls ${options.limits.maxToolCalls}.`,
@@ -96,11 +136,12 @@ export class AgentRuntime {
         outputSpec: resolveOutputSpec(options),
         startedAt,
       });
+      return this.finalizeRuntimeResult(task, result, options, context, startedAt);
     }
 
     for (const toolCall of toolCalls) {
       if (Date.now() - startedAt > options.limits.maxDurationMs) {
-        return createFailedRuntimeResult(task, [
+        const result = createFailedRuntimeResult(task, [
           {
             code: "runtime_limit_exceeded",
             message: `Runtime exceeded maxDurationMs ${options.limits.maxDurationMs}.`,
@@ -113,28 +154,33 @@ export class AgentRuntime {
           outputSpec: resolveOutputSpec(options),
           startedAt,
         });
+        return this.finalizeRuntimeResult(task, result, options, context, startedAt);
       }
 
       const execution = await this.toolExecutionBoundary.execute({
         task,
         toolCall,
         options,
+        workspace: context.workspace,
+        identity: context.identity,
       });
 
       if (execution.status === "failed") {
-        return createRuntimeResult(task, "failed", execution.errors, {
+        const result = createRuntimeResult(task, "failed", execution.errors, {
           metadata: runtimeMetadata,
           outputSpec: resolveOutputSpec(options),
           startedAt,
         });
+        return this.finalizeRuntimeResult(task, result, options, context, startedAt);
       }
 
       if (execution.status === "blocked") {
-        return createRuntimeResult(task, "blocked", execution.errors, {
+        const result = createRuntimeResult(task, "blocked", execution.errors, {
           metadata: runtimeMetadata,
           outputSpec: resolveOutputSpec(options),
           startedAt,
         });
+        return this.finalizeRuntimeResult(task, result, options, context, startedAt);
       }
 
       evidence.push(...execution.evidence);
@@ -146,6 +192,8 @@ export class AgentRuntime {
       artifactRefs,
       output: null,
       outputSpec: resolveOutputSpec(options),
+      options,
+      context,
     });
   }
 
@@ -155,6 +203,7 @@ export class AgentRuntime {
     runtime: {
       metadata: Metadata;
       startedAt: number;
+      context: RuntimeContext;
     },
   ): Promise<RuntimeResult> {
     const loopResult = await this.dependencies.agentLoop!.run({
@@ -163,7 +212,7 @@ export class AgentRuntime {
     });
 
     if (loopResult.status === "stopped") {
-      return createFailedRuntimeResult(task, [
+      const result = createFailedRuntimeResult(task, [
         {
           code: "runtime_agent_loop_stopped",
           message: loopResult.stopReason ?? "Agent loop stopped before completion.",
@@ -181,10 +230,11 @@ export class AgentRuntime {
         outputSpec: resolveOutputSpec(options),
         startedAt: runtime.startedAt,
       });
+      return this.finalizeRuntimeResult(task, result, options, runtime.context, runtime.startedAt);
     }
 
     if (loopResult.status === "blocked") {
-      return createRuntimeResult(task, "blocked", loopResult.errors, {
+      const result = createRuntimeResult(task, "blocked", loopResult.errors, {
         evidenceRefs: loopResult.evidence.map((item) => item.id),
         metadata: {
           ...runtime.metadata,
@@ -193,10 +243,11 @@ export class AgentRuntime {
         outputSpec: resolveOutputSpec(options),
         startedAt: runtime.startedAt,
       });
+      return this.finalizeRuntimeResult(task, result, options, runtime.context, runtime.startedAt);
     }
 
     if (loopResult.status !== "completed") {
-      return createFailedRuntimeResult(task, loopResult.errors.length > 0
+      const result = createFailedRuntimeResult(task, loopResult.errors.length > 0
         ? loopResult.errors
         : [
           {
@@ -215,6 +266,7 @@ export class AgentRuntime {
         },
         startedAt: runtime.startedAt,
       });
+      return this.finalizeRuntimeResult(task, result, options, runtime.context, runtime.startedAt);
     }
 
     return this.completeRuntimeWithEvidence(task, loopResult.evidence, {
@@ -226,6 +278,8 @@ export class AgentRuntime {
       artifactRefs: [],
       output: loopResult.finalOutput,
       outputSpec: resolveOutputSpec(options),
+      options,
+      context: runtime.context,
     });
   }
 
@@ -238,6 +292,8 @@ export class AgentRuntime {
       artifactRefs: string[];
       output: unknown;
       outputSpec: RuntimeOutputSpec;
+      options: RuntimeOptions;
+      context: RuntimeContext;
     },
   ): Promise<RuntimeResult> {
     const artifactRefs = [...runtime.artifactRefs];
@@ -247,7 +303,7 @@ export class AgentRuntime {
         artifactRefs.push(artifact.id);
       }
 
-      return {
+      const result: RuntimeResult = {
         taskId: task.id,
         status: "succeeded",
         output: runtime.output,
@@ -257,8 +313,9 @@ export class AgentRuntime {
         errors: [],
         metadata: createRuntimeMetadata(runtime.metadata, runtime.startedAt),
       };
+      return this.finalizeRuntimeResult(task, result, runtime.options, runtime.context, runtime.startedAt);
     } catch (error) {
-      return createFailedRuntimeResult(task, [toRuntimeError(error, {
+      const result = createFailedRuntimeResult(task, [toRuntimeError(error, {
         code: "storage_write_failed",
         message: "Failed to store runtime artifacts.",
       })], {
@@ -267,6 +324,201 @@ export class AgentRuntime {
         metadata: runtime.metadata,
         outputSpec: runtime.outputSpec,
         startedAt: runtime.startedAt,
+      });
+      return this.finalizeRuntimeResult(task, result, runtime.options, runtime.context, runtime.startedAt);
+    }
+  }
+
+  private async resolveRuntimeContext(
+    task: AgentTask,
+    options: RuntimeOptions,
+    startedAt: number,
+  ): Promise<{ context: RuntimeContext } | { result: RuntimeResult }> {
+    const context: RuntimeContext = {};
+
+    if (this.dependencies.workspaceResolver) {
+      try {
+        context.workspace = await this.dependencies.workspaceResolver.resolve({
+          taskId: task.id,
+          cwd: typeof options.metadata.cwd === "string" ? options.metadata.cwd : null,
+          metadata: options.metadata,
+        });
+      } catch (error) {
+        return {
+          result: createFailedRuntimeResult(task, [toRuntimeError(error, {
+            code: "runtime_workspace_resolution_failed",
+            message: "Workspace resolution failed.",
+          })], {
+            metadata: options.metadata,
+            outputSpec: resolveOutputSpec(options),
+            startedAt,
+          }),
+        };
+      }
+    }
+
+    if (this.dependencies.identityProvider) {
+      try {
+        context.identity = await this.dependencies.identityProvider.resolve({
+          taskId: task.id,
+          metadata: options.metadata,
+        });
+      } catch (error) {
+        return {
+          result: createFailedRuntimeResult(task, [toRuntimeError(error, {
+            code: "runtime_identity_resolution_failed",
+            message: "Identity resolution failed.",
+          })], {
+            metadata: options.metadata,
+            outputSpec: resolveOutputSpec(options),
+            startedAt,
+          }),
+        };
+      }
+    }
+
+    return { context };
+  }
+
+  private async finalizeRuntimeResult(
+    task: AgentTask,
+    result: RuntimeResult,
+    options: RuntimeOptions,
+    context: RuntimeContext,
+    startedAt: number,
+  ): Promise<RuntimeResult> {
+    const auditError = await this.recordTaskAudit(task, {
+      eventName: result.status === "succeeded" ? "task.completed" : "task.failed",
+      action: result.status === "succeeded" ? "runtime.complete" : "runtime.fail",
+      outcome: result.status,
+      payload: {
+        status: result.status,
+        outputPresent: result.output !== null,
+        evidenceCount: result.evidenceRefs.length,
+        artifactCount: result.artifactRefs.length,
+        errorCodes: result.errors.map((error) => error.code),
+        durationMs: Date.now() - startedAt,
+      },
+    }, options, context);
+    if (auditError) {
+      return createFailedRuntimeResult(task, [auditError], {
+        evidenceRefs: result.evidenceRefs,
+        artifactRefs: result.artifactRefs,
+        metadata: options.metadata,
+        outputSpec: resolveOutputSpec(options),
+        startedAt,
+      });
+    }
+
+    const telemetryError = await this.recordTaskTelemetry(task, result, options, startedAt);
+    if (telemetryError) {
+      return createFailedRuntimeResult(task, [telemetryError], {
+        evidenceRefs: result.evidenceRefs,
+        artifactRefs: result.artifactRefs,
+        metadata: options.metadata,
+        outputSpec: resolveOutputSpec(options),
+        startedAt,
+      });
+    }
+
+    return result;
+  }
+
+  private async recordTaskAudit(
+    task: AgentTask,
+    event: {
+      eventName: string;
+      action: string;
+      outcome: "succeeded" | "failed" | "blocked" | "cancelled";
+      payload: Metadata;
+    },
+    options: RuntimeOptions,
+    context: RuntimeContext,
+  ): Promise<RuntimeError | null> {
+    if (!this.dependencies.auditPort) {
+      return null;
+    }
+
+    try {
+      await this.dependencies.auditPort.record(createAuditRecord({
+        id: `audit_${event.eventName.replace(".", "_")}_${task.id}`,
+        taskId: task.id,
+        eventName: event.eventName,
+        timestamp: new Date().toISOString(),
+        actorRef: context.identity?.id ?? null,
+        workspaceId: context.workspace?.id ?? null,
+        subject: {
+          kind: context.identity?.kind ?? "agent",
+          id: context.identity?.id ?? "agent",
+          metadata: context.identity?.metadata ?? {},
+        },
+        action: event.action,
+        target: {
+          kind: "task",
+          id: task.id,
+          metadata: {
+            taskKind: task.kind,
+          },
+        },
+        outcome: event.outcome,
+        payload: event.payload,
+        metadata: {
+          source: "agent-runtime",
+        },
+      }));
+      return null;
+    } catch (error) {
+      if ((options.auditMode ?? "optional") !== "required") {
+        return null;
+      }
+
+      return toRuntimeError(error, {
+        code: "audit_required_failed",
+        message: "Required audit recording failed.",
+      });
+    }
+  }
+
+  private async recordTaskTelemetry(
+    task: AgentTask,
+    result: RuntimeResult,
+    options: RuntimeOptions,
+    startedAt: number,
+  ): Promise<RuntimeError | null> {
+    if (!this.dependencies.telemetryPort) {
+      return null;
+    }
+
+    try {
+      await this.dependencies.telemetryPort.record(createTelemetryRecord({
+        id: `telemetry_runtime_task_completed_${task.id}`,
+        taskId: task.id,
+        eventName: "runtime.task.completed",
+        timestamp: new Date().toISOString(),
+        durationMs: Date.now() - startedAt,
+        counters: {
+          evidenceCount: result.evidenceRefs.length,
+          artifactCount: result.artifactRefs.length,
+          errorCount: result.errors.length,
+        },
+        dimensions: {
+          status: result.status,
+          code: result.errors[0]?.code ?? null,
+          permissionMode: options.permissionMode,
+          executionAccess: typeof options.metadata.executionAccess === "string"
+            ? options.metadata.executionAccess
+            : null,
+        },
+      }));
+      return null;
+    } catch (error) {
+      if ((options.telemetryMode ?? "optional") !== "required") {
+        return null;
+      }
+
+      return toRuntimeError(error, {
+        code: "runtime_telemetry_required_failed",
+        message: "Required telemetry recording failed.",
       });
     }
   }

@@ -1,9 +1,13 @@
 import { EvidenceBuilder, type EvidenceBuilderPort } from "../../evidence/index.js";
+import type { AuditPort } from "../../audit/index.js";
+import type { IdentityProvider } from "../../identity/index.js";
 import type { PermissionMode, PermissionService } from "../../permission/index.js";
 import type { PolicyPort } from "../../governance/index.js";
 import type { Metadata } from "../../shared/types.js";
 import type { StoragePort } from "../../storage/index.js";
+import type { TelemetryPort } from "../../telemetry/index.js";
 import type { ToolCall, ToolRegistry } from "../../tools/index.js";
+import type { WorkspaceResolver } from "../../workspace/index.js";
 import type { AgentTask } from "../task/index.js";
 import { AgentRuntime, type PlanToolCalls } from "./AgentRuntime.js";
 import type { RuntimeLimits } from "./RuntimeLimits.js";
@@ -25,6 +29,12 @@ export interface CreateDefaultRuntimeInput {
   planToolCalls?: PlanToolCalls;
   policyPort?: PolicyPort;
   permissionService?: PermissionService;
+  auditPort?: AuditPort;
+  auditMode?: "optional" | "required";
+  telemetryPort?: TelemetryPort;
+  telemetryMode?: "optional" | "required";
+  workspaceResolver?: WorkspaceResolver;
+  identityProvider?: IdentityProvider;
 }
 
 export function createDefaultRuntime(
@@ -38,6 +48,10 @@ export function createDefaultRuntime(
       planToolCalls: input.planToolCalls ?? readToolCallsFromTaskInput,
       policyPort: input.policyPort,
       permissionService: input.permissionService,
+      auditPort: input.auditPort,
+      telemetryPort: input.telemetryPort,
+      workspaceResolver: input.workspaceResolver,
+      identityProvider: input.identityProvider,
     },
     {
       limits: {
@@ -45,6 +59,8 @@ export function createDefaultRuntime(
         ...input.limits,
       },
       permissionMode: input.permissionMode,
+      auditMode: input.auditMode ?? "optional",
+      telemetryMode: input.telemetryMode ?? "optional",
       metadata: input.metadata ?? {},
     },
   );

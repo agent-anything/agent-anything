@@ -185,26 +185,6 @@ export type {
 } from "./evidence/index.js";
 export { EvidenceBuilder } from "./evidence/index.js";
 export type {
-  GenerateReportInput,
-  Report,
-  ReportGeneratorPort,
-  ReportSection,
-  ReportTemplate,
-  ReportTemplateOutput,
-  ReportTemplateRendererInput,
-  TemplateRenderError,
-  TemplateRenderFailed,
-  TemplateRenderInput,
-  TemplateRenderResult,
-  TemplateRenderStatus,
-  TemplateRenderSucceeded,
-} from "./report/index.js";
-export {
-  ReportGenerator,
-  ReportTemplateRegistry,
-  ReportTemplateRenderer,
-} from "./report/index.js";
-export type {
   BaseRedactionRule,
   KeyRedactionRule,
   PatternRedactionRule,
