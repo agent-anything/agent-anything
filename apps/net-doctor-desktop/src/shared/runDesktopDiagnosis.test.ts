@@ -8,6 +8,8 @@ describe("runDesktopDiagnosis", () => {
       request: {
         target: "https://example.com",
         symptom: "Browser cannot connect.",
+        permissionMode: "trusted",
+        executionAccess: "workspace",
       },
       provider: new FakeProvider({
         responses: [

@@ -1,6 +1,12 @@
+import type {
+  DesktopDiagnosisRequest,
+  DesktopPermissionPreset,
+} from "../shared/DesktopDiagnosis.js";
+
 const form = requireElement<HTMLFormElement>("#diagnosis-form");
 const targetInput = requireElement<HTMLInputElement>("#target");
 const symptomInput = requireElement<HTMLInputElement>("#symptom");
+const permissionInput = requireElement<HTMLSelectElement>("#permission");
 const runButton = requireElement<HTMLButtonElement>("#run");
 const progressList = requireElement<HTMLUListElement>("#progress");
 const resultPanel = requireElement<HTMLElement>("#result");
@@ -20,6 +26,7 @@ async function runDiagnosis(): Promise<void> {
     const result = await window.netDoctor.diagnose({
       target: targetInput.value,
       symptom: symptomInput.value,
+      ...resolvePermissionPreset(permissionInput.value),
     });
 
     for (const update of result.progress) {
@@ -54,6 +61,31 @@ async function runDiagnosis(): Promise<void> {
   } finally {
     runButton.disabled = false;
   }
+}
+
+function resolvePermissionPreset(
+  value: string,
+): Pick<DesktopDiagnosisRequest, "permissionMode" | "executionAccess"> {
+  const preset = value as DesktopPermissionPreset;
+
+  if (preset === "ask-for-approval") {
+    return {
+      permissionMode: "ask",
+      executionAccess: "workspace",
+    };
+  }
+
+  if (preset === "full-access") {
+    return {
+      permissionMode: "trusted",
+      executionAccess: "full",
+    };
+  }
+
+  return {
+    permissionMode: "trusted",
+    executionAccess: "workspace",
+  };
 }
 
 function requireElement<TElement extends Element>(selector: string): TElement {

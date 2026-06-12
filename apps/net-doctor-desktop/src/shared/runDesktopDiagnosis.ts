@@ -46,6 +46,10 @@ export async function runDesktopDiagnosis(
     provider: input.provider ?? createDesktopDemoProvider(),
     storage,
     eventEmitter,
+    permissionMode: input.request.permissionMode ?? "trusted",
+    metadata: {
+      executionAccess: input.request.executionAccess ?? "workspace",
+    },
   });
   const result = await runtime.run(task);
   const evidence = result.evidenceRefs

@@ -1,12 +1,16 @@
+import type { PermissionMode } from "@agent-anything/platform";
+
 export interface NetDoctorCliArgs {
   target: string;
   symptom: string;
+  permissionMode: PermissionMode;
 }
 
 export function parseCliArgs(args: string[]): NetDoctorCliArgs {
   const values = [...args];
   let target: string | null = null;
   let symptom = "";
+  let permissionMode: PermissionMode = "trusted";
 
   while (values.length > 0) {
     const value = values.shift();
@@ -22,6 +26,11 @@ export function parseCliArgs(args: string[]): NetDoctorCliArgs {
 
     if (value === "--symptom" || value === "-s") {
       symptom = readRequiredValue(values, value);
+      continue;
+    }
+
+    if (value === "--permission") {
+      permissionMode = readPermissionMode(values, value);
       continue;
     }
 
@@ -43,6 +52,7 @@ export function parseCliArgs(args: string[]): NetDoctorCliArgs {
   return {
     target,
     symptom,
+    permissionMode,
   };
 }
 
@@ -61,4 +71,14 @@ function readRequiredValue(values: string[], option: string): string {
   }
 
   return value;
+}
+
+function readPermissionMode(values: string[], option: string): PermissionMode {
+  const value = readRequiredValue(values, option);
+
+  if (value === "trusted" || value === "ask" || value === "deny") {
+    return value;
+  }
+
+  throw new Error(`Option '${option}' must be one of: trusted, ask, deny.`);
 }

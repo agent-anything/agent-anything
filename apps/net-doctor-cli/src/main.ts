@@ -18,5 +18,5 @@ try {
 }
 
 function printHelp(): void {
-  console.log("Usage: net-doctor --target <host-or-url> [--symptom <text>]");
+  console.log("Usage: net-doctor --target <host-or-url> [--symptom <text>] [--permission trusted|ask|deny]");
 }

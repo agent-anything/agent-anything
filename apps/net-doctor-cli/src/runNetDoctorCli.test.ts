@@ -9,6 +9,7 @@ describe("runNetDoctorCli", () => {
       args: {
         target: "https://example.com",
         symptom: "Browser cannot connect.",
+        permissionMode: "trusted",
       },
       provider: new FakeProvider({
         responses: [

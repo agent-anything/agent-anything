@@ -52,6 +52,7 @@ export async function runNetDoctorCli(
     provider,
     storage,
     eventEmitter,
+    permissionMode: input.args.permissionMode,
   });
 
   write(`NetDoctor diagnosis: ${input.args.target}`);
