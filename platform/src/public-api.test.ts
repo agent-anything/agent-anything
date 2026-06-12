@@ -7,10 +7,13 @@ import {
   createTelemetryRecord,
   FunctionToolAdapter,
   InMemoryStorage,
+  McpRegistry,
+  McpToolAdapter,
   Redactor,
   RemoteToolAdapter,
   ToolRegistry,
   type AgentTask,
+  type McpServerDefinition,
   type RemoteToolNode,
   type ToolDefinition,
 } from "./index.js";
@@ -294,12 +297,55 @@ describe("Phase1 public API", () => {
     });
   });
 
+  it("exposes Phase3.1 MCP contracts, registry, and adapter", () => {
+    const server: McpServerDefinition = {
+      id: "mcp_server_001",
+      name: "MCP Server 001",
+      transport: "stdio",
+      tools: [
+        {
+          name: "mcp.lookup",
+          description: "Lookup via MCP.",
+          inputSchema: {
+            type: "object",
+          },
+          risk: "safe",
+          metadata: {},
+        },
+      ],
+      metadata: {},
+    };
+    const registry = new McpRegistry();
+    registry.register(server);
+    const adapter = new McpToolAdapter({
+      server,
+      tool: server.tools[0]!,
+      connectionPort: {
+        async callTool(input) {
+          return {
+            toolCallId: input.toolCallId,
+            toolName: input.toolName,
+            output: {},
+            metadata: {},
+          };
+        },
+      },
+    });
+
+    expect(registry.listTools()).toHaveLength(1);
+    expect(adapter.toToolDefinition()).toMatchObject({
+      name: "mcp.lookup",
+      risk: "safe",
+    });
+  });
+
   it("does not expose testing fakes through public exports", () => {
     expect("FakeAuditPort" in publicApi).toBe(false);
     expect("FakeTelemetryPort" in publicApi).toBe(false);
     expect("FakeWorkspaceResolver" in publicApi).toBe(false);
     expect("FakeIdentityProvider" in publicApi).toBe(false);
     expect("FakeRemoteToolPort" in publicApi).toBe(false);
+    expect("FakeMcpConnectionPort" in publicApi).toBe(false);
   });
 });
 

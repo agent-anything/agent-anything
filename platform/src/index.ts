@@ -137,6 +137,19 @@ export {
 } from "./remote-tools/index.js";
 
 export type {
+  McpConnectionPort,
+  McpServerDefinition,
+  McpToolCallInput,
+  McpToolCallResult,
+  McpToolDefinition,
+} from "./mcp/index.js";
+export {
+  McpRegistry,
+  McpToolAdapter,
+  type McpToolAdapterInput,
+} from "./mcp/index.js";
+
+export type {
   CreatePermissionRequestInput,
   PermissionDecision,
   PermissionDecisionCode,

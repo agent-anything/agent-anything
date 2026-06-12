@@ -26,3 +26,7 @@ export {
   FakeRemoteToolPort,
   type FakeRemoteToolPortHandler,
 } from "./FakeRemoteToolPort.js";
+export {
+  FakeMcpConnectionPort,
+  type FakeMcpConnectionPortHandler,
+} from "./FakeMcpConnectionPort.js";
