@@ -19,6 +19,7 @@ export {
   ToolExecutionBoundary,
   type ExecuteToolInput,
   type ToolExecutionBoundaryDependencies,
+  type ToolExecutionBlocked,
   type ToolExecutionFailed,
   type ToolExecutionOutcome,
   type ToolExecutionSucceeded,

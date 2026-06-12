@@ -8,7 +8,7 @@ import type { RuntimeError } from "./RuntimeError.js";
 import type { RuntimeOptions } from "./RuntimeOptions.js";
 import type { ToolExecutionBoundary } from "./ToolExecutionBoundary.js";
 
-export type AgentLoopStatus = "completed" | "failed" | "stopped";
+export type AgentLoopStatus = "completed" | "failed" | "blocked" | "stopped";
 
 export interface AgentLoopDependencies {
   planner: Planner;
@@ -163,6 +163,30 @@ export class AgentLoop {
 
         return createLoopResult(task, {
           status: "failed",
+          finalOutput: null,
+          stopReason: null,
+          evidence,
+          observations,
+          errors: toolOutcome.errors,
+          iterations: iteration,
+          metadata: options.metadata,
+        });
+      }
+
+      if (toolOutcome.status === "blocked") {
+        this.emit("tool.finished", task.id, {
+          iteration,
+          status: "blocked",
+          toolCallId: planStep.toolCall.id,
+          toolName: planStep.toolCall.toolName,
+        });
+        this.emit("loop.iteration.finished", task.id, {
+          iteration,
+          status: "blocked",
+        });
+
+        return createLoopResult(task, {
+          status: "blocked",
           finalOutput: null,
           stopReason: null,
           evidence,

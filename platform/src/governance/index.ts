@@ -9,3 +9,4 @@ export type {
   PolicyTarget,
   PolicyWorkspace,
 } from "./policy/index.js";
+export { createAllowAllPolicyPort } from "./policy/index.js";

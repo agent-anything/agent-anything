@@ -56,6 +56,7 @@ export type {
   RuntimeResult,
   RuntimeStatus,
   ToolExecutionBoundaryDependencies,
+  ToolExecutionBlocked,
   ToolExecutionFailed,
   ToolExecutionOutcome,
   ToolExecutionSucceeded,
@@ -118,6 +119,7 @@ export type {
   PolicyTarget,
   PolicyWorkspace,
 } from "./governance/index.js";
+export { createAllowAllPolicyPort } from "./governance/index.js";
 
 export type {
   FakeProviderInput,

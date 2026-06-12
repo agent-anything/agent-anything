@@ -11,3 +11,4 @@ export type {
   PolicyDecisionStatus,
 } from "./PolicyDecision.js";
 export type { PolicyPort } from "./PolicyPort.js";
+export { createAllowAllPolicyPort } from "./createAllowAllPolicyPort.js";

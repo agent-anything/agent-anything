@@ -60,7 +60,7 @@ describe("Phase1 public API", () => {
     });
   });
 
-  it("returns structured failure through public exports when permission denies a risky tool", async () => {
+  it("returns structured blocked result through public exports when permission denies a risky tool", async () => {
     const toolRegistry = new ToolRegistry();
     toolRegistry.register({
       ...createLookupDnsTool(),
@@ -99,7 +99,7 @@ describe("Phase1 public API", () => {
     });
 
     expect(result).toMatchObject({
-      status: "failed",
+      status: "blocked",
       reportRef: null,
       errors: [
         {

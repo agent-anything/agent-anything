@@ -80,7 +80,7 @@ describe("AgentRuntime", () => {
 
     const result = await runtime.run(createTask());
 
-    expect(result.status).toBe("failed");
+    expect(result.status).toBe("blocked");
     expect(result.errors[0]).toMatchObject({
       code: "permission_mode_denied",
       metadata: {

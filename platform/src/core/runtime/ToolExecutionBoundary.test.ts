@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EvidenceBuilder } from "../../evidence/index.js";
+import type { PolicyPort } from "../../governance/index.js";
 import type { PermissionService } from "../../permission/index.js";
 import {
   ToolRegistry,
@@ -176,7 +177,7 @@ describe("ToolExecutionBoundary", () => {
     );
 
     expect(outcome).toMatchObject({
-      status: "failed",
+      status: "blocked",
       errors: [
         {
           code: "permission_mode_denied",
@@ -184,6 +185,117 @@ describe("ToolExecutionBoundary", () => {
       ],
     });
     expect(executed).toBe(false);
+  });
+
+  it("blocks risky tools when policy denies before permission and execution", async () => {
+    let executed = false;
+    let permissionRequested = false;
+    const boundary = createBoundary(createToolResult("succeeded"), {
+      onExecute: () => {
+        executed = true;
+      },
+      policyPort: {
+        async evaluate(input) {
+          return {
+            checkId: input.id,
+            status: "denied",
+            code: "policy_denied",
+            reason: "Policy denies risky tool.",
+            decidedAt: "2026-06-12T00:00:00.000Z",
+          };
+        },
+      },
+      permissionService: {
+        async request(request) {
+          permissionRequested = true;
+          return {
+            requestId: request.id,
+            status: "granted",
+            reason: "Allowed by test service.",
+            decidedAt: "2026-06-12T00:00:00.000Z",
+          };
+        },
+      },
+    });
+
+    const outcome = await boundary.execute(
+      createExecuteInput({
+        toolCall: createToolCall({
+          risk: "risky",
+        }),
+      }),
+    );
+
+    expect(outcome).toMatchObject({
+      status: "blocked",
+      errors: [
+        {
+          code: "policy_denied",
+          message: "Policy denies risky tool.",
+        },
+      ],
+    });
+    expect(permissionRequested).toBe(false);
+    expect(executed).toBe(false);
+  });
+
+  it("blocks risky tools when policy requires review", async () => {
+    const boundary = createBoundary(createToolResult("succeeded"), {
+      policyPort: {
+        async evaluate(input) {
+          return {
+            checkId: input.id,
+            status: "requires_review",
+            decidedAt: "2026-06-12T00:00:00.000Z",
+          };
+        },
+      },
+    });
+
+    const outcome = await boundary.execute(
+      createExecuteInput({
+        toolCall: createToolCall({
+          risk: "risky",
+        }),
+      }),
+    );
+
+    expect(outcome).toMatchObject({
+      status: "blocked",
+      errors: [
+        {
+          code: "policy_review_required",
+        },
+      ],
+    });
+  });
+
+  it("maps policy port failure to structured runtime error", async () => {
+    const boundary = createBoundary(createToolResult("succeeded"), {
+      policyPort: {
+        async evaluate() {
+          throw new Error("Policy service failed.");
+        },
+      },
+    });
+
+    const outcome = await boundary.execute(
+      createExecuteInput({
+        toolCall: createToolCall({
+          risk: "risky",
+        }),
+      }),
+    );
+
+    expect(outcome).toMatchObject({
+      status: "failed",
+      errors: [
+        {
+          code: "policy_check_failed",
+          message: "Policy service failed.",
+        },
+      ],
+    });
   });
 
   it("uses injected permission service to allow risky tools", async () => {
@@ -253,6 +365,7 @@ function createBoundary(
   toolResult: ToolResult,
   options: {
     onExecute?: () => void;
+    policyPort?: PolicyPort;
     permissionService?: PermissionService;
   } = {},
 ): ToolExecutionBoundary {
@@ -262,6 +375,7 @@ function createBoundary(
   return new ToolExecutionBoundary({
     toolRegistry: registry,
     evidenceBuilder: new EvidenceBuilder(),
+    policyPort: options.policyPort,
     permissionService: options.permissionService,
   });
 }

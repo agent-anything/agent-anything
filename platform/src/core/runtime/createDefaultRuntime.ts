@@ -1,5 +1,6 @@
 import { EvidenceBuilder, type EvidenceBuilderPort } from "../../evidence/index.js";
 import type { PermissionMode, PermissionService } from "../../permission/index.js";
+import type { PolicyPort } from "../../governance/index.js";
 import { ReportGenerator } from "../../report/index.js";
 import type { Metadata } from "../../shared/types.js";
 import type { StoragePort } from "../../storage/index.js";
@@ -23,6 +24,7 @@ export interface CreateDefaultRuntimeInput {
   limits?: Partial<RuntimeLimits>;
   metadata?: Metadata;
   planToolCalls?: PlanToolCalls;
+  policyPort?: PolicyPort;
   permissionService?: PermissionService;
 }
 
@@ -36,6 +38,7 @@ export function createDefaultRuntime(
       reportGenerator: new ReportGenerator(),
       storage: input.storage,
       planToolCalls: input.planToolCalls ?? readToolCallsFromTaskInput,
+      policyPort: input.policyPort,
       permissionService: input.permissionService,
     },
     {

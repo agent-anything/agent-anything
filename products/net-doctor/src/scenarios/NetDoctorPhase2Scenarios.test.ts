@@ -214,7 +214,7 @@ describe("NetDoctor Phase2 agent scenarios", () => {
     }));
 
     expect(result).toMatchObject({
-      status: "failed",
+      status: "blocked",
       errors: [
         {
           code: "permission_denied",

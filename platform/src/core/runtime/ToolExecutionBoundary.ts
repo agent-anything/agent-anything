@@ -2,6 +2,10 @@ import type { Observation } from "../context/index.js";
 import type { AgentTask } from "../task/index.js";
 import type { Evidence, EvidenceBuilderPort } from "../../evidence/index.js";
 import {
+  createAllowAllPolicyPort,
+  type PolicyPort,
+} from "../../governance/index.js";
+import {
   createPermissionRequest,
   createPermissionServiceFromMode,
   type PermissionService,
@@ -13,6 +17,7 @@ import type { RuntimeOptions } from "./RuntimeOptions.js";
 export interface ToolExecutionBoundaryDependencies {
   toolRegistry: ToolRegistry;
   evidenceBuilder: EvidenceBuilderPort;
+  policyPort?: PolicyPort;
   permissionService?: PermissionService;
 }
 
@@ -24,7 +29,8 @@ export interface ExecuteToolInput {
 
 export type ToolExecutionOutcome =
   | ToolExecutionSucceeded
-  | ToolExecutionFailed;
+  | ToolExecutionFailed
+  | ToolExecutionBlocked;
 
 export interface ToolExecutionSucceeded {
   status: "succeeded";
@@ -39,19 +45,26 @@ export interface ToolExecutionFailed {
   errors: RuntimeError[];
 }
 
+export interface ToolExecutionBlocked {
+  status: "blocked";
+  toolResult: ToolResult | null;
+  errors: RuntimeError[];
+}
+
 export class ToolExecutionBoundary {
   constructor(
     private readonly dependencies: ToolExecutionBoundaryDependencies,
   ) {}
 
   async execute(input: ExecuteToolInput): Promise<ToolExecutionOutcome> {
-    const permissionError = await this.checkPermission(input);
-    if (permissionError) {
-      return {
-        status: "failed",
-        toolResult: null,
-        errors: [permissionError],
-      };
+    const policyOutcome = await this.checkPolicy(input);
+    if (policyOutcome) {
+      return policyOutcome;
+    }
+
+    const permissionOutcome = await this.checkPermission(input);
+    if (permissionOutcome) {
+      return permissionOutcome;
     }
 
     const toolResult = await this.dependencies.toolRegistry.execute(input.toolCall);
@@ -105,8 +118,77 @@ export class ToolExecutionBoundary {
     };
   }
 
-  private async checkPermission(input: ExecuteToolInput): Promise<RuntimeError | null> {
-    if (input.toolCall.risk !== "risky") {
+  private async checkPolicy(input: ExecuteToolInput): Promise<ToolExecutionFailed | ToolExecutionBlocked | null> {
+    if (!isGovernedToolCall(input.toolCall)) {
+      return null;
+    }
+
+    const checkId = `policy_check_${input.toolCall.id}`;
+    try {
+      const policyPort = this.dependencies.policyPort ?? createAllowAllPolicyPort();
+      const decision = await policyPort.evaluate({
+        id: checkId,
+        taskId: input.task.id,
+        action: "tool.execute",
+        risk: input.toolCall.risk,
+        target: {
+          kind: "tool",
+          name: input.toolCall.toolName,
+          resource: input.toolCall.id,
+        },
+        metadata: {
+          source: "tool-execution-boundary",
+        },
+      });
+
+      if (decision.status === "allowed") {
+        return null;
+      }
+
+      return {
+        status: "blocked",
+        toolResult: null,
+        errors: [
+          {
+            code: decision.code ?? (decision.status === "requires_review"
+              ? "policy_review_required"
+              : "policy_denied"),
+            message: decision.reason ?? (decision.status === "requires_review"
+              ? "Policy review is required before tool execution."
+              : "Policy denied tool execution."),
+            metadata: {
+              checkId: decision.checkId,
+              toolCallId: input.toolCall.id,
+              toolName: input.toolCall.toolName,
+              policyDecisionStatus: decision.status,
+              ...decision.metadata,
+            },
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        status: "failed",
+        toolResult: null,
+        errors: [
+          {
+            code: "policy_check_failed",
+            message: error instanceof Error
+              ? error.message
+              : "Policy check failed.",
+            metadata: {
+              checkId,
+              toolCallId: input.toolCall.id,
+              toolName: input.toolCall.toolName,
+            },
+          },
+        ],
+      };
+    }
+  }
+
+  private async checkPermission(input: ExecuteToolInput): Promise<ToolExecutionFailed | ToolExecutionBlocked | null> {
+    if (!isGovernedToolCall(input.toolCall)) {
       return null;
     }
 
@@ -126,15 +208,21 @@ export class ToolExecutionBoundary {
       decision = await permissionService.request(permissionRequest);
     } catch (error) {
       return {
-        code: "permission_check_failed",
-        message: error instanceof Error
-          ? error.message
-          : "Permission service failed.",
-        metadata: {
-          requestId: permissionRequest.id,
-          toolCallId: input.toolCall.id,
-          toolName: input.toolCall.toolName,
-        },
+        status: "failed",
+        toolResult: null,
+        errors: [
+          {
+            code: "permission_check_failed",
+            message: error instanceof Error
+              ? error.message
+              : "Permission service failed.",
+            metadata: {
+              requestId: permissionRequest.id,
+              toolCallId: input.toolCall.id,
+              toolName: input.toolCall.toolName,
+            },
+          },
+        ],
       };
     }
 
@@ -143,15 +231,25 @@ export class ToolExecutionBoundary {
     }
 
     return {
-      code: decision.code ?? "permission_denied",
-      message: decision.reason,
-      metadata: {
-        requestId: decision.requestId,
-        toolCallId: input.toolCall.id,
-        toolName: input.toolCall.toolName,
-      },
+      status: "blocked",
+      toolResult: null,
+      errors: [
+        {
+          code: decision.code ?? "permission_denied",
+          message: decision.reason,
+          metadata: {
+            requestId: decision.requestId,
+            toolCallId: input.toolCall.id,
+            toolName: input.toolCall.toolName,
+          },
+        },
+      ],
     };
   }
+}
+
+function isGovernedToolCall(toolCall: ToolCall): boolean {
+  return toolCall.risk === "risky";
 }
 
 function validateToolResultStatus(toolResult: ToolResult): RuntimeError | null {

@@ -5,6 +5,7 @@ import type { StoragePort } from "../../storage/index.js";
 import type { ToolCall, ToolRegistry } from "../../tools/index.js";
 import type { Metadata } from "../../shared/types.js";
 import type { PermissionService } from "../../permission/index.js";
+import type { PolicyPort } from "../../governance/index.js";
 import type { RuntimeError } from "./RuntimeError.js";
 import type { RuntimeOptions } from "./RuntimeOptions.js";
 import type { RuntimeResult } from "./RuntimeResult.js";
@@ -22,6 +23,7 @@ export interface AgentRuntimeDependencies {
   storage: StoragePort;
   planToolCalls: PlanToolCalls;
   agentLoop?: AgentLoop;
+  policyPort?: PolicyPort;
   permissionService?: PermissionService;
   toolExecutionBoundary?: ToolExecutionBoundary;
 }
@@ -37,6 +39,7 @@ export class AgentRuntime {
       ?? new ToolExecutionBoundary({
         toolRegistry: dependencies.toolRegistry,
         evidenceBuilder: dependencies.evidenceBuilder,
+        policyPort: dependencies.policyPort,
         permissionService: dependencies.permissionService,
       });
   }
@@ -117,7 +120,14 @@ export class AgentRuntime {
       });
 
       if (execution.status === "failed") {
-        return createFailedRuntimeResult(task, execution.errors, {
+        return createRuntimeResult(task, "failed", execution.errors, {
+          metadata: runtimeMetadata,
+          startedAt,
+        });
+      }
+
+      if (execution.status === "blocked") {
+        return createRuntimeResult(task, "blocked", execution.errors, {
           metadata: runtimeMetadata,
           startedAt,
         });
@@ -158,6 +168,17 @@ export class AgentRuntime {
           },
         },
       ], {
+        evidenceRefs: loopResult.evidence.map((item) => item.id),
+        metadata: {
+          ...runtime.metadata,
+          ...loopResult.metadata,
+        },
+        startedAt: runtime.startedAt,
+      });
+    }
+
+    if (loopResult.status === "blocked") {
+      return createRuntimeResult(task, "blocked", loopResult.errors, {
         evidenceRefs: loopResult.evidence.map((item) => item.id),
         metadata: {
           ...runtime.metadata,
@@ -327,9 +348,23 @@ function createFailedRuntimeResult(
     startedAt: number;
   },
 ): RuntimeResult {
+  return createRuntimeResult(task, "failed", errors, options);
+}
+
+function createRuntimeResult(
+  task: AgentTask,
+  status: "failed" | "blocked",
+  errors: RuntimeError[],
+  options: {
+    evidenceRefs?: string[];
+    artifactRefs?: string[];
+    metadata: Metadata;
+    startedAt: number;
+  },
+): RuntimeResult {
   return {
     taskId: task.id,
-    status: "failed",
+    status,
     reportRef: null,
     evidenceRefs: options.evidenceRefs ?? [],
     artifactRefs: options.artifactRefs ?? [],
