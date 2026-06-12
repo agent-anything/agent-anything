@@ -126,6 +126,17 @@ export {
 } from "./tools/index.js";
 
 export type {
+  RemoteToolCall,
+  RemoteToolNode,
+  RemoteToolPort,
+  RemoteToolResult,
+} from "./remote-tools/index.js";
+export {
+  RemoteToolAdapter,
+  type RemoteToolAdapterInput,
+} from "./remote-tools/index.js";
+
+export type {
   CreatePermissionRequestInput,
   PermissionDecision,
   PermissionDecisionCode,

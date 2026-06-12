@@ -22,3 +22,7 @@ export {
   FakeIdentityProvider,
   type FakeIdentityProviderHandler,
 } from "./FakeIdentityProvider.js";
+export {
+  FakeRemoteToolPort,
+  type FakeRemoteToolPortHandler,
+} from "./FakeRemoteToolPort.js";

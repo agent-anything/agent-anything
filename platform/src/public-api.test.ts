@@ -8,8 +8,10 @@ import {
   FunctionToolAdapter,
   InMemoryStorage,
   Redactor,
+  RemoteToolAdapter,
   ToolRegistry,
   type AgentTask,
+  type RemoteToolNode,
   type ToolDefinition,
 } from "./index.js";
 import * as publicApi from "./index.js";
@@ -255,11 +257,49 @@ describe("Phase1 public API", () => {
     expect(identity.kind).toBe("anonymous");
   });
 
+  it("exposes Phase3.1 remote tool contracts and adapter", () => {
+    const remoteNode: RemoteToolNode = {
+      id: "remote_node_001",
+      name: "Remote Node 001",
+      capabilities: ["network.lookup"],
+      metadata: {},
+    };
+    const adapter = new RemoteToolAdapter({
+      name: "remote.lookup",
+      risk: "safe",
+      remoteNode,
+      remoteToolPort: {
+        async call(input) {
+          return {
+            remoteCallId: input.id,
+            toolResult: {
+              toolCallId: input.toolCallId,
+              toolName: input.toolName,
+              status: "succeeded",
+              output: {},
+              error: null,
+              startedAt: "2026-06-13T00:00:00.000Z",
+              finishedAt: "2026-06-13T00:00:01.000Z",
+              metadata: {},
+            },
+            metadata: {},
+          };
+        },
+      },
+    });
+
+    expect(adapter.toToolDefinition()).toMatchObject({
+      name: "remote.lookup",
+      risk: "safe",
+    });
+  });
+
   it("does not expose testing fakes through public exports", () => {
     expect("FakeAuditPort" in publicApi).toBe(false);
     expect("FakeTelemetryPort" in publicApi).toBe(false);
     expect("FakeWorkspaceResolver" in publicApi).toBe(false);
     expect("FakeIdentityProvider" in publicApi).toBe(false);
+    expect("FakeRemoteToolPort" in publicApi).toBe(false);
   });
 });
 
