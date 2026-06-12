@@ -14,7 +14,7 @@ describe("Permission mode", () => {
       },
       reason: "This tool can execute a shell command.",
       metadata: {
-        source: "runtime",
+        source: "permission-test",
         correlationId: "run_001",
       },
     });
@@ -33,7 +33,7 @@ describe("Permission mode", () => {
         resource: "tool_call_001",
       },
       metadata: {
-        source: "runtime",
+        source: "permission-test",
         correlationId: "run_001",
       },
     });
@@ -92,7 +92,7 @@ function createRiskyRequest() {
     },
     reason: "This tool can execute a shell command.",
     metadata: {
-      source: "runtime",
+      source: "permission-test",
     },
   });
 }

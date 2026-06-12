@@ -33,7 +33,7 @@ describe("InMemoryContextManager", () => {
       messages: [
         {
           id: "message_001",
-          role: "runtime",
+          role: "system",
           content: "DNS lookup completed.",
           metadata: {},
         },

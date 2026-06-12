@@ -12,7 +12,7 @@ export interface PolicySubject {
 }
 
 export interface PolicyTarget {
-  kind: "tool" | "provider" | "report" | "storage" | "runtime" | "remote_tool";
+  kind: "tool" | "provider" | "report" | "storage" | "system" | "remote_tool";
   name?: string;
   resource?: string;
   metadata?: Metadata;

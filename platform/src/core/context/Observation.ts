@@ -10,7 +10,7 @@ export interface Observation {
 }
 
 export interface ObservationSource {
-  kind: "toolResult" | "runtime" | "planner";
+  kind: "toolResult" | "system" | "planner";
   id: string;
   metadata: Metadata;
 }

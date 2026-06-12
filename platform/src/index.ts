@@ -45,8 +45,10 @@ export type {
   AgentRuntimeDependencies,
   CreateDefaultRuntimeInput,
   ExecuteToolInput,
+  ExecutionAccess,
   PlanToolCalls,
   RunAgentLoopInput,
+  RuntimeAccessProfile,
   RuntimeError,
   RuntimeErrorCode,
   RuntimeLimits,
@@ -86,7 +88,6 @@ export {
 
 export type {
   CreatePermissionRequestInput,
-  ExecutionAccess,
   PermissionDecision,
   PermissionDecisionCode,
   PermissionDecisionStatus,
@@ -99,7 +100,6 @@ export type {
   PermissionSubject,
   PermissionTarget,
   ResolvePermissionDecisionInput,
-  RuntimeAccessProfile,
 } from "./permission/index.js";
 export {
   createPermissionRequest,

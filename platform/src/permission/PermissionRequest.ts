@@ -2,7 +2,7 @@ import type { Metadata } from "../shared/types.js";
 import type { PermissionRisk } from "./PermissionRisk.js";
 
 export interface PermissionTarget {
-  kind: "tool" | "provider" | "report" | "storage" | "runtime" | "remote_tool";
+  kind: "tool" | "provider" | "report" | "storage" | "system" | "remote_tool";
   name?: string;
   resource?: string;
   metadata?: Metadata;

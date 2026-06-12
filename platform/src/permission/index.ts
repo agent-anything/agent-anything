@@ -13,7 +13,6 @@ export type {
 } from "./PermissionDecision.js";
 export type { PermissionService } from "./PermissionService.js";
 export type { PermissionServiceResult } from "./PermissionServiceResult.js";
-export type { ExecutionAccess, RuntimeAccessProfile } from "./RuntimeAccessProfile.js";
 export { createPermissionServiceFromMode } from "./createPermissionServiceFromMode.js";
 export {
   createPermissionRequest,
