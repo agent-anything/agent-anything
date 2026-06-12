@@ -30,3 +30,7 @@ export {
   FakeMcpConnectionPort,
   type FakeMcpConnectionPortHandler,
 } from "./FakeMcpConnectionPort.js";
+export {
+  FakePluginRegistry,
+  type FakePluginRegistryHandler,
+} from "./FakePluginRegistry.js";

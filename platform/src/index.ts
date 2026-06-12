@@ -150,6 +150,19 @@ export {
 } from "./mcp/index.js";
 
 export type {
+  PluginContribution,
+  PluginContributionKind,
+  PluginManifest,
+  PluginValidationIssue,
+  PluginValidationResult,
+  PluginValidationStatus,
+} from "./plugins/index.js";
+export {
+  PluginRegistry,
+  PluginRegistryError,
+} from "./plugins/index.js";
+
+export type {
   CreatePermissionRequestInput,
   PermissionDecision,
   PermissionDecisionCode,

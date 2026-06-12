@@ -9,11 +9,13 @@ import {
   InMemoryStorage,
   McpRegistry,
   McpToolAdapter,
+  PluginRegistry,
   Redactor,
   RemoteToolAdapter,
   ToolRegistry,
   type AgentTask,
   type McpServerDefinition,
+  type PluginManifest,
   type RemoteToolNode,
   type ToolDefinition,
 } from "./index.js";
@@ -339,6 +341,32 @@ describe("Phase1 public API", () => {
     });
   });
 
+  it("exposes Phase3.1 plugin contracts and registry", () => {
+    const manifest: PluginManifest = {
+      id: "plugin_001",
+      name: "Plugin 001",
+      version: "0.1.0",
+      contributions: [
+        {
+          kind: "tool",
+          id: "tool.lookup",
+          metadata: {},
+        },
+      ],
+      metadata: {},
+    };
+    const registry = new PluginRegistry();
+
+    registry.register(manifest);
+
+    expect(registry.listManifests()).toHaveLength(1);
+    expect(registry.listContributionsByKind("tool")).toMatchObject([
+      {
+        id: "tool.lookup",
+      },
+    ]);
+  });
+
   it("does not expose testing fakes through public exports", () => {
     expect("FakeAuditPort" in publicApi).toBe(false);
     expect("FakeTelemetryPort" in publicApi).toBe(false);
@@ -346,6 +374,7 @@ describe("Phase1 public API", () => {
     expect("FakeIdentityProvider" in publicApi).toBe(false);
     expect("FakeRemoteToolPort" in publicApi).toBe(false);
     expect("FakeMcpConnectionPort" in publicApi).toBe(false);
+    expect("FakePluginRegistry" in publicApi).toBe(false);
   });
 });
 
