@@ -1,0 +1,24 @@
+{
+  "name": "@agent-anything/storage",
+  "version": "0.0.0",
+  "description": "Storage contracts for AgentAnything platform packages.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "license": "Apache-2.0",
+  "private": true
+}

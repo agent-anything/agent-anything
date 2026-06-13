@@ -1,0 +1,40 @@
+{
+  "name": "@agent-anything/extensions",
+  "version": "0.0.0",
+  "description": "External capability adapters for AgentAnything platform packages.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./remote-tools": {
+      "types": "./dist/remote-tools/index.d.ts",
+      "import": "./dist/remote-tools/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js"
+    },
+    "./plugins": {
+      "types": "./dist/plugins/index.d.ts",
+      "import": "./dist/plugins/index.js"
+    },
+    "./enterprise-storage": {
+      "types": "./dist/enterprise-storage/index.d.ts",
+      "import": "./dist/enterprise-storage/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "license": "Apache-2.0",
+  "private": true
+}

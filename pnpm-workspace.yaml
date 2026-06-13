@@ -2,3 +2,4 @@ packages:
   - "apps/*"
   - "platform"
   - "products/*"
+  - "packages/*"
