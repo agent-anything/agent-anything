@@ -49,3 +49,13 @@ export {
   type CreateHostIdentityProviderInput,
   type CreateHostWorkspaceResolverInput,
 } from "./HostContext.js";
+export {
+  createHostPermissionService,
+  mapHostPermissionBridgeResult,
+  type CreateHostPermissionServiceInput,
+  type HostPermissionBridge,
+  type HostPermissionBridgeInput,
+  type HostPermissionBridgeResult,
+  type HostPermissionBridgeStatus,
+  type MapHostPermissionBridgeResultInput,
+} from "./HostPermissionBridge.js";
