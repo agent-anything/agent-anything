@@ -15,6 +15,7 @@ export type {
   ResolveWorkspaceInput,
   WorkspaceContext,
   WorkspaceResolver,
+  WorkspaceTrustState,
 } from "./workspace/index.js";
 export { createDefaultWorkspaceResolver } from "./workspace/index.js";
 export type {

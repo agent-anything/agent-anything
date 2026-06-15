@@ -15,6 +15,8 @@ describe("WorkspaceResolver", () => {
       id: "workspace_local",
       name: "Local workspace",
       rootRef: "D:/projects/example",
+      trustState: "unknown",
+      source: "default-workspace-resolver",
       policyRefs: [],
     });
   });
@@ -24,6 +26,8 @@ describe("WorkspaceResolver", () => {
       id: "workspace_001",
       name: "Test workspace",
       rootRef: "D:/projects/example",
+      trustState: "trusted",
+      source: "test",
       policyRefs: ["policy_001"],
       metadata: {},
     });

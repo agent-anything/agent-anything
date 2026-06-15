@@ -38,6 +38,8 @@ describe("HostSession types", () => {
         id: "workspace-1",
         name: "Example",
         rootRef: "file:///workspace",
+        trustState: "trusted",
+        source: "test",
         policyRefs: [],
         metadata: {},
       },

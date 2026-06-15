@@ -474,17 +474,11 @@ function mapWorkspaceToPolicyWorkspace(workspace: WorkspaceContext | undefined):
 
   return {
     id: workspace.id,
-    trustLevel: typeof workspace.metadata.trustLevel === "string" &&
-      (
-        workspace.metadata.trustLevel === "trusted" ||
-        workspace.metadata.trustLevel === "restricted" ||
-        workspace.metadata.trustLevel === "unknown"
-      )
-      ? workspace.metadata.trustLevel
-      : undefined,
+    trustLevel: workspace.trustState,
     metadata: {
       name: workspace.name,
       rootRef: workspace.rootRef,
+      source: workspace.source,
       policyRefs: workspace.policyRefs,
       ...workspace.metadata,
     },

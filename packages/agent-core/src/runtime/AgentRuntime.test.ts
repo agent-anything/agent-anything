@@ -381,10 +381,10 @@ describe("AgentRuntime", () => {
       id: "workspace_001",
       name: "Workspace 001",
       rootRef: "D:/projects/example",
+      trustState: "restricted",
+      source: "test",
       policyRefs: ["policy_workspace"],
-      metadata: {
-        trustLevel: "restricted",
-      },
+      metadata: {},
     });
     const identityProvider = new FakeIdentityProvider({
       id: "user_001",

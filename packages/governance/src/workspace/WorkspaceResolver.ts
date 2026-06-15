@@ -15,6 +15,8 @@ export interface CreateDefaultWorkspaceResolverInput {
   workspaceId?: string;
   name?: string;
   rootRef?: string | null;
+  trustState?: WorkspaceContext["trustState"];
+  source?: string;
   policyRefs?: string[];
   metadata?: Metadata;
 }
@@ -28,6 +30,8 @@ export function createDefaultWorkspaceResolver(
         id: input.workspaceId ?? "workspace_local",
         name: input.name ?? "Local workspace",
         rootRef: input.rootRef ?? resolveInput.cwd ?? null,
+        trustState: input.trustState ?? "unknown",
+        source: input.source ?? "default-workspace-resolver",
         policyRefs: input.policyRefs ?? [],
         metadata: {
           ...input.metadata,
