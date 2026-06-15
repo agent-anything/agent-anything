@@ -1,4 +1,4 @@
-import { defaultRuntimeLimits } from "@agent-anything/platform";
+import { defaultRuntimeLimits } from "@agent-anything/agent-core";
 import type { NetDoctorRuntimeConfig } from "./NetDoctorRuntimeConfig.js";
 
 export function createDefaultNetDoctorRuntimeConfig(): NetDoctorRuntimeConfig {

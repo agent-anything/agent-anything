@@ -13,7 +13,11 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
-    "@agent-anything/platform": "workspace:*",
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/evidence": "workspace:*",
+    "@agent-anything/permission": "workspace:*",
+    "@agent-anything/providers": "workspace:*",
+    "@agent-anything/storage": "workspace:*",
     "net-doctor": "workspace:*"
   },
   "devDependencies": {

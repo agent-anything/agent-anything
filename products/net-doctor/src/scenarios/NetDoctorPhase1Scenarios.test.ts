@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
-import {
-  createDefaultRuntime,
-  InMemoryStorage,
-  ToolRegistry,
-  type Evidence,
-  type ToolCall,
-  type ToolDefinition,
-  type ToolResult,
-} from "@agent-anything/platform";
+import { createDefaultRuntime } from "@agent-anything/agent-core";
+import { InMemoryStorage } from "@agent-anything/storage";
+import { ToolRegistry, type ToolCall, type ToolDefinition, type ToolResult } from "@agent-anything/tools";
+import type { Evidence } from "@agent-anything/evidence";
 import { NetDoctorEvidenceBuilder } from "../evidence/index.js";
 import { createNetDoctorTask } from "../input/index.js";
 import { createNetDoctorReportViewModel } from "../report/NetDoctorReportViewModel.js";

@@ -1,4 +1,5 @@
-import type { Metadata, RuntimeEvent } from "@agent-anything/platform";
+import type { Metadata } from "@agent-anything/shared";
+import type { RuntimeEvent } from "@agent-anything/agent-core";
 import type { NetDoctorProgressUpdate } from "./NetDoctorProgressUpdate.js";
 
 export function mapRuntimeEventToNetDoctorProgress(

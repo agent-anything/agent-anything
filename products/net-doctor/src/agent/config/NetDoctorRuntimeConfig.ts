@@ -1,8 +1,6 @@
-import type {
-  Metadata,
-  PermissionMode,
-  RuntimeLimits,
-} from "@agent-anything/platform";
+import type { Metadata } from "@agent-anything/shared";
+import type { PermissionMode } from "@agent-anything/permission";
+import type { RuntimeLimits } from "@agent-anything/agent-core";
 
 export interface NetDoctorRuntimeConfig {
   providerId: string;

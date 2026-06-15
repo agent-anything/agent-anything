@@ -1,7 +1,4 @@
-import type {
-  ToolAdapter,
-  ToolDefinition,
-} from "@agent-anything/platform";
+import type { ToolAdapter, ToolDefinition } from "@agent-anything/tools";
 
 export class NetDoctorToolDefinitionAdapter implements ToolAdapter {
   readonly name: string;

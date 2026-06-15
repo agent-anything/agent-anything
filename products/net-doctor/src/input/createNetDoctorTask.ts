@@ -1,4 +1,5 @@
-import type { AgentTask, ToolCall } from "@agent-anything/platform";
+import type { AgentTask } from "@agent-anything/agent-core";
+import type { ToolCall } from "@agent-anything/tools";
 import type { NetDoctorInput } from "./NetDoctorInput.js";
 import { parseSymptom } from "./SymptomParser.js";
 import { parseTarget } from "./TargetParser.js";

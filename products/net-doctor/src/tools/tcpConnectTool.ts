@@ -1,5 +1,5 @@
 import { createConnection } from "node:net";
-import type { ToolDefinition } from "@agent-anything/platform";
+import type { ToolDefinition } from "@agent-anything/tools";
 import { readNetDoctorToolInput } from "./input.js";
 import type { NetDoctorToolInput, TcpConnectOutput } from "./toolSchemas.js";
 import { createFailedToolResult, createSucceededToolResult } from "./toolResult.js";

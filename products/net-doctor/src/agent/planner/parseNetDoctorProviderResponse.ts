@@ -1,9 +1,6 @@
-import type {
-  PlanStep,
-  PlannerInput,
-  ProviderResponse,
-  ToolCall,
-} from "@agent-anything/platform";
+import type { PlanStep, PlannerInput } from "@agent-anything/agent-core";
+import type { ProviderResponse } from "@agent-anything/providers";
+import type { ToolCall } from "@agent-anything/tools";
 import { isNetDoctorToolName } from "./netDoctorPlannerPrompt.js";
 
 export function parseNetDoctorProviderResponse(

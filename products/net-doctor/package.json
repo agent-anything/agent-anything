@@ -51,7 +51,14 @@
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.33.0",
   "dependencies": {
-    "@agent-anything/platform": "workspace:*"
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/evidence": "workspace:*",
+    "@agent-anything/observability": "workspace:*",
+    "@agent-anything/permission": "workspace:*",
+    "@agent-anything/providers": "workspace:*",
+    "@agent-anything/shared": "workspace:*",
+    "@agent-anything/storage": "workspace:*",
+    "@agent-anything/tools": "workspace:*"
   },
   "devDependencies": {
     "@agent-anything/testing": "workspace:*",

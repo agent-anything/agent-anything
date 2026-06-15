@@ -1,4 +1,5 @@
-import type { PlannerInput, ToolCall } from "@agent-anything/platform";
+import type { PlannerInput } from "@agent-anything/agent-core";
+import type { ToolCall } from "@agent-anything/tools";
 import type { NetDoctorInput } from "../../input/index.js";
 import { redactNetDoctorPromptText } from "./netDoctorPromptRedaction.js";
 

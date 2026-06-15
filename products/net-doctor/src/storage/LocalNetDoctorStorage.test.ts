@@ -2,7 +2,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AgentTask, Evidence, RuntimeResult } from "@agent-anything/platform";
+import type { AgentTask, RuntimeResult } from "@agent-anything/agent-core";
+import type { Evidence } from "@agent-anything/evidence";
 import type { NetDoctorInput } from "../input/index.js";
 import { LocalNetDoctorStorage } from "./LocalNetDoctorStorage.js";
 

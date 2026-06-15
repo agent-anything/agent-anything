@@ -15,11 +15,11 @@ The package script uses:
 vsce package --no-dependencies --allow-missing-repository --skip-license
 ```
 
-This is intentional for Phase1 because `net-doctor` depends on the workspace
-package `@agent-anything/platform`. `vsce` dependency detection uses `npm list`,
-which does not understand pnpm `workspace:*` dependencies. The `vscode:prepublish`
-script runs `build:extension`, which bundles `src/extension.ts` and the workspace
-platform runtime into `dist/extension.js` with `esbuild`.
+This is intentional because `net-doctor` depends on workspace platform packages
+through `workspace:*` dependencies. `vsce` dependency detection uses `npm list`,
+which does not understand pnpm workspace dependencies. The `vscode:prepublish`
+script runs `build:extension`, which bundles `src/extension.ts` and the required
+workspace runtime packages into `dist/extension.js` with `esbuild`.
 
 `--allow-missing-repository` and `--skip-license` are Phase1 packaging choices
 because this product package is still part of the monorepo and does not yet have

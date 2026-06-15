@@ -1,9 +1,6 @@
-import {
-  type ContextSnapshot,
-  type PlannerInput,
-  type ProviderResponse,
-  type ToolCall,
-} from "@agent-anything/platform";
+import type { ContextSnapshot, PlannerInput } from "@agent-anything/agent-core";
+import type { ProviderResponse } from "@agent-anything/providers";
+import type { ToolCall } from "@agent-anything/tools";
 import { FakeProvider } from "@agent-anything/testing";
 import { describe, expect, it } from "vitest";
 import type { NetDoctorInput } from "../../input/index.js";

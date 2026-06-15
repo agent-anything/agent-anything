@@ -1,4 +1,5 @@
-import type { PlannerInput, ProviderRequest } from "@agent-anything/platform";
+import type { PlannerInput } from "@agent-anything/agent-core";
+import type { ProviderRequest } from "@agent-anything/providers";
 import {
   buildNetDoctorPlannerPrompt,
   netDoctorPlannerCapability,

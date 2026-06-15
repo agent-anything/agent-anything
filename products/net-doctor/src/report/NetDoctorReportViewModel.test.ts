@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Evidence, RuntimeResult } from "@agent-anything/platform";
+import type { Evidence } from "@agent-anything/evidence";
+import type { RuntimeResult } from "@agent-anything/agent-core";
 import { createNetDoctorReportViewModel } from "./NetDoctorReportViewModel.js";
 
 describe("createNetDoctorReportViewModel", () => {

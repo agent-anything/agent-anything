@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ToolResult } from "@agent-anything/platform";
+import type { ToolResult } from "@agent-anything/tools";
 import { NetDoctorEvidenceBuilder } from "./NetDoctorEvidenceBuilder.js";
 
 describe("NetDoctorEvidenceBuilder", () => {

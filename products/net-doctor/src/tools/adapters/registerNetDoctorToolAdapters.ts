@@ -1,7 +1,4 @@
-import {
-  ToolAdapterRegistry,
-  type ToolRegistry,
-} from "@agent-anything/platform";
+import { ToolAdapterRegistry, type ToolRegistry } from "@agent-anything/tools";
 import { createNetDoctorToolAdapters } from "./createNetDoctorToolAdapters.js";
 
 export function registerNetDoctorToolAdapters(toolRegistry: ToolRegistry): ToolAdapterRegistry {

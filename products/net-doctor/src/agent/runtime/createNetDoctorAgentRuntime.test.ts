@@ -1,13 +1,7 @@
-import {
-  InMemoryStorage,
-  RuntimeEventEmitter,
-  RuntimeEventRecorder,
-  ToolRegistry,
-  type ProviderResponse,
-  type ToolCall,
-  type ToolDefinition,
-  type ToolResult,
-} from "@agent-anything/platform";
+import { InMemoryStorage } from "@agent-anything/storage";
+import { RuntimeEventEmitter, RuntimeEventRecorder } from "@agent-anything/agent-core";
+import { ToolRegistry, type ToolCall, type ToolDefinition, type ToolResult } from "@agent-anything/tools";
+import type { ProviderResponse } from "@agent-anything/providers";
 import { FakeProvider } from "@agent-anything/testing";
 import { describe, expect, it } from "vitest";
 import { createNetDoctorTask } from "../../input/index.js";

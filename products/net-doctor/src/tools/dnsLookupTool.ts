@@ -1,5 +1,5 @@
 import { lookup } from "node:dns/promises";
-import type { ToolDefinition } from "@agent-anything/platform";
+import type { ToolDefinition } from "@agent-anything/tools";
 import { readNetDoctorToolInput } from "./input.js";
 import type { DnsLookupOutput, NetDoctorToolInput } from "./toolSchemas.js";
 import { createFailedToolResult, createSucceededToolResult } from "./toolResult.js";

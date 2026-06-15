@@ -1,4 +1,4 @@
-import type { ToolCall } from "@agent-anything/platform";
+import type { ToolCall } from "@agent-anything/tools";
 import type { NetDoctorToolInput } from "./toolSchemas.js";
 
 export function readNetDoctorToolInput(call: ToolCall): NetDoctorToolInput {

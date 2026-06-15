@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ToolRegistry, type ToolCall } from "@agent-anything/platform";
+import { ToolRegistry, type ToolCall } from "@agent-anything/tools";
 import { createNetDoctorToolAdapters } from "./createNetDoctorToolAdapters.js";
 import { registerNetDoctorToolAdapters } from "./registerNetDoctorToolAdapters.js";
 

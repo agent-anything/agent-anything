@@ -1,8 +1,4 @@
-import {
-  Redactor,
-  defaultRedactionRules,
-  type RedactionRule,
-} from "@agent-anything/platform";
+import { Redactor, defaultRedactionRules, type RedactionRule } from "@agent-anything/observability";
 
 const netDoctorPromptRedactionRules: RedactionRule[] = [
   ...defaultRedactionRules,

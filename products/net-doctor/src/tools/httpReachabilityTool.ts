@@ -1,6 +1,6 @@
 import * as http from "node:http";
 import * as https from "node:https";
-import type { ToolDefinition } from "@agent-anything/platform";
+import type { ToolDefinition } from "@agent-anything/tools";
 import { readNetDoctorToolInput } from "./input.js";
 import type { HttpReachabilityOutput, NetDoctorToolInput } from "./toolSchemas.js";
 import { createFailedToolResult, createSucceededToolResult } from "./toolResult.js";

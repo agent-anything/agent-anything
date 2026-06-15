@@ -1,4 +1,4 @@
-import type { ToolRegistry } from "@agent-anything/platform";
+import type { ToolRegistry } from "@agent-anything/tools";
 import { createDnsLookupTool } from "./dnsLookupTool.js";
 import { createHttpReachabilityTool } from "./httpReachabilityTool.js";
 import { createProxyConfigTool } from "./proxyConfigTool.js";

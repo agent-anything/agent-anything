@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/platform";
+import type { Metadata } from "@agent-anything/shared";
 
 export type NetDoctorProgressPhase =
   | "starting"

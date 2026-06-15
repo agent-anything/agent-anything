@@ -1,8 +1,5 @@
-import type {
-  ExecutionAccess,
-  PermissionMode,
-  RuntimeResult,
-} from "@agent-anything/platform";
+import type { ExecutionAccess, RuntimeResult } from "@agent-anything/agent-core";
+import type { PermissionMode } from "@agent-anything/permission";
 import type { NetDoctorProgressUpdate } from "net-doctor";
 
 export type DesktopPermissionPreset = "approve-for-me" | "ask-for-approval" | "full-access";

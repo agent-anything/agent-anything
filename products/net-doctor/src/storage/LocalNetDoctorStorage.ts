@@ -1,13 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type {
-  AgentTask,
-  Evidence,
-  RuntimeResult,
-  StoragePort,
-  StoredArtifact,
-  StoredArtifactKind,
-} from "@agent-anything/platform";
+import type { AgentTask, RuntimeResult } from "@agent-anything/agent-core";
+import type { Evidence } from "@agent-anything/evidence";
+import type { StoragePort, StoredArtifact, StoredArtifactKind } from "@agent-anything/storage";
 import type { NetDoctorInput } from "../input/index.js";
 
 export interface NetDoctorTaskHistoryEntry {

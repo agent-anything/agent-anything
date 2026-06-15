@@ -1,4 +1,4 @@
-import type { Evidence } from "@agent-anything/platform";
+import type { Evidence } from "@agent-anything/evidence";
 import type { NetDoctorInput } from "../../input/index.js";
 import type { TemplateRenderInput } from "./ReportTemplate.js";
 

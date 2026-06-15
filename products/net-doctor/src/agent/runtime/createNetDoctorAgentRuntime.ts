@@ -1,19 +1,9 @@
-import {
-  AgentLoop,
-  AgentRuntime,
-  InMemoryContextManager,
-  ToolExecutionBoundary,
-  ToolRegistry,
-  defaultRuntimeLimits,
-  type AgentTask,
-  type Metadata,
-  type PermissionMode,
-  type PermissionService,
-  type Provider,
-  type RuntimeEventEmitter,
-  type RuntimeLimits,
-  type StoragePort,
-} from "@agent-anything/platform";
+import { AgentLoop, AgentRuntime, InMemoryContextManager, ToolExecutionBoundary, defaultRuntimeLimits, type AgentTask, type RuntimeEventEmitter, type RuntimeLimits } from "@agent-anything/agent-core";
+import { ToolRegistry } from "@agent-anything/tools";
+import type { Metadata } from "@agent-anything/shared";
+import type { PermissionMode, PermissionService } from "@agent-anything/permission";
+import type { Provider } from "@agent-anything/providers";
+import type { StoragePort } from "@agent-anything/storage";
 import { NetDoctorEvidenceBuilder } from "../../evidence/index.js";
 import { registerNetDoctorTools } from "../../tools/index.js";
 import type { NetDoctorRuntimeConfig } from "../config/index.js";

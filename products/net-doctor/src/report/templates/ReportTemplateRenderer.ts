@@ -1,4 +1,4 @@
-import type { EvidenceRef } from "@agent-anything/platform";
+import type { EvidenceRef } from "@agent-anything/evidence";
 import type {
   NetDoctorReport,
   ReportTemplateOutput,

@@ -1,10 +1,5 @@
-import type {
-  BuildEvidenceInput,
-  Evidence,
-  EvidenceBuilderPort,
-  EvidenceSensitivity,
-  ToolResult,
-} from "@agent-anything/platform";
+import type { BuildEvidenceInput, Evidence, EvidenceBuilderPort, EvidenceSensitivity } from "@agent-anything/evidence";
+import type { ToolResult } from "@agent-anything/tools";
 import type {
   DnsLookupOutput,
   HttpReachabilityOutput,

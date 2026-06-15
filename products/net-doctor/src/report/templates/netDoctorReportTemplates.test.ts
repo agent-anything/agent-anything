@@ -3,7 +3,7 @@ import {
   ReportTemplateRenderer,
   type TemplateRenderInput,
 } from "./index.js";
-import type { Evidence } from "@agent-anything/platform";
+import type { Evidence } from "@agent-anything/evidence";
 import { describe, expect, it } from "vitest";
 import { netDoctorSummaryTemplate } from "./netDoctorSummaryTemplate.js";
 import { networkEvidenceTemplate } from "./networkEvidenceTemplate.js";

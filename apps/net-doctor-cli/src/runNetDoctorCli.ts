@@ -1,10 +1,7 @@
-import {
-  InMemoryStorage,
-  RuntimeEventEmitter,
-  type Evidence,
-  type Provider,
-  type RuntimeResult,
-} from "@agent-anything/platform";
+import { InMemoryStorage } from "@agent-anything/storage";
+import { RuntimeEventEmitter, type RuntimeResult } from "@agent-anything/agent-core";
+import type { Evidence } from "@agent-anything/evidence";
+import type { Provider } from "@agent-anything/providers";
 import {
   createNetDoctorAgentRuntime,
   createNetDoctorReportViewModel,
@@ -57,7 +54,7 @@ export async function runNetDoctorCli(
 
   write(`NetDoctor diagnosis: ${input.args.target}`);
 
-  const result = await runtime.run(task);
+  const result: RuntimeResult = await runtime.run(task);
   const evidence = result.evidenceRefs
     .map((evidenceRef) => storage.getEvidence(evidenceRef))
     .filter((item): item is Evidence => item !== undefined);

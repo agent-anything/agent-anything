@@ -1,7 +1,5 @@
-import {
-  InMemoryStorage,
-  type ProviderResponse,
-} from "@agent-anything/platform";
+import { InMemoryStorage } from "@agent-anything/storage";
+import type { ProviderResponse } from "@agent-anything/providers";
 import { FakeProvider } from "@agent-anything/testing";
 import { describe, expect, it } from "vitest";
 import { createNetDoctorTask } from "../../input/index.js";

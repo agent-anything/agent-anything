@@ -1,10 +1,7 @@
 import * as vscode from "vscode";
-import {
-  createDefaultRuntime,
-  type Evidence,
-  ToolRegistry,
-  type RuntimeResult,
-} from "@agent-anything/platform";
+import { createDefaultRuntime, type RuntimeResult } from "@agent-anything/agent-core";
+import type { Evidence } from "@agent-anything/evidence";
+import { ToolRegistry } from "@agent-anything/tools";
 import { NetDoctorEvidenceBuilder } from "./evidence/index.js";
 import { createNetDoctorTask } from "./input/index.js";
 import {

@@ -1,4 +1,4 @@
-import type { RuntimeEvent } from "@agent-anything/platform";
+import type { RuntimeEvent } from "@agent-anything/agent-core";
 import { describe, expect, it } from "vitest";
 import { mapRuntimeEventToNetDoctorProgress } from "./mapRuntimeEventToNetDoctorProgress.js";
 

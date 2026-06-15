@@ -1,4 +1,4 @@
-import type { PermissionMode } from "@agent-anything/platform";
+import type { PermissionMode } from "@agent-anything/permission";
 
 export interface NetDoctorCliArgs {
   target: string;

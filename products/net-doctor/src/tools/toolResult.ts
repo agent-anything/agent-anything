@@ -1,4 +1,5 @@
-import type { Metadata, ToolCall, ToolResult } from "@agent-anything/platform";
+import type { Metadata } from "@agent-anything/shared";
+import type { ToolCall, ToolResult } from "@agent-anything/tools";
 
 export function createSucceededToolResult<TOutput>(
   call: ToolCall,

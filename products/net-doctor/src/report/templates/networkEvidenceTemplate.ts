@@ -1,4 +1,4 @@
-import type { Evidence } from "@agent-anything/platform";
+import type { Evidence } from "@agent-anything/evidence";
 import type { NetDoctorReportSection, ReportTemplate } from "./ReportTemplate.js";
 import {
   createEvidenceSummary,

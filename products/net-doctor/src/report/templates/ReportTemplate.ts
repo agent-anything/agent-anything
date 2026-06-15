@@ -1,11 +1,6 @@
-import type {
-  AgentTask,
-  ArtifactRef,
-  Evidence,
-  EvidenceRef,
-  ISODateTimeString,
-  Metadata,
-} from "@agent-anything/platform";
+import type { AgentTask } from "@agent-anything/agent-core";
+import type { ArtifactRef, ISODateTimeString, Metadata } from "@agent-anything/shared";
+import type { Evidence, EvidenceRef } from "@agent-anything/evidence";
 
 export interface NetDoctorReport {
   id: string;

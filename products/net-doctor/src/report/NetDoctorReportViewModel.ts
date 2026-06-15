@@ -1,4 +1,5 @@
-import type { Evidence, RuntimeResult } from "@agent-anything/platform";
+import type { Evidence } from "@agent-anything/evidence";
+import type { RuntimeResult } from "@agent-anything/agent-core";
 import type { NetDoctorInput } from "../input/index.js";
 
 export interface NetDoctorReportViewModel {

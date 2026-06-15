@@ -1,8 +1,4 @@
-import type {
-  Provider,
-  ProviderRequest,
-  ProviderResponse,
-} from "@agent-anything/platform";
+import type { Provider, ProviderRequest, ProviderResponse } from "@agent-anything/providers";
 
 export function createDesktopDemoProvider(): Provider {
   return createQueuedDesktopDemoProvider(

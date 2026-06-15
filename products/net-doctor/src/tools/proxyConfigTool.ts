@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "@agent-anything/platform";
+import type { ToolDefinition } from "@agent-anything/tools";
 import { readNetDoctorToolInput } from "./input.js";
 import type { NetDoctorToolInput, ProxyConfigOutput } from "./toolSchemas.js";
 import { createFailedToolResult, createSucceededToolResult } from "./toolResult.js";

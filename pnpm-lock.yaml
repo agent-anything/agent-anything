@@ -17,9 +17,21 @@ importers:
 
   apps/net-doctor-cli:
     dependencies:
-      '@agent-anything/platform':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../../platform
+        version: link:../../packages/agent-core
+      '@agent-anything/evidence':
+        specifier: workspace:*
+        version: link:../../packages/evidence
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../../packages/permission
+      '@agent-anything/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
+      '@agent-anything/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       net-doctor:
         specifier: workspace:*
         version: link:../../products/net-doctor
@@ -33,9 +45,21 @@ importers:
 
   apps/net-doctor-desktop:
     dependencies:
-      '@agent-anything/platform':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../../platform
+        version: link:../../packages/agent-core
+      '@agent-anything/evidence':
+        specifier: workspace:*
+        version: link:../../packages/evidence
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../../packages/permission
+      '@agent-anything/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
+      '@agent-anything/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       net-doctor:
         specifier: workspace:*
         version: link:../../products/net-doctor
@@ -216,9 +240,30 @@ importers:
 
   products/net-doctor:
     dependencies:
-      '@agent-anything/platform':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../../platform
+        version: link:../../packages/agent-core
+      '@agent-anything/evidence':
+        specifier: workspace:*
+        version: link:../../packages/evidence
+      '@agent-anything/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../../packages/permission
+      '@agent-anything/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@agent-anything/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
     devDependencies:
       '@agent-anything/testing':
         specifier: workspace:*
