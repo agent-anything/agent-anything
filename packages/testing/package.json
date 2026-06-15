@@ -20,6 +20,9 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@agent-anything/governance": "workspace:*",
+    "@agent-anything/observability": "workspace:*",
+    "@agent-anything/permission": "workspace:*",
     "@agent-anything/providers": "workspace:*"
   },
   "license": "Apache-2.0",

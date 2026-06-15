@@ -14,7 +14,7 @@ import {
   FakePolicyPort,
   FakeTelemetryPort,
   FakeWorkspaceResolver,
-} from "../../testing/index.js";
+} from "@agent-anything/testing";
 import type { WorkspaceResolver } from "@agent-anything/governance/workspace";
 import { InMemoryContextManager } from "../context/index.js";
 import type { PlanStep, PlannerInput } from "../planner/index.js";

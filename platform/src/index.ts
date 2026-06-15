@@ -41,7 +41,7 @@ export type {
 } from "@agent-anything/governance/identity";
 export { createAnonymousIdentityProvider } from "@agent-anything/governance/identity";
 
-export type { AgentTask } from "./core/task/index.js";
+export type { AgentTask } from "@agent-anything/agent-core";
 export type {
   ContextManager,
   ContextMessage,
@@ -50,8 +50,8 @@ export type {
   ContextUpdate,
   Observation,
   ObservationSource,
-} from "./core/context/index.js";
-export { InMemoryContextManager } from "./core/context/index.js";
+} from "@agent-anything/agent-core";
+export { InMemoryContextManager } from "@agent-anything/agent-core";
 export type {
   BuildProviderRequest,
   CallToolPlanStep,
@@ -63,18 +63,18 @@ export type {
   PlanStepKind,
   ProviderBackedPlannerInput,
   StopPlanStep,
-} from "./core/planner/index.js";
-export { ProviderBackedPlanner } from "./core/planner/index.js";
+} from "@agent-anything/agent-core";
+export { ProviderBackedPlanner } from "@agent-anything/agent-core";
 export type {
   EmitRuntimeEventInput,
   RuntimeEvent,
   RuntimeEventName,
   RuntimeEventSubscriber,
-} from "./core/events/index.js";
+} from "@agent-anything/agent-core";
 export {
   RuntimeEventEmitter,
   RuntimeEventRecorder,
-} from "./core/events/index.js";
+} from "@agent-anything/agent-core";
 export type {
   AgentLoopDependencies,
   AgentLoopResult,
@@ -98,14 +98,14 @@ export type {
   ToolExecutionFailed,
   ToolExecutionOutcome,
   ToolExecutionSucceeded,
-} from "./core/runtime/index.js";
+} from "@agent-anything/agent-core";
 export {
   AgentLoop,
   AgentRuntime,
   createDefaultRuntime,
   defaultRuntimeLimits,
   ToolExecutionBoundary,
-} from "./core/runtime/index.js";
+} from "@agent-anything/agent-core";
 
 export type {
   FunctionToolAdapterInput,

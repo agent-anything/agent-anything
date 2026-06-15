@@ -4,30 +4,30 @@
   "description": "Agent runtime, loop, planner, context, events, and task contracts for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "types": "./src/index.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./src/index.ts",
       "import": "./dist/index.js"
     },
     "./runtime": {
-      "types": "./dist/runtime/index.d.ts",
+      "types": "./src/runtime/index.ts",
       "import": "./dist/runtime/index.js"
     },
     "./planner": {
-      "types": "./dist/planner/index.d.ts",
+      "types": "./src/planner/index.ts",
       "import": "./dist/planner/index.js"
     },
     "./context": {
-      "types": "./dist/context/index.d.ts",
+      "types": "./src/context/index.ts",
       "import": "./dist/context/index.js"
     },
     "./events": {
-      "types": "./dist/events/index.d.ts",
+      "types": "./src/events/index.ts",
       "import": "./dist/events/index.js"
     },
     "./task": {
-      "types": "./dist/task/index.d.ts",
+      "types": "./src/task/index.ts",
       "import": "./dist/task/index.js"
     }
   },
@@ -38,6 +38,19 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@agent-anything/evidence": "workspace:*",
+    "@agent-anything/governance": "workspace:*",
+    "@agent-anything/observability": "workspace:*",
+    "@agent-anything/permission": "workspace:*",
+    "@agent-anything/providers": "workspace:*",
+    "@agent-anything/shared": "workspace:*",
+    "@agent-anything/storage": "workspace:*",
+    "@agent-anything/tools": "workspace:*"
+  },
+  "devDependencies": {
+    "@agent-anything/testing": "workspace:*"
   },
   "license": "Apache-2.0",
   "private": true

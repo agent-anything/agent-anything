@@ -5,7 +5,7 @@ import type { PermissionService } from "@agent-anything/permission";
 import {
   FakePermissionService,
   FakePolicyPort,
-} from "../../testing/index.js";
+} from "@agent-anything/testing";
 import {
   ToolRegistry,
   type ToolCall,

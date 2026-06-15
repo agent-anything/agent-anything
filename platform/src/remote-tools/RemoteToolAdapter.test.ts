@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { FakePermissionService, FakePolicyPort, FakeRemoteToolPort } from "../testing/index.js";
 import { ToolRegistry } from "@agent-anything/tools";
 import { EvidenceBuilder } from "@agent-anything/evidence";
-import { ToolExecutionBoundary } from "../core/runtime/ToolExecutionBoundary.js";
+import { ToolExecutionBoundary } from "@agent-anything/agent-core";
 import { RemoteToolAdapter } from "./RemoteToolAdapter.js";
 import type { RemoteToolNode } from "./RemoteToolNode.js";
 

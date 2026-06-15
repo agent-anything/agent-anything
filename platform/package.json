@@ -21,6 +21,7 @@
   "packageManager": "pnpm@10.33.0",
   "types": "./dist/index.d.ts",
   "dependencies": {
+    "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/evidence": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/observability": "workspace:*",

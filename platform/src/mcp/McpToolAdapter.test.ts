@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ToolExecutionBoundary } from "../core/runtime/ToolExecutionBoundary.js";
+import { ToolExecutionBoundary } from "@agent-anything/agent-core";
 import { EvidenceBuilder } from "@agent-anything/evidence";
 import {
   FakeMcpConnectionPort,

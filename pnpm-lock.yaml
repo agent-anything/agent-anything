@@ -50,7 +50,36 @@ importers:
         specifier: ^42.4.0
         version: 42.4.0
 
-  packages/agent-core: {}
+  packages/agent-core:
+    dependencies:
+      '@agent-anything/evidence':
+        specifier: workspace:*
+        version: link:../evidence
+      '@agent-anything/governance':
+        specifier: workspace:*
+        version: link:../governance
+      '@agent-anything/observability':
+        specifier: workspace:*
+        version: link:../observability
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../permission
+      '@agent-anything/providers':
+        specifier: workspace:*
+        version: link:../providers
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@agent-anything/storage':
+        specifier: workspace:*
+        version: link:../storage
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../tools
+    devDependencies:
+      '@agent-anything/testing':
+        specifier: workspace:*
+        version: link:../testing
 
   packages/evidence:
     dependencies:
@@ -112,6 +141,15 @@ importers:
 
   packages/testing:
     dependencies:
+      '@agent-anything/governance':
+        specifier: workspace:*
+        version: link:../governance
+      '@agent-anything/observability':
+        specifier: workspace:*
+        version: link:../observability
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../permission
       '@agent-anything/providers':
         specifier: workspace:*
         version: link:../providers
@@ -124,6 +162,9 @@ importers:
 
   platform:
     dependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../packages/agent-core
       '@agent-anything/evidence':
         specifier: workspace:*
         version: link:../packages/evidence
