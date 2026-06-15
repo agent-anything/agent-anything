@@ -1,1 +1,0 @@
-export type { Scenario, ScenarioExpectation } from "./Scenario.js";

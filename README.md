@@ -1,6 +1,6 @@
 # AgentAnything
 
-AgentAnything is a TypeScript platform for building tool-using AI agent products with structured tasks, permissions, evidence, and reports.
+AgentAnything is a TypeScript platform for building tool-using AI agent products with structured tasks, permissions, evidence, and runtime output.
 
 The platform is designed to support multiple product agents. NetDoctor is the first product built on top of AgentAnything.
 
@@ -12,7 +12,7 @@ AgentAnything provides a shared foundation for AI agent products:
 - Tool definitions and tool registry
 - Permission checks before risky actions
 - Tool results separated from evidence
-- Evidence-based reports
+- Structured runtime output
 - Storage boundaries for task artifacts
 - Scenario-based testing
 - Extension points for providers, plugins, MCP, remote tools, and governance
@@ -23,7 +23,7 @@ AgentAnything provides a shared foundation for AI agent products:
 
 NetDoctor is the first AgentAnything product.
 
-It is planned as a VS Code-based network diagnostic agent that helps users inspect DNS, TCP, HTTP, proxy, and related network issues through structured tools and reports.
+It is a network diagnostic agent that helps users inspect DNS, TCP, HTTP, proxy, and related network issues through structured tools and reports.
 
 ## Repository Status
 
@@ -36,15 +36,28 @@ The initial focus is building the platform foundation and the first usable produ
 - TypeScript
 - Node.js
 - pnpm workspace
-- VS Code extension APIs
 - Vitest
 
 ## Repository Layout
 
 ```text
 agent-anything/
-  platform/
+  packages/
+    shared/
+    tools/
+    evidence/
+    permission/
+    governance/
+    observability/
+    providers/
+    storage/
+    agent-core/
+    extensions/
+    testing/
+  apps/
+    net-doctor-cli/
+    net-doctor-desktop/
   products/
     net-doctor/
-  prototypes/
-  docs/
+  scripts/
+```

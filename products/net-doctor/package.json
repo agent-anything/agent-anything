@@ -45,6 +45,7 @@
     "agent",
     "network",
     "diagnostics",
+    "legacy-vscode-extension",
     "vscode"
   ],
   "author": "",
