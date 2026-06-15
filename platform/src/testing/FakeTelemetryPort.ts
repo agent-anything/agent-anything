@@ -1,4 +1,4 @@
-import type { TelemetryPort, TelemetryRecord } from "../telemetry/index.js";
+import type { TelemetryPort, TelemetryRecord } from "@agent-anything/observability/telemetry";
 
 export type FakeTelemetryPortHandler = (
   record: TelemetryRecord,

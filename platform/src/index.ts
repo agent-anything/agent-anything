@@ -2,7 +2,7 @@ export type {
   ArtifactRef,
   ISODateTimeString,
   Metadata,
-} from "./shared/types.js";
+} from "@agent-anything/shared";
 
 export type {
   AuditOutcome,
@@ -11,8 +11,8 @@ export type {
   AuditSubject,
   AuditTarget,
   CreateAuditRecordInput,
-} from "./audit/index.js";
-export { createAuditRecord } from "./audit/index.js";
+} from "@agent-anything/observability/audit";
+export { createAuditRecord } from "@agent-anything/observability/audit";
 
 export type {
   CreateTelemetryRecordInput,
@@ -21,16 +21,16 @@ export type {
   TelemetryDimensionValue,
   TelemetryPort,
   TelemetryRecord,
-} from "./telemetry/index.js";
-export { createTelemetryRecord } from "./telemetry/index.js";
+} from "@agent-anything/observability/telemetry";
+export { createTelemetryRecord } from "@agent-anything/observability/telemetry";
 
 export type {
   CreateDefaultWorkspaceResolverInput,
   ResolveWorkspaceInput,
   WorkspaceContext,
   WorkspaceResolver,
-} from "./workspace/index.js";
-export { createDefaultWorkspaceResolver } from "./workspace/index.js";
+} from "@agent-anything/governance/workspace";
+export { createDefaultWorkspaceResolver } from "@agent-anything/governance/workspace";
 
 export type {
   CreateAnonymousIdentityProviderInput,
@@ -38,8 +38,8 @@ export type {
   IdentityProvider,
   IdentityRef,
   ResolveIdentityInput,
-} from "./identity/index.js";
-export { createAnonymousIdentityProvider } from "./identity/index.js";
+} from "@agent-anything/governance/identity";
+export { createAnonymousIdentityProvider } from "@agent-anything/governance/identity";
 
 export type { AgentTask } from "./core/task/index.js";
 export type {
@@ -118,12 +118,12 @@ export type {
   ToolResultError,
   ToolResultStatus,
   ToolRisk,
-} from "./tools/index.js";
+} from "@agent-anything/tools";
 export {
   FunctionToolAdapter,
   ToolAdapterRegistry,
   ToolRegistry,
-} from "./tools/index.js";
+} from "@agent-anything/tools";
 
 export type {
   RemoteToolCall,
@@ -184,14 +184,14 @@ export type {
   PermissionSubject,
   PermissionTarget,
   ResolvePermissionDecisionInput,
-} from "./permission/index.js";
+} from "@agent-anything/permission";
 export {
   createDenyPermissionService,
   createPermissionRequest,
   createPermissionServiceFromMode,
   createTrustedPermissionService,
   resolvePermissionDecision,
-} from "./permission/index.js";
+} from "@agent-anything/permission";
 
 export type {
   PolicyCheckInput,
@@ -203,11 +203,10 @@ export type {
   PolicySubject,
   PolicyTarget,
   PolicyWorkspace,
-} from "./governance/index.js";
-export { createAllowAllPolicyPort } from "./governance/index.js";
+} from "@agent-anything/governance";
+export { createAllowAllPolicyPort } from "@agent-anything/governance";
 
 export type {
-  FakeProviderInput,
   Provider,
   ProviderCapabilities,
   ProviderError,
@@ -217,8 +216,7 @@ export type {
   ProviderResponse,
   ProviderResponseStatus,
   ProviderUsage,
-} from "./providers/index.js";
-export { FakeProvider } from "./providers/index.js";
+} from "@agent-anything/providers";
 
 export type {
   BuildEvidenceInput,
@@ -227,8 +225,8 @@ export type {
   EvidenceRef,
   EvidenceSensitivity,
   EvidenceSource,
-} from "./evidence/index.js";
-export { EvidenceBuilder } from "./evidence/index.js";
+} from "@agent-anything/evidence";
+export { EvidenceBuilder } from "@agent-anything/evidence";
 export type {
   BaseRedactionRule,
   KeyRedactionRule,
@@ -239,11 +237,11 @@ export type {
   RedactionRule,
   RedactionRuleKind,
   RedactorInput,
-} from "./redaction/index.js";
+} from "@agent-anything/observability";
 export {
   defaultRedactionRules,
   Redactor,
-} from "./redaction/index.js";
-export type { StoragePort, StoredArtifact, StoredArtifactKind } from "./storage/index.js";
-export { InMemoryStorage } from "./storage/index.js";
+} from "@agent-anything/observability";
+export type { StoragePort, StoredArtifact, StoredArtifactKind } from "@agent-anything/storage";
+export { InMemoryStorage } from "@agent-anything/storage";
 export type { Scenario, ScenarioExpectation } from "./scenarios/index.js";

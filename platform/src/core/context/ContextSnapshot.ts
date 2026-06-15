@@ -1,4 +1,4 @@
-import type { EvidenceRef, Metadata } from "../../shared/types.js";
+import type { EvidenceRef, Metadata } from "@agent-anything/shared";
 import type { ContextMessage } from "./ContextMessage.js";
 import type { Observation } from "./Observation.js";
 

@@ -1,4 +1,4 @@
-import { FakeProvider } from "@agent-anything/platform";
+import { FakeProvider } from "@agent-anything/testing";
 import { describe, expect, it } from "vitest";
 import { runNetDoctorCli } from "./runNetDoctorCli.js";
 

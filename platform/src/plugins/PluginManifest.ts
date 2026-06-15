@@ -1,4 +1,4 @@
-import type { Metadata } from "../shared/types.js";
+import type { Metadata } from "@agent-anything/shared";
 import type { PluginContribution } from "./PluginContribution.js";
 
 export interface PluginManifest {

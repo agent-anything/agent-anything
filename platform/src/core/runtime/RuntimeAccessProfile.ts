@@ -1,5 +1,5 @@
-import type { PermissionMode } from "../../permission/index.js";
-import type { Metadata } from "../../shared/types.js";
+import type { PermissionMode } from "@agent-anything/permission";
+import type { Metadata } from "@agent-anything/shared";
 
 export type ExecutionAccess = "restricted" | "workspace" | "full";
 

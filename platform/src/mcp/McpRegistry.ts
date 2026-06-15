@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "../tools/index.js";
+import type { ToolDefinition } from "@agent-anything/tools";
 import type { McpConnectionPort } from "./McpConnectionPort.js";
 import type { McpServerDefinition } from "./McpServerDefinition.js";
 import type { McpToolDefinition } from "./McpToolDefinition.js";

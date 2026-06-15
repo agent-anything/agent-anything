@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { EvidenceBuilder } from "../../evidence/index.js";
-import type { PolicyPort } from "../../governance/index.js";
-import type { PermissionService } from "../../permission/index.js";
+import { EvidenceBuilder } from "@agent-anything/evidence";
+import type { PolicyPort } from "@agent-anything/governance";
+import type { PermissionService } from "@agent-anything/permission";
 import {
   FakePermissionService,
   FakePolicyPort,
@@ -11,7 +11,7 @@ import {
   type ToolCall,
   type ToolDefinition,
   type ToolResult,
-} from "../../tools/index.js";
+} from "@agent-anything/tools";
 import type { AgentTask } from "../task/index.js";
 import { ToolExecutionBoundary } from "./ToolExecutionBoundary.js";
 import type { RuntimeOptions } from "./RuntimeOptions.js";

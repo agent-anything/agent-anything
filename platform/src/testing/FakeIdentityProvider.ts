@@ -2,7 +2,7 @@ import type {
   IdentityProvider,
   IdentityRef,
   ResolveIdentityInput,
-} from "../identity/index.js";
+} from "@agent-anything/governance/identity";
 
 export type FakeIdentityProviderHandler = (
   input: ResolveIdentityInput,

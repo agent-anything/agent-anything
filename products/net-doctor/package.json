@@ -54,6 +54,7 @@
     "@agent-anything/platform": "workspace:*"
   },
   "devDependencies": {
+    "@agent-anything/testing": "workspace:*",
     "@types/node": "^25.9.1",
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.9.2",

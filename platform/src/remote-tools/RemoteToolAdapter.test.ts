@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakePermissionService, FakePolicyPort, FakeRemoteToolPort } from "../testing/index.js";
-import { ToolRegistry } from "../tools/index.js";
-import { EvidenceBuilder } from "../evidence/index.js";
+import { ToolRegistry } from "@agent-anything/tools";
+import { EvidenceBuilder } from "@agent-anything/evidence";
 import { ToolExecutionBoundary } from "../core/runtime/ToolExecutionBoundary.js";
 import { RemoteToolAdapter } from "./RemoteToolAdapter.js";
 import type { RemoteToolNode } from "./RemoteToolNode.js";

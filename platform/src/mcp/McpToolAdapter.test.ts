@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { ToolExecutionBoundary } from "../core/runtime/ToolExecutionBoundary.js";
-import { EvidenceBuilder } from "../evidence/index.js";
+import { EvidenceBuilder } from "@agent-anything/evidence";
 import {
   FakeMcpConnectionPort,
   FakePermissionService,
   FakePolicyPort,
 } from "../testing/index.js";
-import { ToolRegistry } from "../tools/index.js";
+import { ToolRegistry } from "@agent-anything/tools";
 import { McpToolAdapter } from "./McpToolAdapter.js";
 import type { McpServerDefinition } from "./McpServerDefinition.js";
 import type { McpToolDefinition } from "./McpToolDefinition.js";

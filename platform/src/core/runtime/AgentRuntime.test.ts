@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { Evidence } from "../../evidence/index.js";
-import { EvidenceBuilder } from "../../evidence/index.js";
-import type { AuditPort } from "../../audit/index.js";
-import type { IdentityProvider } from "../../identity/index.js";
-import type { PolicyPort } from "../../governance/index.js";
-import type { PermissionService } from "../../permission/index.js";
-import { InMemoryStorage, type StoragePort } from "../../storage/index.js";
-import type { TelemetryPort } from "../../telemetry/index.js";
+import type { Evidence } from "@agent-anything/evidence";
+import { EvidenceBuilder } from "@agent-anything/evidence";
+import type { AuditPort } from "@agent-anything/observability/audit";
+import type { IdentityProvider } from "@agent-anything/governance/identity";
+import type { PolicyPort } from "@agent-anything/governance";
+import type { PermissionService } from "@agent-anything/permission";
+import { InMemoryStorage, type StoragePort } from "@agent-anything/storage";
+import type { TelemetryPort } from "@agent-anything/observability/telemetry";
 import {
   FakeAuditPort,
   FakeIdentityProvider,
@@ -15,7 +15,7 @@ import {
   FakeTelemetryPort,
   FakeWorkspaceResolver,
 } from "../../testing/index.js";
-import type { WorkspaceResolver } from "../../workspace/index.js";
+import type { WorkspaceResolver } from "@agent-anything/governance/workspace";
 import { InMemoryContextManager } from "../context/index.js";
 import type { PlanStep, PlannerInput } from "../planner/index.js";
 import {
@@ -23,7 +23,7 @@ import {
   type ToolCall,
   type ToolDefinition,
   type ToolResult,
-} from "../../tools/index.js";
+} from "@agent-anything/tools";
 import type { AgentTask } from "../task/index.js";
 import { AgentRuntime } from "./AgentRuntime.js";
 import { AgentLoop } from "./AgentLoop.js";

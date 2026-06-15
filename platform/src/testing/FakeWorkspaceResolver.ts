@@ -2,7 +2,7 @@ import type {
   ResolveWorkspaceInput,
   WorkspaceContext,
   WorkspaceResolver,
-} from "../workspace/index.js";
+} from "@agent-anything/governance/workspace";
 
 export type FakeWorkspaceResolverHandler = (
   input: ResolveWorkspaceInput,

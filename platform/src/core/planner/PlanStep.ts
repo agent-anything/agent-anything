@@ -1,5 +1,5 @@
-import type { Metadata } from "../../shared/types.js";
-import type { ToolCall } from "../../tools/index.js";
+import type { Metadata } from "@agent-anything/shared";
+import type { ToolCall } from "@agent-anything/tools";
 
 export type PlanStepKind = "callTool" | "final" | "stop";
 

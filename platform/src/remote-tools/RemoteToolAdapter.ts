@@ -1,11 +1,11 @@
-import type { Metadata } from "../shared/types.js";
+import type { Metadata } from "@agent-anything/shared";
 import type {
   ToolAdapter,
   ToolCall,
   ToolDefinition,
   ToolResult,
   ToolRisk,
-} from "../tools/index.js";
+} from "@agent-anything/tools";
 import type { RemoteToolCall } from "./RemoteToolCall.js";
 import type { RemoteToolNode } from "./RemoteToolNode.js";
 import type { RemoteToolPort } from "./RemoteToolPort.js";

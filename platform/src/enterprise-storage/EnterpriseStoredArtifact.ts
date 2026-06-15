@@ -1,4 +1,4 @@
-import type { ArtifactRef, ISODateTimeString, Metadata } from "../shared/types.js";
+import type { ArtifactRef, ISODateTimeString, Metadata } from "@agent-anything/shared";
 
 export type RetentionPolicyRef = string;
 export type AccessPolicyRef = string;

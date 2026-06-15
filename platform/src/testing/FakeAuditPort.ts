@@ -1,4 +1,4 @@
-import type { AuditPort, AuditRecord } from "../audit/index.js";
+import type { AuditPort, AuditRecord } from "@agent-anything/observability/audit";
 
 export type FakeAuditPortHandler = (
   record: AuditRecord,

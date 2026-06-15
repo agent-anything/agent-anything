@@ -2,7 +2,7 @@ import type {
   PolicyCheckInput,
   PolicyDecision,
   PolicyPort,
-} from "../governance/index.js";
+} from "@agent-anything/governance";
 
 export type FakePolicyPortHandler = (
   input: PolicyCheckInput,

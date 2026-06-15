@@ -3,13 +3,13 @@ import { InMemoryContextManager } from "../context/index.js";
 import { RuntimeEventEmitter, RuntimeEventRecorder } from "../events/index.js";
 import type { PlanStep, Planner, PlannerInput } from "../planner/index.js";
 import type { AgentTask } from "../task/index.js";
-import { EvidenceBuilder } from "../../evidence/index.js";
+import { EvidenceBuilder } from "@agent-anything/evidence";
 import {
   ToolRegistry,
   type ToolCall,
   type ToolDefinition,
   type ToolResult,
-} from "../../tools/index.js";
+} from "@agent-anything/tools";
 import { AgentLoop } from "./AgentLoop.js";
 import { ToolExecutionBoundary } from "./ToolExecutionBoundary.js";
 import type { RuntimeOptions } from "./RuntimeOptions.js";

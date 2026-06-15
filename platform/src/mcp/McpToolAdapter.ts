@@ -1,10 +1,10 @@
-import type { Metadata } from "../shared/types.js";
+import type { Metadata } from "@agent-anything/shared";
 import type {
   ToolAdapter,
   ToolCall,
   ToolDefinition,
   ToolResult,
-} from "../tools/index.js";
+} from "@agent-anything/tools";
 import type {
   McpConnectionPort,
   McpToolCallResult,

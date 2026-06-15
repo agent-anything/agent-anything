@@ -1,5 +1,4 @@
 import {
-  FakeProvider,
   InMemoryStorage,
   ToolRegistry,
   type PermissionService,
@@ -8,6 +7,7 @@ import {
   type ToolDefinition,
   type ToolResult,
 } from "@agent-anything/platform";
+import { FakeProvider } from "@agent-anything/testing";
 import { describe, expect, it } from "vitest";
 import { createNetDoctorAgentRuntime } from "../agent/index.js";
 import { createNetDoctorTask } from "../input/index.js";

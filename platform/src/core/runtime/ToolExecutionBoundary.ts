@@ -1,24 +1,24 @@
 import type { Observation } from "../context/index.js";
 import type { AgentTask } from "../task/index.js";
-import { createAuditRecord, type AuditPort } from "../../audit/index.js";
-import type { Evidence, EvidenceBuilderPort } from "../../evidence/index.js";
+import { createAuditRecord, type AuditPort } from "@agent-anything/observability/audit";
+import type { Evidence, EvidenceBuilderPort } from "@agent-anything/evidence";
 import {
   createAllowAllPolicyPort,
   type PolicyDecision,
   type PolicyPort,
   type PolicySubject,
   type PolicyWorkspace,
-} from "../../governance/index.js";
-import type { IdentityRef } from "../../identity/index.js";
+} from "@agent-anything/governance";
+import type { IdentityRef } from "@agent-anything/governance/identity";
 import {
   createPermissionRequest,
   createPermissionServiceFromMode,
   type PermissionDecision,
   type PermissionService,
-} from "../../permission/index.js";
-import { createTelemetryRecord, type TelemetryPort } from "../../telemetry/index.js";
-import type { ToolCall, ToolRegistry, ToolResult } from "../../tools/index.js";
-import type { WorkspaceContext } from "../../workspace/index.js";
+} from "@agent-anything/permission";
+import { createTelemetryRecord, type TelemetryPort } from "@agent-anything/observability/telemetry";
+import type { ToolCall, ToolRegistry, ToolResult } from "@agent-anything/tools";
+import type { WorkspaceContext } from "@agent-anything/governance/workspace";
 import type { RuntimeError } from "./RuntimeError.js";
 import type { RuntimeOptions } from "./RuntimeOptions.js";
 

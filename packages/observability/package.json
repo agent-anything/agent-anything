@@ -4,18 +4,18 @@
   "description": "Audit, telemetry, and platform event contracts for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "types": "./src/index.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./src/index.ts",
       "import": "./dist/index.js"
     },
     "./audit": {
-      "types": "./dist/audit/index.d.ts",
+      "types": "./src/audit/index.ts",
       "import": "./dist/audit/index.js"
     },
     "./telemetry": {
-      "types": "./dist/telemetry/index.d.ts",
+      "types": "./src/telemetry/index.ts",
       "import": "./dist/telemetry/index.js"
     }
   },
@@ -28,5 +28,9 @@
     "test": "vitest run --passWithNoTests"
   },
   "license": "Apache-2.0",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "@agent-anything/evidence": "workspace:*",
+    "@agent-anything/shared": "workspace:*"
+  }
 }

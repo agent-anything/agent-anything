@@ -4,22 +4,22 @@
   "description": "Governance, policy, workspace, and identity contracts for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "types": "./src/index.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./src/index.ts",
       "import": "./dist/index.js"
     },
     "./policy": {
-      "types": "./dist/policy/index.d.ts",
+      "types": "./src/policy/index.ts",
       "import": "./dist/policy/index.js"
     },
     "./workspace": {
-      "types": "./dist/workspace/index.d.ts",
+      "types": "./src/workspace/index.ts",
       "import": "./dist/workspace/index.js"
     },
     "./identity": {
-      "types": "./dist/identity/index.d.ts",
+      "types": "./src/identity/index.ts",
       "import": "./dist/identity/index.js"
     }
   },
@@ -32,5 +32,10 @@
     "test": "vitest run --passWithNoTests"
   },
   "license": "Apache-2.0",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "@agent-anything/permission": "workspace:*",
+    "@agent-anything/shared": "workspace:*",
+    "@agent-anything/tools": "workspace:*"
+  }
 }

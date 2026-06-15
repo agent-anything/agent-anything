@@ -1,5 +1,4 @@
 import {
-  FakeProvider,
   InMemoryStorage,
   RuntimeEventEmitter,
   RuntimeEventRecorder,
@@ -9,6 +8,7 @@ import {
   type ToolDefinition,
   type ToolResult,
 } from "@agent-anything/platform";
+import { FakeProvider } from "@agent-anything/testing";
 import { describe, expect, it } from "vitest";
 import { createNetDoctorTask } from "../../input/index.js";
 import { createNetDoctorAgentRuntime } from "./createNetDoctorAgentRuntime.js";

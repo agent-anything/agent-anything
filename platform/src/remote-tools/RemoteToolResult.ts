@@ -1,5 +1,5 @@
-import type { Metadata } from "../shared/types.js";
-import type { ToolResult } from "../tools/index.js";
+import type { Metadata } from "@agent-anything/shared";
+import type { ToolResult } from "@agent-anything/tools";
 
 export interface RemoteToolResult<TOutput = unknown> {
   remoteCallId: string;

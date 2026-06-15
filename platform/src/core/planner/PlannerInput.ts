@@ -1,6 +1,6 @@
 import type { AgentTask } from "../task/index.js";
 import type { ContextSnapshot } from "../context/index.js";
-import type { Metadata } from "../../shared/types.js";
+import type { Metadata } from "@agent-anything/shared";
 
 export interface PlannerInput {
   task: AgentTask;

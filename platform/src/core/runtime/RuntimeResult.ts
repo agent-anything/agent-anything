@@ -1,4 +1,4 @@
-import type { ArtifactRef, EvidenceRef, Metadata } from "../../shared/types.js";
+import type { ArtifactRef, EvidenceRef, Metadata } from "@agent-anything/shared";
 import type { RuntimeError } from "./RuntimeError.js";
 
 export type RuntimeStatus = "succeeded" | "failed" | "blocked" | "cancelled";

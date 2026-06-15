@@ -24,6 +24,9 @@ importers:
         specifier: workspace:*
         version: link:../../products/net-doctor
     devDependencies:
+      '@agent-anything/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@types/node':
         specifier: ^25.9.1
         version: 25.9.1
@@ -37,6 +40,9 @@ importers:
         specifier: workspace:*
         version: link:../../products/net-doctor
     devDependencies:
+      '@agent-anything/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@types/node':
         specifier: ^25.9.1
         version: 25.9.1
@@ -44,7 +50,108 @@ importers:
         specifier: ^42.4.0
         version: 42.4.0
 
-  platform: {}
+  packages/agent-core: {}
+
+  packages/evidence:
+    dependencies:
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../tools
+
+  packages/extensions: {}
+
+  packages/governance:
+    dependencies:
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../permission
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../tools
+
+  packages/observability:
+    dependencies:
+      '@agent-anything/evidence':
+        specifier: workspace:*
+        version: link:../evidence
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  packages/permission:
+    dependencies:
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../tools
+
+  packages/providers:
+    dependencies:
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  packages/shared: {}
+
+  packages/storage:
+    dependencies:
+      '@agent-anything/evidence':
+        specifier: workspace:*
+        version: link:../evidence
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  packages/testing:
+    dependencies:
+      '@agent-anything/providers':
+        specifier: workspace:*
+        version: link:../providers
+
+  packages/tools:
+    dependencies:
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  platform:
+    dependencies:
+      '@agent-anything/evidence':
+        specifier: workspace:*
+        version: link:../packages/evidence
+      '@agent-anything/governance':
+        specifier: workspace:*
+        version: link:../packages/governance
+      '@agent-anything/observability':
+        specifier: workspace:*
+        version: link:../packages/observability
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../packages/permission
+      '@agent-anything/providers':
+        specifier: workspace:*
+        version: link:../packages/providers
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../packages/shared
+      '@agent-anything/storage':
+        specifier: workspace:*
+        version: link:../packages/storage
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../packages/tools
+    devDependencies:
+      '@agent-anything/testing':
+        specifier: workspace:*
+        version: link:../packages/testing
 
   products/net-doctor:
     dependencies:
@@ -52,6 +159,9 @@ importers:
         specifier: workspace:*
         version: link:../../platform
     devDependencies:
+      '@agent-anything/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@types/node':
         specifier: ^25.9.1
         version: 25.9.1

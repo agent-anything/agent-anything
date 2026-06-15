@@ -1,5 +1,5 @@
-import type { Metadata } from "../../shared/types.js";
-import type { PermissionMode } from "../../permission/index.js";
+import type { Metadata } from "@agent-anything/shared";
+import type { PermissionMode } from "@agent-anything/permission";
 import type { RuntimeLimits } from "./RuntimeLimits.js";
 import type { RuntimeOutputSpec } from "./RuntimeResult.js";
 

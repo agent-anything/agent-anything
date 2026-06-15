@@ -2,7 +2,7 @@ import type {
   PermissionDecision,
   PermissionRequestInput,
   PermissionService,
-} from "../permission/index.js";
+} from "@agent-anything/permission";
 
 export type FakePermissionServiceHandler = (
   input: PermissionRequestInput,

@@ -2,7 +2,7 @@ import type {
   Provider,
   ProviderRequest,
   ProviderResponse,
-} from "../../providers/index.js";
+} from "@agent-anything/providers";
 import type { Planner } from "./Planner.js";
 import type { PlannerInput } from "./PlannerInput.js";
 import type { PlanStep } from "./PlanStep.js";

@@ -1,4 +1,4 @@
-import type { EvidenceRef, Metadata } from "../../shared/types.js";
+import type { EvidenceRef, Metadata } from "@agent-anything/shared";
 
 export interface Observation {
   id: string;

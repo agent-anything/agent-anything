@@ -1,8 +1,12 @@
-import { FakeProvider, type Provider } from "@agent-anything/platform";
+import type {
+  Provider,
+  ProviderRequest,
+  ProviderResponse,
+} from "@agent-anything/platform";
 
 export function createDemoNetDoctorProvider(): Provider {
-  return new FakeProvider({
-    responses: [
+  return createQueuedDemoProvider(
+    [
       providerOutput({
         kind: "callTool",
         toolName: "netDoctor.dnsLookup",
@@ -30,10 +34,42 @@ export function createDemoNetDoctorProvider(): Provider {
         },
       }),
     ],
-  });
+  );
 }
 
-function providerOutput(output: unknown) {
+function createQueuedDemoProvider(responses: ProviderResponse[]): Provider {
+  return {
+    capabilities: {
+      id: "net-doctor-demo-provider",
+      name: "NetDoctor Demo Provider",
+      supportsToolPlanning: true,
+      supportsStructuredOutput: true,
+      supportsStreaming: false,
+      metadata: {},
+    },
+    async send(_request: ProviderRequest) {
+      const response = responses.shift();
+      if (!response) {
+        return {
+          status: "failed",
+          output: null,
+          usage: null,
+          error: {
+            code: "provider_demo_exhausted",
+            message: "Demo provider has no queued response.",
+          },
+          metadata: {
+            providerId: "net-doctor-demo-provider",
+          },
+        };
+      }
+
+      return response;
+    },
+  };
+}
+
+function providerOutput(output: unknown): ProviderResponse {
   return {
     status: "succeeded" as const,
     output,

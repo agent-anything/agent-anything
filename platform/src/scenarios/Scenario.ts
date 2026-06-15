@@ -1,6 +1,6 @@
 import type { AgentTask } from "../core/task/index.js";
 import type { RuntimeStatus } from "../core/runtime/index.js";
-import type { Metadata } from "../shared/types.js";
+import type { Metadata } from "@agent-anything/shared";
 
 export interface Scenario<TInput = unknown> {
   id: string;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { FakeProvider, type Provider, type ProviderResponse } from "../../providers/index.js";
+import { FakeProvider } from "@agent-anything/testing";
+import type { Provider, ProviderResponse } from "@agent-anything/providers";
 import type { AgentTask } from "../task/index.js";
 import { ProviderBackedPlanner } from "./ProviderBackedPlanner.js";
 import type { PlannerInput } from "./PlannerInput.js";

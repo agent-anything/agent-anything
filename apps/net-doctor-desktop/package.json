@@ -15,6 +15,7 @@
     "net-doctor": "workspace:*"
   },
   "devDependencies": {
+    "@agent-anything/testing": "workspace:*",
     "@types/node": "^25.9.1",
     "electron": "^42.4.0"
   }

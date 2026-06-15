@@ -1,8 +1,8 @@
 import {
-  FakeProvider,
   InMemoryStorage,
   type ProviderResponse,
 } from "@agent-anything/platform";
+import { FakeProvider } from "@agent-anything/testing";
 import { describe, expect, it } from "vitest";
 import { createNetDoctorTask } from "../../input/index.js";
 import { createNetDoctorAgentRuntime } from "../runtime/index.js";
