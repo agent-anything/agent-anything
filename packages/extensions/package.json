@@ -4,26 +4,26 @@
   "description": "External capability adapters for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "types": "./src/index.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./src/index.ts",
       "import": "./dist/index.js"
     },
     "./remote-tools": {
-      "types": "./dist/remote-tools/index.d.ts",
+      "types": "./src/remote-tools/index.ts",
       "import": "./dist/remote-tools/index.js"
     },
     "./mcp": {
-      "types": "./dist/mcp/index.d.ts",
+      "types": "./src/mcp/index.ts",
       "import": "./dist/mcp/index.js"
     },
     "./plugins": {
-      "types": "./dist/plugins/index.d.ts",
+      "types": "./src/plugins/index.ts",
       "import": "./dist/plugins/index.js"
     },
     "./enterprise-storage": {
-      "types": "./dist/enterprise-storage/index.d.ts",
+      "types": "./src/enterprise-storage/index.ts",
       "import": "./dist/enterprise-storage/index.js"
     }
   },
@@ -34,6 +34,15 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@agent-anything/shared": "workspace:*",
+    "@agent-anything/tools": "workspace:*"
+  },
+  "devDependencies": {
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/evidence": "workspace:*",
+    "@agent-anything/testing": "workspace:*"
   },
   "license": "Apache-2.0",
   "private": true

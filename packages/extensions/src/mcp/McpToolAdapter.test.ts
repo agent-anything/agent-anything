@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { ToolExecutionBoundary } from "@agent-anything/agent-core";
 import { EvidenceBuilder } from "@agent-anything/evidence";
+import { FakePermissionService, FakePolicyPort } from "@agent-anything/testing";
 import {
   FakeMcpConnectionPort,
-  FakePermissionService,
-  FakePolicyPort,
 } from "../testing/index.js";
 import { ToolRegistry } from "@agent-anything/tools";
 import { McpToolAdapter } from "./McpToolAdapter.js";

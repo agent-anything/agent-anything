@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { FakePermissionService, FakePolicyPort, FakeRemoteToolPort } from "../testing/index.js";
+import { FakePermissionService, FakePolicyPort } from "@agent-anything/testing";
+import { FakeRemoteToolPort } from "../testing/index.js";
 import { ToolRegistry } from "@agent-anything/tools";
 import { EvidenceBuilder } from "@agent-anything/evidence";
 import { ToolExecutionBoundary } from "@agent-anything/agent-core";

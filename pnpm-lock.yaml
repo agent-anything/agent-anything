@@ -90,7 +90,24 @@ importers:
         specifier: workspace:*
         version: link:../tools
 
-  packages/extensions: {}
+  packages/extensions:
+    dependencies:
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../tools
+    devDependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
+      '@agent-anything/evidence':
+        specifier: workspace:*
+        version: link:../evidence
+      '@agent-anything/testing':
+        specifier: workspace:*
+        version: link:../testing
 
   packages/governance:
     dependencies:
@@ -168,6 +185,9 @@ importers:
       '@agent-anything/evidence':
         specifier: workspace:*
         version: link:../packages/evidence
+      '@agent-anything/extensions':
+        specifier: workspace:*
+        version: link:../packages/extensions
       '@agent-anything/governance':
         specifier: workspace:*
         version: link:../packages/governance

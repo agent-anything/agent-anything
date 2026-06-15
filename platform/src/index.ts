@@ -130,11 +130,11 @@ export type {
   RemoteToolNode,
   RemoteToolPort,
   RemoteToolResult,
-} from "./remote-tools/index.js";
+} from "@agent-anything/extensions/remote-tools";
 export {
   RemoteToolAdapter,
   type RemoteToolAdapterInput,
-} from "./remote-tools/index.js";
+} from "@agent-anything/extensions/remote-tools";
 
 export type {
   McpConnectionPort,
@@ -142,12 +142,12 @@ export type {
   McpToolCallInput,
   McpToolCallResult,
   McpToolDefinition,
-} from "./mcp/index.js";
+} from "@agent-anything/extensions/mcp";
 export {
   McpRegistry,
   McpToolAdapter,
   type McpToolAdapterInput,
-} from "./mcp/index.js";
+} from "@agent-anything/extensions/mcp";
 
 export type {
   PluginContribution,
@@ -156,11 +156,11 @@ export type {
   PluginValidationIssue,
   PluginValidationResult,
   PluginValidationStatus,
-} from "./plugins/index.js";
+} from "@agent-anything/extensions/plugins";
 export {
   PluginRegistry,
   PluginRegistryError,
-} from "./plugins/index.js";
+} from "@agent-anything/extensions/plugins";
 
 export type {
   AccessPolicyRef,
@@ -168,7 +168,7 @@ export type {
   EnterpriseStoredArtifact,
   RetentionPolicyRef,
   StoreEnterpriseArtifactInput,
-} from "./enterprise-storage/index.js";
+} from "@agent-anything/extensions/enterprise-storage";
 
 export type {
   CreatePermissionRequestInput,
