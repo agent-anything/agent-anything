@@ -26,6 +26,10 @@
       "types": "./src/events/index.ts",
       "import": "./dist/events/index.js"
     },
+    "./host": {
+      "types": "./src/host/index.ts",
+      "import": "./dist/host/index.js"
+    },
     "./task": {
       "types": "./src/task/index.ts",
       "import": "./dist/task/index.js"
