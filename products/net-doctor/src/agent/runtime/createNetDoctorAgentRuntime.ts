@@ -1,4 +1,6 @@
 import { AgentLoop, AgentRuntime, InMemoryContextManager, ToolExecutionBoundary, defaultRuntimeLimits, type AgentTask, type RuntimeEventEmitter, type RuntimeLimits } from "@agent-anything/agent-core";
+import type { IdentityProvider } from "@agent-anything/governance/identity";
+import type { WorkspaceResolver } from "@agent-anything/governance/workspace";
 import { ToolRegistry } from "@agent-anything/tools";
 import type { Metadata } from "@agent-anything/shared";
 import type { PermissionMode, PermissionService } from "@agent-anything/permission";
@@ -19,6 +21,8 @@ export interface CreateNetDoctorAgentRuntimeInput {
   metadata?: Metadata;
   eventEmitter?: RuntimeEventEmitter;
   toolRegistry?: ToolRegistry;
+  workspaceResolver?: WorkspaceResolver;
+  identityProvider?: IdentityProvider;
 }
 
 export function createNetDoctorAgentRuntime(
@@ -47,6 +51,8 @@ export function createNetDoctorAgentRuntime(
       permissionService: input.permissionService,
       toolExecutionBoundary,
       agentLoop,
+      workspaceResolver: input.workspaceResolver,
+      identityProvider: input.identityProvider,
     },
     {
       limits: {

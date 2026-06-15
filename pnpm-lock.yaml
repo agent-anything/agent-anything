@@ -209,6 +209,9 @@ importers:
       '@agent-anything/evidence':
         specifier: workspace:*
         version: link:../../packages/evidence
+      '@agent-anything/governance':
+        specifier: workspace:*
+        version: link:../../packages/governance
       '@agent-anything/observability':
         specifier: workspace:*
         version: link:../../packages/observability

@@ -1,5 +1,15 @@
 import { InMemoryStorage } from "@agent-anything/storage";
-import { RuntimeEventEmitter, type RuntimeResult } from "@agent-anything/agent-core";
+import { RuntimeEventEmitter, defaultRuntimeLimits, type RuntimeResult } from "@agent-anything/agent-core";
+import {
+  createHostIdentityProvider,
+  createHostPermissionService,
+  createHostRunResult,
+  createHostWorkspaceResolver,
+  mapRuntimeEventToHostEvent,
+  type HostEvent,
+  type HostRunResult,
+  type HostRuntimeAdapter,
+} from "@agent-anything/agent-core/host";
 import type { Evidence } from "@agent-anything/evidence";
 import type { Provider } from "@agent-anything/providers";
 import {
@@ -23,12 +33,16 @@ export interface RunNetDoctorCliResult {
   exitCode: number;
   output: RuntimeResult["output"];
   evidenceRefs: string[];
+  hostResult: HostRunResult;
+  hostEvents: HostEvent[];
 }
 
 export async function runNetDoctorCli(
   input: RunNetDoctorCliInput,
 ): Promise<RunNetDoctorCliResult> {
   const write = input.write ?? console.log;
+  const sessionId = `net-doctor-cli-${taskSafeId(input.args.target)}`;
+  const hostEvents: HostEvent[] = [];
   const eventEmitter = new RuntimeEventEmitter();
   const storage = new InMemoryStorage();
   const provider = input.provider ?? createDemoNetDoctorProvider();
@@ -39,6 +53,10 @@ export async function runNetDoctorCli(
   });
 
   eventEmitter.subscribe((event) => {
+    hostEvents.push(mapRuntimeEventToHostEvent({
+      sessionId,
+      runtimeEvent: event,
+    }));
     const update = mapRuntimeEventToNetDoctorProgress(event);
     if (update) {
       write(`[${update.phase}] ${update.message}`);
@@ -50,11 +68,66 @@ export async function runNetDoctorCli(
     storage,
     eventEmitter,
     permissionMode: input.args.permissionMode,
+    permissionService: input.args.permissionMode === "ask"
+      ? createHostPermissionService({
+        sessionId,
+        bridge: async () => ({
+          status: "granted",
+          reason: "Granted by NetDoctor CLI host bridge.",
+        }),
+        eventSink: (event) => {
+          hostEvents.push(event);
+        },
+        metadata: {
+          host: "net-doctor-cli",
+        },
+      })
+      : undefined,
+    workspaceResolver: createHostWorkspaceResolver({
+      workspace: {
+        id: "net-doctor-cli-workspace",
+        name: "NetDoctor CLI workspace",
+        rootRef: null,
+        trustState: "unknown",
+        source: "net-doctor-cli",
+        policyRefs: [],
+        metadata: {},
+      },
+    }),
+    identityProvider: createHostIdentityProvider({
+      source: "net-doctor-cli",
+    }),
   });
+  const hostAdapter: HostRuntimeAdapter = {
+    async run(hostInput) {
+      const runtimeResult = await runtime.run(hostInput.task, hostInput.runtimeOptions);
+      return createHostRunResult({
+        sessionId: hostInput.sessionId,
+        runtimeResult,
+        cancellation: hostInput.cancellation,
+        metadata: hostInput.metadata,
+      });
+    },
+  };
 
   write(`NetDoctor diagnosis: ${input.args.target}`);
 
-  const result: RuntimeResult = await runtime.run(task);
+  const hostResult = await hostAdapter.run({
+    sessionId,
+    task,
+    runtimeOptions: {
+      limits: defaultRuntimeLimits,
+      permissionMode: input.args.permissionMode,
+      metadata: {
+        product: "net-doctor",
+        host: "net-doctor-cli",
+      },
+    },
+    metadata: {
+      host: "net-doctor-cli",
+    },
+  });
+  const result: RuntimeResult = hostResult.runtimeResult!;
   const evidence = result.evidenceRefs
     .map((evidenceRef) => storage.getEvidence(evidenceRef))
     .filter((item): item is Evidence => item !== undefined);
@@ -79,9 +152,15 @@ export async function runNetDoctorCli(
     exitCode: result.status === "succeeded" ? 0 : 1,
     output: result.output,
     evidenceRefs: result.evidenceRefs,
+    hostResult,
+    hostEvents,
   };
 }
 
 function formatOutput(output: unknown): string {
   return output === null ? "(none)" : JSON.stringify(output);
+}
+
+function taskSafeId(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "session";
 }

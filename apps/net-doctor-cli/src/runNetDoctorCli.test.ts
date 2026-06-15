@@ -36,6 +36,8 @@ describe("runNetDoctorCli", () => {
       status: "succeeded",
       exitCode: 0,
     });
+    expect(result.hostResult.state.status).toBe("completed");
+    expect(result.hostEvents.some((event) => event.name === "host.runtime.event")).toBe(true);
     expect(lines.some((line) => line.includes("NetDoctor diagnosis"))).toBe(true);
     expect(lines.some((line) => line.includes("Result: succeeded"))).toBe(true);
   });

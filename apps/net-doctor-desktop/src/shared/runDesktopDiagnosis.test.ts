@@ -30,6 +30,8 @@ describe("runDesktopDiagnosis", () => {
     });
 
     expect(result.status).toBe("succeeded");
+    expect(result.hostResult.state.status).toBe("completed");
+    expect(result.hostEvents.some((event) => event.name === "host.runtime.event")).toBe(true);
     expect(result.output).toEqual({
       conclusion: "Desktop test completed.",
     });

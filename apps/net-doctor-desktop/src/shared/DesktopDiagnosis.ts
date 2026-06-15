@@ -1,4 +1,5 @@
 import type { ExecutionAccess, RuntimeResult } from "@agent-anything/agent-core";
+import type { HostEvent, HostRunResult } from "@agent-anything/agent-core/host";
 import type { PermissionMode } from "@agent-anything/permission";
 import type { NetDoctorProgressUpdate } from "net-doctor";
 
@@ -16,6 +17,8 @@ export interface DesktopDiagnosisResult {
   output: RuntimeResult["output"];
   conclusion: string;
   evidenceRefs: string[];
+  hostResult: HostRunResult;
+  hostEvents: HostEvent[];
   errors: Array<{
     code: string;
     message: string;
