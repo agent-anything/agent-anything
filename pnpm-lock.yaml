@@ -105,6 +105,30 @@ importers:
         specifier: workspace:*
         version: link:../testing
 
+  packages/code-agent:
+    dependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
+      '@agent-anything/governance':
+        specifier: workspace:*
+        version: link:../governance
+      '@agent-anything/observability':
+        specifier: workspace:*
+        version: link:../observability
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../permission
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@agent-anything/storage':
+        specifier: workspace:*
+        version: link:../storage
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../tools
+
   packages/evidence:
     dependencies:
       '@agent-anything/shared':

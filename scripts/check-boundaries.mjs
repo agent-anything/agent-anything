@@ -15,6 +15,7 @@ const packageRoots = [
   "packages/storage",
   "packages/agent-core",
   "packages/extensions",
+  "packages/code-agent",
   "packages/testing",
   "products/net-doctor",
   "apps/net-doctor-cli",
@@ -145,6 +146,7 @@ function checkLayerRule(file, ownerName, importedName) {
     for (const forbidden of [
       "@agent-anything/agent-core",
       "@agent-anything/extensions",
+      "@agent-anything/code-agent",
       "@agent-anything/testing",
     ]) {
       if (importedName === forbidden) {
@@ -156,6 +158,7 @@ function checkLayerRule(file, ownerName, importedName) {
   if (ownerName === "@agent-anything/agent-core") {
     for (const forbidden of [
       "@agent-anything/extensions",
+      "@agent-anything/code-agent",
       "@agent-anything/testing",
     ]) {
       if (importedName === forbidden) {
@@ -166,6 +169,7 @@ function checkLayerRule(file, ownerName, importedName) {
 
   if (ownerName === "@agent-anything/extensions") {
     for (const forbidden of [
+      "@agent-anything/code-agent",
       "@agent-anything/testing",
     ]) {
       if (importedName === forbidden) {
@@ -174,10 +178,22 @@ function checkLayerRule(file, ownerName, importedName) {
     }
   }
 
+  if (ownerName === "@agent-anything/code-agent") {
+    for (const forbidden of [
+      "@agent-anything/extensions",
+      "@agent-anything/testing",
+    ]) {
+      if (importedName === forbidden) {
+        violations.push(`${rel} code-agent production code must not import '${forbidden}'.`);
+      }
+    }
+  }
+
   if (ownerName === "@agent-anything/testing") {
     for (const forbidden of [
       "@agent-anything/agent-core",
       "@agent-anything/extensions",
+      "@agent-anything/code-agent",
     ]) {
       if (importedName === forbidden) {
         violations.push(`${rel} testing package must not import '${forbidden}' to avoid package cycles.`);
