@@ -29,3 +29,9 @@ export {
   defaultRuntimeLimits,
   type CreateDefaultRuntimeInput,
 } from "./createDefaultRuntime.js";
+export type {
+  ResolveToolExecutionContextInput,
+  ToolExecutionContext,
+  ToolExecutionContextResolver,
+} from "./ToolExecutionContextResolver.js";
+export { ToolExecutionContextError } from "./ToolExecutionContextResolver.js";

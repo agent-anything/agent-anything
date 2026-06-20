@@ -32,3 +32,16 @@ export type {
   WriteFileInput,
   WriteFileOutput,
 } from "./file-tools/index.js";
+export {
+  CODE_AGENT_RUN_COMMAND_TOOL,
+  createCodeAgentShellCapability,
+  defaultCodeAgentShellLimits,
+  registerCodeAgentShellTool,
+} from "./shell-tool/index.js";
+export type {
+  CodeAgentShellCapability,
+  CodeAgentShellLimits,
+  CreateCodeAgentShellCapabilityInput,
+  RunCommandInput,
+  RunCommandOutput,
+} from "./shell-tool/index.js";

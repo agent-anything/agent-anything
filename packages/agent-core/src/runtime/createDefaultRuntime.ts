@@ -11,6 +11,8 @@ import type { WorkspaceResolver } from "@agent-anything/governance/workspace";
 import type { AgentTask } from "../task/index.js";
 import { AgentRuntime, type PlanToolCalls } from "./AgentRuntime.js";
 import type { RuntimeLimits } from "./RuntimeLimits.js";
+import type { ExecutionAccess } from "./RuntimeAccessProfile.js";
+import type { ToolExecutionContextResolver } from "./ToolExecutionContextResolver.js";
 
 export const defaultRuntimeLimits: RuntimeLimits = {
   maxToolCalls: 5,
@@ -22,6 +24,7 @@ export const defaultRuntimeLimits: RuntimeLimits = {
 export interface CreateDefaultRuntimeInput {
   toolRegistry: ToolRegistry;
   permissionMode: PermissionMode;
+  executionAccess?: ExecutionAccess;
   storage: StoragePort;
   evidenceBuilder?: EvidenceBuilderPort;
   limits?: Partial<RuntimeLimits>;
@@ -35,6 +38,7 @@ export interface CreateDefaultRuntimeInput {
   telemetryMode?: "optional" | "required";
   workspaceResolver?: WorkspaceResolver;
   identityProvider?: IdentityProvider;
+  toolExecutionContextResolver?: ToolExecutionContextResolver;
 }
 
 export function createDefaultRuntime(
@@ -52,6 +56,7 @@ export function createDefaultRuntime(
       telemetryPort: input.telemetryPort,
       workspaceResolver: input.workspaceResolver,
       identityProvider: input.identityProvider,
+      toolExecutionContextResolver: input.toolExecutionContextResolver,
     },
     {
       limits: {
@@ -59,6 +64,7 @@ export function createDefaultRuntime(
         ...input.limits,
       },
       permissionMode: input.permissionMode,
+      executionAccess: input.executionAccess ?? readExecutionAccess(input.metadata),
       auditMode: input.auditMode ?? "optional",
       telemetryMode: input.telemetryMode ?? "optional",
       metadata: input.metadata ?? {},
@@ -96,4 +102,12 @@ function isToolCall(value: unknown): value is ToolCall {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+function readExecutionAccess(
+  metadata: Metadata | undefined,
+): ExecutionAccess {
+  const value = metadata?.executionAccess;
+  return value === "workspace" || value === "full"
+    ? value
+    : "restricted";
 }

@@ -50,7 +50,10 @@ export type {
   RuntimeOutputSpec,
   RuntimeResult,
   RuntimeStatus,
+  ResolveToolExecutionContextInput,
   ToolExecutionBoundaryDependencies,
+  ToolExecutionContext,
+  ToolExecutionContextResolver,
   ToolExecutionBlocked,
   ToolExecutionFailed,
   ToolExecutionOutcome,
@@ -62,4 +65,5 @@ export {
   createDefaultRuntime,
   defaultRuntimeLimits,
   ToolExecutionBoundary,
+  ToolExecutionContextError,
 } from "./runtime/index.js";

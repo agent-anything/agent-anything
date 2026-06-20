@@ -21,6 +21,7 @@ import type { ToolCall, ToolRegistry, ToolResult } from "@agent-anything/tools";
 import type { WorkspaceContext } from "@agent-anything/governance/workspace";
 import type { RuntimeError } from "./RuntimeError.js";
 import type { RuntimeOptions } from "./RuntimeOptions.js";
+import { ToolExecutionContextError, type ToolExecutionContext, type ToolExecutionContextResolver } from "./ToolExecutionContextResolver.js";
 
 export interface ToolExecutionBoundaryDependencies {
   toolRegistry: ToolRegistry;
@@ -29,6 +30,7 @@ export interface ToolExecutionBoundaryDependencies {
   permissionService?: PermissionService;
   auditPort?: AuditPort;
   telemetryPort?: TelemetryPort;
+  toolExecutionContextResolver?: ToolExecutionContextResolver;
 }
 
 export interface ExecuteToolInput {
@@ -37,6 +39,7 @@ export interface ExecuteToolInput {
   options: RuntimeOptions;
   workspace?: WorkspaceContext;
   identity?: IdentityRef;
+  executionContext?: ToolExecutionContext;
 }
 
 export type ToolExecutionOutcome =
@@ -69,6 +72,11 @@ export class ToolExecutionBoundary {
   ) {}
 
   async execute(input: ExecuteToolInput): Promise<ToolExecutionOutcome> {
+    const preparation = await this.prepareExecutionInput(input);
+    if ("status" in preparation) {
+      return preparation;
+    }
+    input = preparation.input;
     const policyOutcome = await this.checkPolicy(input);
     if (policyOutcome) {
       return policyOutcome;
@@ -130,6 +138,78 @@ export class ToolExecutionBoundary {
     };
   }
 
+  private async prepareExecutionInput(
+    input: ExecuteToolInput,
+  ): Promise<{ input: ExecuteToolInput } | ToolExecutionFailed> {
+    const definition = this.dependencies.toolRegistry.get(input.toolCall.toolName);
+    if (definition?.risk === "risky" && input.toolCall.risk !== "risky") {
+      return {
+        status: "failed",
+        toolResult: null,
+        errors: [
+          {
+            code: "tool_risk_mismatch",
+            message: "Tool call cannot downgrade the registered tool risk.",
+            metadata: {
+              toolCallId: input.toolCall.id,
+              toolName: input.toolCall.toolName,
+              callRisk: input.toolCall.risk,
+              definitionRisk: definition.risk,
+            },
+          },
+        ],
+      };
+    }
+
+    let executionContext: ToolExecutionContext = {
+      workspace: input.workspace,
+      metadata: {},
+    };
+
+    if (this.dependencies.toolExecutionContextResolver) {
+      try {
+        executionContext =
+          await this.dependencies.toolExecutionContextResolver.resolve({
+            task: input.task,
+            toolCall: input.toolCall,
+            defaultWorkspace: input.workspace,
+          });
+      } catch (error) {
+        return {
+          status: "failed",
+          toolResult: null,
+          errors: [
+            {
+              code: error instanceof ToolExecutionContextError
+                ? "tool_execution_context_invalid"
+                : "tool_execution_context_resolution_failed",
+              message: error instanceof ToolExecutionContextError
+                ? error.message
+                : "Failed to resolve trusted tool execution context.",
+              metadata: {
+                toolCallId: input.toolCall.id,
+                toolName: input.toolCall.toolName,
+                contextErrorCode: error instanceof ToolExecutionContextError
+                  ? error.code
+                  : null,
+                ...(error instanceof ToolExecutionContextError
+                  ? error.metadata
+                  : {}),
+              },
+            },
+          ],
+        };
+      }
+    }
+
+    return {
+      input: {
+        ...input,
+        workspace: executionContext.workspace ?? input.workspace,
+        executionContext,
+      },
+    };
+  }
   private async checkPolicy(input: ExecuteToolInput): Promise<ToolExecutionFailed | ToolExecutionBlocked | null> {
     if (!isGovernedToolCall(input.toolCall)) {
       return null;
@@ -149,9 +229,13 @@ export class ToolExecutionBoundary {
           kind: "tool",
           name: input.toolCall.toolName,
           resource: input.toolCall.id,
+          metadata: input.executionContext?.metadata,
         },
         metadata: {
           source: "tool-execution-boundary",
+          executionAccess: input.options.executionAccess ?? "restricted",
+          taskKind: input.task.kind,
+          ...input.executionContext?.metadata,
         },
       });
       const recordError = await this.recordPolicyDecision(input, decision);
@@ -214,9 +298,13 @@ export class ToolExecutionBoundary {
       id: `permission_request_${input.toolCall.id}`,
       taskId: input.task.id,
       toolCall: input.toolCall,
-      reason: `Tool ${input.toolCall.toolName} is marked as risky.`,
+      reason: input.executionContext?.permissionReason
+        ?? `Tool ${input.toolCall.toolName} is marked as risky.`,
       metadata: {
         source: "tool-execution-boundary",
+        executionAccess: input.options.executionAccess ?? "restricted",
+        workspaceId: input.workspace?.id ?? null,
+        ...input.executionContext?.metadata,
       },
     });
     let decision;

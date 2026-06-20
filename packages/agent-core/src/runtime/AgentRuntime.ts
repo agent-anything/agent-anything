@@ -14,6 +14,7 @@ import type { RuntimeOptions } from "./RuntimeOptions.js";
 import type { RuntimeOutputSpec, RuntimeResult } from "./RuntimeResult.js";
 import type { AgentLoop } from "./AgentLoop.js";
 import { ToolExecutionBoundary } from "./ToolExecutionBoundary.js";
+import type { ToolExecutionContextResolver } from "./ToolExecutionContextResolver.js";
 
 export type PlanToolCalls = (
   task: AgentTask,
@@ -32,6 +33,7 @@ export interface AgentRuntimeDependencies {
   workspaceResolver?: WorkspaceResolver;
   identityProvider?: IdentityProvider;
   toolExecutionBoundary?: ToolExecutionBoundary;
+  toolExecutionContextResolver?: ToolExecutionContextResolver;
 }
 
 interface RuntimeContext {
@@ -54,6 +56,7 @@ export class AgentRuntime {
         permissionService: dependencies.permissionService,
         auditPort: dependencies.auditPort,
         telemetryPort: dependencies.telemetryPort,
+        toolExecutionContextResolver: dependencies.toolExecutionContextResolver,
       });
   }
 
@@ -505,9 +508,10 @@ export class AgentRuntime {
           status: result.status,
           code: result.errors[0]?.code ?? null,
           permissionMode: options.permissionMode,
-          executionAccess: typeof options.metadata.executionAccess === "string"
-            ? options.metadata.executionAccess
-            : null,
+          executionAccess: options.executionAccess
+            ?? (typeof options.metadata.executionAccess === "string"
+              ? options.metadata.executionAccess
+              : null),
         },
       }));
       return null;
