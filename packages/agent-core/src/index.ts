@@ -1,4 +1,4 @@
-export type { AgentTask } from "./task/index.js";
+export type { AgentTask, TaskWorkspaceScope } from "./task/index.js";
 export type {
   ContextManager,
   ContextMessage,

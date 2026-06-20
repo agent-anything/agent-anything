@@ -29,5 +29,8 @@
     "@agent-anything/shared": "workspace:*",
     "@agent-anything/storage": "workspace:*",
     "@agent-anything/tools": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1"
   }
 }

@@ -5,5 +5,5 @@ export type {
   WorkspacePathError,
   WorkspacePathErrorCode,
   WorkspacePathResolution,
-} from "./workspace/index.js";
-export { resolveWorkspacePath } from "./workspace/index.js";
+} from "./WorkspacePath.js";
+export { resolveWorkspacePath } from "./resolveWorkspacePath.js";
