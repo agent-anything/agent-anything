@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/code-agent",
   "version": "0.0.0",
-  "description": "Code-agent workspace, file, shell, patch, and scenario capability for AgentAnything platform packages.",
+  "description": "Code-agent workspace, file, shell, and patch capability for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -24,13 +24,11 @@
   "dependencies": {
     "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/governance": "workspace:*",
-    "@agent-anything/observability": "workspace:*",
-    "@agent-anything/permission": "workspace:*",
     "@agent-anything/shared": "workspace:*",
-    "@agent-anything/storage": "workspace:*",
     "@agent-anything/tools": "workspace:*"
   },
   "devDependencies": {
+    "@agent-anything/permission": "workspace:*",
     "@types/node": "^25.9.1"
   }
 }
