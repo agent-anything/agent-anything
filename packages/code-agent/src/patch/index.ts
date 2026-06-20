@@ -20,3 +20,20 @@ export type {
   RejectedPatchStatus,
   UpdatePatchOperation,
 } from "./PatchContracts.js";
+export {
+  acceptPatch,
+  applyAcceptedPatch,
+  createPatchProposal,
+  defaultPatchWorkflowLimits,
+  rejectPatch,
+} from "./PatchWorkflow.js";
+export type {
+  AcceptPatchOptions,
+  ApplyAcceptedPatchInput,
+  CreatePatchProposalInput,
+  CreatePatchProposalOptions,
+  PatchProposalChange,
+  PatchWorkflowLimits,
+  RejectPatchInput,
+} from "./PatchWorkflow.js";
+export { PatchWorkflowError } from "./PatchWorkflowError.js";

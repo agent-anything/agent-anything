@@ -67,3 +67,20 @@ export type {
   RejectedPatchStatus,
   UpdatePatchOperation,
 } from "./patch/index.js";
+export {
+  acceptPatch,
+  applyAcceptedPatch,
+  createPatchProposal,
+  defaultPatchWorkflowLimits,
+  PatchWorkflowError,
+  rejectPatch,
+} from "./patch/index.js";
+export type {
+  AcceptPatchOptions,
+  ApplyAcceptedPatchInput,
+  CreatePatchProposalInput,
+  CreatePatchProposalOptions,
+  PatchProposalChange,
+  PatchWorkflowLimits,
+  RejectPatchInput,
+} from "./patch/index.js";
