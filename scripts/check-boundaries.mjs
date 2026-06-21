@@ -18,8 +18,10 @@ const packageRoots = [
   "packages/code-agent",
   "packages/testing",
   "products/net-doctor",
+  "products/helarc",
   "apps/net-doctor-cli",
   "apps/net-doctor-desktop",
+  "apps/helarc-desktop",
 ].map((item) => resolve(repoRoot, item));
 
 const packageInfo = new Map();
@@ -29,6 +31,7 @@ for (const root of packageRoots) {
   const info = {
     root,
     name: packageJson.name,
+    kind: packageKind(root),
     exports: exportedSpecifiers(packageJson),
     dependencies: new Set(Object.keys(packageJson.dependencies ?? {})),
     devDependencies: new Set(Object.keys(packageJson.devDependencies ?? {})),
@@ -109,6 +112,9 @@ function checkWorkspaceImport({ file, owner, imported, isTestOnly }) {
   const hasDependency = owner.dependencies.has(imported.packageName);
   const hasDevDependency = owner.devDependencies.has(imported.packageName);
   const isSelf = owner.name === imported.packageName;
+  if (!isSelf) {
+    checkRepositoryDirection(file, owner, importedPackage);
+  }
   if (!isSelf && !hasDependency && !(isTestOnly && hasDevDependency)) {
     violations.push(`${rel} imports '${imported.packageName}' without declaring it in ${isTestOnly ? "dependencies or devDependencies" : "dependencies"}.`);
   }
@@ -122,6 +128,26 @@ function checkWorkspaceImport({ file, owner, imported, isTestOnly }) {
 
   if (!isTestOnly) {
     checkLayerRule(file, owner.name, imported.packageName);
+  }
+}
+
+function checkRepositoryDirection(file, owner, importedPackage) {
+  const rel = display(file);
+
+  if (owner.kind === "platform" && importedPackage.kind !== "platform") {
+    violations.push(`${rel} platform package must not import ${importedPackage.kind} package '${importedPackage.name}'.`);
+  }
+
+  if (owner.kind === "product" && importedPackage.kind === "app") {
+    violations.push(`${rel} product package must not import app package '${importedPackage.name}'.`);
+  }
+
+  if (
+    owner.kind === "product" &&
+    importedPackage.kind === "product" &&
+    owner.name !== importedPackage.name
+  ) {
+    violations.push(`${rel} product package must not import another product package '${importedPackage.name}'.`);
   }
 }
 
@@ -286,6 +312,20 @@ function exists(file) {
   } catch {
     return false;
   }
+}
+
+function packageKind(root) {
+  const rel = relative(repoRoot, root).replaceAll("\\", "/");
+  if (rel.startsWith("packages/")) {
+    return "platform";
+  }
+  if (rel.startsWith("products/")) {
+    return "product";
+  }
+  if (rel.startsWith("apps/")) {
+    return "app";
+  }
+  throw new Error(`Unknown package root kind: ${rel}`);
 }
 
 function display(file) {

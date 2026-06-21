@@ -1,0 +1,32 @@
+{
+  "name": "@agent-anything/helarc-desktop",
+  "version": "0.0.0",
+  "description": "Secure Electron desktop host for the Helarc developer workbench.",
+  "type": "module",
+  "private": true,
+  "main": "./dist/main/main.js",
+  "scripts": {
+    "build": "pnpm run build:main && pnpm run build:renderer && pnpm run copy:preload",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "vite build",
+    "copy:preload": "node scripts/copy-preload.mjs",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "dev": "vite --host 127.0.0.1",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@agent-anything/helarc": "workspace:*",
+    "lucide-react": "^1.21.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "electron": "^42.4.0",
+    "vite": "^8.0.16"
+  }
+}

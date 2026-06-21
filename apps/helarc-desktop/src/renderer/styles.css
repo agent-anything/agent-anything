@@ -1,0 +1,317 @@
+:root {
+  color: #1f2933;
+  background: #f4f5f3;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  letter-spacing: 0;
+}
+
+* {
+  box-sizing: border-box;
+  letter-spacing: 0;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 320px;
+  height: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #26705a;
+  outline-offset: 2px;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-rows: 54px 48px minmax(0, 1fr) auto;
+  min-height: 100vh;
+  background: #f4f5f3;
+}
+
+.app-header,
+.workspace-bar,
+.task-composer {
+  padding-inline: clamp(16px, 3vw, 34px);
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #f8faf9;
+  background: #26343e;
+  border-bottom: 1px solid #17232b;
+}
+
+.brand-block,
+.brand-block > div,
+.workspace-identity,
+.status-indicator,
+.composer-row,
+.secondary-button,
+.primary-button {
+  display: flex;
+  align-items: center;
+}
+
+.brand-block {
+  gap: 10px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  color: #17382e;
+  background: #91d0b6;
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.brand-block > div {
+  align-items: baseline;
+  gap: 9px;
+}
+
+.brand-block strong {
+  font-size: 16px;
+}
+
+.brand-block span:last-child {
+  color: #b8c4c8;
+  font-size: 12px;
+}
+
+.icon-button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  place-items: center;
+  color: #b8c4c8;
+  background: transparent;
+  border: 1px solid #52606a;
+  border-radius: 6px;
+}
+
+.workspace-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: #ffffff;
+  border-bottom: 1px solid #d8ddda;
+}
+
+.workspace-identity {
+  min-width: 0;
+  gap: 8px;
+  color: #50606a;
+  font-size: 13px;
+}
+
+.label {
+  color: #25313a;
+  font-weight: 700;
+}
+
+.workspace-path {
+  overflow: hidden;
+  color: #7b858c;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.secondary-button,
+.primary-button {
+  min-height: 34px;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 6px;
+  font-weight: 700;
+}
+
+.secondary-button {
+  padding: 0 12px;
+  color: #43515a;
+  background: #f8faf8;
+  border: 1px solid #cbd2ce;
+  font-size: 12px;
+}
+
+.workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 33%);
+  min-height: 0;
+  padding: clamp(14px, 2.5vw, 28px) clamp(16px, 3vw, 34px);
+  gap: 14px;
+}
+
+.activity-pane,
+.review-pane {
+  min-width: 0;
+  min-height: 0;
+  background: #ffffff;
+  border: 1px solid #d8ddda;
+  border-radius: 7px;
+}
+
+.activity-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.review-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: #fbfcfa;
+}
+
+.pane-header {
+  display: flex;
+  min-height: 70px;
+  padding: 14px 18px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid #e0e4e1;
+}
+
+.pane-header.compact {
+  min-height: 62px;
+}
+
+.eyebrow {
+  display: block;
+  margin-bottom: 3px;
+  color: #78838a;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 20px;
+}
+
+h2 {
+  font-size: 16px;
+}
+
+.status-indicator {
+  gap: 7px;
+  color: #647078;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status-indicator span {
+  width: 8px;
+  height: 8px;
+  background: #c58a32;
+  border-radius: 50%;
+}
+
+.empty-state,
+.review-empty {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  color: #8a9499;
+}
+
+.empty-state {
+  gap: 10px;
+}
+
+.empty-state h2 {
+  color: #69767d;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.review-empty {
+  gap: 9px;
+  font-size: 13px;
+}
+
+.task-composer {
+  padding-top: 13px;
+  padding-bottom: 16px;
+  background: #ffffff;
+  border-top: 1px solid #d8ddda;
+}
+
+.task-composer label {
+  display: block;
+  margin-bottom: 7px;
+  color: #39464e;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.composer-row {
+  align-items: stretch;
+  gap: 10px;
+}
+
+textarea {
+  width: 100%;
+  min-height: 58px;
+  max-height: 132px;
+  padding: 10px 12px;
+  resize: vertical;
+  color: #26343e;
+  background: #f8faf8;
+  border: 1px solid #cbd2ce;
+  border-radius: 6px;
+  line-height: 1.45;
+}
+
+.primary-button {
+  width: 92px;
+  flex: 0 0 92px;
+  color: #ffffff;
+  background: #2f6f59;
+  border: 1px solid #265f4c;
+}
+
+button:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+@media (max-width: 760px) {
+  .brand-block span:last-child {
+    display: none;
+  }
+
+  .workbench {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(260px, 1fr) minmax(180px, 0.6fr);
+  }
+
+  .workspace-identity .label {
+    display: none;
+  }
+}
