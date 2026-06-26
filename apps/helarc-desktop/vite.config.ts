@@ -12,5 +12,6 @@ export default defineConfig({
   build: {
     outDir: resolve(currentDir, "dist/renderer"),
     emptyOutDir: true,
+    sourcemap: true,
   },
 });

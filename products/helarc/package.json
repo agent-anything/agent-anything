@@ -1,24 +1,29 @@
 {
-  "name": "@agent-anything/helarc",
-  "version": "0.0.0",
-  "description": "Helarc product composition for the AgentAnything developer workbench.",
-  "type": "module",
-  "main": "./dist/index.js",
-  "types": "./src/index.ts",
-  "exports": {
-    ".": {
-      "types": "./src/index.ts",
-      "import": "./dist/index.js"
-    }
-  },
-  "files": [
-    "dist"
-  ],
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
-  },
-  "license": "Apache-2.0",
-  "private": true
+    "name":  "@agent-anything/helarc",
+    "version":  "0.0.0",
+    "description":  "Helarc product composition for the AgentAnything developer workbench.",
+    "type":  "module",
+    "main":  "./dist/index.js",
+    "types":  "./src/index.ts",
+    "exports":  {
+                    ".":  {
+                              "types":  "./src/index.ts",
+                              "import":  "./dist/index.js"
+                          }
+                },
+    "files":  [
+                  "dist"
+              ],
+    "scripts":  {
+                    "build":  "tsc -p tsconfig.json",
+                    "typecheck":  "tsc -p tsconfig.json --noEmit",
+                    "test":  "vitest run --passWithNoTests"
+                },
+    "license":  "Apache-2.0",
+    "private":  true,
+    "dependencies":  {
+                         "@agent-anything/agent-core":  "workspace:*",
+                         "@agent-anything/governance":  "workspace:*",
+                         "@agent-anything/shared":  "workspace:*"
+                     }
 }

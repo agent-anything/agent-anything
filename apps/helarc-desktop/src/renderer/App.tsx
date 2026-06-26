@@ -6,8 +6,76 @@ import {
   Settings,
   ShieldCheck,
 } from "lucide-react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import type { HelarcMainSnapshot, HelarcStartSessionResult } from "../shared/HelarcDesktopApi.js";
+
+const initialSnapshot: HelarcMainSnapshot = {
+  status: "idle",
+  workspace: null,
+  acceptedTask: null,
+  error: null,
+};
 
 export function App() {
+  const [snapshot, setSnapshot] = useState<HelarcMainSnapshot>(initialSnapshot);
+  const [taskText, setTaskText] = useState("");
+  const [isBusy, setIsBusy] = useState(false);
+  const [startResult, setStartResult] = useState<HelarcStartSessionResult | null>(null);
+
+  useEffect(() => {
+    const api = getHelarcApi();
+    if (!api) {
+      return;
+    }
+
+    void api.getSnapshot().then(setSnapshot);
+  }, []);
+
+  const canStart = useMemo(
+    () => Boolean(snapshot.workspace && taskText.trim().length > 0 && !isBusy),
+    [isBusy, snapshot.workspace, taskText],
+  );
+
+  async function chooseWorkspace() {
+    const api = getHelarcApi();
+    if (!api) {
+      return;
+    }
+
+    setIsBusy(true);
+    try {
+      setSnapshot(await api.chooseWorkspace());
+      setStartResult(null);
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function startSession(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const api = getHelarcApi();
+    if (!api || !canStart) {
+      return;
+    }
+
+    setIsBusy(true);
+    try {
+      const result = await api.startSession({ taskText });
+      setStartResult(result);
+      setSnapshot(result.snapshot);
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  const workspaceLabel = snapshot.workspace
+    ? snapshot.workspace.path
+    : "No workspace selected";
+  const statusText = snapshot.acceptedTask ? "Task ready" : "Idle";
+  const activityTitle = snapshot.acceptedTask
+    ? snapshot.acceptedTask.prompt
+    : "No active session";
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -27,9 +95,9 @@ export function App() {
         <div className="workspace-identity">
           <FolderOpen size={17} aria-hidden="true" />
           <span className="label">Workspace</span>
-          <span className="workspace-path">No workspace selected</span>
+          <span className="workspace-path" title={workspaceLabel}>{workspaceLabel}</span>
         </div>
-        <button className="secondary-button" type="button" disabled>
+        <button className="secondary-button" type="button" onClick={chooseWorkspace} disabled={isBusy}>
           <FolderOpen size={16} aria-hidden="true" />
           Choose workspace
         </button>
@@ -42,11 +110,12 @@ export function App() {
               <span className="eyebrow">Current session</span>
               <h1 id="activity-title">Activity</h1>
             </div>
-            <span className="status-indicator"><span /> Idle</span>
+            <span className="status-indicator"><span /> {statusText}</span>
           </div>
           <div className="empty-state">
             <Activity size={28} aria-hidden="true" />
-            <h2>No active session</h2>
+            <h2>{activityTitle}</h2>
+            {snapshot.acceptedTask ? <p>Validated task {snapshot.acceptedTask.id}</p> : null}
           </div>
         </section>
 
@@ -65,7 +134,7 @@ export function App() {
         </aside>
       </main>
 
-      <form className="task-composer">
+      <form className="task-composer" onSubmit={startSession}>
         <label htmlFor="task-input">Task</label>
         <div className="composer-row">
           <textarea
@@ -73,14 +142,22 @@ export function App() {
             name="task"
             rows={2}
             placeholder="Describe a code task..."
-            disabled
+            value={taskText}
+            onChange={(event) => setTaskText(event.target.value)}
+            disabled={!snapshot.workspace || isBusy}
           />
-          <button className="primary-button" type="submit" disabled>
+          <button className="primary-button" type="submit" disabled={!canStart}>
             <Play size={17} fill="currentColor" aria-hidden="true" />
             Start
           </button>
         </div>
+        {snapshot.error ? <p className="composer-message error">{snapshot.error.message}</p> : null}
+        {startResult?.ok ? <p className="composer-message">Task input validated</p> : null}
       </form>
     </div>
   );
+}
+
+function getHelarcApi() {
+  return typeof window === "undefined" ? null : window.helarc;
 }

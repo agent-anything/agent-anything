@@ -257,7 +257,17 @@ importers:
         specifier: workspace:*
         version: link:../shared
 
-  products/helarc: {}
+  products/helarc:
+    dependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../../packages/agent-core
+      '@agent-anything/governance':
+        specifier: workspace:*
+        version: link:../../packages/governance
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
 
   products/net-doctor:
     dependencies:

@@ -60,6 +60,16 @@ textarea:focus-visible {
 .status-indicator,
 .composer-row,
 .secondary-button,
+.composer-message {
+  margin-top: 7px;
+  color: #456257;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.composer-message.error {
+  color: #9a3f35;
+}
 .primary-button {
   display: flex;
   align-items: center;
@@ -136,6 +146,16 @@ textarea:focus-visible {
 }
 
 .secondary-button,
+.composer-message {
+  margin-top: 7px;
+  color: #456257;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.composer-message.error {
+  color: #9a3f35;
+}
 .primary-button {
   min-height: 34px;
   justify-content: center;
@@ -287,6 +307,16 @@ textarea {
   line-height: 1.45;
 }
 
+.composer-message {
+  margin-top: 7px;
+  color: #456257;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.composer-message.error {
+  color: #9a3f35;
+}
 .primary-button {
   width: 92px;
   flex: 0 0 92px;

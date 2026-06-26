@@ -2,6 +2,8 @@ import { helarcProduct } from "@agent-anything/helarc";
 import { BrowserWindow, app } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { HelarcMainController } from "./HelarcMainController.js";
+import { registerHelarcIpc } from "./ipc.js";
 import { createHelarcWindowOptions } from "./windowOptions.js";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
@@ -26,6 +28,8 @@ function createWindow(): void {
   const window = new BrowserWindow(createHelarcWindowOptions(
     join(currentDir, "../preload/preload.cjs"),
   ));
+  const controller = new HelarcMainController();
+  registerHelarcIpc({ window, controller });
   window.setTitle(helarcProduct.displayName);
   window.once("ready-to-show", () => window.show());
   void window.loadFile(join(currentDir, "../renderer/index.html"));

@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "dev": "vite --host 127.0.0.1",
+    "debug": "electron --inspect=9229 .",
     "start": "electron ."
   },
   "dependencies": {

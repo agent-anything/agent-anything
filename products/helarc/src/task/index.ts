@@ -1,8 +1,3 @@
-export {
-  HELARC_PRODUCT_ID,
-  helarcProduct,
-  type HelarcProductDescriptor,
-} from "./HelarcProduct.js";
 export type {
   CreateHelarcTaskInput,
   CreateHelarcTaskResult,
@@ -10,11 +5,11 @@ export type {
   HelarcTaskInputError,
   HelarcTaskInputErrorCode,
   TrustedHelarcWorkspaceSelection,
-} from "./task/index.js";
+} from "./HelarcTaskInput.js";
 export {
   createHelarcTask,
   createTrustedHelarcWorkspaceScope,
   DEFAULT_HELARC_TASK_PROMPT_MAX_LENGTH,
   HELARC_TASK_KIND,
   HELARC_WORKSPACE_ROOT_NAME,
-} from "./task/index.js";
+} from "./HelarcTaskInput.js";
