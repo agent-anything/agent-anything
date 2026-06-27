@@ -24,6 +24,8 @@
     "dependencies":  {
                          "@agent-anything/agent-core":  "workspace:*",
                          "@agent-anything/governance":  "workspace:*",
-                         "@agent-anything/shared":  "workspace:*"
+                         "@agent-anything/providers":  "workspace:*",
+                         "@agent-anything/shared":  "workspace:*",
+                         "@agent-anything/tools":  "workspace:*"
                      }
 }

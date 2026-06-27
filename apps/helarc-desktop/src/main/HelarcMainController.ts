@@ -1,5 +1,6 @@
 import { createHelarcTask, type HelarcTaskInputError } from "@agent-anything/helarc";
 import { basename, isAbsolute, normalize } from "node:path";
+import type { HelarcProviderConfigError } from "./provider/resolveHelarcProviderConfig.js";
 
 export interface HelarcWorkspaceSnapshot {
   id: string;
@@ -12,16 +13,22 @@ export interface HelarcAcceptedTaskSnapshot {
   prompt: string;
 }
 
+export type HelarcProviderSnapshot =
+  | { configured: true; error: null }
+  | { configured: false; error: HelarcMainError };
+
 export type HelarcMainSnapshotStatus = "idle" | "workspace_selected";
 
 export interface HelarcMainSnapshot {
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
+  provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   error: HelarcMainError | null;
 }
 
 export type HelarcMainErrorCode =
+  | "provider_config_missing"
   | "workspace_not_selected"
   | "workspace_path_required"
   | "workspace_path_not_absolute"
@@ -40,16 +47,34 @@ export type StartHelarcSessionResult =
   | { ok: true; taskId: string; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
+export interface HelarcMainControllerInput {
+  providerConfigError?: HelarcProviderConfigError | null;
+}
+
 export class HelarcMainController {
   private selectedWorkspace: HelarcWorkspaceSnapshot | null = null;
   private acceptedTask: HelarcAcceptedTaskSnapshot | null = null;
   private lastError: HelarcMainError | null = null;
+  private readonly provider: HelarcProviderSnapshot;
   private nextTaskNumber = 1;
+
+  constructor(input: HelarcMainControllerInput = {}) {
+    this.provider = input.providerConfigError
+      ? {
+          configured: false,
+          error: {
+            code: "provider_config_missing",
+            message: input.providerConfigError.message,
+          },
+        }
+      : { configured: true, error: null };
+  }
 
   getSnapshot(): HelarcMainSnapshot {
     return {
       status: this.selectedWorkspace ? "workspace_selected" : "idle",
       workspace: this.selectedWorkspace,
+      provider: this.provider,
       acceptedTask: this.acceptedTask,
       error: this.lastError,
     };
@@ -76,6 +101,11 @@ export class HelarcMainController {
   }
 
   startSession(input: StartHelarcSessionInput): StartHelarcSessionResult {
+    if (!this.provider.configured) {
+      const error = this.setError("provider_config_missing", this.provider.error.message);
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+
     if (!this.selectedWorkspace) {
       const error = this.setError("workspace_not_selected", "Choose a workspace before starting a task.");
       return { ok: false, error, snapshot: this.getSnapshot() };

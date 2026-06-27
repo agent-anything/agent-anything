@@ -20,6 +20,9 @@ importers:
       '@agent-anything/helarc':
         specifier: workspace:*
         version: link:../../products/helarc
+      '@agent-anything/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
       lucide-react:
         specifier: ^1.21.0
         version: 1.21.0(react@19.2.7)
@@ -265,9 +268,15 @@ importers:
       '@agent-anything/governance':
         specifier: workspace:*
         version: link:../../packages/governance
+      '@agent-anything/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
       '@agent-anything/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
 
   products/net-doctor:
     dependencies:

@@ -9,16 +9,21 @@ export interface HelarcAcceptedTaskSnapshot {
   prompt: string;
 }
 
-export type HelarcMainSnapshotStatus = "idle" | "workspace_selected";
-
 export interface HelarcMainError {
   code: string;
   message: string;
 }
 
+export type HelarcProviderSnapshot =
+  | { configured: true; error: null }
+  | { configured: false; error: HelarcMainError };
+
+export type HelarcMainSnapshotStatus = "idle" | "workspace_selected";
+
 export interface HelarcMainSnapshot {
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
+  provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   error: HelarcMainError | null;
 }

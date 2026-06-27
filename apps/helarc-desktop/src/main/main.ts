@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HelarcMainController } from "./HelarcMainController.js";
 import { registerHelarcIpc } from "./ipc.js";
+import { resolveHelarcProviderConfig } from "./provider/resolveHelarcProviderConfig.js";
 import { createHelarcWindowOptions } from "./windowOptions.js";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
@@ -28,7 +29,10 @@ function createWindow(): void {
   const window = new BrowserWindow(createHelarcWindowOptions(
     join(currentDir, "../preload/preload.cjs"),
   ));
-  const controller = new HelarcMainController();
+  const providerConfig = resolveHelarcProviderConfig();
+  const controller = new HelarcMainController({
+    providerConfigError: providerConfig.ok ? null : providerConfig.error,
+  });
   registerHelarcIpc({ window, controller });
   window.setTitle(helarcProduct.displayName);
   window.once("ready-to-show", () => window.show());

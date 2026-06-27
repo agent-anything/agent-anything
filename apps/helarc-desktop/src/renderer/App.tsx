@@ -12,6 +12,7 @@ import type { HelarcMainSnapshot, HelarcStartSessionResult } from "../shared/Hel
 const initialSnapshot: HelarcMainSnapshot = {
   status: "idle",
   workspace: null,
+  provider: { configured: true, error: null },
   acceptedTask: null,
   error: null,
 };
@@ -32,8 +33,8 @@ export function App() {
   }, []);
 
   const canStart = useMemo(
-    () => Boolean(snapshot.workspace && taskText.trim().length > 0 && !isBusy),
-    [isBusy, snapshot.workspace, taskText],
+    () => Boolean(snapshot.workspace && snapshot.provider.configured && taskText.trim().length > 0 && !isBusy),
+    [isBusy, snapshot.provider.configured, snapshot.workspace, taskText],
   );
 
   async function chooseWorkspace() {
@@ -71,7 +72,9 @@ export function App() {
   const workspaceLabel = snapshot.workspace
     ? snapshot.workspace.path
     : "No workspace selected";
-  const statusText = snapshot.acceptedTask ? "Task ready" : "Idle";
+  const statusText = snapshot.acceptedTask
+    ? "Task ready"
+    : snapshot.provider.configured ? "Idle" : "Provider missing";
   const activityTitle = snapshot.acceptedTask
     ? snapshot.acceptedTask.prompt
     : "No active session";
@@ -144,13 +147,14 @@ export function App() {
             placeholder="Describe a code task..."
             value={taskText}
             onChange={(event) => setTaskText(event.target.value)}
-            disabled={!snapshot.workspace || isBusy}
+            disabled={!snapshot.workspace || !snapshot.provider.configured || isBusy}
           />
           <button className="primary-button" type="submit" disabled={!canStart}>
             <Play size={17} fill="currentColor" aria-hidden="true" />
             Start
           </button>
         </div>
+        {!snapshot.provider.configured ? <p className="composer-message error">{snapshot.provider.error.message}</p> : null}
         {snapshot.error ? <p className="composer-message error">{snapshot.error.message}</p> : null}
         {startResult?.ok ? <p className="composer-message">Task input validated</p> : null}
       </form>

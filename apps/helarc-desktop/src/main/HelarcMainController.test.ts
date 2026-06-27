@@ -14,6 +14,7 @@ describe("HelarcMainController", () => {
         name: "agent-anything",
         path: "D:\\projects\\agent-anything",
       },
+      provider: { configured: true },
       error: null,
     });
   });
@@ -28,6 +29,37 @@ describe("HelarcMainController", () => {
       error: { code: "workspace_not_selected" },
       snapshot: { status: "idle", workspace: null },
     });
+  });
+
+  it("rejects starting when provider configuration is missing", () => {
+    const controller = new HelarcMainController({
+      providerConfigError: {
+        code: "provider_config_missing",
+        message: "Provider configuration is incomplete.",
+        missingKeys: ["HELARC_PROVIDER_BASE_URL"],
+      },
+    });
+    controller.selectWorkspacePath("D:/projects/agent-anything");
+
+    const result = controller.startSession({ taskText: "Update docs" });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "provider_config_missing",
+        message: "Provider configuration is incomplete.",
+      },
+      snapshot: {
+        provider: {
+          configured: false,
+          error: {
+            code: "provider_config_missing",
+            message: "Provider configuration is incomplete.",
+          },
+        },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("HELARC_PROVIDER_BASE_URL");
   });
 
   it("accepts task text only after native workspace selection", () => {

@@ -6,18 +6,22 @@
   "private": true,
   "main": "./dist/main/main.js",
   "scripts": {
-    "build": "pnpm run build:main && pnpm run build:renderer && pnpm run copy:preload",
+    "build": "pnpm run build:main \u0026\u0026 pnpm run build:renderer \u0026\u0026 pnpm run copy:preload",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build",
     "copy:preload": "node scripts/copy-preload.mjs",
-    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit \u0026\u0026 tsc -p tsconfig.renderer.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "dev": "vite --host 127.0.0.1",
-    "debug": "electron --inspect=9229 .",
+    "debug:main": "electron --inspect=9229 .",
+    "debug:main:break": "electron --inspect-brk=9229 .",
+    "debug:test": "vitest run --inspect-brk --pool forks --poolOptions.forks.singleFork",
+    "debug:test:provider": "vitest run src/main/provider/OpenAICompatibleProvider.test.ts --inspect-brk --pool forks --poolOptions.forks.singleFork",
     "start": "electron ."
   },
   "dependencies": {
     "@agent-anything/helarc": "workspace:*",
+    "@agent-anything/providers": "workspace:*",
     "lucide-react": "^1.21.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
