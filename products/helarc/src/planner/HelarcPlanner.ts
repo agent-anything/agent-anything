@@ -169,6 +169,12 @@ function buildUserPrompt(taskPrompt: string, input: PlannerInput): string {
     "",
     "Context messages:",
     JSON.stringify(input.context.messages),
+    "",
+    "Observations:",
+    JSON.stringify(input.context.observations),
+    "",
+    "Evidence refs:",
+    JSON.stringify(input.context.evidenceRefs),
   ].join("\n");
 }
 

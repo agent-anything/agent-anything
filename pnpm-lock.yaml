@@ -265,6 +265,12 @@ importers:
       '@agent-anything/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
+      '@agent-anything/code-agent':
+        specifier: workspace:*
+        version: link:../../packages/code-agent
+      '@agent-anything/evidence':
+        specifier: workspace:*
+        version: link:../../packages/evidence
       '@agent-anything/governance':
         specifier: workspace:*
         version: link:../../packages/governance
@@ -274,9 +280,16 @@ importers:
       '@agent-anything/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@agent-anything/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@agent-anything/tools':
         specifier: workspace:*
         version: link:../../packages/tools
+    devDependencies:
+      '@types/node':
+        specifier: ^25.9.1
+        version: 25.9.1
 
   products/net-doctor:
     dependencies:

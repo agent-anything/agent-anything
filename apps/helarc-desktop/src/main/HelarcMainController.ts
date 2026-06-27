@@ -1,4 +1,11 @@
-import { createHelarcTask, type HelarcTaskInputError } from "@agent-anything/helarc";
+import {
+  createHelarcTask,
+  runHelarcReadOnlySession,
+  type HelarcActivityItem,
+  type HelarcSessionOutput,
+  type HelarcTaskInputError,
+} from "@agent-anything/helarc";
+import type { Provider } from "@agent-anything/providers";
 import { basename, isAbsolute, normalize } from "node:path";
 import type { HelarcProviderConfigError } from "./provider/resolveHelarcProviderConfig.js";
 
@@ -17,18 +24,28 @@ export type HelarcProviderSnapshot =
   | { configured: true; error: null }
   | { configured: false; error: HelarcMainError };
 
-export type HelarcMainSnapshotStatus = "idle" | "workspace_selected";
+export type HelarcMainSnapshotStatus =
+  | "idle"
+  | "workspace_selected"
+  | "running"
+  | "completed"
+  | "failed"
+  | "blocked"
+  | "cancelled";
 
 export interface HelarcMainSnapshot {
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
+  activity: HelarcActivityItem[];
+  output: HelarcSessionOutput | null;
   error: HelarcMainError | null;
 }
 
 export type HelarcMainErrorCode =
   | "provider_config_missing"
+  | "provider_not_available"
   | "workspace_not_selected"
   | "workspace_path_required"
   | "workspace_path_not_absolute"
@@ -48,17 +65,23 @@ export type StartHelarcSessionResult =
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
 export interface HelarcMainControllerInput {
+  provider?: Provider | null;
   providerConfigError?: HelarcProviderConfigError | null;
 }
 
 export class HelarcMainController {
   private selectedWorkspace: HelarcWorkspaceSnapshot | null = null;
   private acceptedTask: HelarcAcceptedTaskSnapshot | null = null;
+  private activity: HelarcActivityItem[] = [];
+  private output: HelarcSessionOutput | null = null;
   private lastError: HelarcMainError | null = null;
   private readonly provider: HelarcProviderSnapshot;
+  private readonly providerInstance: Provider | null;
+  private status: HelarcMainSnapshotStatus = "idle";
   private nextTaskNumber = 1;
 
   constructor(input: HelarcMainControllerInput = {}) {
+    this.providerInstance = input.provider ?? null;
     this.provider = input.providerConfigError
       ? {
           configured: false,
@@ -72,10 +95,12 @@ export class HelarcMainController {
 
   getSnapshot(): HelarcMainSnapshot {
     return {
-      status: this.selectedWorkspace ? "workspace_selected" : "idle",
+      status: this.status,
       workspace: this.selectedWorkspace,
       provider: this.provider,
       acceptedTask: this.acceptedTask,
+      activity: this.activity,
+      output: this.output,
       error: this.lastError,
     };
   }
@@ -95,14 +120,22 @@ export class HelarcMainController {
       name: basename(normalizedPath) || normalizedPath,
       path: normalizedPath,
     };
+    this.status = "workspace_selected";
     this.acceptedTask = null;
+    this.activity = [];
+    this.output = null;
     this.lastError = null;
     return this.getSnapshot();
   }
 
-  startSession(input: StartHelarcSessionInput): StartHelarcSessionResult {
+  async startSession(input: StartHelarcSessionInput): Promise<StartHelarcSessionResult> {
     if (!this.provider.configured) {
       const error = this.setError("provider_config_missing", this.provider.error.message);
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+
+    if (!this.providerInstance) {
+      const error = this.setError("provider_not_available", "Provider is not available.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
@@ -112,7 +145,7 @@ export class HelarcMainController {
     }
 
     const taskId = `helarc-task-${this.nextTaskNumber}`;
-    const result = createHelarcTask({
+    const taskResult = createHelarcTask({
       taskId,
       prompt: input.taskText,
       createdAt: new Date().toISOString(),
@@ -123,21 +156,45 @@ export class HelarcMainController {
       },
     });
 
-    if (!result.ok) {
-      const error = this.setError(result.error.code, result.error.message);
+    if (!taskResult.ok) {
+      const error = this.setError(taskResult.error.code, taskResult.error.message);
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
     this.nextTaskNumber += 1;
     this.acceptedTask = {
-      id: result.task.id,
-      prompt: result.task.input.prompt,
+      id: taskResult.task.id,
+      prompt: taskResult.task.input.prompt,
     };
+    this.status = "running";
+    this.activity = [];
+    this.output = null;
     this.lastError = null;
+
+    const sessionResult = await runHelarcReadOnlySession({
+      task: taskResult.task,
+      provider: this.providerInstance,
+    });
+
+    this.status = sessionResult.status;
+    this.activity = sessionResult.activity;
+    this.output = sessionResult.output;
+
+    if (sessionResult.status === "failed") {
+      const firstError = sessionResult.output.safeErrors[0] ?? {
+        code: "provider_not_available",
+        message: "Helarc session failed.",
+      };
+      this.lastError = {
+        code: firstError.code as HelarcMainErrorCode,
+        message: firstError.message,
+      };
+      return { ok: false, error: this.lastError, snapshot: this.getSnapshot() };
+    }
 
     return {
       ok: true,
-      taskId: result.task.id,
+      taskId: taskResult.task.id,
       snapshot: this.getSnapshot(),
     };
   }

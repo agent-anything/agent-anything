@@ -18,13 +18,42 @@ export type HelarcProviderSnapshot =
   | { configured: true; error: null }
   | { configured: false; error: HelarcMainError };
 
-export type HelarcMainSnapshotStatus = "idle" | "workspace_selected";
+export type HelarcMainSnapshotStatus =
+  | "idle"
+  | "workspace_selected"
+  | "running"
+  | "completed"
+  | "failed"
+  | "blocked"
+  | "cancelled";
+
+export interface HelarcActivityItem {
+  id: string;
+  sequence: number;
+  timestamp: string;
+  kind: string;
+  title: string;
+  detail: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface HelarcSessionOutput {
+  taskId: string;
+  workspaceId: string | null;
+  agentSummary: string | null;
+  runtimeStatus: string;
+  patchStatus: null;
+  appliedPath: null;
+  safeErrors: Array<{ code: string; message: string }>;
+}
 
 export interface HelarcMainSnapshot {
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
+  activity: HelarcActivityItem[];
+  output: HelarcSessionOutput | null;
   error: HelarcMainError | null;
 }
 

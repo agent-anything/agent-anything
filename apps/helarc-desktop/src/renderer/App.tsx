@@ -1,5 +1,6 @@
 import {
   Activity,
+  CheckCircle2,
   FileCode2,
   FolderOpen,
   Play,
@@ -14,6 +15,8 @@ const initialSnapshot: HelarcMainSnapshot = {
   workspace: null,
   provider: { configured: true, error: null },
   acceptedTask: null,
+  activity: [],
+  output: null,
   error: null,
 };
 
@@ -60,6 +63,7 @@ export function App() {
     }
 
     setIsBusy(true);
+    setSnapshot((current) => ({ ...current, status: "running", activity: [], output: null, error: null }));
     try {
       const result = await api.startSession({ taskText });
       setStartResult(result);
@@ -72,9 +76,7 @@ export function App() {
   const workspaceLabel = snapshot.workspace
     ? snapshot.workspace.path
     : "No workspace selected";
-  const statusText = snapshot.acceptedTask
-    ? "Task ready"
-    : snapshot.provider.configured ? "Idle" : "Provider missing";
+  const statusText = statusLabel(snapshot.status, snapshot.provider.configured);
   const activityTitle = snapshot.acceptedTask
     ? snapshot.acceptedTask.prompt
     : "No active session";
@@ -115,10 +117,22 @@ export function App() {
             </div>
             <span className="status-indicator"><span /> {statusText}</span>
           </div>
-          <div className="empty-state">
-            <Activity size={28} aria-hidden="true" />
-            <h2>{activityTitle}</h2>
-            {snapshot.acceptedTask ? <p>Validated task {snapshot.acceptedTask.id}</p> : null}
+          <div className={snapshot.activity.length > 0 ? "activity-list" : "empty-state"}>
+            {snapshot.activity.length === 0 ? (
+              <>
+                <Activity size={28} aria-hidden="true" />
+                <h2>{activityTitle}</h2>
+                {snapshot.acceptedTask ? <p>Validated task {snapshot.acceptedTask.id}</p> : null}
+              </>
+            ) : snapshot.activity.map((item) => (
+              <div className="activity-item" key={item.id}>
+                <Activity size={16} aria-hidden="true" />
+                <div>
+                  <strong>{item.title}</strong>
+                  {item.detail ? <span>{item.detail}</span> : null}
+                </div>
+              </div>
+            ))}
           </div>
         </section>
 
@@ -131,8 +145,8 @@ export function App() {
             <ShieldCheck size={19} aria-hidden="true" />
           </div>
           <div className="review-empty">
-            <FileCode2 size={24} aria-hidden="true" />
-            <span>No pending review</span>
+            {snapshot.output ? <CheckCircle2 size={24} aria-hidden="true" /> : <FileCode2 size={24} aria-hidden="true" />}
+            <span>{snapshot.output?.agentSummary ?? "No pending review"}</span>
           </div>
         </aside>
       </main>
@@ -156,10 +170,22 @@ export function App() {
         </div>
         {!snapshot.provider.configured ? <p className="composer-message error">{snapshot.provider.error.message}</p> : null}
         {snapshot.error ? <p className="composer-message error">{snapshot.error.message}</p> : null}
-        {startResult?.ok ? <p className="composer-message">Task input validated</p> : null}
+        {startResult?.ok ? <p className="composer-message">Session completed</p> : null}
       </form>
     </div>
   );
+}
+
+function statusLabel(status: HelarcMainSnapshot["status"], providerConfigured: boolean): string {
+  if (!providerConfigured) {
+    return "Provider missing";
+  }
+
+  if (status === "workspace_selected") {
+    return "Idle";
+  }
+
+  return status[0]?.toUpperCase() + status.slice(1).replaceAll("_", " ");
 }
 
 function getHelarcApi() {

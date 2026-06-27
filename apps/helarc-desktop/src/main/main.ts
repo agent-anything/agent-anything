@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HelarcMainController } from "./HelarcMainController.js";
 import { registerHelarcIpc } from "./ipc.js";
+import { OpenAICompatibleProvider } from "./provider/OpenAICompatibleProvider.js";
 import { resolveHelarcProviderConfig } from "./provider/resolveHelarcProviderConfig.js";
 import { createHelarcWindowOptions } from "./windowOptions.js";
 
@@ -31,6 +32,7 @@ function createWindow(): void {
   ));
   const providerConfig = resolveHelarcProviderConfig();
   const controller = new HelarcMainController({
+    provider: providerConfig.ok ? new OpenAICompatibleProvider(providerConfig.config) : null,
     providerConfigError: providerConfig.ok ? null : providerConfig.error,
   });
   registerHelarcIpc({ window, controller });

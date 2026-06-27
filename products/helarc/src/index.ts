@@ -32,3 +32,15 @@ export {
   parseHelarcProviderResponse,
   parseStructuredOutput,
 } from "./planner/index.js";
+export type {
+  HelarcActivityItem,
+  HelarcSessionOutput,
+  HelarcSessionResult,
+  HelarcSessionStatus,
+  RunHelarcReadOnlySessionInput,
+} from "./session/index.js";
+export {
+  createHelarcReadOnlyToolRegistry,
+  mapRuntimeEventToHelarcActivity,
+  runHelarcReadOnlySession,
+} from "./session/index.js";
