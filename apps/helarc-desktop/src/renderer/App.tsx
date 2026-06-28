@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertCircle,
   CheckCircle2,
   FileCode2,
   FolderOpen,
@@ -27,6 +28,7 @@ export function App() {
   const [taskText, setTaskText] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [startResult, setStartResult] = useState<HelarcStartSessionResult | null>(null);
+  const sessionActive = isSessionActive(snapshot.status);
 
   useEffect(() => {
     const api = getHelarcApi();
@@ -44,12 +46,9 @@ export function App() {
       && snapshot.provider.configured
       && taskText.trim().length > 0
       && !isBusy
-      && snapshot.status !== "running"
-      && snapshot.status !== "waiting_for_permission"
-      && snapshot.status !== "waiting_for_patch_review"
-      && snapshot.status !== "applying_patch"
+      && !sessionActive
     ),
-    [isBusy, snapshot.provider.configured, snapshot.status, snapshot.workspace, taskText],
+    [isBusy, sessionActive, snapshot.provider.configured, snapshot.workspace, taskText],
   );
 
   async function chooseWorkspace() {
@@ -166,7 +165,7 @@ export function App() {
               <span className="eyebrow">Current session</span>
               <h1 id="activity-title">Activity</h1>
             </div>
-            <span className="status-indicator"><span /> {statusText}</span>
+            <span className={`status-indicator ${statusTone(snapshot.status)}`}><span /> {statusText}</span>
           </div>
           <div className={snapshot.activity.length > 0 ? "activity-list" : "empty-state"}>
             {snapshot.activity.length === 0 ? (
@@ -195,7 +194,10 @@ export function App() {
             </div>
             <ShieldCheck size={19} aria-hidden="true" />
           </div>
-          <div className="review-empty">
+          <div className={snapshot.pendingPermission || snapshot.pendingPatchReview || snapshot.output || snapshot.error
+            ? "review-content"
+            : "review-empty"}
+          >
             {snapshot.pendingPermission ? (
               <div className="permission-panel">
                 <ShieldCheck size={24} aria-hidden="true" />
@@ -229,7 +231,7 @@ export function App() {
               <div className="patch-panel">
                 <FileCode2 size={24} aria-hidden="true" />
                 <strong>{snapshot.pendingPatchReview.summary}</strong>
-                <span>{snapshot.pendingPatchReview.operation} · {snapshot.pendingPatchReview.path}</span>
+                <span>{snapshot.pendingPatchReview.operation} - {snapshot.pendingPatchReview.path}</span>
                 <div className="patch-preview">
                   <section>
                     <span>Original</span>
@@ -259,10 +261,46 @@ export function App() {
                   </button>
                 </div>
               </div>
+            ) : snapshot.output ? (
+              <div className="result-panel">
+                {snapshot.output.safeErrors.length > 0 || snapshot.status === "failed" ? (
+                  <AlertCircle size={24} aria-hidden="true" />
+                ) : (
+                  <CheckCircle2 size={24} aria-hidden="true" />
+                )}
+                <strong>{terminalTitle(snapshot)}</strong>
+                {snapshot.output.agentSummary ? <span>{snapshot.output.agentSummary}</span> : null}
+                <dl>
+                  <div>
+                    <dt>Runtime</dt>
+                    <dd>{snapshot.output.runtimeStatus}</dd>
+                  </div>
+                  <div>
+                    <dt>Patch</dt>
+                    <dd>{snapshot.output.patchStatus ?? "none"}</dd>
+                  </div>
+                  {snapshot.output.appliedPath ? (
+                    <div>
+                      <dt>Applied</dt>
+                      <dd>{snapshot.output.appliedPath}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+                {snapshot.output.safeErrors.length > 0 ? (
+                  <ul className="error-list">
+                    {snapshot.output.safeErrors.map((error) => (
+                      <li key={`${error.code}:${error.message}`}>
+                        <strong>{error.code}</strong>
+                        <span>{error.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
             ) : (
               <>
-                {snapshot.output ? <CheckCircle2 size={24} aria-hidden="true" /> : <FileCode2 size={24} aria-hidden="true" />}
-                <span>{snapshot.output?.agentSummary ?? "No pending review"}</span>
+                <FileCode2 size={24} aria-hidden="true" />
+                <span>{sessionActive ? "Waiting for next action" : "No pending review"}</span>
               </>
             )}
           </div>
@@ -279,7 +317,7 @@ export function App() {
             placeholder="Describe a code task..."
             value={taskText}
             onChange={(event) => setTaskText(event.target.value)}
-            disabled={!snapshot.workspace || !snapshot.provider.configured || isBusy}
+            disabled={!snapshot.workspace || !snapshot.provider.configured || isBusy || sessionActive}
           />
           <button className="primary-button" type="submit" disabled={!canStart}>
             <Play size={17} fill="currentColor" aria-hidden="true" />
@@ -304,6 +342,49 @@ function statusLabel(status: HelarcMainSnapshot["status"], providerConfigured: b
   }
 
   return status[0]?.toUpperCase() + status.slice(1).replaceAll("_", " ");
+}
+
+function statusTone(status: HelarcMainSnapshot["status"]): string {
+  if (status === "completed") {
+    return "success";
+  }
+
+  if (status === "failed" || status === "blocked" || status === "rejected" || status === "cancelled") {
+    return "danger";
+  }
+
+  if (isSessionActive(status)) {
+    return "active";
+  }
+
+  return "idle";
+}
+
+function isSessionActive(status: HelarcMainSnapshot["status"]): boolean {
+  return status === "running" ||
+    status === "waiting_for_permission" ||
+    status === "waiting_for_patch_review" ||
+    status === "applying_patch";
+}
+
+function terminalTitle(snapshot: HelarcMainSnapshot): string {
+  if (snapshot.status === "rejected") {
+    return "Change rejected";
+  }
+
+  if (snapshot.status === "failed") {
+    return "Session failed";
+  }
+
+  if (snapshot.status === "blocked") {
+    return "Session blocked";
+  }
+
+  if (snapshot.output?.patchStatus === "applied") {
+    return "Patch applied";
+  }
+
+  return "Session completed";
 }
 
 function getHelarcApi() {
