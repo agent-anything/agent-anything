@@ -1,5 +1,5 @@
 import type { Provider, ProviderRequest, ProviderResponse } from "@agent-anything/providers";
-import { access, mkdir, mkdtemp, readFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -240,6 +240,65 @@ describe("HelarcMainController", () => {
       ok: false,
       error: { code: "patch_review_not_pending" },
     });
+  });
+
+  it("completes a desktop-host inspect-review-apply scenario", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-scenario-"));
+    await mkdir(join(workspaceRoot, "src"));
+    const targetPath = join(workspaceRoot, "src", "existing.txt");
+    await writeFile(targetPath, "before\n");
+    const provider = new ScriptedProvider([
+      {
+        action: "call_tool",
+        reason: "Inspect the target file.",
+        toolName: "codeAgent.readFile",
+        input: { path: "src/existing.txt" },
+      },
+      {
+        action: "propose",
+        summary: "Update the target file.",
+        change: {
+          operation: "update",
+          path: "src/existing.txt",
+          content: "after\n",
+        },
+      },
+    ]);
+    const controller = new HelarcMainController({ provider });
+    controller.selectWorkspacePath(workspaceRoot);
+
+    const waitingForReview = waitForStatus(controller, "waiting_for_patch_review");
+    const completed = waitForStatus(controller, "completed");
+    const result = controller.startSession({ taskText: "Update existing file" });
+
+    expect(result).toMatchObject({ ok: true, snapshot: { status: "running" } });
+    const reviewSnapshot = await waitingForReview;
+    expect(reviewSnapshot.activity.map((item) => item.kind)).toContain("tool.finished");
+    expect(reviewSnapshot.pendingPatchReview).toMatchObject({
+      operation: "update",
+      path: "src/existing.txt",
+      originalContent: "before\n",
+      proposedContent: "after\n",
+    });
+
+    const patchId = reviewSnapshot.pendingPatchReview?.patchId ?? "";
+    controller.resolvePatchReview({
+      patchId,
+      decision: "accepted",
+      reason: "Apply scenario change.",
+    });
+
+    const completedSnapshot = await completed;
+    expect(completedSnapshot).toMatchObject({
+      status: "completed",
+      output: {
+        agentSummary: "Update the target file.",
+        patchStatus: "applied",
+        appliedPath: "src/existing.txt",
+        safeErrors: [],
+      },
+    });
+    await expect(readFile(targetPath, "utf8")).resolves.toBe("after\n");
   });
 
   it("rejects relative workspace paths", () => {
