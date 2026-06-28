@@ -38,9 +38,12 @@ export type {
   HelarcSessionResult,
   HelarcSessionStatus,
   RunHelarcReadOnlySessionInput,
+  RunHelarcSessionInput,
 } from "./session/index.js";
 export {
+  createHelarcToolRegistry,
   createHelarcReadOnlyToolRegistry,
   mapRuntimeEventToHelarcActivity,
   runHelarcReadOnlySession,
+  runHelarcSession,
 } from "./session/index.js";

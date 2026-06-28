@@ -20,7 +20,9 @@
     "start": "electron ."
   },
   "dependencies": {
+    "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/helarc": "workspace:*",
+    "@agent-anything/permission": "workspace:*",
     "@agent-anything/providers": "workspace:*",
     "lucide-react": "^1.21.0",
     "react": "^19.2.7",

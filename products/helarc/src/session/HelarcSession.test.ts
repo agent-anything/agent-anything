@@ -1,6 +1,7 @@
 import type { PlannerInput } from "@agent-anything/agent-core";
+import type { HostPermissionBridge } from "@agent-anything/agent-core/host";
 import type { Provider, ProviderRequest, ProviderResponse } from "@agent-anything/providers";
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
@@ -8,7 +9,9 @@ import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "../task/index.js";
 import {
   createHelarcReadOnlyToolRegistry,
+  createHelarcToolRegistry,
   runHelarcReadOnlySession,
+  runHelarcSession,
 } from "./index.js";
 
 describe("Helarc read-only session", () => {
@@ -22,6 +25,14 @@ describe("Helarc read-only session", () => {
       "codeAgent.searchFiles",
     ]);
     expect(registry.has("codeAgent.writeFile")).toBe(false);
+  });
+
+  it("adds governed shell only when shell execution is enabled", () => {
+    const task = createTask("D:/workspace");
+    const registryResult = createHelarcToolRegistry(task, { enableShell: true });
+
+    expect(registryResult.registry.has("codeAgent.runCommand")).toBe(true);
+    expect(registryResult.toolExecutionContextResolver).toBeDefined();
   });
 
   it("runs one read-only tool call and completes with ordered activity", async () => {
@@ -74,6 +85,69 @@ describe("Helarc read-only session", () => {
       "loop.iteration.finished",
     ]);
     expect(provider.requests).toHaveLength(2);
+    expect(provider.lastPlannerInputContexts).toEqual([0, 1]);
+  });
+
+  it("blocks shell execution when permission is denied before process start", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-shell-denied-"));
+    const markerPath = join(workspaceRoot, "marker.txt");
+    const provider = new ScriptedProvider([
+      {
+        action: "call_tool",
+        reason: "Try a shell command.",
+        toolName: "codeAgent.runCommand",
+        input: createShellInput(markerPath),
+      },
+    ]);
+    const permissionBridge: HostPermissionBridge = async () => ({
+      status: "denied",
+      reason: "Denied by test.",
+    });
+
+    const result = await runHelarcSession({
+      task: createTask(workspaceRoot),
+      provider,
+      enableShell: true,
+      permissionBridge,
+    });
+
+    expect(result.status).toBe("blocked");
+    expect(result.output.safeErrors).toEqual([
+      { code: "permission_denied", message: "Denied by test." },
+    ]);
+    await expect(access(markerPath)).rejects.toThrow();
+  });
+
+  it("continues the same session after shell permission is granted", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-shell-granted-"));
+    const markerPath = join(workspaceRoot, "marker.txt");
+    const provider = new ScriptedProvider([
+      {
+        action: "call_tool",
+        reason: "Create a marker.",
+        toolName: "codeAgent.runCommand",
+        input: createShellInput(markerPath),
+      },
+      {
+        action: "complete",
+        summary: "Shell command completed.",
+      },
+    ]);
+    const permissionBridge: HostPermissionBridge = async () => ({
+      status: "granted",
+      reason: "Granted by test.",
+    });
+
+    const result = await runHelarcSession({
+      task: createTask(workspaceRoot),
+      provider,
+      enableShell: true,
+      permissionBridge,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.output.agentSummary).toBe("Shell command completed.");
+    await expect(access(markerPath)).resolves.toBeUndefined();
     expect(provider.lastPlannerInputContexts).toEqual([0, 1]);
   });
 });
@@ -152,4 +226,17 @@ function readObservationCount(request: ProviderRequest): number {
   } catch {
     return 0;
   }
+}
+
+function createShellInput(markerPath: string) {
+  return {
+    command: process.execPath,
+    args: [
+      "-e",
+      `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran')`,
+    ],
+    cwd: ".",
+    timeoutMs: 1_000,
+    reason: "Create a governed marker file.",
+  };
 }

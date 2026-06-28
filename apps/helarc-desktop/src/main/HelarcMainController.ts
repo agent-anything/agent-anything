@@ -1,10 +1,12 @@
+import type { HostPermissionBridge } from "@agent-anything/agent-core/host";
 import {
   createHelarcTask,
-  runHelarcReadOnlySession,
+  runHelarcSession,
   type HelarcActivityItem,
   type HelarcSessionOutput,
   type HelarcTaskInputError,
 } from "@agent-anything/helarc";
+import type { PermissionRequest } from "@agent-anything/permission";
 import type { Provider } from "@agent-anything/providers";
 import { basename, isAbsolute, normalize } from "node:path";
 import type { HelarcProviderConfigError } from "./provider/resolveHelarcProviderConfig.js";
@@ -28,16 +30,29 @@ export type HelarcMainSnapshotStatus =
   | "idle"
   | "workspace_selected"
   | "running"
+  | "waiting_for_permission"
   | "completed"
   | "failed"
   | "blocked"
   | "cancelled";
+
+export interface HelarcPermissionPromptSnapshot {
+  requestId: string;
+  taskId: string;
+  toolName: string;
+  reason: string;
+  command: string | null;
+  args: string[];
+  cwd: string | null;
+  rootName: string | null;
+}
 
 export interface HelarcMainSnapshot {
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
+  pendingPermission: HelarcPermissionPromptSnapshot | null;
   activity: HelarcActivityItem[];
   output: HelarcSessionOutput | null;
   error: HelarcMainError | null;
@@ -46,6 +61,9 @@ export interface HelarcMainSnapshot {
 export type HelarcMainErrorCode =
   | "provider_config_missing"
   | "provider_not_available"
+  | "session_already_running"
+  | "permission_not_pending"
+  | "permission_request_mismatch"
   | "workspace_not_selected"
   | "workspace_path_required"
   | "workspace_path_not_absolute"
@@ -64,6 +82,15 @@ export type StartHelarcSessionResult =
   | { ok: true; taskId: string; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
+export interface ResolveHelarcPermissionInput {
+  requestId: string;
+  decision: "granted" | "denied";
+}
+
+export type ResolveHelarcPermissionResult =
+  | { ok: true; snapshot: HelarcMainSnapshot }
+  | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
+
 export interface HelarcMainControllerInput {
   provider?: Provider | null;
   providerConfigError?: HelarcProviderConfigError | null;
@@ -72,6 +99,7 @@ export interface HelarcMainControllerInput {
 export class HelarcMainController {
   private selectedWorkspace: HelarcWorkspaceSnapshot | null = null;
   private acceptedTask: HelarcAcceptedTaskSnapshot | null = null;
+  private pendingPermission: PendingPermission | null = null;
   private activity: HelarcActivityItem[] = [];
   private output: HelarcSessionOutput | null = null;
   private lastError: HelarcMainError | null = null;
@@ -79,6 +107,7 @@ export class HelarcMainController {
   private readonly providerInstance: Provider | null;
   private status: HelarcMainSnapshotStatus = "idle";
   private nextTaskNumber = 1;
+  private readonly snapshotSubscribers = new Set<(snapshot: HelarcMainSnapshot) => void>();
 
   constructor(input: HelarcMainControllerInput = {}) {
     this.providerInstance = input.provider ?? null;
@@ -99,9 +128,17 @@ export class HelarcMainController {
       workspace: this.selectedWorkspace,
       provider: this.provider,
       acceptedTask: this.acceptedTask,
+      pendingPermission: this.pendingPermission?.prompt ?? null,
       activity: this.activity,
       output: this.output,
       error: this.lastError,
+    };
+  }
+
+  subscribeSnapshot(subscriber: (snapshot: HelarcMainSnapshot) => void): () => void {
+    this.snapshotSubscribers.add(subscriber);
+    return () => {
+      this.snapshotSubscribers.delete(subscriber);
     };
   }
 
@@ -122,13 +159,14 @@ export class HelarcMainController {
     };
     this.status = "workspace_selected";
     this.acceptedTask = null;
+    this.pendingPermission = null;
     this.activity = [];
     this.output = null;
     this.lastError = null;
-    return this.getSnapshot();
+    return this.publishSnapshot();
   }
 
-  async startSession(input: StartHelarcSessionInput): Promise<StartHelarcSessionResult> {
+  startSession(input: StartHelarcSessionInput): StartHelarcSessionResult {
     if (!this.provider.configured) {
       const error = this.setError("provider_config_missing", this.provider.error.message);
       return { ok: false, error, snapshot: this.getSnapshot() };
@@ -141,6 +179,11 @@ export class HelarcMainController {
 
     if (!this.selectedWorkspace) {
       const error = this.setError("workspace_not_selected", "Choose a workspace before starting a task.");
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+
+    if (this.status === "running" || this.status === "waiting_for_permission") {
+      const error = this.setError("session_already_running", "A Helarc session is already running.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
@@ -167,36 +210,41 @@ export class HelarcMainController {
       prompt: taskResult.task.input.prompt,
     };
     this.status = "running";
+    this.pendingPermission = null;
     this.activity = [];
     this.output = null;
     this.lastError = null;
 
-    const sessionResult = await runHelarcReadOnlySession({
-      task: taskResult.task,
-      provider: this.providerInstance,
-    });
-
-    this.status = sessionResult.status;
-    this.activity = sessionResult.activity;
-    this.output = sessionResult.output;
-
-    if (sessionResult.status === "failed") {
-      const firstError = sessionResult.output.safeErrors[0] ?? {
-        code: "provider_not_available",
-        message: "Helarc session failed.",
-      };
-      this.lastError = {
-        code: firstError.code as HelarcMainErrorCode,
-        message: firstError.message,
-      };
-      return { ok: false, error: this.lastError, snapshot: this.getSnapshot() };
-    }
+    void this.runLiveSession(taskResult.task);
 
     return {
       ok: true,
       taskId: taskResult.task.id,
-      snapshot: this.getSnapshot(),
+      snapshot: this.publishSnapshot(),
     };
+  }
+
+  resolvePermission(input: ResolveHelarcPermissionInput): ResolveHelarcPermissionResult {
+    if (!this.pendingPermission) {
+      const error = this.setError("permission_not_pending", "No permission request is pending.");
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+
+    if (this.pendingPermission.prompt.requestId !== input.requestId) {
+      const error = this.setError("permission_request_mismatch", "Permission request is stale.");
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+
+    const pending = this.pendingPermission;
+    this.pendingPermission = null;
+    this.status = "running";
+    pending.resolve({
+      status: input.decision,
+      reason: input.decision === "granted"
+        ? "Granted from Helarc desktop."
+        : "Denied from Helarc desktop.",
+    });
+    return { ok: true, snapshot: this.publishSnapshot() };
   }
 
   private fail(code: HelarcMainErrorCode, message: string): HelarcMainSnapshot {
@@ -209,4 +257,101 @@ export class HelarcMainController {
     this.lastError = error;
     return error;
   }
+
+  private async runLiveSession(
+    task: Parameters<typeof runHelarcSession>[0]["task"],
+  ): Promise<void> {
+    try {
+      const sessionResult = await runHelarcSession({
+        task,
+        provider: this.providerInstance as Provider,
+        enableShell: true,
+        permissionBridge: this.createPermissionBridge(),
+        onActivity: (item) => {
+          this.activity = [...this.activity, item];
+          this.publishSnapshot();
+        },
+      });
+
+      this.status = sessionResult.status;
+      this.activity = sessionResult.activity;
+      this.output = sessionResult.output;
+      this.pendingPermission = null;
+
+      if (sessionResult.status === "failed") {
+        const firstError = sessionResult.output.safeErrors[0] ?? {
+          code: "provider_not_available",
+          message: "Helarc session failed.",
+        };
+        this.lastError = {
+          code: firstError.code as HelarcMainErrorCode,
+          message: firstError.message,
+        };
+      }
+    } catch (error) {
+      this.status = "failed";
+      this.pendingPermission = null;
+      this.lastError = {
+        code: "provider_not_available",
+        message: error instanceof Error ? error.message : "Helarc session failed.",
+      };
+    } finally {
+      this.publishSnapshot();
+    }
+  }
+
+  private createPermissionBridge(): HostPermissionBridge {
+    return async ({ request }) => new Promise((resolve) => {
+      if (this.pendingPermission) {
+        resolve({
+          status: "unavailable",
+          reason: "Another permission request is already pending.",
+        });
+        return;
+      }
+
+      this.pendingPermission = {
+        prompt: createPermissionPromptSnapshot(request),
+        resolve,
+      };
+      this.status = "waiting_for_permission";
+      this.publishSnapshot();
+    });
+  }
+
+  private publishSnapshot(): HelarcMainSnapshot {
+    const snapshot = this.getSnapshot();
+    for (const subscriber of this.snapshotSubscribers) {
+      subscriber(snapshot);
+    }
+    return snapshot;
+  }
+}
+
+interface PendingPermission {
+  prompt: HelarcPermissionPromptSnapshot;
+  resolve: (result: { status: "granted" | "denied" | "unavailable"; reason: string }) => void;
+}
+
+function createPermissionPromptSnapshot(request: PermissionRequest): HelarcPermissionPromptSnapshot {
+  return {
+    requestId: request.id,
+    taskId: request.taskId,
+    toolName: request.toolName ?? request.target?.name ?? "unknown",
+    reason: request.reason,
+    command: readString(request.metadata.command),
+    args: readStringArray(request.metadata.args),
+    cwd: readString(request.metadata.cwd),
+    rootName: readString(request.metadata.rootName),
+  };
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? value
+    : [];
 }

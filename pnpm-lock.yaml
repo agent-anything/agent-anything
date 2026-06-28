@@ -17,9 +17,15 @@ importers:
 
   apps/helarc-desktop:
     dependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../../packages/agent-core
       '@agent-anything/helarc':
         specifier: workspace:*
         version: link:../../products/helarc
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../../packages/permission
       '@agent-anything/providers':
         specifier: workspace:*
         version: link:../../packages/providers

@@ -15,6 +15,7 @@ const initialSnapshot: HelarcMainSnapshot = {
   workspace: null,
   provider: { configured: true, error: null },
   acceptedTask: null,
+  pendingPermission: null,
   activity: [],
   output: null,
   error: null,
@@ -33,11 +34,19 @@ export function App() {
     }
 
     void api.getSnapshot().then(setSnapshot);
+    return api.subscribeSnapshot(setSnapshot);
   }, []);
 
   const canStart = useMemo(
-    () => Boolean(snapshot.workspace && snapshot.provider.configured && taskText.trim().length > 0 && !isBusy),
-    [isBusy, snapshot.provider.configured, snapshot.workspace, taskText],
+    () => Boolean(
+      snapshot.workspace
+      && snapshot.provider.configured
+      && taskText.trim().length > 0
+      && !isBusy
+      && snapshot.status !== "running"
+      && snapshot.status !== "waiting_for_permission",
+    ),
+    [isBusy, snapshot.provider.configured, snapshot.status, snapshot.workspace, taskText],
   );
 
   async function chooseWorkspace() {
@@ -62,11 +71,30 @@ export function App() {
       return;
     }
 
-    setIsBusy(true);
     setSnapshot((current) => ({ ...current, status: "running", activity: [], output: null, error: null }));
+    setIsBusy(true);
     try {
       const result = await api.startSession({ taskText });
       setStartResult(result);
+      setSnapshot(result.snapshot);
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function resolvePermission(decision: "granted" | "denied") {
+    const api = getHelarcApi();
+    const pendingPermission = snapshot.pendingPermission;
+    if (!api || !pendingPermission) {
+      return;
+    }
+
+    setIsBusy(true);
+    try {
+      const result = await api.resolvePermission({
+        requestId: pendingPermission.requestId,
+        decision,
+      });
       setSnapshot(result.snapshot);
     } finally {
       setIsBusy(false);
@@ -145,8 +173,41 @@ export function App() {
             <ShieldCheck size={19} aria-hidden="true" />
           </div>
           <div className="review-empty">
-            {snapshot.output ? <CheckCircle2 size={24} aria-hidden="true" /> : <FileCode2 size={24} aria-hidden="true" />}
-            <span>{snapshot.output?.agentSummary ?? "No pending review"}</span>
+            {snapshot.pendingPermission ? (
+              <div className="permission-panel">
+                <ShieldCheck size={24} aria-hidden="true" />
+                <strong>{snapshot.pendingPermission.toolName}</strong>
+                <span>{snapshot.pendingPermission.reason}</span>
+                <code>{formatCommand(snapshot.pendingPermission.command, snapshot.pendingPermission.args)}</code>
+                <div className="permission-meta">
+                  <span>{snapshot.pendingPermission.rootName ?? "workspace"}</span>
+                  <span>{snapshot.pendingPermission.cwd ?? "."}</span>
+                </div>
+                <div className="permission-actions">
+                  <button
+                    className="secondary-button danger"
+                    type="button"
+                    onClick={() => void resolvePermission("denied")}
+                    disabled={isBusy}
+                  >
+                    Deny
+                  </button>
+                  <button
+                    className="primary-button compact"
+                    type="button"
+                    onClick={() => void resolvePermission("granted")}
+                    disabled={isBusy}
+                  >
+                    Approve
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {snapshot.output ? <CheckCircle2 size={24} aria-hidden="true" /> : <FileCode2 size={24} aria-hidden="true" />}
+                <span>{snapshot.output?.agentSummary ?? "No pending review"}</span>
+              </>
+            )}
           </div>
         </aside>
       </main>
@@ -170,7 +231,7 @@ export function App() {
         </div>
         {!snapshot.provider.configured ? <p className="composer-message error">{snapshot.provider.error.message}</p> : null}
         {snapshot.error ? <p className="composer-message error">{snapshot.error.message}</p> : null}
-        {startResult?.ok ? <p className="composer-message">Session completed</p> : null}
+        {startResult?.ok ? <p className="composer-message">Session started</p> : null}
       </form>
     </div>
   );
@@ -190,4 +251,12 @@ function statusLabel(status: HelarcMainSnapshot["status"], providerConfigured: b
 
 function getHelarcApi() {
   return typeof window === "undefined" ? null : window.helarc;
+}
+
+function formatCommand(command: string | null, args: string[]): string {
+  if (!command) {
+    return "unknown command";
+  }
+
+  return [command, ...args].join(" ");
 }

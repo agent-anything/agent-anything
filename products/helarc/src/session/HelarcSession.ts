@@ -11,12 +11,23 @@ import {
   type RuntimeResult,
   type RuntimeStatus,
 } from "@agent-anything/agent-core";
-import { createCodeAgentFileTools } from "@agent-anything/code-agent";
+import {
+  createCodeAgentFileTools,
+  registerCodeAgentShellTool,
+  type CodeAgentShellLimits,
+} from "@agent-anything/code-agent";
 import {
   CODE_AGENT_LIST_FILES_TOOL,
+  CODE_AGENT_RUN_COMMAND_TOOL,
   CODE_AGENT_READ_FILE_TOOL,
   CODE_AGENT_SEARCH_FILES_TOOL,
 } from "@agent-anything/code-agent";
+import {
+  createHostPermissionService,
+  type HostEventSink,
+  type HostPermissionBridge,
+  type HostSessionId,
+} from "@agent-anything/agent-core/host";
 import { EvidenceBuilder, type Evidence } from "@agent-anything/evidence";
 import type { Provider } from "@agent-anything/providers";
 import type { ArtifactRef, ISODateTimeString, Metadata } from "@agent-anything/shared";
@@ -70,18 +81,50 @@ export interface RunHelarcReadOnlySessionInput {
   now?: () => ISODateTimeString;
 }
 
+export interface RunHelarcSessionInput extends RunHelarcReadOnlySessionInput {
+  sessionId?: HostSessionId;
+  enableShell?: boolean;
+  shellLimits?: Partial<CodeAgentShellLimits>;
+  permissionBridge?: HostPermissionBridge;
+  hostEventSink?: HostEventSink;
+  onActivity?: (item: HelarcActivityItem, event: RuntimeEvent) => void;
+}
+
 export async function runHelarcReadOnlySession(
   input: RunHelarcReadOnlySessionInput,
+): Promise<HelarcSessionResult> {
+  return runHelarcSession({
+    ...input,
+    enableShell: false,
+  });
+}
+
+export async function runHelarcSession(
+  input: RunHelarcSessionInput,
 ): Promise<HelarcSessionResult> {
   const eventEmitter = new RuntimeEventEmitter();
   const recorder = new RuntimeEventRecorder();
   recorder.attachTo(eventEmitter);
+  eventEmitter.subscribe((event) => {
+    input.onActivity?.(mapRuntimeEventToHelarcActivity(event), event);
+  });
 
-  const registry = createHelarcReadOnlyToolRegistry(input.task);
+  const registryResult = createHelarcToolRegistry(input.task, {
+    enableShell: input.enableShell ?? false,
+    shellLimits: input.shellLimits,
+  });
   const evidenceBuilder = new EvidenceBuilder();
   const toolExecutionBoundary = new ToolExecutionBoundary({
-    toolRegistry: registry,
+    toolRegistry: registryResult.registry,
     evidenceBuilder,
+    permissionService: input.permissionBridge
+      ? createHostPermissionService({
+          sessionId: input.sessionId ?? input.task.id,
+          bridge: input.permissionBridge,
+          eventSink: input.hostEventSink,
+        })
+      : undefined,
+    toolExecutionContextResolver: registryResult.toolExecutionContextResolver,
   });
   const planner = new ProviderBackedPlanner({
     provider: input.provider,
@@ -96,7 +139,7 @@ export async function runHelarcReadOnlySession(
   });
   const runtime = new AgentRuntime(
     {
-      toolRegistry: registry,
+      toolRegistry: registryResult.registry,
       evidenceBuilder,
       storage: input.storage ?? new InMemoryHelarcStorage(input.now),
       planToolCalls: () => [],
@@ -109,10 +152,10 @@ export async function runHelarcReadOnlySession(
         maxConsecutiveFailures: 1,
         maxIterations: 5,
       },
-      permissionMode: "trusted",
+      permissionMode: input.enableShell ? "ask" : "trusted",
       executionAccess: "workspace",
       outputSpec: { format: "json", metadata: { product: "helarc" } },
-      metadata: { product: "helarc", sessionMode: "read-only" },
+      metadata: { product: "helarc", sessionMode: input.enableShell ? "shell" : "read-only" },
     },
   );
 
@@ -125,6 +168,32 @@ export async function runHelarcReadOnlySession(
     runtimeResult,
     output,
     activity,
+  };
+}
+
+export function createHelarcToolRegistry(
+  task: AgentTask,
+  input: {
+    enableShell?: boolean;
+    shellLimits?: Partial<CodeAgentShellLimits>;
+  } = {},
+): {
+  registry: ToolRegistry;
+  toolExecutionContextResolver?: ReturnType<typeof registerCodeAgentShellTool>;
+} {
+  const registry = createHelarcReadOnlyToolRegistry(task);
+  if (!input.enableShell) {
+    return { registry };
+  }
+
+  const toolExecutionContextResolver = registerCodeAgentShellTool(registry, {
+    workspaceScope: task.workspaceScope,
+    limits: input.shellLimits,
+  });
+
+  return {
+    registry,
+    toolExecutionContextResolver,
   };
 }
 
@@ -215,6 +284,14 @@ function titleForEvent(name: string, payload: Metadata): string {
 }
 
 function detailForEvent(name: string, payload: Metadata): string | null {
+  if (
+    (name === "tool.started" || name === "tool.finished")
+    && payload.toolName === CODE_AGENT_RUN_COMMAND_TOOL
+    && typeof payload.command === "string"
+  ) {
+    return payload.command;
+  }
+
   if (name === "tool.started" || name === "tool.finished") {
     return typeof payload.toolCallId === "string" ? payload.toolCallId : null;
   }

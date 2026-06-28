@@ -1,4 +1,5 @@
 import type { PlannerInput, PlanStep } from "@agent-anything/agent-core";
+import { CODE_AGENT_RUN_COMMAND_TOOL } from "@agent-anything/code-agent";
 import type { ProviderRequest, ProviderResponse } from "@agent-anything/providers";
 import type { ToolCall } from "@agent-anything/tools";
 import type { HelarcTaskInput } from "../task/index.js";
@@ -120,7 +121,7 @@ function structuredOutputToPlanStep(
         id: output.toolCallId ?? id,
         toolName: output.toolName,
         input: output.input,
-        risk: "safe",
+        risk: output.toolName === CODE_AGENT_RUN_COMMAND_TOOL ? "risky" : "safe",
         metadata: {},
       } satisfies ToolCall,
     };
