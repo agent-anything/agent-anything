@@ -217,7 +217,7 @@ function parseChangeIntent(value: unknown): HelarcChangeIntent {
   }
 
   const path = readRequiredString(value, "path", "planner_change_path_required");
-  const content = readOptionalString(value, "content");
+  const content = readRawOptionalString(value, "content");
   if ((operation === "create" || operation === "update") && content === undefined) {
     throw new HelarcPlannerParseError("planner_change_content_required", "Create and update changes require content.");
   }
@@ -235,6 +235,11 @@ function readString(value: Record<string, unknown>, key: string): string | undef
 function readOptionalString(value: Record<string, unknown>, key: string): string | undefined {
   const field = readString(value, key)?.trim();
   return field && field.length > 0 ? field : undefined;
+}
+
+function readRawOptionalString(value: Record<string, unknown>, key: string): string | undefined {
+  const field = value[key];
+  return typeof field === "string" ? field : undefined;
 }
 
 function readRequiredString(

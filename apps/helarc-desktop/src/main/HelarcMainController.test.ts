@@ -1,5 +1,5 @@
 import type { Provider, ProviderRequest, ProviderResponse } from "@agent-anything/providers";
-import { access, mkdtemp } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -174,6 +174,72 @@ describe("HelarcMainController", () => {
       error: { code: "permission_not_pending" },
     });
     await expect(access(markerPath)).rejects.toThrow();
+  });
+
+  it("correlates patch review decisions and applies accepted patches", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-patch-"));
+    await mkdir(join(workspaceRoot, "src"));
+    const targetPath = join(workspaceRoot, "src", "created.txt");
+    const controller = new HelarcMainController({
+      provider: new ScriptedProvider([
+        {
+          action: "propose",
+          summary: "Create a file.",
+          change: {
+            operation: "create",
+            path: "src/created.txt",
+            content: "created\n",
+          },
+        },
+      ]),
+    });
+    controller.selectWorkspacePath(workspaceRoot);
+
+    const waiting = waitForStatus(controller, "waiting_for_patch_review");
+    const completed = waitForStatus(controller, "completed");
+    const result = controller.startSession({ taskText: "Create file" });
+
+    expect(result).toMatchObject({ ok: true, snapshot: { status: "running" } });
+    const waitingSnapshot = await waiting;
+    const patchId = waitingSnapshot.pendingPatchReview?.patchId ?? "";
+    expect(waitingSnapshot.pendingPatchReview).toMatchObject({
+      operation: "create",
+      path: "src/created.txt",
+      proposedContent: "created\n",
+    });
+
+    expect(controller.resolvePatchReview({
+      patchId: "stale-patch",
+      decision: "accepted",
+    })).toMatchObject({
+      ok: false,
+      error: { code: "patch_review_mismatch" },
+    });
+
+    expect(controller.resolvePatchReview({
+      patchId,
+      decision: "accepted",
+      reason: "Apply it.",
+    })).toMatchObject({ ok: true, snapshot: { status: "applying_patch" } });
+
+    const completedSnapshot = await completed;
+    expect(completedSnapshot).toMatchObject({
+      status: "completed",
+      pendingPatchReview: null,
+      output: {
+        patchStatus: "applied",
+        appliedPath: "src/created.txt",
+        safeErrors: [],
+      },
+    });
+    await expect(readFile(targetPath, "utf8")).resolves.toBe("created\n");
+    expect(controller.resolvePatchReview({
+      patchId,
+      decision: "accepted",
+    })).toMatchObject({
+      ok: false,
+      error: { code: "patch_review_not_pending" },
+    });
   });
 
   it("rejects relative workspace paths", () => {

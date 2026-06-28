@@ -1,5 +1,9 @@
 export type {
   HelarcActivityItem,
+  HelarcPatchReviewBridge,
+  HelarcPatchReviewDecision,
+  HelarcPatchReviewViewModel,
+  HelarcPatchStatus,
   HelarcSessionOutput,
   HelarcSessionResult,
   HelarcSessionStatus,

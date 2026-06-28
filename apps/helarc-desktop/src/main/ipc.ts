@@ -4,6 +4,7 @@ import type { HelarcMainController } from "./HelarcMainController.js";
 export const HELARC_IPC_CHANNELS = {
   chooseWorkspace: "helarc:choose-workspace",
   getSnapshot: "helarc:get-snapshot",
+  resolvePatchReview: "helarc:resolve-patch-review",
   resolvePermission: "helarc:resolve-permission",
   snapshotUpdated: "helarc:snapshot-updated",
   startSession: "helarc:start-session",
@@ -45,6 +46,10 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   ipcMain.handle(HELARC_IPC_CHANNELS.resolvePermission, (_event, payload: unknown) => {
     return input.controller.resolvePermission(readPermissionDecision(payload));
   });
+
+  ipcMain.handle(HELARC_IPC_CHANNELS.resolvePatchReview, (_event, payload: unknown) => {
+    return input.controller.resolvePatchReview(readPatchReviewDecision(payload));
+  });
 }
 
 function readTaskText(payload: unknown): string {
@@ -64,6 +69,20 @@ function readPermissionDecision(payload: unknown): { requestId: string; decision
   return {
     requestId: typeof payload.requestId === "string" ? payload.requestId : "",
     decision: payload.decision === "granted" ? "granted" : "denied",
+  };
+}
+
+function readPatchReviewDecision(
+  payload: unknown,
+): { patchId: string; decision: "accepted" | "rejected"; reason?: string } {
+  if (!isRecord(payload)) {
+    return { patchId: "", decision: "rejected", reason: "Rejected by invalid request." };
+  }
+
+  return {
+    patchId: typeof payload.patchId === "string" ? payload.patchId : "",
+    decision: payload.decision === "accepted" ? "accepted" : "rejected",
+    reason: typeof payload.reason === "string" ? payload.reason : undefined,
   };
 }
 

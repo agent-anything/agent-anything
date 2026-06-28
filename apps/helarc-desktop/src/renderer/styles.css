@@ -302,7 +302,8 @@ h2 {
   color: #8a9499;
 }
 
-.permission-panel {
+.permission-panel,
+.patch-panel {
   display: grid;
   width: min(100%, 360px);
   gap: 10px;
@@ -310,12 +311,14 @@ h2 {
   color: #33414a;
 }
 
-.permission-panel strong {
+.permission-panel strong,
+.patch-panel strong {
   color: #26343e;
   font-size: 14px;
 }
 
-.permission-panel span {
+.permission-panel span,
+.patch-panel span {
   font-size: 12px;
   line-height: 1.45;
 }
@@ -356,6 +359,35 @@ h2 {
 
 .permission-actions {
   justify-content: flex-end;
+}
+
+.patch-preview {
+  display: grid;
+  width: 100%;
+  gap: 8px;
+}
+
+.patch-preview section {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.patch-preview pre {
+  width: 100%;
+  max-height: 132px;
+  margin: 0;
+  padding: 9px;
+  overflow: auto;
+  color: #1f2933;
+  background: #f8faf8;
+  border: 1px solid #d8ddda;
+  border-radius: 6px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .primary-button.compact {

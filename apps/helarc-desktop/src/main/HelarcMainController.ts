@@ -3,6 +3,8 @@ import {
   createHelarcTask,
   runHelarcSession,
   type HelarcActivityItem,
+  type HelarcPatchReviewDecision,
+  type HelarcPatchReviewViewModel,
   type HelarcSessionOutput,
   type HelarcTaskInputError,
 } from "@agent-anything/helarc";
@@ -31,7 +33,10 @@ export type HelarcMainSnapshotStatus =
   | "workspace_selected"
   | "running"
   | "waiting_for_permission"
+  | "waiting_for_patch_review"
+  | "applying_patch"
   | "completed"
+  | "rejected"
   | "failed"
   | "blocked"
   | "cancelled";
@@ -53,6 +58,7 @@ export interface HelarcMainSnapshot {
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   pendingPermission: HelarcPermissionPromptSnapshot | null;
+  pendingPatchReview: HelarcPatchReviewViewModel | null;
   activity: HelarcActivityItem[];
   output: HelarcSessionOutput | null;
   error: HelarcMainError | null;
@@ -64,6 +70,8 @@ export type HelarcMainErrorCode =
   | "session_already_running"
   | "permission_not_pending"
   | "permission_request_mismatch"
+  | "patch_review_not_pending"
+  | "patch_review_mismatch"
   | "workspace_not_selected"
   | "workspace_path_required"
   | "workspace_path_not_absolute"
@@ -91,6 +99,16 @@ export type ResolveHelarcPermissionResult =
   | { ok: true; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
+export interface ResolveHelarcPatchReviewInput {
+  patchId: string;
+  decision: "accepted" | "rejected";
+  reason?: string;
+}
+
+export type ResolveHelarcPatchReviewResult =
+  | { ok: true; snapshot: HelarcMainSnapshot }
+  | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
+
 export interface HelarcMainControllerInput {
   provider?: Provider | null;
   providerConfigError?: HelarcProviderConfigError | null;
@@ -100,6 +118,7 @@ export class HelarcMainController {
   private selectedWorkspace: HelarcWorkspaceSnapshot | null = null;
   private acceptedTask: HelarcAcceptedTaskSnapshot | null = null;
   private pendingPermission: PendingPermission | null = null;
+  private pendingPatchReview: PendingPatchReview | null = null;
   private activity: HelarcActivityItem[] = [];
   private output: HelarcSessionOutput | null = null;
   private lastError: HelarcMainError | null = null;
@@ -129,6 +148,7 @@ export class HelarcMainController {
       provider: this.provider,
       acceptedTask: this.acceptedTask,
       pendingPermission: this.pendingPermission?.prompt ?? null,
+      pendingPatchReview: this.pendingPatchReview?.review ?? null,
       activity: this.activity,
       output: this.output,
       error: this.lastError,
@@ -160,6 +180,7 @@ export class HelarcMainController {
     this.status = "workspace_selected";
     this.acceptedTask = null;
     this.pendingPermission = null;
+    this.pendingPatchReview = null;
     this.activity = [];
     this.output = null;
     this.lastError = null;
@@ -182,7 +203,12 @@ export class HelarcMainController {
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
-    if (this.status === "running" || this.status === "waiting_for_permission") {
+    if (
+      this.status === "running" ||
+      this.status === "waiting_for_permission" ||
+      this.status === "waiting_for_patch_review" ||
+      this.status === "applying_patch"
+    ) {
       const error = this.setError("session_already_running", "A Helarc session is already running.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
@@ -211,6 +237,7 @@ export class HelarcMainController {
     };
     this.status = "running";
     this.pendingPermission = null;
+    this.pendingPatchReview = null;
     this.activity = [];
     this.output = null;
     this.lastError = null;
@@ -247,6 +274,32 @@ export class HelarcMainController {
     return { ok: true, snapshot: this.publishSnapshot() };
   }
 
+  resolvePatchReview(input: ResolveHelarcPatchReviewInput): ResolveHelarcPatchReviewResult {
+    if (!this.pendingPatchReview) {
+      const error = this.setError("patch_review_not_pending", "No patch review is pending.");
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+
+    if (this.pendingPatchReview.review.patchId !== input.patchId) {
+      const error = this.setError("patch_review_mismatch", "Patch review is stale.");
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+
+    const rejectReason = input.reason?.trim() ?? "";
+    if (input.decision === "rejected" && rejectReason.length === 0) {
+      const error = this.setError("patch_review_not_pending", "Rejected patch reason is required.");
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+
+    const pending = this.pendingPatchReview;
+    this.pendingPatchReview = null;
+    this.status = input.decision === "accepted" ? "applying_patch" : "running";
+    pending.resolve(input.decision === "accepted"
+      ? { decision: "accepted", reason: input.reason }
+      : { decision: "rejected", reason: rejectReason });
+    return { ok: true, snapshot: this.publishSnapshot() };
+  }
+
   private fail(code: HelarcMainErrorCode, message: string): HelarcMainSnapshot {
     this.setError(code, message);
     return this.getSnapshot();
@@ -267,6 +320,7 @@ export class HelarcMainController {
         provider: this.providerInstance as Provider,
         enableShell: true,
         permissionBridge: this.createPermissionBridge(),
+        patchReviewBridge: this.createPatchReviewBridge(),
         onActivity: (item) => {
           this.activity = [...this.activity, item];
           this.publishSnapshot();
@@ -277,6 +331,7 @@ export class HelarcMainController {
       this.activity = sessionResult.activity;
       this.output = sessionResult.output;
       this.pendingPermission = null;
+      this.pendingPatchReview = null;
 
       if (sessionResult.status === "failed") {
         const firstError = sessionResult.output.safeErrors[0] ?? {
@@ -291,6 +346,7 @@ export class HelarcMainController {
     } catch (error) {
       this.status = "failed";
       this.pendingPermission = null;
+      this.pendingPatchReview = null;
       this.lastError = {
         code: "provider_not_available",
         message: error instanceof Error ? error.message : "Helarc session failed.",
@@ -319,6 +375,22 @@ export class HelarcMainController {
     });
   }
 
+  private createPatchReviewBridge() {
+    return async (review: HelarcPatchReviewViewModel) => new Promise<HelarcPatchReviewDecision>((resolve) => {
+      if (this.pendingPatchReview) {
+        resolve({
+          decision: "rejected",
+          reason: "Another patch review is already pending.",
+        });
+        return;
+      }
+
+      this.pendingPatchReview = { review, resolve };
+      this.status = "waiting_for_patch_review";
+      this.publishSnapshot();
+    });
+  }
+
   private publishSnapshot(): HelarcMainSnapshot {
     const snapshot = this.getSnapshot();
     for (const subscriber of this.snapshotSubscribers) {
@@ -331,6 +403,11 @@ export class HelarcMainController {
 interface PendingPermission {
   prompt: HelarcPermissionPromptSnapshot;
   resolve: (result: { status: "granted" | "denied" | "unavailable"; reason: string }) => void;
+}
+
+interface PendingPatchReview {
+  review: HelarcPatchReviewViewModel;
+  resolve: (decision: HelarcPatchReviewDecision) => void;
 }
 
 function createPermissionPromptSnapshot(request: PermissionRequest): HelarcPermissionPromptSnapshot {

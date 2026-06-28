@@ -1,7 +1,7 @@
 import type { PlannerInput } from "@agent-anything/agent-core";
 import type { HostPermissionBridge } from "@agent-anything/agent-core/host";
 import type { Provider, ProviderRequest, ProviderResponse } from "@agent-anything/providers";
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
@@ -149,6 +149,120 @@ describe("Helarc read-only session", () => {
     expect(result.output.agentSummary).toBe("Shell command completed.");
     await expect(access(markerPath)).resolves.toBeUndefined();
     expect(provider.lastPlannerInputContexts).toEqual([0, 1]);
+  });
+
+  it("materializes and applies an accepted proposed patch", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-patch-accepted-"));
+    await mkdir(join(workspaceRoot, "src"));
+    const provider = new ScriptedProvider([
+      {
+        action: "propose",
+        summary: "Create a new file.",
+        change: {
+          operation: "create",
+          path: "src/created.txt",
+          content: "created\n",
+        },
+      },
+    ]);
+
+    const result = await runHelarcSession({
+      task: createTask(workspaceRoot),
+      provider,
+      patchReviewBridge: async (review) => {
+        expect(review).toMatchObject({
+          operation: "create",
+          path: "src/created.txt",
+          originalContent: null,
+          proposedContent: "created\n",
+          decisionState: "pending",
+        });
+        return { decision: "accepted", reason: "Looks good." };
+      },
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.output).toMatchObject({
+      patchStatus: "applied",
+      appliedPath: "src/created.txt",
+      safeErrors: [],
+    });
+    await expect(readFile(join(workspaceRoot, "src", "created.txt"), "utf8"))
+      .resolves.toBe("created\n");
+  });
+
+  it("keeps files unchanged when a proposed patch is rejected", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-patch-rejected-"));
+    await mkdir(join(workspaceRoot, "src"));
+    await writeFile(join(workspaceRoot, "src", "existing.txt"), "before\n");
+    const provider = new ScriptedProvider([
+      {
+        action: "propose",
+        summary: "Update the file.",
+        change: {
+          operation: "update",
+          path: "src/existing.txt",
+          content: "after\n",
+        },
+      },
+    ]);
+
+    const result = await runHelarcSession({
+      task: createTask(workspaceRoot),
+      provider,
+      patchReviewBridge: async (review) => {
+        expect(review).toMatchObject({
+          operation: "update",
+          originalContent: "before\n",
+          proposedContent: "after\n",
+        });
+        return { decision: "rejected", reason: "Not this change." };
+      },
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.output).toMatchObject({
+      patchStatus: "rejected",
+      appliedPath: null,
+      safeErrors: [],
+    });
+    await expect(readFile(join(workspaceRoot, "src", "existing.txt"), "utf8"))
+      .resolves.toBe("before\n");
+  });
+
+  it("reports a stale patch failure when content changes after review", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-patch-stale-"));
+    await mkdir(join(workspaceRoot, "src"));
+    const targetPath = join(workspaceRoot, "src", "existing.txt");
+    await writeFile(targetPath, "before\n");
+    const provider = new ScriptedProvider([
+      {
+        action: "propose",
+        summary: "Update the file.",
+        change: {
+          operation: "update",
+          path: "src/existing.txt",
+          content: "after\n",
+        },
+      },
+    ]);
+
+    const result = await runHelarcSession({
+      task: createTask(workspaceRoot),
+      provider,
+      patchReviewBridge: async () => {
+        await writeFile(targetPath, "changed\n");
+        return { decision: "accepted" };
+      },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.output).toMatchObject({
+      patchStatus: "failed",
+      appliedPath: null,
+      safeErrors: [{ code: "patch_stale" }],
+    });
+    await expect(readFile(targetPath, "utf8")).resolves.toBe("changed\n");
   });
 });
 

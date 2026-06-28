@@ -25,6 +25,7 @@ export {
   applyAcceptedPatch,
   createPatchProposal,
   defaultPatchWorkflowLimits,
+  materializePatchReview,
   rejectPatch,
 } from "./PatchWorkflow.js";
 export type {
@@ -32,6 +33,8 @@ export type {
   ApplyAcceptedPatchInput,
   CreatePatchProposalInput,
   CreatePatchProposalOptions,
+  MaterializedPatchReview,
+  MaterializePatchReviewInput,
   PatchProposalChange,
   PatchWorkflowLimits,
   RejectPatchInput,

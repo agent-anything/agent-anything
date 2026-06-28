@@ -72,6 +72,7 @@ export {
   applyAcceptedPatch,
   createPatchProposal,
   defaultPatchWorkflowLimits,
+  materializePatchReview,
   PatchWorkflowError,
   rejectPatch,
 } from "./patch/index.js";
@@ -80,6 +81,8 @@ export type {
   ApplyAcceptedPatchInput,
   CreatePatchProposalInput,
   CreatePatchProposalOptions,
+  MaterializedPatchReview,
+  MaterializePatchReviewInput,
   PatchProposalChange,
   PatchWorkflowLimits,
   RejectPatchInput,

@@ -8,6 +8,7 @@ import {
   acceptPatch,
   applyAcceptedPatch,
   createPatchProposal,
+  materializePatchReview,
   PatchWorkflowError,
   rejectPatch,
   type AcceptedPatchStatus,
@@ -87,6 +88,50 @@ describe("PatchWorkflow", () => {
     expect(result.status).toBe("applied");
     await expect(readFile(join(codeRoot, "src", "existing.txt"), "utf8"))
       .resolves.toBe("after\n");
+  });
+
+  it("materializes verified update review content", async () => {
+    const proposed = await propose({
+      kind: "update",
+      path: join("src", "existing.txt"),
+      proposedContent: "after\n",
+    });
+
+    const review = await materializePatchReview({
+      patch: proposed,
+      workspaceScope: createScope(),
+    });
+
+    expect(review).toMatchObject({
+      patchId: "patch-1",
+      rootName: "code",
+      workspaceId: "workspace-code",
+      path: "src/existing.txt",
+      operation: "update",
+      summary: "Test patch",
+      rationale: "Exercise the patch workflow.",
+      originalContent: "before\n",
+      proposedContent: "after\n",
+      originalContentBytes: 7,
+      proposedContentBytes: 6,
+    });
+  });
+
+  it("rejects stale review materialization", async () => {
+    const proposed = await propose({
+      kind: "update",
+      path: join("src", "existing.txt"),
+      proposedContent: "after\n",
+    });
+    await writeFile(join(codeRoot, "src", "existing.txt"), "changed\n");
+
+    await expect(materializePatchReview({
+      patch: proposed,
+      workspaceScope: createScope(),
+    })).rejects.toMatchObject({
+      name: "PatchWorkflowError",
+      code: "patch_stale",
+    });
   });
 
   it("applies an accepted delete patch", async () => {

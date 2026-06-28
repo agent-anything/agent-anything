@@ -16,6 +16,7 @@ const initialSnapshot: HelarcMainSnapshot = {
   provider: { configured: true, error: null },
   acceptedTask: null,
   pendingPermission: null,
+  pendingPatchReview: null,
   activity: [],
   output: null,
   error: null,
@@ -44,7 +45,9 @@ export function App() {
       && taskText.trim().length > 0
       && !isBusy
       && snapshot.status !== "running"
-      && snapshot.status !== "waiting_for_permission",
+      && snapshot.status !== "waiting_for_permission"
+      && snapshot.status !== "waiting_for_patch_review"
+      && snapshot.status !== "applying_patch"
     ),
     [isBusy, snapshot.provider.configured, snapshot.status, snapshot.workspace, taskText],
   );
@@ -94,6 +97,26 @@ export function App() {
       const result = await api.resolvePermission({
         requestId: pendingPermission.requestId,
         decision,
+      });
+      setSnapshot(result.snapshot);
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function resolvePatchReview(decision: "accepted" | "rejected") {
+    const api = getHelarcApi();
+    const pendingPatchReview = snapshot.pendingPatchReview;
+    if (!api || !pendingPatchReview) {
+      return;
+    }
+
+    setIsBusy(true);
+    try {
+      const result = await api.resolvePatchReview({
+        patchId: pendingPatchReview.patchId,
+        decision,
+        reason: decision === "accepted" ? "Accepted from Helarc desktop." : "Rejected from Helarc desktop.",
       });
       setSnapshot(result.snapshot);
     } finally {
@@ -199,6 +222,40 @@ export function App() {
                     disabled={isBusy}
                   >
                     Approve
+                  </button>
+                </div>
+              </div>
+            ) : snapshot.pendingPatchReview ? (
+              <div className="patch-panel">
+                <FileCode2 size={24} aria-hidden="true" />
+                <strong>{snapshot.pendingPatchReview.summary}</strong>
+                <span>{snapshot.pendingPatchReview.operation} · {snapshot.pendingPatchReview.path}</span>
+                <div className="patch-preview">
+                  <section>
+                    <span>Original</span>
+                    <pre>{snapshot.pendingPatchReview.originalContent ?? ""}</pre>
+                  </section>
+                  <section>
+                    <span>Proposed</span>
+                    <pre>{snapshot.pendingPatchReview.proposedContent ?? ""}</pre>
+                  </section>
+                </div>
+                <div className="permission-actions">
+                  <button
+                    className="secondary-button danger"
+                    type="button"
+                    onClick={() => void resolvePatchReview("rejected")}
+                    disabled={isBusy}
+                  >
+                    Reject
+                  </button>
+                  <button
+                    className="primary-button compact"
+                    type="button"
+                    onClick={() => void resolvePatchReview("accepted")}
+                    disabled={isBusy}
+                  >
+                    Apply
                   </button>
                 </div>
               </div>

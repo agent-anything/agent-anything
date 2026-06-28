@@ -34,6 +34,10 @@ export {
 } from "./planner/index.js";
 export type {
   HelarcActivityItem,
+  HelarcPatchReviewBridge,
+  HelarcPatchReviewDecision,
+  HelarcPatchReviewViewModel,
+  HelarcPatchStatus,
   HelarcSessionOutput,
   HelarcSessionResult,
   HelarcSessionStatus,

@@ -23,7 +23,10 @@ export type HelarcMainSnapshotStatus =
   | "workspace_selected"
   | "running"
   | "waiting_for_permission"
+  | "waiting_for_patch_review"
+  | "applying_patch"
   | "completed"
+  | "rejected"
   | "failed"
   | "blocked"
   | "cancelled";
@@ -37,6 +40,21 @@ export interface HelarcPermissionPromptSnapshot {
   args: string[];
   cwd: string | null;
   rootName: string | null;
+}
+
+export interface HelarcPatchReviewViewModel {
+  patchId: string;
+  rootName: string;
+  workspaceId: string;
+  path: string;
+  operation: "create" | "update" | "delete";
+  summary: string;
+  rationale: string;
+  originalContent: string | null;
+  proposedContent: string | null;
+  originalContentBytes: number | null;
+  proposedContentBytes: number | null;
+  decisionState: "pending";
 }
 
 export interface HelarcActivityItem {
@@ -54,8 +72,8 @@ export interface HelarcSessionOutput {
   workspaceId: string | null;
   agentSummary: string | null;
   runtimeStatus: string;
-  patchStatus: null;
-  appliedPath: null;
+  patchStatus: "proposed" | "applied" | "rejected" | "failed" | null;
+  appliedPath: string | null;
   safeErrors: Array<{ code: string; message: string }>;
 }
 
@@ -65,6 +83,7 @@ export interface HelarcMainSnapshot {
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   pendingPermission: HelarcPermissionPromptSnapshot | null;
+  pendingPatchReview: HelarcPatchReviewViewModel | null;
   activity: HelarcActivityItem[];
   output: HelarcSessionOutput | null;
   error: HelarcMainError | null;
@@ -87,6 +106,16 @@ export type HelarcResolvePermissionResult =
   | { ok: true; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
+export interface HelarcResolvePatchReviewInput {
+  patchId: string;
+  decision: "accepted" | "rejected";
+  reason?: string;
+}
+
+export type HelarcResolvePatchReviewResult =
+  | { ok: true; snapshot: HelarcMainSnapshot }
+  | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
+
 export interface HelarcDesktopApi {
   readonly bridgeVersion: 1;
   readonly productId: "helarc";
@@ -94,5 +123,6 @@ export interface HelarcDesktopApi {
   getSnapshot(): Promise<HelarcMainSnapshot>;
   startSession(input: HelarcStartSessionInput): Promise<HelarcStartSessionResult>;
   resolvePermission(input: HelarcResolvePermissionInput): Promise<HelarcResolvePermissionResult>;
+  resolvePatchReview(input: HelarcResolvePatchReviewInput): Promise<HelarcResolvePatchReviewResult>;
   subscribeSnapshot(listener: (snapshot: HelarcMainSnapshot) => void): () => void;
 }

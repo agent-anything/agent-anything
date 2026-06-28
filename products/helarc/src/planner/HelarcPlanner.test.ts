@@ -64,7 +64,7 @@ describe("Helarc planner", () => {
       change: {
         operation: "update",
         path: "README.md",
-        content: "# Updated",
+        content: "# Updated\n",
       },
     })), createPlannerInput());
 
@@ -76,7 +76,7 @@ describe("Helarc planner", () => {
         change: {
           operation: "update",
           path: "README.md",
-          content: "# Updated",
+          content: "# Updated\n",
         },
       },
     });

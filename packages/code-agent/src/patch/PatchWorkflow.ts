@@ -76,6 +76,27 @@ export interface ApplyAcceptedPatchInput {
   now?: () => ISODateTimeString;
 }
 
+export interface MaterializePatchReviewInput {
+  patch: ProposedPatchStatus;
+  workspaceScope: TaskWorkspaceScope | undefined;
+  limits?: Partial<PatchWorkflowLimits>;
+}
+
+export interface MaterializedPatchReview {
+  patchId: PatchId;
+  rootName: string;
+  workspaceId: string;
+  path: string;
+  operation: PatchOperation["kind"];
+  summary: string;
+  rationale: string;
+  originalContent: string | null;
+  proposedContent: string | null;
+  originalContentBytes: number | null;
+  proposedContentBytes: number | null;
+  metadata: Metadata;
+}
+
 export async function createPatchProposal(
   input: CreatePatchProposalInput,
   options: CreatePatchProposalOptions = {},
@@ -188,6 +209,55 @@ export async function applyAcceptedPatch(
       },
     };
   }
+}
+
+export async function materializePatchReview(
+  input: MaterializePatchReviewInput,
+): Promise<MaterializedPatchReview> {
+  assertProposedPatch(input.patch);
+  const limits = resolveLimits(input.limits);
+  const { proposal } = input.patch;
+  const { operation } = proposal;
+  let originalContent: string | null = null;
+  let originalContentBytes: number | null = null;
+
+  if (operation.kind === "update" || operation.kind === "delete") {
+    const current = await readExistingPatchTarget(
+      input.workspaceScope,
+      proposal.rootName,
+      operation.path,
+      limits,
+      "apply",
+    );
+    assertWorkspaceIdentity(proposal, current.target.resolved.workspaceId);
+    assertContentReference(operation.originalContent, current.reference);
+    originalContent = current.content;
+    originalContentBytes = current.reference.byteLength;
+  }
+
+  const proposedContent = operation.kind === "delete"
+    ? null
+    : operation.proposedContent;
+  if (proposedContent !== null) {
+    assertContentLimit(proposedContent, limits);
+  }
+
+  return {
+    patchId: proposal.id,
+    rootName: proposal.rootName,
+    workspaceId: proposal.workspaceId,
+    path: operation.path,
+    operation: operation.kind,
+    summary: proposal.summary,
+    rationale: proposal.rationale,
+    originalContent,
+    proposedContent,
+    originalContentBytes,
+    proposedContentBytes: proposedContent === null
+      ? null
+      : Buffer.byteLength(proposedContent, "utf8"),
+    metadata: proposal.metadata,
+  };
 }
 
 async function createOperation(
@@ -319,6 +389,7 @@ async function readExistingPatchTarget(
 ): Promise<{
   target: ExistingWorkspaceTarget;
   reference: PatchContentReference;
+  content: string;
 }> {
   const target = await resolveExistingTarget({
     workspaceScope,
@@ -342,7 +413,8 @@ async function readExistingPatchTarget(
   if (bytes.byteLength > limits.maxContentBytes) {
     throw contentLimitError(bytes.byteLength, limits.maxContentBytes);
   }
-  if (decodeUtf8(bytes) === null) {
+  const content = decodeUtf8(bytes);
+  if (content === null) {
     throw new PatchWorkflowError(
       stage === "apply" ? "patch_stale" : "patch_state_invalid",
       stage === "apply"
@@ -352,7 +424,7 @@ async function readExistingPatchTarget(
     );
   }
 
-  return { target, reference: createContentReference(bytes) };
+  return { target, reference: createContentReference(bytes), content };
 }
 
 function createContentReference(bytes: Uint8Array): PatchContentReference {

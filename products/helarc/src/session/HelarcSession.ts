@@ -12,9 +12,18 @@ import {
   type RuntimeStatus,
 } from "@agent-anything/agent-core";
 import {
+  acceptPatch,
+  applyAcceptedPatch,
   createCodeAgentFileTools,
+  createPatchProposal,
+  materializePatchReview,
+  PatchWorkflowError,
+  rejectPatch,
   registerCodeAgentShellTool,
   type CodeAgentShellLimits,
+  type MaterializedPatchReview,
+  type PatchProposalChange,
+  type ProposedPatchStatus,
 } from "@agent-anything/code-agent";
 import {
   CODE_AGENT_LIST_FILES_TOOL,
@@ -37,15 +46,19 @@ import {
   buildHelarcProviderRequest,
   parseHelarcProviderResponse,
   type HelarcAgentOutput,
+  type HelarcChangeIntent,
 } from "../planner/index.js";
 import type { HelarcTaskInput } from "../task/index.js";
 
 export type HelarcSessionStatus =
   | "running"
   | "completed"
+  | "rejected"
   | "failed"
   | "blocked"
   | "cancelled";
+
+export type HelarcPatchStatus = "proposed" | "applied" | "rejected" | "failed";
 
 export interface HelarcActivityItem {
   id: string;
@@ -62,8 +75,8 @@ export interface HelarcSessionOutput {
   workspaceId: string | null;
   agentSummary: string | null;
   runtimeStatus: RuntimeStatus;
-  patchStatus: null;
-  appliedPath: null;
+  patchStatus: HelarcPatchStatus | null;
+  appliedPath: string | null;
   safeErrors: Array<{ code: string; message: string }>;
 }
 
@@ -87,8 +100,32 @@ export interface RunHelarcSessionInput extends RunHelarcReadOnlySessionInput {
   shellLimits?: Partial<CodeAgentShellLimits>;
   permissionBridge?: HostPermissionBridge;
   hostEventSink?: HostEventSink;
+  patchReviewBridge?: HelarcPatchReviewBridge;
   onActivity?: (item: HelarcActivityItem, event: RuntimeEvent) => void;
 }
+
+export interface HelarcPatchReviewViewModel {
+  patchId: string;
+  rootName: string;
+  workspaceId: string;
+  path: string;
+  operation: MaterializedPatchReview["operation"];
+  summary: string;
+  rationale: string;
+  originalContent: string | null;
+  proposedContent: string | null;
+  originalContentBytes: number | null;
+  proposedContentBytes: number | null;
+  decisionState: "pending";
+}
+
+export type HelarcPatchReviewDecision =
+  | { decision: "accepted"; reason?: string }
+  | { decision: "rejected"; reason: string };
+
+export type HelarcPatchReviewBridge = (
+  review: HelarcPatchReviewViewModel,
+) => Promise<HelarcPatchReviewDecision>;
 
 export async function runHelarcReadOnlySession(
   input: RunHelarcReadOnlySessionInput,
@@ -161,10 +198,11 @@ export async function runHelarcSession(
 
   const runtimeResult = await runtime.run(input.task) as RuntimeResult<HelarcAgentOutput>;
   const activity = recorder.events().map(mapRuntimeEventToHelarcActivity);
-  const output = createSessionOutput(input.task, runtimeResult);
+  const patchOutcome = await resolvePatchOutcome(input, runtimeResult);
+  const output = createSessionOutput(input.task, runtimeResult, patchOutcome);
 
   return {
-    status: mapRuntimeStatus(runtimeResult.status),
+    status: patchOutcome?.sessionStatus ?? mapRuntimeStatus(runtimeResult.status),
     runtimeResult,
     output,
     activity,
@@ -231,22 +269,157 @@ export function mapRuntimeEventToHelarcActivity(
   };
 }
 
+interface HelarcPatchOutcome {
+  sessionStatus: HelarcSessionStatus;
+  patchStatus: HelarcPatchStatus;
+  appliedPath: string | null;
+  errors: Array<{ code: string; message: string }>;
+}
+
+async function resolvePatchOutcome(
+  input: RunHelarcSessionInput,
+  runtimeResult: RuntimeResult<HelarcAgentOutput>,
+): Promise<HelarcPatchOutcome | null> {
+  if (runtimeResult.status !== "succeeded" || runtimeResult.output?.kind !== "propose") {
+    return null;
+  }
+
+  if (!input.patchReviewBridge) {
+    return {
+      sessionStatus: "blocked",
+      patchStatus: "proposed",
+      appliedPath: null,
+      errors: [{
+        code: "patch_review_unavailable",
+        message: "Patch review bridge is unavailable.",
+      }],
+    };
+  }
+
+  try {
+    const proposed = await createHelarcPatchProposal(input, runtimeResult.output);
+    const review = toHelarcPatchReviewViewModel(await materializePatchReview({
+      patch: proposed,
+      workspaceScope: input.task.workspaceScope,
+    }));
+    const decision = await input.patchReviewBridge(review);
+
+    if (decision.decision === "rejected") {
+      rejectPatch(proposed, {
+        reason: decision.reason,
+        now: input.now,
+      });
+      return {
+        sessionStatus: "rejected",
+        patchStatus: "rejected",
+        appliedPath: null,
+        errors: [],
+      };
+    }
+
+    const accepted = acceptPatch(proposed, {
+      reason: decision.reason,
+      now: input.now,
+    });
+    const applied = await applyAcceptedPatch({
+      patch: accepted,
+      workspaceScope: input.task.workspaceScope,
+      now: input.now,
+    });
+
+    if (applied.status === "failed") {
+      return {
+        sessionStatus: "failed",
+        patchStatus: "failed",
+        appliedPath: null,
+        errors: [{ code: applied.result.code, message: applied.result.message }],
+      };
+    }
+
+    return {
+      sessionStatus: "completed",
+      patchStatus: "applied",
+      appliedPath: applied.proposal.operation.path,
+      errors: [],
+    };
+  } catch (error) {
+    return {
+      sessionStatus: "failed",
+      patchStatus: "failed",
+      appliedPath: null,
+      errors: [{
+        code: error instanceof PatchWorkflowError ? error.code : "patch_apply_failed",
+        message: error instanceof Error ? error.message : "Patch workflow failed.",
+      }],
+    };
+  }
+}
+
+function createHelarcPatchProposal(
+  input: RunHelarcSessionInput,
+  output: Extract<HelarcAgentOutput, { kind: "propose" }>,
+): Promise<ProposedPatchStatus> {
+  return createPatchProposal({
+    workspaceScope: input.task.workspaceScope,
+    change: toPatchProposalChange(output.change),
+    summary: output.summary,
+    rationale: output.summary,
+    metadata: { product: "helarc" },
+  }, {
+    now: input.now,
+  });
+}
+
+function toPatchProposalChange(change: HelarcChangeIntent): PatchProposalChange {
+  if (change.operation === "delete") {
+    return { kind: "delete", path: change.path };
+  }
+
+  return {
+    kind: change.operation,
+    path: change.path,
+    proposedContent: change.content ?? "",
+  };
+}
+
+function toHelarcPatchReviewViewModel(
+  review: MaterializedPatchReview,
+): HelarcPatchReviewViewModel {
+  return {
+    patchId: review.patchId,
+    rootName: review.rootName,
+    workspaceId: review.workspaceId,
+    path: review.path,
+    operation: review.operation,
+    summary: review.summary,
+    rationale: review.rationale,
+    originalContent: review.originalContent,
+    proposedContent: review.proposedContent,
+    originalContentBytes: review.originalContentBytes,
+    proposedContentBytes: review.proposedContentBytes,
+    decisionState: "pending",
+  };
+}
+
 function createSessionOutput(
   task: AgentTask,
   runtimeResult: RuntimeResult<HelarcAgentOutput>,
+  patchOutcome: HelarcPatchOutcome | null,
 ): HelarcSessionOutput {
   const agentOutput = runtimeResult.output;
+  const safeErrors: Array<{ code: string; message: string }> =
+    runtimeResult.errors.map((error) => ({
+      code: error.code,
+      message: error.message,
+    }));
   return {
     taskId: task.id,
     workspaceId: task.workspaceScope?.roots[task.workspaceScope.defaultRootName ?? ""]?.id ?? null,
     agentSummary: agentOutput?.summary ?? null,
     runtimeStatus: runtimeResult.status,
-    patchStatus: null,
-    appliedPath: null,
-    safeErrors: runtimeResult.errors.map((error) => ({
-      code: error.code,
-      message: error.message,
-    })),
+    patchStatus: patchOutcome?.patchStatus ?? null,
+    appliedPath: patchOutcome?.appliedPath ?? null,
+    safeErrors: safeErrors.concat(patchOutcome?.errors ?? []),
   };
 }
 
