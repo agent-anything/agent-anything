@@ -216,17 +216,22 @@ describe("PatchWorkflow", () => {
     });
 
     const linkPath = join(codeRoot, "src", "linked.txt");
-    await symlink(join(codeRoot, "src", "existing.txt"), linkPath, "file");
+    const linkCreated = await tryCreateSymlink(
+      join(codeRoot, "src", "existing.txt"),
+      linkPath,
+    );
 
-    await expect(propose({
-      kind: "delete",
-      path: join("src", "linked.txt"),
-    })).rejects.toMatchObject({
-      name: "PatchWorkflowError",
-      code: "patch_path_unsafe",
-    });
-    await expect(readFile(join(codeRoot, "src", "existing.txt"), "utf8"))
-      .resolves.toBe("before\n");
+    if (linkCreated) {
+      await expect(propose({
+        kind: "delete",
+        path: join("src", "linked.txt"),
+      })).rejects.toMatchObject({
+        name: "PatchWorkflowError",
+        code: "patch_path_unsafe",
+      });
+      await expect(readFile(join(codeRoot, "src", "existing.txt"), "utf8"))
+        .resolves.toBe("before\n");
+    }
   });
 
   it("returns invalid-state failures for workspace and decision mismatches", async () => {
@@ -394,4 +399,20 @@ function createWorkspace(id: string, rootRef: string): WorkspaceContext {
 
 function clock(): string {
   return timestamp;
+}
+
+async function tryCreateSymlink(target: string, path: string): Promise<boolean> {
+  try {
+    await symlink(target, path, "file");
+    return true;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "EPERM"
+    ) {
+      return false;
+    }
+    throw error;
+  }
 }

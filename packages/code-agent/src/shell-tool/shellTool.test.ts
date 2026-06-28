@@ -1,4 +1,4 @@
-import { access, mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
+import { access, mkdtemp, mkdir, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -68,8 +68,9 @@ describe("codeAgent.runCommand", () => {
         timedOut: false,
       },
     });
+    const expectedCwd = await realpath(join(codeRoot, "src"));
     expect((result.output as { stdout: string }).stdout)
-      .toBe("hello world|" + join(codeRoot, "src"));
+      .toBe("hello world|" + expectedCwd);
   });
 
   it("returns nonzero exit as a completed command outcome", async () => {
