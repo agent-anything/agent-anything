@@ -19,6 +19,21 @@ export {
   HELARC_WORKSPACE_ROOT_NAME,
 } from "./task/index.js";
 export type {
+  CreateHelarcTaskTemplateInput,
+  CreateHelarcTaskTemplateResult,
+  HelarcTaskTemplate,
+  HelarcTaskTemplateCategory,
+  HelarcTaskTemplateError,
+  HelarcTaskTemplateErrorCode,
+  SelectHelarcTaskTemplateResult,
+} from "./task-template/index.js";
+export {
+  createBuiltInHelarcTaskTemplates,
+  createHelarcTaskTemplate,
+  renderHelarcTaskTemplatePrompt,
+  selectHelarcTaskTemplate,
+} from "./task-template/index.js";
+export type {
   HelarcAgentOutput,
   HelarcChangeIntent,
   HelarcChangeOperationKind,

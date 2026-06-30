@@ -20,6 +20,7 @@ const initialSnapshot: HelarcMainSnapshot = {
   workspace: null,
   workspaceProfiles: [],
   sessionHistory: [],
+  taskTemplates: [],
   provider: {
     configured: true,
     activeProfile: {
@@ -121,6 +122,16 @@ export function App() {
     } finally {
       setIsBusy(false);
     }
+  }
+
+  function applyTaskTemplate(templateId: string) {
+    const template = snapshot.taskTemplates.find((item) => item.id === templateId);
+    if (!template) {
+      return;
+    }
+
+    setTaskText(renderTaskTemplatePrompt(template.promptText, template.defaultConstraints));
+    setStartResult(null);
   }
 
   async function resolvePermission(decision: "granted" | "denied") {
@@ -379,7 +390,22 @@ export function App() {
       </main>
 
       <form className="task-composer" onSubmit={startSession}>
-        <label htmlFor="task-input">Task</label>
+        <div className="composer-heading">
+          <label htmlFor="task-input">Task</label>
+          <select
+            aria-label="Task templates"
+            value=""
+            onChange={(event) => applyTaskTemplate(event.target.value)}
+            disabled={isBusy || sessionActive || snapshot.taskTemplates.length === 0}
+          >
+            <option value="">Templates</option>
+            {snapshot.taskTemplates.map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.title}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="composer-row">
           <textarea
             id="task-input"
@@ -495,4 +521,12 @@ function formatCommand(command: string | null, args: string[]): string {
   }
 
   return [command, ...args].join(" ");
+}
+
+function renderTaskTemplatePrompt(promptText: string, constraints: string[]): string {
+  if (constraints.length === 0) {
+    return promptText;
+  }
+
+  return `${promptText}\n\nConstraints:\n${constraints.map((constraint) => `- ${constraint}`).join("\n")}`;
 }

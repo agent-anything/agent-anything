@@ -175,6 +175,25 @@ describe("HelarcMainController", () => {
     });
   });
 
+  it("exposes built-in task templates without changing task flow", () => {
+    const controller = new HelarcMainController({ provider: new CompleteProvider() });
+
+    expect(controller.getSnapshot().taskTemplates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "inspect-code",
+          title: "Inspect code",
+          category: "inspect",
+        }),
+        expect.objectContaining({
+          id: "implement-change",
+          title: "Implement change",
+          category: "edit",
+        }),
+      ]),
+    );
+  });
+
   it("runs a no-change read-only session after native workspace selection", async () => {
     const controller = new HelarcMainController({ provider: new CompleteProvider() });
     controller.selectWorkspacePath("D:/projects/agent-anything");

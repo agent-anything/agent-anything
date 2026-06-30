@@ -3,6 +3,7 @@ import {
   createHelarcProviderProfile,
   createHelarcSessionHistoryRecord,
   createHelarcTask,
+  createBuiltInHelarcTaskTemplates,
   runHelarcSession,
   type HelarcActivityItem,
   type HelarcPatchReviewDecision,
@@ -12,6 +13,7 @@ import {
   type HelarcSessionHistoryRecord,
   type HelarcSessionOutput,
   type HelarcTaskInputError,
+  type HelarcTaskTemplate,
   type HelarcWorkspaceProfile,
 } from "@agent-anything/helarc";
 import type { PermissionRequest } from "@agent-anything/permission";
@@ -73,6 +75,7 @@ export interface HelarcMainSnapshot {
   workspace: HelarcWorkspaceSnapshot | null;
   workspaceProfiles: HelarcWorkspaceProfile[];
   sessionHistory: HelarcSessionHistoryRecord[];
+  taskTemplates: HelarcTaskTemplate[];
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   pendingPermission: HelarcPermissionPromptSnapshot | null;
@@ -138,6 +141,7 @@ export interface HelarcMainControllerInput {
   providerProfile?: HelarcProviderProfile | null;
   workspaceProfiles?: HelarcWorkspaceProfile[];
   sessionHistory?: HelarcSessionHistoryRecord[];
+  taskTemplates?: HelarcTaskTemplate[];
   onSessionHistoryRecord?: (
     record: HelarcSessionHistoryRecord,
   ) => Promise<HelarcSessionHistoryRecord[]> | HelarcSessionHistoryRecord[];
@@ -153,6 +157,7 @@ export class HelarcMainController {
   private lastError: HelarcMainError | null = null;
   private workspaceProfiles: HelarcWorkspaceProfile[] = [];
   private sessionHistory: HelarcSessionHistoryRecord[] = [];
+  private readonly taskTemplates: HelarcTaskTemplate[];
   private currentSessionStartedAt: string | null = null;
   private lastPatchReview: CompletedPatchReview | null = null;
   private readonly onSessionHistoryRecord: HelarcMainControllerInput["onSessionHistoryRecord"];
@@ -166,6 +171,7 @@ export class HelarcMainController {
     this.providerInstance = input.provider ?? null;
     this.workspaceProfiles = input.workspaceProfiles ?? [];
     this.sessionHistory = input.sessionHistory ?? [];
+    this.taskTemplates = input.taskTemplates ?? createBuiltInHelarcTaskTemplates();
     this.onSessionHistoryRecord = input.onSessionHistoryRecord;
     this.provider = input.providerConfigError
       ? {
@@ -186,6 +192,7 @@ export class HelarcMainController {
       workspace: this.selectedWorkspace,
       workspaceProfiles: this.workspaceProfiles,
       sessionHistory: this.sessionHistory,
+      taskTemplates: this.taskTemplates,
       provider: this.provider,
       acceptedTask: this.acceptedTask,
       pendingPermission: this.pendingPermission?.prompt ?? null,

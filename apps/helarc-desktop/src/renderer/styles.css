@@ -607,12 +607,32 @@ h2 {
   border-top: 1px solid #d8ddda;
 }
 
+.composer-heading {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
 .task-composer label {
   display: block;
-  margin-bottom: 7px;
   color: #39464e;
   font-size: 12px;
   font-weight: 750;
+}
+
+.composer-heading select {
+  width: 156px;
+  height: 32px;
+  padding: 0 9px;
+  color: #43515a;
+  background: #f8faf8;
+  border: 1px solid #cbd2ce;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .composer-row {

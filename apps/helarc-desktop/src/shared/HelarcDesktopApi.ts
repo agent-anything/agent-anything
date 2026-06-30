@@ -19,6 +19,21 @@ export interface HelarcAcceptedTaskSnapshot {
   prompt: string;
 }
 
+export type HelarcTaskTemplateCategory =
+  | "inspect"
+  | "edit"
+  | "test"
+  | "refactor";
+
+export interface HelarcTaskTemplateSnapshot {
+  id: string;
+  title: string;
+  description: string;
+  promptText: string;
+  category: HelarcTaskTemplateCategory;
+  defaultConstraints: string[];
+}
+
 export interface HelarcMainError {
   code: string;
   message: string;
@@ -155,6 +170,7 @@ export interface HelarcMainSnapshot {
   workspace: HelarcWorkspaceSnapshot | null;
   workspaceProfiles: HelarcWorkspaceProfileSnapshot[];
   sessionHistory: HelarcSessionHistoryRecord[];
+  taskTemplates: HelarcTaskTemplateSnapshot[];
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   pendingPermission: HelarcPermissionPromptSnapshot | null;
