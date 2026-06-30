@@ -58,7 +58,6 @@ describe("OpenAICompatibleProvider", () => {
       },
     }));
 
-    debugger;
     const result = await provider.send(request());
 
     expect(result).toMatchObject({
