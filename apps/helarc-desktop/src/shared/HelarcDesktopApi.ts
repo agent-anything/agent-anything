@@ -4,6 +4,16 @@ export interface HelarcWorkspaceSnapshot {
   path: string;
 }
 
+export type HelarcWorkspaceTrustState = "trusted";
+
+export interface HelarcWorkspaceProfileSnapshot {
+  id: string;
+  displayName: string;
+  path: string;
+  lastOpenedAt: string;
+  trustState: HelarcWorkspaceTrustState;
+}
+
 export interface HelarcAcceptedTaskSnapshot {
   id: string;
   prompt: string;
@@ -106,6 +116,7 @@ export interface HelarcSessionOutput {
 export interface HelarcMainSnapshot {
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
+  workspaceProfiles: HelarcWorkspaceProfileSnapshot[];
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   pendingPermission: HelarcPermissionPromptSnapshot | null;
@@ -142,11 +153,16 @@ export type HelarcResolvePatchReviewResult =
   | { ok: true; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
+export interface HelarcSelectWorkspaceProfileInput {
+  profileId: string;
+}
+
 export interface HelarcDesktopApi {
   readonly bridgeVersion: 1;
   readonly productId: "helarc";
   chooseWorkspace(): Promise<HelarcMainSnapshot>;
   getSnapshot(): Promise<HelarcMainSnapshot>;
+  selectWorkspaceProfile(input: HelarcSelectWorkspaceProfileInput): Promise<HelarcMainSnapshot>;
   startSession(input: HelarcStartSessionInput): Promise<HelarcStartSessionResult>;
   resolvePermission(input: HelarcResolvePermissionInput): Promise<HelarcResolvePermissionResult>;
   resolvePatchReview(input: HelarcResolvePatchReviewInput): Promise<HelarcResolvePatchReviewResult>;

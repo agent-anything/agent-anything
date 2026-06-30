@@ -1,11 +1,13 @@
 import { dialog, ipcMain, type BrowserWindow } from "electron";
 import type { HelarcMainController } from "./HelarcMainController.js";
+import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
 
 export const HELARC_IPC_CHANNELS = {
   chooseWorkspace: "helarc:choose-workspace",
   getSnapshot: "helarc:get-snapshot",
   resolvePatchReview: "helarc:resolve-patch-review",
   resolvePermission: "helarc:resolve-permission",
+  selectWorkspaceProfile: "helarc:select-workspace-profile",
   snapshotUpdated: "helarc:snapshot-updated",
   startSession: "helarc:start-session",
 } as const;
@@ -13,6 +15,7 @@ export const HELARC_IPC_CHANNELS = {
 export interface RegisterHelarcIpcInput {
   window: BrowserWindow;
   controller: HelarcMainController;
+  workspaceProfileStore?: HelarcWorkspaceProfileStore | null;
 }
 
 export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
@@ -35,7 +38,41 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
       return input.controller.getSnapshot();
     }
 
-    return input.controller.selectWorkspacePath(result.filePaths[0] ?? "");
+    const workspacePath = result.filePaths[0] ?? "";
+    if (!input.workspaceProfileStore) {
+      return input.controller.selectWorkspacePath(workspacePath);
+    }
+
+    const remembered = await input.workspaceProfileStore.rememberWorkspacePath(workspacePath);
+    if (!remembered.ok) {
+      return input.controller.failWorkspaceSelection(
+        remembered.error.code,
+        remembered.error.message,
+      );
+    }
+
+    input.controller.setWorkspaceProfiles(remembered.profiles);
+    return input.controller.selectWorkspaceProfile(remembered.profile);
+  });
+
+  ipcMain.handle(HELARC_IPC_CHANNELS.selectWorkspaceProfile, async (_event, payload: unknown) => {
+    if (!input.workspaceProfileStore) {
+      return input.controller.failWorkspaceSelection(
+        "workspace_profile_not_found",
+        "Workspace profile was not found.",
+      );
+    }
+
+    const resolved = await input.workspaceProfileStore.resolveWorkspaceProfile(readProfileId(payload));
+    if (!resolved.ok) {
+      return input.controller.failWorkspaceSelection(
+        resolved.error.code,
+        resolved.error.message,
+      );
+    }
+
+    input.controller.setWorkspaceProfiles(resolved.profiles);
+    return input.controller.selectWorkspaceProfile(resolved.profile);
   });
 
   ipcMain.handle(HELARC_IPC_CHANNELS.startSession, (_event, payload: unknown) => {
@@ -50,6 +87,14 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   ipcMain.handle(HELARC_IPC_CHANNELS.resolvePatchReview, (_event, payload: unknown) => {
     return input.controller.resolvePatchReview(readPatchReviewDecision(payload));
   });
+}
+
+function readProfileId(payload: unknown): string {
+  if (!isRecord(payload)) {
+    return "";
+  }
+
+  return typeof payload.profileId === "string" ? payload.profileId : "";
 }
 
 function readTaskText(payload: unknown): string {

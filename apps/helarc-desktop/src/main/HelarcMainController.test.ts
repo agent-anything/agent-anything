@@ -131,6 +131,49 @@ describe("HelarcMainController", () => {
     expect(JSON.stringify(snapshot)).not.toContain("secret");
   });
 
+  it("exposes recent workspace profiles and selects restored profiles", () => {
+    const controller = new HelarcMainController({
+      provider: new CompleteProvider(),
+      workspaceProfiles: [
+        {
+          id: "workspace:agent-anything",
+          displayName: "agent-anything",
+          path: "D:\\projects\\agent-anything",
+          lastOpenedAt: "2026-06-30T07:00:00.000Z",
+          trustState: "trusted",
+        },
+      ],
+    });
+
+    expect(controller.getSnapshot()).toMatchObject({
+      workspace: null,
+      workspaceProfiles: [
+        {
+          id: "workspace:agent-anything",
+          displayName: "agent-anything",
+          trustState: "trusted",
+        },
+      ],
+    });
+
+    const snapshot = controller.selectWorkspaceProfile({
+      id: "workspace:agent-anything",
+      displayName: "agent-anything",
+      path: "D:\\projects\\agent-anything",
+      lastOpenedAt: "2026-06-30T07:00:00.000Z",
+      trustState: "trusted",
+    });
+
+    expect(snapshot).toMatchObject({
+      status: "workspace_selected",
+      workspace: {
+        id: "workspace:agent-anything",
+        name: "agent-anything",
+        path: "D:\\projects\\agent-anything",
+      },
+    });
+  });
+
   it("runs a no-change read-only session after native workspace selection", async () => {
     const controller = new HelarcMainController({ provider: new CompleteProvider() });
     controller.selectWorkspacePath("D:/projects/agent-anything");

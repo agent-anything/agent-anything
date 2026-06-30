@@ -9,6 +9,7 @@ import {
   type HelarcProviderProfile,
   type HelarcSessionOutput,
   type HelarcTaskInputError,
+  type HelarcWorkspaceProfile,
 } from "@agent-anything/helarc";
 import type { PermissionRequest } from "@agent-anything/permission";
 import type { Provider } from "@agent-anything/providers";
@@ -67,6 +68,7 @@ export interface HelarcPermissionPromptSnapshot {
 export interface HelarcMainSnapshot {
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
+  workspaceProfiles: HelarcWorkspaceProfile[];
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   pendingPermission: HelarcPermissionPromptSnapshot | null;
@@ -88,6 +90,10 @@ export type HelarcMainErrorCode =
   | "workspace_not_selected"
   | "workspace_path_required"
   | "workspace_path_not_absolute"
+  | "workspace_path_not_found"
+  | "workspace_path_not_directory"
+  | "workspace_profile_not_found"
+  | "workspace_profile_invalid"
   | HelarcTaskInputError["code"];
 
 export interface HelarcMainError {
@@ -126,6 +132,7 @@ export interface HelarcMainControllerInput {
   provider?: Provider | null;
   providerConfigError?: HelarcProviderConfigError | null;
   providerProfile?: HelarcProviderProfile | null;
+  workspaceProfiles?: HelarcWorkspaceProfile[];
 }
 
 export class HelarcMainController {
@@ -136,6 +143,7 @@ export class HelarcMainController {
   private activity: HelarcActivityItem[] = [];
   private output: HelarcSessionOutput | null = null;
   private lastError: HelarcMainError | null = null;
+  private workspaceProfiles: HelarcWorkspaceProfile[] = [];
   private readonly provider: HelarcProviderSnapshot;
   private readonly providerInstance: Provider | null;
   private status: HelarcMainSnapshotStatus = "idle";
@@ -144,6 +152,7 @@ export class HelarcMainController {
 
   constructor(input: HelarcMainControllerInput = {}) {
     this.providerInstance = input.provider ?? null;
+    this.workspaceProfiles = input.workspaceProfiles ?? [];
     this.provider = input.providerConfigError
       ? {
           configured: false,
@@ -161,6 +170,7 @@ export class HelarcMainController {
     return {
       status: this.status,
       workspace: this.selectedWorkspace,
+      workspaceProfiles: this.workspaceProfiles,
       provider: this.provider,
       acceptedTask: this.acceptedTask,
       pendingPermission: this.pendingPermission?.prompt ?? null,
@@ -188,11 +198,36 @@ export class HelarcMainController {
       return this.fail("workspace_path_not_absolute", "Workspace path must be absolute.");
     }
 
-    this.selectedWorkspace = {
+    return this.selectWorkspace({
       id: "workspace",
       name: basename(normalizedPath) || normalizedPath,
       path: normalizedPath,
-    };
+    });
+  }
+
+  setWorkspaceProfiles(profiles: readonly HelarcWorkspaceProfile[]): HelarcMainSnapshot {
+    this.workspaceProfiles = [...profiles];
+    return this.publishSnapshot();
+  }
+
+  selectWorkspaceProfile(profile: HelarcWorkspaceProfile): HelarcMainSnapshot {
+    this.workspaceProfiles = [
+      profile,
+      ...this.workspaceProfiles.filter((item) => item.id !== profile.id),
+    ];
+    return this.selectWorkspace({
+      id: profile.id,
+      name: profile.displayName,
+      path: profile.path,
+    });
+  }
+
+  failWorkspaceSelection(code: HelarcMainErrorCode, message: string): HelarcMainSnapshot {
+    return this.fail(code, message);
+  }
+
+  private selectWorkspace(workspace: HelarcWorkspaceSnapshot): HelarcMainSnapshot {
+    this.selectedWorkspace = workspace;
     this.status = "workspace_selected";
     this.acceptedTask = null;
     this.pendingPermission = null;

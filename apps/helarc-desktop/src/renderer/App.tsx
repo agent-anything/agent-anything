@@ -14,6 +14,7 @@ import type { HelarcMainSnapshot, HelarcStartSessionResult } from "../shared/Hel
 const initialSnapshot: HelarcMainSnapshot = {
   status: "idle",
   workspace: null,
+  workspaceProfiles: [],
   provider: {
     configured: true,
     activeProfile: {
@@ -74,6 +75,21 @@ export function App() {
     setIsBusy(true);
     try {
       setSnapshot(await api.chooseWorkspace());
+      setStartResult(null);
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function selectWorkspaceProfile(profileId: string) {
+    const api = getHelarcApi();
+    if (!api || profileId.length === 0) {
+      return;
+    }
+
+    setIsBusy(true);
+    try {
+      setSnapshot(await api.selectWorkspaceProfile({ profileId }));
       setStartResult(null);
     } finally {
       setIsBusy(false);
@@ -166,10 +182,25 @@ export function App() {
           <span className="label">Workspace</span>
           <span className="workspace-path" title={workspaceLabel}>{workspaceLabel}</span>
         </div>
-        <button className="secondary-button" type="button" onClick={chooseWorkspace} disabled={isBusy}>
-          <FolderOpen size={16} aria-hidden="true" />
-          Choose workspace
-        </button>
+        <div className="workspace-actions">
+          <select
+            aria-label="Recent workspaces"
+            value=""
+            onChange={(event) => void selectWorkspaceProfile(event.target.value)}
+            disabled={isBusy || snapshot.workspaceProfiles.length === 0}
+          >
+            <option value="">Recent workspaces</option>
+            {snapshot.workspaceProfiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.displayName}
+              </option>
+            ))}
+          </select>
+          <button className="secondary-button" type="button" onClick={chooseWorkspace} disabled={isBusy}>
+            <FolderOpen size={16} aria-hidden="true" />
+            Choose workspace
+          </button>
+        </div>
       </section>
 
       <main className="workbench">

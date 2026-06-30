@@ -46,6 +46,19 @@ export {
   selectHelarcProviderProfile,
 } from "./provider-profile/index.js";
 export type {
+  CreateHelarcWorkspaceProfileInput,
+  CreateHelarcWorkspaceProfileResult,
+  HelarcWorkspaceProfile,
+  HelarcWorkspaceProfileError,
+  HelarcWorkspaceProfileErrorCode,
+  HelarcWorkspaceTrustState,
+  SelectHelarcWorkspaceProfileResult,
+} from "./workspace-profile/index.js";
+export {
+  createHelarcWorkspaceProfile,
+  selectHelarcWorkspaceProfile,
+} from "./workspace-profile/index.js";
+export type {
   HelarcActivityItem,
   HelarcPatchReviewBridge,
   HelarcPatchReviewDecision,
