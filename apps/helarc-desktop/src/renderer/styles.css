@@ -71,7 +71,9 @@ dd {
 .status-indicator,
 .composer-row,
 .secondary-button,
-.composer-message {
+.composer-message,
+.app-nav,
+.nav-button {
   display: flex;
   align-items: center;
 }
@@ -106,16 +108,29 @@ dd {
   font-size: 12px;
 }
 
-.icon-button {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  place-items: center;
-  color: #b8c4c8;
+.app-nav {
+  gap: 6px;
+}
+
+.nav-button {
+  height: 32px;
+  min-width: 34px;
+  padding: 0 10px;
+  justify-content: center;
+  gap: 6px;
+  color: #c8d2d5;
   background: transparent;
-  border: 1px solid #52606a;
+  border: 1px solid transparent;
   border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.nav-button:hover,
+.nav-button.active {
+  color: #f8faf9;
+  background: #32444f;
+  border-color: #52606a;
 }
 
 .workspace-bar {
@@ -371,7 +386,9 @@ h2 {
 .patch-panel,
 .result-panel,
 .history-list,
-.history-record {
+.history-record,
+.settings-panel,
+.panel-empty {
   display: grid;
   width: 100%;
   gap: 10px;
@@ -383,7 +400,8 @@ h2 {
 .patch-panel strong,
 .result-panel strong,
 .history-list strong,
-.history-record strong {
+.history-record strong,
+.settings-panel strong {
   color: #26343e;
   font-size: 14px;
 }
@@ -391,7 +409,8 @@ h2 {
 .permission-panel span,
 .patch-panel span,
 .result-panel span,
-.history-record span {
+.history-record span,
+.panel-empty span {
   font-size: 12px;
   line-height: 1.45;
 }
@@ -520,12 +539,6 @@ h2 {
   color: #6f504b;
 }
 
-.history-list {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid #e0e4e1;
-}
-
 .history-item {
   display: grid;
   width: 100%;
@@ -575,6 +588,52 @@ h2 {
   width: 100%;
   gap: 5px;
   margin: 0;
+}
+
+.settings-panel {
+  align-content: start;
+}
+
+.settings-panel dl {
+  display: grid;
+  width: 100%;
+  gap: 6px;
+  margin: 0;
+  padding: 10px;
+  background: #f8faf8;
+  border: 1px solid #e0e4e1;
+  border-radius: 6px;
+}
+
+.settings-panel dl div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.settings-panel dt,
+.settings-panel dd {
+  font-size: 12px;
+}
+
+.settings-panel dt {
+  color: #78838a;
+  font-weight: 700;
+}
+
+.settings-panel dd {
+  min-width: 0;
+  overflow: hidden;
+  color: #26343e;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-empty {
+  min-height: 160px;
+  place-content: center;
+  justify-items: center;
+  color: #8a9499;
 }
 
 .history-record dl div {
@@ -667,6 +726,21 @@ textarea {
 @media (max-width: 760px) {
   .brand-block span:last-child {
     display: none;
+  }
+
+  .app-header {
+    gap: 10px;
+  }
+
+  .nav-button {
+    width: 34px;
+    padding: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .nav-button svg {
+    flex: 0 0 auto;
   }
 
   .workspace-bar {

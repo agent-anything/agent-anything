@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Helarc</title>
+  <desc id="desc">Helarc desktop application icon.</desc>
+  <rect width="256" height="256" rx="44" fill="#26343e"/>
+  <path d="M62 61h34v51h64V61h34v134h-34v-53H96v53H62V61Z" fill="#91d0b6"/>
+  <path d="M101 205h54l-27 31-27-31Z" fill="#f4f5f3"/>
+</svg>

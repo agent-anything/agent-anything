@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   FileCode2,
   FolderOpen,
+  History,
   Play,
   Settings,
   ShieldCheck,
@@ -44,14 +45,20 @@ const initialSnapshot: HelarcMainSnapshot = {
   error: null,
 };
 
+type SidePanelMode = "review" | "history" | "settings";
+
 export function App() {
   const [snapshot, setSnapshot] = useState<HelarcMainSnapshot>(initialSnapshot);
   const [taskText, setTaskText] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [startResult, setStartResult] = useState<HelarcStartSessionResult | null>(null);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
+  const [sidePanelMode, setSidePanelMode] = useState<SidePanelMode>("review");
   const sessionActive = isSessionActive(snapshot.status);
   const selectedHistory = snapshot.sessionHistory.find((record) => record.id === selectedHistoryId) ?? null;
+  const activePanelMode: SidePanelMode = snapshot.pendingPermission || snapshot.pendingPatchReview
+    ? "review"
+    : sidePanelMode;
 
   useEffect(() => {
     const api = getHelarcApi();
@@ -191,9 +198,35 @@ export function App() {
             <span>Developer workbench</span>
           </div>
         </div>
-        <button className="icon-button" type="button" aria-label="Settings" title="Settings" disabled>
-          <Settings size={18} />
-        </button>
+        <nav className="app-nav" aria-label="Workbench navigation">
+          <button
+            className={activePanelMode === "review" ? "nav-button active" : "nav-button"}
+            type="button"
+            onClick={() => setSidePanelMode("review")}
+            title="Workbench review"
+          >
+            <ShieldCheck size={16} aria-hidden="true" />
+            Workbench
+          </button>
+          <button
+            className={activePanelMode === "history" ? "nav-button active" : "nav-button"}
+            type="button"
+            onClick={() => setSidePanelMode("history")}
+            title="History"
+          >
+            <History size={16} aria-hidden="true" />
+            History
+          </button>
+          <button
+            className={activePanelMode === "settings" ? "nav-button active" : "nav-button"}
+            type="button"
+            onClick={() => setSidePanelMode("settings")}
+            title="Settings"
+          >
+            <Settings size={16} aria-hidden="true" />
+            Settings
+          </button>
+        </nav>
       </header>
 
       <section className="workspace-bar" aria-label="Workspace">
@@ -254,16 +287,29 @@ export function App() {
         <aside className="review-pane" aria-labelledby="review-title">
           <div className="pane-header compact">
             <div>
-              <span className="eyebrow">Pending action</span>
-              <h2 id="review-title">Review</h2>
+              <span className="eyebrow">{sidePanelEyebrow(activePanelMode)}</span>
+              <h2 id="review-title">{sidePanelTitle(activePanelMode)}</h2>
             </div>
-            <ShieldCheck size={19} aria-hidden="true" />
+            {activePanelMode === "history"
+              ? <History size={19} aria-hidden="true" />
+              : activePanelMode === "settings"
+                ? <Settings size={19} aria-hidden="true" />
+                : <ShieldCheck size={19} aria-hidden="true" />}
           </div>
-          <div className={snapshot.pendingPermission || snapshot.pendingPatchReview || snapshot.output || snapshot.error
+          <div className={activePanelMode !== "review" || snapshot.pendingPermission || snapshot.pendingPatchReview || snapshot.output || snapshot.error
             ? "review-content"
             : "review-empty"}
           >
-            {snapshot.pendingPermission ? (
+            {activePanelMode === "history" ? (
+              <HistoryPanel
+                records={snapshot.sessionHistory}
+                selectedHistory={selectedHistory}
+                selectedHistoryId={selectedHistoryId}
+                onSelectHistory={setSelectedHistoryId}
+              />
+            ) : activePanelMode === "settings" ? (
+              <SettingsPanel snapshot={snapshot} />
+            ) : snapshot.pendingPermission ? (
               <div className="permission-panel">
                 <ShieldCheck size={24} aria-hidden="true" />
                 <strong>{snapshot.pendingPermission.toolName}</strong>
@@ -368,23 +414,6 @@ export function App() {
                 <span>{sessionActive ? "Waiting for next action" : "No pending review"}</span>
               </>
             )}
-            {snapshot.sessionHistory.length > 0 ? (
-              <section className="history-list" aria-label="Session history">
-                <strong>History</strong>
-                {snapshot.sessionHistory.slice(0, 5).map((record) => (
-                  <button
-                    className={record.id === selectedHistoryId ? "history-item selected" : "history-item"}
-                    key={record.id}
-                    type="button"
-                    onClick={() => setSelectedHistoryId(record.id)}
-                  >
-                    <span>{record.taskText}</span>
-                    <small>{record.status} - {record.workspace.displayName}</small>
-                  </button>
-                ))}
-              </section>
-            ) : null}
-            {selectedHistory ? <HistoryRecordView record={selectedHistory} /> : null}
           </div>
         </aside>
       </main>
@@ -429,6 +458,47 @@ export function App() {
   );
 }
 
+function HistoryPanel({
+  records,
+  selectedHistory,
+  selectedHistoryId,
+  onSelectHistory,
+}: {
+  records: HelarcSessionHistoryRecord[];
+  selectedHistory: HelarcSessionHistoryRecord | null;
+  selectedHistoryId: string | null;
+  onSelectHistory: (recordId: string) => void;
+}) {
+  if (records.length === 0) {
+    return (
+      <div className="panel-empty">
+        <History size={24} aria-hidden="true" />
+        <span>No completed sessions yet</span>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <section className="history-list" aria-label="Session history">
+        <strong>History</strong>
+        {records.slice(0, 8).map((record) => (
+          <button
+            className={record.id === selectedHistoryId ? "history-item selected" : "history-item"}
+            key={record.id}
+            type="button"
+            onClick={() => onSelectHistory(record.id)}
+          >
+            <span>{record.taskText}</span>
+            <small>{record.status} - {record.workspace.displayName}</small>
+          </button>
+        ))}
+      </section>
+      {selectedHistory ? <HistoryRecordView record={selectedHistory} /> : null}
+    </>
+  );
+}
+
 function HistoryRecordView({ record }: { record: HelarcSessionHistoryRecord }) {
   return (
     <section className="history-record" aria-label="Selected session history">
@@ -452,6 +522,46 @@ function HistoryRecordView({ record }: { record: HelarcSessionHistoryRecord }) {
         </div>
       </dl>
       {record.output.agentSummary ? <span>{record.output.agentSummary}</span> : null}
+    </section>
+  );
+}
+
+function SettingsPanel({ snapshot }: { snapshot: HelarcMainSnapshot }) {
+  const provider = snapshot.provider.configured ? snapshot.provider.activeProfile : null;
+
+  return (
+    <section className="settings-panel" aria-label="Desktop settings summary">
+      <strong>Desktop state</strong>
+      <dl>
+        <div>
+          <dt>Product</dt>
+          <dd>Helarc</dd>
+        </div>
+        <div>
+          <dt>Workspace</dt>
+          <dd>{snapshot.workspace?.name ?? "not selected"}</dd>
+        </div>
+        <div>
+          <dt>Provider</dt>
+          <dd>{provider?.displayName ?? snapshot.provider.error?.message ?? "not configured"}</dd>
+        </div>
+        <div>
+          <dt>Model</dt>
+          <dd>{provider?.model ?? "not configured"}</dd>
+        </div>
+        <div>
+          <dt>Credential</dt>
+          <dd>{provider?.credentialStatus ?? "missing"}</dd>
+        </div>
+        <div>
+          <dt>Templates</dt>
+          <dd>{snapshot.taskTemplates.length}</dd>
+        </div>
+        <div>
+          <dt>History</dt>
+          <dd>{snapshot.sessionHistory.length}</dd>
+        </div>
+      </dl>
     </section>
   );
 }
@@ -482,6 +592,30 @@ function statusTone(status: HelarcMainSnapshot["status"]): string {
   }
 
   return "idle";
+}
+
+function sidePanelEyebrow(mode: SidePanelMode): string {
+  if (mode === "history") {
+    return "Completed work";
+  }
+
+  if (mode === "settings") {
+    return "Desktop state";
+  }
+
+  return "Pending action";
+}
+
+function sidePanelTitle(mode: SidePanelMode): string {
+  if (mode === "history") {
+    return "History";
+  }
+
+  if (mode === "settings") {
+    return "Settings";
+  }
+
+  return "Review";
 }
 
 function isSessionActive(status: HelarcMainSnapshot["status"]): boolean {

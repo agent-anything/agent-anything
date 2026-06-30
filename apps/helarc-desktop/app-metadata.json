@@ -1,0 +1,7 @@
+{
+  "productId": "helarc",
+  "appId": "dev.agentanything.helarc",
+  "displayName": "Helarc",
+  "description": "Secure Electron desktop host for the Helarc developer workbench.",
+  "iconAsset": "assets/icon.svg"
+}

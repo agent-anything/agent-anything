@@ -10,6 +10,9 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("No workspace selected");
     expect(html).toContain("No active session");
     expect(html).toContain("No pending review");
+    expect(html).toContain("Workbench");
+    expect(html).toContain("History");
+    expect(html).toContain("Settings");
     expect(html).toContain("Templates");
   });
 });

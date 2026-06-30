@@ -1,6 +1,8 @@
 {
   "name": "@agent-anything/helarc-desktop",
   "version": "0.0.0",
+  "productName": "Helarc",
+  "appId": "dev.agentanything.helarc",
   "description": "Secure Electron desktop host for the Helarc developer workbench.",
   "type": "module",
   "private": true,
