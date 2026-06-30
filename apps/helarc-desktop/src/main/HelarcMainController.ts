@@ -1,12 +1,15 @@
 import type { HostPermissionBridge } from "@agent-anything/agent-core/host";
 import {
   createHelarcProviderProfile,
+  createHelarcSessionHistoryRecord,
   createHelarcTask,
   runHelarcSession,
   type HelarcActivityItem,
   type HelarcPatchReviewDecision,
   type HelarcPatchReviewViewModel,
   type HelarcProviderProfile,
+  type HelarcSessionHistoryPatchSummary,
+  type HelarcSessionHistoryRecord,
   type HelarcSessionOutput,
   type HelarcTaskInputError,
   type HelarcWorkspaceProfile,
@@ -69,6 +72,7 @@ export interface HelarcMainSnapshot {
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
   workspaceProfiles: HelarcWorkspaceProfile[];
+  sessionHistory: HelarcSessionHistoryRecord[];
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   pendingPermission: HelarcPermissionPromptSnapshot | null;
@@ -133,6 +137,10 @@ export interface HelarcMainControllerInput {
   providerConfigError?: HelarcProviderConfigError | null;
   providerProfile?: HelarcProviderProfile | null;
   workspaceProfiles?: HelarcWorkspaceProfile[];
+  sessionHistory?: HelarcSessionHistoryRecord[];
+  onSessionHistoryRecord?: (
+    record: HelarcSessionHistoryRecord,
+  ) => Promise<HelarcSessionHistoryRecord[]> | HelarcSessionHistoryRecord[];
 }
 
 export class HelarcMainController {
@@ -144,6 +152,10 @@ export class HelarcMainController {
   private output: HelarcSessionOutput | null = null;
   private lastError: HelarcMainError | null = null;
   private workspaceProfiles: HelarcWorkspaceProfile[] = [];
+  private sessionHistory: HelarcSessionHistoryRecord[] = [];
+  private currentSessionStartedAt: string | null = null;
+  private lastPatchReview: CompletedPatchReview | null = null;
+  private readonly onSessionHistoryRecord: HelarcMainControllerInput["onSessionHistoryRecord"];
   private readonly provider: HelarcProviderSnapshot;
   private readonly providerInstance: Provider | null;
   private status: HelarcMainSnapshotStatus = "idle";
@@ -153,6 +165,8 @@ export class HelarcMainController {
   constructor(input: HelarcMainControllerInput = {}) {
     this.providerInstance = input.provider ?? null;
     this.workspaceProfiles = input.workspaceProfiles ?? [];
+    this.sessionHistory = input.sessionHistory ?? [];
+    this.onSessionHistoryRecord = input.onSessionHistoryRecord;
     this.provider = input.providerConfigError
       ? {
           configured: false,
@@ -171,6 +185,7 @@ export class HelarcMainController {
       status: this.status,
       workspace: this.selectedWorkspace,
       workspaceProfiles: this.workspaceProfiles,
+      sessionHistory: this.sessionHistory,
       provider: this.provider,
       acceptedTask: this.acceptedTask,
       pendingPermission: this.pendingPermission?.prompt ?? null,
@@ -235,6 +250,8 @@ export class HelarcMainController {
     this.activity = [];
     this.output = null;
     this.lastError = null;
+    this.currentSessionStartedAt = null;
+    this.lastPatchReview = null;
     return this.publishSnapshot();
   }
 
@@ -292,6 +309,8 @@ export class HelarcMainController {
     this.activity = [];
     this.output = null;
     this.lastError = null;
+    this.currentSessionStartedAt = new Date().toISOString();
+    this.lastPatchReview = null;
 
     void this.runLiveSession(taskResult.task);
 
@@ -344,6 +363,11 @@ export class HelarcMainController {
 
     const pending = this.pendingPatchReview;
     this.pendingPatchReview = null;
+    this.lastPatchReview = {
+      review: pending.review,
+      decision: input.decision,
+      reason: input.reason?.trim() || null,
+    };
     this.status = input.decision === "accepted" ? "applying_patch" : "running";
     pending.resolve(input.decision === "accepted"
       ? { decision: "accepted", reason: input.reason }
@@ -394,14 +418,28 @@ export class HelarcMainController {
           message: firstError.message,
         };
       }
+      await this.persistSessionHistory(task);
     } catch (error) {
       this.status = "failed";
       this.pendingPermission = null;
       this.pendingPatchReview = null;
+      this.output = {
+        taskId: task.id,
+        workspaceId: task.workspaceScope?.roots[task.workspaceScope.defaultRootName ?? ""]?.id ?? null,
+        agentSummary: null,
+        runtimeStatus: "failed",
+        patchStatus: null,
+        appliedPath: null,
+        safeErrors: [{
+          code: "provider_not_available",
+          message: error instanceof Error ? error.message : "Helarc session failed.",
+        }],
+      };
       this.lastError = {
         code: "provider_not_available",
         message: error instanceof Error ? error.message : "Helarc session failed.",
       };
+      await this.persistSessionHistory(task);
     } finally {
       this.publishSnapshot();
     }
@@ -437,9 +475,58 @@ export class HelarcMainController {
       }
 
       this.pendingPatchReview = { review, resolve };
+      this.lastPatchReview = {
+        review,
+        decision: null,
+        reason: null,
+      };
       this.status = "waiting_for_patch_review";
       this.publishSnapshot();
     });
+  }
+
+  private async persistSessionHistory(
+    task: Parameters<typeof runHelarcSession>[0]["task"],
+  ): Promise<void> {
+    if (!this.output || !this.selectedWorkspace || !this.provider.configured) {
+      return;
+    }
+    if (!isTerminalSessionStatus(this.status)) {
+      return;
+    }
+
+    const recordResult = createHelarcSessionHistoryRecord({
+      id: `history-${task.id}`,
+      taskId: task.id,
+      taskText: task.input.prompt,
+      workspace: {
+        profileId: this.selectedWorkspace.id.startsWith("workspace:")
+          ? this.selectedWorkspace.id
+          : null,
+        displayName: this.selectedWorkspace.name,
+        path: this.selectedWorkspace.path,
+      },
+      provider: {
+        profileId: this.provider.activeProfile.id,
+        displayName: this.provider.activeProfile.displayName,
+        endpointLabel: this.provider.activeProfile.endpointLabel,
+        model: this.provider.activeProfile.model,
+      },
+      startedAt: this.currentSessionStartedAt ?? new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+      status: this.status,
+      activity: this.activity,
+      output: this.output,
+      patch: createHistoryPatchSummary(this.lastPatchReview, this.output),
+    });
+
+    if (!recordResult.ok) {
+      return;
+    }
+
+    this.sessionHistory = this.onSessionHistoryRecord
+      ? await this.onSessionHistoryRecord(recordResult.record)
+      : [recordResult.record, ...this.sessionHistory.filter((record) => record.id !== recordResult.record.id)];
   }
 
   private publishSnapshot(): HelarcMainSnapshot {
@@ -459,6 +546,49 @@ interface PendingPermission {
 interface PendingPatchReview {
   review: HelarcPatchReviewViewModel;
   resolve: (decision: HelarcPatchReviewDecision) => void;
+}
+
+interface CompletedPatchReview {
+  review: HelarcPatchReviewViewModel;
+  decision: "accepted" | "rejected" | null;
+  reason: string | null;
+}
+
+function isTerminalSessionStatus(
+  status: HelarcMainSnapshotStatus,
+): status is Exclude<HelarcMainSnapshotStatus, "idle" | "workspace_selected" | "running" | "waiting_for_permission" | "waiting_for_patch_review" | "applying_patch"> {
+  return status === "completed" ||
+    status === "rejected" ||
+    status === "failed" ||
+    status === "blocked" ||
+    status === "cancelled";
+}
+
+function createHistoryPatchSummary(
+  patchReview: CompletedPatchReview | null,
+  output: HelarcSessionOutput,
+): HelarcSessionHistoryPatchSummary {
+  if (!patchReview) {
+    return {
+      patchId: null,
+      operation: null,
+      path: output.appliedPath,
+      summary: output.agentSummary,
+      decision: "not_required" as const,
+      reason: null,
+      status: output.patchStatus,
+    };
+  }
+
+  return {
+    patchId: patchReview.review.patchId,
+    operation: patchReview.review.operation,
+    path: patchReview.review.path,
+    summary: patchReview.review.summary,
+    decision: patchReview.decision ?? "unknown" as const,
+    reason: patchReview.reason,
+    status: output.patchStatus,
+  };
 }
 
 function createPermissionPromptSnapshot(request: PermissionRequest): HelarcPermissionPromptSnapshot {

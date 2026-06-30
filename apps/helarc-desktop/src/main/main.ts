@@ -6,6 +6,7 @@ import { HelarcMainController } from "./HelarcMainController.js";
 import { registerHelarcIpc } from "./ipc.js";
 import { OpenAICompatibleProvider } from "./provider/OpenAICompatibleProvider.js";
 import { resolveHelarcProviderConfig } from "./provider/resolveHelarcProviderConfig.js";
+import { FileHelarcSessionHistoryStore } from "./session-history/HelarcSessionHistoryStore.js";
 import { FileHelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
 import { createHelarcWindowOptions } from "./windowOptions.js";
 
@@ -35,11 +36,16 @@ async function createWindow(): Promise<void> {
   const workspaceProfileStore = new FileHelarcWorkspaceProfileStore(
     join(app.getPath("userData"), "workspace-profiles.json"),
   );
+  const sessionHistoryStore = new FileHelarcSessionHistoryStore(
+    join(app.getPath("userData"), "session-history.json"),
+  );
   const controller = new HelarcMainController({
     provider: providerConfig.ok ? new OpenAICompatibleProvider(providerConfig.config) : null,
     providerConfigError: providerConfig.ok ? null : providerConfig.error,
     providerProfile: providerConfig.ok ? providerConfig.profile : null,
     workspaceProfiles: await workspaceProfileStore.listProfiles(),
+    sessionHistory: await sessionHistoryStore.listRecords(),
+    onSessionHistoryRecord: (record) => sessionHistoryStore.appendRecord(record),
   });
   registerHelarcIpc({ window, controller, workspaceProfileStore });
   window.setTitle(helarcProduct.displayName);

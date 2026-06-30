@@ -9,12 +9,17 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import type { HelarcMainSnapshot, HelarcStartSessionResult } from "../shared/HelarcDesktopApi.js";
+import type {
+  HelarcMainSnapshot,
+  HelarcSessionHistoryRecord,
+  HelarcStartSessionResult,
+} from "../shared/HelarcDesktopApi.js";
 
 const initialSnapshot: HelarcMainSnapshot = {
   status: "idle",
   workspace: null,
   workspaceProfiles: [],
+  sessionHistory: [],
   provider: {
     configured: true,
     activeProfile: {
@@ -43,7 +48,9 @@ export function App() {
   const [taskText, setTaskText] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [startResult, setStartResult] = useState<HelarcStartSessionResult | null>(null);
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const sessionActive = isSessionActive(snapshot.status);
+  const selectedHistory = snapshot.sessionHistory.find((record) => record.id === selectedHistoryId) ?? null;
 
   useEffect(() => {
     const api = getHelarcApi();
@@ -76,6 +83,7 @@ export function App() {
     try {
       setSnapshot(await api.chooseWorkspace());
       setStartResult(null);
+      setSelectedHistoryId(null);
     } finally {
       setIsBusy(false);
     }
@@ -91,6 +99,7 @@ export function App() {
     try {
       setSnapshot(await api.selectWorkspaceProfile({ profileId }));
       setStartResult(null);
+      setSelectedHistoryId(null);
     } finally {
       setIsBusy(false);
     }
@@ -348,6 +357,23 @@ export function App() {
                 <span>{sessionActive ? "Waiting for next action" : "No pending review"}</span>
               </>
             )}
+            {snapshot.sessionHistory.length > 0 ? (
+              <section className="history-list" aria-label="Session history">
+                <strong>History</strong>
+                {snapshot.sessionHistory.slice(0, 5).map((record) => (
+                  <button
+                    className={record.id === selectedHistoryId ? "history-item selected" : "history-item"}
+                    key={record.id}
+                    type="button"
+                    onClick={() => setSelectedHistoryId(record.id)}
+                  >
+                    <span>{record.taskText}</span>
+                    <small>{record.status} - {record.workspace.displayName}</small>
+                  </button>
+                ))}
+              </section>
+            ) : null}
+            {selectedHistory ? <HistoryRecordView record={selectedHistory} /> : null}
           </div>
         </aside>
       </main>
@@ -374,6 +400,33 @@ export function App() {
         {startResult?.ok ? <p className="composer-message">Session started</p> : null}
       </form>
     </div>
+  );
+}
+
+function HistoryRecordView({ record }: { record: HelarcSessionHistoryRecord }) {
+  return (
+    <section className="history-record" aria-label="Selected session history">
+      <strong>{record.taskText}</strong>
+      <dl>
+        <div>
+          <dt>Status</dt>
+          <dd>{record.status}</dd>
+        </div>
+        <div>
+          <dt>Workspace</dt>
+          <dd>{record.workspace.displayName}</dd>
+        </div>
+        <div>
+          <dt>Provider</dt>
+          <dd>{record.provider.displayName}</dd>
+        </div>
+        <div>
+          <dt>Patch</dt>
+          <dd>{record.patch.status ?? "none"}</dd>
+        </div>
+      </dl>
+      {record.output.agentSummary ? <span>{record.output.agentSummary}</span> : null}
+    </section>
   );
 }
 

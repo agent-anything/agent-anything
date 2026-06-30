@@ -113,10 +113,48 @@ export interface HelarcSessionOutput {
   safeErrors: Array<{ code: string; message: string }>;
 }
 
+export interface HelarcSessionHistoryWorkspaceRef {
+  profileId: string | null;
+  displayName: string;
+  path: string;
+}
+
+export interface HelarcSessionHistoryProviderRef {
+  profileId: string | null;
+  displayName: string;
+  endpointLabel: string;
+  model: string;
+}
+
+export interface HelarcSessionHistoryPatchSummary {
+  patchId: string | null;
+  operation: "create" | "update" | "delete" | null;
+  path: string | null;
+  summary: string | null;
+  decision: "accepted" | "rejected" | "not_required" | "unknown";
+  reason: string | null;
+  status: "proposed" | "applied" | "rejected" | "failed" | null;
+}
+
+export interface HelarcSessionHistoryRecord {
+  id: string;
+  taskId: string;
+  taskText: string;
+  workspace: HelarcSessionHistoryWorkspaceRef;
+  provider: HelarcSessionHistoryProviderRef;
+  startedAt: string;
+  endedAt: string;
+  status: "completed" | "rejected" | "failed" | "blocked" | "cancelled";
+  activity: HelarcActivityItem[];
+  output: HelarcSessionOutput;
+  patch: HelarcSessionHistoryPatchSummary;
+}
+
 export interface HelarcMainSnapshot {
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
   workspaceProfiles: HelarcWorkspaceProfileSnapshot[];
+  sessionHistory: HelarcSessionHistoryRecord[];
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   pendingPermission: HelarcPermissionPromptSnapshot | null;

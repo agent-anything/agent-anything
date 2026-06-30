@@ -369,7 +369,9 @@ h2 {
 
 .permission-panel,
 .patch-panel,
-.result-panel {
+.result-panel,
+.history-list,
+.history-record {
   display: grid;
   width: 100%;
   gap: 10px;
@@ -379,14 +381,17 @@ h2 {
 
 .permission-panel strong,
 .patch-panel strong,
-.result-panel strong {
+.result-panel strong,
+.history-list strong,
+.history-record strong {
   color: #26343e;
   font-size: 14px;
 }
 
 .permission-panel span,
 .patch-panel span,
-.result-panel span {
+.result-panel span,
+.history-record span {
   font-size: 12px;
   line-height: 1.45;
 }
@@ -513,6 +518,86 @@ h2 {
 
 .error-list span {
   color: #6f504b;
+}
+
+.history-list {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #e0e4e1;
+}
+
+.history-item {
+  display: grid;
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  justify-items: start;
+  gap: 2px;
+  color: #33414a;
+  background: #f8faf8;
+  border: 1px solid #e0e4e1;
+  border-radius: 6px;
+  text-align: left;
+}
+
+.history-item.selected {
+  border-color: #7ab299;
+}
+
+.history-item span,
+.history-item small {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-item span {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.history-item small {
+  color: #78838a;
+  font-size: 11px;
+}
+
+.history-record {
+  margin-top: 4px;
+  padding: 10px;
+  background: #f8faf8;
+  border: 1px solid #e0e4e1;
+  border-radius: 6px;
+}
+
+.history-record dl {
+  display: grid;
+  width: 100%;
+  gap: 5px;
+  margin: 0;
+}
+
+.history-record dl div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.history-record dt,
+.history-record dd {
+  font-size: 12px;
+}
+
+.history-record dt {
+  color: #78838a;
+  font-weight: 700;
+}
+
+.history-record dd {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .task-composer {

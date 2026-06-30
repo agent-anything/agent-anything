@@ -46,6 +46,21 @@ export {
   selectHelarcProviderProfile,
 } from "./provider-profile/index.js";
 export type {
+  CreateHelarcSessionHistoryRecordInput,
+  CreateHelarcSessionHistoryRecordResult,
+  HelarcSessionHistoryPatchDecision,
+  HelarcSessionHistoryPatchSummary,
+  HelarcSessionHistoryProviderRef,
+  HelarcSessionHistoryRecord,
+  HelarcSessionHistoryRecordError,
+  HelarcSessionHistoryRecordErrorCode,
+  HelarcSessionHistoryStatus,
+  HelarcSessionHistoryWorkspaceRef,
+} from "./session-history/index.js";
+export {
+  createHelarcSessionHistoryRecord,
+} from "./session-history/index.js";
+export type {
   CreateHelarcWorkspaceProfileInput,
   CreateHelarcWorkspaceProfileResult,
   HelarcWorkspaceProfile,

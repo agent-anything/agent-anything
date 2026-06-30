@@ -1,3 +1,4 @@
+import type { HelarcSessionHistoryRecord } from "@agent-anything/helarc";
 import type { Provider, ProviderRequest, ProviderResponse } from "@agent-anything/providers";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -213,6 +214,62 @@ describe("HelarcMainController", () => {
     });
     expect(snapshot.activity.map((item) => item.kind)).toContain("planner.started");
     expect(snapshot.activity.map((item) => item.kind)).toContain("plan.created");
+  });
+
+  it("persists completed session history records for read-only review", async () => {
+    let storedHistory: HelarcSessionHistoryRecord[] = [];
+    const controller = new HelarcMainController({
+      provider: new CompleteProvider(),
+      providerProfile: {
+        id: "provider-a",
+        displayName: "Provider A",
+        endpointLabel: "provider.local",
+        baseUrlOrigin: "https://provider.local",
+        model: "model-a",
+        timeoutMs: 1000,
+        credentialStatus: "present",
+        isActive: true,
+      },
+      onSessionHistoryRecord: (record) => {
+        storedHistory = [record, ...storedHistory];
+        return storedHistory;
+      },
+    });
+    controller.selectWorkspacePath("D:/projects/agent-anything");
+
+    const completed = waitForStatus(controller, "completed");
+    controller.startSession({ taskText: "Update docs" });
+
+    const snapshot = await completed;
+    expect(snapshot.sessionHistory).toMatchObject([
+      {
+        taskText: "Update docs",
+        status: "completed",
+        workspace: {
+          displayName: "agent-anything",
+        },
+        provider: {
+          profileId: "provider-a",
+          displayName: "Provider A",
+          model: "model-a",
+        },
+        patch: {
+          decision: "not_required",
+          status: null,
+        },
+      },
+    ]);
+    expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("secret");
+
+    const restoredController = new HelarcMainController({
+      providerConfigError: {
+        code: "provider_config_missing",
+        message: "Provider configuration is incomplete.",
+        missingKeys: [],
+      },
+      sessionHistory: storedHistory,
+    });
+    expect(restoredController.getSnapshot().sessionHistory).toHaveLength(1);
   });
 
   it("correlates shell permission decisions and blocks denied commands", async () => {
