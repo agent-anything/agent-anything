@@ -23,6 +23,21 @@ describe("HelarcMainController", () => {
       output: null,
       error: null,
     });
+    expect(snapshot.provider).toMatchObject({
+      configured: true,
+      activeProfile: {
+        id: "test-provider",
+        displayName: "Injected Test Provider",
+        credentialStatus: "empty_allowed",
+        isActive: true,
+      },
+      profiles: [
+        {
+          id: "test-provider",
+          isActive: true,
+        },
+      ],
+    });
   });
 
   it("rejects renderer task text until main has a workspace", async () => {
@@ -58,6 +73,8 @@ describe("HelarcMainController", () => {
       snapshot: {
         provider: {
           configured: false,
+          activeProfile: null,
+          profiles: [],
           error: {
             code: "provider_config_missing",
             message: "Provider configuration is incomplete.",
@@ -66,6 +83,52 @@ describe("HelarcMainController", () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain("HELARC_PROVIDER_BASE_URL");
+  });
+
+  it("uses injected safe provider profile metadata without exposing secrets", () => {
+    const controller = new HelarcMainController({
+      provider: new CompleteProvider(),
+      providerProfile: {
+        id: "env-provider",
+        displayName: "Environment Provider",
+        endpointLabel: "provider.local",
+        baseUrlOrigin: "https://provider.local",
+        model: "model-a",
+        timeoutMs: 1500,
+        credentialStatus: "present",
+        isActive: true,
+      },
+    });
+
+    const snapshot = controller.getSnapshot();
+
+    expect(snapshot.provider).toEqual({
+      configured: true,
+      activeProfile: {
+        id: "env-provider",
+        displayName: "Environment Provider",
+        endpointLabel: "provider.local",
+        baseUrlOrigin: "https://provider.local",
+        model: "model-a",
+        timeoutMs: 1500,
+        credentialStatus: "present",
+        isActive: true,
+      },
+      profiles: [
+        {
+          id: "env-provider",
+          displayName: "Environment Provider",
+          endpointLabel: "provider.local",
+          baseUrlOrigin: "https://provider.local",
+          model: "model-a",
+          timeoutMs: 1500,
+          credentialStatus: "present",
+          isActive: true,
+        },
+      ],
+      error: null,
+    });
+    expect(JSON.stringify(snapshot)).not.toContain("secret");
   });
 
   it("runs a no-change read-only session after native workspace selection", async () => {
@@ -315,12 +378,14 @@ describe("HelarcMainController", () => {
 });
 
 class CompleteProvider implements Provider {
-  readonly capabilities = {
+  readonly descriptor = {
     id: "complete-provider",
     name: "Complete Provider",
-    supportsToolPlanning: true,
-    supportsStructuredOutput: true,
-    supportsStreaming: false,
+    capabilities: {
+      supportsToolPlanning: true,
+      supportsStructuredOutput: true,
+      supportsStreaming: false,
+    },
     metadata: {},
   };
 
@@ -339,12 +404,14 @@ class CompleteProvider implements Provider {
 }
 
 class ScriptedProvider implements Provider {
-  readonly capabilities = {
+  readonly descriptor = {
     id: "scripted-provider",
     name: "Scripted Provider",
-    supportsToolPlanning: true,
-    supportsStructuredOutput: true,
-    supportsStreaming: false,
+    capabilities: {
+      supportsToolPlanning: true,
+      supportsStructuredOutput: true,
+      supportsStreaming: false,
+    },
     metadata: {},
   };
 

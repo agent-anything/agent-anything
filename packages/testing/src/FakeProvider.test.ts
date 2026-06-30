@@ -69,21 +69,25 @@ describe("FakeProvider", () => {
     });
   });
 
-  it("exposes provider capabilities", () => {
+  it("exposes provider descriptor and capabilities separately", () => {
     const provider = new FakeProvider({
-      capabilities: {
+      descriptor: {
         id: "fake-openai",
         name: "Fake OpenAI",
-        supportsStreaming: true,
+        capabilities: {
+          supportsStreaming: true,
+        },
       },
     });
 
-    expect(provider.capabilities).toMatchObject({
+    expect(provider.descriptor).toMatchObject({
       id: "fake-openai",
       name: "Fake OpenAI",
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: true,
+      capabilities: {
+        supportsToolPlanning: true,
+        supportsStructuredOutput: true,
+        supportsStreaming: true,
+      },
     });
   });
 });

@@ -1,10 +1,12 @@
 import type { HostPermissionBridge } from "@agent-anything/agent-core/host";
 import {
+  createHelarcProviderProfile,
   createHelarcTask,
   runHelarcSession,
   type HelarcActivityItem,
   type HelarcPatchReviewDecision,
   type HelarcPatchReviewViewModel,
+  type HelarcProviderProfile,
   type HelarcSessionOutput,
   type HelarcTaskInputError,
 } from "@agent-anything/helarc";
@@ -25,8 +27,18 @@ export interface HelarcAcceptedTaskSnapshot {
 }
 
 export type HelarcProviderSnapshot =
-  | { configured: true; error: null }
-  | { configured: false; error: HelarcMainError };
+  | {
+      configured: true;
+      activeProfile: HelarcProviderProfile;
+      profiles: HelarcProviderProfile[];
+      error: null;
+    }
+  | {
+      configured: false;
+      activeProfile: null;
+      profiles: HelarcProviderProfile[];
+      error: HelarcMainError;
+    };
 
 export type HelarcMainSnapshotStatus =
   | "idle"
@@ -66,6 +78,7 @@ export interface HelarcMainSnapshot {
 
 export type HelarcMainErrorCode =
   | "provider_config_missing"
+  | "provider_config_invalid"
   | "provider_not_available"
   | "session_already_running"
   | "permission_not_pending"
@@ -112,6 +125,7 @@ export type ResolveHelarcPatchReviewResult =
 export interface HelarcMainControllerInput {
   provider?: Provider | null;
   providerConfigError?: HelarcProviderConfigError | null;
+  providerProfile?: HelarcProviderProfile | null;
 }
 
 export class HelarcMainController {
@@ -133,12 +147,14 @@ export class HelarcMainController {
     this.provider = input.providerConfigError
       ? {
           configured: false,
+          activeProfile: null,
+          profiles: [],
           error: {
-            code: "provider_config_missing",
+            code: input.providerConfigError.code,
             message: input.providerConfigError.message,
           },
         }
-      : { configured: true, error: null };
+      : createConfiguredProviderSnapshot(input.providerProfile);
   }
 
   getSnapshot(): HelarcMainSnapshot {
@@ -431,4 +447,34 @@ function readStringArray(value: unknown): string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string")
     ? value
     : [];
+}
+
+function createConfiguredProviderSnapshot(
+  profile: HelarcProviderProfile | null | undefined,
+): HelarcProviderSnapshot {
+  const activeProfile = profile ?? createInjectedProviderProfile();
+  return {
+    configured: true,
+    activeProfile,
+    profiles: [activeProfile],
+    error: null,
+  };
+}
+
+function createInjectedProviderProfile(): HelarcProviderProfile {
+  const result = createHelarcProviderProfile({
+    id: "test-provider",
+    displayName: "Injected Test Provider",
+    baseUrl: "https://provider.local/v1",
+    model: "test-model",
+    timeoutMs: 30_000,
+    credentialStatus: "empty_allowed",
+    isActive: true,
+  });
+
+  if (!result.ok) {
+    throw new Error("Injected provider profile is invalid.");
+  }
+
+  return result.profile;
 }

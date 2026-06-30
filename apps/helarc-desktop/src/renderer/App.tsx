@@ -14,7 +14,21 @@ import type { HelarcMainSnapshot, HelarcStartSessionResult } from "../shared/Hel
 const initialSnapshot: HelarcMainSnapshot = {
   status: "idle",
   workspace: null,
-  provider: { configured: true, error: null },
+  provider: {
+    configured: true,
+    activeProfile: {
+      id: "initial",
+      displayName: "Initial Provider",
+      endpointLabel: "provider.local",
+      baseUrlOrigin: "https://provider.local",
+      model: "initial",
+      timeoutMs: 30_000,
+      credentialStatus: "missing",
+      isActive: true,
+    },
+    profiles: [],
+    error: null,
+  },
   acceptedTask: null,
   pendingPermission: null,
   pendingPatchReview: null,

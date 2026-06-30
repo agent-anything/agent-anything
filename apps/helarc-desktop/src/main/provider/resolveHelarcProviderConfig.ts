@@ -1,3 +1,5 @@
+import { createHelarcProviderProfile, type HelarcProviderProfile } from "@agent-anything/helarc";
+
 export interface HelarcProviderConfig {
   baseUrl: string;
   apiKey: string;
@@ -5,14 +7,18 @@ export interface HelarcProviderConfig {
   timeoutMs: number;
 }
 
+export type HelarcProviderConfigErrorCode =
+  | "provider_config_missing"
+  | "provider_config_invalid";
+
 export interface HelarcProviderConfigError {
-  code: "provider_config_missing";
+  code: HelarcProviderConfigErrorCode;
   message: string;
   missingKeys: string[];
 }
 
 export type ResolveHelarcProviderConfigResult =
-  | { ok: true; config: HelarcProviderConfig }
+  | { ok: true; config: HelarcProviderConfig; profile: HelarcProviderProfile }
   | { ok: false; error: HelarcProviderConfigError };
 
 export function resolveHelarcProviderConfig(
@@ -36,14 +42,38 @@ export function resolveHelarcProviderConfig(
     };
   }
 
+  const apiKey = readEnv(env, "HELARC_PROVIDER_API_KEY") ?? "";
+  const timeoutMs = readTimeoutMs(env);
+  const profileResult = createHelarcProviderProfile({
+    id: "env-provider",
+    displayName: "Environment Provider",
+    baseUrl,
+    model,
+    timeoutMs,
+    credentialStatus: apiKey.length > 0 ? "present" : "empty_allowed",
+    isActive: true,
+  });
+
+  if (!profileResult.ok) {
+    return {
+      ok: false,
+      error: {
+        code: "provider_config_invalid",
+        message: "Provider configuration is invalid.",
+        missingKeys: [],
+      },
+    };
+  }
+
   return {
     ok: true,
     config: {
       baseUrl,
-      apiKey: readEnv(env, "HELARC_PROVIDER_API_KEY") ?? "",
+      apiKey,
       model,
-      timeoutMs: readTimeoutMs(env),
+      timeoutMs,
     },
+    profile: profileResult.profile,
   };
 }
 

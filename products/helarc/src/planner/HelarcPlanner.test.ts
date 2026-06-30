@@ -124,12 +124,14 @@ describe("Helarc planner", () => {
 });
 
 class FakeProvider implements Provider {
-  readonly capabilities = {
+  readonly descriptor = {
     id: "fake-helarc-provider",
     name: "Fake Helarc Provider",
-    supportsToolPlanning: true,
-    supportsStructuredOutput: true,
-    supportsStreaming: false,
+    capabilities: {
+      supportsToolPlanning: true,
+      supportsStructuredOutput: true,
+      supportsStreaming: false,
+    },
     metadata: {},
   };
   lastRequest: ProviderRequest | null = null;

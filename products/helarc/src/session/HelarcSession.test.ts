@@ -267,12 +267,14 @@ describe("Helarc read-only session", () => {
 });
 
 class ScriptedProvider implements Provider {
-  readonly capabilities = {
+  readonly descriptor = {
     id: "scripted-helarc-provider",
     name: "Scripted Helarc Provider",
-    supportsToolPlanning: true,
-    supportsStructuredOutput: true,
-    supportsStreaming: false,
+    capabilities: {
+      supportsToolPlanning: true,
+      supportsStructuredOutput: true,
+      supportsStreaming: false,
+    },
     metadata: {},
   };
   readonly requests: ProviderRequest[] = [];

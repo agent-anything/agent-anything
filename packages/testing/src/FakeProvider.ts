@@ -1,29 +1,34 @@
 import type {
   Provider,
   ProviderCapabilities,
+  ProviderDescriptor,
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/providers";
 
 export interface FakeProviderInput {
-  capabilities?: Partial<ProviderCapabilities>;
+  descriptor?: Partial<Omit<ProviderDescriptor, "capabilities">> & {
+    capabilities?: Partial<ProviderCapabilities>;
+  };
   responses?: ProviderResponse[];
 }
 
 export class FakeProvider implements Provider {
-  readonly capabilities: ProviderCapabilities;
+  readonly descriptor: ProviderDescriptor;
   private readonly responses: ProviderResponse[];
   private readonly recordedRequests: ProviderRequest[] = [];
 
   constructor(input: FakeProviderInput = {}) {
-    this.capabilities = {
-      id: "fake-provider",
-      name: "Fake Provider",
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: false,
-      metadata: {},
-      ...input.capabilities,
+    this.descriptor = {
+      id: input.descriptor?.id ?? "fake-provider",
+      name: input.descriptor?.name ?? "Fake Provider",
+      metadata: input.descriptor?.metadata ?? {},
+      capabilities: {
+        supportsToolPlanning: true,
+        supportsStructuredOutput: true,
+        supportsStreaming: false,
+        ...input.descriptor?.capabilities,
+      },
     };
     this.responses = [...(input.responses ?? [])];
   }
@@ -42,7 +47,7 @@ export class FakeProvider implements Provider {
           message: "FakeProvider has no queued response.",
         },
         metadata: {
-          providerId: this.capabilities.id,
+          providerId: this.descriptor.id,
         },
       };
     }

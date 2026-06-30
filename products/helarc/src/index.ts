@@ -33,6 +33,19 @@ export {
   parseStructuredOutput,
 } from "./planner/index.js";
 export type {
+  CreateHelarcProviderProfileInput,
+  CreateHelarcProviderProfileResult,
+  HelarcProviderCredentialStatus,
+  HelarcProviderProfile,
+  HelarcProviderProfileError,
+  HelarcProviderProfileErrorCode,
+  SelectHelarcProviderProfileResult,
+} from "./provider-profile/index.js";
+export {
+  createHelarcProviderProfile,
+  selectHelarcProviderProfile,
+} from "./provider-profile/index.js";
+export type {
   HelarcActivityItem,
   HelarcPatchReviewBridge,
   HelarcPatchReviewDecision,

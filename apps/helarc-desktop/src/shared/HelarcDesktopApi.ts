@@ -14,9 +14,35 @@ export interface HelarcMainError {
   message: string;
 }
 
+export type HelarcProviderCredentialStatus =
+  | "present"
+  | "empty_allowed"
+  | "missing";
+
+export interface HelarcProviderProfileSnapshot {
+  id: string;
+  displayName: string;
+  endpointLabel: string;
+  baseUrlOrigin: string;
+  model: string;
+  timeoutMs: number;
+  credentialStatus: HelarcProviderCredentialStatus;
+  isActive: boolean;
+}
+
 export type HelarcProviderSnapshot =
-  | { configured: true; error: null }
-  | { configured: false; error: HelarcMainError };
+  | {
+      configured: true;
+      activeProfile: HelarcProviderProfileSnapshot;
+      profiles: HelarcProviderProfileSnapshot[];
+      error: null;
+    }
+  | {
+      configured: false;
+      activeProfile: null;
+      profiles: HelarcProviderProfileSnapshot[];
+      error: HelarcMainError;
+    };
 
 export type HelarcMainSnapshotStatus =
   | "idle"

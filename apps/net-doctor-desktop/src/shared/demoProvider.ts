@@ -25,12 +25,14 @@ export function createDesktopDemoProvider(): Provider {
 
 function createQueuedDesktopDemoProvider(responses: ProviderResponse[]): Provider {
   return {
-    capabilities: {
+    descriptor: {
       id: "net-doctor-desktop-demo-provider",
       name: "NetDoctor Desktop Demo Provider",
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: false,
+      capabilities: {
+        supportsToolPlanning: true,
+        supportsStructuredOutput: true,
+        supportsStreaming: false,
+      },
       metadata: {},
     },
     async send(_request: ProviderRequest) {

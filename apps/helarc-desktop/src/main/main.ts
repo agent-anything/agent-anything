@@ -34,6 +34,7 @@ function createWindow(): void {
   const controller = new HelarcMainController({
     provider: providerConfig.ok ? new OpenAICompatibleProvider(providerConfig.config) : null,
     providerConfigError: providerConfig.ok ? null : providerConfig.error,
+    providerProfile: providerConfig.ok ? providerConfig.profile : null,
   });
   registerHelarcIpc({ window, controller });
   window.setTitle(helarcProduct.displayName);

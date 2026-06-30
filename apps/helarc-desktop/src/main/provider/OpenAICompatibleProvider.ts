@@ -1,4 +1,4 @@
-import type { Provider, ProviderCapabilities, ProviderRequest, ProviderResponse } from "@agent-anything/providers";
+import type { Provider, ProviderDescriptor, ProviderRequest, ProviderResponse } from "@agent-anything/providers";
 import type { HelarcProviderConfig } from "./resolveHelarcProviderConfig.js";
 
 export interface FetchResponseLike {
@@ -18,12 +18,14 @@ export type FetchLike = (
 ) => Promise<FetchResponseLike>;
 
 export class OpenAICompatibleProvider implements Provider {
-  readonly capabilities: ProviderCapabilities = {
+  readonly descriptor: ProviderDescriptor = {
     id: "helarc-openai-compatible",
     name: "Helarc OpenAI-compatible Provider",
-    supportsToolPlanning: true,
-    supportsStructuredOutput: true,
-    supportsStreaming: false,
+    capabilities: {
+      supportsToolPlanning: true,
+      supportsStructuredOutput: true,
+      supportsStreaming: false,
+    },
     metadata: {},
   };
 

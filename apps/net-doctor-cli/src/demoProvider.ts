@@ -35,12 +35,14 @@ export function createDemoNetDoctorProvider(): Provider {
 
 function createQueuedDemoProvider(responses: ProviderResponse[]): Provider {
   return {
-    capabilities: {
+    descriptor: {
       id: "net-doctor-demo-provider",
       name: "NetDoctor Demo Provider",
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: false,
+      capabilities: {
+        supportsToolPlanning: true,
+        supportsStructuredOutput: true,
+        supportsStreaming: false,
+      },
       metadata: {},
     },
     async send(_request: ProviderRequest) {
