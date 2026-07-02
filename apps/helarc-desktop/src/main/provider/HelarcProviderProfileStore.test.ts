@@ -16,6 +16,7 @@ describe("FileHelarcProviderProfileStore", () => {
     const store = new FileHelarcProviderProfileStore(profilePath);
 
     const saved = await store.saveActiveProfile({
+      providerKind: "openai-compatible",
       displayName: "DeepSeek",
       baseUrl: "https://api.deepseek.com/v1",
       model: "deepseek-chat",
@@ -27,12 +28,14 @@ describe("FileHelarcProviderProfileStore", () => {
     expect(saved).toMatchObject({
       ok: true,
       config: {
+        providerKind: "openai-compatible",
         baseUrl: "https://api.deepseek.com/v1",
         apiKey: "secret-key",
         model: "deepseek-chat",
         timeoutMs: 45_000,
       },
       profile: {
+        providerKind: "openai-compatible",
         displayName: "DeepSeek",
         baseUrl: "https://api.deepseek.com/v1",
         credentialStatus: "present",
@@ -64,6 +67,7 @@ describe("FileHelarcProviderProfileStore", () => {
     const store = new FileHelarcProviderProfileStore(profilePath);
 
     await store.saveActiveProfile({
+      providerKind: "openai-compatible",
       displayName: "Local",
       baseUrl: "http://localhost:11434/v1",
       model: "gemma3:4b",
@@ -73,6 +77,7 @@ describe("FileHelarcProviderProfileStore", () => {
     }, credentialStore);
 
     const saved = await store.saveActiveProfile({
+      providerKind: "openai-compatible",
       displayName: "Local",
       baseUrl: "http://127.0.0.1:11434/v1",
       model: "gemma3:4b",
@@ -84,9 +89,11 @@ describe("FileHelarcProviderProfileStore", () => {
     expect(saved).toMatchObject({
       ok: true,
       config: {
+        providerKind: "openai-compatible",
         baseUrl: "http://127.0.0.1:11434/v1",
       },
       profile: {
+        providerKind: "openai-compatible",
         baseUrl: "http://127.0.0.1:11434/v1",
         baseUrlOrigin: "http://127.0.0.1:11434",
       },
@@ -117,6 +124,7 @@ describe("FileHelarcProviderProfileStore", () => {
     const store = new FileHelarcProviderProfileStore(profilePath);
 
     await store.saveActiveProfile({
+      providerKind: "openai-compatible",
       displayName: "Cloud Provider",
       baseUrl: "https://first.provider/v1",
       model: "model-a",
@@ -126,6 +134,7 @@ describe("FileHelarcProviderProfileStore", () => {
     }, credentialStore);
 
     const saved = await store.saveActiveProfile({
+      providerKind: "openai-compatible",
       displayName: "Cloud Provider",
       baseUrl: "https://second.provider/v1",
       model: "model-a",
@@ -137,16 +146,53 @@ describe("FileHelarcProviderProfileStore", () => {
     expect(saved).toMatchObject({
       ok: true,
       config: {
+        providerKind: "openai-compatible",
         baseUrl: "https://second.provider/v1",
         apiKey: "secret-key",
       },
       profile: {
+        providerKind: "openai-compatible",
         baseUrl: "https://second.provider/v1",
         credentialStatus: "present",
       },
     });
     await expect(readFile(profilePath, "utf8")).resolves.toContain("https://second.provider/v1");
     await expect(readFile(profilePath, "utf8")).resolves.not.toContain("secret-key");
+  });
+
+  it("persists Ollama native provider kind without requiring an API key", async () => {
+    const rootPath = await mkdtemp(join(tmpdir(), "helarc-provider-profile-store-"));
+    const profilePath = join(rootPath, "provider-profile.json");
+    const credentialStore = new ProviderCredentialStore(
+      new MemoryCredentialPersistence(),
+      new PlainTextCipher(),
+    );
+    const store = new FileHelarcProviderProfileStore(profilePath);
+
+    const saved = await store.saveActiveProfile({
+      providerKind: "ollama",
+      displayName: "Local Gemma",
+      baseUrl: "http://localhost:11434",
+      model: "gemma3:4b",
+      timeoutMs: 30_000,
+      apiKeyUpdate: "clear",
+      apiKey: "",
+    }, credentialStore);
+
+    expect(saved).toMatchObject({
+      ok: true,
+      config: {
+        providerKind: "ollama",
+        baseUrl: "http://localhost:11434",
+        apiKey: "",
+      },
+      profile: {
+        providerKind: "ollama",
+        baseUrl: "http://localhost:11434/",
+        credentialStatus: "empty_allowed",
+      },
+    });
+    await expect(readFile(profilePath, "utf8")).resolves.toContain("\"providerKind\": \"ollama\"");
   });
 });
 

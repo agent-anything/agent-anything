@@ -1,6 +1,7 @@
-import { createHelarcProviderProfile, type HelarcProviderProfile } from "@agent-anything/helarc";
+import { createHelarcProviderProfile, type HelarcProviderKind, type HelarcProviderProfile } from "@agent-anything/helarc";
 
 export interface HelarcProviderConfig {
+  providerKind: HelarcProviderKind;
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -44,8 +45,10 @@ export function resolveHelarcProviderConfig(
 
   const apiKey = readEnv(env, "HELARC_PROVIDER_API_KEY") ?? "";
   const timeoutMs = readTimeoutMs(env);
+  const providerKind = readProviderKind(env);
   const profileResult = createHelarcProviderProfile({
     id: "env-provider",
+    providerKind,
     displayName: "Environment Provider",
     baseUrl,
     model,
@@ -68,6 +71,7 @@ export function resolveHelarcProviderConfig(
   return {
     ok: true,
     config: {
+      providerKind,
       baseUrl,
       apiKey,
       model,
@@ -75,6 +79,11 @@ export function resolveHelarcProviderConfig(
     },
     profile: profileResult.profile,
   };
+}
+
+function readProviderKind(env: NodeJS.ProcessEnv): HelarcProviderKind {
+  const value = readEnv(env, "HELARC_PROVIDER_KIND");
+  return value === "ollama" ? "ollama" : "openai-compatible";
 }
 
 function readEnv(env: NodeJS.ProcessEnv, key: string): string | undefined {

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HelarcMainController } from "./HelarcMainController.js";
 import { registerHelarcIpc } from "./ipc.js";
-import { OpenAICompatibleProvider } from "./provider/OpenAICompatibleProvider.js";
+import { createHelarcProvider } from "./provider/createHelarcProvider.js";
 import { createElectronProviderCredentialStore } from "./provider/createElectronProviderCredentialStore.js";
 import { FileHelarcProviderProfileStore } from "./provider/HelarcProviderProfileStore.js";
 import { resolveHelarcProviderConfig } from "./provider/resolveHelarcProviderConfig.js";
@@ -31,7 +31,6 @@ app.on("window-all-closed", () => {
 });
 
 async function createWindow(): Promise<void> {
-  debugger;
   const window = new BrowserWindow(createHelarcWindowOptions(
     join(currentDir, "../preload/preload.cjs"),
   ));
@@ -49,7 +48,7 @@ async function createWindow(): Promise<void> {
     join(userDataPath, "session-history.json"),
   );
   const controller = new HelarcMainController({
-    provider: providerConfig.ok ? new OpenAICompatibleProvider(providerConfig.config) : null,
+    provider: providerConfig.ok ? createHelarcProvider(providerConfig.config) : null,
     providerConfigError: providerConfig.ok ? null : providerConfig.error,
     providerProfile: providerConfig.ok ? providerConfig.profile : null,
     workspaceProfiles: await workspaceProfileStore.listProfiles(),

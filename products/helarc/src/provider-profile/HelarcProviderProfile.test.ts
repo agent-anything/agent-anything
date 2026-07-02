@@ -20,6 +20,7 @@ describe("createHelarcProviderProfile", () => {
       ok: true,
       profile: {
         id: "local",
+        providerKind: "openai-compatible",
         displayName: "Local Model",
         endpointLabel: "provider.local",
         baseUrl: "https://provider.local/v1/chat/completions",
@@ -36,8 +37,9 @@ describe("createHelarcProviderProfile", () => {
   it("allows explicit empty credential status for trusted local endpoints", () => {
     const result = createHelarcProviderProfile({
       id: "local",
+      providerKind: "ollama",
       displayName: "Local Model",
-      baseUrl: "http://localhost:11434/v1",
+      baseUrl: "http://localhost:11434",
       model: "local-model",
       timeoutMs: 30_000,
       credentialStatus: "empty_allowed",
@@ -46,7 +48,8 @@ describe("createHelarcProviderProfile", () => {
     expect(result).toMatchObject({
       ok: true,
       profile: {
-        baseUrl: "http://localhost:11434/v1",
+        providerKind: "ollama",
+        baseUrl: "http://localhost:11434/",
         baseUrlOrigin: "http://localhost:11434",
         credentialStatus: "empty_allowed",
         isActive: false,
@@ -88,6 +91,26 @@ describe("createHelarcProviderProfile", () => {
       error: {
         code: "provider_profile_base_url_invalid",
         message: "Provider profile base URL must use HTTP or HTTPS.",
+      },
+    });
+  });
+
+  it("rejects invalid provider kind", () => {
+    const result = createHelarcProviderProfile({
+      id: "profile-1",
+      providerKind: "unknown" as never,
+      displayName: "Provider",
+      baseUrl: "https://provider.local/v1",
+      model: "model-a",
+      timeoutMs: 1000,
+      credentialStatus: "present",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "provider_profile_kind_invalid",
+        message: "Provider profile kind is invalid.",
       },
     });
   });

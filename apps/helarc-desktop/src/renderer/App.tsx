@@ -12,6 +12,7 @@ import {
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type {
   HelarcMainSnapshot,
+  HelarcProviderKind,
   HelarcSessionHistoryRecord,
   HelarcStartSessionResult,
 } from "../shared/HelarcDesktopApi.js";
@@ -24,9 +25,10 @@ const initialSnapshot: HelarcMainSnapshot = {
   taskTemplates: [],
   provider: {
     configured: true,
-    activeProfile: {
-      id: "initial",
-      displayName: "Initial Provider",
+      activeProfile: {
+        id: "initial",
+        providerKind: "openai-compatible",
+        displayName: "Initial Provider",
       endpointLabel: "provider.local",
       baseUrl: "https://provider.local/v1",
       baseUrlOrigin: "https://provider.local",
@@ -537,7 +539,7 @@ function SettingsPanel({
   const provider = snapshot.provider.configured ? snapshot.provider.activeProfile : null;
   const [isSaving, setIsSaving] = useState(false);
   const formKey = provider
-    ? `${provider.id}:${provider.displayName}:${provider.baseUrl}:${provider.model}:${provider.timeoutMs}:${provider.credentialStatus}`
+    ? `${provider.id}:${provider.providerKind}:${provider.displayName}:${provider.baseUrl}:${provider.model}:${provider.timeoutMs}:${provider.credentialStatus}`
     : "unconfigured-provider";
 
   async function saveProviderConfig(event: FormEvent<HTMLFormElement>) {
@@ -548,6 +550,7 @@ function SettingsPanel({
     }
 
     const formData = new FormData(event.currentTarget);
+    const submittedProviderKind = readProviderKind(formData, provider?.providerKind ?? "openai-compatible");
     const submittedDisplayName = readFormString(formData, "displayName");
     const submittedBaseUrl = readFormString(formData, "baseUrl");
     const submittedModel = readFormString(formData, "model");
@@ -557,6 +560,7 @@ function SettingsPanel({
     setIsSaving(true);
     try {
       const nextSnapshot = await api.saveProviderConfig({
+        providerKind: submittedProviderKind,
         displayName: submittedDisplayName,
         baseUrl: submittedBaseUrl,
         model: submittedModel,
@@ -577,6 +581,17 @@ function SettingsPanel({
   return (
     <form key={formKey} className="settings-panel" aria-label="Provider settings" onSubmit={saveProviderConfig}>
       <strong>Provider</strong>
+      <label>
+        <span>Type</span>
+        <select
+          name="providerKind"
+          defaultValue={provider?.providerKind ?? "openai-compatible"}
+          disabled={isSaving}
+        >
+          <option value="openai-compatible">OpenAI-compatible</option>
+          <option value="ollama">Ollama</option>
+        </select>
+      </label>
       <label>
         <span>Name</span>
         <input
@@ -699,6 +714,11 @@ function readFormString(formData: FormData, key: string): string {
 function readFormNumber(formData: FormData, key: string, fallback: number): number {
   const parsed = Number(readFormString(formData, key));
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readProviderKind(formData: FormData, fallback: HelarcProviderKind): HelarcProviderKind {
+  const value = readFormString(formData, "providerKind");
+  return value === "openai-compatible" || value === "ollama" ? value : fallback;
 }
 
 function isSessionActive(status: HelarcMainSnapshot["status"]): boolean {

@@ -91,6 +91,7 @@ describe("HelarcMainController", () => {
       provider: new CompleteProvider(),
       providerProfile: {
         id: "env-provider",
+        providerKind: "openai-compatible",
         displayName: "Environment Provider",
         endpointLabel: "provider.local",
         baseUrl: "https://provider.local/v1",
@@ -108,6 +109,7 @@ describe("HelarcMainController", () => {
       configured: true,
       activeProfile: {
         id: "env-provider",
+        providerKind: "openai-compatible",
         displayName: "Environment Provider",
         endpointLabel: "provider.local",
         baseUrl: "https://provider.local/v1",
@@ -120,6 +122,7 @@ describe("HelarcMainController", () => {
       profiles: [
         {
           id: "env-provider",
+          providerKind: "openai-compatible",
           displayName: "Environment Provider",
           endpointLabel: "provider.local",
           baseUrl: "https://provider.local/v1",
@@ -244,6 +247,7 @@ describe("HelarcMainController", () => {
       provider: new CompleteProvider(),
       providerProfile: {
         id: "provider-a",
+        providerKind: "openai-compatible",
         displayName: "Provider A",
         endpointLabel: "provider.local",
         baseUrl: "https://provider.local/v1",

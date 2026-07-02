@@ -51,6 +51,7 @@ export type {
   CreateHelarcProviderProfileInput,
   CreateHelarcProviderProfileResult,
   HelarcProviderCredentialStatus,
+  HelarcProviderKind,
   HelarcProviderProfile,
   HelarcProviderProfileError,
   HelarcProviderProfileErrorCode,

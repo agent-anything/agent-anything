@@ -1,25 +1,21 @@
 import type { ProviderRequest } from "@agent-anything/providers";
 import { describe, expect, it } from "vitest";
-import { OpenAICompatibleProvider, type FetchLike } from "./OpenAICompatibleProvider.js";
+import { OllamaProvider } from "./OllamaProvider.js";
+import type { FetchLike } from "./OpenAICompatibleProvider.js";
 
-describe("OpenAICompatibleProvider", () => {
-  it("sends an OpenAI-compatible chat completions request", async () => {
+describe("OllamaProvider", () => {
+  it("sends an Ollama native generate request", async () => {
     const calls: Array<{ url: string; headers: Record<string, string>; body: unknown }> = [];
-    const provider = new OpenAICompatibleProvider({
-      providerKind: "openai-compatible",
-      baseUrl: "https://provider.local/v1/",
-      apiKey: "secret-key",
-      model: "model-a",
-      timeoutMs: 1000,
-    }, async (url, init) => {
+    const provider = new OllamaProvider(config(), async (url, init) => {
       calls.push({
         url,
         headers: init.headers,
         body: JSON.parse(init.body) as unknown,
       });
       return okResponse({
-        choices: [{ message: { content: "{\"action\":\"complete\",\"summary\":\"done\"}" } }],
-        usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+        response: "{\"action\":\"complete\",\"summary\":\"done\"}",
+        prompt_eval_count: 3,
+        eval_count: 4,
       });
     });
 
@@ -27,14 +23,13 @@ describe("OpenAICompatibleProvider", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
-      url: "https://provider.local/v1/chat/completions",
+      url: "http://localhost:11434/api/generate",
       headers: {
         "content-type": "application/json",
-        authorization: "Bearer secret-key",
       },
       body: {
-        model: "model-a",
-        messages: [{ role: "user", content: "hello" }],
+        model: "gemma3:4b",
+        prompt: "system: You are concise.\n\nuser: hello",
         stream: false,
       },
     });
@@ -45,18 +40,12 @@ describe("OpenAICompatibleProvider", () => {
     });
   });
 
-  it("maps HTTP failure without leaking credentials", async () => {
-    const provider = new OpenAICompatibleProvider({
-      providerKind: "openai-compatible",
-      baseUrl: "https://provider.local/v1",
-      apiKey: "secret-key",
-      model: "model-a",
-      timeoutMs: 1000,
-    }, async () => ({
+  it("maps HTTP failure without reading response body", async () => {
+    const provider = new OllamaProvider(config(), async () => ({
       ok: false,
-      status: 401,
+      status: 500,
       async json() {
-        return { error: "secret-key" };
+        return { response: "secret" };
       },
     }));
 
@@ -66,15 +55,15 @@ describe("OpenAICompatibleProvider", () => {
       status: "failed",
       error: {
         code: "provider_http_error",
-        message: "Provider request failed with HTTP 401.",
-        metadata: { status: 401 },
+        message: "Provider request failed with HTTP 500.",
+        metadata: { status: 500 },
       },
     });
-    expect(JSON.stringify(result)).not.toContain("secret-key");
+    expect(JSON.stringify(result)).not.toContain("secret");
   });
 
   it("maps malformed provider responses", async () => {
-    const provider = new OpenAICompatibleProvider(config(), async () => okResponse({ choices: [] }));
+    const provider = new OllamaProvider(config(), async () => okResponse({ done: true }));
 
     await expect(provider.send(request())).resolves.toMatchObject({
       status: "failed",
@@ -87,7 +76,7 @@ describe("OpenAICompatibleProvider", () => {
       init.signal.dispatchEvent(new Event("abort"));
       throw Object.assign(new Error("aborted"), { name: "AbortError" });
     };
-    const provider = new OpenAICompatibleProvider(config(), abortingFetch);
+    const provider = new OllamaProvider(config(), abortingFetch);
 
     await expect(provider.send(request())).resolves.toMatchObject({
       status: "failed",
@@ -98,10 +87,10 @@ describe("OpenAICompatibleProvider", () => {
 
 function config() {
   return {
-    providerKind: "openai-compatible" as const,
-    baseUrl: "https://provider.local/v1",
+    providerKind: "ollama" as const,
+    baseUrl: "http://localhost:11434/",
     apiKey: "",
-    model: "model-a",
+    model: "gemma3:4b",
     timeoutMs: 1000,
   };
 }
@@ -109,7 +98,10 @@ function config() {
 function request(): ProviderRequest {
   return {
     capability: "helarc.code-agent.plan",
-    messages: [{ role: "user", content: "hello", metadata: {} }],
+    messages: [
+      { role: "system", content: "You are concise.", metadata: {} },
+      { role: "user", content: "hello", metadata: {} },
+    ],
     metadata: {},
   };
 }

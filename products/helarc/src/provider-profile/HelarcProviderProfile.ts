@@ -3,8 +3,13 @@ export type HelarcProviderCredentialStatus =
   | "empty_allowed"
   | "missing";
 
+export type HelarcProviderKind =
+  | "openai-compatible"
+  | "ollama";
+
 export interface CreateHelarcProviderProfileInput {
   id: string;
+  providerKind?: HelarcProviderKind;
   displayName: string;
   baseUrl: string;
   model: string;
@@ -15,6 +20,7 @@ export interface CreateHelarcProviderProfileInput {
 
 export interface HelarcProviderProfile {
   id: string;
+  providerKind: HelarcProviderKind;
   displayName: string;
   endpointLabel: string;
   baseUrl: string;
@@ -33,6 +39,7 @@ export type HelarcProviderProfileErrorCode =
   | "provider_profile_model_required"
   | "provider_profile_timeout_invalid"
   | "provider_profile_credential_status_invalid"
+  | "provider_profile_kind_invalid"
   | "provider_profile_not_found";
 
 export interface HelarcProviderProfileError {
@@ -54,6 +61,14 @@ export function createHelarcProviderProfile(
   const id = input.id.trim();
   if (id.length === 0) {
     return reject("provider_profile_id_required", "Provider profile id is required.");
+  }
+
+  const providerKind = input.providerKind ?? "openai-compatible";
+  if (!isProviderKind(providerKind)) {
+    return reject(
+      "provider_profile_kind_invalid",
+      "Provider profile kind is invalid.",
+    );
   }
 
   const displayName = input.displayName.trim();
@@ -92,6 +107,7 @@ export function createHelarcProviderProfile(
     ok: true,
     profile: {
       id,
+      providerKind,
       displayName,
       endpointLabel: urlResult.url.host,
       baseUrl: urlResult.url.toString(),
@@ -127,6 +143,10 @@ export function selectHelarcProviderProfile(
       isActive: true,
     },
   };
+}
+
+function isProviderKind(value: unknown): value is HelarcProviderKind {
+  return value === "openai-compatible" || value === "ollama";
 }
 
 function normalizeBaseUrl(

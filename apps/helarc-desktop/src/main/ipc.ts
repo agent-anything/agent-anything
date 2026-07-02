@@ -1,6 +1,6 @@
 import { dialog, ipcMain, type BrowserWindow } from "electron";
 import type { HelarcMainController } from "./HelarcMainController.js";
-import { OpenAICompatibleProvider } from "./provider/OpenAICompatibleProvider.js";
+import { createHelarcProvider } from "./provider/createHelarcProvider.js";
 import type { ProviderCredentialStore } from "./provider/ProviderCredentialStore.js";
 import type {
   FileHelarcProviderProfileStore,
@@ -112,7 +112,7 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
     }
 
     return input.controller.configureProvider({
-      provider: new OpenAICompatibleProvider(saved.config),
+      provider: createHelarcProvider(saved.config),
       profile: saved.profile,
     });
   });
@@ -151,6 +151,7 @@ function readTaskText(payload: unknown): string {
 function readProviderConfig(payload: unknown): SaveHelarcProviderProfileInput {
   if (!isRecord(payload)) {
     return {
+      providerKind: "openai-compatible",
       displayName: "",
       baseUrl: "",
       model: "",
@@ -161,6 +162,7 @@ function readProviderConfig(payload: unknown): SaveHelarcProviderProfileInput {
   }
 
   return {
+    providerKind: readProviderKind(payload.providerKind),
     displayName: typeof payload.displayName === "string" ? payload.displayName : "",
     baseUrl: typeof payload.baseUrl === "string" ? payload.baseUrl : "",
     model: typeof payload.model === "string" ? payload.model : "",
@@ -168,6 +170,10 @@ function readProviderConfig(payload: unknown): SaveHelarcProviderProfileInput {
     apiKeyUpdate: readApiKeyUpdate(payload.apiKeyUpdate),
     apiKey: typeof payload.apiKey === "string" ? payload.apiKey : "",
   };
+}
+
+function readProviderKind(value: unknown): SaveHelarcProviderProfileInput["providerKind"] {
+  return value === "ollama" ? "ollama" : "openai-compatible";
 }
 
 function readApiKeyUpdate(value: unknown): SaveHelarcProviderProfileInput["apiKeyUpdate"] {

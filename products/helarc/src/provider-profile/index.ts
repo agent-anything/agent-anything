@@ -2,6 +2,7 @@ export type {
   CreateHelarcProviderProfileInput,
   CreateHelarcProviderProfileResult,
   HelarcProviderCredentialStatus,
+  HelarcProviderKind,
   HelarcProviderProfile,
   HelarcProviderProfileError,
   HelarcProviderProfileErrorCode,
@@ -11,4 +12,3 @@ export {
   createHelarcProviderProfile,
   selectHelarcProviderProfile,
 } from "./HelarcProviderProfile.js";
-

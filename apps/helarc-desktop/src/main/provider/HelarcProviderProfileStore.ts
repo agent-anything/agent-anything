@@ -1,5 +1,6 @@
 import {
   createHelarcProviderProfile,
+  type HelarcProviderKind,
   type HelarcProviderProfile,
   type HelarcProviderProfileError,
 } from "@agent-anything/helarc";
@@ -9,6 +10,7 @@ import type { HelarcProviderConfig } from "./resolveHelarcProviderConfig.js";
 import type { ProviderCredentialStore, ProviderCredentialStoreError } from "./ProviderCredentialStore.js";
 
 export interface SaveHelarcProviderProfileInput {
+  providerKind: HelarcProviderKind;
   displayName: string;
   baseUrl: string;
   model: string;
@@ -19,6 +21,7 @@ export interface SaveHelarcProviderProfileInput {
 
 export interface PersistedHelarcProviderProfile {
   id: string;
+  providerKind: HelarcProviderKind;
   displayName: string;
   baseUrl: string;
   model: string;
@@ -36,7 +39,6 @@ export class FileHelarcProviderProfileStore {
   async resolveActiveProfile(
     credentialStore: ProviderCredentialStore,
   ): Promise<ResolveHelarcStoredProviderProfileResult | null> {
-    debugger;
     const persisted = await this.readProfile();
     if (!persisted) {
       return null;
@@ -56,6 +58,7 @@ export class FileHelarcProviderProfileStore {
   ): Promise<ResolveHelarcStoredProviderProfileResult> {
     const persisted: PersistedHelarcProviderProfile = {
       id: "desktop-provider",
+      providerKind: input.providerKind,
       displayName: input.displayName.trim(),
       baseUrl: input.baseUrl.trim(),
       model: input.model.trim(),
@@ -63,7 +66,6 @@ export class FileHelarcProviderProfileStore {
       updatedAt: new Date().toISOString(),
     };
 
-    debugger;
     const credential = await resolveCredentialUpdate(persisted.id, input, credentialStore);
     if (!credential.ok) {
       return { ok: false, error: credential.error };
@@ -82,7 +84,7 @@ export class FileHelarcProviderProfileStore {
   private async readProfile(): Promise<PersistedHelarcProviderProfile | null> {
     try {
       const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as unknown;
-      return isPersistedHelarcProviderProfile(parsed) ? parsed : null;
+      return normalizePersistedHelarcProviderProfile(parsed);
     } catch (error) {
       if (isMissingFileError(error)) {
         return null;
@@ -132,6 +134,7 @@ function createResolvedProfile(
 ): ResolveHelarcStoredProviderProfileResult {
   const profileResult = createHelarcProviderProfile({
     id: persisted.id,
+    providerKind: persisted.providerKind,
     displayName: persisted.displayName,
     baseUrl: persisted.baseUrl,
     model: persisted.model,
@@ -147,6 +150,7 @@ function createResolvedProfile(
   return {
     ok: true,
     config: {
+      providerKind: persisted.providerKind,
       baseUrl: persisted.baseUrl,
       apiKey,
       model: persisted.model,
@@ -162,11 +166,28 @@ function isPersistedHelarcProviderProfile(value: unknown): value is PersistedHel
   }
 
   return typeof value.id === "string" &&
+    isProviderKind(value.providerKind) &&
     typeof value.displayName === "string" &&
     typeof value.baseUrl === "string" &&
     typeof value.model === "string" &&
     typeof value.timeoutMs === "number" &&
     typeof value.updatedAt === "string";
+}
+
+function normalizePersistedHelarcProviderProfile(value: unknown): PersistedHelarcProviderProfile | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const providerKind = isProviderKind(value.providerKind)
+    ? value.providerKind
+    : "openai-compatible";
+  const normalized = { ...value, providerKind };
+  return isPersistedHelarcProviderProfile(normalized) ? normalized : null;
+}
+
+function isProviderKind(value: unknown): value is HelarcProviderKind {
+  return value === "openai-compatible" || value === "ollama";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -13,6 +13,7 @@ describe("resolveHelarcProviderConfig", () => {
     expect(result).toEqual({
       ok: true,
       config: {
+        providerKind: "openai-compatible",
         baseUrl: "https://provider.local/v1",
         apiKey: "secret-key",
         model: "model-a",
@@ -20,6 +21,7 @@ describe("resolveHelarcProviderConfig", () => {
       },
       profile: {
         id: "env-provider",
+        providerKind: "openai-compatible",
         displayName: "Environment Provider",
         endpointLabel: "provider.local",
         baseUrl: "https://provider.local/v1",
@@ -57,9 +59,37 @@ describe("resolveHelarcProviderConfig", () => {
 
     expect(result).toMatchObject({
       ok: true,
+      config: {
+        providerKind: "openai-compatible",
+      },
       profile: {
+        providerKind: "openai-compatible",
         credentialStatus: "empty_allowed",
         baseUrlOrigin: "http://127.0.0.1:11434",
+      },
+    });
+  });
+
+  it("resolves Ollama provider kind from environment", () => {
+    const result = resolveHelarcProviderConfig({
+      HELARC_PROVIDER_KIND: "ollama",
+      HELARC_PROVIDER_BASE_URL: "http://localhost:11434",
+      HELARC_PROVIDER_MODEL: "gemma3:4b",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      config: {
+        providerKind: "ollama",
+        baseUrl: "http://localhost:11434",
+        apiKey: "",
+        model: "gemma3:4b",
+      },
+      profile: {
+        providerKind: "ollama",
+        baseUrl: "http://localhost:11434/",
+        baseUrlOrigin: "http://localhost:11434",
+        credentialStatus: "empty_allowed",
       },
     });
   });

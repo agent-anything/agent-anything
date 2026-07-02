@@ -44,8 +44,13 @@ export type HelarcProviderCredentialStatus =
   | "empty_allowed"
   | "missing";
 
+export type HelarcProviderKind =
+  | "openai-compatible"
+  | "ollama";
+
 export interface HelarcProviderProfileSnapshot {
   id: string;
+  providerKind: HelarcProviderKind;
   displayName: string;
   endpointLabel: string;
   baseUrl: string;
@@ -213,6 +218,7 @@ export interface HelarcSelectWorkspaceProfileInput {
 }
 
 export interface HelarcSaveProviderConfigInput {
+  providerKind: HelarcProviderKind;
   displayName: string;
   baseUrl: string;
   model: string;

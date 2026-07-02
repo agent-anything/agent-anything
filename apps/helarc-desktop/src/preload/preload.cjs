@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
   chooseWorkspace: () => ipcRenderer.invoke(channels.chooseWorkspace),
   getSnapshot: () => ipcRenderer.invoke(channels.getSnapshot),
   saveProviderConfig: (input) => ipcRenderer.invoke(channels.saveProviderConfig, {
+    providerKind: input?.providerKind === "ollama" ? "ollama" : "openai-compatible",
     displayName: typeof input?.displayName === "string" ? input.displayName : "",
     baseUrl: typeof input?.baseUrl === "string" ? input.baseUrl : "",
     model: typeof input?.model === "string" ? input.model : "",
