@@ -22,12 +22,14 @@ body,
 }
 
 button,
+input,
 select,
 textarea {
   font: inherit;
 }
 
 button:focus-visible,
+input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
   outline: 2px solid #26705a;
@@ -38,14 +40,17 @@ h1,
 h2,
 p,
 dl,
-dd {
+dd,
+form {
   margin: 0;
 }
 
 .app-shell {
   display: grid;
   grid-template-rows: 54px 48px minmax(0, 1fr) auto;
+  height: 100vh;
   min-height: 100vh;
+  overflow: hidden;
   background: #f4f5f3;
 }
 
@@ -592,6 +597,59 @@ h2 {
 
 .settings-panel {
   align-content: start;
+}
+
+.settings-panel label,
+.settings-status,
+.settings-error {
+  width: 100%;
+}
+
+.settings-panel label {
+  display: grid;
+  gap: 5px;
+}
+
+.settings-panel label span,
+.settings-status span {
+  color: #78838a;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.settings-panel input {
+  width: 100%;
+  height: 34px;
+  min-width: 0;
+  padding: 0 9px;
+  color: #26343e;
+  background: #f8faf8;
+  border: 1px solid #cbd2ce;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.settings-status {
+  display: flex;
+  min-height: 34px;
+  padding: 0 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: #f8faf8;
+  border: 1px solid #e0e4e1;
+  border-radius: 6px;
+}
+
+.settings-status strong {
+  font-size: 12px;
+}
+
+.settings-error {
+  color: #9a3f35;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .settings-panel dl {

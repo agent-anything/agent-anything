@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { HelarcMainController } from "./HelarcMainController.js";
 import { registerHelarcIpc } from "./ipc.js";
 import { OpenAICompatibleProvider } from "./provider/OpenAICompatibleProvider.js";
+import { createElectronProviderCredentialStore } from "./provider/createElectronProviderCredentialStore.js";
+import { FileHelarcProviderProfileStore } from "./provider/HelarcProviderProfileStore.js";
 import { resolveHelarcProviderConfig } from "./provider/resolveHelarcProviderConfig.js";
 import { FileHelarcSessionHistoryStore } from "./session-history/HelarcSessionHistoryStore.js";
 import { FileHelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
@@ -29,15 +31,22 @@ app.on("window-all-closed", () => {
 });
 
 async function createWindow(): Promise<void> {
+  debugger;
   const window = new BrowserWindow(createHelarcWindowOptions(
     join(currentDir, "../preload/preload.cjs"),
   ));
-  const providerConfig = resolveHelarcProviderConfig();
+  const userDataPath = app.getPath("userData");
+  const providerCredentialStore = createElectronProviderCredentialStore(userDataPath);
+  const providerProfileStore = new FileHelarcProviderProfileStore(
+    join(userDataPath, "provider-profile.json"),
+  );
+  const storedProviderConfig = await providerProfileStore.resolveActiveProfile(providerCredentialStore);
+  const providerConfig = storedProviderConfig ?? resolveHelarcProviderConfig();
   const workspaceProfileStore = new FileHelarcWorkspaceProfileStore(
-    join(app.getPath("userData"), "workspace-profiles.json"),
+    join(userDataPath, "workspace-profiles.json"),
   );
   const sessionHistoryStore = new FileHelarcSessionHistoryStore(
-    join(app.getPath("userData"), "session-history.json"),
+    join(userDataPath, "session-history.json"),
   );
   const controller = new HelarcMainController({
     provider: providerConfig.ok ? new OpenAICompatibleProvider(providerConfig.config) : null,
@@ -47,8 +56,34 @@ async function createWindow(): Promise<void> {
     sessionHistory: await sessionHistoryStore.listRecords(),
     onSessionHistoryRecord: (record) => sessionHistoryStore.appendRecord(record),
   });
-  registerHelarcIpc({ window, controller, workspaceProfileStore });
+  registerHelarcIpc({
+    window,
+    controller,
+    workspaceProfileStore,
+    providerProfileStore,
+    providerCredentialStore,
+  });
   window.setTitle(helarcProduct.displayName);
   window.once("ready-to-show", () => window.show());
+  const rendererDevServerUrl = readRendererDevServerUrl(process.env);
+  if (rendererDevServerUrl) {
+    void window.loadURL(rendererDevServerUrl);
+    return;
+  }
+
   void window.loadFile(join(currentDir, "../renderer/index.html"));
+}
+
+function readRendererDevServerUrl(env: NodeJS.ProcessEnv): string | null {
+  const value = env.HELARC_RENDERER_DEV_SERVER_URL?.trim();
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }

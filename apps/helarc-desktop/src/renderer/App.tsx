@@ -28,6 +28,7 @@ const initialSnapshot: HelarcMainSnapshot = {
       id: "initial",
       displayName: "Initial Provider",
       endpointLabel: "provider.local",
+      baseUrl: "https://provider.local/v1",
       baseUrlOrigin: "https://provider.local",
       model: "initial",
       timeoutMs: 30_000,
@@ -308,7 +309,7 @@ export function App() {
                 onSelectHistory={setSelectedHistoryId}
               />
             ) : activePanelMode === "settings" ? (
-              <SettingsPanel snapshot={snapshot} />
+              <SettingsPanel snapshot={snapshot} onSaved={setSnapshot} />
             ) : snapshot.pendingPermission ? (
               <div className="permission-panel">
                 <ShieldCheck size={24} aria-hidden="true" />
@@ -526,43 +527,115 @@ function HistoryRecordView({ record }: { record: HelarcSessionHistoryRecord }) {
   );
 }
 
-function SettingsPanel({ snapshot }: { snapshot: HelarcMainSnapshot }) {
+function SettingsPanel({
+  snapshot,
+  onSaved,
+}: {
+  snapshot: HelarcMainSnapshot;
+  onSaved: (snapshot: HelarcMainSnapshot) => void;
+}) {
   const provider = snapshot.provider.configured ? snapshot.provider.activeProfile : null;
+  const [isSaving, setIsSaving] = useState(false);
+  const formKey = provider
+    ? `${provider.id}:${provider.displayName}:${provider.baseUrl}:${provider.model}:${provider.timeoutMs}:${provider.credentialStatus}`
+    : "unconfigured-provider";
+
+  async function saveProviderConfig(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const api = getHelarcApi();
+    if (!api) {
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const submittedDisplayName = readFormString(formData, "displayName");
+    const submittedBaseUrl = readFormString(formData, "baseUrl");
+    const submittedModel = readFormString(formData, "model");
+    const submittedTimeoutMs = readFormNumber(formData, "timeoutMs", provider?.timeoutMs ?? 30_000);
+    const submittedApiKey = readFormString(formData, "apiKey");
+
+    setIsSaving(true);
+    try {
+      const nextSnapshot = await api.saveProviderConfig({
+        displayName: submittedDisplayName,
+        baseUrl: submittedBaseUrl,
+        model: submittedModel,
+        timeoutMs: submittedTimeoutMs,
+        apiKeyUpdate: submittedApiKey.trim().length > 0
+          ? "set"
+          : provider?.credentialStatus === "present"
+            ? "keep"
+            : "clear",
+        apiKey: submittedApiKey,
+      });
+      onSaved(nextSnapshot);
+    } finally {
+      setIsSaving(false);
+    }
+  }
 
   return (
-    <section className="settings-panel" aria-label="Desktop settings summary">
-      <strong>Desktop state</strong>
-      <dl>
-        <div>
-          <dt>Product</dt>
-          <dd>Helarc</dd>
-        </div>
-        <div>
-          <dt>Workspace</dt>
-          <dd>{snapshot.workspace?.name ?? "not selected"}</dd>
-        </div>
-        <div>
-          <dt>Provider</dt>
-          <dd>{provider?.displayName ?? snapshot.provider.error?.message ?? "not configured"}</dd>
-        </div>
-        <div>
-          <dt>Model</dt>
-          <dd>{provider?.model ?? "not configured"}</dd>
-        </div>
-        <div>
-          <dt>Credential</dt>
-          <dd>{provider?.credentialStatus ?? "missing"}</dd>
-        </div>
-        <div>
-          <dt>Templates</dt>
-          <dd>{snapshot.taskTemplates.length}</dd>
-        </div>
-        <div>
-          <dt>History</dt>
-          <dd>{snapshot.sessionHistory.length}</dd>
-        </div>
-      </dl>
-    </section>
+    <form key={formKey} className="settings-panel" aria-label="Provider settings" onSubmit={saveProviderConfig}>
+      <strong>Provider</strong>
+      <label>
+        <span>Name</span>
+        <input
+          name="displayName"
+          defaultValue={provider?.displayName ?? "OpenAI-compatible Provider"}
+          autoComplete="off"
+          disabled={isSaving}
+        />
+      </label>
+      <label>
+        <span>Base URL</span>
+        <input
+          name="baseUrl"
+          defaultValue={provider?.baseUrl ?? "https://api.openai.com/v1"}
+          autoComplete="off"
+          disabled={isSaving}
+        />
+      </label>
+      <label>
+        <span>Model</span>
+        <input
+          name="model"
+          defaultValue={provider?.model ?? ""}
+          autoComplete="off"
+          disabled={isSaving}
+        />
+      </label>
+      <label>
+        <span>Timeout</span>
+        <input
+          name="timeoutMs"
+          type="number"
+          min="1"
+          step="1000"
+          defaultValue={provider?.timeoutMs.toString() ?? "30000"}
+          autoComplete="off"
+          disabled={isSaving}
+        />
+      </label>
+      <label>
+        <span>API key</span>
+        <input
+          name="apiKey"
+          type="password"
+          defaultValue=""
+          autoComplete="off"
+          disabled={isSaving}
+          placeholder={provider?.credentialStatus === "present" ? "Stored key is present" : "Optional for local endpoints"}
+        />
+      </label>
+      <div className="settings-status">
+        <span>Credential</span>
+        <strong>{provider?.credentialStatus ?? "missing"}</strong>
+      </div>
+      {snapshot.provider.configured ? null : <p className="settings-error">{snapshot.provider.error.message}</p>}
+      <button className="primary-button compact" type="submit" disabled={isSaving}>
+        Save
+      </button>
+    </form>
   );
 }
 
@@ -616,6 +689,16 @@ function sidePanelTitle(mode: SidePanelMode): string {
   }
 
   return "Review";
+}
+
+function readFormString(formData: FormData, key: string): string {
+  const value = formData.get(key);
+  return typeof value === "string" ? value : "";
+}
+
+function readFormNumber(formData: FormData, key: string, fallback: number): number {
+  const parsed = Number(readFormString(formData, key));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function isSessionActive(status: HelarcMainSnapshot["status"]): boolean {

@@ -5,6 +5,7 @@ const channels = Object.freeze({
   getSnapshot: "helarc:get-snapshot",
   resolvePatchReview: "helarc:resolve-patch-review",
   resolvePermission: "helarc:resolve-permission",
+  saveProviderConfig: "helarc:save-provider-config",
   selectWorkspaceProfile: "helarc:select-workspace-profile",
   snapshotUpdated: "helarc:snapshot-updated",
   startSession: "helarc:start-session",
@@ -15,6 +16,16 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
   productId: "helarc",
   chooseWorkspace: () => ipcRenderer.invoke(channels.chooseWorkspace),
   getSnapshot: () => ipcRenderer.invoke(channels.getSnapshot),
+  saveProviderConfig: (input) => ipcRenderer.invoke(channels.saveProviderConfig, {
+    displayName: typeof input?.displayName === "string" ? input.displayName : "",
+    baseUrl: typeof input?.baseUrl === "string" ? input.baseUrl : "",
+    model: typeof input?.model === "string" ? input.model : "",
+    timeoutMs: typeof input?.timeoutMs === "number" ? input.timeoutMs : Number(input?.timeoutMs),
+    apiKeyUpdate: input?.apiKeyUpdate === "set" || input?.apiKeyUpdate === "keep" || input?.apiKeyUpdate === "clear"
+      ? input.apiKeyUpdate
+      : "clear",
+    apiKey: typeof input?.apiKey === "string" ? input.apiKey : "",
+  }),
   selectWorkspaceProfile: (input) => ipcRenderer.invoke(channels.selectWorkspaceProfile, {
     profileId: typeof input?.profileId === "string" ? input.profileId : "",
   }),

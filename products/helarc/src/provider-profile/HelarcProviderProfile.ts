@@ -17,6 +17,7 @@ export interface HelarcProviderProfile {
   id: string;
   displayName: string;
   endpointLabel: string;
+  baseUrl: string;
   baseUrlOrigin: string;
   model: string;
   timeoutMs: number;
@@ -93,6 +94,7 @@ export function createHelarcProviderProfile(
       id,
       displayName,
       endpointLabel: urlResult.url.host,
+      baseUrl: urlResult.url.toString(),
       baseUrlOrigin: urlResult.url.origin,
       model,
       timeoutMs: input.timeoutMs,
@@ -146,6 +148,12 @@ function normalizeBaseUrl(
         "Provider profile base URL must use HTTP or HTTPS.",
       );
     }
+    if (url.protocol === "http:" && !isLoopbackHost(url.hostname)) {
+      return reject(
+        "provider_profile_base_url_invalid",
+        "Provider profile base URL must use HTTPS unless it targets localhost.",
+      );
+    }
     return { ok: true, url };
   } catch {
     return reject(
@@ -153,6 +161,22 @@ function normalizeBaseUrl(
       "Provider profile base URL is invalid.",
     );
   }
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  if (normalized === "localhost" || normalized === "::1" || normalized === "[::1]") {
+    return true;
+  }
+
+  const parts = normalized.split(".");
+  if (parts.length !== 4 || parts.some((part) => part.length === 0)) {
+    return false;
+  }
+
+  const numbers = parts.map((part) => Number(part));
+  return numbers.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) &&
+    numbers[0] === 127;
 }
 
 function isCredentialStatus(
@@ -167,4 +191,3 @@ function reject(
 ): { ok: false; error: HelarcProviderProfileError } {
   return { ok: false, error: { code, message } };
 }
-

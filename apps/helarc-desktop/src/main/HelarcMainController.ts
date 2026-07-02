@@ -19,7 +19,7 @@ import {
 import type { PermissionRequest } from "@agent-anything/permission";
 import type { Provider } from "@agent-anything/providers";
 import { basename, isAbsolute, normalize } from "node:path";
-import type { HelarcProviderConfigError } from "./provider/resolveHelarcProviderConfig.js";
+import type { ProviderCredentialStoreError } from "./provider/ProviderCredentialStore.js";
 
 export interface HelarcWorkspaceSnapshot {
   id: string;
@@ -101,6 +101,15 @@ export type HelarcMainErrorCode =
   | "workspace_path_not_directory"
   | "workspace_profile_not_found"
   | "workspace_profile_invalid"
+  | ProviderCredentialStoreError["code"]
+  | "provider_profile_id_required"
+  | "provider_profile_display_name_required"
+  | "provider_profile_base_url_required"
+  | "provider_profile_base_url_invalid"
+  | "provider_profile_model_required"
+  | "provider_profile_timeout_invalid"
+  | "provider_profile_credential_status_invalid"
+  | "provider_profile_not_found"
   | HelarcTaskInputError["code"];
 
 export interface HelarcMainError {
@@ -137,7 +146,7 @@ export type ResolveHelarcPatchReviewResult =
 
 export interface HelarcMainControllerInput {
   provider?: Provider | null;
-  providerConfigError?: HelarcProviderConfigError | null;
+  providerConfigError?: (HelarcMainError & { missingKeys?: string[] }) | null;
   providerProfile?: HelarcProviderProfile | null;
   workspaceProfiles?: HelarcWorkspaceProfile[];
   sessionHistory?: HelarcSessionHistoryRecord[];
@@ -161,8 +170,8 @@ export class HelarcMainController {
   private currentSessionStartedAt: string | null = null;
   private lastPatchReview: CompletedPatchReview | null = null;
   private readonly onSessionHistoryRecord: HelarcMainControllerInput["onSessionHistoryRecord"];
-  private readonly provider: HelarcProviderSnapshot;
-  private readonly providerInstance: Provider | null;
+  private provider: HelarcProviderSnapshot;
+  private providerInstance: Provider | null;
   private status: HelarcMainSnapshotStatus = "idle";
   private nextTaskNumber = 1;
   private readonly snapshotSubscribers = new Set<(snapshot: HelarcMainSnapshot) => void>();
@@ -184,6 +193,24 @@ export class HelarcMainController {
           },
         }
       : createConfiguredProviderSnapshot(input.providerProfile);
+  }
+
+  configureProvider(input: {
+    provider: Provider | null;
+    profile: HelarcProviderProfile | null;
+    error?: HelarcMainError | null;
+  }): HelarcMainSnapshot {
+    this.providerInstance = input.provider;
+    this.provider = input.error
+      ? {
+          configured: false,
+          activeProfile: null,
+          profiles: [],
+          error: input.error,
+        }
+      : createConfiguredProviderSnapshot(input.profile);
+    this.lastError = null;
+    return this.publishSnapshot();
   }
 
   getSnapshot(): HelarcMainSnapshot {

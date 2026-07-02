@@ -48,6 +48,7 @@ export interface HelarcProviderProfileSnapshot {
   id: string;
   displayName: string;
   endpointLabel: string;
+  baseUrl: string;
   baseUrlOrigin: string;
   model: string;
   timeoutMs: number;
@@ -211,11 +212,21 @@ export interface HelarcSelectWorkspaceProfileInput {
   profileId: string;
 }
 
+export interface HelarcSaveProviderConfigInput {
+  displayName: string;
+  baseUrl: string;
+  model: string;
+  timeoutMs: number;
+  apiKeyUpdate: "keep" | "set" | "clear";
+  apiKey: string;
+}
+
 export interface HelarcDesktopApi {
   readonly bridgeVersion: 1;
   readonly productId: "helarc";
   chooseWorkspace(): Promise<HelarcMainSnapshot>;
   getSnapshot(): Promise<HelarcMainSnapshot>;
+  saveProviderConfig(input: HelarcSaveProviderConfigInput): Promise<HelarcMainSnapshot>;
   selectWorkspaceProfile(input: HelarcSelectWorkspaceProfileInput): Promise<HelarcMainSnapshot>;
   startSession(input: HelarcStartSessionInput): Promise<HelarcStartSessionResult>;
   resolvePermission(input: HelarcResolvePermissionInput): Promise<HelarcResolvePermissionResult>;

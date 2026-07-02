@@ -1,5 +1,11 @@
 import { dialog, ipcMain, type BrowserWindow } from "electron";
 import type { HelarcMainController } from "./HelarcMainController.js";
+import { OpenAICompatibleProvider } from "./provider/OpenAICompatibleProvider.js";
+import type { ProviderCredentialStore } from "./provider/ProviderCredentialStore.js";
+import type {
+  FileHelarcProviderProfileStore,
+  SaveHelarcProviderProfileInput,
+} from "./provider/HelarcProviderProfileStore.js";
 import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
 
 export const HELARC_IPC_CHANNELS = {
@@ -7,6 +13,7 @@ export const HELARC_IPC_CHANNELS = {
   getSnapshot: "helarc:get-snapshot",
   resolvePatchReview: "helarc:resolve-patch-review",
   resolvePermission: "helarc:resolve-permission",
+  saveProviderConfig: "helarc:save-provider-config",
   selectWorkspaceProfile: "helarc:select-workspace-profile",
   snapshotUpdated: "helarc:snapshot-updated",
   startSession: "helarc:start-session",
@@ -15,6 +22,8 @@ export const HELARC_IPC_CHANNELS = {
 export interface RegisterHelarcIpcInput {
   window: BrowserWindow;
   controller: HelarcMainController;
+  providerCredentialStore?: ProviderCredentialStore | null;
+  providerProfileStore?: FileHelarcProviderProfileStore | null;
   workspaceProfileStore?: HelarcWorkspaceProfileStore | null;
 }
 
@@ -75,6 +84,39 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
     return input.controller.selectWorkspaceProfile(resolved.profile);
   });
 
+  ipcMain.handle(HELARC_IPC_CHANNELS.saveProviderConfig, async (_event, payload: unknown) => {
+    if (!input.providerProfileStore || !input.providerCredentialStore) {
+      return input.controller.configureProvider({
+        provider: null,
+        profile: null,
+        error: {
+          code: "provider_config_missing",
+          message: "Provider profile storage is unavailable.",
+        },
+      });
+    }
+
+    const saved = await input.providerProfileStore.saveActiveProfile(
+      readProviderConfig(payload),
+      input.providerCredentialStore,
+    );
+    if (!saved.ok) {
+      return input.controller.configureProvider({
+        provider: null,
+        profile: null,
+        error: {
+          code: saved.error.code,
+          message: saved.error.message,
+        },
+      });
+    }
+
+    return input.controller.configureProvider({
+      provider: new OpenAICompatibleProvider(saved.config),
+      profile: saved.profile,
+    });
+  });
+
   ipcMain.handle(HELARC_IPC_CHANNELS.startSession, (_event, payload: unknown) => {
     const taskText = readTaskText(payload);
     return input.controller.startSession({ taskText });
@@ -104,6 +146,37 @@ function readTaskText(payload: unknown): string {
 
   const value = payload.taskText;
   return typeof value === "string" ? value : "";
+}
+
+function readProviderConfig(payload: unknown): SaveHelarcProviderProfileInput {
+  if (!isRecord(payload)) {
+    return {
+      displayName: "",
+      baseUrl: "",
+      model: "",
+      timeoutMs: 30_000,
+      apiKeyUpdate: "clear",
+      apiKey: "",
+    };
+  }
+
+  return {
+    displayName: typeof payload.displayName === "string" ? payload.displayName : "",
+    baseUrl: typeof payload.baseUrl === "string" ? payload.baseUrl : "",
+    model: typeof payload.model === "string" ? payload.model : "",
+    timeoutMs: readPositiveNumber(payload.timeoutMs, 30_000),
+    apiKeyUpdate: readApiKeyUpdate(payload.apiKeyUpdate),
+    apiKey: typeof payload.apiKey === "string" ? payload.apiKey : "",
+  };
+}
+
+function readApiKeyUpdate(value: unknown): SaveHelarcProviderProfileInput["apiKeyUpdate"] {
+  return value === "set" || value === "keep" || value === "clear" ? value : "clear";
+}
+
+function readPositiveNumber(value: unknown, fallback: number): number {
+  const numberValue = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : fallback;
 }
 
 function readPermissionDecision(payload: unknown): { requestId: string; decision: "granted" | "denied" } {

@@ -22,6 +22,7 @@ describe("resolveHelarcProviderConfig", () => {
         id: "env-provider",
         displayName: "Environment Provider",
         endpointLabel: "provider.local",
+        baseUrl: "https://provider.local/v1",
         baseUrlOrigin: "https://provider.local",
         model: "model-a",
         timeoutMs: 1500,

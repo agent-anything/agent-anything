@@ -22,6 +22,7 @@ describe("createHelarcProviderProfile", () => {
         id: "local",
         displayName: "Local Model",
         endpointLabel: "provider.local",
+        baseUrl: "https://provider.local/v1/chat/completions",
         baseUrlOrigin: "https://provider.local",
         model: "model-a",
         timeoutMs: 1500,
@@ -29,14 +30,14 @@ describe("createHelarcProviderProfile", () => {
         isActive: true,
       },
     });
-    expect(JSON.stringify(result)).not.toContain("chat/completions");
+    expect(JSON.stringify(result)).not.toContain("secret");
   });
 
   it("allows explicit empty credential status for trusted local endpoints", () => {
     const result = createHelarcProviderProfile({
       id: "local",
       displayName: "Local Model",
-      baseUrl: "http://127.0.0.1:11434/v1",
+      baseUrl: "http://localhost:11434/v1",
       model: "local-model",
       timeoutMs: 30_000,
       credentialStatus: "empty_allowed",
@@ -45,9 +46,29 @@ describe("createHelarcProviderProfile", () => {
     expect(result).toMatchObject({
       ok: true,
       profile: {
-        baseUrlOrigin: "http://127.0.0.1:11434",
+        baseUrl: "http://localhost:11434/v1",
+        baseUrlOrigin: "http://localhost:11434",
         credentialStatus: "empty_allowed",
         isActive: false,
+      },
+    });
+  });
+
+  it("rejects remote HTTP provider endpoints", () => {
+    const result = createHelarcProviderProfile({
+      id: "remote",
+      displayName: "Remote Provider",
+      baseUrl: "http://provider.example/v1",
+      model: "model-a",
+      timeoutMs: 1000,
+      credentialStatus: "present",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "provider_profile_base_url_invalid",
+        message: "Provider profile base URL must use HTTPS unless it targets localhost.",
       },
     });
   });
@@ -113,4 +134,3 @@ describe("selectHelarcProviderProfile", () => {
     });
   });
 });
-
