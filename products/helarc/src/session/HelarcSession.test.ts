@@ -88,6 +88,72 @@ describe("Helarc read-only session", () => {
     expect(provider.lastPlannerInputContexts).toEqual([0, 1]);
   });
 
+  it("runs list, read, and search tools inside the workspace boundary", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-read-only-tools-"));
+    await mkdir(join(workspaceRoot, "src"));
+    await writeFile(join(workspaceRoot, "src", "index.ts"), "export const value = 42;\n");
+
+    const provider = new ScriptedProvider([
+      {
+        action: "call_tool",
+        reason: "List workspace files.",
+        toolName: "codeAgent.listFiles",
+        input: { path: ".", recursive: true },
+      },
+      {
+        action: "call_tool",
+        reason: "Read the source file.",
+        toolName: "codeAgent.readFile",
+        input: { path: "src/index.ts" },
+      },
+      {
+        action: "call_tool",
+        reason: "Search for the exported value.",
+        toolName: "codeAgent.searchFiles",
+        input: { path: ".", query: "value" },
+      },
+      {
+        action: "complete",
+        summary: "Read-only tools completed.",
+      },
+    ]);
+
+    const result = await runHelarcReadOnlySession({
+      task: createTask(workspaceRoot),
+      provider,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.output.agentSummary).toBe("Read-only tools completed.");
+    expect(result.runtimeResult.evidenceRefs).toHaveLength(3);
+    expect(result.activity.filter((item) => item.kind === "tool.finished")).toHaveLength(3);
+    expect(provider.lastPlannerInputContexts).toEqual([0, 1, 2, 3]);
+  });
+
+  it("does not register shell execution in the default read-only session", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-read-only-shell-blocked-"));
+    const markerPath = join(workspaceRoot, "marker.txt");
+    const provider = new ScriptedProvider([
+      {
+        action: "call_tool",
+        reason: "Try a shell command.",
+        toolName: "codeAgent.runCommand",
+        input: createShellInput(markerPath),
+      },
+    ]);
+
+    const result = await runHelarcReadOnlySession({
+      task: createTask(workspaceRoot),
+      provider,
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.output.safeErrors).toEqual([
+      { code: "tool_not_found", message: "Tool is not registered: codeAgent.runCommand" },
+    ]);
+    await expect(access(markerPath)).rejects.toThrow();
+  });
+
   it("blocks shell execution when permission is denied before process start", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-shell-denied-"));
     const markerPath = join(workspaceRoot, "marker.txt");

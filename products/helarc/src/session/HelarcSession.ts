@@ -154,7 +154,7 @@ export async function runHelarcSession(
   const toolExecutionBoundary = new ToolExecutionBoundary({
     toolRegistry: registryResult.registry,
     evidenceBuilder,
-    permissionService: input.permissionBridge
+    permissionService: input.enableShell && input.permissionBridge
       ? createHostPermissionService({
           sessionId: input.sessionId ?? input.task.id,
           bridge: input.permissionBridge,

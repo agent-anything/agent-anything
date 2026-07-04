@@ -1,5 +1,10 @@
 import type { PlannerInput, PlanStep } from "@agent-anything/agent-core";
-import { CODE_AGENT_RUN_COMMAND_TOOL } from "@agent-anything/code-agent";
+import {
+  CODE_AGENT_LIST_FILES_TOOL,
+  CODE_AGENT_READ_FILE_TOOL,
+  CODE_AGENT_RUN_COMMAND_TOOL,
+  CODE_AGENT_SEARCH_FILES_TOOL,
+} from "@agent-anything/code-agent";
 import type { ProviderRequest, ProviderResponse } from "@agent-anything/providers";
 import type { ToolCall } from "@agent-anything/tools";
 import type { HelarcTaskInput } from "../task/index.js";
@@ -156,6 +161,8 @@ function buildSystemPrompt(): string {
     "Return only JSON. Do not wrap it in markdown.",
     "Use one of these actions: call_tool, complete, propose, stop.",
     "For call_tool, return action, toolName, input, and optional reason.",
+    `Default Phase9 tools are read-only: ${CODE_AGENT_LIST_FILES_TOOL}, ${CODE_AGENT_READ_FILE_TOOL}, ${CODE_AGENT_SEARCH_FILES_TOOL}.`,
+    "Do not call shell, write, patch, or long-running process tools unless the host explicitly enables them.",
     "For complete, return action and summary.",
     "For propose, return action, summary, and one change with operation create/update/delete, path, and content when needed.",
     "For stop, return action and reason.",

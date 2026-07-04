@@ -314,6 +314,7 @@ describe("HelarcMainController", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
+      runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
         {
           action: "call_tool",
@@ -407,6 +408,7 @@ describe("HelarcMainController", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-allow-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
+      runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
         {
           action: "call_tool",
@@ -470,6 +472,7 @@ describe("HelarcMainController", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-cancel-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
+      runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
         {
           action: "call_tool",
@@ -524,6 +527,53 @@ describe("HelarcMainController", () => {
           runtimeStatus: "blocked",
           runtimeCode: "permission_unavailable",
         },
+      },
+    });
+    await expect(access(markerPath)).rejects.toThrow();
+  });
+
+  it("keeps desktop runtime tool mode read-only by default", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-read-only-default-"));
+    const markerPath = join(workspaceRoot, "marker.txt");
+    const controller = new HelarcMainController({
+      provider: new ScriptedProvider([
+        {
+          action: "call_tool",
+          reason: "Try a shell command.",
+          toolName: "codeAgent.runCommand",
+          input: {
+            command: process.execPath,
+            args: [
+              "-e",
+              `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran')`,
+            ],
+            cwd: ".",
+            timeoutMs: 1_000,
+            reason: "Create a governed marker file.",
+          },
+        },
+      ]),
+    });
+    controller.selectWorkspacePath(workspaceRoot);
+
+    const failed = waitForStatus(controller, "failed");
+    controller.startSession({ taskText: "Run command" });
+
+    const snapshot = await failed;
+    expect(snapshot).toMatchObject({
+      status: "failed",
+      pendingPermission: null,
+      activeRun: {
+        status: "failed",
+        pendingPermission: null,
+        terminal: {
+          status: "failed",
+          runtimeStatus: "failed",
+          runtimeCode: "tool_not_found",
+        },
+      },
+      output: {
+        safeErrors: [{ code: "tool_not_found" }],
       },
     });
     await expect(access(markerPath)).rejects.toThrow();

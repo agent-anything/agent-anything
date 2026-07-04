@@ -162,6 +162,7 @@ export interface HelarcMainControllerInput {
   provider?: Provider | null;
   providerConfigError?: (HelarcMainError & { missingKeys?: string[] }) | null;
   providerProfile?: HelarcProviderProfile | null;
+  runtimeToolMode?: HelarcRuntimeToolMode;
   workspaceProfiles?: HelarcWorkspaceProfile[];
   sessionHistory?: HelarcSessionHistoryRecord[];
   taskTemplates?: HelarcTaskTemplate[];
@@ -169,6 +170,8 @@ export interface HelarcMainControllerInput {
     record: HelarcSessionHistoryRecord,
   ) => Promise<HelarcSessionHistoryRecord[]> | HelarcSessionHistoryRecord[];
 }
+
+export type HelarcRuntimeToolMode = "read-only" | "shell-enabled";
 
 export class HelarcMainController {
   private selectedWorkspace: HelarcWorkspaceSnapshot | null = null;
@@ -186,6 +189,7 @@ export class HelarcMainController {
   private readonly onSessionHistoryRecord: HelarcMainControllerInput["onSessionHistoryRecord"];
   private provider: HelarcProviderSnapshot;
   private providerInstance: Provider | null;
+  private readonly runtimeToolMode: HelarcRuntimeToolMode;
   private status: HelarcMainSnapshotStatus = "idle";
   private nextTaskNumber = 1;
   private cancellationRequested = false;
@@ -198,6 +202,7 @@ export class HelarcMainController {
     this.sessionHistory = input.sessionHistory ?? [];
     this.taskTemplates = input.taskTemplates ?? createBuiltInHelarcTaskTemplates();
     this.onSessionHistoryRecord = input.onSessionHistoryRecord;
+    this.runtimeToolMode = input.runtimeToolMode ?? "read-only";
     this.provider = input.providerConfigError
       ? {
           configured: false,
@@ -510,7 +515,7 @@ export class HelarcMainController {
       const sessionResult = await runHelarcSession({
         task,
         provider: this.providerInstance as Provider,
-        enableShell: true,
+        enableShell: this.runtimeToolMode === "shell-enabled",
         permissionBridge: this.createPermissionBridge(),
         patchReviewBridge: this.createPatchReviewBridge(),
         onActivity: (item, event) => {
