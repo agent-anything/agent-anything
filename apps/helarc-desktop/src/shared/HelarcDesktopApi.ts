@@ -1,3 +1,5 @@
+import type { HelarcRunSnapshot } from "@agent-anything/helarc";
+
 export interface HelarcWorkspaceSnapshot {
   id: string;
   name: string;
@@ -182,6 +184,7 @@ export interface HelarcMainSnapshot {
   pendingPermission: HelarcPermissionPromptSnapshot | null;
   pendingPatchReview: HelarcPatchReviewViewModel | null;
   activity: HelarcActivityItem[];
+  activeRun: HelarcRunSnapshot;
   output: HelarcSessionOutput | null;
   error: HelarcMainError | null;
 }

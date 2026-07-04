@@ -102,6 +102,7 @@ export {
   createHelarcRunInput,
   createHelarcRunTerminalSummary,
   createIdleHelarcRunSnapshot,
+  mapRuntimeEventToHelarcRunEvent,
 } from "./run/index.js";
 export type {
   CreateHelarcWorkspaceProfileInput,

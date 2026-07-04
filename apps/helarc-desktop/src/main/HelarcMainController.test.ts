@@ -239,6 +239,17 @@ describe("HelarcMainController", () => {
     });
     expect(snapshot.activity.map((item) => item.kind)).toContain("planner.started");
     expect(snapshot.activity.map((item) => item.kind)).toContain("plan.created");
+    expect(snapshot.activeRun).toMatchObject({
+      status: "completed",
+      terminal: {
+        status: "completed",
+        runtimeStatus: "succeeded",
+      },
+    });
+    expect(snapshot.activeRun.events.map((item) => item.kind)).toEqual(
+      expect.arrayContaining(["planning.started", "provider.output", "runtime.output"]),
+    );
+    expect(JSON.stringify(snapshot.activeRun.events)).not.toContain("rawProvider");
   });
 
   it("persists completed session history records for read-only review", async () => {
@@ -352,6 +363,13 @@ describe("HelarcMainController", () => {
     const blockedSnapshot = await blocked;
     expect(blockedSnapshot).toMatchObject({
       status: "blocked",
+      activeRun: {
+        status: "denied",
+        terminal: {
+          status: "denied",
+          runtimeStatus: "blocked",
+        },
+      },
       output: {
         safeErrors: [{ code: "permission_denied" }],
       },

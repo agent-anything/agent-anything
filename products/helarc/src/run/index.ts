@@ -20,6 +20,7 @@ export type {
   HelarcRunTerminalSummary,
   HelarcRunWorkspaceRef,
 } from "./HelarcRun.js";
+export { mapRuntimeEventToHelarcRunEvent } from "./HelarcRunEventMapping.js";
 export {
   createHelarcRunInput,
   createHelarcRunTerminalSummary,

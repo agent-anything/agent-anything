@@ -44,6 +44,21 @@ const initialSnapshot: HelarcMainSnapshot = {
   pendingPermission: null,
   pendingPatchReview: null,
   activity: [],
+  activeRun: {
+    runId: "",
+    status: "idle",
+    task: {
+      text: "",
+      templateId: null,
+    },
+    workspace: null,
+    provider: null,
+    events: [],
+    pendingPermission: null,
+    terminal: null,
+    startedAt: null,
+    metadata: {},
+  },
   output: null,
   error: null,
 };
