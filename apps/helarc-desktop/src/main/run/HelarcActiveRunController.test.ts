@@ -150,6 +150,32 @@ describe("HelarcActiveRunController", () => {
     });
   });
 
+  it("tracks pending permission and clears it after a decision", () => {
+    const controller = new HelarcActiveRunController();
+    controller.startRun(activeRunInput());
+    controller.markRunning();
+
+    expect(controller.requestPermission(permissionPrompt())).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "waiting_for_permission",
+        pendingPermission: {
+          requestId: "permission-1",
+          toolName: "codeAgent.runCommand",
+          inputSummary: "node -e ...",
+        },
+      },
+    });
+
+    expect(controller.resolvePermission()).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "running",
+        pendingPermission: null,
+      },
+    });
+  });
+
   it("resets to an idle snapshot", () => {
     const controller = new HelarcActiveRunController();
     controller.startRun(activeRunInput());
@@ -197,6 +223,19 @@ function activeRunInput() {
       model: "model-a",
     },
     metadata: { source: "test" },
+  };
+}
+
+function permissionPrompt() {
+  return {
+    requestId: "permission-1",
+    actionLabel: "Execute shell command",
+    toolName: "codeAgent.runCommand",
+    riskLevel: "high" as const,
+    workspaceDisplayName: "agent-anything",
+    explanation: "Create a governed marker file.",
+    inputSummary: "node -e ...",
+    createdAt: "2026-07-04T00:00:01.000Z",
   };
 }
 

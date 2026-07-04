@@ -9,6 +9,7 @@ import type {
 import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
 
 export const HELARC_IPC_CHANNELS = {
+  cancelSession: "helarc:cancel-session",
   chooseWorkspace: "helarc:choose-workspace",
   getSnapshot: "helarc:get-snapshot",
   resolvePatchReview: "helarc:resolve-patch-review",
@@ -120,6 +121,10 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   ipcMain.handle(HELARC_IPC_CHANNELS.startSession, (_event, payload: unknown) => {
     const taskText = readTaskText(payload);
     return input.controller.startSession({ taskText });
+  });
+
+  ipcMain.handle(HELARC_IPC_CHANNELS.cancelSession, () => {
+    return input.controller.cancelSession();
   });
 
   ipcMain.handle(HELARC_IPC_CHANNELS.resolvePermission, (_event, payload: unknown) => {

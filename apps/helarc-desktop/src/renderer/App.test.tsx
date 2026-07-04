@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { App } from "./App.js";
+import { App, PermissionPromptPanel } from "./App.js";
 
 describe("Helarc workbench shell", () => {
   it("renders the primary workbench surfaces", () => {
@@ -14,5 +14,32 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("History");
     expect(html).toContain("Settings");
     expect(html).toContain("Templates");
+  });
+
+  it("renders permission prompt decision actions", () => {
+    const html = renderToStaticMarkup(
+      <PermissionPromptPanel
+        prompt={{
+          requestId: "permission-1",
+          taskId: "task-1",
+          toolName: "codeAgent.runCommand",
+          reason: "Create a governed marker file.",
+          command: "node",
+          args: ["-e", "..."],
+          cwd: ".",
+          rootName: "workspace",
+        }}
+        isBusy={false}
+        onCancel={() => undefined}
+        onResolve={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("codeAgent.runCommand");
+    expect(html).toContain("Create a governed marker file.");
+    expect(html).toContain("node -e ...");
+    expect(html).toContain("Cancel");
+    expect(html).toContain("Deny");
+    expect(html).toContain("Approve");
   });
 });

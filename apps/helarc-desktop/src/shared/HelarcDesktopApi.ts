@@ -206,6 +206,10 @@ export type HelarcResolvePermissionResult =
   | { ok: true; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
+export type HelarcCancelSessionResult =
+  | { ok: true; snapshot: HelarcMainSnapshot }
+  | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
+
 export interface HelarcResolvePatchReviewInput {
   patchId: string;
   decision: "accepted" | "rejected";
@@ -238,6 +242,7 @@ export interface HelarcDesktopApi {
   saveProviderConfig(input: HelarcSaveProviderConfigInput): Promise<HelarcMainSnapshot>;
   selectWorkspaceProfile(input: HelarcSelectWorkspaceProfileInput): Promise<HelarcMainSnapshot>;
   startSession(input: HelarcStartSessionInput): Promise<HelarcStartSessionResult>;
+  cancelSession(): Promise<HelarcCancelSessionResult>;
   resolvePermission(input: HelarcResolvePermissionInput): Promise<HelarcResolvePermissionResult>;
   resolvePatchReview(input: HelarcResolvePatchReviewInput): Promise<HelarcResolvePatchReviewResult>;
   subscribeSnapshot(listener: (snapshot: HelarcMainSnapshot) => void): () => void;

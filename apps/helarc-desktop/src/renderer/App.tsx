@@ -178,6 +178,21 @@ export function App() {
     }
   }
 
+  async function cancelSession() {
+    const api = getHelarcApi();
+    if (!api) {
+      return;
+    }
+
+    setIsBusy(true);
+    try {
+      const result = await api.cancelSession();
+      setSnapshot(result.snapshot);
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
   async function resolvePatchReview(decision: "accepted" | "rejected") {
     const api = getHelarcApi();
     const pendingPatchReview = snapshot.pendingPatchReview;
@@ -328,34 +343,12 @@ export function App() {
             ) : activePanelMode === "settings" ? (
               <SettingsPanel snapshot={snapshot} onSaved={setSnapshot} />
             ) : snapshot.pendingPermission ? (
-              <div className="permission-panel">
-                <ShieldCheck size={24} aria-hidden="true" />
-                <strong>{snapshot.pendingPermission.toolName}</strong>
-                <span>{snapshot.pendingPermission.reason}</span>
-                <code>{formatCommand(snapshot.pendingPermission.command, snapshot.pendingPermission.args)}</code>
-                <div className="permission-meta">
-                  <span>{snapshot.pendingPermission.rootName ?? "workspace"}</span>
-                  <span>{snapshot.pendingPermission.cwd ?? "."}</span>
-                </div>
-                <div className="permission-actions">
-                  <button
-                    className="secondary-button danger"
-                    type="button"
-                    onClick={() => void resolvePermission("denied")}
-                    disabled={isBusy}
-                  >
-                    Deny
-                  </button>
-                  <button
-                    className="primary-button compact"
-                    type="button"
-                    onClick={() => void resolvePermission("granted")}
-                    disabled={isBusy}
-                  >
-                    Approve
-                  </button>
-                </div>
-              </div>
+              <PermissionPromptPanel
+                prompt={snapshot.pendingPermission}
+                isBusy={isBusy}
+                onCancel={() => void cancelSession()}
+                onResolve={(decision) => void resolvePermission(decision)}
+              />
             ) : snapshot.pendingPatchReview ? (
               <div className="patch-panel">
                 <FileCode2 size={24} aria-hidden="true" />
@@ -472,6 +465,61 @@ export function App() {
         {snapshot.error ? <p className="composer-message error">{snapshot.error.message}</p> : null}
         {startResult?.ok ? <p className="composer-message">Session started</p> : null}
       </form>
+    </div>
+  );
+}
+
+export function PermissionPromptPanel({
+  prompt,
+  isBusy,
+  onCancel,
+  onResolve,
+}: {
+  prompt: HelarcMainSnapshot["pendingPermission"];
+  isBusy: boolean;
+  onCancel: () => void;
+  onResolve: (decision: "granted" | "denied") => void;
+}) {
+  if (!prompt) {
+    return null;
+  }
+
+  return (
+    <div className="permission-panel">
+      <ShieldCheck size={24} aria-hidden="true" />
+      <strong>{prompt.toolName}</strong>
+      <span>{prompt.reason}</span>
+      <code>{formatCommand(prompt.command, prompt.args)}</code>
+      <div className="permission-meta">
+        <span>{prompt.rootName ?? "workspace"}</span>
+        <span>{prompt.cwd ?? "."}</span>
+      </div>
+      <div className="permission-actions">
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={onCancel}
+          disabled={isBusy}
+        >
+          Cancel
+        </button>
+        <button
+          className="secondary-button danger"
+          type="button"
+          onClick={() => onResolve("denied")}
+          disabled={isBusy}
+        >
+          Deny
+        </button>
+        <button
+          className="primary-button compact"
+          type="button"
+          onClick={() => onResolve("granted")}
+          disabled={isBusy}
+        >
+          Approve
+        </button>
+      </div>
     </div>
   );
 }

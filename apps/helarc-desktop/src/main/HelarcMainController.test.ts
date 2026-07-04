@@ -346,6 +346,16 @@ describe("HelarcMainController", () => {
       reason: "Create a governed marker file.",
       command: process.execPath,
     });
+    expect(waitingSnapshot.activeRun).toMatchObject({
+      status: "waiting_for_permission",
+      pendingPermission: {
+        requestId,
+        toolName: "codeAgent.runCommand",
+        riskLevel: "high",
+        workspaceDisplayName: workspaceRoot.split(/[\\/]/).pop(),
+        inputSummary: expect.stringContaining(process.execPath),
+      },
+    });
 
     expect(controller.resolvePermission({
       requestId: "stale-request",
@@ -358,7 +368,16 @@ describe("HelarcMainController", () => {
     expect(controller.resolvePermission({
       requestId,
       decision: "denied",
-    })).toMatchObject({ ok: true, snapshot: { status: "running" } });
+    })).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "running",
+        activeRun: {
+          status: "running",
+          pendingPermission: null,
+        },
+      },
+    });
 
     const blockedSnapshot = await blocked;
     expect(blockedSnapshot).toMatchObject({
@@ -382,6 +401,149 @@ describe("HelarcMainController", () => {
       error: { code: "permission_not_pending" },
     });
     await expect(access(markerPath)).rejects.toThrow();
+  });
+
+  it("allows a shell permission request once and completes the run", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-allow-"));
+    const markerPath = join(workspaceRoot, "marker.txt");
+    const controller = new HelarcMainController({
+      provider: new ScriptedProvider([
+        {
+          action: "call_tool",
+          reason: "Create a marker.",
+          toolName: "codeAgent.runCommand",
+          input: {
+            command: process.execPath,
+            args: [
+              "-e",
+              `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran')`,
+            ],
+            cwd: ".",
+            timeoutMs: 1_000,
+            reason: "Create a governed marker file.",
+          },
+        },
+        {
+          action: "complete",
+          summary: "Marker created.",
+        },
+      ]),
+    });
+    controller.selectWorkspacePath(workspaceRoot);
+
+    const waiting = waitForStatus(controller, "waiting_for_permission");
+    const completed = waitForStatus(controller, "completed");
+    controller.startSession({ taskText: "Run command" });
+
+    const requestId = (await waiting).pendingPermission?.requestId ?? "";
+    expect(controller.resolvePermission({
+      requestId,
+      decision: "granted",
+    })).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "running",
+        activeRun: {
+          pendingPermission: null,
+        },
+      },
+    });
+
+    const completedSnapshot = await completed;
+    expect(completedSnapshot).toMatchObject({
+      status: "completed",
+      activeRun: {
+        status: "completed",
+        terminal: {
+          status: "completed",
+          runtimeStatus: "succeeded",
+        },
+      },
+      output: {
+        agentSummary: "Marker created.",
+      },
+    });
+    await expect(readFile(markerPath, "utf8")).resolves.toBe("ran");
+  });
+
+  it("cancels while a permission request is pending", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-cancel-"));
+    const markerPath = join(workspaceRoot, "marker.txt");
+    const controller = new HelarcMainController({
+      provider: new ScriptedProvider([
+        {
+          action: "call_tool",
+          reason: "Create a marker.",
+          toolName: "codeAgent.runCommand",
+          input: {
+            command: process.execPath,
+            args: [
+              "-e",
+              `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran')`,
+            ],
+            cwd: ".",
+            timeoutMs: 1_000,
+            reason: "Create a governed marker file.",
+          },
+        },
+      ]),
+    });
+    controller.selectWorkspacePath(workspaceRoot);
+
+    const waiting = waitForStatus(controller, "waiting_for_permission");
+    controller.startSession({ taskText: "Run command" });
+    const waitingSnapshot = await waiting;
+    const requestId = waitingSnapshot.pendingPermission?.requestId ?? "";
+
+    expect(controller.cancelSession()).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "cancelled",
+        pendingPermission: null,
+        activeRun: {
+          status: "cancelling",
+          pendingPermission: null,
+        },
+      },
+    });
+    expect(controller.resolvePermission({
+      requestId,
+      decision: "granted",
+    })).toMatchObject({
+      ok: false,
+      error: { code: "permission_not_pending" },
+    });
+
+    const terminalSnapshot = await waitForActiveRunTerminal(controller, "cancelled");
+    expect(terminalSnapshot).toMatchObject({
+      status: "cancelled",
+      activeRun: {
+        status: "cancelled",
+        terminal: {
+          status: "cancelled",
+          runtimeStatus: "blocked",
+          runtimeCode: "permission_unavailable",
+        },
+      },
+    });
+    await expect(access(markerPath)).rejects.toThrow();
+  });
+
+  it("rejects unknown permission decisions and cancellation without a running session", () => {
+    const controller = new HelarcMainController({ provider: new CompleteProvider() });
+
+    expect(controller.resolvePermission({
+      requestId: "unknown",
+      decision: "granted",
+    })).toMatchObject({
+      ok: false,
+      error: { code: "permission_not_pending" },
+    });
+
+    expect(controller.cancelSession()).toMatchObject({
+      ok: false,
+      error: { code: "session_not_running" },
+    });
   });
 
   it("correlates patch review decisions and applies accepted patches", async () => {
@@ -601,6 +763,31 @@ function waitForStatus(
 
     const unsubscribe = controller.subscribeSnapshot((nextSnapshot) => {
       if (nextSnapshot.status === status) {
+        clearTimeout(timeout);
+        unsubscribe();
+        resolve(nextSnapshot);
+      }
+    });
+  });
+}
+
+function waitForActiveRunTerminal(
+  controller: HelarcMainController,
+  status: NonNullable<HelarcMainSnapshot["activeRun"]["terminal"]>["status"],
+): Promise<HelarcMainSnapshot> {
+  const snapshot = controller.getSnapshot();
+  if (snapshot.activeRun.terminal?.status === status) {
+    return Promise.resolve(snapshot);
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      unsubscribe();
+      reject(new Error(`Timed out waiting for active run terminal ${status}.`));
+    }, 2_000);
+
+    const unsubscribe = controller.subscribeSnapshot((nextSnapshot) => {
+      if (nextSnapshot.activeRun.terminal?.status === status) {
         clearTimeout(timeout);
         unsubscribe();
         resolve(nextSnapshot);

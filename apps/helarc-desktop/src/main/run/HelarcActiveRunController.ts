@@ -1,6 +1,7 @@
 import type {
   HelarcRunEventViewModel,
   HelarcRunInput,
+  HelarcRunPermissionPrompt,
   HelarcRunProviderRef,
   HelarcRunSnapshot,
   HelarcRunStatus,
@@ -123,6 +124,38 @@ export class HelarcActiveRunController {
     this.snapshot = {
       ...this.snapshot,
       events: [...this.snapshot.events, event],
+    };
+    return { ok: true, snapshot: this.publishSnapshot() };
+  }
+
+  requestPermission(prompt: HelarcRunPermissionPrompt): UpdateHelarcActiveRunResult {
+    if (!isActiveStatus(this.snapshot.status)) {
+      return this.reject(
+        "active_run_not_running",
+        "No Helarc run is active.",
+      );
+    }
+
+    this.snapshot = {
+      ...this.snapshot,
+      status: "waiting_for_permission",
+      pendingPermission: prompt,
+    };
+    return { ok: true, snapshot: this.publishSnapshot() };
+  }
+
+  resolvePermission(): UpdateHelarcActiveRunResult {
+    if (!isActiveStatus(this.snapshot.status)) {
+      return this.reject(
+        "active_run_not_running",
+        "No Helarc run is active.",
+      );
+    }
+
+    this.snapshot = {
+      ...this.snapshot,
+      status: "running",
+      pendingPermission: null,
     };
     return { ok: true, snapshot: this.publishSnapshot() };
   }

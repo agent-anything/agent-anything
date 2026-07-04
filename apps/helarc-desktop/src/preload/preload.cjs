@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const channels = Object.freeze({
+  cancelSession: "helarc:cancel-session",
   chooseWorkspace: "helarc:choose-workspace",
   getSnapshot: "helarc:get-snapshot",
   resolvePatchReview: "helarc:resolve-patch-review",
@@ -33,6 +34,7 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
   startSession: (input) => ipcRenderer.invoke(channels.startSession, {
     taskText: typeof input?.taskText === "string" ? input.taskText : "",
   }),
+  cancelSession: () => ipcRenderer.invoke(channels.cancelSession),
   resolvePermission: (input) => ipcRenderer.invoke(channels.resolvePermission, {
     requestId: typeof input?.requestId === "string" ? input.requestId : "",
     decision: input?.decision === "granted" ? "granted" : "denied",
