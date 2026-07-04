@@ -7,6 +7,7 @@ export type {
   HelarcSessionHistoryRecord,
   HelarcSessionHistoryRecordError,
   HelarcSessionHistoryRecordErrorCode,
+  HelarcSessionHistoryRunRecord,
   HelarcSessionHistoryStatus,
   HelarcSessionHistoryWorkspaceRef,
 } from "./HelarcSessionHistoryRecord.js";

@@ -22,6 +22,14 @@ describe("HelarcSessionHistoryRecord", () => {
           model: "model-a",
         },
         status: "completed",
+        run: {
+          runId: "run-1",
+          status: "completed",
+          terminal: {
+            status: "completed",
+            runtimeStatus: "succeeded",
+          },
+        },
         patch: {
           decision: "accepted",
           status: "applied",
@@ -60,6 +68,20 @@ describe("HelarcSessionHistoryRecord", () => {
     })).toMatchObject({
       ok: false,
       error: { code: "session_history_provider_invalid" },
+    });
+
+    expect(createHelarcSessionHistoryRecord({
+      ...recordInput(),
+      run: {
+        ...recordInput().run,
+        terminal: {
+          ...recordInput().run.terminal,
+          eventCount: 2,
+        },
+      },
+    })).toMatchObject({
+      ok: false,
+      error: { code: "session_history_run_invalid" },
     });
   });
 });
@@ -109,6 +131,33 @@ function recordInput() {
       decision: "accepted" as const,
       reason: "Accepted from test.",
       status: "applied" as const,
+    },
+    run: {
+      runId: " run-1 ",
+      status: "completed" as const,
+      events: [{
+        id: "event-1",
+        sequence: 1,
+        timestamp: "2026-06-30T08:00:01.000Z",
+        kind: "planning.started" as const,
+        title: "Planning started",
+        detail: null,
+        severity: "info" as const,
+        metadata: {},
+      }],
+      terminal: {
+        status: "completed" as const,
+        runtimeStatus: "succeeded" as const,
+        runtimeCode: null,
+        safeOutput: {
+          taskId: "task-1",
+          agentSummary: "Updated docs.",
+        },
+        errorSummary: [],
+        startedAt: "2026-06-30T08:00:00.000Z",
+        completedAt: "2026-06-30T08:01:00.000Z",
+        eventCount: 1,
+      },
     },
   };
 }

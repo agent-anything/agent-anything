@@ -1,4 +1,7 @@
-import type { HelarcRunSnapshot } from "@agent-anything/helarc";
+import type {
+  HelarcRunSnapshot,
+  HelarcSessionHistoryRunRecord,
+} from "@agent-anything/helarc";
 
 export interface HelarcWorkspaceSnapshot {
   id: string;
@@ -171,6 +174,7 @@ export interface HelarcSessionHistoryRecord {
   activity: HelarcActivityItem[];
   output: HelarcSessionOutput;
   patch: HelarcSessionHistoryPatchSummary;
+  run: HelarcSessionHistoryRunRecord;
 }
 
 export interface HelarcMainSnapshot {

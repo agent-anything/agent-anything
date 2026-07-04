@@ -1,3 +1,8 @@
+import type {
+  HelarcRunEventViewModel,
+  HelarcRunTerminalStatus,
+  HelarcRunTerminalSummary,
+} from "../run/index.js";
 import type { HelarcActivityItem, HelarcPatchStatus, HelarcSessionOutput, HelarcSessionStatus } from "../session/index.js";
 
 export type HelarcSessionHistoryStatus = Exclude<HelarcSessionStatus, "running">;
@@ -31,6 +36,13 @@ export interface HelarcSessionHistoryPatchSummary {
   status: HelarcPatchStatus | null;
 }
 
+export interface HelarcSessionHistoryRunRecord {
+  runId: string;
+  status: HelarcRunTerminalStatus;
+  events: HelarcRunEventViewModel[];
+  terminal: HelarcRunTerminalSummary;
+}
+
 export interface CreateHelarcSessionHistoryRecordInput {
   id: string;
   taskId: string;
@@ -43,6 +55,7 @@ export interface CreateHelarcSessionHistoryRecordInput {
   activity: HelarcActivityItem[];
   output: HelarcSessionOutput;
   patch: HelarcSessionHistoryPatchSummary;
+  run: HelarcSessionHistoryRunRecord;
 }
 
 export interface HelarcSessionHistoryRecord extends CreateHelarcSessionHistoryRecordInput {}
@@ -54,7 +67,8 @@ export type HelarcSessionHistoryRecordErrorCode =
   | "session_history_timestamp_invalid"
   | "session_history_status_invalid"
   | "session_history_workspace_invalid"
-  | "session_history_provider_invalid";
+  | "session_history_provider_invalid"
+  | "session_history_run_invalid";
 
 export interface HelarcSessionHistoryRecordError {
   code: HelarcSessionHistoryRecordErrorCode;
@@ -101,6 +115,11 @@ export function createHelarcSessionHistoryRecord(
     return providerResult;
   }
 
+  const runResult = normalizeRun(input.run);
+  if (!runResult.ok) {
+    return runResult;
+  }
+
   return {
     ok: true,
     record: {
@@ -115,6 +134,7 @@ export function createHelarcSessionHistoryRecord(
       activity: input.activity,
       output: input.output,
       patch: input.patch,
+      run: runResult.run,
     },
   };
 }
@@ -159,6 +179,30 @@ function normalizeProvider(
   };
 }
 
+function normalizeRun(
+  run: HelarcSessionHistoryRunRecord,
+): { ok: true; run: HelarcSessionHistoryRunRecord } | { ok: false; error: HelarcSessionHistoryRecordError } {
+  const runId = run.runId.trim();
+  if (
+    runId.length === 0 ||
+    !isRunTerminalStatus(run.status) ||
+    run.terminal.status !== run.status ||
+    run.terminal.eventCount !== run.events.length
+  ) {
+    return reject("session_history_run_invalid", "Session history run record is invalid.");
+  }
+
+  return {
+    ok: true,
+    run: {
+      runId,
+      status: run.status,
+      events: [...run.events],
+      terminal: run.terminal,
+    },
+  };
+}
+
 function normalizeNullableString(value: string | null): string | null {
   const normalized = value?.trim() ?? "";
   return normalized.length > 0 ? normalized : null;
@@ -173,6 +217,13 @@ function isSessionStatus(value: unknown): value is HelarcSessionHistoryStatus {
     value === "rejected" ||
     value === "failed" ||
     value === "blocked" ||
+    value === "cancelled";
+}
+
+function isRunTerminalStatus(value: unknown): value is HelarcRunTerminalStatus {
+  return value === "completed" ||
+    value === "failed" ||
+    value === "denied" ||
     value === "cancelled";
 }
 

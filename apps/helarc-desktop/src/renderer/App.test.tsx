@@ -1,6 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { App, PermissionPromptPanel } from "./App.js";
+import {
+  App,
+  PermissionPromptPanel,
+  RunTerminalPanel,
+  RunTimelinePanel,
+} from "./App.js";
 
 describe("Helarc workbench shell", () => {
   it("renders the primary workbench surfaces", () => {
@@ -42,4 +47,114 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Deny");
     expect(html).toContain("Approve");
   });
+
+  it("disables permission controls while a decision is in flight", () => {
+    const html = renderToStaticMarkup(
+      <PermissionPromptPanel
+        prompt={{
+          requestId: "permission-1",
+          taskId: "task-1",
+          toolName: "codeAgent.runCommand",
+          reason: "Create a governed marker file.",
+          command: "node",
+          args: ["-e", "..."],
+          cwd: ".",
+          rootName: "workspace",
+        }}
+        isBusy={true}
+        onCancel={() => undefined}
+        onResolve={() => undefined}
+      />,
+    );
+
+    expect(html.match(/disabled=""/g)).toHaveLength(3);
+  });
+
+  it("renders the active run timeline from safe run events", () => {
+    const html = renderToStaticMarkup(
+      <RunTimelinePanel
+        activeRun={{
+          runId: "run-1",
+          status: "running",
+          task: {
+            text: "Inspect code",
+            templateId: null,
+          },
+          workspace: null,
+          provider: null,
+          events: [
+            event("event-1", "planning.started", "Planning started", "info"),
+            event("event-2", "tool.completed", "Tool completed", "warning"),
+          ],
+          pendingPermission: null,
+          terminal: null,
+          startedAt: "2026-07-05T01:00:00.000Z",
+          metadata: {},
+        }}
+        acceptedTask={{ id: "task-1", prompt: "Inspect code" }}
+      />,
+    );
+
+    expect(html).toContain("Inspect code");
+    expect(html).toContain("Running");
+    expect(html).toContain("Planning started");
+    expect(html).toContain("Tool completed");
+    expect(html).toContain("severity-warning");
+  });
+
+  it.each([
+    ["completed", "Run completed", "succeeded"],
+    ["failed", "Run failed", "failed"],
+    ["denied", "Run denied", "blocked"],
+    ["cancelled", "Run cancelled", "cancelled"],
+  ] as const)("renders terminal %s output", (status, title, runtimeStatus) => {
+    const html = renderToStaticMarkup(
+      <RunTerminalPanel
+        title={title}
+        terminal={{
+          status,
+          runtimeStatus,
+          runtimeCode: status === "completed" ? null : `${status}_code`,
+          safeOutput: {
+            taskId: "task-1",
+            workspaceId: "workspace",
+            agentSummary: "Terminal summary",
+            runtimeStatus,
+            patchStatus: null,
+            appliedPath: null,
+            safeErrors: status === "completed" ? [] : [{ code: `${status}_code`, message: "Terminal error" }],
+          },
+          errorSummary: status === "completed" ? [] : [{ code: `${status}_code`, message: "Terminal error" }],
+          startedAt: "2026-07-05T01:00:00.000Z",
+          completedAt: "2026-07-05T01:00:01.000Z",
+          eventCount: 1,
+        }}
+        events={[event("event-1", "run.completed", "Run event", "info")]}
+      />,
+    );
+
+    expect(html).toContain(title);
+    expect(html).toContain(status);
+    expect(html).toContain(runtimeStatus);
+    expect(html).toContain("Terminal summary");
+    expect(html).toContain("Event summary");
+  });
 });
+
+function event(
+  id: string,
+  kind: "planning.started" | "tool.completed" | "run.completed",
+  title: string,
+  severity: "info" | "warning" | "error",
+) {
+  return {
+    id,
+    sequence: Number(id.replace("event-", "")),
+    timestamp: "2026-07-05T01:00:00.000Z",
+    kind,
+    title,
+    detail: null,
+    severity,
+    metadata: {},
+  };
+}

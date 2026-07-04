@@ -295,9 +295,22 @@ describe("HelarcMainController", () => {
           decision: "not_required",
           status: null,
         },
+        run: {
+          runId: "helarc-run-1",
+          status: "completed",
+          terminal: {
+            status: "completed",
+            runtimeStatus: "succeeded",
+          },
+        },
       },
     ]);
+    expect(snapshot.sessionHistory[0]?.run.events.map((item) => item.kind)).toEqual(
+      expect.arrayContaining(["planning.started", "provider.output", "runtime.output"]),
+    );
     expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("secret");
+    expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("rawProvider");
+    expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("pendingPermission");
 
     const restoredController = new HelarcMainController({
       providerConfigError: {
@@ -393,7 +406,19 @@ describe("HelarcMainController", () => {
       output: {
         safeErrors: [{ code: "permission_denied" }],
       },
+      sessionHistory: [{
+        status: "blocked",
+        run: {
+          runId: "helarc-run-1",
+          status: "denied",
+          terminal: {
+            status: "denied",
+            runtimeStatus: "blocked",
+          },
+        },
+      }],
     });
+    expect(JSON.stringify(blockedSnapshot.sessionHistory)).not.toContain("pendingPermission");
     expect(controller.resolvePermission({
       requestId,
       decision: "granted",
@@ -528,7 +553,20 @@ describe("HelarcMainController", () => {
           runtimeCode: "permission_unavailable",
         },
       },
+      sessionHistory: [{
+        status: "cancelled",
+        run: {
+          runId: "helarc-run-1",
+          status: "cancelled",
+          terminal: {
+            status: "cancelled",
+            runtimeStatus: "blocked",
+            runtimeCode: "permission_unavailable",
+          },
+        },
+      }],
     });
+    expect(JSON.stringify(terminalSnapshot.sessionHistory)).not.toContain("pendingPermission");
     await expect(access(markerPath)).rejects.toThrow();
   });
 
@@ -575,7 +613,20 @@ describe("HelarcMainController", () => {
       output: {
         safeErrors: [{ code: "tool_not_found" }],
       },
+      sessionHistory: [{
+        status: "failed",
+        run: {
+          runId: "helarc-run-1",
+          status: "failed",
+          terminal: {
+            status: "failed",
+            runtimeStatus: "failed",
+            runtimeCode: "tool_not_found",
+          },
+        },
+      }],
     });
+    expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("pendingPermission");
     await expect(access(markerPath)).rejects.toThrow();
   });
 

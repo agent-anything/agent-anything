@@ -78,7 +78,8 @@ form {
 .secondary-button,
 .composer-message,
 .app-nav,
-.nav-button {
+.nav-button,
+.run-header-actions {
   display: flex;
   align-items: center;
 }
@@ -221,6 +222,11 @@ form {
   border-color: #d7aaa4;
 }
 
+.secondary-button.compact-icon {
+  min-height: 32px;
+  padding-inline: 10px;
+}
+
 button:disabled,
 select:disabled,
 textarea:disabled {
@@ -313,6 +319,11 @@ h2 {
   background: #a94d43;
 }
 
+.run-header-actions {
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .empty-state,
 .activity-list {
   display: grid;
@@ -337,6 +348,33 @@ h2 {
   text-align: center;
 }
 
+.run-summary {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  background: #eef3f0;
+  border: 1px solid #d8ddda;
+  border-radius: 6px;
+}
+
+.run-summary strong,
+.run-summary span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-summary strong {
+  color: #26343e;
+  font-size: 13px;
+}
+
+.run-summary span {
+  color: #59666d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .activity-item {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
@@ -348,8 +386,19 @@ h2 {
   border-radius: 6px;
 }
 
+.activity-item.severity-warning {
+  background: #fffaf0;
+  border-color: #ead6a8;
+}
+
+.activity-item.severity-error {
+  background: #fff7f5;
+  border-color: #ebcbc5;
+}
+
 .activity-item strong,
-.activity-item span {
+.activity-item span,
+.activity-item small {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -365,6 +414,12 @@ h2 {
   margin-top: 2px;
   color: #78838a;
   font-size: 12px;
+}
+
+.activity-item small {
+  margin-top: 3px;
+  color: #9aa3a8;
+  font-size: 11px;
 }
 
 .review-empty,
@@ -513,6 +568,27 @@ h2 {
   overflow: hidden;
   color: #26343e;
   font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-events {
+  display: grid;
+  width: 100%;
+  gap: 5px;
+  padding: 10px;
+  background: #f8faf8;
+  border: 1px solid #e0e4e1;
+  border-radius: 6px;
+}
+
+.terminal-events strong {
+  font-size: 12px;
+}
+
+.terminal-events span {
+  overflow: hidden;
+  color: #59666d;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

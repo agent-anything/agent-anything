@@ -2,6 +2,7 @@ import {
   Activity,
   AlertCircle,
   CheckCircle2,
+  CircleStop,
   FileCode2,
   FolderOpen,
   History,
@@ -217,9 +218,9 @@ export function App() {
     ? snapshot.workspace.path
     : "No workspace selected";
   const statusText = statusLabel(snapshot.status, snapshot.provider.configured);
-  const activityTitle = snapshot.acceptedTask
-    ? snapshot.acceptedTask.prompt
-    : "No active session";
+  const canCancelRun = isRunCancellable(snapshot.activeRun.status) &&
+    snapshot.activeRun.status !== "cancelling" &&
+    !isBusy;
 
   return (
     <div className="app-shell">
@@ -293,28 +294,29 @@ export function App() {
         <section className="activity-pane" aria-labelledby="activity-title">
           <div className="pane-header">
             <div>
-              <span className="eyebrow">Current session</span>
-              <h1 id="activity-title">Activity</h1>
+              <span className="eyebrow">Current run</span>
+              <h1 id="activity-title">Run timeline</h1>
             </div>
-            <span className={`status-indicator ${statusTone(snapshot.status)}`}><span /> {statusText}</span>
+            <div className="run-header-actions">
+              {isRunCancellable(snapshot.activeRun.status) ? (
+                <button
+                  className="secondary-button danger compact-icon"
+                  type="button"
+                  onClick={() => void cancelSession()}
+                  disabled={!canCancelRun}
+                  title="Cancel run"
+                >
+                  <CircleStop size={16} aria-hidden="true" />
+                  Cancel
+                </button>
+              ) : null}
+              <span className={`status-indicator ${statusTone(snapshot.status)}`}><span /> {statusText}</span>
+            </div>
           </div>
-          <div className={snapshot.activity.length > 0 ? "activity-list" : "empty-state"}>
-            {snapshot.activity.length === 0 ? (
-              <>
-                <Activity size={28} aria-hidden="true" />
-                <h2>{activityTitle}</h2>
-                {snapshot.acceptedTask ? <p>Validated task {snapshot.acceptedTask.id}</p> : null}
-              </>
-            ) : snapshot.activity.map((item) => (
-              <div className="activity-item" key={item.id}>
-                <Activity size={16} aria-hidden="true" />
-                <div>
-                  <strong>{item.title}</strong>
-                  {item.detail ? <span>{item.detail}</span> : null}
-                </div>
-              </div>
-            ))}
-          </div>
+          <RunTimelinePanel
+            activeRun={snapshot.activeRun}
+            acceptedTask={snapshot.acceptedTask}
+          />
         </section>
 
         <aside className="review-pane" aria-labelledby="review-title">
@@ -329,7 +331,7 @@ export function App() {
                 ? <Settings size={19} aria-hidden="true" />
                 : <ShieldCheck size={19} aria-hidden="true" />}
           </div>
-          <div className={activePanelMode !== "review" || snapshot.pendingPermission || snapshot.pendingPatchReview || snapshot.output || snapshot.error
+          <div className={activePanelMode !== "review" || snapshot.pendingPermission || snapshot.pendingPatchReview || snapshot.activeRun.terminal || snapshot.error
             ? "review-content"
             : "review-empty"}
           >
@@ -383,42 +385,12 @@ export function App() {
                   </button>
                 </div>
               </div>
-            ) : snapshot.output ? (
-              <div className="result-panel">
-                {snapshot.output.safeErrors.length > 0 || snapshot.status === "failed" ? (
-                  <AlertCircle size={24} aria-hidden="true" />
-                ) : (
-                  <CheckCircle2 size={24} aria-hidden="true" />
-                )}
-                <strong>{terminalTitle(snapshot)}</strong>
-                {snapshot.output.agentSummary ? <span>{snapshot.output.agentSummary}</span> : null}
-                <dl>
-                  <div>
-                    <dt>Runtime</dt>
-                    <dd>{snapshot.output.runtimeStatus}</dd>
-                  </div>
-                  <div>
-                    <dt>Patch</dt>
-                    <dd>{snapshot.output.patchStatus ?? "none"}</dd>
-                  </div>
-                  {snapshot.output.appliedPath ? (
-                    <div>
-                      <dt>Applied</dt>
-                      <dd>{snapshot.output.appliedPath}</dd>
-                    </div>
-                  ) : null}
-                </dl>
-                {snapshot.output.safeErrors.length > 0 ? (
-                  <ul className="error-list">
-                    {snapshot.output.safeErrors.map((error) => (
-                      <li key={`${error.code}:${error.message}`}>
-                        <strong>{error.code}</strong>
-                        <span>{error.message}</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
+            ) : snapshot.activeRun.terminal ? (
+              <RunTerminalPanel
+                title={terminalTitle(snapshot)}
+                terminal={snapshot.activeRun.terminal}
+                events={snapshot.activeRun.events}
+              />
             ) : (
               <>
                 <FileCode2 size={24} aria-hidden="true" />
@@ -465,6 +437,127 @@ export function App() {
         {snapshot.error ? <p className="composer-message error">{snapshot.error.message}</p> : null}
         {startResult?.ok ? <p className="composer-message">Session started</p> : null}
       </form>
+    </div>
+  );
+}
+
+export function RunTimelinePanel({
+  activeRun,
+  acceptedTask,
+}: {
+  activeRun: HelarcMainSnapshot["activeRun"];
+  acceptedTask: HelarcMainSnapshot["acceptedTask"];
+}) {
+  if (activeRun.events.length === 0) {
+    const title = activeRun.task.text || acceptedTask?.prompt || "No active session";
+    return (
+      <div className="empty-state">
+        <Activity size={28} aria-hidden="true" />
+        <h2>{title}</h2>
+        {acceptedTask ? <p>Validated task {acceptedTask.id}</p> : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="activity-list" aria-label="Run timeline">
+      <div className="run-summary">
+        <strong>{activeRun.task.text}</strong>
+        <span>{runStatusLabel(activeRun.status)}</span>
+      </div>
+      {activeRun.events.map((event) => (
+        <div className={`activity-item severity-${event.severity}`} key={event.id}>
+          <Activity size={16} aria-hidden="true" />
+          <div>
+            <strong>{event.title}</strong>
+            {event.detail ? <span>{event.detail}</span> : null}
+            <small>{formatTimestamp(event.timestamp)}</small>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function RunTerminalPanel({
+  title,
+  terminal,
+  events,
+}: {
+  title: string;
+  terminal: NonNullable<HelarcMainSnapshot["activeRun"]["terminal"]>;
+  events: HelarcMainSnapshot["activeRun"]["events"];
+}) {
+  const safeOutput = isSessionOutput(terminal.safeOutput) ? terminal.safeOutput : null;
+  const failed = terminal.status === "failed" || terminal.status === "denied" || terminal.status === "cancelled";
+
+  return (
+    <div className="result-panel">
+      {failed ? (
+        <AlertCircle size={24} aria-hidden="true" />
+      ) : (
+        <CheckCircle2 size={24} aria-hidden="true" />
+      )}
+      <strong>{title}</strong>
+      {safeOutput?.agentSummary ? <span>{safeOutput.agentSummary}</span> : null}
+      <dl>
+        <div>
+          <dt>Run</dt>
+          <dd>{terminal.status}</dd>
+        </div>
+        <div>
+          <dt>Runtime</dt>
+          <dd>{terminal.runtimeStatus ?? "unknown"}</dd>
+        </div>
+        {terminal.runtimeCode ? (
+          <div>
+            <dt>Code</dt>
+            <dd>{terminal.runtimeCode}</dd>
+          </div>
+        ) : null}
+        <div>
+          <dt>Events</dt>
+          <dd>{terminal.eventCount}</dd>
+        </div>
+        <div>
+          <dt>Started</dt>
+          <dd>{formatTimestamp(terminal.startedAt)}</dd>
+        </div>
+        <div>
+          <dt>Completed</dt>
+          <dd>{formatTimestamp(terminal.completedAt)}</dd>
+        </div>
+        {safeOutput?.patchStatus ? (
+          <div>
+            <dt>Patch</dt>
+            <dd>{safeOutput.patchStatus}</dd>
+          </div>
+        ) : null}
+        {safeOutput?.appliedPath ? (
+          <div>
+            <dt>Applied</dt>
+            <dd>{safeOutput.appliedPath}</dd>
+          </div>
+        ) : null}
+      </dl>
+      {terminal.errorSummary.length > 0 ? (
+        <ul className="error-list">
+          {terminal.errorSummary.map((error) => (
+            <li key={`${error.code}:${error.message}`}>
+              <strong>{error.code}</strong>
+              <span>{error.message}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {events.length > 0 ? (
+        <section className="terminal-events" aria-label="Terminal event summary">
+          <strong>Event summary</strong>
+          {events.slice(-4).map((event) => (
+            <span key={event.id}>{event.title}</span>
+          ))}
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -571,8 +664,8 @@ function HistoryRecordView({ record }: { record: HelarcSessionHistoryRecord }) {
       <strong>{record.taskText}</strong>
       <dl>
         <div>
-          <dt>Status</dt>
-          <dd>{record.status}</dd>
+          <dt>Run</dt>
+          <dd>{record.run.status}</dd>
         </div>
         <div>
           <dt>Workspace</dt>
@@ -587,7 +680,11 @@ function HistoryRecordView({ record }: { record: HelarcSessionHistoryRecord }) {
           <dd>{record.patch.status ?? "none"}</dd>
         </div>
       </dl>
-      {record.output.agentSummary ? <span>{record.output.agentSummary}</span> : null}
+      <RunTerminalPanel
+        title={`History ${record.run.status}`}
+        terminal={record.run.terminal}
+        events={record.run.events}
+      />
     </section>
   );
 }
@@ -791,7 +888,27 @@ function isSessionActive(status: HelarcMainSnapshot["status"]): boolean {
     status === "applying_patch";
 }
 
+function isRunCancellable(status: HelarcMainSnapshot["activeRun"]["status"]): boolean {
+  return status === "starting" ||
+    status === "running" ||
+    status === "waiting_for_permission" ||
+    status === "cancelling";
+}
+
+function runStatusLabel(status: HelarcMainSnapshot["activeRun"]["status"]): string {
+  return status[0]?.toUpperCase() + status.slice(1).replaceAll("_", " ");
+}
+
 function terminalTitle(snapshot: HelarcMainSnapshot): string {
+  const terminalStatus = snapshot.activeRun.terminal?.status;
+  if (terminalStatus === "denied") {
+    return "Run denied";
+  }
+
+  if (terminalStatus === "cancelled") {
+    return "Run cancelled";
+  }
+
   if (snapshot.status === "rejected") {
     return "Change rejected";
   }
@@ -809,6 +926,30 @@ function terminalTitle(snapshot: HelarcMainSnapshot): string {
   }
 
   return "Session completed";
+}
+
+function formatTimestamp(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) {
+    return timestamp;
+  }
+
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function isSessionOutput(value: unknown): value is NonNullable<HelarcMainSnapshot["output"]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const output = value as Partial<NonNullable<HelarcMainSnapshot["output"]>>;
+  return typeof output.taskId === "string" &&
+    typeof output.runtimeStatus === "string" &&
+    Array.isArray(output.safeErrors);
 }
 
 function getHelarcApi() {

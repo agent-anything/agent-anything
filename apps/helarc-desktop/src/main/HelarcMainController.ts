@@ -15,6 +15,7 @@ import {
   type HelarcRunPermissionPrompt,
   type HelarcRunSnapshot,
   type HelarcRunTerminalStatus,
+  type HelarcRunTerminalSummary,
   type HelarcSessionHistoryPatchSummary,
   type HelarcSessionHistoryRecord,
   type HelarcSessionOutput,
@@ -541,14 +542,15 @@ export class HelarcMainController {
           message: firstError.message,
         };
       }
-      await this.persistSessionHistory(task);
-      this.completeActiveRun({
+      const terminal = this.createActiveRunTerminalSummary({
         status: mapSessionStatusToRunTerminalStatus(this.status, sessionResult.output),
         runtimeStatus: sessionResult.runtimeResult.status,
         runtimeCode: sessionResult.runtimeResult.errors[0]?.code ?? null,
         safeOutput: sessionResult.output,
         errorSummary: sessionResult.output.safeErrors,
       });
+      await this.persistSessionHistory(task, terminal);
+      this.completeActiveRun(terminal);
     } catch (error) {
       this.status = this.cancellationRequested ? "cancelled" : "failed";
       this.pendingPermission = null;
@@ -571,14 +573,15 @@ export class HelarcMainController {
             code: "provider_not_available",
             message: error instanceof Error ? error.message : "Helarc session failed.",
           };
-      await this.persistSessionHistory(task);
-      this.completeActiveRun({
+      const terminal = this.createActiveRunTerminalSummary({
         status: this.cancellationRequested ? "cancelled" : "failed",
         runtimeStatus: "failed",
         runtimeCode: "provider_not_available",
         safeOutput: this.output,
         errorSummary: this.output.safeErrors,
       });
+      await this.persistSessionHistory(task, terminal);
+      this.completeActiveRun(terminal);
     } finally {
       this.publishSnapshot();
     }
@@ -629,11 +632,17 @@ export class HelarcMainController {
 
   private async persistSessionHistory(
     task: Parameters<typeof runHelarcSession>[0]["task"],
+    terminal: HelarcRunTerminalSummary | null,
   ): Promise<void> {
-    if (!this.output || !this.selectedWorkspace || !this.provider.configured) {
+    if (!terminal || !this.output || !this.selectedWorkspace || !this.provider.configured) {
       return;
     }
     if (!isTerminalSessionStatus(this.status)) {
+      return;
+    }
+
+    const activeRun = this.activeRunController.getSnapshot();
+    if (activeRun.runId.length === 0) {
       return;
     }
 
@@ -655,11 +664,17 @@ export class HelarcMainController {
         model: this.provider.activeProfile.model,
       },
       startedAt: this.currentSessionStartedAt ?? new Date().toISOString(),
-      endedAt: new Date().toISOString(),
+      endedAt: terminal.completedAt,
       status: this.status,
       activity: this.activity,
       output: this.output,
       patch: createHistoryPatchSummary(this.lastPatchReview, this.output),
+      run: {
+        runId: activeRun.runId,
+        status: terminal.status,
+        events: activeRun.events,
+        terminal,
+      },
     });
 
     if (!recordResult.ok) {
@@ -671,13 +686,13 @@ export class HelarcMainController {
       : [recordResult.record, ...this.sessionHistory.filter((record) => record.id !== recordResult.record.id)];
   }
 
-  private completeActiveRun(input: {
+  private createActiveRunTerminalSummary(input: {
     status: HelarcRunTerminalStatus;
     runtimeStatus: "succeeded" | "failed" | "blocked" | "cancelled";
     runtimeCode: string | null;
     safeOutput: unknown;
     errorSummary: Array<{ code: string; message: string }>;
-  }): void {
+  }): HelarcRunTerminalSummary | null {
     const activeRun = this.activeRunController.getSnapshot();
     const terminalResult = createHelarcRunTerminalSummary({
       status: input.status,
@@ -690,8 +705,12 @@ export class HelarcMainController {
       eventCount: activeRun.events.length,
     });
 
-    if (terminalResult.ok) {
-      this.activeRunController.completeRun(terminalResult.terminal);
+    return terminalResult.ok ? terminalResult.terminal : null;
+  }
+
+  private completeActiveRun(terminal: HelarcRunTerminalSummary | null): void {
+    if (terminal) {
+      this.activeRunController.completeRun(terminal);
     }
   }
 

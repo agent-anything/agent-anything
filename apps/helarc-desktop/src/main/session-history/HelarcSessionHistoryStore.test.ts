@@ -18,6 +18,10 @@ describe("FileHelarcSessionHistoryStore", () => {
         taskText: "Update docs",
         workspace: { displayName: "workspace" },
         provider: { displayName: "Provider" },
+        run: {
+          runId: "run-history-1",
+          status: "completed",
+        },
       },
     ]);
   });
@@ -91,6 +95,24 @@ function record(id: string, endedAt: string) {
       decision: "not_required" as const,
       reason: null,
       status: null,
+    },
+    run: {
+      runId: `run-${id}`,
+      status: "completed" as const,
+      events: [],
+      terminal: {
+        status: "completed" as const,
+        runtimeStatus: "succeeded" as const,
+        runtimeCode: null,
+        safeOutput: {
+          taskId: "task-1",
+          agentSummary: "Done.",
+        },
+        errorSummary: [],
+        startedAt: "2026-06-30T07:59:00.000Z",
+        completedAt: endedAt,
+        eventCount: 0,
+      },
     },
   };
 }
