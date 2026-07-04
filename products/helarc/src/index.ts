@@ -77,6 +77,33 @@ export {
   createHelarcSessionHistoryRecord,
 } from "./session-history/index.js";
 export type {
+  CreateHelarcRunInput,
+  CreateHelarcRunInputResult,
+  CreateHelarcRunTerminalSummaryInput,
+  CreateHelarcRunTerminalSummaryResult,
+  HelarcRunContractError,
+  HelarcRunContractErrorCode,
+  HelarcRunEventKind,
+  HelarcRunEventSeverity,
+  HelarcRunEventViewModel,
+  HelarcRunInput,
+  HelarcRunPermissionPreset,
+  HelarcRunPermissionPrompt,
+  HelarcRunPermissionRiskLevel,
+  HelarcRunProviderRef,
+  HelarcRunSnapshot,
+  HelarcRunStatus,
+  HelarcRunTerminalErrorSummary,
+  HelarcRunTerminalStatus,
+  HelarcRunTerminalSummary,
+  HelarcRunWorkspaceRef,
+} from "./run/index.js";
+export {
+  createHelarcRunInput,
+  createHelarcRunTerminalSummary,
+  createIdleHelarcRunSnapshot,
+} from "./run/index.js";
+export type {
   CreateHelarcWorkspaceProfileInput,
   CreateHelarcWorkspaceProfileResult,
   HelarcWorkspaceProfile,
