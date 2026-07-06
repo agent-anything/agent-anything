@@ -3,6 +3,7 @@ import type { Provider, ProviderRequest, ProviderResponse } from "@agent-anythin
 import { describe, expect, it } from "vitest";
 import {
   buildHelarcProviderRequest,
+  buildHelarcPromptAssembly,
   HelarcPlannerParseError,
   parseHelarcProviderResponse,
   parseStructuredOutput,
@@ -16,8 +17,59 @@ describe("Helarc planner", () => {
     expect(request.messages[0]?.role).toBe("system");
     expect(request.messages[0]?.content).toContain("Return only JSON");
     expect(request.messages[1]?.content).toContain("Update docs");
+    expect(request.metadata).toMatchObject({
+      promptArchitectureVersion: "helarc-prompt-v1",
+      actionContractVersion: "helarc-action-v1",
+      toolCatalogVersion: "helarc-tool-catalog-v1",
+      exposedToolNames: [
+        "codeAgent.listFiles",
+        "codeAgent.readFile",
+        "codeAgent.searchFiles",
+      ],
+      promptSectionIds: [
+        "agent_identity",
+        "output_format",
+        "action_protocol",
+        "tool_catalog",
+        "permission_safety",
+        "patch_workflow",
+        "stop_protocol",
+        "safe_output_boundary",
+      ],
+    });
     expect(request.messages.map((message) => message.content).join("\n"))
       .not.toContain("D:/projects/agent-anything");
+  });
+
+  it("assembles Helarc prompts from named modules", () => {
+    const assembly = buildHelarcPromptAssembly({
+      plannerInput: createPlannerInput(),
+      taskPrompt: "Update docs",
+    });
+
+    expect(assembly.versions).toEqual({
+      promptArchitectureVersion: "helarc-prompt-v1",
+      actionContractVersion: "helarc-action-v1",
+      toolCatalogVersion: "helarc-tool-catalog-v1",
+    });
+    expect(assembly.systemSections.map((section) => section.id)).toEqual([
+      "agent_identity",
+      "output_format",
+      "action_protocol",
+      "tool_catalog",
+      "permission_safety",
+      "patch_workflow",
+      "stop_protocol",
+      "safe_output_boundary",
+    ]);
+    expect(assembly.systemPrompt).toContain("You are Helarc, a careful code agent planner.");
+    expect(assembly.systemPrompt).toContain("For propose, return action, summary");
+    expect(assembly.exposedToolNames).toEqual([
+      "codeAgent.listFiles",
+      "codeAgent.readFile",
+      "codeAgent.searchFiles",
+    ]);
+    expect(assembly.userPrompt).toContain("Task:\nUpdate docs");
   });
 
   it("parses call_tool output into a tool plan step", () => {

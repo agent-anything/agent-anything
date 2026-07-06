@@ -1,13 +1,9 @@
 import type { PlannerInput, PlanStep } from "@agent-anything/agent-core";
-import {
-  CODE_AGENT_LIST_FILES_TOOL,
-  CODE_AGENT_READ_FILE_TOOL,
-  CODE_AGENT_RUN_COMMAND_TOOL,
-  CODE_AGENT_SEARCH_FILES_TOOL,
-} from "@agent-anything/code-agent";
+import { CODE_AGENT_RUN_COMMAND_TOOL } from "@agent-anything/code-agent";
 import type { ProviderRequest, ProviderResponse } from "@agent-anything/providers";
 import type { ToolCall } from "@agent-anything/tools";
 import type { HelarcTaskInput } from "../task/index.js";
+import { buildHelarcPromptAssembly } from "./HelarcPromptAssembly.js";
 
 export const HELARC_PLANNER_CAPABILITY = "helarc.code-agent.plan";
 export const HELARC_PLANNER_OUTPUT_MAX_LENGTH = 64_000;
@@ -43,22 +39,31 @@ export class HelarcPlannerParseError extends Error {
 export function buildHelarcProviderRequest(input: PlannerInput): ProviderRequest {
   const taskInput = input.task.input as Partial<HelarcTaskInput>;
   const taskPrompt = typeof taskInput.prompt === "string" ? taskInput.prompt : "";
+  const promptAssembly = buildHelarcPromptAssembly({
+    plannerInput: input,
+    taskPrompt,
+  });
 
   return {
     capability: HELARC_PLANNER_CAPABILITY,
     metadata: {
       taskId: input.task.id,
       taskKind: input.task.kind,
+      promptArchitectureVersion: promptAssembly.versions.promptArchitectureVersion,
+      actionContractVersion: promptAssembly.versions.actionContractVersion,
+      toolCatalogVersion: promptAssembly.versions.toolCatalogVersion,
+      exposedToolNames: promptAssembly.exposedToolNames,
+      promptSectionIds: promptAssembly.systemSections.map((section) => section.id),
     },
     messages: [
       {
         role: "system",
-        content: buildSystemPrompt(),
+        content: promptAssembly.systemPrompt,
         metadata: {},
       },
       {
         role: "user",
-        content: buildUserPrompt(taskPrompt, input),
+        content: promptAssembly.userPrompt,
         metadata: {},
       },
     ],
@@ -153,37 +158,6 @@ function structuredOutputToPlanStep(
     finalOutput,
     metadata: { source: "helarc-planner" },
   };
-}
-
-function buildSystemPrompt(): string {
-  return [
-    "You are Helarc, a careful code agent planner.",
-    "Return only JSON. Do not wrap it in markdown.",
-    "Use one of these actions: call_tool, complete, propose, stop.",
-    "For call_tool, return action, toolName, input, and optional reason.",
-    `Default Phase9 tools are read-only: ${CODE_AGENT_LIST_FILES_TOOL}, ${CODE_AGENT_READ_FILE_TOOL}, ${CODE_AGENT_SEARCH_FILES_TOOL}.`,
-    "Do not call shell, write, patch, or long-running process tools unless the host explicitly enables them.",
-    "For complete, return action and summary.",
-    "For propose, return action, summary, and one change with operation create/update/delete, path, and content when needed.",
-    "For stop, return action and reason.",
-    "Never include workspace root paths, credentials, approval decisions, original content hashes, or patch ids.",
-  ].join("\n");
-}
-
-function buildUserPrompt(taskPrompt: string, input: PlannerInput): string {
-  return [
-    "Task:",
-    taskPrompt,
-    "",
-    "Context messages:",
-    JSON.stringify(input.context.messages),
-    "",
-    "Observations:",
-    JSON.stringify(input.context.observations),
-    "",
-    "Evidence refs:",
-    JSON.stringify(input.context.evidenceRefs),
-  ].join("\n");
 }
 
 function normalizeProviderOutput(output: unknown): unknown {
