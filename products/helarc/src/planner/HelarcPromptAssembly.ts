@@ -4,6 +4,11 @@ import {
   CODE_AGENT_READ_FILE_TOOL,
   CODE_AGENT_SEARCH_FILES_TOOL,
 } from "@agent-anything/code-agent";
+import {
+  buildHelarcActionDecisionRulesText,
+  buildHelarcActionProtocolText,
+} from "./HelarcActionContract.js";
+import type { HelarcTaskInput } from "../task/index.js";
 
 export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v1";
 export const HELARC_ACTION_CONTRACT_VERSION = "helarc-action-v1";
@@ -13,6 +18,7 @@ export type HelarcPromptSectionId =
   | "agent_identity"
   | "output_format"
   | "action_protocol"
+  | "action_decision_rules"
   | "tool_catalog"
   | "permission_safety"
   | "patch_workflow"
@@ -26,7 +32,6 @@ export interface HelarcPromptSection {
 
 export interface HelarcPromptAssemblyInput {
   plannerInput: PlannerInput;
-  taskPrompt: string;
 }
 
 export interface HelarcPromptAssemblyVersions {
@@ -54,10 +59,11 @@ export function buildHelarcPromptAssembly(
 ): HelarcPromptAssemblyResult {
   const exposedToolNames = [...DEFAULT_READ_ONLY_TOOL_NAMES];
   const systemSections = buildSystemPromptSections(exposedToolNames);
+  const taskPrompt = readHelarcTaskPrompt(input.plannerInput);
 
   return {
     systemPrompt: systemSections.map((section) => section.content).join("\n"),
-    userPrompt: buildUserPrompt(input.taskPrompt, input.plannerInput),
+    userPrompt: buildUserPrompt(taskPrompt, input.plannerInput),
     systemSections,
     exposedToolNames,
     versions: {
@@ -82,10 +88,11 @@ function buildSystemPromptSections(
     },
     {
       id: "action_protocol",
-      content: [
-        "Use one of these actions: call_tool, complete, propose, stop.",
-        "For call_tool, return action, toolName, input, and optional reason.",
-      ].join("\n"),
+      content: buildHelarcActionProtocolText(),
+    },
+    {
+      id: "action_decision_rules",
+      content: buildHelarcActionDecisionRulesText(),
     },
     {
       id: "tool_catalog",
@@ -97,7 +104,7 @@ function buildSystemPromptSections(
     },
     {
       id: "patch_workflow",
-      content: "For propose, return action, summary, and one change with operation create/update/delete, path, and content when needed.",
+      content: "For propose change, use operation create/update/delete, path, and content when needed.",
     },
     {
       id: "stop_protocol",
@@ -127,4 +134,9 @@ function buildUserPrompt(taskPrompt: string, input: PlannerInput): string {
     "Evidence refs:",
     JSON.stringify(input.context.evidenceRefs),
   ].join("\n");
+}
+
+function readHelarcTaskPrompt(input: PlannerInput): string {
+  const taskInput = input.task.input as Partial<HelarcTaskInput>;
+  return typeof taskInput.prompt === "string" ? taskInput.prompt : "";
 }

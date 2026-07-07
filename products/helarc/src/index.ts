@@ -34,9 +34,13 @@ export {
   selectHelarcTaskTemplate,
 } from "./task-template/index.js";
 export type {
+  HelarcActionContract,
+  HelarcActionDecisionRule,
   HelarcAgentOutput,
   HelarcChangeIntent,
   HelarcChangeOperationKind,
+  HelarcPlannerActionDescription,
+  HelarcPlannerActionName,
   HelarcPromptAssemblyInput,
   HelarcPromptAssemblyResult,
   HelarcPromptAssemblyVersions,
@@ -45,9 +49,13 @@ export type {
   HelarcProviderStructuredOutput,
 } from "./planner/index.js";
 export {
+  buildHelarcActionDecisionRulesText,
+  buildHelarcActionProtocolText,
   buildHelarcPromptAssembly,
   buildHelarcProviderRequest,
+  createHelarcActionContract,
   HELARC_ACTION_CONTRACT_VERSION,
+  HELARC_PLANNER_ACTIONS,
   HELARC_PLANNER_CAPABILITY,
   HELARC_PLANNER_OUTPUT_MAX_LENGTH,
   HELARC_PROMPT_ARCHITECTURE_VERSION,

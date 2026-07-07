@@ -1,4 +1,16 @@
 export type {
+  HelarcActionContract,
+  HelarcActionDecisionRule,
+  HelarcPlannerActionDescription,
+  HelarcPlannerActionName,
+} from "./HelarcActionContract.js";
+export {
+  buildHelarcActionDecisionRulesText,
+  buildHelarcActionProtocolText,
+  createHelarcActionContract,
+  HELARC_PLANNER_ACTIONS,
+} from "./HelarcActionContract.js";
+export type {
   HelarcAgentOutput,
   HelarcChangeIntent,
   HelarcChangeOperationKind,

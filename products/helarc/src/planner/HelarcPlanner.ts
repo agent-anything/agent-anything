@@ -2,7 +2,6 @@ import type { PlannerInput, PlanStep } from "@agent-anything/agent-core";
 import { CODE_AGENT_RUN_COMMAND_TOOL } from "@agent-anything/code-agent";
 import type { ProviderRequest, ProviderResponse } from "@agent-anything/providers";
 import type { ToolCall } from "@agent-anything/tools";
-import type { HelarcTaskInput } from "../task/index.js";
 import { buildHelarcPromptAssembly } from "./HelarcPromptAssembly.js";
 
 export const HELARC_PLANNER_CAPABILITY = "helarc.code-agent.plan";
@@ -37,11 +36,8 @@ export class HelarcPlannerParseError extends Error {
 }
 
 export function buildHelarcProviderRequest(input: PlannerInput): ProviderRequest {
-  const taskInput = input.task.input as Partial<HelarcTaskInput>;
-  const taskPrompt = typeof taskInput.prompt === "string" ? taskInput.prompt : "";
   const promptAssembly = buildHelarcPromptAssembly({
     plannerInput: input,
-    taskPrompt,
   });
 
   return {

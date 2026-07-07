@@ -2,8 +2,11 @@ import { ProviderBackedPlanner, type PlannerInput } from "@agent-anything/agent-
 import type { Provider, ProviderRequest, ProviderResponse } from "@agent-anything/providers";
 import { describe, expect, it } from "vitest";
 import {
+  buildHelarcActionDecisionRulesText,
+  buildHelarcActionProtocolText,
   buildHelarcProviderRequest,
   buildHelarcPromptAssembly,
+  createHelarcActionContract,
   HelarcPlannerParseError,
   parseHelarcProviderResponse,
   parseStructuredOutput,
@@ -30,6 +33,7 @@ describe("Helarc planner", () => {
         "agent_identity",
         "output_format",
         "action_protocol",
+        "action_decision_rules",
         "tool_catalog",
         "permission_safety",
         "patch_workflow",
@@ -41,10 +45,9 @@ describe("Helarc planner", () => {
       .not.toContain("D:/projects/agent-anything");
   });
 
-  it("assembles Helarc prompts from named modules", () => {
+  it("assembles Helarc prompts from named sections", () => {
     const assembly = buildHelarcPromptAssembly({
       plannerInput: createPlannerInput(),
-      taskPrompt: "Update docs",
     });
 
     expect(assembly.versions).toEqual({
@@ -56,6 +59,7 @@ describe("Helarc planner", () => {
       "agent_identity",
       "output_format",
       "action_protocol",
+      "action_decision_rules",
       "tool_catalog",
       "permission_safety",
       "patch_workflow",
@@ -64,12 +68,33 @@ describe("Helarc planner", () => {
     ]);
     expect(assembly.systemPrompt).toContain("You are Helarc, a careful code agent planner.");
     expect(assembly.systemPrompt).toContain("For propose, return action, summary");
+    expect(assembly.systemPrompt).toContain("Use propose for file creation, update, or deletion.");
+    expect(assembly.systemPrompt).toContain("Use call_tool only for tools listed in the active tool catalog.");
     expect(assembly.exposedToolNames).toEqual([
       "codeAgent.listFiles",
       "codeAgent.readFile",
       "codeAgent.searchFiles",
     ]);
     expect(assembly.userPrompt).toContain("Task:\nUpdate docs");
+  });
+
+  it("generates action protocol and decision rules from the action contract", () => {
+    const contract = createHelarcActionContract();
+    const actionProtocol = buildHelarcActionProtocolText(contract);
+    const decisionRules = buildHelarcActionDecisionRulesText(contract);
+
+    expect(contract.actions.map((item) => item.action)).toEqual([
+      "call_tool",
+      "complete",
+      "propose",
+      "stop",
+    ]);
+    expect(actionProtocol).toContain("Use one of these actions: call_tool, complete, propose, stop.");
+    expect(actionProtocol).toContain("For call_tool, return action, toolName, input, and optional reason, toolCallId.");
+    expect(actionProtocol).toContain("For propose, return action, summary, change.");
+    expect(decisionRules).toContain("Use propose for file creation, update, or deletion.");
+    expect(decisionRules).toContain("Use call_tool only for tools listed in the active tool catalog.");
+    expect(decisionRules).toContain("Do not use shell unless the host explicitly exposes shell in the active tool catalog.");
   });
 
   it("parses call_tool output into a tool plan step", () => {
