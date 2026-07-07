@@ -11,6 +11,21 @@ export {
   HELARC_PLANNER_ACTIONS,
 } from "./HelarcActionContract.js";
 export type {
+  HelarcToolDefinitionSummary,
+  HelarcToolCatalog,
+  HelarcToolCatalogItem,
+  HelarcToolCatalogMetadata,
+  HelarcToolCatalogMode,
+} from "./HelarcToolCatalog.js";
+export {
+  buildHelarcToolCatalogText,
+  createDefaultHelarcToolCatalog,
+  createHelarcToolCatalogFromDefinitions,
+  createHelarcToolCatalogMetadata,
+  HELARC_TOOL_CATALOG_METADATA_KEY,
+  readHelarcToolCatalog,
+} from "./HelarcToolCatalog.js";
+export type {
   HelarcAgentOutput,
   HelarcChangeIntent,
   HelarcChangeOperationKind,

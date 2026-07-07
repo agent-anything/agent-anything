@@ -44,6 +44,8 @@ import type { StoragePort, StoredArtifact } from "@agent-anything/storage";
 import { ToolRegistry } from "@agent-anything/tools";
 import {
   buildHelarcProviderRequest,
+  createHelarcToolCatalogMetadata,
+  HELARC_TOOL_CATALOG_METADATA_KEY,
   parseHelarcProviderResponse,
   type HelarcAgentOutput,
   type HelarcChangeIntent,
@@ -192,7 +194,14 @@ export async function runHelarcSession(
       permissionMode: input.enableShell ? "ask" : "trusted",
       executionAccess: "workspace",
       outputSpec: { format: "json", metadata: { product: "helarc" } },
-      metadata: { product: "helarc", sessionMode: input.enableShell ? "shell" : "read-only" },
+      metadata: {
+        product: "helarc",
+        sessionMode: input.enableShell ? "shell" : "read-only",
+        [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
+          mode: input.enableShell ? "shell-enabled" : "read-only",
+          tools: registryResult.registry.list(),
+        }),
+      },
     },
   );
 

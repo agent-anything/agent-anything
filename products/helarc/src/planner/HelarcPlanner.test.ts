@@ -4,9 +4,13 @@ import { describe, expect, it } from "vitest";
 import {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,
+  buildHelarcToolCatalogText,
   buildHelarcProviderRequest,
   buildHelarcPromptAssembly,
   createHelarcActionContract,
+  createHelarcToolCatalogFromDefinitions,
+  createHelarcToolCatalogMetadata,
+  HELARC_TOOL_CATALOG_METADATA_KEY,
   HelarcPlannerParseError,
   parseHelarcProviderResponse,
   parseStructuredOutput,
@@ -45,6 +49,49 @@ describe("Helarc planner", () => {
       .not.toContain("D:/projects/agent-anything");
   });
 
+  it("builds a Helarc provider request from shell-enabled tool catalog metadata", () => {
+    const request = buildHelarcProviderRequest(createPlannerInput({
+      metadata: {
+        [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
+          mode: "shell-enabled",
+          tools: [
+            {
+              name: "codeAgent.listFiles",
+              description: "List files inside a declared task workspace root.",
+              risk: "safe",
+            },
+            {
+              name: "codeAgent.readFile",
+              description: "Read one file inside a declared task workspace root.",
+              risk: "safe",
+            },
+            {
+              name: "codeAgent.searchFiles",
+              description: "Search text across files inside a declared task workspace root.",
+              risk: "safe",
+            },
+            {
+              name: "codeAgent.runCommand",
+              description: "Run a process inside a declared task workspace root.",
+              risk: "risky",
+            },
+          ],
+        }),
+      },
+    }));
+
+    expect(request.metadata.exposedToolNames).toEqual([
+      "codeAgent.listFiles",
+      "codeAgent.readFile",
+      "codeAgent.searchFiles",
+      "codeAgent.runCommand",
+    ]);
+    expect(request.messages[0]?.content).toContain("Active tool catalog (shell-enabled):");
+    expect(request.messages[0]?.content).toContain("codeAgent.runCommand");
+    expect(request.messages[0]?.content).toContain("Risk: risky");
+    expect(request.messages[0]?.content).toContain("Requires policy and permission approval");
+  });
+
   it("assembles Helarc prompts from named sections", () => {
     const assembly = buildHelarcPromptAssembly({
       plannerInput: createPlannerInput(),
@@ -70,12 +117,50 @@ describe("Helarc planner", () => {
     expect(assembly.systemPrompt).toContain("For propose, return action, summary");
     expect(assembly.systemPrompt).toContain("Use propose for file creation, update, or deletion.");
     expect(assembly.systemPrompt).toContain("Use call_tool only for tools listed in the active tool catalog.");
+    expect(assembly.systemPrompt).toContain("Active tool catalog (read-only):");
+    expect(assembly.systemPrompt).toContain("File creation, update, and deletion are not tool calls in read-only mode; use propose.");
     expect(assembly.exposedToolNames).toEqual([
       "codeAgent.listFiles",
       "codeAgent.readFile",
       "codeAgent.searchFiles",
     ]);
     expect(assembly.userPrompt).toContain("Task:\nUpdate docs");
+  });
+
+  it("generates read-only and shell-enabled tool catalog text", () => {
+    const readOnlyCatalog = createHelarcToolCatalogFromDefinitions({
+      mode: "read-only",
+      tools: [
+        { name: "codeAgent.listFiles", description: "List files.", risk: "safe" },
+        { name: "codeAgent.readFile", description: "Read files.", risk: "safe" },
+        { name: "codeAgent.searchFiles", description: "Search files.", risk: "safe" },
+      ],
+    });
+    const shellCatalog = createHelarcToolCatalogFromDefinitions({
+      mode: "shell-enabled",
+      tools: [
+        ...readOnlyCatalog.tools,
+        { name: "codeAgent.runCommand", description: "Run commands.", risk: "risky" },
+      ],
+    });
+
+    expect(buildHelarcToolCatalogText(readOnlyCatalog)).toContain("Active tool catalog (read-only):");
+    expect(readOnlyCatalog.tools.map((tool) => tool.name)).toEqual([
+      "codeAgent.listFiles",
+      "codeAgent.readFile",
+      "codeAgent.searchFiles",
+    ]);
+    expect(buildHelarcToolCatalogText(readOnlyCatalog))
+      .toContain("File creation, update, and deletion are not tool calls in read-only mode; use propose.");
+    expect(shellCatalog.tools.map((tool) => tool.name)).toEqual([
+      "codeAgent.listFiles",
+      "codeAgent.readFile",
+      "codeAgent.searchFiles",
+      "codeAgent.runCommand",
+    ]);
+    expect(buildHelarcToolCatalogText(shellCatalog)).toContain("codeAgent.runCommand");
+    expect(buildHelarcToolCatalogText(shellCatalog)).toContain("Risk: risky");
+    expect(buildHelarcToolCatalogText(shellCatalog)).toContain("Use codeAgent.runCommand only when command execution is necessary");
   });
 
   it("generates action protocol and decision rules from the action contract", () => {
@@ -231,7 +316,9 @@ function response(output: unknown): ProviderResponse {
   };
 }
 
-function createPlannerInput(): PlannerInput {
+function createPlannerInput(input: {
+  metadata?: PlannerInput["metadata"];
+} = {}): PlannerInput {
   return {
     task: {
       id: "task-1",
@@ -247,6 +334,6 @@ function createPlannerInput(): PlannerInput {
       evidenceRefs: [],
       metadata: {},
     },
-    metadata: {},
+    metadata: input.metadata ?? {},
   };
 }

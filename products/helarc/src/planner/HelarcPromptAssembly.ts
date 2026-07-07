@@ -1,14 +1,14 @@
 import type { PlannerInput } from "@agent-anything/agent-core";
 import {
-  CODE_AGENT_LIST_FILES_TOOL,
-  CODE_AGENT_READ_FILE_TOOL,
-  CODE_AGENT_SEARCH_FILES_TOOL,
-} from "@agent-anything/code-agent";
-import {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,
 } from "./HelarcActionContract.js";
 import type { HelarcTaskInput } from "../task/index.js";
+import {
+  buildHelarcToolCatalogText,
+  readHelarcToolCatalog,
+  type HelarcToolCatalog,
+} from "./HelarcToolCatalog.js";
 
 export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v1";
 export const HELARC_ACTION_CONTRACT_VERSION = "helarc-action-v1";
@@ -32,6 +32,7 @@ export interface HelarcPromptSection {
 
 export interface HelarcPromptAssemblyInput {
   plannerInput: PlannerInput;
+  toolCatalog?: HelarcToolCatalog;
 }
 
 export interface HelarcPromptAssemblyVersions {
@@ -45,20 +46,16 @@ export interface HelarcPromptAssemblyResult {
   userPrompt: string;
   systemSections: HelarcPromptSection[];
   exposedToolNames: string[];
+  toolCatalog: HelarcToolCatalog;
   versions: HelarcPromptAssemblyVersions;
 }
-
-const DEFAULT_READ_ONLY_TOOL_NAMES = [
-  CODE_AGENT_LIST_FILES_TOOL,
-  CODE_AGENT_READ_FILE_TOOL,
-  CODE_AGENT_SEARCH_FILES_TOOL,
-] as const;
 
 export function buildHelarcPromptAssembly(
   input: HelarcPromptAssemblyInput,
 ): HelarcPromptAssemblyResult {
-  const exposedToolNames = [...DEFAULT_READ_ONLY_TOOL_NAMES];
-  const systemSections = buildSystemPromptSections(exposedToolNames);
+  const toolCatalog = input.toolCatalog ?? readHelarcToolCatalog(input.plannerInput);
+  const exposedToolNames = toolCatalog.tools.map((tool) => tool.name);
+  const systemSections = buildSystemPromptSections(toolCatalog);
   const taskPrompt = readHelarcTaskPrompt(input.plannerInput);
 
   return {
@@ -66,6 +63,7 @@ export function buildHelarcPromptAssembly(
     userPrompt: buildUserPrompt(taskPrompt, input.plannerInput),
     systemSections,
     exposedToolNames,
+    toolCatalog,
     versions: {
       promptArchitectureVersion: HELARC_PROMPT_ARCHITECTURE_VERSION,
       actionContractVersion: HELARC_ACTION_CONTRACT_VERSION,
@@ -75,7 +73,7 @@ export function buildHelarcPromptAssembly(
 }
 
 function buildSystemPromptSections(
-  exposedToolNames: readonly string[],
+  toolCatalog: HelarcToolCatalog,
 ): HelarcPromptSection[] {
   return [
     {
@@ -96,7 +94,7 @@ function buildSystemPromptSections(
     },
     {
       id: "tool_catalog",
-      content: `Default Phase9 tools are read-only: ${exposedToolNames.join(", ")}.`,
+      content: buildHelarcToolCatalogText(toolCatalog),
     },
     {
       id: "permission_safety",
