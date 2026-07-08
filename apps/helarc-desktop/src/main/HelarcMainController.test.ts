@@ -607,11 +607,11 @@ describe("HelarcMainController", () => {
         terminal: {
           status: "failed",
           runtimeStatus: "failed",
-          runtimeCode: "tool_not_found",
+          runtimeCode: "provider_planner_failed",
         },
       },
       output: {
-        safeErrors: [{ code: "tool_not_found" }],
+        safeErrors: [{ code: "provider_planner_failed" }],
       },
       sessionHistory: [{
         status: "failed",
@@ -621,7 +621,7 @@ describe("HelarcMainController", () => {
           terminal: {
             status: "failed",
             runtimeStatus: "failed",
-            runtimeCode: "tool_not_found",
+            runtimeCode: "provider_planner_failed",
           },
         },
       }],

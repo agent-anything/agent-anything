@@ -465,16 +465,20 @@ export function RunTimelinePanel({
         <strong>{activeRun.task.text}</strong>
         <span>{runStatusLabel(activeRun.status)}</span>
       </div>
-      {activeRun.events.map((event) => (
-        <div className={`activity-item severity-${event.severity}`} key={event.id}>
-          <Activity size={16} aria-hidden="true" />
-          <div>
-            <strong>{event.title}</strong>
-            {event.detail ? <span>{event.detail}</span> : null}
-            <small>{formatTimestamp(event.timestamp)}</small>
+      {activeRun.events.map((event) => {
+        const trace = formatTraceMetadata(event.metadata);
+        return (
+          <div className={`activity-item severity-${event.severity}`} key={event.id}>
+            <Activity size={16} aria-hidden="true" />
+            <div>
+              <strong>{event.title}</strong>
+              {event.detail ? <span>{event.detail}</span> : null}
+              {trace ? <small>{trace}</small> : null}
+              <small>{formatTimestamp(event.timestamp)}</small>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -939,6 +943,54 @@ function formatTimestamp(timestamp: string): string {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+function formatTraceMetadata(metadata: Record<string, unknown>): string | null {
+  const action = readMetadataString(metadata, "plannerAction");
+  if (!action) {
+    return null;
+  }
+
+  const parts = [`action ${action}`];
+  const requestedToolName = readMetadataString(metadata, "requestedToolName");
+  const patchOperation = readMetadataString(metadata, "patchOperation");
+  const patchPath = readMetadataString(metadata, "patchPath");
+  const versions = [
+    readMetadataString(metadata, "promptArchitectureVersion"),
+    readMetadataString(metadata, "actionContractVersion"),
+    readMetadataString(metadata, "toolCatalogVersion"),
+  ].filter((item): item is string => Boolean(item));
+  const exposedToolNames = readMetadataStringArray(metadata, "exposedToolNames");
+
+  if (requestedToolName) {
+    parts.push(`tool ${requestedToolName}`);
+  }
+
+  if (patchOperation && patchPath) {
+    parts.push(`patch ${patchOperation} ${patchPath}`);
+  }
+
+  if (versions.length > 0) {
+    parts.push(`versions ${versions.join(", ")}`);
+  }
+
+  if (exposedToolNames.length > 0) {
+    parts.push(`tools ${exposedToolNames.join(", ")}`);
+  }
+
+  return parts.join(" | ");
+}
+
+function readMetadataString(metadata: Record<string, unknown>, key: string): string | null {
+  const value = metadata[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readMetadataStringArray(metadata: Record<string, unknown>, key: string): string[] {
+  const value = metadata[key];
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? value
+    : [];
 }
 
 function isSessionOutput(value: unknown): value is NonNullable<HelarcMainSnapshot["output"]> {

@@ -86,6 +86,18 @@ describe("Helarc read-only session", () => {
     ]);
     expect(provider.requests).toHaveLength(2);
     expect(provider.lastPlannerInputContexts).toEqual([0, 1]);
+    expect(result.activity.find((item) => item.kind === "plan.created")?.metadata).toMatchObject({
+      plannerAction: "call_tool",
+      requestedToolName: "codeAgent.listFiles",
+      promptArchitectureVersion: "helarc-prompt-v1",
+      actionContractVersion: "helarc-action-v1",
+      toolCatalogVersion: "helarc-tool-catalog-v1",
+      exposedToolNames: [
+        "codeAgent.listFiles",
+        "codeAgent.readFile",
+        "codeAgent.searchFiles",
+      ],
+    });
   });
 
   it("runs list, read, and search tools inside the workspace boundary", async () => {

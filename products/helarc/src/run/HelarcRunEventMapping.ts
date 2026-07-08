@@ -115,7 +115,7 @@ function detailForEvent(name: RuntimeEventName, payload: Metadata): string | nul
   }
 
   if (name === "plan.created") {
-    return readString(payload, "planStepId");
+    return detailForPlanCreated(payload);
   }
 
   if (name === "permission.requested" || name === "permission.resolved") {
@@ -135,6 +135,23 @@ function detailForEvent(name: RuntimeEventName, payload: Metadata): string | nul
   }
 
   return null;
+}
+
+function detailForPlanCreated(payload: Metadata): string | null {
+  const plannerAction = readString(payload, "plannerAction");
+  if (plannerAction === "call_tool") {
+    return readString(payload, "requestedToolName") ?? readString(payload, "toolName") ?? readString(payload, "planStepId");
+  }
+
+  if (plannerAction === "propose") {
+    const operation = readString(payload, "patchOperation");
+    const path = readString(payload, "patchPath");
+    if (operation && path) {
+      return `${operation} ${path}`;
+    }
+  }
+
+  return plannerAction ?? readString(payload, "planStepId");
 }
 
 function severityForEvent(
@@ -171,6 +188,14 @@ function metadataForEvent(event: RuntimeEvent, payload: Metadata): Metadata {
   copyString(metadata, payload, "errorCode");
   copyString(metadata, payload, "planStepId");
   copyString(metadata, payload, "planStepKind");
+  copyString(metadata, payload, "plannerAction");
+  copyString(metadata, payload, "promptArchitectureVersion");
+  copyString(metadata, payload, "actionContractVersion");
+  copyString(metadata, payload, "toolCatalogVersion");
+  copyStringArray(metadata, payload, "exposedToolNames");
+  copyString(metadata, payload, "requestedToolName");
+  copyString(metadata, payload, "patchOperation");
+  copyString(metadata, payload, "patchPath");
   copyString(metadata, payload, "toolCallId");
   copyString(metadata, payload, "toolName");
   copyString(metadata, payload, "toolResultStatus");

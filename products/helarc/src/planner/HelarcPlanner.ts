@@ -1,8 +1,14 @@
 import type { PlannerInput, PlanStep } from "@agent-anything/agent-core";
 import { CODE_AGENT_RUN_COMMAND_TOOL } from "@agent-anything/code-agent";
 import type { ProviderRequest, ProviderResponse } from "@agent-anything/providers";
+import type { Metadata } from "@agent-anything/shared";
 import type { ToolCall } from "@agent-anything/tools";
-import { buildHelarcPromptAssembly } from "./HelarcPromptAssembly.js";
+import {
+  buildHelarcPromptAssembly,
+  HELARC_ACTION_CONTRACT_VERSION,
+  HELARC_PROMPT_ARCHITECTURE_VERSION,
+  HELARC_TOOL_CATALOG_VERSION,
+} from "./HelarcPromptAssembly.js";
 import { readHelarcToolCatalog } from "./HelarcToolCatalog.js";
 
 export const HELARC_PLANNER_CAPABILITY = "helarc.code-agent.plan";
@@ -136,6 +142,7 @@ function structuredOutputToPlanStep(
   input: PlannerInput,
 ): PlanStep {
   const id = createPlanStepId(input, output.action);
+  const metadata = createPlannerTraceMetadata(output, input);
   if (output.action === "call_tool") {
     assertToolNameSupported(output.toolName, input);
 
@@ -143,7 +150,7 @@ function structuredOutputToPlanStep(
       id,
       kind: "callTool",
       reason: output.reason ?? "Helarc planner requested a tool call.",
-      metadata: { source: "helarc-planner" },
+      metadata,
       toolCall: {
         id: output.toolCallId ?? id,
         toolName: output.toolName,
@@ -160,7 +167,7 @@ function structuredOutputToPlanStep(
       kind: "stop",
       reason: output.reason,
       stopReason: output.reason,
-      metadata: { source: "helarc-planner" },
+      metadata,
     };
   }
 
@@ -173,7 +180,7 @@ function structuredOutputToPlanStep(
     kind: "final",
     reason: finalOutput.summary,
     finalOutput,
-    metadata: { source: "helarc-planner" },
+    metadata,
   };
 }
 
@@ -215,6 +222,32 @@ function assertToolNameSupported(toolName: string, input: PlannerInput): void {
     "planner_tool_name_unsupported",
     "Tool is not exposed in the active tool catalog.",
   );
+}
+
+function createPlannerTraceMetadata(
+  output: HelarcProviderStructuredOutput,
+  input: PlannerInput,
+): Metadata {
+  const toolCatalog = readHelarcToolCatalog(input);
+  const metadata: Metadata = {
+    source: "helarc-planner",
+    plannerAction: output.action,
+    promptArchitectureVersion: HELARC_PROMPT_ARCHITECTURE_VERSION,
+    actionContractVersion: HELARC_ACTION_CONTRACT_VERSION,
+    toolCatalogVersion: HELARC_TOOL_CATALOG_VERSION,
+    exposedToolNames: toolCatalog.tools.map((tool) => tool.name),
+  };
+
+  if (output.action === "call_tool") {
+    metadata.requestedToolName = output.toolName;
+  }
+
+  if (output.action === "propose") {
+    metadata.patchOperation = output.change.operation;
+    metadata.patchPath = output.change.path;
+  }
+
+  return metadata;
 }
 
 function readRequiredToolInput(value: Record<string, unknown>): Record<string, unknown> {

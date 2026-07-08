@@ -102,6 +102,47 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("severity-warning");
   });
 
+  it("renders compact planner trace details in the run timeline", () => {
+    const html = renderToStaticMarkup(
+      <RunTimelinePanel
+        activeRun={{
+          runId: "run-1",
+          status: "running",
+          task: {
+            text: "Inspect code",
+            templateId: null,
+          },
+          workspace: null,
+          provider: null,
+          events: [
+            event("event-1", "tool.proposed", "Tool call proposed", "info", {
+              plannerAction: "call_tool",
+              requestedToolName: "codeAgent.readFile",
+              promptArchitectureVersion: "helarc-prompt-v1",
+              actionContractVersion: "helarc-action-v1",
+              toolCatalogVersion: "helarc-tool-catalog-v1",
+              exposedToolNames: [
+                "codeAgent.listFiles",
+                "codeAgent.readFile",
+                "codeAgent.searchFiles",
+              ],
+            }),
+          ],
+          pendingPermission: null,
+          terminal: null,
+          startedAt: "2026-07-05T01:00:00.000Z",
+          metadata: {},
+        }}
+        acceptedTask={{ id: "task-1", prompt: "Inspect code" }}
+      />,
+    );
+
+    expect(html).toContain("action call_tool");
+    expect(html).toContain("tool codeAgent.readFile");
+    expect(html).toContain("versions helarc-prompt-v1, helarc-action-v1, helarc-tool-catalog-v1");
+    expect(html).toContain("tools codeAgent.listFiles, codeAgent.readFile, codeAgent.searchFiles");
+  });
+
   it.each([
     ["completed", "Run completed", "succeeded"],
     ["failed", "Run failed", "failed"],
@@ -143,9 +184,10 @@ describe("Helarc workbench shell", () => {
 
 function event(
   id: string,
-  kind: "planning.started" | "tool.completed" | "run.completed",
+  kind: "planning.started" | "tool.proposed" | "tool.completed" | "run.completed",
   title: string,
   severity: "info" | "warning" | "error",
+  metadata: Record<string, unknown> = {},
 ) {
   return {
     id,
@@ -155,6 +197,6 @@ function event(
     title,
     detail: null,
     severity,
-    metadata: {},
+    metadata,
   };
 }

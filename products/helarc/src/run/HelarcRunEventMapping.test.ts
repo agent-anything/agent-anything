@@ -43,20 +43,71 @@ describe("mapRuntimeEventToHelarcRunEvent", () => {
         iteration: 2,
         planStepId: "step-1",
         planStepKind: "callTool",
+        plannerAction: "call_tool",
+        promptArchitectureVersion: "helarc-prompt-v1",
+        actionContractVersion: "helarc-action-v1",
+        toolCatalogVersion: "helarc-tool-catalog-v1",
+        exposedToolNames: [
+          "codeAgent.listFiles",
+          "codeAgent.readFile",
+          "codeAgent.searchFiles",
+        ],
+        requestedToolName: "codeAgent.readFile",
+        rawPrompt: "secret prompt",
+        apiKey: "secret",
       },
     }));
 
     expect(event).toMatchObject({
       kind: "tool.proposed",
       title: "Tool call proposed",
-      detail: "step-1",
+      detail: "codeAgent.readFile",
       severity: "info",
       metadata: {
         iteration: 2,
         planStepId: "step-1",
         planStepKind: "callTool",
+        plannerAction: "call_tool",
+        promptArchitectureVersion: "helarc-prompt-v1",
+        actionContractVersion: "helarc-action-v1",
+        toolCatalogVersion: "helarc-tool-catalog-v1",
+        exposedToolNames: [
+          "codeAgent.listFiles",
+          "codeAgent.readFile",
+          "codeAgent.searchFiles",
+        ],
+        requestedToolName: "codeAgent.readFile",
       },
     });
+    expect(event.metadata).not.toHaveProperty("rawPrompt");
+    expect(event.metadata).not.toHaveProperty("apiKey");
+  });
+
+  it("maps proposed patch trace details without file content", () => {
+    const event = mapRuntimeEventToHelarcRunEvent(runtimeEvent({
+      name: "plan.created",
+      payload: {
+        iteration: 1,
+        planStepId: "step-1",
+        planStepKind: "final",
+        plannerAction: "propose",
+        patchOperation: "create",
+        patchPath: "empty.txt",
+        proposedContent: "secret content",
+      },
+    }));
+
+    expect(event).toMatchObject({
+      kind: "runtime.output",
+      title: "Final output proposed",
+      detail: "create empty.txt",
+      metadata: {
+        plannerAction: "propose",
+        patchOperation: "create",
+        patchPath: "empty.txt",
+      },
+    });
+    expect(event.metadata).not.toHaveProperty("proposedContent");
   });
 
   it("maps tool execution events without exposing raw tool inputs", () => {
