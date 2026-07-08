@@ -10,6 +10,7 @@ import {
   createHelarcActionContract,
   createHelarcToolCatalogFromDefinitions,
   createHelarcToolCatalogMetadata,
+  HELARC_PLANNER_OUTPUT_MAX_LENGTH,
   HELARC_TOOL_CATALOG_METADATA_KEY,
   HelarcPlannerParseError,
   parseHelarcProviderResponse,
@@ -264,6 +265,115 @@ describe("Helarc planner", () => {
       ));
   });
 
+  it("rejects provider failures with a stable planner code", () => {
+    expectPlannerParseError(() => parseHelarcProviderResponse({
+      status: "failed",
+      output: null,
+      usage: null,
+      error: {
+        code: "provider_network_timeout",
+        message: "Provider failed.",
+      },
+      metadata: {},
+    }, createPlannerInput()), "provider_failed");
+  });
+
+  it("rejects invalid planner output with stable codes", () => {
+    const oversizedOutput = JSON.stringify({ action: "complete", summary: "x" })
+      .padEnd(HELARC_PLANNER_OUTPUT_MAX_LENGTH + 1, " ");
+
+    const cases: Array<[string, () => void, string]> = [
+      ["oversized output", () => parseStructuredOutput(oversizedOutput), "planner_output_too_large"],
+      ["non-json output", () => parseStructuredOutput("{"), "planner_output_not_json"],
+      ["non-object output", () => parseStructuredOutput([]), "planner_output_invalid"],
+      ["unsupported action", () => parseStructuredOutput({ action: "unknown" }), "planner_action_invalid"],
+      ["missing tool name", () => parseStructuredOutput({ action: "call_tool", input: {} }), "planner_tool_name_required"],
+      [
+        "missing tool input",
+        () => parseStructuredOutput({ action: "call_tool", toolName: "codeAgent.listFiles" }),
+        "planner_tool_input_required",
+      ],
+      [
+        "invalid tool input",
+        () => parseStructuredOutput({ action: "call_tool", toolName: "codeAgent.listFiles", input: [] }),
+        "planner_tool_input_invalid",
+      ],
+      ["missing summary", () => parseStructuredOutput({ action: "complete" }), "planner_summary_required"],
+      [
+        "missing change",
+        () => parseStructuredOutput({ action: "propose", summary: "Missing change" }),
+        "planner_change_required",
+      ],
+      [
+        "missing operation",
+        () => parseStructuredOutput({ action: "propose", summary: "Bad change", change: { path: "README.md" } }),
+        "planner_change_operation_required",
+      ],
+      [
+        "invalid operation",
+        () => parseStructuredOutput({
+          action: "propose",
+          summary: "Bad change",
+          change: { operation: "rename", path: "README.md" },
+        }),
+        "planner_change_operation_invalid",
+      ],
+      [
+        "missing path",
+        () => parseStructuredOutput({ action: "propose", summary: "Bad change", change: { operation: "delete" } }),
+        "planner_change_path_required",
+      ],
+      [
+        "missing content",
+        () => parseStructuredOutput({ action: "propose", summary: "Bad change", change: { operation: "create", path: "a.txt" } }),
+        "planner_change_content_required",
+      ],
+      ["missing stop reason", () => parseStructuredOutput({ action: "stop" }), "planner_stop_reason_required"],
+    ];
+
+    for (const [name, execute, code] of cases) {
+      expectPlannerParseError(execute, code, name);
+    }
+  });
+
+  it("rejects tool calls outside the active tool catalog before execution", () => {
+    expectPlannerParseError(() => parseHelarcProviderResponse(response({
+      action: "call_tool",
+      toolName: "codeAgent.runCommand",
+      input: { command: "echo hello" },
+    }), createPlannerInput()), "planner_tool_name_unsupported");
+  });
+
+  it("accepts shell tool calls only when shell is exposed by the active tool catalog", () => {
+    const step = parseHelarcProviderResponse(response({
+      action: "call_tool",
+      toolName: "codeAgent.runCommand",
+      input: { command: "echo hello" },
+    }), createPlannerInput({
+      metadata: {
+        [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
+          mode: "shell-enabled",
+          tools: [
+            {
+              name: "codeAgent.runCommand",
+              description: "Run a process inside a declared task workspace root.",
+              risk: "risky",
+            },
+          ],
+        }),
+      },
+    }));
+
+    expect(step).toMatchObject({
+      kind: "callTool",
+      toolCall: {
+        toolName: "codeAgent.runCommand",
+        input: { command: "echo hello" },
+        risk: "risky",
+      },
+    });
+  });
+
   it("can drive ProviderBackedPlanner with an injected fake provider", async () => {
     const provider = new FakeProvider(response({
       action: "complete",
@@ -336,4 +446,20 @@ function createPlannerInput(input: {
     },
     metadata: input.metadata ?? {},
   };
+}
+
+function expectPlannerParseError(
+  execute: () => unknown,
+  code: string,
+  label = code,
+): void {
+  try {
+    execute();
+  } catch (error) {
+    expect(error, label).toBeInstanceOf(HelarcPlannerParseError);
+    expect((error as HelarcPlannerParseError).code, label).toBe(code);
+    return;
+  }
+
+  throw new Error(`Expected HelarcPlannerParseError: ${label}`);
 }

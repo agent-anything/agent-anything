@@ -149,7 +149,7 @@ describe("Helarc read-only session", () => {
 
     expect(result.status).toBe("failed");
     expect(result.output.safeErrors).toEqual([
-      { code: "tool_not_found", message: "Tool is not registered: codeAgent.runCommand" },
+      { code: "provider_planner_failed", message: "Tool is not exposed in the active tool catalog." },
     ]);
     await expect(access(markerPath)).rejects.toThrow();
   });

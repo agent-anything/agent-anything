@@ -3,6 +3,7 @@ import { CODE_AGENT_RUN_COMMAND_TOOL } from "@agent-anything/code-agent";
 import type { ProviderRequest, ProviderResponse } from "@agent-anything/providers";
 import type { ToolCall } from "@agent-anything/tools";
 import { buildHelarcPromptAssembly } from "./HelarcPromptAssembly.js";
+import { readHelarcToolCatalog } from "./HelarcToolCatalog.js";
 
 export const HELARC_PLANNER_CAPABILITY = "helarc.code-agent.plan";
 export const HELARC_PLANNER_OUTPUT_MAX_LENGTH = 64_000;
@@ -25,9 +26,27 @@ export type HelarcProviderStructuredOutput =
   | { action: "propose"; summary: string; change: HelarcChangeIntent }
   | { action: "stop"; reason: string };
 
+export type HelarcPlannerParseErrorCode =
+  | "provider_failed"
+  | "planner_output_too_large"
+  | "planner_output_not_json"
+  | "planner_output_invalid"
+  | "planner_action_invalid"
+  | "planner_tool_name_required"
+  | "planner_tool_input_required"
+  | "planner_tool_input_invalid"
+  | "planner_tool_name_unsupported"
+  | "planner_summary_required"
+  | "planner_change_required"
+  | "planner_change_operation_required"
+  | "planner_change_operation_invalid"
+  | "planner_change_path_required"
+  | "planner_change_content_required"
+  | "planner_stop_reason_required";
+
 export class HelarcPlannerParseError extends Error {
   constructor(
-    readonly code: string,
+    readonly code: HelarcPlannerParseErrorCode,
     message: string,
   ) {
     super(message);
@@ -72,7 +91,7 @@ export function parseHelarcProviderResponse(
 ): PlanStep {
   if (response.status === "failed") {
     throw new HelarcPlannerParseError(
-      response.error?.code ?? "provider_failed",
+      "provider_failed",
       response.error?.message ?? "Provider failed.",
     );
   }
@@ -118,6 +137,8 @@ function structuredOutputToPlanStep(
 ): PlanStep {
   const id = createPlanStepId(input, output.action);
   if (output.action === "call_tool") {
+    assertToolNameSupported(output.toolName, input);
+
     return {
       id,
       kind: "callTool",
@@ -174,13 +195,39 @@ function normalizeProviderOutput(output: unknown): unknown {
 
 function parseCallToolOutput(value: Record<string, unknown>): HelarcProviderStructuredOutput {
   const toolName = readRequiredString(value, "toolName", "planner_tool_name_required");
+  const toolInput = readRequiredToolInput(value);
   return {
     action: "call_tool",
     toolName,
-    input: value.input ?? {},
+    input: toolInput,
     reason: readOptionalString(value, "reason"),
     toolCallId: readOptionalString(value, "toolCallId"),
   };
+}
+
+function assertToolNameSupported(toolName: string, input: PlannerInput): void {
+  const catalog = readHelarcToolCatalog(input);
+  if (catalog.tools.some((tool) => tool.name === toolName)) {
+    return;
+  }
+
+  throw new HelarcPlannerParseError(
+    "planner_tool_name_unsupported",
+    "Tool is not exposed in the active tool catalog.",
+  );
+}
+
+function readRequiredToolInput(value: Record<string, unknown>): Record<string, unknown> {
+  if (!Object.hasOwn(value, "input")) {
+    throw new HelarcPlannerParseError("planner_tool_input_required", "input is required.");
+  }
+
+  const input = value.input;
+  if (!isRecord(input)) {
+    throw new HelarcPlannerParseError("planner_tool_input_invalid", "input must be a JSON object.");
+  }
+
+  return input;
 }
 
 function parseChangeIntent(value: unknown): HelarcChangeIntent {
@@ -222,7 +269,7 @@ function readRawOptionalString(value: Record<string, unknown>, key: string): str
 function readRequiredString(
   value: Record<string, unknown>,
   key: string,
-  code: string,
+  code: HelarcPlannerParseErrorCode,
 ): string {
   const field = readOptionalString(value, key);
   if (!field) {
