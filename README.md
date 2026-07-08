@@ -3,19 +3,26 @@
 AgentAnything is a TypeScript workspace for building tool-using AI agent products.
 
 The project is organized around a reusable platform foundation, product-level agent
-composition, and host applications. Helarc is the primary product direction: a
-desktop developer workbench in the same broad category as Codex, Claude Code,
-Cline, and Cursor. NetDoctor remains in the repository as the first vertical
-product built on the platform.
+composition, and host applications. Helarc is the primary product direction: an
+agent workbench that starts with workspace-aware developer tasks, tool orchestration,
+permission flows, change review, and durable run history, then grows beyond the
+initial code-agent desktop stage. NetDoctor remains in the repository as the first
+vertical product built on the platform.
 
-## Current Focus
+## Current State
 
-- Build a strong platform foundation for agent products
-- Keep platform packages independent from product and host application concerns
-- Support structured tasks, runtime output, permissions, governance, tools,
-  evidence, provider integration, and host-facing events
-- Ship Helarc as an Electron desktop host backed by the shared platform
-- Preserve NetDoctor as a concrete diagnostic product and regression surface
+- Platform packages have been split into focused workspaces with boundary checks.
+- `agent-core` provides runtime, task, context, planner, loop, event, and
+  host-facing contracts.
+- Helarc is the main active product and has a working Electron desktop host.
+- Helarc supports workspace profiles, provider profiles, local credential storage,
+  provider-backed runs, session history, run traces, permission-aware tools, and
+  reviewable changes.
+- Helarc's agent behavior foundation includes prompt sections, an action contract,
+  a dynamic tool catalog, planner response recovery, protocol eval fixtures, and
+  renderer-safe trace projection.
+- NetDoctor remains as the first vertical product and a useful regression surface
+  for platform contracts.
 
 ## Products
 
@@ -23,10 +30,25 @@ product built on the platform.
 
 Helarc is the main product direction for AgentAnything.
 
-It is a developer workbench that combines a desktop host, provider configuration,
-workspace/task/session concepts, and agent runtime integration. The desktop app
-currently supports OpenAI-compatible providers and Ollama through editable provider
-profiles.
+Its first stage is a developer-focused agent workbench that combines a desktop
+host, provider configuration, workspace/task/session concepts, traceable agent
+runs, permission-aware tool use, and reviewable changes. The longer-term product
+direction is broader than this first code-agent workflow. The desktop app currently
+supports OpenAI-compatible providers and Ollama through editable provider profiles.
+
+Current Helarc capabilities include:
+
+- Electron desktop host with a React renderer
+- Workspace and task setup for local development work
+- Provider profile management for OpenAI-compatible APIs and Ollama
+- Local credential storage for provider API keys
+- Provider-backed agent loop execution
+- Read-only code tools for listing, reading, and searching workspace files
+- Permission-gated shell execution for enabled runs
+- Patch proposal, review, and application flow
+- Durable session history and run timeline data
+- Safe trace projection for renderer-visible planner behavior
+- Protocol fixtures for validating planner action behavior
 
 ### NetDoctor
 
@@ -87,7 +109,8 @@ Platform packages are designed to point inward:
   product hosting.
 
 Boundary rules are checked by `scripts/check-boundaries.mjs` and run as part of
-the root test command.
+the root test command. Product and app packages should depend on platform packages,
+but platform packages should not depend on products or apps.
 
 ## Common Commands
 
@@ -148,7 +171,17 @@ HTTP provider URLs are accepted only for loopback addresses.
 
 ## Status
 
-The project is still pre-1.0 as a product, but the platform structure, Helarc
-desktop host, provider profile flow, and workspace-level validation are now in
-place. Current validation passes through root typecheck, tests, build, boundary
-checks, and Helarc desktop package readiness checks.
+The repository is still pre-product-1.0, but the platform package structure and
+the Helarc agent behavior foundation are in place. Current validation passes
+through boundary checks, root typecheck, tests, build, and Helarc desktop package
+readiness checks.
+
+Current validation commands:
+
+```powershell
+pnpm run boundaries
+pnpm run typecheck
+pnpm run test
+pnpm run build
+pnpm --filter @agent-anything/helarc-desktop run package:check
+```
