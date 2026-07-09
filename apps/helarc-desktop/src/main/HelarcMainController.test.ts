@@ -387,6 +387,7 @@ describe("HelarcMainController", () => {
           role: "assistant",
           content: "No changes needed.",
           relatedRunIds: ["helarc-run-1"],
+          relatedArtifactIds: ["helarc-run-1-artifact-final-output"],
         },
       ],
       runs: [
@@ -399,6 +400,7 @@ describe("HelarcMainController", () => {
             status: "succeeded",
             summary: "No changes needed.",
           },
+          artifactIds: ["helarc-run-1-artifact-final-output"],
           provider: {
             profileId: "provider-a",
             displayName: "Provider A",
@@ -406,7 +408,15 @@ describe("HelarcMainController", () => {
           },
         },
       ],
-      artifacts: [],
+      artifacts: [
+        {
+          id: "helarc-run-1-artifact-final-output",
+          kind: "final-output",
+          title: "Final output",
+          summary: "No changes needed.",
+          runId: "helarc-run-1",
+        },
+      ],
     });
 
     const snapshot = controller.getSnapshot();
@@ -424,6 +434,15 @@ describe("HelarcMainController", () => {
           id: "helarc-message-1-assistant",
           role: "assistant",
           content: "No changes needed.",
+          relatedArtifactIds: ["helarc-run-1-artifact-final-output"],
+        },
+      ],
+      artifacts: [
+        {
+          id: "helarc-run-1-artifact-final-output",
+          kind: "final-output",
+          title: "Final output",
+          summary: "No changes needed.",
         },
       ],
     });
@@ -807,6 +826,25 @@ describe("HelarcMainController", () => {
         patchStatus: "applied",
         appliedPath: "src/created.txt",
         safeErrors: [],
+      },
+      activeThread: {
+        artifacts: [
+          {
+            kind: "final-output",
+            title: "Final output",
+            summary: "Create a file.",
+          },
+          {
+            kind: "patch-proposal",
+            title: "Patch proposal: create src/created.txt",
+            summary: "Accepted create patch for src/created.txt.",
+          },
+          {
+            kind: "applied-patch",
+            title: "Applied patch: src/created.txt",
+            summary: "Applied create to src/created.txt.",
+          },
+        ],
       },
     });
     await expect(readFile(targetPath, "utf8")).resolves.toBe("created\n");

@@ -120,6 +120,23 @@ export interface HelarcConversationMessageSnapshot {
   relatedArtifactIds: string[];
 }
 
+export type HelarcArtifactSnapshotKind =
+  | "final-output"
+  | "patch-proposal"
+  | "applied-patch"
+  | "trace-projection"
+  | "tool-output-summary"
+  | "error-report";
+
+export interface HelarcArtifactSnapshot {
+  id: string;
+  kind: HelarcArtifactSnapshotKind;
+  title: string;
+  summary: string | null;
+  createdAt: string;
+  runId: string | null;
+}
+
 export interface HelarcActiveThreadSnapshot {
   id: string;
   title: string;
@@ -127,6 +144,7 @@ export interface HelarcActiveThreadSnapshot {
   workspace: HelarcWorkspaceSnapshot;
   activeConversationId: string;
   messages: HelarcConversationMessageSnapshot[];
+  artifacts: HelarcArtifactSnapshot[];
 }
 
 export interface HelarcPatchReviewViewModel {

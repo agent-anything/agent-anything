@@ -175,6 +175,16 @@ describe("Helarc workbench shell", () => {
               relatedArtifactIds: [],
             },
           ],
+          artifacts: [
+            {
+              id: "artifact-1",
+              kind: "final-output",
+              title: "Final output",
+              summary: "No changes needed.",
+              createdAt: "2026-07-05T01:00:01.000Z",
+              runId: "run-1",
+            },
+          ],
         }}
       />,
     );
@@ -184,6 +194,7 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("User");
     expect(html).toContain("Assistant");
     expect(html).toContain("No changes needed.");
+    expect(html).toContain("Final output");
     expect(html).not.toContain("rawProvider");
     expect(html).not.toContain("secret");
   });

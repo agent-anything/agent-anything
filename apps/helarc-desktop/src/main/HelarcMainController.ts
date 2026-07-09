@@ -5,6 +5,7 @@ import {
   createHelarcProviderProfile,
   createHelarcConversation,
   createHelarcMessage,
+  createHelarcArtifact,
   createHelarcWorkContextRun,
   createHelarcSessionHistoryRecord,
   createHelarcTask,
@@ -25,6 +26,7 @@ import {
   type HelarcSessionOutput,
   type HelarcTaskInputError,
   type HelarcTaskTemplate,
+  type HelarcArtifact,
   type HelarcMessage,
   type HelarcThreadRecord,
   type HelarcWorkContextError,
@@ -103,6 +105,15 @@ export interface HelarcConversationMessageSnapshot {
   relatedArtifactIds: string[];
 }
 
+export interface HelarcArtifactSnapshot {
+  id: string;
+  kind: HelarcArtifact["kind"];
+  title: string;
+  summary: string | null;
+  createdAt: string;
+  runId: string | null;
+}
+
 export interface HelarcActiveThreadSnapshot {
   id: string;
   title: string;
@@ -110,6 +121,7 @@ export interface HelarcActiveThreadSnapshot {
   workspace: HelarcWorkspaceSnapshot;
   activeConversationId: string;
   messages: HelarcConversationMessageSnapshot[];
+  artifacts: HelarcArtifactSnapshot[];
 }
 
 export interface HelarcMainSnapshot {
@@ -901,12 +913,30 @@ export class HelarcMainController {
     const runRecord = persistedRunRecord ?? nextRecord;
     this.currentThreadRecord = runRecord;
 
-    const assistantMessage = createAssistantTerminalMessage(runRecord, finalRun, terminal);
+    const artifacts = createTerminalArtifacts(runRecord, finalRun, terminal, this.lastPatchReview);
+    let artifactRecord = runRecord;
+    for (const artifact of artifacts) {
+      artifactRecord = appendArtifactToThreadRecord(artifactRecord, artifact);
+      this.currentThreadRecord = artifactRecord;
+      this.currentThreadWrite = this.threadStore
+        ? this.threadStore.appendArtifact(artifactRecord.thread.id, artifact)
+        : Promise.resolve(artifactRecord);
+      const persistedArtifactRecord = await this.currentThreadWrite;
+      artifactRecord = persistedArtifactRecord ?? artifactRecord;
+      this.currentThreadRecord = artifactRecord;
+    }
+
+    const assistantMessage = createAssistantTerminalMessage(
+      artifactRecord,
+      finalRun,
+      terminal,
+      artifacts.map((artifact) => artifact.id),
+    );
     if (!assistantMessage) {
       return;
     }
 
-    const messageRecord = appendMessageToThreadRecord(runRecord, assistantMessage);
+    const messageRecord = appendMessageToThreadRecord(artifactRecord, assistantMessage);
     this.currentThreadRecord = messageRecord;
     this.currentThreadWrite = this.threadStore
       ? this.threadStore.appendMessage(messageRecord.thread.id, assistantMessage)
@@ -1055,6 +1085,7 @@ function createAssistantTerminalMessage(
   record: HelarcThreadRecord,
   run: HelarcWorkContextRun,
   terminal: HelarcRunTerminalSummary,
+  relatedArtifactIds: readonly string[],
 ): HelarcMessage | null {
   const content = createAssistantTerminalMessageContent(terminal);
   if (!content) {
@@ -1074,9 +1105,134 @@ function createAssistantTerminalMessage(
     content,
     createdAt: terminal.completedAt,
     relatedRunIds: [run.id],
+    relatedArtifactIds,
   });
 
   return result.ok ? result.message : null;
+}
+
+function createTerminalArtifacts(
+  record: HelarcThreadRecord,
+  run: HelarcWorkContextRun,
+  terminal: HelarcRunTerminalSummary,
+  patchReview: CompletedPatchReview | null,
+): HelarcArtifact[] {
+  const artifacts: HelarcArtifact[] = [];
+  const summary = createRuntimeSummary(terminal.safeOutput);
+  const safeOutput = isHelarcSessionOutput(terminal.safeOutput) ? terminal.safeOutput : null;
+
+  if (summary) {
+    const artifact = createArtifact({
+      id: `${run.id}-artifact-final-output`,
+      threadId: record.thread.id,
+      runId: run.id,
+      kind: "final-output",
+      title: "Final output",
+      summary,
+      createdAt: terminal.completedAt,
+      payload: safeOutput
+        ? {
+            agentSummary: safeOutput.agentSummary,
+            runtimeStatus: safeOutput.runtimeStatus,
+            patchStatus: safeOutput.patchStatus,
+            appliedPath: safeOutput.appliedPath,
+          }
+        : { summary },
+    });
+    if (artifact) {
+      artifacts.push(artifact);
+    }
+  }
+
+  if (patchReview) {
+    const patchSummary = createPatchArtifactSummary(patchReview);
+    const proposal = createArtifact({
+      id: `${run.id}-artifact-patch-proposal`,
+      threadId: record.thread.id,
+      runId: run.id,
+      kind: "patch-proposal",
+      title: `Patch proposal: ${patchReview.review.operation} ${patchReview.review.path}`,
+      summary: patchSummary,
+      createdAt: terminal.completedAt,
+      payload: {
+        operation: patchReview.review.operation,
+        path: patchReview.review.path,
+        summary: patchReview.review.summary,
+        rationale: patchReview.review.rationale,
+        decision: patchReview.decision,
+        reason: patchReview.reason,
+        originalContentBytes: patchReview.review.originalContentBytes,
+        proposedContentBytes: patchReview.review.proposedContentBytes,
+        status: safeOutput?.patchStatus ?? null,
+      },
+    });
+    if (proposal) {
+      artifacts.push(proposal);
+    }
+
+    if (patchReview.decision === "accepted" && safeOutput?.patchStatus === "applied") {
+      const applied = createArtifact({
+        id: `${run.id}-artifact-applied-patch`,
+        threadId: record.thread.id,
+        runId: run.id,
+        kind: "applied-patch",
+        title: `Applied patch: ${patchReview.review.path}`,
+        summary: safeOutput.appliedPath
+          ? `Applied ${patchReview.review.operation} to ${safeOutput.appliedPath}.`
+          : `Applied ${patchReview.review.operation} patch.`,
+        createdAt: terminal.completedAt,
+        payload: {
+          operation: patchReview.review.operation,
+          path: safeOutput.appliedPath ?? patchReview.review.path,
+          reason: patchReview.reason,
+          status: safeOutput.patchStatus,
+        },
+      });
+      if (applied) {
+        artifacts.push(applied);
+      }
+    }
+  }
+
+  if (terminal.errorSummary.length > 0) {
+    const artifact = createArtifact({
+      id: `${run.id}-artifact-error-report`,
+      threadId: record.thread.id,
+      runId: run.id,
+      kind: "error-report",
+      title: "Error report",
+      summary: terminal.errorSummary[0]?.message ?? "Run reported errors.",
+      createdAt: terminal.completedAt,
+      payload: {
+        status: terminal.status,
+        runtimeStatus: terminal.runtimeStatus,
+        runtimeCode: terminal.runtimeCode,
+        errors: terminal.errorSummary,
+      },
+    });
+    if (artifact) {
+      artifacts.push(artifact);
+    }
+  }
+
+  return artifacts;
+}
+
+function createArtifact(input: Parameters<typeof createHelarcArtifact>[0]): HelarcArtifact | null {
+  const result = createHelarcArtifact(input);
+  return result.ok ? result.artifact : null;
+}
+
+function createPatchArtifactSummary(patchReview: CompletedPatchReview): string {
+  if (patchReview.decision === "accepted") {
+    return `Accepted ${patchReview.review.operation} patch for ${patchReview.review.path}.`;
+  }
+
+  if (patchReview.decision === "rejected") {
+    return `Rejected ${patchReview.review.operation} patch for ${patchReview.review.path}.`;
+  }
+
+  return `Proposed ${patchReview.review.operation} patch for ${patchReview.review.path}.`;
 }
 
 function createAssistantTerminalMessageContent(terminal: HelarcRunTerminalSummary): string | null {
@@ -1151,6 +1307,27 @@ function appendMessageToThreadRecord(
   };
 }
 
+function appendArtifactToThreadRecord(
+  record: HelarcThreadRecord,
+  artifact: HelarcArtifact,
+): HelarcThreadRecord {
+  return {
+    ...record,
+    thread: {
+      ...record.thread,
+      updatedAt: maxIsoDateTime(record.thread.updatedAt, artifact.createdAt),
+    },
+    runs: artifact.runId
+      ? record.runs.map((run) =>
+          run.id === artifact.runId
+            ? { ...run, artifactIds: appendUniqueString(run.artifactIds, artifact.id) }
+            : run
+        )
+      : record.runs,
+    artifacts: replaceById(record.artifacts, artifact),
+  };
+}
+
 function createActiveThreadSnapshot(record: HelarcThreadRecord | null): HelarcActiveThreadSnapshot | null {
   if (!record) {
     return null;
@@ -1183,6 +1360,14 @@ function createActiveThreadSnapshot(record: HelarcThreadRecord | null): HelarcAc
     },
     activeConversationId: record.thread.activeConversationId,
     messages,
+    artifacts: record.artifacts.map((artifact) => ({
+      id: artifact.id,
+      kind: artifact.kind,
+      title: artifact.title,
+      summary: artifact.summary,
+      createdAt: artifact.createdAt,
+      runId: artifact.runId,
+    })),
   };
 }
 
@@ -1199,6 +1384,17 @@ function appendUniqueString(items: readonly string[], item: string): string[] {
 
 function maxIsoDateTime(left: string, right: string): string {
   return right.localeCompare(left) > 0 ? right : left;
+}
+
+function isHelarcSessionOutput(value: unknown): value is HelarcSessionOutput {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const output = value as Partial<HelarcSessionOutput>;
+  return typeof output.taskId === "string" &&
+    typeof output.runtimeStatus === "string" &&
+    Array.isArray(output.safeErrors);
 }
 
 function createThreadTitle(taskText: string): string {

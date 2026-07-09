@@ -3,6 +3,7 @@ import {
   AlertCircle,
   CheckCircle2,
   CircleStop,
+  Boxes,
   FileCode2,
   FolderOpen,
   History,
@@ -473,6 +474,19 @@ export function ConversationPanel({
           </article>
         ))}
       </div>
+      {activeThread.artifacts.length > 0 ? (
+        <div className="artifact-strip" aria-label="Thread artifacts">
+          {activeThread.artifacts.map((artifact) => (
+            <article className="artifact-chip" key={artifact.id}>
+              <Boxes size={14} aria-hidden="true" />
+              <div>
+                <strong>{artifact.title}</strong>
+                <span>{artifact.summary ?? artifactKindLabel(artifact.kind)}</span>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -945,6 +959,10 @@ function conversationRoleLabel(role: NonNullable<HelarcMainSnapshot["activeThrea
   }
 
   return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
+function artifactKindLabel(kind: NonNullable<HelarcMainSnapshot["activeThread"]>["artifacts"][number]["kind"]): string {
+  return kind.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
 }
 
 function terminalTitle(snapshot: HelarcMainSnapshot): string {
