@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   App,
+  ConversationPanel,
   PermissionPromptPanel,
   RunTerminalPanel,
   RunTimelinePanel,
@@ -141,6 +142,50 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("tool codeAgent.readFile");
     expect(html).toContain("versions helarc-prompt-v1, helarc-action-v1, helarc-tool-catalog-v1");
     expect(html).toContain("tools codeAgent.listFiles, codeAgent.readFile, codeAgent.searchFiles");
+  });
+
+  it("renders active thread conversation messages", () => {
+    const html = renderToStaticMarkup(
+      <ConversationPanel
+        activeThread={{
+          id: "thread-1",
+          title: "Update docs",
+          status: "open",
+          workspace: {
+            id: "workspace",
+            name: "agent-anything",
+            path: "D:/projects/agent-anything",
+          },
+          activeConversationId: "conversation-1",
+          messages: [
+            {
+              id: "message-1",
+              role: "user",
+              content: "Update docs",
+              createdAt: "2026-07-05T01:00:00.000Z",
+              relatedRunIds: ["run-1"],
+              relatedArtifactIds: [],
+            },
+            {
+              id: "message-2",
+              role: "assistant",
+              content: "No changes needed.",
+              createdAt: "2026-07-05T01:00:01.000Z",
+              relatedRunIds: ["run-1"],
+              relatedArtifactIds: [],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(html).toContain("Update docs");
+    expect(html).toContain("2 messages");
+    expect(html).toContain("User");
+    expect(html).toContain("Assistant");
+    expect(html).toContain("No changes needed.");
+    expect(html).not.toContain("rawProvider");
+    expect(html).not.toContain("secret");
   });
 
   it.each([

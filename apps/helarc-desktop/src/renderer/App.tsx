@@ -6,6 +6,7 @@ import {
   FileCode2,
   FolderOpen,
   History,
+  MessageSquareText,
   Play,
   Settings,
   ShieldCheck,
@@ -44,6 +45,7 @@ const initialSnapshot: HelarcMainSnapshot = {
   acceptedTask: null,
   pendingPermission: null,
   pendingPatchReview: null,
+  activeThread: null,
   activity: [],
   activeRun: {
     runId: "",
@@ -313,10 +315,13 @@ export function App() {
               <span className={`status-indicator ${statusTone(snapshot.status)}`}><span /> {statusText}</span>
             </div>
           </div>
-          <RunTimelinePanel
-            activeRun={snapshot.activeRun}
-            acceptedTask={snapshot.acceptedTask}
-          />
+          <div className="activity-stack">
+            <ConversationPanel activeThread={snapshot.activeThread} />
+            <RunTimelinePanel
+              activeRun={snapshot.activeRun}
+              acceptedTask={snapshot.acceptedTask}
+            />
+          </div>
         </section>
 
         <aside className="review-pane" aria-labelledby="review-title">
@@ -438,6 +443,37 @@ export function App() {
         {startResult?.ok ? <p className="composer-message">Session started</p> : null}
       </form>
     </div>
+  );
+}
+
+export function ConversationPanel({
+  activeThread,
+}: {
+  activeThread: HelarcMainSnapshot["activeThread"];
+}) {
+  if (!activeThread) {
+    return null;
+  }
+
+  return (
+    <section className="conversation-panel" aria-label="Active conversation">
+      <div className="conversation-header">
+        <MessageSquareText size={16} aria-hidden="true" />
+        <strong>{activeThread.title}</strong>
+        <span>{activeThread.messages.length} messages</span>
+      </div>
+      <div className="conversation-list">
+        {activeThread.messages.map((message) => (
+          <article className={`conversation-message role-${message.role}`} key={message.id}>
+            <div>
+              <strong>{conversationRoleLabel(message.role)}</strong>
+              <time dateTime={message.createdAt}>{formatTimestamp(message.createdAt)}</time>
+            </div>
+            <p>{message.content}</p>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -901,6 +937,14 @@ function isRunCancellable(status: HelarcMainSnapshot["activeRun"]["status"]): bo
 
 function runStatusLabel(status: HelarcMainSnapshot["activeRun"]["status"]): string {
   return status[0]?.toUpperCase() + status.slice(1).replaceAll("_", " ");
+}
+
+function conversationRoleLabel(role: NonNullable<HelarcMainSnapshot["activeThread"]>["messages"][number]["role"]): string {
+  if (role === "product-event") {
+    return "Product";
+  }
+
+  return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
 function terminalTitle(snapshot: HelarcMainSnapshot): string {

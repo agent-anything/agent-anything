@@ -372,7 +372,7 @@ describe("HelarcMainController", () => {
       conversations: [
         {
           id: "helarc-conversation-1",
-          messageIds: ["helarc-message-1"],
+          messageIds: ["helarc-message-1", "helarc-message-1-assistant"],
         },
       ],
       messages: [
@@ -380,6 +380,12 @@ describe("HelarcMainController", () => {
           id: "helarc-message-1",
           role: "user",
           content: "Update docs",
+          relatedRunIds: ["helarc-run-1"],
+        },
+        {
+          id: "helarc-message-1-assistant",
+          role: "assistant",
+          content: "No changes needed.",
           relatedRunIds: ["helarc-run-1"],
         },
       ],
@@ -401,6 +407,25 @@ describe("HelarcMainController", () => {
         },
       ],
       artifacts: [],
+    });
+
+    const snapshot = controller.getSnapshot();
+    expect(snapshot.activeThread).toMatchObject({
+      id: "helarc-thread-1",
+      title: "Update docs",
+      activeConversationId: "helarc-conversation-1",
+      messages: [
+        {
+          id: "helarc-message-1",
+          role: "user",
+          content: "Update docs",
+        },
+        {
+          id: "helarc-message-1-assistant",
+          role: "assistant",
+          content: "No changes needed.",
+        },
+      ],
     });
   });
 

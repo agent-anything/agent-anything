@@ -25,6 +25,7 @@ import {
   type HelarcSessionOutput,
   type HelarcTaskInputError,
   type HelarcTaskTemplate,
+  type HelarcMessage,
   type HelarcThreadRecord,
   type HelarcWorkContextError,
   type HelarcWorkContextRun,
@@ -86,6 +87,31 @@ export interface HelarcPermissionPromptSnapshot {
   rootName: string | null;
 }
 
+export type HelarcConversationMessageRole =
+  | "user"
+  | "assistant"
+  | "system"
+  | "tool"
+  | "product-event";
+
+export interface HelarcConversationMessageSnapshot {
+  id: string;
+  role: HelarcConversationMessageRole;
+  content: string;
+  createdAt: string;
+  relatedRunIds: string[];
+  relatedArtifactIds: string[];
+}
+
+export interface HelarcActiveThreadSnapshot {
+  id: string;
+  title: string;
+  status: "open" | "closed" | "archived";
+  workspace: HelarcWorkspaceSnapshot;
+  activeConversationId: string;
+  messages: HelarcConversationMessageSnapshot[];
+}
+
 export interface HelarcMainSnapshot {
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
@@ -96,6 +122,7 @@ export interface HelarcMainSnapshot {
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   pendingPermission: HelarcPermissionPromptSnapshot | null;
   pendingPatchReview: HelarcPatchReviewViewModel | null;
+  activeThread: HelarcActiveThreadSnapshot | null;
   activity: HelarcActivityItem[];
   activeRun: HelarcRunSnapshot;
   output: HelarcSessionOutput | null;
@@ -263,6 +290,7 @@ export class HelarcMainController {
       acceptedTask: this.acceptedTask,
       pendingPermission: this.pendingPermission?.prompt ?? null,
       pendingPatchReview: this.pendingPatchReview?.review ?? null,
+      activeThread: createActiveThreadSnapshot(this.currentThreadRecord),
       activity: this.activity,
       activeRun: this.activeRunController.getSnapshot(),
       output: this.output,
@@ -869,8 +897,22 @@ export class HelarcMainController {
     this.currentThreadWrite = this.threadStore
       ? this.threadStore.updateRun(nextRecord.thread.id, finalRun)
       : Promise.resolve(nextRecord);
-    const persisted = await this.currentThreadWrite;
-    this.currentThreadRecord = persisted ?? nextRecord;
+    const persistedRunRecord = await this.currentThreadWrite;
+    const runRecord = persistedRunRecord ?? nextRecord;
+    this.currentThreadRecord = runRecord;
+
+    const assistantMessage = createAssistantTerminalMessage(runRecord, finalRun, terminal);
+    if (!assistantMessage) {
+      return;
+    }
+
+    const messageRecord = appendMessageToThreadRecord(runRecord, assistantMessage);
+    this.currentThreadRecord = messageRecord;
+    this.currentThreadWrite = this.threadStore
+      ? this.threadStore.appendMessage(messageRecord.thread.id, assistantMessage)
+      : Promise.resolve(messageRecord);
+    const persistedMessageRecord = await this.currentThreadWrite;
+    this.currentThreadRecord = persistedMessageRecord ?? messageRecord;
   }
 
   private createActiveRunTerminalSummary(input: {
@@ -1009,6 +1051,61 @@ function createFinalWorkContextRun(
   };
 }
 
+function createAssistantTerminalMessage(
+  record: HelarcThreadRecord,
+  run: HelarcWorkContextRun,
+  terminal: HelarcRunTerminalSummary,
+): HelarcMessage | null {
+  const content = createAssistantTerminalMessageContent(terminal);
+  if (!content) {
+    return null;
+  }
+
+  const conversation = record.conversations.find((item) => item.id === record.thread.activeConversationId);
+  if (!conversation) {
+    return null;
+  }
+
+  const result = createHelarcMessage({
+    id: `${run.triggeringMessageId}-assistant`,
+    threadId: record.thread.id,
+    conversationId: conversation.id,
+    role: "assistant",
+    content,
+    createdAt: terminal.completedAt,
+    relatedRunIds: [run.id],
+  });
+
+  return result.ok ? result.message : null;
+}
+
+function createAssistantTerminalMessageContent(terminal: HelarcRunTerminalSummary): string | null {
+  const summary = createRuntimeSummary(terminal.safeOutput);
+  if (summary) {
+    return summary;
+  }
+
+  if (terminal.errorSummary.length > 0) {
+    return terminal.errorSummary
+      .map((error) => `${error.code}: ${error.message}`)
+      .join("; ");
+  }
+
+  if (terminal.status === "completed") {
+    return "Run completed.";
+  }
+
+  if (terminal.status === "denied") {
+    return "Run denied.";
+  }
+
+  if (terminal.status === "cancelled") {
+    return "Run cancelled.";
+  }
+
+  return "Run failed.";
+}
+
 function createRuntimeSummary(safeOutput: unknown): string | null {
   if (
     typeof safeOutput === "object" &&
@@ -1020,6 +1117,88 @@ function createRuntimeSummary(safeOutput: unknown): string | null {
   }
 
   return null;
+}
+
+function appendMessageToThreadRecord(
+  record: HelarcThreadRecord,
+  message: HelarcMessage,
+): HelarcThreadRecord {
+  const conversation = record.conversations.find((item) => item.id === record.thread.activeConversationId);
+  if (!conversation) {
+    return record;
+  }
+
+  const messageIds = appendUniqueString(conversation.messageIds, message.id);
+  const nextConversation = {
+    ...conversation,
+    updatedAt: maxIsoDateTime(conversation.updatedAt, message.createdAt),
+    messageIds,
+  };
+  const messages = replaceById(record.messages, message);
+  const messageById = new Map(messages.map((item) => [item.id, item]));
+
+  return {
+    ...record,
+    thread: {
+      ...record.thread,
+      updatedAt: maxIsoDateTime(record.thread.updatedAt, message.createdAt),
+    },
+    conversations: replaceById(record.conversations, nextConversation),
+    messages: messageIds.flatMap((id) => {
+      const item = messageById.get(id);
+      return item ? [item] : [];
+    }),
+  };
+}
+
+function createActiveThreadSnapshot(record: HelarcThreadRecord | null): HelarcActiveThreadSnapshot | null {
+  if (!record) {
+    return null;
+  }
+
+  const activeConversation = record.conversations.find((item) => item.id === record.thread.activeConversationId);
+  const messageById = new Map(record.messages.map((message) => [message.id, message]));
+  const messages = (activeConversation?.messageIds ?? []).flatMap((messageId) => {
+    const message = messageById.get(messageId);
+    return message
+      ? [{
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          createdAt: message.createdAt,
+          relatedRunIds: [...message.relatedRunIds],
+          relatedArtifactIds: [...message.relatedArtifactIds],
+        }]
+      : [];
+  });
+
+  return {
+    id: record.thread.id,
+    title: record.thread.title,
+    status: record.thread.status,
+    workspace: {
+      id: record.thread.workspace.profileId ?? "workspace",
+      name: record.thread.workspace.displayName,
+      path: record.thread.workspace.path,
+    },
+    activeConversationId: record.thread.activeConversationId,
+    messages,
+  };
+}
+
+function replaceById<T extends { id: string }>(items: readonly T[], item: T): T[] {
+  return [
+    ...items.filter((candidate) => candidate.id !== item.id),
+    item,
+  ];
+}
+
+function appendUniqueString(items: readonly string[], item: string): string[] {
+  return items.includes(item) ? [...items] : [...items, item];
+}
+
+function maxIsoDateTime(left: string, right: string): string {
+  return right.localeCompare(left) > 0 ? right : left;
 }
 
 function createThreadTitle(taskText: string): string {

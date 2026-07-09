@@ -104,6 +104,31 @@ export interface HelarcPermissionPromptSnapshot {
   rootName: string | null;
 }
 
+export type HelarcConversationMessageRole =
+  | "user"
+  | "assistant"
+  | "system"
+  | "tool"
+  | "product-event";
+
+export interface HelarcConversationMessageSnapshot {
+  id: string;
+  role: HelarcConversationMessageRole;
+  content: string;
+  createdAt: string;
+  relatedRunIds: string[];
+  relatedArtifactIds: string[];
+}
+
+export interface HelarcActiveThreadSnapshot {
+  id: string;
+  title: string;
+  status: "open" | "closed" | "archived";
+  workspace: HelarcWorkspaceSnapshot;
+  activeConversationId: string;
+  messages: HelarcConversationMessageSnapshot[];
+}
+
 export interface HelarcPatchReviewViewModel {
   patchId: string;
   rootName: string;
@@ -187,6 +212,7 @@ export interface HelarcMainSnapshot {
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   pendingPermission: HelarcPermissionPromptSnapshot | null;
   pendingPatchReview: HelarcPatchReviewViewModel | null;
+  activeThread: HelarcActiveThreadSnapshot | null;
   activity: HelarcActivityItem[];
   activeRun: HelarcRunSnapshot;
   output: HelarcSessionOutput | null;
