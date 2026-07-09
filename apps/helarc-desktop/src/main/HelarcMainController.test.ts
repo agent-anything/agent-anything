@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HelarcMainController, type HelarcMainSnapshot } from "./HelarcMainController.js";
+import { FileHelarcThreadStore } from "./thread/index.js";
 
 describe("HelarcMainController", () => {
   it("keeps workspace authority in main state", () => {
@@ -321,6 +322,86 @@ describe("HelarcMainController", () => {
       sessionHistory: storedHistory,
     });
     expect(restoredController.getSnapshot().sessionHistory).toHaveLength(1);
+  });
+
+  it("persists work context thread, trigger message, and run records", async () => {
+    const threadStore = new FileHelarcThreadStore(await threadFilePath());
+    const controller = new HelarcMainController({
+      provider: new CompleteProvider(),
+      providerProfile: {
+        id: "provider-a",
+        providerKind: "openai-compatible",
+        displayName: "Provider A",
+        endpointLabel: "provider.local",
+        baseUrl: "https://provider.local/v1",
+        baseUrlOrigin: "https://provider.local",
+        model: "model-a",
+        timeoutMs: 1000,
+        credentialStatus: "present",
+        isActive: true,
+      },
+      threadStore,
+    });
+    controller.selectWorkspacePath("D:/projects/agent-anything");
+
+    const completed = waitForStatus(controller, "completed");
+    controller.startSession({ taskText: "Update docs" });
+    await completed;
+
+    const summaries = await threadStore.listThreadSummaries();
+    expect(summaries).toMatchObject([
+      {
+        id: "helarc-thread-1",
+        title: "Update docs",
+        latestRun: {
+          runId: "helarc-run-1",
+          status: "completed",
+        },
+      },
+    ]);
+
+    await expect(threadStore.loadThread("helarc-thread-1")).resolves.toMatchObject({
+      thread: {
+        id: "helarc-thread-1",
+        activeConversationId: "helarc-conversation-1",
+        latestRun: {
+          runId: "helarc-run-1",
+          status: "completed",
+        },
+      },
+      conversations: [
+        {
+          id: "helarc-conversation-1",
+          messageIds: ["helarc-message-1"],
+        },
+      ],
+      messages: [
+        {
+          id: "helarc-message-1",
+          role: "user",
+          content: "Update docs",
+          relatedRunIds: ["helarc-run-1"],
+        },
+      ],
+      runs: [
+        {
+          id: "helarc-run-1",
+          triggeringMessageId: "helarc-message-1",
+          triggerMessageRole: "user",
+          status: "completed",
+          runtime: {
+            status: "succeeded",
+            summary: "No changes needed.",
+          },
+          provider: {
+            profileId: "provider-a",
+            displayName: "Provider A",
+            model: "model-a",
+          },
+        },
+      ],
+      artifacts: [],
+    });
   });
 
   it("correlates shell permission decisions and blocks denied commands", async () => {
@@ -870,6 +951,11 @@ function waitForStatus(
       }
     });
   });
+}
+
+async function threadFilePath(): Promise<string> {
+  const rootPath = await mkdtemp(join(tmpdir(), "helarc-controller-thread-store-"));
+  return join(rootPath, "threads", "threads.json");
 }
 
 function waitForActiveRunTerminal(

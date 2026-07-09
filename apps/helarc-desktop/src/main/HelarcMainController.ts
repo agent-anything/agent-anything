@@ -3,8 +3,12 @@ import {
   createHelarcRunInput,
   createHelarcRunTerminalSummary,
   createHelarcProviderProfile,
+  createHelarcConversation,
+  createHelarcMessage,
+  createHelarcWorkContextRun,
   createHelarcSessionHistoryRecord,
   createHelarcTask,
+  createHelarcThread,
   createBuiltInHelarcTaskTemplates,
   mapRuntimeEventToHelarcRunEvent,
   runHelarcSession,
@@ -21,6 +25,9 @@ import {
   type HelarcSessionOutput,
   type HelarcTaskInputError,
   type HelarcTaskTemplate,
+  type HelarcThreadRecord,
+  type HelarcWorkContextError,
+  type HelarcWorkContextRun,
   type HelarcWorkspaceProfile,
 } from "@agent-anything/helarc";
 import type { PermissionRequest } from "@agent-anything/permission";
@@ -28,6 +35,7 @@ import type { Provider } from "@agent-anything/providers";
 import { basename, isAbsolute, normalize } from "node:path";
 import type { ProviderCredentialStoreError } from "./provider/ProviderCredentialStore.js";
 import { HelarcActiveRunController } from "./run/index.js";
+import type { HelarcThreadStore } from "./thread/index.js";
 
 export interface HelarcWorkspaceSnapshot {
   id: string;
@@ -111,6 +119,7 @@ export type HelarcMainErrorCode =
   | "workspace_path_not_directory"
   | "workspace_profile_not_found"
   | "workspace_profile_invalid"
+  | HelarcWorkContextError["code"]
   | ProviderCredentialStoreError["code"]
   | "provider_profile_id_required"
   | "provider_profile_display_name_required"
@@ -167,6 +176,7 @@ export interface HelarcMainControllerInput {
   workspaceProfiles?: HelarcWorkspaceProfile[];
   sessionHistory?: HelarcSessionHistoryRecord[];
   taskTemplates?: HelarcTaskTemplate[];
+  threadStore?: HelarcThreadStore | null;
   onSessionHistoryRecord?: (
     record: HelarcSessionHistoryRecord,
   ) => Promise<HelarcSessionHistoryRecord[]> | HelarcSessionHistoryRecord[];
@@ -186,8 +196,11 @@ export class HelarcMainController {
   private sessionHistory: HelarcSessionHistoryRecord[] = [];
   private readonly taskTemplates: HelarcTaskTemplate[];
   private currentSessionStartedAt: string | null = null;
+  private currentThreadRecord: HelarcThreadRecord | null = null;
+  private currentThreadWrite: Promise<HelarcThreadRecord | null> | null = null;
   private lastPatchReview: CompletedPatchReview | null = null;
   private readonly onSessionHistoryRecord: HelarcMainControllerInput["onSessionHistoryRecord"];
+  private readonly threadStore: HelarcThreadStore | null;
   private provider: HelarcProviderSnapshot;
   private providerInstance: Provider | null;
   private readonly runtimeToolMode: HelarcRuntimeToolMode;
@@ -203,6 +216,7 @@ export class HelarcMainController {
     this.sessionHistory = input.sessionHistory ?? [];
     this.taskTemplates = input.taskTemplates ?? createBuiltInHelarcTaskTemplates();
     this.onSessionHistoryRecord = input.onSessionHistoryRecord;
+    this.threadStore = input.threadStore ?? null;
     this.runtimeToolMode = input.runtimeToolMode ?? "read-only";
     this.provider = input.providerConfigError
       ? {
@@ -311,6 +325,8 @@ export class HelarcMainController {
     this.output = null;
     this.lastError = null;
     this.currentSessionStartedAt = null;
+    this.currentThreadRecord = null;
+    this.currentThreadWrite = null;
     this.lastPatchReview = null;
     this.cancellationRequested = false;
     this.activeRunController.reset();
@@ -361,8 +377,9 @@ export class HelarcMainController {
     }
 
     const startedAt = new Date().toISOString();
+    const sequenceNumber = this.nextTaskNumber;
     const runResult = createHelarcRunInput({
-      runId: `helarc-run-${this.nextTaskNumber}`,
+      runId: `helarc-run-${sequenceNumber}`,
       taskText: taskResult.task.input.prompt,
       workspaceProfileId: this.selectedWorkspace.id,
       providerProfileId: this.provider.activeProfile.id,
@@ -378,6 +395,20 @@ export class HelarcMainController {
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
+    const threadRecordResult = this.createInitialThreadRecord({
+      sequenceNumber,
+      taskText: taskResult.task.input.prompt,
+      runId: runResult.input.runId,
+      startedAt,
+    });
+    if (!threadRecordResult.ok) {
+      const error = this.setError(
+        threadRecordResult.error.code as HelarcMainErrorCode,
+        threadRecordResult.error.message,
+      );
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+
     this.nextTaskNumber += 1;
     this.acceptedTask = {
       id: taskResult.task.id,
@@ -390,6 +421,8 @@ export class HelarcMainController {
     this.output = null;
     this.lastError = null;
     this.currentSessionStartedAt = startedAt;
+    this.currentThreadRecord = threadRecordResult.record;
+    this.currentThreadWrite = this.persistInitialThreadRecord(threadRecordResult.record);
     this.lastPatchReview = null;
     this.cancellationRequested = false;
     this.activeRunController.startRun({
@@ -550,6 +583,7 @@ export class HelarcMainController {
         errorSummary: sessionResult.output.safeErrors,
       });
       await this.persistSessionHistory(task, terminal);
+      await this.persistWorkContextRun(terminal);
       this.completeActiveRun(terminal);
     } catch (error) {
       this.status = this.cancellationRequested ? "cancelled" : "failed";
@@ -581,6 +615,7 @@ export class HelarcMainController {
         errorSummary: this.output.safeErrors,
       });
       await this.persistSessionHistory(task, terminal);
+      await this.persistWorkContextRun(terminal);
       this.completeActiveRun(terminal);
     } finally {
       this.publishSnapshot();
@@ -684,6 +719,158 @@ export class HelarcMainController {
     this.sessionHistory = this.onSessionHistoryRecord
       ? await this.onSessionHistoryRecord(recordResult.record)
       : [recordResult.record, ...this.sessionHistory.filter((record) => record.id !== recordResult.record.id)];
+  }
+
+  private createInitialThreadRecord(input: {
+    sequenceNumber: number;
+    taskText: string;
+    runId: string;
+    startedAt: string;
+  }): { ok: true; record: HelarcThreadRecord } | { ok: false; error: HelarcWorkContextError } {
+    if (!this.selectedWorkspace || !this.provider.configured) {
+      return {
+        ok: false,
+        error: {
+          code: "thread_workspace_invalid",
+          message: "Thread workspace context is unavailable.",
+        },
+      };
+    }
+
+    const threadId = `helarc-thread-${input.sequenceNumber}`;
+    const conversationId = `helarc-conversation-${input.sequenceNumber}`;
+    const messageId = `helarc-message-${input.sequenceNumber}`;
+
+    const threadResult = createHelarcThread({
+      id: threadId,
+      workspace: {
+        profileId: this.selectedWorkspace.id.startsWith("workspace:")
+          ? this.selectedWorkspace.id
+          : null,
+        displayName: this.selectedWorkspace.name,
+        path: this.selectedWorkspace.path,
+      },
+      title: createThreadTitle(input.taskText),
+      status: "open",
+      createdAt: input.startedAt,
+      updatedAt: input.startedAt,
+      activeConversationId: conversationId,
+      latestRun: {
+        runId: input.runId,
+        status: "running",
+        startedAt: input.startedAt,
+        completedAt: null,
+      },
+      metadata: {
+        product: "helarc",
+      },
+    });
+    if (!threadResult.ok) {
+      return threadResult;
+    }
+
+    const conversationResult = createHelarcConversation({
+      id: conversationId,
+      threadId,
+      createdAt: input.startedAt,
+      updatedAt: input.startedAt,
+      messageIds: [messageId],
+    });
+    if (!conversationResult.ok) {
+      return conversationResult;
+    }
+
+    const messageResult = createHelarcMessage({
+      id: messageId,
+      threadId,
+      conversationId,
+      role: "user",
+      content: input.taskText,
+      createdAt: input.startedAt,
+      relatedRunIds: [input.runId],
+    });
+    if (!messageResult.ok) {
+      return messageResult;
+    }
+
+    const runResult = createHelarcWorkContextRun({
+      id: input.runId,
+      threadId,
+      triggeringMessageId: messageId,
+      triggerMessageRole: "user",
+      status: "running",
+      provider: {
+        profileId: this.provider.activeProfile.id,
+        providerKind: this.provider.activeProfile.providerKind,
+        displayName: this.provider.activeProfile.displayName,
+        endpointLabel: this.provider.activeProfile.endpointLabel,
+        model: this.provider.activeProfile.model,
+      },
+      permissionPreset: "ask",
+      startedAt: input.startedAt,
+      metadata: {
+        product: "helarc",
+      },
+    });
+    if (!runResult.ok) {
+      return runResult;
+    }
+
+    return {
+      ok: true,
+      record: {
+        thread: threadResult.thread,
+        conversations: [conversationResult.conversation],
+        messages: [messageResult.message],
+        runs: [runResult.run],
+        artifacts: [],
+      },
+    };
+  }
+
+  private async persistInitialThreadRecord(record: HelarcThreadRecord): Promise<HelarcThreadRecord | null> {
+    if (!this.threadStore) {
+      return record;
+    }
+
+    const persisted = await this.threadStore.createThread(record);
+    this.currentThreadRecord = persisted ?? record;
+    return persisted;
+  }
+
+  private async persistWorkContextRun(terminal: HelarcRunTerminalSummary | null): Promise<void> {
+    if (!terminal || !this.currentThreadRecord) {
+      return;
+    }
+
+    const existingRun = this.currentThreadRecord.runs[0];
+    if (!existingRun) {
+      return;
+    }
+
+    const finalRun = createFinalWorkContextRun(existingRun, terminal);
+    const nextRecord: HelarcThreadRecord = {
+      ...this.currentThreadRecord,
+      thread: {
+        ...this.currentThreadRecord.thread,
+        updatedAt: terminal.completedAt,
+        latestRun: {
+          runId: finalRun.id,
+          status: finalRun.status,
+          startedAt: finalRun.startedAt,
+          completedAt: finalRun.completedAt,
+        },
+      },
+      runs: [finalRun],
+    };
+
+    this.currentThreadRecord = nextRecord;
+    await this.currentThreadWrite;
+    this.currentThreadWrite = this.threadStore
+      ? this.threadStore.updateRun(nextRecord.thread.id, finalRun)
+      : Promise.resolve(nextRecord);
+    const persisted = await this.currentThreadWrite;
+    this.currentThreadRecord = persisted ?? nextRecord;
   }
 
   private createActiveRunTerminalSummary(input: {
@@ -803,6 +990,41 @@ function createHistoryPatchSummary(
     reason: patchReview.reason,
     status: output.patchStatus,
   };
+}
+
+function createFinalWorkContextRun(
+  run: HelarcWorkContextRun,
+  terminal: HelarcRunTerminalSummary,
+): HelarcWorkContextRun {
+  return {
+    ...run,
+    status: terminal.status,
+    completedAt: terminal.completedAt,
+    runtime: {
+      status: terminal.runtimeStatus,
+      code: terminal.runtimeCode,
+      summary: createRuntimeSummary(terminal.safeOutput),
+    },
+    errors: terminal.errorSummary,
+  };
+}
+
+function createRuntimeSummary(safeOutput: unknown): string | null {
+  if (
+    typeof safeOutput === "object" &&
+    safeOutput !== null &&
+    "agentSummary" in safeOutput &&
+    typeof safeOutput.agentSummary === "string"
+  ) {
+    return safeOutput.agentSummary;
+  }
+
+  return null;
+}
+
+function createThreadTitle(taskText: string): string {
+  const normalized = taskText.trim().replace(/\s+/g, " ");
+  return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
 }
 
 function createPermissionPromptSnapshot(request: PermissionRequest): HelarcPermissionPromptSnapshot {
