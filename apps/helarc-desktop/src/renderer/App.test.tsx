@@ -6,6 +6,7 @@ import {
   PermissionPromptPanel,
   RunTerminalPanel,
   RunTimelinePanel,
+  ThreadPanel,
 } from "./App.js";
 
 describe("Helarc workbench shell", () => {
@@ -17,7 +18,7 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("No active session");
     expect(html).toContain("No pending review");
     expect(html).toContain("Workbench");
-    expect(html).toContain("History");
+    expect(html).toContain("Threads");
     expect(html).toContain("Settings");
     expect(html).toContain("Templates");
   });
@@ -195,6 +196,60 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Assistant");
     expect(html).toContain("No changes needed.");
     expect(html).toContain("Final output");
+    expect(html).not.toContain("rawProvider");
+    expect(html).not.toContain("secret");
+  });
+
+  it("renders thread summaries as the work history surface", () => {
+    const html = renderToStaticMarkup(
+      <ThreadPanel
+        threads={[
+          {
+            id: "thread-1",
+            title: "Update docs",
+            status: "open",
+            workspace: {
+              id: "workspace",
+              name: "agent-anything",
+              path: "D:/projects/agent-anything",
+            },
+            createdAt: "2026-07-05T01:00:00.000Z",
+            updatedAt: "2026-07-05T01:00:01.000Z",
+            latestRun: {
+              runId: "run-1",
+              status: "completed",
+              startedAt: "2026-07-05T01:00:00.000Z",
+              completedAt: "2026-07-05T01:00:01.000Z",
+            },
+          },
+        ]}
+        selectedThread={{
+          id: "thread-1",
+          title: "Update docs",
+          status: "open",
+          workspace: {
+            id: "workspace",
+            name: "agent-anything",
+            path: "D:/projects/agent-anything",
+          },
+          createdAt: "2026-07-05T01:00:00.000Z",
+          updatedAt: "2026-07-05T01:00:01.000Z",
+          latestRun: {
+            runId: "run-1",
+            status: "completed",
+            startedAt: "2026-07-05T01:00:00.000Z",
+            completedAt: "2026-07-05T01:00:01.000Z",
+          },
+        }}
+        selectedThreadId="thread-1"
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Threads");
+    expect(html).toContain("Update docs");
+    expect(html).toContain("completed - agent-anything");
+    expect(html).toContain("Latest run");
     expect(html).not.toContain("rawProvider");
     expect(html).not.toContain("secret");
   });

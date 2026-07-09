@@ -57,6 +57,7 @@ async function createWindow(): Promise<void> {
     providerProfile: providerConfig.ok ? providerConfig.profile : null,
     workspaceProfiles: await workspaceProfileStore.listProfiles(),
     sessionHistory: await sessionHistoryStore.listRecords(),
+    threadSummaries: await threadStore.listThreadSummaries(),
     threadStore,
     onSessionHistoryRecord: (record) => sessionHistoryStore.appendRecord(record),
   });

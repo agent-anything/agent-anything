@@ -38,7 +38,7 @@ import type { Provider } from "@agent-anything/providers";
 import { basename, isAbsolute, normalize } from "node:path";
 import type { ProviderCredentialStoreError } from "./provider/ProviderCredentialStore.js";
 import { HelarcActiveRunController } from "./run/index.js";
-import type { HelarcThreadStore } from "./thread/index.js";
+import type { HelarcThreadStore, HelarcThreadSummary } from "./thread/index.js";
 
 export interface HelarcWorkspaceSnapshot {
   id: string;
@@ -124,6 +124,16 @@ export interface HelarcActiveThreadSnapshot {
   artifacts: HelarcArtifactSnapshot[];
 }
 
+export interface HelarcThreadSummarySnapshot {
+  id: string;
+  title: string;
+  status: "open" | "closed" | "archived";
+  workspace: HelarcWorkspaceSnapshot;
+  createdAt: string;
+  updatedAt: string;
+  latestRun: HelarcThreadRecord["thread"]["latestRun"];
+}
+
 export interface HelarcMainSnapshot {
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
@@ -135,6 +145,7 @@ export interface HelarcMainSnapshot {
   pendingPermission: HelarcPermissionPromptSnapshot | null;
   pendingPatchReview: HelarcPatchReviewViewModel | null;
   activeThread: HelarcActiveThreadSnapshot | null;
+  threadSummaries: HelarcThreadSummarySnapshot[];
   activity: HelarcActivityItem[];
   activeRun: HelarcRunSnapshot;
   output: HelarcSessionOutput | null;
@@ -214,6 +225,7 @@ export interface HelarcMainControllerInput {
   runtimeToolMode?: HelarcRuntimeToolMode;
   workspaceProfiles?: HelarcWorkspaceProfile[];
   sessionHistory?: HelarcSessionHistoryRecord[];
+  threadSummaries?: HelarcThreadSummary[];
   taskTemplates?: HelarcTaskTemplate[];
   threadStore?: HelarcThreadStore | null;
   onSessionHistoryRecord?: (
@@ -233,6 +245,7 @@ export class HelarcMainController {
   private lastError: HelarcMainError | null = null;
   private workspaceProfiles: HelarcWorkspaceProfile[] = [];
   private sessionHistory: HelarcSessionHistoryRecord[] = [];
+  private threadSummaries: HelarcThreadSummarySnapshot[] = [];
   private readonly taskTemplates: HelarcTaskTemplate[];
   private currentSessionStartedAt: string | null = null;
   private currentThreadRecord: HelarcThreadRecord | null = null;
@@ -253,6 +266,7 @@ export class HelarcMainController {
     this.providerInstance = input.provider ?? null;
     this.workspaceProfiles = input.workspaceProfiles ?? [];
     this.sessionHistory = input.sessionHistory ?? [];
+    this.threadSummaries = (input.threadSummaries ?? []).map(createThreadSummarySnapshot);
     this.taskTemplates = input.taskTemplates ?? createBuiltInHelarcTaskTemplates();
     this.onSessionHistoryRecord = input.onSessionHistoryRecord;
     this.threadStore = input.threadStore ?? null;
@@ -303,6 +317,7 @@ export class HelarcMainController {
       pendingPermission: this.pendingPermission?.prompt ?? null,
       pendingPatchReview: this.pendingPatchReview?.review ?? null,
       activeThread: createActiveThreadSnapshot(this.currentThreadRecord),
+      threadSummaries: this.threadSummaries,
       activity: this.activity,
       activeRun: this.activeRunController.getSnapshot(),
       output: this.output,
@@ -462,6 +477,10 @@ export class HelarcMainController {
     this.lastError = null;
     this.currentSessionStartedAt = startedAt;
     this.currentThreadRecord = threadRecordResult.record;
+    this.threadSummaries = upsertThreadSummarySnapshot(
+      this.threadSummaries,
+      createThreadSummarySnapshotFromRecord(threadRecordResult.record),
+    );
     this.currentThreadWrite = this.persistInitialThreadRecord(threadRecordResult.record);
     this.lastPatchReview = null;
     this.cancellationRequested = false;
@@ -875,6 +894,10 @@ export class HelarcMainController {
 
     const persisted = await this.threadStore.createThread(record);
     this.currentThreadRecord = persisted ?? record;
+    this.threadSummaries = upsertThreadSummarySnapshot(
+      this.threadSummaries,
+      createThreadSummarySnapshotFromRecord(this.currentThreadRecord),
+    );
     return persisted;
   }
 
@@ -943,6 +966,10 @@ export class HelarcMainController {
       : Promise.resolve(messageRecord);
     const persistedMessageRecord = await this.currentThreadWrite;
     this.currentThreadRecord = persistedMessageRecord ?? messageRecord;
+    this.threadSummaries = upsertThreadSummarySnapshot(
+      this.threadSummaries,
+      createThreadSummarySnapshotFromRecord(this.currentThreadRecord),
+    );
   }
 
   private createActiveRunTerminalSummary(input: {
@@ -1369,6 +1396,48 @@ function createActiveThreadSnapshot(record: HelarcThreadRecord | null): HelarcAc
       runId: artifact.runId,
     })),
   };
+}
+
+function createThreadSummarySnapshot(summary: HelarcThreadSummary): HelarcThreadSummarySnapshot {
+  return {
+    id: summary.id,
+    title: summary.title,
+    status: summary.status,
+    workspace: {
+      id: summary.workspace.profileId ?? "workspace",
+      name: summary.workspace.displayName,
+      path: summary.workspace.path,
+    },
+    createdAt: summary.createdAt,
+    updatedAt: summary.updatedAt,
+    latestRun: summary.latestRun,
+  };
+}
+
+function createThreadSummarySnapshotFromRecord(record: HelarcThreadRecord): HelarcThreadSummarySnapshot {
+  return {
+    id: record.thread.id,
+    title: record.thread.title,
+    status: record.thread.status,
+    workspace: {
+      id: record.thread.workspace.profileId ?? "workspace",
+      name: record.thread.workspace.displayName,
+      path: record.thread.workspace.path,
+    },
+    createdAt: record.thread.createdAt,
+    updatedAt: record.thread.updatedAt,
+    latestRun: record.thread.latestRun,
+  };
+}
+
+function upsertThreadSummarySnapshot(
+  summaries: readonly HelarcThreadSummarySnapshot[],
+  summary: HelarcThreadSummarySnapshot,
+): HelarcThreadSummarySnapshot[] {
+  return [
+    summary,
+    ...summaries.filter((item) => item.id !== summary.id),
+  ].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
 function replaceById<T extends { id: string }>(items: readonly T[], item: T): T[] {

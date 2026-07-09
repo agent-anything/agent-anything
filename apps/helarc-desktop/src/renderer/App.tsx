@@ -16,7 +16,6 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type {
   HelarcMainSnapshot,
   HelarcProviderKind,
-  HelarcSessionHistoryRecord,
   HelarcStartSessionResult,
 } from "../shared/HelarcDesktopApi.js";
 
@@ -47,6 +46,7 @@ const initialSnapshot: HelarcMainSnapshot = {
   pendingPermission: null,
   pendingPatchReview: null,
   activeThread: null,
+  threadSummaries: [],
   activity: [],
   activeRun: {
     runId: "",
@@ -67,17 +67,17 @@ const initialSnapshot: HelarcMainSnapshot = {
   error: null,
 };
 
-type SidePanelMode = "review" | "history" | "settings";
+type SidePanelMode = "review" | "threads" | "settings";
 
 export function App() {
   const [snapshot, setSnapshot] = useState<HelarcMainSnapshot>(initialSnapshot);
   const [taskText, setTaskText] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [startResult, setStartResult] = useState<HelarcStartSessionResult | null>(null);
-  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [sidePanelMode, setSidePanelMode] = useState<SidePanelMode>("review");
   const sessionActive = isSessionActive(snapshot.status);
-  const selectedHistory = snapshot.sessionHistory.find((record) => record.id === selectedHistoryId) ?? null;
+  const selectedThread = snapshot.threadSummaries.find((thread) => thread.id === selectedThreadId) ?? null;
   const activePanelMode: SidePanelMode = snapshot.pendingPermission || snapshot.pendingPatchReview
     ? "review"
     : sidePanelMode;
@@ -113,7 +113,7 @@ export function App() {
     try {
       setSnapshot(await api.chooseWorkspace());
       setStartResult(null);
-      setSelectedHistoryId(null);
+      setSelectedThreadId(null);
     } finally {
       setIsBusy(false);
     }
@@ -129,7 +129,7 @@ export function App() {
     try {
       setSnapshot(await api.selectWorkspaceProfile({ profileId }));
       setStartResult(null);
-      setSelectedHistoryId(null);
+      setSelectedThreadId(null);
     } finally {
       setIsBusy(false);
     }
@@ -246,13 +246,13 @@ export function App() {
             Workbench
           </button>
           <button
-            className={activePanelMode === "history" ? "nav-button active" : "nav-button"}
+            className={activePanelMode === "threads" ? "nav-button active" : "nav-button"}
             type="button"
-            onClick={() => setSidePanelMode("history")}
-            title="History"
+            onClick={() => setSidePanelMode("threads")}
+            title="Threads"
           >
             <History size={16} aria-hidden="true" />
-            History
+            Threads
           </button>
           <button
             className={activePanelMode === "settings" ? "nav-button active" : "nav-button"}
@@ -331,7 +331,7 @@ export function App() {
               <span className="eyebrow">{sidePanelEyebrow(activePanelMode)}</span>
               <h2 id="review-title">{sidePanelTitle(activePanelMode)}</h2>
             </div>
-            {activePanelMode === "history"
+            {activePanelMode === "threads"
               ? <History size={19} aria-hidden="true" />
               : activePanelMode === "settings"
                 ? <Settings size={19} aria-hidden="true" />
@@ -341,12 +341,12 @@ export function App() {
             ? "review-content"
             : "review-empty"}
           >
-            {activePanelMode === "history" ? (
-              <HistoryPanel
-                records={snapshot.sessionHistory}
-                selectedHistory={selectedHistory}
-                selectedHistoryId={selectedHistoryId}
-                onSelectHistory={setSelectedHistoryId}
+            {activePanelMode === "threads" ? (
+              <ThreadPanel
+                threads={snapshot.threadSummaries}
+                selectedThread={selectedThread}
+                selectedThreadId={selectedThreadId}
+                onSelectThread={setSelectedThreadId}
               />
             ) : activePanelMode === "settings" ? (
               <SettingsPanel snapshot={snapshot} onSaved={setSnapshot} />
@@ -671,74 +671,69 @@ export function PermissionPromptPanel({
   );
 }
 
-function HistoryPanel({
-  records,
-  selectedHistory,
-  selectedHistoryId,
-  onSelectHistory,
+export function ThreadPanel({
+  threads,
+  selectedThread,
+  selectedThreadId,
+  onSelectThread,
 }: {
-  records: HelarcSessionHistoryRecord[];
-  selectedHistory: HelarcSessionHistoryRecord | null;
-  selectedHistoryId: string | null;
-  onSelectHistory: (recordId: string) => void;
+  threads: HelarcMainSnapshot["threadSummaries"];
+  selectedThread: HelarcMainSnapshot["threadSummaries"][number] | null;
+  selectedThreadId: string | null;
+  onSelectThread: (threadId: string) => void;
 }) {
-  if (records.length === 0) {
+  if (threads.length === 0) {
     return (
       <div className="panel-empty">
         <History size={24} aria-hidden="true" />
-        <span>No completed sessions yet</span>
+        <span>No threads yet</span>
       </div>
     );
   }
 
   return (
     <>
-      <section className="history-list" aria-label="Session history">
-        <strong>History</strong>
-        {records.slice(0, 8).map((record) => (
+      <section className="history-list" aria-label="Thread summaries">
+        <strong>Threads</strong>
+        {threads.slice(0, 8).map((thread) => (
           <button
-            className={record.id === selectedHistoryId ? "history-item selected" : "history-item"}
-            key={record.id}
+            className={thread.id === selectedThreadId ? "history-item selected" : "history-item"}
+            key={thread.id}
             type="button"
-            onClick={() => onSelectHistory(record.id)}
+            onClick={() => onSelectThread(thread.id)}
           >
-            <span>{record.taskText}</span>
-            <small>{record.status} - {record.workspace.displayName}</small>
+            <span>{thread.title}</span>
+            <small>{thread.latestRun?.status ?? thread.status} - {thread.workspace.name}</small>
           </button>
         ))}
       </section>
-      {selectedHistory ? <HistoryRecordView record={selectedHistory} /> : null}
+      {selectedThread ? <ThreadSummaryView thread={selectedThread} /> : null}
     </>
   );
 }
 
-function HistoryRecordView({ record }: { record: HelarcSessionHistoryRecord }) {
+function ThreadSummaryView({ thread }: { thread: HelarcMainSnapshot["threadSummaries"][number] }) {
   return (
-    <section className="history-record" aria-label="Selected session history">
-      <strong>{record.taskText}</strong>
+    <section className="history-record" aria-label="Selected thread summary">
+      <strong>{thread.title}</strong>
       <dl>
         <div>
-          <dt>Run</dt>
-          <dd>{record.run.status}</dd>
+          <dt>Status</dt>
+          <dd>{thread.status}</dd>
         </div>
         <div>
           <dt>Workspace</dt>
-          <dd>{record.workspace.displayName}</dd>
+          <dd>{thread.workspace.name}</dd>
         </div>
         <div>
-          <dt>Provider</dt>
-          <dd>{record.provider.displayName}</dd>
+          <dt>Latest run</dt>
+          <dd>{thread.latestRun?.status ?? "none"}</dd>
         </div>
         <div>
-          <dt>Patch</dt>
-          <dd>{record.patch.status ?? "none"}</dd>
+          <dt>Updated</dt>
+          <dd>{formatTimestamp(thread.updatedAt)}</dd>
         </div>
       </dl>
-      <RunTerminalPanel
-        title={`History ${record.run.status}`}
-        terminal={record.run.terminal}
-        events={record.run.events}
-      />
     </section>
   );
 }
@@ -897,8 +892,8 @@ function statusTone(status: HelarcMainSnapshot["status"]): string {
 }
 
 function sidePanelEyebrow(mode: SidePanelMode): string {
-  if (mode === "history") {
-    return "Completed work";
+  if (mode === "threads") {
+    return "Work context";
   }
 
   if (mode === "settings") {
@@ -909,8 +904,8 @@ function sidePanelEyebrow(mode: SidePanelMode): string {
 }
 
 function sidePanelTitle(mode: SidePanelMode): string {
-  if (mode === "history") {
-    return "History";
+  if (mode === "threads") {
+    return "Threads";
   }
 
   if (mode === "settings") {

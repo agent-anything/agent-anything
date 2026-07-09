@@ -147,6 +147,33 @@ export interface HelarcActiveThreadSnapshot {
   artifacts: HelarcArtifactSnapshot[];
 }
 
+export type HelarcThreadRunStatus =
+  | "starting"
+  | "running"
+  | "waiting_for_permission"
+  | "cancelling"
+  | "completed"
+  | "failed"
+  | "denied"
+  | "cancelled";
+
+export interface HelarcThreadLatestRunSnapshot {
+  runId: string;
+  status: HelarcThreadRunStatus;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+export interface HelarcThreadSummarySnapshot {
+  id: string;
+  title: string;
+  status: "open" | "closed" | "archived";
+  workspace: HelarcWorkspaceSnapshot;
+  createdAt: string;
+  updatedAt: string;
+  latestRun: HelarcThreadLatestRunSnapshot | null;
+}
+
 export interface HelarcPatchReviewViewModel {
   patchId: string;
   rootName: string;
@@ -231,6 +258,7 @@ export interface HelarcMainSnapshot {
   pendingPermission: HelarcPermissionPromptSnapshot | null;
   pendingPatchReview: HelarcPatchReviewViewModel | null;
   activeThread: HelarcActiveThreadSnapshot | null;
+  threadSummaries: HelarcThreadSummarySnapshot[];
   activity: HelarcActivityItem[];
   activeRun: HelarcRunSnapshot;
   output: HelarcSessionOutput | null;

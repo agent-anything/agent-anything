@@ -420,6 +420,16 @@ describe("HelarcMainController", () => {
     });
 
     const snapshot = controller.getSnapshot();
+    expect(snapshot.threadSummaries).toMatchObject([
+      {
+        id: "helarc-thread-1",
+        title: "Update docs",
+        latestRun: {
+          runId: "helarc-run-1",
+          status: "completed",
+        },
+      },
+    ]);
     expect(snapshot.activeThread).toMatchObject({
       id: "helarc-thread-1",
       title: "Update docs",
