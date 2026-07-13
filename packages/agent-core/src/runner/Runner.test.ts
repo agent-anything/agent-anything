@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AuditPort, TelemetryPort } from "@agent-anything/observability";
+import type { ToolDefinition } from "@agent-anything/tools";
 import type { Agent } from "../agent/index.js";
 import {
   ControllerError,
@@ -13,6 +14,7 @@ import { createRunCancellationController } from "./RunCancellation.js";
 import type { RunConfig } from "./RunConfig.js";
 import type { RunInput } from "./RunInput.js";
 import { Runner } from "./Runner.js";
+import type { ToolActionBridge } from "./ToolActionBridge.js";
 
 interface TestOutput {
   readonly summary: string;
@@ -156,7 +158,7 @@ describe("Runner", () => {
     ]);
 
     const result = await createRunner(controller).run(
-      createAgent(),
+      createAgent([createAgentTool("workspace.readFile")]),
       createRunInput(),
       createRunConfig(),
     );
@@ -571,6 +573,286 @@ describe("Runner", () => {
       "docs",
     ]);
   });
+
+  it("commits a tool outcome with references and returns to a fresh Controller turn", async () => {
+    const controller = new ScriptedController([
+      actionsDecision([{
+        kind: "tool",
+        name: "test.read",
+        input: { path: "README.md" },
+        modelItemId: "model_1",
+      }]),
+      (input) => {
+        expect(input.context).toMatchObject({
+          observations: [{ kind: "tool_result", result: { output: "contents" } }],
+          evidenceRefs: ["evidence_001"],
+        });
+        return finalDecision("Tool completed");
+      },
+    ]);
+    const bridge: ToolActionBridge = {
+      async execute(input) {
+        expect(input.toolRisk).toBe("safe");
+        return {
+          status: "observed",
+          outcome: "succeeded",
+          observation: {
+            kind: "tool_result",
+            result: createToolResult(input.action.id, "contents"),
+            metadata: { bridge: "temporary" },
+          },
+          evidenceRefs: ["evidence_001"],
+          artifactRefs: ["artifact_001"],
+        };
+      },
+    };
+
+    const result = await createRunner(controller, { toolActionBridge: bridge }).run(
+      createAgent([createAgentTool("test.read")]),
+      createRunInput(),
+      createRunConfig(),
+    );
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      evidenceRefs: ["evidence_001"],
+      artifactRefs: ["artifact_001"],
+    });
+    expect(result.items.map((item) => item.kind)).toEqual([
+      "model_output",
+      "action",
+      "observation",
+      "model_output",
+      "final_output",
+    ]);
+  });
+
+  it("rejects tools outside the Agent catalog without invoking the bridge", async () => {
+    let bridgeCalls = 0;
+    const bridge: ToolActionBridge = {
+      async execute() {
+        bridgeCalls += 1;
+        throw new Error("Bridge must not be invoked.");
+      },
+    };
+    const controller = new ScriptedController([
+      actionsDecision([{
+        kind: "tool",
+        name: "test.undeclared",
+        input: {},
+        modelItemId: "model_1",
+      }]),
+      finalDecision("Recovered"),
+    ]);
+
+    const result = await createRunner(controller, { toolActionBridge: bridge }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(bridgeCalls).toBe(0);
+    expect(controller.calls[1]?.context.observations).toMatchObject([
+      { kind: "action_rejected", code: "tool_not_found" },
+    ]);
+  });
+
+  it.each([
+    [
+      "denial",
+      {
+        kind: "action_denied" as const,
+        owner: "permission" as const,
+        code: "permission_denied",
+        message: "Permission denied.",
+        metadata: {},
+      },
+    ],
+    [
+      "failure",
+      {
+        kind: "action_failure" as const,
+        error: {
+          owner: "tool" as const,
+          code: "tool_execution_failed",
+          message: "Tool failed.",
+          retryable: false,
+          metadata: {},
+        },
+        metadata: {},
+      },
+    ],
+  ])("returns to Controller after recoverable tool %s", async (_name, observation) => {
+    const controller = new ScriptedController([
+      actionsDecision([{
+        kind: "tool",
+        name: "test.read",
+        input: {},
+        modelItemId: "model_1",
+      }]),
+      finalDecision("Recovered"),
+    ]);
+    const bridge: ToolActionBridge = {
+      async execute() {
+        return {
+          status: "observed",
+          outcome: observation.kind === "action_denied" ? "denied" : "failed",
+          observation,
+          evidenceRefs: [],
+          artifactRefs: [],
+        };
+      },
+    };
+
+    const result = await createRunner(controller, { toolActionBridge: bridge }).run(
+      createAgent([createAgentTool("test.read")]),
+      createRunInput(),
+      createRunConfig(),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(controller.calls).toHaveLength(2);
+    expect(controller.calls[1]?.context.observations.at(-1)?.kind).toBe(observation.kind);
+  });
+
+  it("invalidates the remaining Action batch after a settled external tool", async () => {
+    let bridgeCalls = 0;
+    const bridge: ToolActionBridge = {
+      async execute(input) {
+        bridgeCalls += 1;
+        return {
+          status: "observed",
+          outcome: "succeeded",
+          observation: {
+            kind: "tool_result",
+            result: createToolResult(input.action.id, input.action.name),
+            metadata: {},
+          },
+          evidenceRefs: [],
+          artifactRefs: [],
+        };
+      },
+    };
+    const controller = new ScriptedController([
+      actionsDecision([
+        { kind: "tool", name: "test.first", input: {}, modelItemId: "model_1" },
+        { kind: "tool", name: "test.second", input: {}, modelItemId: "model_1" },
+      ]),
+      finalDecision("Replanned"),
+    ]);
+
+    const result = await createRunner(controller, { toolActionBridge: bridge }).run(
+      createAgent([createAgentTool("test.first"), createAgentTool("test.second")]),
+      createRunInput(),
+      createRunConfig(),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(bridgeCalls).toBe(1);
+  });
+
+  it("commits a settled tool fact before terminalizing cancellation", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const bridge: ToolActionBridge = {
+      async execute(input) {
+        cancellation.requestCancellation({
+          origin: "user",
+          reasonCode: "user_requested",
+        });
+        return {
+          status: "observed",
+          outcome: "succeeded",
+          observation: {
+            kind: "tool_result",
+            result: createToolResult(input.action.id, "side effect settled"),
+            metadata: {},
+          },
+          evidenceRefs: ["evidence_after_cancel"],
+          artifactRefs: [],
+        };
+      },
+    };
+
+    const result = await createRunner(
+      new ScriptedController([actionsDecision([{
+        kind: "tool",
+        name: "test.write",
+        input: {},
+        modelItemId: "model_1",
+      }])]),
+      { toolActionBridge: bridge },
+    ).run(
+      createAgent([createAgentTool("test.write", "risky")]),
+      createRunInput(),
+      createRunConfig({ cancellation }),
+    );
+
+    expect(result).toMatchObject({
+      status: "cancelled",
+      evidenceRefs: ["evidence_after_cancel"],
+    });
+    expect(result.items.map((item) => item.kind)).toEqual([
+      "model_output",
+      "action",
+      "observation",
+      "run_cancellation_requested",
+      "run_cancelled",
+    ]);
+  });
+
+  it("keeps cancellation attribution when a settled bridge reports terminal failure", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const bridge: ToolActionBridge = {
+      async execute() {
+        cancellation.requestCancellation({
+          origin: "user",
+          reasonCode: "user_requested",
+        });
+        return {
+          status: "terminal_failure",
+          code: "storage_write_failed",
+          errors: [{
+            owner: "storage",
+            code: "storage_write_failed",
+            message: "Storage failed after tool settlement.",
+            retryable: false,
+            metadata: {},
+          }],
+          evidenceRefs: ["evidence_settled"],
+          artifactRefs: [],
+        };
+      },
+    };
+
+    const result = await createRunner(
+      new ScriptedController([actionsDecision([{
+        kind: "tool",
+        name: "test.write",
+        input: {},
+        modelItemId: "model_1",
+      }])]),
+      { toolActionBridge: bridge },
+    ).run(
+      createAgent([createAgentTool("test.write", "risky")]),
+      createRunInput(),
+      createRunConfig({ cancellation }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "storage_write_failed",
+      cancellation: { reasonCode: "user_requested" },
+      evidenceRefs: ["evidence_settled"],
+      errors: [{ owner: "storage" }],
+    });
+    expect(result.items.map((item) => item.kind)).toEqual([
+      "model_output",
+      "action",
+      "run_cancellation_requested",
+      "run_failed",
+    ]);
+  });
 });
 
 function createRunner(
@@ -584,12 +866,12 @@ function createRunner(
   });
 }
 
-function createAgent(): Agent<TestOutput> {
+function createAgent(tools: readonly ToolDefinition[] = []): Agent<TestOutput> {
   return {
     id: "agent_001",
     name: "Test Agent",
     instructions: "Complete the task.",
-    tools: [],
+    tools,
     output: {
       validate(candidate) {
         if (
@@ -603,6 +885,32 @@ function createAgent(): Agent<TestOutput> {
         return { valid: false, message: "Output requires a summary." };
       },
     },
+    metadata: {},
+  };
+}
+
+function createAgentTool(
+  name: string,
+  risk: ToolDefinition["risk"] = "safe",
+): ToolDefinition {
+  return {
+    name,
+    risk,
+    async execute() {
+      throw new Error("Runner must execute tools through ToolActionBridge.");
+    },
+  };
+}
+
+function createToolResult(toolCallId: string, output: unknown) {
+  return {
+    toolCallId,
+    toolName: "test.read",
+    status: "succeeded" as const,
+    output,
+    error: null,
+    startedAt: "2026-07-13T00:00:00.000Z",
+    finishedAt: "2026-07-13T00:00:01.000Z",
     metadata: {},
   };
 }

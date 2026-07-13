@@ -1,4 +1,9 @@
-import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
+import type {
+  ArtifactRef,
+  EvidenceRef,
+  ISODateTimeString,
+  Metadata,
+} from "@agent-anything/shared";
 import type { Agent } from "../agent/index.js";
 import {
   ControllerError,
@@ -20,9 +25,12 @@ import {
 } from "../plan/index.js";
 import type { Action, ActionCandidate } from "./Action.js";
 import type {
+  ActionDeniedObservation,
+  ActionFailureObservation,
   ActionRejectedObservation,
   Observation,
   PlanUpdateResultObservation,
+  ToolResultObservation,
 } from "./Observation.js";
 import type { RunCancellationRequest } from "./RunCancellation.js";
 import { toRunCancellationSummary } from "./RunCancellation.js";
@@ -48,6 +56,7 @@ import {
 } from "./RunnerValidation.js";
 import type { RunCounters, RunState } from "./RunState.js";
 import type { RuntimeError } from "./RuntimeError.js";
+import type { ToolActionObservationPayload } from "./ToolActionBridge.js";
 
 type ResolvedRunnerDependencies = RunnerDependencies & {
   readonly now: NonNullable<RunnerDependencies["now"]>;
@@ -405,6 +414,9 @@ export class RunExecution<TOutput> {
     if (action.kind === "internal" && action.name === "update_plan") {
       return this.processPlanUpdate(action);
     }
+    if (action.kind === "tool") {
+      return this.processToolAction(action as Action & { readonly kind: "tool" });
+    }
 
     const observation = Object.freeze({
       ...this.createObservationBase(action),
@@ -413,6 +425,203 @@ export class RunExecution<TOutput> {
       message: `Action ${action.kind}:${action.name} is not supported by this Runner slice.`,
     });
     return this.commitActionObservation(observation, true, true);
+  }
+
+  private async processToolAction(
+    action: Action & { readonly kind: "tool" },
+  ): Promise<ProcessActionResult> {
+    const tool = this.agent.tools.find((candidate) => candidate.name === action.name);
+    if (tool === undefined) {
+      const observation: ActionRejectedObservation = Object.freeze({
+        ...this.createObservationBase(action),
+        kind: "action_rejected",
+        code: "tool_not_found",
+        message: `Tool ${action.name} is not available to Agent ${this.agent.id}.`,
+      });
+      return this.commitActionObservation(observation, true, true);
+    }
+
+    const bridge = this.dependencies.toolActionBridge;
+    if (bridge === undefined) {
+      const observation: ActionRejectedObservation = Object.freeze({
+        ...this.createObservationBase(action),
+        kind: "action_rejected",
+        code: "action_unsupported",
+        message: "This Runner has no ToolActionBridge.",
+      });
+      return this.commitActionObservation(observation, true, true);
+    }
+
+    this.emit("tool.started", {
+      runId: this.state.runId,
+      actionId: action.id,
+      toolName: action.name,
+    });
+
+    let result;
+    try {
+      result = await bridge.execute({
+        action,
+        task: this.input.task,
+        workspace: this.config.workspace,
+        identity: this.config.identity,
+        cancellation: this.config.cancellation.context,
+        audit: this.config.audit,
+        telemetry: this.config.telemetry,
+        toolRisk: tool.risk,
+        metadata: Object.freeze({
+          runId: this.state.runId,
+          taskId: this.state.taskId,
+          agentId: this.state.activeAgentId,
+        }),
+      });
+    } catch (error) {
+      if (this.cancellationRequest() !== null) {
+        this.emit("tool.finished", {
+          runId: this.state.runId,
+          actionId: action.id,
+          toolName: action.name,
+          status: "cancelled",
+        });
+        return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
+      }
+
+      const bridgeError = runtimeError(
+        "tool",
+        "tool_action_bridge_failed",
+        error instanceof Error ? error.message : "ToolActionBridge failed.",
+        false,
+        { actionId: action.id, toolName: action.name },
+      );
+      this.emit("tool.finished", {
+        runId: this.state.runId,
+        actionId: action.id,
+        toolName: action.name,
+        status: "failed",
+        code: bridgeError.code,
+      });
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(bridgeError, "tool_execution_failed"),
+      };
+    }
+
+    this.emit("tool.finished", {
+      runId: this.state.runId,
+      actionId: action.id,
+      toolName: action.name,
+      status: result.status === "observed" ? result.outcome : "failed",
+      ...(result.status === "terminal_failure" ? { code: result.code } : {}),
+    });
+
+    if (result.status === "terminal_failure") {
+      this.commitRunning([], {
+        evidenceRefs: result.evidenceRefs,
+        artifactRefs: result.artifactRefs,
+      });
+      const cancellationRequest = this.cancellationRequest();
+      if (cancellationRequest !== null) {
+        this.enterCancelling(cancellationRequest);
+      }
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.terminalize({
+          status: "failed",
+          code: result.code,
+          errors: result.errors,
+          cancellationRequest,
+        }, new Set(result.errors.map((error) => error.owner))),
+      };
+    }
+
+    const observation = result.observation === null
+      ? null
+      : this.materializeToolObservation(action, result.observation);
+    const processed = await this.commitToolOutcome(
+      action,
+      observation,
+      result.outcome !== "succeeded",
+      result.evidenceRefs,
+      result.artifactRefs,
+    );
+
+    if (processed.terminalResult !== null) {
+      return processed;
+    }
+    if (this.cancellationRequest() !== null) {
+      return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
+    }
+    return processed;
+  }
+
+  private materializeToolObservation(
+    action: Action,
+    payload: ToolActionObservationPayload,
+  ): ToolResultObservation | ActionDeniedObservation | ActionFailureObservation |
+    ActionRejectedObservation {
+    const base = this.createObservationBase(action);
+    const metadata = Object.freeze({ ...base.metadata, ...payload.metadata });
+    switch (payload.kind) {
+      case "tool_result":
+        return Object.freeze({ ...base, metadata, kind: payload.kind, result: payload.result });
+      case "action_denied":
+        return Object.freeze({
+          ...base,
+          metadata,
+          kind: payload.kind,
+          owner: payload.owner,
+          code: payload.code,
+          message: payload.message,
+        });
+      case "action_failure":
+        return Object.freeze({ ...base, metadata, kind: payload.kind, error: payload.error });
+      case "action_rejected":
+        return Object.freeze({
+          ...base,
+          metadata,
+          kind: payload.kind,
+          code: payload.code,
+          message: payload.message,
+        });
+    }
+  }
+
+  private async commitToolOutcome(
+    action: Action,
+    observation: Observation | null,
+    failed: boolean,
+    evidenceRefs: readonly EvidenceRef[],
+    artifactRefs: readonly ArtifactRef[],
+  ): Promise<ProcessActionResult> {
+    const context = applyContextUpdate(this.state.context, {
+      observations: observation === null ? [] : [observation],
+      evidenceRefs,
+      metadata: {
+        lastActionId: action.id,
+        lastControllerIteration: action.provenance.controllerIteration,
+      },
+    });
+    const counters = nextActionCounters(this.state.counters, failed);
+    this.commitRunning(
+      observation === null ? [] : [observationDraft<TOutput>(observation)],
+      { context, counters, evidenceRefs, artifactRefs },
+    );
+
+    if (counters.consecutiveActionFailures > this.config.limits.maxConsecutiveActionFailures) {
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(limitRuntimeError(
+          "Run exceeded maxConsecutiveActionFailures.",
+          {
+            maxConsecutiveActionFailures:
+              this.config.limits.maxConsecutiveActionFailures,
+            actualConsecutiveActionFailures: counters.consecutiveActionFailures,
+          },
+        )),
+      };
+    }
+
+    return { invalidatesBatch: true, terminalResult: null };
   }
 
   private async processPlanUpdate(action: Action): Promise<ProcessActionResult> {
@@ -840,6 +1049,8 @@ export class RunExecution<TOutput> {
       readonly context?: Context;
       readonly plan?: Plan | null;
       readonly counters?: RunCounters;
+      readonly evidenceRefs?: readonly EvidenceRef[];
+      readonly artifactRefs?: readonly ArtifactRef[];
     } = {},
   ): void {
     if (this.state.status !== "running") {
@@ -851,6 +1062,8 @@ export class RunExecution<TOutput> {
       context: update.context ?? this.state.context,
       plan: update.plan === undefined ? this.state.plan : update.plan,
       counters: update.counters ?? this.state.counters,
+      evidenceRefs: appendUnique(this.state.evidenceRefs, update.evidenceRefs ?? []),
+      artifactRefs: appendUnique(this.state.artifactRefs, update.artifactRefs ?? []),
       items: Object.freeze([...this.state.items, ...items]),
     }));
     this.publishItems(items);
@@ -1092,6 +1305,19 @@ function freezeState<TOutput>(state: RunState<TOutput>): RunState<TOutput> {
 
 function freezeCounters(counters: RunCounters): RunCounters {
   return Object.freeze({ ...counters });
+}
+
+function appendUnique<TValue>(
+  current: readonly TValue[],
+  next: readonly TValue[],
+): readonly TValue[] {
+  const values = [...current];
+  for (const value of next) {
+    if (!values.includes(value)) {
+      values.push(value);
+    }
+  }
+  return Object.freeze(values);
 }
 
 function assertNonEmpty(value: unknown, field: string): asserts value is string {

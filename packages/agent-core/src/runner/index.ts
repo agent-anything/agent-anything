@@ -89,3 +89,11 @@ export type {
 } from "./Runner.js";
 export { Runner } from "./Runner.js";
 export type { RuntimeError, RuntimeErrorOwner } from "./RuntimeError.js";
+export type {
+  ToolActionBridge,
+  ToolActionBridgeInput,
+  ToolActionBridgeResult,
+  ToolActionObservationPayload,
+  ToolActionObservedResult,
+  ToolActionTerminalFailureResult,
+} from "./ToolActionBridge.js";

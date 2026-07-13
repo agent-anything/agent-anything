@@ -35,3 +35,7 @@ export type {
   ToolExecutionContextResolver,
 } from "./ToolExecutionContextResolver.js";
 export { ToolExecutionContextError } from "./ToolExecutionContextResolver.js";
+export {
+  TemporaryToolActionBridge,
+  type TemporaryToolActionBridgeDependencies,
+} from "./TemporaryToolActionBridge.js";

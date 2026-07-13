@@ -98,6 +98,12 @@ export type {
   RunResultStatus,
   RunState,
   SucceededRunResult,
+  ToolActionBridge,
+  ToolActionBridgeInput,
+  ToolActionBridgeResult,
+  ToolActionObservationPayload,
+  ToolActionObservedResult,
+  ToolActionTerminalFailureResult,
 } from "./runner/index.js";
 export {
   createBlockedRunResult,

@@ -7,6 +7,7 @@ import { RunExecution } from "./RunExecution.js";
 import type { RunConfig } from "./RunConfig.js";
 import type { RunInput } from "./RunInput.js";
 import type { RunResult } from "./RunResult.js";
+import type { ToolActionBridge } from "./ToolActionBridge.js";
 
 export type RunnerIdentityKind = "run_item" | "action" | "observation" | "plan";
 
@@ -23,6 +24,7 @@ export interface RunnerDependencies {
   readonly eventEmitter?: RuntimeEventEmitter;
   readonly auditPort?: AuditPort;
   readonly telemetryPort?: TelemetryPort;
+  readonly toolActionBridge?: ToolActionBridge;
   readonly now?: () => ISODateTimeString;
   readonly createId?: CreateRunnerIdentity;
 }
