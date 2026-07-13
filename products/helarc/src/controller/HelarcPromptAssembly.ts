@@ -1,4 +1,4 @@
-import type { PlannerInput } from "@agent-anything/agent-core";
+import type { ControllerInput } from "@agent-anything/agent-core";
 import {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,
@@ -31,7 +31,7 @@ export interface HelarcPromptSection {
 }
 
 export interface HelarcPromptAssemblyInput {
-  plannerInput: PlannerInput;
+  controllerInput: ControllerInput;
   toolCatalog?: HelarcToolCatalog;
 }
 
@@ -53,14 +53,14 @@ export interface HelarcPromptAssemblyResult {
 export function buildHelarcPromptAssembly(
   input: HelarcPromptAssemblyInput,
 ): HelarcPromptAssemblyResult {
-  const toolCatalog = input.toolCatalog ?? readHelarcToolCatalog(input.plannerInput);
+  const toolCatalog = input.toolCatalog ?? readHelarcToolCatalog(input.controllerInput);
   const exposedToolNames = toolCatalog.tools.map((tool) => tool.name);
   const systemSections = buildSystemPromptSections(toolCatalog);
-  const taskPrompt = readHelarcTaskPrompt(input.plannerInput);
+  const taskPrompt = readHelarcTaskPrompt(input.controllerInput);
 
   return {
     systemPrompt: systemSections.map((section) => section.content).join("\n"),
-    userPrompt: buildUserPrompt(taskPrompt, input.plannerInput),
+    userPrompt: buildUserPrompt(taskPrompt, input.controllerInput),
     systemSections,
     exposedToolNames,
     toolCatalog,
@@ -78,7 +78,7 @@ function buildSystemPromptSections(
   return [
     {
       id: "agent_identity",
-      content: "You are Helarc, a careful code agent planner.",
+      content: "You are Helarc, a careful code agent.",
     },
     {
       id: "output_format",
@@ -118,10 +118,13 @@ function buildSystemPromptSections(
   ];
 }
 
-function buildUserPrompt(taskPrompt: string, input: PlannerInput): string {
+function buildUserPrompt(taskPrompt: string, input: ControllerInput): string {
   return [
     "Task:",
     taskPrompt,
+    "",
+    "Conversation items:",
+    JSON.stringify(input.conversationItems),
     "",
     "Context messages:",
     JSON.stringify(input.context.messages),
@@ -131,10 +134,13 @@ function buildUserPrompt(taskPrompt: string, input: PlannerInput): string {
     "",
     "Evidence refs:",
     JSON.stringify(input.context.evidenceRefs),
+    "",
+    "Current plan:",
+    JSON.stringify(input.context.plan),
   ].join("\n");
 }
 
-function readHelarcTaskPrompt(input: PlannerInput): string {
+function readHelarcTaskPrompt(input: ControllerInput): string {
   const taskInput = input.task.input as Partial<HelarcTaskInput>;
   return typeof taskInput.prompt === "string" ? taskInput.prompt : "";
 }

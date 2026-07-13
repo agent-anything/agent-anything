@@ -1,4 +1,4 @@
-import type { RuntimeStatus } from "@agent-anything/agent-core";
+import type { RunResultStatus } from "@agent-anything/agent-core";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { HelarcProviderKind } from "../provider-profile/index.js";
 
@@ -103,7 +103,7 @@ export interface HelarcRunTerminalErrorSummary {
 
 export interface CreateHelarcRunTerminalSummaryInput {
   status: HelarcRunTerminalStatus;
-  runtimeStatus: RuntimeStatus | null;
+  runtimeStatus: RunResultStatus | null;
   runtimeCode?: string | null;
   safeOutput: unknown;
   errorSummary?: readonly HelarcRunTerminalErrorSummary[];
@@ -114,7 +114,7 @@ export interface CreateHelarcRunTerminalSummaryInput {
 
 export interface HelarcRunTerminalSummary {
   status: HelarcRunTerminalStatus;
-  runtimeStatus: RuntimeStatus | null;
+  runtimeStatus: RunResultStatus | null;
   runtimeCode: string | null;
   safeOutput: unknown;
   errorSummary: HelarcRunTerminalErrorSummary[];

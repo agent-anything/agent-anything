@@ -1,4 +1,5 @@
 import type { Evidence } from "@agent-anything/evidence";
+import type { PermissionMode } from "@agent-anything/permission";
 import type { ArtifactRef, EvidenceRef, Metadata } from "@agent-anything/shared";
 import type { StoragePort } from "@agent-anything/storage";
 import type { ToolCall, ToolResult } from "@agent-anything/tools";
@@ -23,7 +24,8 @@ import {
 export interface TemporaryToolActionBridgeDependencies {
   readonly boundary: ToolExecutionBoundary;
   readonly storage: StoragePort;
-  readonly runtimeOptions: RuntimeOptions;
+  readonly permissionMode: PermissionMode;
+  readonly metadata?: Metadata;
 }
 
 /** @deprecated Phase13 migration bridge. Remove when ActionExecutionBoundary lands. */
@@ -49,15 +51,7 @@ export class TemporaryToolActionBridge implements ToolActionBridge {
     const outcome = await this.dependencies.boundary.execute({
       task: input.task,
       toolCall,
-      options: Object.freeze({
-        ...this.dependencies.runtimeOptions,
-        auditMode: input.audit,
-        telemetryMode: input.telemetry,
-        metadata: Object.freeze({
-          ...this.dependencies.runtimeOptions.metadata,
-          ...input.metadata,
-        }),
-      }),
+      options: createLegacyRuntimeOptions(input, this.dependencies),
       workspace: input.workspace,
       identity: input.identity,
     });
@@ -183,6 +177,28 @@ export class TemporaryToolActionBridge implements ToolActionBridge {
       artifactRefs: Object.freeze(artifactRefs),
     });
   }
+}
+
+function createLegacyRuntimeOptions(
+  input: ToolActionBridgeInput,
+  dependencies: TemporaryToolActionBridgeDependencies,
+): RuntimeOptions {
+  return Object.freeze({
+    limits: Object.freeze({
+      maxToolCalls: 1,
+      maxDurationMs: 30_000,
+      maxConsecutiveFailures: 1,
+      maxIterations: 1,
+    }),
+    permissionMode: dependencies.permissionMode,
+    executionAccess: "workspace",
+    auditMode: input.audit,
+    telemetryMode: input.telemetry,
+    metadata: Object.freeze({
+      ...(dependencies.metadata ?? {}),
+      ...input.metadata,
+    }),
+  });
 }
 
 function observed(

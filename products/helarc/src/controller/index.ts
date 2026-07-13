@@ -1,14 +1,14 @@
 export type {
   HelarcActionContract,
   HelarcActionDecisionRule,
-  HelarcPlannerActionDescription,
-  HelarcPlannerActionName,
+  HelarcControllerActionDescription,
+  HelarcControllerActionName,
 } from "./HelarcActionContract.js";
 export {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,
   createHelarcActionContract,
-  HELARC_PLANNER_ACTIONS,
+  HELARC_CONTROLLER_ACTIONS,
 } from "./HelarcActionContract.js";
 export type {
   HelarcToolDefinitionSummary,
@@ -30,15 +30,16 @@ export type {
   HelarcChangeIntent,
   HelarcChangeOperationKind,
   HelarcProviderStructuredOutput,
-} from "./HelarcPlanner.js";
+  HelarcControllerParseErrorCode,
+} from "./HelarcController.js";
 export {
   buildHelarcProviderRequest,
-  HELARC_PLANNER_CAPABILITY,
-  HELARC_PLANNER_OUTPUT_MAX_LENGTH,
-  HelarcPlannerParseError,
+  HELARC_CONTROLLER_CAPABILITY,
+  HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
+  HelarcControllerParseError,
   parseHelarcProviderResponse,
   parseStructuredOutput,
-} from "./HelarcPlanner.js";
+} from "./HelarcController.js";
 export type {
   HelarcPromptAssemblyInput,
   HelarcPromptAssemblyResult,

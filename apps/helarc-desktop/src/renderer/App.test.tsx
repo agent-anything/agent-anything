@@ -118,7 +118,7 @@ describe("Helarc workbench shell", () => {
           provider: null,
           events: [
             event("event-1", "tool.proposed", "Tool call proposed", "info", {
-              plannerAction: "call_tool",
+              controllerAction: "call_tool",
               requestedToolName: "codeAgent.readFile",
               promptArchitectureVersion: "helarc-prompt-v1",
               actionContractVersion: "helarc-action-v1",

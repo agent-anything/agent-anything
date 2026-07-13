@@ -257,16 +257,8 @@ function createBridge(options: {
   return new TemporaryToolActionBridge({
     boundary,
     storage: options.storage ?? new InMemoryStorage(),
-    runtimeOptions: {
-      limits: {
-        maxToolCalls: 4,
-        maxDurationMs: 10_000,
-        maxConsecutiveFailures: 2,
-        maxIterations: 4,
-      },
-      permissionMode: "trusted",
-      metadata: {},
-    },
+    permissionMode: "trusted",
+    metadata: {},
   });
 }
 

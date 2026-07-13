@@ -43,19 +43,6 @@ function kindForEvent(
       return "provider.output";
     case "run.item.appended":
       return "runtime.output";
-    case "task.started":
-      return "run.started";
-    case "task.completed":
-      return "run.completed";
-    case "task.failed":
-      return "run.failed";
-    case "planner.started":
-    case "loop.iteration.started":
-      return "planning.started";
-    case "planner.finished":
-      return "provider.output";
-    case "plan.created":
-      return payload.planStepKind === "callTool" ? "tool.proposed" : "runtime.output";
     case "permission.requested":
       return "permission.requested";
     case "permission.resolved":
@@ -64,10 +51,7 @@ function kindForEvent(
       return "tool.started";
     case "tool.finished":
       return "tool.completed";
-    case "loop.iteration.finished":
-    case "observation.created":
-    case "context.updated":
-    case "evidence.created":
+    default:
       return "runtime.output";
   }
 }
@@ -90,22 +74,6 @@ function titleForEvent(name: RuntimeEventName, payload: Metadata): string {
       return `Controller ${readString(payload, "status") ?? "finished"}`;
     case "run.item.appended":
       return `Run item appended: ${readString(payload, "itemKind") ?? "unknown"}`;
-    case "task.started":
-      return "Run started";
-    case "task.completed":
-      return "Run completed";
-    case "task.failed":
-      return "Run failed";
-    case "loop.iteration.started":
-      return `Iteration ${readNumber(payload, "iteration") ?? ""} started`.trim();
-    case "loop.iteration.finished":
-      return `Iteration ${readString(payload, "status") ?? "finished"}`;
-    case "planner.started":
-      return "Planning started";
-    case "planner.finished":
-      return `Planning ${readString(payload, "status") ?? "finished"}`;
-    case "plan.created":
-      return titleForPlanCreated(payload);
     case "permission.requested":
       return `Permission requested: ${readString(payload, "toolName") ?? "tool"}`;
     case "permission.resolved":
@@ -114,67 +82,43 @@ function titleForEvent(name: RuntimeEventName, payload: Metadata): string {
       return `Tool started: ${readString(payload, "toolName") ?? "unknown"}`;
     case "tool.finished":
       return `Tool ${readString(payload, "status") ?? "finished"}: ${readString(payload, "toolName") ?? "unknown"}`;
-    case "observation.created":
-      return "Observation created";
-    case "context.updated":
-      return "Context updated";
-    case "evidence.created":
-      return "Evidence created";
+    default:
+      return name;
   }
-}
-
-function titleForPlanCreated(payload: Metadata): string {
-  const kind = readString(payload, "planStepKind");
-  if (kind === "callTool") {
-    return "Tool call proposed";
-  }
-
-  if (kind === "final") {
-    return "Final output proposed";
-  }
-
-  if (kind === "stop") {
-    return "Stop proposed";
-  }
-
-  return "Plan created";
 }
 
 function detailForEvent(name: RuntimeEventName, payload: Metadata): string | null {
   if (name === "tool.started" || name === "tool.finished") {
-    return readString(payload, "toolCallId");
+    return readString(payload, "actionId");
   }
 
-  if (name === "plan.created") {
-    return detailForPlanCreated(payload);
+  if (name === "controller.finished") {
+    return detailForControllerFinished(payload);
   }
 
   if (name === "permission.requested" || name === "permission.resolved") {
     return readString(payload, "requestId") ?? readString(payload, "permissionRequestId");
   }
 
-  if (name === "planner.finished" || name === "task.failed") {
-    return readString(payload, "errorCode");
-  }
-
-  if (name === "observation.created" || name === "context.updated") {
-    return readString(payload, "observationId");
-  }
-
-  if (name === "evidence.created") {
-    return readString(payload, "evidenceId");
+  if (name === "run.item.appended") {
+    return readString(payload, "itemId");
   }
 
   return null;
 }
 
-function detailForPlanCreated(payload: Metadata): string | null {
-  const plannerAction = readString(payload, "plannerAction");
-  if (plannerAction === "call_tool") {
-    return readString(payload, "requestedToolName") ?? readString(payload, "toolName") ?? readString(payload, "planStepId");
+function detailForControllerFinished(payload: Metadata): string | null {
+  const code = readString(payload, "code");
+  if (code) {
+    return code;
   }
 
-  if (plannerAction === "propose") {
+  const controllerAction = readString(payload, "controllerAction");
+  if (controllerAction === "call_tool") {
+    return readString(payload, "requestedToolName");
+  }
+
+  if (controllerAction === "propose") {
     const operation = readString(payload, "patchOperation");
     const path = readString(payload, "patchPath");
     if (operation && path) {
@@ -182,7 +126,7 @@ function detailForPlanCreated(payload: Metadata): string | null {
     }
   }
 
-  return plannerAction ?? readString(payload, "planStepId");
+  return controllerAction;
 }
 
 function severityForEvent(
@@ -195,7 +139,6 @@ function severityForEvent(
   if (
     name === "run.failed" ||
     name === "run.blocked" ||
-    name === "task.failed" ||
     status === "failed" ||
     status === "blocked" ||
     decision === "denied"
@@ -224,10 +167,7 @@ function metadataForEvent(event: RuntimeEvent, payload: Metadata): Metadata {
   copyString(metadata, payload, "itemId");
   copyString(metadata, payload, "itemKind");
   copyNumber(metadata, payload, "itemSequence");
-  copyString(metadata, payload, "errorCode");
-  copyString(metadata, payload, "planStepId");
-  copyString(metadata, payload, "planStepKind");
-  copyString(metadata, payload, "plannerAction");
+  copyString(metadata, payload, "controllerAction");
   copyString(metadata, payload, "promptArchitectureVersion");
   copyString(metadata, payload, "actionContractVersion");
   copyString(metadata, payload, "toolCatalogVersion");
@@ -235,7 +175,7 @@ function metadataForEvent(event: RuntimeEvent, payload: Metadata): Metadata {
   copyString(metadata, payload, "requestedToolName");
   copyString(metadata, payload, "patchOperation");
   copyString(metadata, payload, "patchPath");
-  copyString(metadata, payload, "toolCallId");
+  copyString(metadata, payload, "actionId");
   copyString(metadata, payload, "toolName");
   copyString(metadata, payload, "toolResultStatus");
   copyString(metadata, payload, "requestId");

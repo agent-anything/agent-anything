@@ -27,9 +27,9 @@ const fixtures: HelarcProtocolEvalFixture[] = [
     },
     expectedExposedToolNames: READ_ONLY_TOOLS,
     expected: {
-      kind: "planStep",
+      kind: "decision",
       action: "propose",
-      planStepKind: "final",
+      decisionKind: "final_output",
       finalOutputKind: "propose",
       changeOperation: "create",
     },
@@ -45,9 +45,10 @@ const fixtures: HelarcProtocolEvalFixture[] = [
     },
     expectedExposedToolNames: READ_ONLY_TOOLS,
     expected: {
-      kind: "planStep",
+      kind: "decision",
       action: "call_tool",
-      planStepKind: "callTool",
+      decisionKind: "actions",
+      actionKind: "tool",
       toolName: "codeAgent.readFile",
     },
   },
@@ -62,9 +63,10 @@ const fixtures: HelarcProtocolEvalFixture[] = [
     },
     expectedExposedToolNames: READ_ONLY_TOOLS,
     expected: {
-      kind: "planStep",
+      kind: "decision",
       action: "call_tool",
-      planStepKind: "callTool",
+      decisionKind: "actions",
+      actionKind: "tool",
       toolName: "codeAgent.searchFiles",
     },
   },
@@ -79,9 +81,10 @@ const fixtures: HelarcProtocolEvalFixture[] = [
     },
     expectedExposedToolNames: READ_ONLY_TOOLS,
     expected: {
-      kind: "planStep",
+      kind: "decision",
       action: "call_tool",
-      planStepKind: "callTool",
+      decisionKind: "actions",
+      actionKind: "tool",
       toolName: "codeAgent.listFiles",
     },
   },
@@ -95,9 +98,9 @@ const fixtures: HelarcProtocolEvalFixture[] = [
     },
     expectedExposedToolNames: READ_ONLY_TOOLS,
     expected: {
-      kind: "planStep",
+      kind: "decision",
       action: "complete",
-      planStepKind: "final",
+      decisionKind: "final_output",
       finalOutputKind: "complete",
     },
   },
@@ -112,9 +115,9 @@ const fixtures: HelarcProtocolEvalFixture[] = [
     },
     expectedExposedToolNames: READ_ONLY_TOOLS,
     expected: {
-      kind: "planStep",
+      kind: "decision",
       action: "propose",
-      planStepKind: "final",
+      decisionKind: "final_output",
       finalOutputKind: "propose",
       changeOperation: "create",
     },
@@ -130,10 +133,31 @@ const fixtures: HelarcProtocolEvalFixture[] = [
     },
     expectedExposedToolNames: SHELL_ENABLED_TOOLS,
     expected: {
-      kind: "planStep",
+      kind: "decision",
       action: "call_tool",
-      planStepKind: "callTool",
+      decisionKind: "actions",
+      actionKind: "tool",
       toolName: "codeAgent.runCommand",
+    },
+  },
+  {
+    id: "multi-step-task-updates-plan",
+    taskPrompt: "Inspect the project and prepare a change.",
+    mode: "read-only",
+    providerOutput: {
+      action: "update_plan",
+      explanation: "The task has multiple steps.",
+      plan: [
+        { step: "Inspect project", status: "in_progress" },
+        { step: "Prepare change", status: "pending" },
+      ],
+    },
+    expectedExposedToolNames: READ_ONLY_TOOLS,
+    expected: {
+      kind: "decision",
+      action: "update_plan",
+      decisionKind: "actions",
+      actionKind: "internal",
     },
   },
   {
@@ -148,7 +172,7 @@ const fixtures: HelarcProtocolEvalFixture[] = [
     expectedExposedToolNames: READ_ONLY_TOOLS,
     expected: {
       kind: "error",
-      code: "planner_tool_name_unsupported",
+      code: "controller_tool_name_unsupported",
     },
   },
   {
@@ -163,7 +187,7 @@ const fixtures: HelarcProtocolEvalFixture[] = [
     expectedExposedToolNames: READ_ONLY_TOOLS,
     expected: {
       kind: "error",
-      code: "planner_action_invalid",
+      code: "controller_action_invalid",
     },
   },
   {
@@ -174,7 +198,7 @@ const fixtures: HelarcProtocolEvalFixture[] = [
     expectedExposedToolNames: READ_ONLY_TOOLS,
     expected: {
       kind: "error",
-      code: "planner_output_not_json",
+      code: "controller_output_not_json",
     },
   },
 ];

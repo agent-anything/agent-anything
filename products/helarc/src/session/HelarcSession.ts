@@ -1,16 +1,18 @@
 import {
-  AgentLoop,
-  AgentRuntime,
-  InMemoryContextManager,
-  ProviderBackedPlanner,
+  ProviderBackedController,
+  Runner,
   RuntimeEventEmitter,
   RuntimeEventRecorder,
   ToolExecutionBoundary,
+  createRunCancellationController,
+  type Agent,
   type AgentTask,
+  type RunCancellationController,
+  type RunResult,
+  type RunResultStatus,
   type RuntimeEvent,
-  type RuntimeResult,
-  type RuntimeStatus,
 } from "@agent-anything/agent-core";
+import { TemporaryToolActionBridge } from "@agent-anything/agent-core/runtime";
 import {
   acceptPatch,
   applyAcceptedPatch,
@@ -41,19 +43,20 @@ import { EvidenceBuilder, type Evidence } from "@agent-anything/evidence";
 import type { Provider } from "@agent-anything/providers";
 import type { ArtifactRef, ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { StoragePort, StoredArtifact } from "@agent-anything/storage";
-import { ToolRegistry } from "@agent-anything/tools";
+import { ToolRegistry, type ToolDefinition } from "@agent-anything/tools";
 import {
   buildHelarcProviderRequest,
   createHelarcToolCatalogMetadata,
+  HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
   HELARC_TOOL_CATALOG_METADATA_KEY,
   parseHelarcProviderResponse,
   type HelarcAgentOutput,
   type HelarcChangeIntent,
-} from "../planner/index.js";
+} from "../controller/index.js";
 import {
-  enrichRuntimeEventWithPlannerTrace,
-  HelarcTracingPlanner,
-} from "../run/HelarcPlannerTraceProjection.js";
+  enrichRuntimeEventWithControllerTrace,
+  HelarcTracingController,
+} from "../run/HelarcControllerTraceProjection.js";
 import type { HelarcTaskInput } from "../task/index.js";
 
 export type HelarcSessionStatus =
@@ -80,7 +83,7 @@ export interface HelarcSessionOutput {
   taskId: string;
   workspaceId: string | null;
   agentSummary: string | null;
-  runtimeStatus: RuntimeStatus;
+  runtimeStatus: RunResultStatus;
   patchStatus: HelarcPatchStatus | null;
   appliedPath: string | null;
   safeErrors: Array<{ code: string; message: string }>;
@@ -88,7 +91,7 @@ export interface HelarcSessionOutput {
 
 export interface HelarcSessionResult {
   status: HelarcSessionStatus;
-  runtimeResult: RuntimeResult<HelarcAgentOutput>;
+  runResult: RunResult<HelarcAgentOutput>;
   output: HelarcSessionOutput;
   activity: HelarcActivityItem[];
 }
@@ -96,6 +99,8 @@ export interface HelarcSessionResult {
 export interface RunHelarcReadOnlySessionInput {
   task: AgentTask<HelarcTaskInput>;
   provider: Provider;
+  runId?: string;
+  cancellation?: RunCancellationController;
   storage?: StoragePort;
   now?: () => ISODateTimeString;
 }
@@ -147,10 +152,13 @@ export async function runHelarcSession(
 ): Promise<HelarcSessionResult> {
   const eventEmitter = new RuntimeEventEmitter();
   const recorder = new RuntimeEventRecorder();
-  const plannerTraceByPlanStepId = new Map<string, Metadata>();
+  const controllerTraceByIteration = new Map<number, Metadata>();
   recorder.attachTo(eventEmitter);
   eventEmitter.subscribe((event) => {
-    const tracedEvent = enrichRuntimeEventWithPlannerTrace(event, plannerTraceByPlanStepId);
+    const tracedEvent = enrichRuntimeEventWithControllerTrace(
+      event,
+      controllerTraceByIteration,
+    );
     input.onActivity?.(mapRuntimeEventToHelarcActivity(tracedEvent), tracedEvent);
   });
 
@@ -171,57 +179,78 @@ export async function runHelarcSession(
       : undefined,
     toolExecutionContextResolver: registryResult.toolExecutionContextResolver,
   });
-  const planner = new HelarcTracingPlanner(new ProviderBackedPlanner({
+  const controller = new HelarcTracingController(new ProviderBackedController<HelarcAgentOutput>({
     provider: input.provider,
     buildRequest: buildHelarcProviderRequest,
     parseResponse: parseHelarcProviderResponse,
-  }), plannerTraceByPlanStepId);
-  const loop = new AgentLoop({
-    planner,
-    contextManager: new InMemoryContextManager(),
-    toolExecutionBoundary,
-    eventEmitter,
+    maxProviderOutputLength: HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
+  }), controllerTraceByIteration);
+  const sessionMode = input.enableShell ? "shell-enabled" : "read-only";
+  const runMetadata = Object.freeze({
+    product: "helarc",
+    sessionMode,
+    [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
+      mode: sessionMode,
+      tools: registryResult.registry.list(),
+    }),
   });
-  const runtime = new AgentRuntime(
+  const toolActionBridge = new TemporaryToolActionBridge({
+    boundary: toolExecutionBoundary,
+    storage: input.storage ?? new InMemoryHelarcStorage(input.now),
+    permissionMode: input.enableShell ? "ask" : "trusted",
+    metadata: runMetadata,
+  });
+  const runner = new Runner({
+    controller,
+    toolActionBridge,
+    eventEmitter,
+    now: input.now,
+  });
+  const runId = input.runId ?? input.sessionId ?? input.task.id;
+  const cancellation = input.cancellation ?? createRunCancellationController({ runId });
+  const runResult = await runner.run(
+    createHelarcAgent(registryResult.registry.list()),
     {
-      toolRegistry: registryResult.registry,
-      evidenceBuilder,
-      storage: input.storage ?? new InMemoryHelarcStorage(input.now),
-      planToolCalls: () => [],
-      agentLoop: loop,
+      runId,
+      task: input.task,
+      conversationItems: [],
+      metadata: runMetadata,
     },
     {
+      workspace: resolveHelarcRunWorkspace(input.task),
+      identity: {
+        id: input.sessionId ?? runId,
+        kind: "anonymous",
+        displayName: "Helarc user",
+        metadata: { product: "helarc" },
+      },
       limits: {
-        maxToolCalls: 5,
-        maxDurationMs: 30000,
-        maxConsecutiveFailures: 1,
         maxIterations: 5,
+        maxActions: 8,
+        maxConsecutiveActionFailures: 1,
+        maxDurationMs: 30_000,
+        plan: {
+          maxSteps: 12,
+          maxStepLength: 300,
+          maxExplanationLength: 1_000,
+        },
       },
-      permissionMode: input.enableShell ? "ask" : "trusted",
-      executionAccess: "workspace",
-      outputSpec: { format: "json", metadata: { product: "helarc" } },
-      metadata: {
-        product: "helarc",
-        sessionMode: input.enableShell ? "shell" : "read-only",
-        [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
-          mode: input.enableShell ? "shell-enabled" : "read-only",
-          tools: registryResult.registry.list(),
-        }),
-      },
+      audit: "optional",
+      telemetry: "optional",
+      cancellation,
+      metadata: runMetadata,
     },
   );
-
-  const runtimeResult = await runtime.run(input.task) as RuntimeResult<HelarcAgentOutput>;
   const activity = recorder.events()
     .map((event) => mapRuntimeEventToHelarcActivity(
-      enrichRuntimeEventWithPlannerTrace(event, plannerTraceByPlanStepId),
+      enrichRuntimeEventWithControllerTrace(event, controllerTraceByIteration),
     ));
-  const patchOutcome = await resolvePatchOutcome(input, runtimeResult);
-  const output = createSessionOutput(input.task, runtimeResult, patchOutcome);
+  const patchOutcome = await resolvePatchOutcome(input, runResult);
+  const output = createSessionOutput(input.task, runResult, patchOutcome);
 
   return {
-    status: patchOutcome?.sessionStatus ?? mapRuntimeStatus(runtimeResult.status),
-    runtimeResult,
+    status: patchOutcome?.sessionStatus ?? mapRunStatus(runResult.status),
+    runResult,
     output,
     activity,
   };
@@ -272,6 +301,73 @@ export function createHelarcReadOnlyToolRegistry(
   return registry;
 }
 
+function createHelarcAgent(
+  tools: readonly ToolDefinition[],
+): Agent<HelarcAgentOutput> {
+  return Object.freeze({
+    id: "helarc-code-agent",
+    name: "Helarc",
+    instructions: "Complete the requested code task within the active workspace and safety boundaries.",
+    tools: Object.freeze([...tools]),
+    output: Object.freeze({
+      validate(candidate: unknown) {
+        if (!isRecord(candidate) || typeof candidate.summary !== "string") {
+          return { valid: false as const, message: "Helarc output requires a summary." };
+        }
+        if (candidate.kind === "complete") {
+          return {
+            valid: true as const,
+            output: Object.freeze({ kind: "complete" as const, summary: candidate.summary }),
+          };
+        }
+        if (candidate.kind !== "propose" || !isRecord(candidate.change)) {
+          return { valid: false as const, message: "Helarc output kind is invalid." };
+        }
+        const operation = candidate.change.operation;
+        const path = candidate.change.path;
+        const content = candidate.change.content;
+        if (
+          (operation !== "create" && operation !== "update" && operation !== "delete") ||
+          typeof path !== "string" ||
+          ((operation === "create" || operation === "update") && typeof content !== "string")
+        ) {
+          return { valid: false as const, message: "Helarc proposed change is invalid." };
+        }
+        const change: HelarcChangeIntent = operation === "delete"
+          ? { operation, path }
+          : { operation, path, content: content as string };
+        return {
+          valid: true as const,
+          output: Object.freeze({
+            kind: "propose" as const,
+            summary: candidate.summary,
+            change: Object.freeze(change),
+          }),
+        };
+      },
+    }),
+    metadata: Object.freeze({ product: "helarc" }),
+  });
+}
+
+function resolveHelarcRunWorkspace(task: AgentTask) {
+  const scope = task.workspaceScope;
+  if (!scope) {
+    throw new TypeError("Helarc requires a task workspace scope.");
+  }
+  if (scope.defaultRootName !== undefined) {
+    const workspace = scope.roots[scope.defaultRootName];
+    if (workspace) {
+      return workspace;
+    }
+  }
+  const workspaces = Object.values(scope.roots);
+  if (workspaces.length === 1 && workspaces[0]) {
+    return workspaces[0];
+  }
+  throw new TypeError("Helarc requires one resolvable default workspace.");
+}
+
 export function mapRuntimeEventToHelarcActivity(
   event: RuntimeEvent,
 ): HelarcActivityItem {
@@ -296,9 +392,9 @@ interface HelarcPatchOutcome {
 
 async function resolvePatchOutcome(
   input: RunHelarcSessionInput,
-  runtimeResult: RuntimeResult<HelarcAgentOutput>,
+  runResult: RunResult<HelarcAgentOutput>,
 ): Promise<HelarcPatchOutcome | null> {
-  if (runtimeResult.status !== "succeeded" || runtimeResult.output?.kind !== "propose") {
+  if (runResult.status !== "succeeded" || runResult.finalOutput.kind !== "propose") {
     return null;
   }
 
@@ -315,7 +411,7 @@ async function resolvePatchOutcome(
   }
 
   try {
-    const proposed = await createHelarcPatchProposal(input, runtimeResult.output);
+    const proposed = await createHelarcPatchProposal(input, runResult.finalOutput);
     const review = toHelarcPatchReviewViewModel(await materializePatchReview({
       patch: proposed,
       workspaceScope: input.task.workspaceScope,
@@ -421,27 +517,54 @@ function toHelarcPatchReviewViewModel(
 
 function createSessionOutput(
   task: AgentTask,
-  runtimeResult: RuntimeResult<HelarcAgentOutput>,
+  runResult: RunResult<HelarcAgentOutput>,
   patchOutcome: HelarcPatchOutcome | null,
 ): HelarcSessionOutput {
-  const agentOutput = runtimeResult.output;
-  const safeErrors: Array<{ code: string; message: string }> =
-    runtimeResult.errors.map((error) => ({
-      code: error.code,
-      message: error.message,
-    }));
+  const agentOutput = runResult.status === "succeeded" ? runResult.finalOutput : null;
+  const safeErrors = collectSafeRunErrors(runResult);
   return {
     taskId: task.id,
     workspaceId: task.workspaceScope?.roots[task.workspaceScope.defaultRootName ?? ""]?.id ?? null,
     agentSummary: agentOutput?.summary ?? null,
-    runtimeStatus: runtimeResult.status,
+    runtimeStatus: runResult.status,
     patchStatus: patchOutcome?.patchStatus ?? null,
     appliedPath: patchOutcome?.appliedPath ?? null,
     safeErrors: safeErrors.concat(patchOutcome?.errors ?? []),
   };
 }
 
-function mapRuntimeStatus(status: RuntimeStatus): HelarcSessionStatus {
+function collectSafeRunErrors(
+  runResult: RunResult<HelarcAgentOutput>,
+): Array<{ code: string; message: string }> {
+  const errors = runResult.errors.map((error) => ({
+      code: error.code,
+      message: error.message,
+    }));
+  for (const item of runResult.items) {
+    if (item.kind !== "observation") {
+      continue;
+    }
+    const observation = item.observation;
+    if (observation.kind === "action_denied" || observation.kind === "action_rejected") {
+      appendSafeError(errors, observation.code, observation.message);
+    } else if (observation.kind === "action_failure") {
+      appendSafeError(errors, observation.error.code, observation.error.message);
+    }
+  }
+  return errors;
+}
+
+function appendSafeError(
+  errors: Array<{ code: string; message: string }>,
+  code: string,
+  message: string,
+): void {
+  if (!errors.some((error) => error.code === code && error.message === message)) {
+    errors.push({ code, message });
+  }
+}
+
+function mapRunStatus(status: RunResultStatus): HelarcSessionStatus {
   if (status === "succeeded") {
     return "completed";
   }
@@ -451,24 +574,26 @@ function mapRuntimeStatus(status: RuntimeStatus): HelarcSessionStatus {
 
 function titleForEvent(name: string, payload: Metadata): string {
   switch (name) {
-    case "loop.iteration.started":
-      return `Iteration ${payload.iteration ?? ""}`.trim();
-    case "planner.started":
-      return "Planner started";
-    case "planner.finished":
-      return `Planner ${payload.status ?? "finished"}`;
-    case "plan.created":
-      return `Plan ${payload.planStepKind ?? "created"}`;
+    case "run.started":
+      return "Run started";
+    case "run.completed":
+      return "Run completed";
+    case "run.blocked":
+      return "Run blocked";
+    case "run.failed":
+      return "Run failed";
+    case "run.cancelled":
+      return "Run cancelled";
+    case "controller.started":
+      return `Controller iteration ${payload.iteration ?? ""} started`.trim();
+    case "controller.finished":
+      return `Controller ${payload.status ?? "finished"}`;
+    case "run.item.appended":
+      return `Run item appended: ${payload.itemKind ?? "unknown"}`;
     case "tool.started":
       return `Tool started: ${payload.toolName ?? "unknown"}`;
     case "tool.finished":
       return `Tool ${payload.status ?? "finished"}: ${payload.toolName ?? "unknown"}`;
-    case "observation.created":
-      return "Observation created";
-    case "context.updated":
-      return "Context updated";
-    case "loop.iteration.finished":
-      return `Iteration ${payload.status ?? "finished"}`;
     default:
       return name;
   }
@@ -484,11 +609,13 @@ function detailForEvent(name: string, payload: Metadata): string | null {
   }
 
   if (name === "tool.started" || name === "tool.finished") {
-    return typeof payload.toolCallId === "string" ? payload.toolCallId : null;
+    return typeof payload.actionId === "string" ? payload.actionId : null;
   }
 
-  if (name === "plan.created") {
-    return typeof payload.planStepId === "string" ? payload.planStepId : null;
+  if (name === "controller.finished") {
+    return typeof payload.controllerAction === "string"
+      ? payload.controllerAction
+      : null;
   }
 
   return null;

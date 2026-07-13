@@ -1,4 +1,4 @@
-import type { PlannerInput } from "@agent-anything/agent-core";
+import type { ControllerInput } from "@agent-anything/agent-core";
 import {
   CODE_AGENT_LIST_FILES_TOOL,
   CODE_AGENT_READ_FILE_TOOL,
@@ -106,7 +106,7 @@ export function createHelarcToolCatalogMetadata(input: {
   };
 }
 
-export function readHelarcToolCatalog(input: PlannerInput): HelarcToolCatalog {
+export function readHelarcToolCatalog(input: ControllerInput): HelarcToolCatalog {
   const metadata = input.metadata[HELARC_TOOL_CATALOG_METADATA_KEY];
   const catalogMetadata = parseHelarcToolCatalogMetadata(metadata);
   if (!catalogMetadata) {

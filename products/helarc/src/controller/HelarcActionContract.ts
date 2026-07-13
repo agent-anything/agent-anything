@@ -1,11 +1,12 @@
-export type HelarcPlannerActionName =
+export type HelarcControllerActionName =
   | "call_tool"
+  | "update_plan"
   | "complete"
   | "propose"
   | "stop";
 
-export interface HelarcPlannerActionDescription {
-  action: HelarcPlannerActionName;
+export interface HelarcControllerActionDescription {
+  action: HelarcControllerActionName;
   purpose: string;
   requiredFields: string[];
   optionalFields: string[];
@@ -17,23 +18,30 @@ export interface HelarcActionDecisionRule {
 }
 
 export interface HelarcActionContract {
-  actions: HelarcPlannerActionDescription[];
+  actions: HelarcControllerActionDescription[];
   decisionRules: HelarcActionDecisionRule[];
 }
 
-export const HELARC_PLANNER_ACTIONS = [
+export const HELARC_CONTROLLER_ACTIONS = [
   "call_tool",
+  "update_plan",
   "complete",
   "propose",
   "stop",
-] as const satisfies readonly HelarcPlannerActionName[];
+] as const satisfies readonly HelarcControllerActionName[];
 
-const HELARC_ACTION_DESCRIPTIONS: HelarcPlannerActionDescription[] = [
+const HELARC_ACTION_DESCRIPTIONS: HelarcControllerActionDescription[] = [
   {
     action: "call_tool",
     purpose: "Request one tool execution from the active tool catalog.",
     requiredFields: ["action", "toolName", "input"],
-    optionalFields: ["reason", "toolCallId"],
+    optionalFields: ["reason"],
+  },
+  {
+    action: "update_plan",
+    purpose: "Create or update the Runner-owned task plan when planning improves execution.",
+    requiredFields: ["action", "plan"],
+    optionalFields: ["explanation"],
   },
   {
     action: "complete",
@@ -59,6 +67,10 @@ const HELARC_ACTION_DECISION_RULES: HelarcActionDecisionRule[] = [
   {
     id: "active_tool_catalog_only",
     text: "Use call_tool only for tools listed in the active tool catalog.",
+  },
+  {
+    id: "plan_when_useful",
+    text: "Use update_plan only when an explicit plan improves multi-step execution; simple tasks may proceed without a plan.",
   },
   {
     id: "list_files_for_directory_discovery",
@@ -116,7 +128,7 @@ export function buildHelarcActionDecisionRulesText(
   return contract.decisionRules.map((rule) => rule.text).join("\n");
 }
 
-function formatActionDescription(action: HelarcPlannerActionDescription): string {
+function formatActionDescription(action: HelarcControllerActionDescription): string {
   const required = action.requiredFields.join(", ");
   const optional = action.optionalFields.length > 0
     ? `, and optional ${action.optionalFields.join(", ")}`

@@ -1,5 +1,9 @@
 import type { HostPermissionBridge } from "@agent-anything/agent-core/host";
 import {
+  createRunCancellationController,
+  type RunCancellationController,
+} from "@agent-anything/agent-core";
+import {
   createHelarcRunInput,
   createHelarcRunTerminalSummary,
   createHelarcProviderProfile,
@@ -259,6 +263,7 @@ export class HelarcMainController {
   private status: HelarcMainSnapshotStatus = "idle";
   private nextTaskNumber = 1;
   private cancellationRequested = false;
+  private runCancellation: RunCancellationController | null = null;
   private readonly activeRunController = new HelarcActiveRunController();
   private readonly snapshotSubscribers = new Set<(snapshot: HelarcMainSnapshot) => void>();
 
@@ -384,6 +389,7 @@ export class HelarcMainController {
     this.currentThreadWrite = null;
     this.lastPatchReview = null;
     this.cancellationRequested = false;
+    this.runCancellation = null;
     this.activeRunController.reset();
     return this.publishSnapshot();
   }
@@ -484,6 +490,9 @@ export class HelarcMainController {
     this.currentThreadWrite = this.persistInitialThreadRecord(threadRecordResult.record);
     this.lastPatchReview = null;
     this.cancellationRequested = false;
+    this.runCancellation = createRunCancellationController({
+      runId: runResult.input.runId,
+    });
     this.activeRunController.startRun({
       run: runResult.input,
       workspace: {
@@ -542,6 +551,11 @@ export class HelarcMainController {
     }
 
     this.cancellationRequested = true;
+    this.runCancellation?.requestCancellation({
+      origin: "user",
+      reasonCode: "user_requested",
+      reason: "Cancelled from Helarc desktop.",
+    });
     this.activeRunController.requestCancel();
 
     if (this.pendingPermission) {
@@ -607,6 +621,8 @@ export class HelarcMainController {
     try {
       const sessionResult = await runHelarcSession({
         task,
+        runId: this.activeRunController.getSnapshot().runId,
+        cancellation: this.runCancellation ?? undefined,
         provider: this.providerInstance as Provider,
         enableShell: this.runtimeToolMode === "shell-enabled",
         permissionBridge: this.createPermissionBridge(),
@@ -618,13 +634,13 @@ export class HelarcMainController {
         },
       });
 
-      this.status = this.cancellationRequested ? "cancelled" : sessionResult.status;
+      this.status = sessionResult.status;
       this.activity = sessionResult.activity;
       this.output = sessionResult.output;
       this.pendingPermission = null;
       this.pendingPatchReview = null;
 
-      if (!this.cancellationRequested && sessionResult.status === "failed") {
+      if (sessionResult.status === "failed") {
         const firstError = sessionResult.output.safeErrors[0] ?? {
           code: "provider_not_available",
           message: "Helarc session failed.",
@@ -636,8 +652,8 @@ export class HelarcMainController {
       }
       const terminal = this.createActiveRunTerminalSummary({
         status: mapSessionStatusToRunTerminalStatus(this.status, sessionResult.output),
-        runtimeStatus: sessionResult.runtimeResult.status,
-        runtimeCode: sessionResult.runtimeResult.errors[0]?.code ?? null,
+        runtimeStatus: sessionResult.runResult.status,
+        runtimeCode: sessionResult.runResult.code,
         safeOutput: sessionResult.output,
         errorSummary: sessionResult.output.safeErrors,
       });
@@ -677,6 +693,7 @@ export class HelarcMainController {
       await this.persistWorkContextRun(terminal);
       this.completeActiveRun(terminal);
     } finally {
+      this.runCancellation = null;
       this.publishSnapshot();
     }
   }

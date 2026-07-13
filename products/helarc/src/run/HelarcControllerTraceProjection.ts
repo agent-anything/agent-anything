@@ -1,56 +1,54 @@
 import type {
-  Planner,
-  PlannerInput,
-  PlanStep,
+  Controller,
+  ControllerCallContext,
+  ControllerDecision,
+  ControllerInput,
   RuntimeEvent,
 } from "@agent-anything/agent-core";
 import type { Metadata } from "@agent-anything/shared";
 
-export class HelarcTracingPlanner implements Planner {
+export class HelarcTracingController<TOutput = unknown> implements Controller<TOutput> {
   constructor(
-    private readonly inner: Planner,
-    private readonly traceByPlanStepId: Map<string, Metadata>,
+    private readonly inner: Controller<TOutput>,
+    private readonly traceByIteration: Map<number, Metadata>,
   ) {}
 
-  async plan(input: PlannerInput): Promise<PlanStep> {
-    const step = await this.inner.plan(input);
-    this.traceByPlanStepId.set(step.id, selectPlannerTraceMetadata(step.metadata));
-    return step;
+  async next(
+    input: ControllerInput<TOutput>,
+    context: ControllerCallContext,
+  ): Promise<ControllerDecision<TOutput>> {
+    const decision = await this.inner.next(input, context);
+    const metadata = decision.modelItems[0]?.metadata ?? {};
+    this.traceByIteration.set(input.iteration, selectControllerTraceMetadata(metadata));
+    return decision;
   }
 }
 
-export function enrichRuntimeEventWithPlannerTrace(
+export function enrichRuntimeEventWithControllerTrace(
   event: RuntimeEvent,
-  traceByPlanStepId: Map<string, Metadata>,
+  traceByIteration: ReadonlyMap<number, Metadata>,
 ): RuntimeEvent {
-  if (event.name !== "plan.created" || !isRecord(event.payload)) {
+  if (event.name !== "controller.finished" || !isRecord(event.payload)) {
     return event;
   }
 
-  const planStepId = readTraceString(event.payload.planStepId);
-  if (!planStepId) {
-    return event;
-  }
-
-  const trace = traceByPlanStepId.get(planStepId);
+  const iteration = readTraceNumber(event.payload.iteration);
+  const trace = iteration === null ? undefined : traceByIteration.get(iteration);
   if (!trace) {
     return event;
   }
 
   return {
     ...event,
-    payload: {
-      ...event.payload,
-      ...trace,
-    },
+    payload: { ...event.payload, ...trace },
   };
 }
 
-function selectPlannerTraceMetadata(source: Metadata): Metadata {
+function selectControllerTraceMetadata(source: Metadata): Metadata {
   const metadata: Metadata = {};
 
   copyString(metadata, source, "source");
-  copyString(metadata, source, "plannerAction");
+  copyString(metadata, source, "controllerAction");
   copyString(metadata, source, "promptArchitectureVersion");
   copyString(metadata, source, "actionContractVersion");
   copyString(metadata, source, "toolCatalogVersion");
@@ -59,7 +57,7 @@ function selectPlannerTraceMetadata(source: Metadata): Metadata {
   copyString(metadata, source, "patchOperation");
   copyString(metadata, source, "patchPath");
 
-  return metadata;
+  return Object.freeze(metadata);
 }
 
 function copyString(target: Metadata, source: Metadata, key: string): void {
@@ -80,9 +78,15 @@ function readTraceString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function readTraceNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value > 0
+    ? value
+    : null;
+}
+
 function readTraceStringArray(value: unknown): string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string")
-    ? value
+    ? [...value]
     : [];
 }
 

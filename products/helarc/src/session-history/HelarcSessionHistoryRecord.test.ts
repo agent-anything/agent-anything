@@ -109,7 +109,7 @@ function recordInput() {
       id: "activity-1",
       sequence: 1,
       timestamp: "2026-06-30T08:00:01.000Z",
-      kind: "planner.started",
+      kind: "controller.started",
       title: "Planner started",
       detail: null,
       metadata: {},

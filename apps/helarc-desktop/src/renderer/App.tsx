@@ -1003,7 +1003,7 @@ function formatTimestamp(timestamp: string): string {
 }
 
 function formatTraceMetadata(metadata: Record<string, unknown>): string | null {
-  const action = readMetadataString(metadata, "plannerAction");
+  const action = readMetadataString(metadata, "controllerAction");
   if (!action) {
     return null;
   }

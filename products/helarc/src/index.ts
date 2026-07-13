@@ -39,8 +39,9 @@ export type {
   HelarcAgentOutput,
   HelarcChangeIntent,
   HelarcChangeOperationKind,
-  HelarcPlannerActionDescription,
-  HelarcPlannerActionName,
+  HelarcControllerActionDescription,
+  HelarcControllerActionName,
+  HelarcControllerParseErrorCode,
   HelarcPromptAssemblyInput,
   HelarcPromptAssemblyResult,
   HelarcPromptAssemblyVersions,
@@ -52,7 +53,7 @@ export type {
   HelarcToolCatalogItem,
   HelarcToolCatalogMetadata,
   HelarcToolCatalogMode,
-} from "./planner/index.js";
+} from "./controller/index.js";
 export {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,
@@ -64,17 +65,17 @@ export {
   createHelarcToolCatalogFromDefinitions,
   createHelarcToolCatalogMetadata,
   HELARC_ACTION_CONTRACT_VERSION,
-  HELARC_PLANNER_ACTIONS,
-  HELARC_PLANNER_CAPABILITY,
-  HELARC_PLANNER_OUTPUT_MAX_LENGTH,
+  HELARC_CONTROLLER_ACTIONS,
+  HELARC_CONTROLLER_CAPABILITY,
+  HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
   HELARC_PROMPT_ARCHITECTURE_VERSION,
   HELARC_TOOL_CATALOG_METADATA_KEY,
   HELARC_TOOL_CATALOG_VERSION,
-  HelarcPlannerParseError,
+  HelarcControllerParseError,
   parseHelarcProviderResponse,
   parseStructuredOutput,
   readHelarcToolCatalog,
-} from "./planner/index.js";
+} from "./controller/index.js";
 export type {
   CreateHelarcProviderProfileInput,
   CreateHelarcProviderProfileResult,

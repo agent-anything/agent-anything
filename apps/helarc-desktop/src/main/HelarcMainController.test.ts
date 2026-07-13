@@ -238,8 +238,8 @@ describe("HelarcMainController", () => {
       },
       error: null,
     });
-    expect(snapshot.activity.map((item) => item.kind)).toContain("planner.started");
-    expect(snapshot.activity.map((item) => item.kind)).toContain("plan.created");
+    expect(snapshot.activity.map((item) => item.kind)).toContain("controller.started");
+    expect(snapshot.activity.map((item) => item.kind)).toContain("run.item.appended");
     expect(snapshot.activeRun).toMatchObject({
       status: "completed",
       terminal: {
@@ -479,6 +479,10 @@ describe("HelarcMainController", () => {
             reason: "Create a governed marker file.",
           },
         },
+        {
+          action: "stop",
+          reason: "Permission was denied.",
+        },
       ]),
     });
     controller.selectWorkspacePath(workspaceRoot);
@@ -684,8 +688,8 @@ describe("HelarcMainController", () => {
         status: "cancelled",
         terminal: {
           status: "cancelled",
-          runtimeStatus: "blocked",
-          runtimeCode: "permission_unavailable",
+          runtimeStatus: "cancelled",
+          runtimeCode: "runtime_cancelled",
         },
       },
       sessionHistory: [{
@@ -695,8 +699,8 @@ describe("HelarcMainController", () => {
           status: "cancelled",
           terminal: {
             status: "cancelled",
-            runtimeStatus: "blocked",
-            runtimeCode: "permission_unavailable",
+            runtimeStatus: "cancelled",
+            runtimeCode: "runtime_cancelled",
           },
         },
       }],
@@ -742,11 +746,11 @@ describe("HelarcMainController", () => {
         terminal: {
           status: "failed",
           runtimeStatus: "failed",
-          runtimeCode: "provider_planner_failed",
+          runtimeCode: "model_output_invalid",
         },
       },
       output: {
-        safeErrors: [{ code: "provider_planner_failed" }],
+        safeErrors: [{ code: "model_output_invalid" }],
       },
       sessionHistory: [{
         status: "failed",
@@ -756,7 +760,7 @@ describe("HelarcMainController", () => {
           terminal: {
             status: "failed",
             runtimeStatus: "failed",
-            runtimeCode: "provider_planner_failed",
+            runtimeCode: "model_output_invalid",
           },
         },
       }],

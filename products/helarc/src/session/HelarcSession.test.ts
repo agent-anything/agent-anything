@@ -1,4 +1,4 @@
-import type { PlannerInput } from "@agent-anything/agent-core";
+import type { ContextProjection } from "@agent-anything/agent-core";
 import type { HostPermissionBridge } from "@agent-anything/agent-core/host";
 import type { Provider, ProviderRequest, ProviderResponse } from "@agent-anything/providers";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -60,7 +60,7 @@ describe("Helarc read-only session", () => {
     });
 
     expect(result.status).toBe("completed");
-    expect(result.runtimeResult.status).toBe("succeeded");
+    expect(result.runResult.status).toBe("succeeded");
     expect(result.output).toMatchObject({
       agentSummary: "Workspace contains src/index.ts. No changes needed.",
       runtimeStatus: "succeeded",
@@ -69,25 +69,24 @@ describe("Helarc read-only session", () => {
       safeErrors: [],
     });
     expect(result.activity.map((item) => item.kind)).toEqual([
-      "loop.iteration.started",
-      "planner.started",
-      "planner.finished",
-      "plan.created",
+      "run.started",
+      "controller.started",
+      "run.item.appended",
+      "controller.finished",
+      "run.item.appended",
       "tool.started",
       "tool.finished",
-      "observation.created",
-      "context.updated",
-      "loop.iteration.finished",
-      "loop.iteration.started",
-      "planner.started",
-      "planner.finished",
-      "plan.created",
-      "loop.iteration.finished",
+      "run.item.appended",
+      "controller.started",
+      "run.item.appended",
+      "controller.finished",
+      "run.item.appended",
+      "run.completed",
     ]);
     expect(provider.requests).toHaveLength(2);
-    expect(provider.lastPlannerInputContexts).toEqual([0, 1]);
-    expect(result.activity.find((item) => item.kind === "plan.created")?.metadata).toMatchObject({
-      plannerAction: "call_tool",
+    expect(provider.lastControllerInputContexts).toEqual([0, 1]);
+    expect(result.activity.find((item) => item.metadata.controllerAction === "call_tool")?.metadata).toMatchObject({
+      controllerAction: "call_tool",
       requestedToolName: "codeAgent.listFiles",
       promptArchitectureVersion: "helarc-prompt-v1",
       actionContractVersion: "helarc-action-v1",
@@ -137,9 +136,9 @@ describe("Helarc read-only session", () => {
 
     expect(result.status).toBe("completed");
     expect(result.output.agentSummary).toBe("Read-only tools completed.");
-    expect(result.runtimeResult.evidenceRefs).toHaveLength(3);
+    expect(result.runResult.evidenceRefs).toHaveLength(3);
     expect(result.activity.filter((item) => item.kind === "tool.finished")).toHaveLength(3);
-    expect(provider.lastPlannerInputContexts).toEqual([0, 1, 2, 3]);
+    expect(provider.lastControllerInputContexts).toEqual([0, 1, 2, 3]);
   });
 
   it("does not register shell execution in the default read-only session", async () => {
@@ -161,7 +160,7 @@ describe("Helarc read-only session", () => {
 
     expect(result.status).toBe("failed");
     expect(result.output.safeErrors).toEqual([
-      { code: "provider_planner_failed", message: "Tool is not exposed in the active tool catalog." },
+      { code: "model_output_invalid", message: "Tool is not exposed in the active tool catalog." },
     ]);
     await expect(access(markerPath)).rejects.toThrow();
   });
@@ -175,6 +174,10 @@ describe("Helarc read-only session", () => {
         reason: "Try a shell command.",
         toolName: "codeAgent.runCommand",
         input: createShellInput(markerPath),
+      },
+      {
+        action: "stop",
+        reason: "Permission was denied.",
       },
     ]);
     const permissionBridge: HostPermissionBridge = async () => ({
@@ -226,7 +229,44 @@ describe("Helarc read-only session", () => {
     expect(result.status).toBe("completed");
     expect(result.output.agentSummary).toBe("Shell command completed.");
     await expect(access(markerPath)).resolves.toBeUndefined();
-    expect(provider.lastPlannerInputContexts).toEqual([0, 1]);
+    expect(provider.lastControllerInputContexts).toEqual([0, 1]);
+  });
+
+  it("updates the Runner-owned plan and exposes it to the next controller turn", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-plan-update-"));
+    const provider = new ScriptedProvider([
+      {
+        action: "update_plan",
+        explanation: "The task has multiple steps.",
+        plan: [
+          { step: "Inspect workspace", status: "in_progress" },
+          { step: "Finish task", status: "pending" },
+        ],
+      },
+      {
+        action: "complete",
+        summary: "Plan was recorded.",
+      },
+    ]);
+
+    const result = await runHelarcReadOnlySession({
+      task: createTask(workspaceRoot),
+      provider,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(provider.lastControllerInputPlans).toEqual([
+      null,
+      {
+        id: "helarc-task-1:plan:1",
+        version: 1,
+        status: "active",
+        steps: [
+          { step: "Inspect workspace", status: "in_progress" },
+          { step: "Finish task", status: "pending" },
+        ],
+      },
+    ]);
   });
 
   it("materializes and applies an accepted proposed patch", async () => {
@@ -356,13 +396,15 @@ class ScriptedProvider implements Provider {
     metadata: {},
   };
   readonly requests: ProviderRequest[] = [];
-  readonly lastPlannerInputContexts: number[] = [];
+  readonly lastControllerInputContexts: number[] = [];
+  readonly lastControllerInputPlans: unknown[] = [];
 
   constructor(private readonly outputs: unknown[]) {}
 
   async send(request: ProviderRequest): Promise<ProviderResponse> {
     this.requests.push(request);
-    this.lastPlannerInputContexts.push(readObservationCount(request));
+    this.lastControllerInputContexts.push(readObservationCount(request));
+    this.lastControllerInputPlans.push(readCurrentPlan(request));
     const output = this.outputs.shift();
     if (!output) {
       return {
@@ -415,10 +457,25 @@ function readObservationCount(request: ProviderRequest): number {
 
   try {
     const json = content.slice(index + marker.length, nextIndex).trim();
-    const parsed = JSON.parse(json) as PlannerInput["context"]["observations"];
+    const parsed = JSON.parse(json) as ContextProjection["observations"];
     return Array.isArray(parsed) ? parsed.length : 0;
   } catch {
     return 0;
+  }
+}
+
+function readCurrentPlan(request: ProviderRequest): unknown {
+  const content = request.messages.find((message) => message.role === "user")?.content ?? "";
+  const marker = "Current plan:";
+  const index = content.indexOf(marker);
+  if (index < 0) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(content.slice(index + marker.length).trim()) as unknown;
+  } catch {
+    return null;
   }
 }
 
