@@ -25,7 +25,7 @@ export interface TemporaryToolActionBridgeDependencies {
   readonly permissionMode: PermissionMode;
 }
 
-/** @deprecated Phase13 migration bridge. Remove when ActionExecutionBoundary lands. */
+/** Transitional Tool bridge retained until Phase16 ActionExecutionBoundary replaces it. */
 export class TemporaryToolActionBridge implements ToolActionBridge {
   constructor(
     private readonly dependencies: TemporaryToolActionBridgeDependencies,

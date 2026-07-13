@@ -18,6 +18,7 @@ import {
   Runner,
   createRunCancellationController,
   type ActionCandidate,
+  type RunConfig,
   type ToolActionBridge,
   type ToolActionBridgeInput,
   type ToolActionBridgeResult,
@@ -107,6 +108,116 @@ describe("Runner and generic Host conformance", () => {
     ]);
   });
 
+  it("carries one Plan through creation, completion, reactivation, and terminal abandonment", async () => {
+    const controller = new FakeController([
+      (input) => actionsDecision(input, [{
+        kind: "internal",
+        name: "update_plan",
+        input: {
+          explanation: "Start with inspection.",
+          plan: [{ step: "Inspect resource", status: "in_progress" }],
+        },
+      }]),
+      (input) => actionsDecision(input, [{
+        kind: "internal",
+        name: "update_plan",
+        input: {
+          explanation: "Inspection is complete.",
+          plan: [{ step: "Inspect resource", status: "completed" }],
+        },
+      }]),
+      (input) => actionsDecision(input, [{
+        kind: "internal",
+        name: "update_plan",
+        input: {
+          explanation: "New work was discovered.",
+          plan: [
+            { step: "Inspect resource", status: "completed" },
+            { step: "Verify discovery", status: "in_progress" },
+          ],
+        },
+      }]),
+      (input) => finalDecision(input, "Plan lifecycle complete"),
+    ]);
+
+    const result = await createHostHarness(controller).run(createHostInput());
+
+    expect(result.runResult.status).toBe("succeeded");
+    expect(controller.calls.map((call) => call.context.plan?.status ?? null)).toEqual([
+      null,
+      "active",
+      "completed",
+      "active",
+    ]);
+    expect(controller.calls.map((call) => call.context.plan?.version ?? null)).toEqual([
+      null,
+      1,
+      2,
+      3,
+    ]);
+    expect(result.runResult.items.map((item) => item.kind)).toEqual([
+      "model_output",
+      "action",
+      "plan_created",
+      "observation",
+      "model_output",
+      "action",
+      "plan_updated",
+      "plan_completed",
+      "observation",
+      "model_output",
+      "action",
+      "plan_updated",
+      "observation",
+      "model_output",
+      "plan_abandoned",
+      "final_output",
+    ]);
+  });
+
+  it("returns an invalid Plan update as a recoverable Observation", async () => {
+    const controller = new FakeController([
+      (input) => actionsDecision(input, [{
+        kind: "internal",
+        name: "update_plan",
+        input: {
+          plan: [
+            { step: "First concurrent step", status: "in_progress" },
+            { step: "Second concurrent step", status: "in_progress" },
+          ],
+        },
+      }]),
+      (input) => {
+        expect(input.context.plan).toBeNull();
+        expect(input.context.observations.at(-1)).toMatchObject({
+          kind: "plan_update",
+          result: {
+            status: "rejected",
+            code: "plan_invalid",
+          },
+        });
+        return finalDecision(input, "Recovered after invalid Plan");
+      },
+    ]);
+
+    const result = await createHostHarness(controller).run(createHostInput());
+
+    expect(result).toMatchObject({
+      state: { status: "completed" },
+      runResult: {
+        status: "succeeded",
+        finalOutput: { summary: "Recovered after invalid Plan" },
+      },
+    });
+    expect(result.runResult.items.map((item) => item.kind)).toEqual([
+      "model_output",
+      "action",
+      "observation",
+      "model_output",
+      "final_output",
+    ]);
+  });
+
   it("returns a recoverable Tool failure to Controller as an Observation", async () => {
     const controller = new FakeController([
       (input) => actionsDecision(input, [{
@@ -148,6 +259,142 @@ describe("Runner and generic Host conformance", () => {
       status: "succeeded",
       finalOutput: { summary: "Recovered after observation" },
     });
+  });
+
+  it("returns a recoverable permission denial to the same Controller loop", async () => {
+    const controller = new FakeController([
+      (input) => actionsDecision(input, [{
+        kind: "tool",
+        name: "conformance.inspect",
+        input: {},
+      }]),
+      (input) => {
+        expect(input.context.observations.at(-1)).toMatchObject({
+          kind: "action_denied",
+          owner: "permission",
+          code: "permission_denied",
+        });
+        return finalDecision(input, "Recovered after denial");
+      },
+    ]);
+    const bridge = new FakeToolActionBridge(() => ({
+      status: "observed",
+      outcome: "denied",
+      observation: {
+        kind: "action_denied",
+        owner: "permission",
+        code: "permission_denied",
+        message: "Permission denied by conformance fixture.",
+        metadata: {},
+      },
+      evidenceRefs: [],
+      artifactRefs: [],
+    }));
+
+    const result = await createHostHarness(controller, bridge).run(
+      createHostInput({ tools: [conformanceTool()] }),
+    );
+
+    expect(result).toMatchObject({
+      state: { status: "completed" },
+      runResult: {
+        status: "succeeded",
+        finalOutput: { summary: "Recovered after denial" },
+      },
+    });
+    expect(result.state.runResult).toBe(result.runResult);
+  });
+
+  it("projects Controller stop as blocked while preserving the exact RunResult", async () => {
+    const controller = new FakeController([
+      (input) => ({
+        kind: "stop",
+        reason: "No safe path remains.",
+        modelItems: [modelItem(input, { action: "stop" })],
+      }),
+    ]);
+
+    const result = await createHostHarness(controller).run(createHostInput());
+
+    expect(result).toMatchObject({
+      state: { status: "blocked" },
+      runResult: {
+        status: "blocked",
+        code: "runtime_no_safe_path",
+      },
+    });
+    expect(result.state.runResult).toBe(result.runResult);
+    expect(result.runResult.items.map((item) => item.kind)).toEqual([
+      "model_output",
+      "stop",
+      "run_blocked",
+    ]);
+  });
+
+  it("projects a Runner iteration limit as failed without reconstructing it in Host", async () => {
+    const controller = new FakeController([
+      (input) => actionsDecision(input, [{
+        kind: "tool",
+        name: "conformance.inspect",
+        input: {},
+      }]),
+    ]);
+    const bridge = new FakeToolActionBridge(() => succeededToolResult());
+
+    const result = await createHostHarness(controller, bridge).run(createHostInput({
+      tools: [conformanceTool()],
+      limits: { maxIterations: 1 },
+    }));
+
+    expect(result).toMatchObject({
+      state: { status: "failed" },
+      runResult: {
+        status: "failed",
+        code: "runtime_limit_exceeded",
+        errors: [{ owner: "runtime", code: "runtime_limit_exceeded" }],
+      },
+    });
+    expect(result.state.runResult).toBe(result.runResult);
+  });
+
+  it("preserves a terminal Tool boundary failure through the generic Host", async () => {
+    const controller = new FakeController([
+      (input) => actionsDecision(input, [{
+        kind: "tool",
+        name: "conformance.inspect",
+        input: {},
+      }]),
+    ]);
+    const bridge = new FakeToolActionBridge(() => ({
+      status: "terminal_failure",
+      code: "storage_write_failed",
+      errors: [{
+        owner: "storage",
+        code: "storage_write_failed",
+        message: "Conformance storage failed.",
+        retryable: false,
+        metadata: {},
+      }],
+      evidenceRefs: [],
+      artifactRefs: [],
+    }));
+
+    const result = await createHostHarness(controller, bridge).run(
+      createHostInput({ tools: [conformanceTool()] }),
+    );
+
+    expect(result).toMatchObject({
+      state: {
+        status: "failed",
+        errors: [{ owner: "storage", code: "storage_write_failed" }],
+      },
+      runResult: {
+        status: "failed",
+        code: "storage_write_failed",
+      },
+    });
+    expect(result.state.runResult).toBe(result.runResult);
+    expect(result.state.status === "failed" && result.state.errors).toBe(result.runResult.errors);
   });
 
   it("keeps Host cancelling non-terminal until Runner settles the active boundary", async () => {
@@ -315,6 +562,7 @@ function createHostHarness(
 
 function createHostInput(input: {
   tools?: readonly ToolDefinition[];
+  limits?: Partial<Omit<RunConfig["limits"], "plan">>;
 } = {}): HostRunInput<ConformanceOutput> {
   const cancellation = createRunCancellationController({
     runId: "run-conformance",
@@ -356,6 +604,7 @@ function createHostInput(input: {
         maxActions: 5,
         maxConsecutiveActionFailures: 1,
         maxDurationMs: 5_000,
+        ...input.limits,
         plan: {
           maxSteps: 5,
           maxStepLength: 100,

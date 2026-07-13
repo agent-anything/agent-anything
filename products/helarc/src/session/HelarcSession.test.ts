@@ -300,6 +300,14 @@ describe("Helarc read-only session", () => {
     });
 
     expect(result.status).toBe("completed");
+    expect(result.runResult).toMatchObject({
+      status: "succeeded",
+      finalOutput: {
+        kind: "propose",
+        summary: "Create a new file.",
+      },
+      errors: [],
+    });
     expect(result.output).toMatchObject({
       patchStatus: "applied",
       appliedPath: "src/created.txt",
@@ -339,6 +347,14 @@ describe("Helarc read-only session", () => {
     });
 
     expect(result.status).toBe("rejected");
+    expect(result.runResult).toMatchObject({
+      status: "succeeded",
+      finalOutput: {
+        kind: "propose",
+        summary: "Update the file.",
+      },
+      errors: [],
+    });
     expect(result.output).toMatchObject({
       patchStatus: "rejected",
       appliedPath: null,
@@ -375,6 +391,14 @@ describe("Helarc read-only session", () => {
     });
 
     expect(result.status).toBe("failed");
+    expect(result.runResult).toMatchObject({
+      status: "succeeded",
+      finalOutput: {
+        kind: "propose",
+        summary: "Update the file.",
+      },
+      errors: [],
+    });
     expect(result.output).toMatchObject({
       patchStatus: "failed",
       appliedPath: null,
