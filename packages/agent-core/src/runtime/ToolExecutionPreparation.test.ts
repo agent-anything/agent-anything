@@ -9,8 +9,11 @@ import {
   type ToolResult,
 } from "@agent-anything/tools";
 import type { AgentTask } from "../task/index.js";
-import { ToolExecutionBoundary } from "./ToolExecutionBoundary.js";
-import type { RuntimeOptions } from "./RuntimeOptions.js";
+import {
+  ToolExecutionBoundary,
+  type ExecuteToolInput,
+  type ToolExecutionConfig,
+} from "./ToolExecutionBoundary.js";
 
 describe("ToolExecutionBoundary preparation", () => {
   it("rejects risk downgrade before governance or execution", async () => {
@@ -122,7 +125,7 @@ function createTool(onExecute?: () => void): ToolDefinition {
 
 function createExecuteInput(
   toolCallOverrides: Partial<ToolCall> = {},
-) {
+): ExecuteToolInput {
   return {
     task: createTask(),
     toolCall: {
@@ -133,7 +136,7 @@ function createExecuteInput(
       metadata: {},
       ...toolCallOverrides,
     },
-    options: createOptions(),
+    config: createConfig(),
     workspace: createWorkspace("workspace-default"),
   };
 }
@@ -148,17 +151,11 @@ function createTask(): AgentTask {
   };
 }
 
-function createOptions(): RuntimeOptions {
+function createConfig(): ToolExecutionConfig {
   return {
-    limits: {
-      maxToolCalls: 5,
-      maxDurationMs: 30_000,
-      maxConsecutiveFailures: 1,
-      maxIterations: 5,
-    },
     permissionMode: "trusted",
-    executionAccess: "workspace",
-    metadata: {},
+    audit: "optional",
+    telemetry: "optional",
   };
 }
 

@@ -11,13 +11,11 @@ import type {
 } from "../runner/ToolActionBridge.js";
 import type { RunFailureCode } from "../runner/RunResult.js";
 import type {
-  RuntimeError as RunnerRuntimeError,
-  RuntimeErrorOwner,
+  RuntimeError,
 } from "../runner/RuntimeError.js";
-import type { RuntimeError as LegacyRuntimeError } from "./RuntimeError.js";
-import type { RuntimeOptions } from "./RuntimeOptions.js";
 import {
   ToolExecutionBoundary,
+  type ToolExecutionConfig,
   type ToolExecutionOutcome,
 } from "./ToolExecutionBoundary.js";
 
@@ -25,7 +23,6 @@ export interface TemporaryToolActionBridgeDependencies {
   readonly boundary: ToolExecutionBoundary;
   readonly storage: StoragePort;
   readonly permissionMode: PermissionMode;
-  readonly metadata?: Metadata;
 }
 
 /** @deprecated Phase13 migration bridge. Remove when ActionExecutionBoundary lands. */
@@ -51,7 +48,7 @@ export class TemporaryToolActionBridge implements ToolActionBridge {
     const outcome = await this.dependencies.boundary.execute({
       task: input.task,
       toolCall,
-      options: createLegacyRuntimeOptions(input, this.dependencies),
+      config: createToolExecutionConfig(input, this.dependencies),
       workspace: input.workspace,
       identity: input.identity,
     });
@@ -83,7 +80,7 @@ export class TemporaryToolActionBridge implements ToolActionBridge {
     if (terminalCode !== null) {
       return terminalFailure(
         terminalCode,
-        outcome.errors.map(toRunnerError),
+        outcome.errors,
       );
     }
 
@@ -121,7 +118,7 @@ export class TemporaryToolActionBridge implements ToolActionBridge {
 
     return observed("failed", {
       kind: "action_failure",
-      error: toRunnerError(error),
+      error,
       metadata: freezeMetadata(error.metadata),
     });
   }
@@ -179,25 +176,14 @@ export class TemporaryToolActionBridge implements ToolActionBridge {
   }
 }
 
-function createLegacyRuntimeOptions(
+function createToolExecutionConfig(
   input: ToolActionBridgeInput,
   dependencies: TemporaryToolActionBridgeDependencies,
-): RuntimeOptions {
+): ToolExecutionConfig {
   return Object.freeze({
-    limits: Object.freeze({
-      maxToolCalls: 1,
-      maxDurationMs: 30_000,
-      maxConsecutiveFailures: 1,
-      maxIterations: 1,
-    }),
     permissionMode: dependencies.permissionMode,
-    executionAccess: "workspace",
-    auditMode: input.audit,
-    telemetryMode: input.telemetry,
-    metadata: Object.freeze({
-      ...(dependencies.metadata ?? {}),
-      ...input.metadata,
-    }),
+    audit: input.audit,
+    telemetry: input.telemetry,
   });
 }
 
@@ -233,7 +219,7 @@ function observed(
 
 function terminalFailure(
   code: RunFailureCode,
-  errors: readonly RunnerRuntimeError[],
+  errors: readonly RuntimeError[],
   evidenceRefs: readonly EvidenceRef[] = [],
   artifactRefs: readonly ArtifactRef[] = [],
 ): ToolActionBridgeResult {
@@ -248,15 +234,15 @@ function terminalFailure(
     status: "terminal_failure" as const,
     code,
     errors: Object.freeze([...normalizedErrors]) as unknown as readonly [
-      RunnerRuntimeError,
-      ...RunnerRuntimeError[],
+      RuntimeError,
+      ...RuntimeError[],
     ],
     evidenceRefs: Object.freeze([...evidenceRefs]),
     artifactRefs: Object.freeze([...artifactRefs]),
   });
 }
 
-function terminalCodeFor(errors: readonly LegacyRuntimeError[]): RunFailureCode | null {
+function terminalCodeFor(errors: readonly RuntimeError[]): RunFailureCode | null {
   for (const error of errors) {
     if (error.code === "audit_required_failed") {
       return "audit_required_failed";
@@ -281,32 +267,12 @@ function deniedOwner(code: string): "policy" | "permission" | "tool" {
   return "tool";
 }
 
-function toRunnerError(error: LegacyRuntimeError): RunnerRuntimeError {
-  return runnerError(
-    ownerForCode(error.code),
-    error.code,
-    error.message,
-    error.metadata,
-  );
-}
-
-function ownerForCode(code: string): RuntimeErrorOwner {
-  if (code.startsWith("audit_")) return "audit";
-  if (code.startsWith("runtime_telemetry_")) return "telemetry";
-  if (code.startsWith("storage_")) return "storage";
-  if (code.startsWith("policy_")) return "policy";
-  if (code.startsWith("permission_")) return "permission";
-  if (code.startsWith("provider_")) return "provider";
-  if (code.startsWith("tool_") || code === "runtime_evidence_creation_failed") return "tool";
-  return "runtime";
-}
-
 function runnerError(
-  owner: RuntimeErrorOwner,
+  owner: RuntimeError["owner"],
   code: string,
   message: string,
   metadata: Metadata = {},
-): RunnerRuntimeError {
+): RuntimeError {
   return Object.freeze({
     owner,
     code,

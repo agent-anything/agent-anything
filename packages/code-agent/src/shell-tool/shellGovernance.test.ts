@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ToolExecutionBoundary,
-  type RuntimeOptions,
+  type ToolExecutionConfig,
 } from "@agent-anything/agent-core";
 import type { AgentTask, TaskWorkspaceScope } from "@agent-anything/agent-core";
 import type {
@@ -133,7 +133,6 @@ describe("shell governance integration", () => {
         },
       },
       metadata: {
-        executionAccess: "workspace",
         taskKind: "code.change",
       },
     });
@@ -146,7 +145,6 @@ describe("shell governance integration", () => {
         rootName: "docs",
         workspaceId: "workspace-docs",
         timeoutMs: 1_000,
-        executionAccess: "workspace",
       },
     });
     await expect(access(markerPath)).resolves.toBeUndefined();
@@ -213,7 +211,7 @@ describe("shell governance integration", () => {
     return {
       task: createTask(),
       toolCall: createShellCall(),
-      options: createOptions(),
+      config: createConfig(),
       workspace: createWorkspace("workspace-code", codeRoot),
     };
   }
@@ -260,17 +258,11 @@ function createShellCall(): ToolCall {
   };
 }
 
-function createOptions(): RuntimeOptions {
+function createConfig(): ToolExecutionConfig {
   return {
-    limits: {
-      maxToolCalls: 5,
-      maxDurationMs: 30_000,
-      maxConsecutiveFailures: 1,
-      maxIterations: 5,
-    },
     permissionMode: "trusted",
-    executionAccess: "workspace",
-    metadata: {},
+    audit: "optional",
+    telemetry: "optional",
   };
 }
 
@@ -297,13 +289,25 @@ function allowPolicy(): PolicyPort {
   }));
 }
 function createPolicyPort(
-  evaluate: PolicyPort["evaluate"],
+  evaluate: (
+    input: Parameters<PolicyPort["evaluate"]>[0],
+  ) => Awaited<ReturnType<PolicyPort["evaluate"]>> | ReturnType<PolicyPort["evaluate"]>,
 ): PolicyPort {
-  return { evaluate };
+  return {
+    async evaluate(input) {
+      return evaluate(input);
+    },
+  };
 }
 
 function createPermissionService(
-  request: PermissionService["request"],
+  request: (
+    input: Parameters<PermissionService["request"]>[0],
+  ) => Awaited<ReturnType<PermissionService["request"]>> | ReturnType<PermissionService["request"]>,
 ): PermissionService {
-  return { request };
+  return {
+    async request(input) {
+      return request(input);
+    },
+  };
 }

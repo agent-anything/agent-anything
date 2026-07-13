@@ -258,7 +258,6 @@ function createBridge(options: {
     boundary,
     storage: options.storage ?? new InMemoryStorage(),
     permissionMode: "trusted",
-    metadata: {},
   });
 }
 

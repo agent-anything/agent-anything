@@ -198,7 +198,6 @@ export async function runHelarcSession(
     boundary: toolExecutionBoundary,
     storage: input.storage ?? new InMemoryHelarcStorage(input.now),
     permissionMode: input.enableShell ? "ask" : "trusted",
-    metadata: runMetadata,
   });
   const runner = new Runner({
     controller,

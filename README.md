@@ -11,15 +11,15 @@ initial code-agent desktop stage.
 ## Current State
 
 - Platform packages have been split into focused workspaces with boundary checks.
-- `agent-core` provides runtime, task, context, planner, loop, event, and
-  host-facing contracts.
+- `agent-core` provides Agent, Controller, Runner, Run, Action, Observation,
+  Context, Plan, event, task, and host-facing contracts.
 - Helarc is the main active product and has a working Electron desktop host.
 - Helarc supports workspace profiles, provider profiles, local credential storage,
   provider-backed runs, session history, run traces, permission-aware tools, and
   reviewable changes.
-- Helarc's agent behavior foundation includes prompt sections, an action contract,
-  a dynamic tool catalog, planner response recovery, protocol eval fixtures, and
-  renderer-safe trace projection.
+- Helarc's agent behavior foundation includes prompt sections, a Controller action
+  contract, a dynamic tool catalog, provider response recovery, protocol eval
+  fixtures, and renderer-safe trace projection.
 
 ## Products
 
@@ -39,13 +39,13 @@ Current Helarc capabilities include:
 - Workspace and task setup for local development work
 - Provider profile management for OpenAI-compatible APIs and Ollama
 - Local credential storage for provider API keys
-- Provider-backed agent loop execution
+- Provider-backed Controller and unified Runner execution
 - Read-only code tools for listing, reading, and searching workspace files
 - Permission-gated shell execution for enabled runs
 - Patch proposal, review, and application flow
 - Durable session history and run timeline data
-- Safe trace projection for renderer-visible planner behavior
-- Protocol fixtures for validating planner action behavior
+- Safe trace projection for renderer-visible Controller behavior
+- Protocol fixtures for validating Controller action behavior
 
 ## Tech Stack
 
@@ -71,7 +71,7 @@ agent-anything/
     storage/         Storage port contracts
     testing/         Test fakes and scenario support
     extensions/      MCP, plugins, remote tools, and extension points
-    agent-core/      Runtime, loop, planner, context, task, events, host contracts
+    agent-core/      Agent, Controller, Runner, Context, Plan, events, host contracts
     code-agent/      Code-oriented tools and workflows
   products/
     helarc/          Helarc product composition
@@ -87,8 +87,8 @@ Platform packages are designed to point inward:
 
 - Lower-level packages such as `shared`, `providers`, `tools`, `permission`,
   `governance`, `observability`, and `storage` define focused contracts.
-- `agent-core` composes runtime-facing concepts such as task execution, planning,
-  context, events, and host integration.
+- `agent-core` composes Agent, Controller, unified Runner, dynamic Plan, Context,
+  events, and host integration.
 - `extensions` contains optional integration surfaces such as MCP, plugins,
   remote tools, and enterprise storage.
 - Product packages compose platform contracts into product behavior.

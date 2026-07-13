@@ -1,4 +1,3 @@
-import type { Observation } from "../context/index.js";
 import type { AgentTask } from "../task/index.js";
 import { createAuditRecord, type AuditPort } from "@agent-anything/observability/audit";
 import type { Evidence, EvidenceBuilderPort } from "@agent-anything/evidence";
@@ -14,13 +13,14 @@ import {
   createPermissionRequest,
   createPermissionServiceFromMode,
   type PermissionDecision,
+  type PermissionMode,
   type PermissionService,
 } from "@agent-anything/permission";
 import { createTelemetryRecord, type TelemetryPort } from "@agent-anything/observability/telemetry";
 import type { ToolCall, ToolRegistry, ToolResult } from "@agent-anything/tools";
 import type { WorkspaceContext } from "@agent-anything/governance/workspace";
-import type { RuntimeError } from "./RuntimeError.js";
-import type { RuntimeOptions } from "./RuntimeOptions.js";
+import type { RunInfrastructureRequirement } from "../runner/RunConfig.js";
+import type { RuntimeError } from "../runner/RuntimeError.js";
 import { ToolExecutionContextError, type ToolExecutionContext, type ToolExecutionContextResolver } from "./ToolExecutionContextResolver.js";
 
 export interface ToolExecutionBoundaryDependencies {
@@ -36,10 +36,16 @@ export interface ToolExecutionBoundaryDependencies {
 export interface ExecuteToolInput {
   task: AgentTask;
   toolCall: ToolCall;
-  options: RuntimeOptions;
+  config: ToolExecutionConfig;
   workspace?: WorkspaceContext;
   identity?: IdentityRef;
   executionContext?: ToolExecutionContext;
+}
+
+export interface ToolExecutionConfig {
+  readonly permissionMode: PermissionMode;
+  readonly audit: RunInfrastructureRequirement;
+  readonly telemetry: RunInfrastructureRequirement;
 }
 
 export type ToolExecutionOutcome =
@@ -51,7 +57,6 @@ export interface ToolExecutionSucceeded {
   status: "succeeded";
   toolResult: ToolResult;
   evidence: Evidence[];
-  observation: Observation | null;
 }
 
 export interface ToolExecutionFailed {
@@ -102,7 +107,6 @@ export class ToolExecutionBoundary {
         status: "succeeded",
         toolResult,
         evidence: [],
-        observation: null,
       };
     }
 
@@ -117,6 +121,7 @@ export class ToolExecutionBoundary {
         toolResult,
         errors: [
           {
+            owner: "tool",
             code: "runtime_evidence_creation_failed",
             message: error instanceof Error
               ? error.message
@@ -125,6 +130,7 @@ export class ToolExecutionBoundary {
               toolCallId: toolResult.toolCallId,
               toolName: toolResult.toolName,
             },
+            retryable: false,
           },
         ],
       };
@@ -134,7 +140,6 @@ export class ToolExecutionBoundary {
       status: "succeeded",
       toolResult,
       evidence,
-      observation: createObservation(toolResult, evidence),
     };
   }
 
@@ -148,6 +153,7 @@ export class ToolExecutionBoundary {
         toolResult: null,
         errors: [
           {
+            owner: "tool",
             code: "tool_risk_mismatch",
             message: "Tool call cannot downgrade the registered tool risk.",
             metadata: {
@@ -156,6 +162,7 @@ export class ToolExecutionBoundary {
               callRisk: input.toolCall.risk,
               definitionRisk: definition.risk,
             },
+            retryable: false,
           },
         ],
       };
@@ -180,6 +187,7 @@ export class ToolExecutionBoundary {
           toolResult: null,
           errors: [
             {
+              owner: "tool",
               code: error instanceof ToolExecutionContextError
                 ? "tool_execution_context_invalid"
                 : "tool_execution_context_resolution_failed",
@@ -196,6 +204,7 @@ export class ToolExecutionBoundary {
                   ? error.metadata
                   : {}),
               },
+              retryable: false,
             },
           ],
         };
@@ -233,7 +242,6 @@ export class ToolExecutionBoundary {
         },
         metadata: {
           source: "tool-execution-boundary",
-          executionAccess: input.options.executionAccess ?? "restricted",
           taskKind: input.task.kind,
           ...input.executionContext?.metadata,
         },
@@ -252,6 +260,7 @@ export class ToolExecutionBoundary {
         toolResult: null,
         errors: [
           {
+            owner: "policy",
             code: decision.code ?? (decision.status === "requires_review"
               ? "policy_review_required"
               : "policy_denied"),
@@ -265,6 +274,7 @@ export class ToolExecutionBoundary {
               policyDecisionStatus: decision.status,
               ...decision.metadata,
             },
+            retryable: false,
           },
         ],
       };
@@ -274,6 +284,7 @@ export class ToolExecutionBoundary {
         toolResult: null,
         errors: [
           {
+            owner: "policy",
             code: "policy_check_failed",
             message: error instanceof Error
               ? error.message
@@ -283,6 +294,7 @@ export class ToolExecutionBoundary {
               toolCallId: input.toolCall.id,
               toolName: input.toolCall.toolName,
             },
+            retryable: false,
           },
         ],
       };
@@ -302,7 +314,6 @@ export class ToolExecutionBoundary {
         ?? `Tool ${input.toolCall.toolName} is marked as risky.`,
       metadata: {
         source: "tool-execution-boundary",
-        executionAccess: input.options.executionAccess ?? "restricted",
         workspaceId: input.workspace?.id ?? null,
         ...input.executionContext?.metadata,
       },
@@ -310,7 +321,7 @@ export class ToolExecutionBoundary {
     let decision;
     try {
       const permissionService = this.dependencies.permissionService
-        ?? createPermissionServiceFromMode(input.options.permissionMode);
+        ?? createPermissionServiceFromMode(input.config.permissionMode);
       decision = await permissionService.request(permissionRequest);
     } catch (error) {
       return {
@@ -318,6 +329,7 @@ export class ToolExecutionBoundary {
         toolResult: null,
         errors: [
           {
+            owner: "permission",
             code: "permission_check_failed",
             message: error instanceof Error
               ? error.message
@@ -327,6 +339,7 @@ export class ToolExecutionBoundary {
               toolCallId: input.toolCall.id,
               toolName: input.toolCall.toolName,
             },
+            retryable: false,
           },
         ],
       };
@@ -346,6 +359,7 @@ export class ToolExecutionBoundary {
       toolResult: null,
       errors: [
         {
+          owner: "permission",
           code: decision.code ?? "permission_denied",
           message: decision.reason,
           metadata: {
@@ -353,6 +367,7 @@ export class ToolExecutionBoundary {
             toolCallId: input.toolCall.id,
             toolName: input.toolCall.toolName,
           },
+          retryable: false,
         },
       ],
     };
@@ -406,7 +421,7 @@ export class ToolExecutionBoundary {
         requestId: decision.requestId,
         decisionStatus: decision.status,
         code: decision.code ?? null,
-        permissionMode: input.options.permissionMode,
+        permissionMode: input.config.permissionMode,
         toolCallId: input.toolCall.id,
         toolName: input.toolCall.toolName,
       },
@@ -421,7 +436,7 @@ export class ToolExecutionBoundary {
       dimensions: {
         decisionStatus: decision.status,
         code: decision.code ?? null,
-        permissionMode: input.options.permissionMode,
+        permissionMode: input.config.permissionMode,
         toolName: input.toolCall.toolName,
       },
       counters: {
@@ -473,7 +488,7 @@ export class ToolExecutionBoundary {
       }));
       return null;
     } catch (error) {
-      if ((input.options.auditMode ?? "optional") !== "required") {
+      if (input.config.audit !== "required") {
         return null;
       }
 
@@ -482,6 +497,7 @@ export class ToolExecutionBoundary {
         toolResult: null,
         errors: [
           {
+            owner: "audit",
             code: "audit_required_failed",
             message: error instanceof Error ? error.message : "Required audit recording failed.",
             metadata: {
@@ -489,6 +505,7 @@ export class ToolExecutionBoundary {
               toolCallId: input.toolCall.id,
               toolName: input.toolCall.toolName,
             },
+            retryable: false,
           },
         ],
       };
@@ -519,7 +536,7 @@ export class ToolExecutionBoundary {
       }));
       return null;
     } catch (error) {
-      if ((input.options.telemetryMode ?? "optional") !== "required") {
+      if (input.config.telemetry !== "required") {
         return null;
       }
 
@@ -528,6 +545,7 @@ export class ToolExecutionBoundary {
         toolResult: null,
         errors: [
           {
+            owner: "telemetry",
             code: "runtime_telemetry_required_failed",
             message: error instanceof Error ? error.message : "Required telemetry recording failed.",
             metadata: {
@@ -535,6 +553,7 @@ export class ToolExecutionBoundary {
               toolCallId: input.toolCall.id,
               toolName: input.toolCall.toolName,
             },
+            retryable: false,
           },
         ],
       };
@@ -627,8 +646,10 @@ function createToolStatusError(
   input: Pick<RuntimeError, "code" | "message">,
 ): RuntimeError {
   return {
+    owner: "tool",
     code: input.code,
     message: input.message,
+    retryable: false,
     metadata: {
       toolCallId: toolResult.toolCallId,
       toolName: toolResult.toolName,
@@ -647,32 +668,4 @@ function shouldCreateEvidence(toolResult: ToolResult): boolean {
       toolResult.status === "interrupted"
     )
   );
-}
-
-function createObservation(
-  toolResult: ToolResult,
-  evidence: Evidence[],
-): Observation | null {
-  if (evidence.length === 0) {
-    return null;
-  }
-
-  return {
-    id: `observation_${toolResult.toolCallId}`,
-    source: {
-      kind: "toolResult",
-      id: toolResult.toolCallId,
-      metadata: {
-        toolName: toolResult.toolName,
-        status: toolResult.status,
-      },
-    },
-    summary: evidence[0]?.summary ?? `Tool ${toolResult.toolName} produced evidence.`,
-    toolResultRef: toolResult.toolCallId,
-    evidenceRefs: evidence.map((item) => item.id),
-    metadata: {
-      toolName: toolResult.toolName,
-      toolResultStatus: toolResult.status,
-    },
-  };
 }

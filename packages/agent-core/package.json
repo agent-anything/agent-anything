@@ -30,10 +30,6 @@
       "types": "./src/runtime/index.ts",
       "import": "./dist/runtime/index.js"
     },
-    "./planner": {
-      "types": "./src/planner/index.ts",
-      "import": "./dist/planner/index.js"
-    },
     "./context": {
       "types": "./src/context/index.ts",
       "import": "./dist/context/index.js"

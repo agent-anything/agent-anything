@@ -1,4 +1,4 @@
-import type { RuntimeStatus } from "@agent-anything/agent-core";
+import type { RunResultStatus } from "@agent-anything/agent-core";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { HelarcProviderKind } from "../provider-profile/index.js";
 import type { HelarcRunPermissionPreset } from "../run/index.js";
@@ -123,7 +123,7 @@ export interface HelarcRunProviderContext {
 }
 
 export interface HelarcRunRuntimeSummary {
-  status: RuntimeStatus | null;
+  status: RunResultStatus | null;
   code: string | null;
   summary: string | null;
 }
@@ -756,7 +756,7 @@ function normalizeRuntime(
     return { ok: true, runtime: null };
   }
 
-  if (runtime.status !== null && !isRuntimeStatus(runtime.status)) {
+  if (runtime.status !== null && !isRunResultStatus(runtime.status)) {
     return reject("run_runtime_invalid", "Run runtime summary is invalid.");
   }
 
@@ -852,7 +852,7 @@ function isPermissionPreset(value: unknown): value is HelarcRunPermissionPreset 
   return value === "trusted" || value === "ask" || value === "deny";
 }
 
-function isRuntimeStatus(value: unknown): value is RuntimeStatus {
+function isRunResultStatus(value: unknown): value is RunResultStatus {
   return value === "succeeded" ||
     value === "failed" ||
     value === "blocked" ||

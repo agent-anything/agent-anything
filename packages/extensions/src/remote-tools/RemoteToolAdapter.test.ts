@@ -129,7 +129,7 @@ describe("RemoteToolAdapter", () => {
     const result = await boundary.execute({
       task: createTask(),
       toolCall: createToolCall(),
-      options: createOptions(),
+      config: createConfig(),
     });
 
     expect(result.status).toBe("succeeded");
@@ -159,7 +159,7 @@ describe("RemoteToolAdapter", () => {
     const result = await boundary.execute({
       task: createTask(),
       toolCall: createToolCall({ risk: "risky" }),
-      options: createOptions(),
+      config: createConfig(),
     });
 
     expect(result.status).toBe("blocked");
@@ -189,7 +189,7 @@ describe("RemoteToolAdapter", () => {
     const result = await boundary.execute({
       task: createTask(),
       toolCall: createToolCall({ risk: "risky" }),
-      options: createOptions(),
+      config: createConfig(),
     });
 
     expect(result.status).toBe("blocked");
@@ -267,15 +267,10 @@ function createTask() {
   };
 }
 
-function createOptions() {
+function createConfig() {
   return {
-    limits: {
-      maxToolCalls: 5,
-      maxDurationMs: 30000,
-      maxConsecutiveFailures: 1,
-      maxIterations: 5,
-    },
     permissionMode: "trusted" as const,
-    metadata: {},
+    audit: "optional" as const,
+    telemetry: "optional" as const,
   };
 }

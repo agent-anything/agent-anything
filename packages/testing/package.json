@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/testing",
   "version": "0.0.0",
-  "description": "Testing fakes, fixtures, and compatibility helpers for AgentAnything platform packages.",
+  "description": "Lower-level testing fakes and fixtures for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",

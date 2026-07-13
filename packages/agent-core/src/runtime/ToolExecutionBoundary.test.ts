@@ -13,11 +13,13 @@ import {
   type ToolResult,
 } from "@agent-anything/tools";
 import type { AgentTask } from "../task/index.js";
-import { ToolExecutionBoundary } from "./ToolExecutionBoundary.js";
-import type { RuntimeOptions } from "./RuntimeOptions.js";
+import {
+  ToolExecutionBoundary,
+  type ToolExecutionConfig,
+} from "./ToolExecutionBoundary.js";
 
 describe("ToolExecutionBoundary", () => {
-  it("executes a successful tool and creates evidence plus observation", async () => {
+  it("executes a successful tool and creates evidence", async () => {
     const boundary = createBoundary(createToolResult("succeeded"));
 
     const outcome = await boundary.execute(createExecuteInput());
@@ -29,10 +31,6 @@ describe("ToolExecutionBoundary", () => {
           id: "evidence_tool_call_001",
         },
       ],
-      observation: {
-        id: "observation_tool_call_001",
-        evidenceRefs: ["evidence_tool_call_001"],
-      },
     });
   });
 
@@ -48,15 +46,10 @@ describe("ToolExecutionBoundary", () => {
           summary: "Partial evidence from net.lookupDns.",
         },
       ],
-      observation: {
-        metadata: {
-          toolResultStatus: "partial",
-        },
-      },
     });
   });
 
-  it("does not create evidence or observation for skipped tools", async () => {
+  it("does not create evidence for skipped tools", async () => {
     const boundary = createBoundary({
       ...createToolResult("skipped"),
       output: null,
@@ -67,7 +60,6 @@ describe("ToolExecutionBoundary", () => {
     expect(outcome).toMatchObject({
       status: "succeeded",
       evidence: [],
-      observation: null,
     });
   });
 
@@ -152,11 +144,6 @@ describe("ToolExecutionBoundary", () => {
           },
         },
       ],
-      observation: {
-        metadata: {
-          toolResultStatus: "interrupted",
-        },
-      },
     });
   });
 
@@ -173,8 +160,8 @@ describe("ToolExecutionBoundary", () => {
         toolCall: createToolCall({
           risk: "risky",
         }),
-        options: {
-          ...createOptions(),
+        config: {
+          ...createConfig(),
           permissionMode: "deny",
         },
       }),
@@ -346,8 +333,8 @@ describe("ToolExecutionBoundary", () => {
         toolCall: createToolCall({
           risk: "risky",
         }),
-        options: {
-          ...createOptions(),
+        config: {
+          ...createConfig(),
           permissionMode: "deny",
         },
       }),
@@ -405,8 +392,8 @@ describe("ToolExecutionBoundary", () => {
         toolCall: createToolCall({
           risk: "risky",
         }),
-        options: {
-          ...createOptions(),
+        config: {
+          ...createConfig(),
           permissionMode: "ask",
         },
       }),
@@ -489,13 +476,13 @@ function createExecuteInput(
   overrides: Partial<{
     task: AgentTask;
     toolCall: ToolCall;
-    options: RuntimeOptions;
+    config: ToolExecutionConfig;
   }> = {},
 ) {
   return {
     task: createTask(),
     toolCall: createToolCall(),
-    options: createOptions(),
+    config: createConfig(),
     ...overrides,
   };
 }
@@ -521,16 +508,11 @@ function createToolCall(overrides: Partial<ToolCall> = {}): ToolCall {
   };
 }
 
-function createOptions(): RuntimeOptions {
+function createConfig(): ToolExecutionConfig {
   return {
-    limits: {
-      maxToolCalls: 5,
-      maxDurationMs: 30000,
-      maxConsecutiveFailures: 1,
-      maxIterations: 5,
-    },
     permissionMode: "trusted",
-    metadata: {},
+    audit: "optional",
+    telemetry: "optional",
   };
 }
 

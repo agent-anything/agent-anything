@@ -22,18 +22,13 @@ export {
 export type {
   Context,
   ContextProjection,
-  ContextManager,
   ContextMessage,
   ContextMessageRole,
-  ContextSnapshot,
   ContextUpdate,
-  Observation,
-  ObservationSource,
 } from "./context/index.js";
 export {
   applyContextUpdate,
   createInitialContext,
-  InMemoryContextManager,
   projectContext,
 } from "./context/index.js";
 export type {
@@ -59,8 +54,13 @@ export {
 export type {
   Action,
   ActionCandidate,
+  ActionDeniedObservation,
+  ActionDeniedOwner,
+  ActionFailureObservation,
   ActionKind,
   ActionProvenance,
+  ActionRejectedCode,
+  ActionRejectedObservation,
   BlockedRunResult,
   CancellationContext,
   CancelledRunResult,
@@ -69,6 +69,9 @@ export type {
   CreateRunCancellationControllerInput,
   CreateRunResultBaseInput,
   FailedRunResult,
+  Observation,
+  ObservationBase,
+  PlanUpdateResultObservation,
   RunBlockedCode,
   RunCancellationController,
   RunCancellationOrigin,
@@ -98,6 +101,7 @@ export type {
   RunResultStatus,
   RunState,
   SucceededRunResult,
+  ToolResultObservation,
   ToolActionBridge,
   ToolActionBridgeInput,
   ToolActionBridgeResult,
@@ -115,19 +119,6 @@ export {
   toRunCancellationSummary,
 } from "./runner/index.js";
 export type {
-  BuildProviderRequest,
-  CallToolPlanStep,
-  FinalPlanStep,
-  ParseProviderResponse,
-  Planner,
-  PlannerInput,
-  PlanStep,
-  PlanStepKind,
-  ProviderBackedPlannerInput,
-  StopPlanStep,
-} from "./planner/index.js";
-export { ProviderBackedPlanner } from "./planner/index.js";
-export type {
   EmitRuntimeEventInput,
   RuntimeEvent,
   RuntimeEventName,
@@ -138,23 +129,9 @@ export {
   RuntimeEventRecorder,
 } from "./events/index.js";
 export type {
-  AgentLoopDependencies,
-  AgentLoopResult,
-  AgentLoopStatus,
-  AgentRuntimeDependencies,
-  CreateDefaultRuntimeInput,
   ExecuteToolInput,
-  ExecutionAccess,
-  PlanToolCalls,
-  RunAgentLoopInput,
-  RuntimeAccessProfile,
-  RuntimeErrorCode,
-  RuntimeLimits,
-  RuntimeOptions,
-  RuntimeOutputSpec,
-  RuntimeResult,
-  RuntimeStatus,
   ResolveToolExecutionContextInput,
+  ToolExecutionConfig,
   ToolExecutionBoundaryDependencies,
   ToolExecutionContext,
   ToolExecutionContextResolver,
@@ -164,10 +141,6 @@ export type {
   ToolExecutionSucceeded,
 } from "./runtime/index.js";
 export {
-  AgentLoop,
-  AgentRuntime,
-  createDefaultRuntime,
-  defaultRuntimeLimits,
   ToolExecutionBoundary,
   ToolExecutionContextError,
 } from "./runtime/index.js";
