@@ -232,6 +232,32 @@ describe("mapRuntimeEventToHelarcRunEvent", () => {
     });
     expect(event.metadata).not.toHaveProperty("observation");
   });
+
+  it("maps committed Runner item notifications without exposing item content", () => {
+    const event = mapRuntimeEventToHelarcRunEvent(runtimeEvent({
+      name: "run.item.appended",
+      payload: {
+        runId: "run-1",
+        itemId: "item-2",
+        itemKind: "observation",
+        itemSequence: 2,
+        observation: { raw: "private model-visible content" },
+      },
+    }));
+
+    expect(event).toMatchObject({
+      kind: "runtime.output",
+      title: "Run item appended: observation",
+      severity: "info",
+      metadata: {
+        runId: "run-1",
+        itemId: "item-2",
+        itemKind: "observation",
+        itemSequence: 2,
+      },
+    });
+    expect(event.metadata).not.toHaveProperty("observation");
+  });
 });
 
 function runtimeEvent(input: {

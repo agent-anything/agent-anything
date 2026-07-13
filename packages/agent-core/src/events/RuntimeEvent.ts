@@ -1,6 +1,14 @@
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 
 export type RuntimeEventName =
+  | "run.started"
+  | "run.item.appended"
+  | "run.completed"
+  | "run.blocked"
+  | "run.failed"
+  | "run.cancelled"
+  | "controller.started"
+  | "controller.finished"
   | "task.started"
   | "task.completed"
   | "task.failed"

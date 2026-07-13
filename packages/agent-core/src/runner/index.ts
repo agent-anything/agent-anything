@@ -81,5 +81,11 @@ export type {
   RunLifecycleStatus,
   RunState,
 } from "./RunState.js";
-export type { Runner } from "./Runner.js";
+export type {
+  CreateRunnerIdentity,
+  CreateRunnerIdentityInput,
+  RunnerDependencies,
+  RunnerIdentityKind,
+} from "./Runner.js";
+export { Runner } from "./Runner.js";
 export type { RuntimeError, RuntimeErrorOwner } from "./RuntimeError.js";

@@ -28,6 +28,21 @@ function kindForEvent(
   payload: Metadata,
 ): HelarcRunEventKind {
   switch (name) {
+    case "run.started":
+      return "run.started";
+    case "run.completed":
+      return "run.completed";
+    case "run.blocked":
+    case "run.failed":
+      return "run.failed";
+    case "run.cancelled":
+      return "run.cancelled";
+    case "controller.started":
+      return "planning.started";
+    case "controller.finished":
+      return "provider.output";
+    case "run.item.appended":
+      return "runtime.output";
     case "task.started":
       return "run.started";
     case "task.completed":
@@ -59,6 +74,22 @@ function kindForEvent(
 
 function titleForEvent(name: RuntimeEventName, payload: Metadata): string {
   switch (name) {
+    case "run.started":
+      return "Run started";
+    case "run.completed":
+      return "Run completed";
+    case "run.blocked":
+      return "Run blocked";
+    case "run.failed":
+      return "Run failed";
+    case "run.cancelled":
+      return "Run cancelled";
+    case "controller.started":
+      return `Controller iteration ${readNumber(payload, "iteration") ?? ""} started`.trim();
+    case "controller.finished":
+      return `Controller ${readString(payload, "status") ?? "finished"}`;
+    case "run.item.appended":
+      return `Run item appended: ${readString(payload, "itemKind") ?? "unknown"}`;
     case "task.started":
       return "Run started";
     case "task.completed":
@@ -162,6 +193,8 @@ function severityForEvent(
   const decision = readString(payload, "decision");
 
   if (
+    name === "run.failed" ||
+    name === "run.blocked" ||
     name === "task.failed" ||
     status === "failed" ||
     status === "blocked" ||
@@ -170,7 +203,7 @@ function severityForEvent(
     return "error";
   }
 
-  if (status === "stopped" || decision === "review") {
+  if (name === "run.cancelled" || status === "stopped" || decision === "review") {
     return "warning";
   }
 
@@ -184,7 +217,13 @@ function metadataForEvent(event: RuntimeEvent, payload: Metadata): Metadata {
   };
 
   copyNumber(metadata, payload, "iteration");
+  copyString(metadata, payload, "runId");
   copyString(metadata, payload, "status");
+  copyString(metadata, payload, "code");
+  copyString(metadata, payload, "decisionKind");
+  copyString(metadata, payload, "itemId");
+  copyString(metadata, payload, "itemKind");
+  copyNumber(metadata, payload, "itemSequence");
   copyString(metadata, payload, "errorCode");
   copyString(metadata, payload, "planStepId");
   copyString(metadata, payload, "planStepKind");
