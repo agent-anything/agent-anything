@@ -9,8 +9,15 @@ export type {
   Controller,
   ControllerCallContext,
   ControllerDecision,
+  ControllerFailure,
+  ControllerFailureCode,
   ControllerInput,
   ControllerModelItem,
+  ProviderBackedControllerInput,
+} from "./controller/index.js";
+export {
+  ControllerError,
+  ProviderBackedController,
 } from "./controller/index.js";
 export type {
   Context,
