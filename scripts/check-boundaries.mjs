@@ -17,10 +17,7 @@ const packageRoots = [
   "packages/extensions",
   "packages/code-agent",
   "packages/testing",
-  "products/net-doctor",
   "products/helarc",
-  "apps/net-doctor-cli",
-  "apps/net-doctor-desktop",
   "apps/helarc-desktop",
 ].map((item) => resolve(repoRoot, item));
 

@@ -745,7 +745,7 @@ function createFinalPlanStep(finalOutput: unknown): PlanStep {
 function createTask(input: unknown = {}): AgentTask {
   return {
     id: "task_001",
-    kind: "net-doctor.diagnose",
+    kind: "test.agent.run",
     input,
     createdAt: "2026-06-04T00:00:00.000Z",
     metadata: {

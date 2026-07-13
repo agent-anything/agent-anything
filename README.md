@@ -6,8 +6,7 @@ The project is organized around a reusable platform foundation, product-level ag
 composition, and host applications. Helarc is the primary product direction: an
 agent workbench that starts with workspace-aware developer tasks, tool orchestration,
 permission flows, change review, and durable run history, then grows beyond the
-initial code-agent desktop stage. NetDoctor remains in the repository as the first
-vertical product built on the platform.
+initial code-agent desktop stage.
 
 ## Current State
 
@@ -21,8 +20,6 @@ vertical product built on the platform.
 - Helarc's agent behavior foundation includes prompt sections, an action contract,
   a dynamic tool catalog, planner response recovery, protocol eval fixtures, and
   renderer-safe trace projection.
-- NetDoctor remains as the first vertical product and a useful regression surface
-  for platform contracts.
 
 ## Products
 
@@ -49,13 +46,6 @@ Current Helarc capabilities include:
 - Durable session history and run timeline data
 - Safe trace projection for renderer-visible planner behavior
 - Protocol fixtures for validating planner action behavior
-
-### NetDoctor
-
-NetDoctor is the first product built on AgentAnything.
-
-It is a network diagnostic agent that inspects DNS, TCP, HTTP, proxy, and related
-network issues through structured tools and product-specific reports.
 
 ## Tech Stack
 
@@ -85,11 +75,8 @@ agent-anything/
     code-agent/      Code-oriented tools and workflows
   products/
     helarc/          Helarc product composition
-    net-doctor/      NetDoctor product composition
   apps/
     helarc-desktop/      Electron desktop app for Helarc
-    net-doctor-cli/      CLI host for NetDoctor
-    net-doctor-desktop/  Legacy Electron host for NetDoctor
   scripts/
     check-boundaries.mjs
 ```

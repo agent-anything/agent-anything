@@ -79,7 +79,7 @@ describe("ProviderBackedPlanner", () => {
         ],
         capability: "tool-planning",
         metadata: {
-          taskKind: "net-doctor.diagnose",
+          taskKind: "test.agent.run",
         },
       },
     ]);
@@ -140,7 +140,7 @@ function createPlannerInput(): PlannerInput {
 function createTask(): AgentTask {
   return {
     id: "task_001",
-    kind: "net-doctor.diagnose",
+    kind: "test.agent.run",
     input: {},
     createdAt: "2026-06-07T00:00:00.000Z",
     metadata: {},
