@@ -1,5 +1,20 @@
 export type { AgentTask, TaskWorkspaceScope } from "./task/index.js";
 export type {
+  Agent,
+  AgentInstructions,
+  AgentOutputContract,
+  AgentOutputValidation,
+} from "./agent/index.js";
+export type {
+  Controller,
+  ControllerCallContext,
+  ControllerDecision,
+  ControllerInput,
+  ControllerModelItem,
+} from "./controller/index.js";
+export type {
+  Context,
+  ContextProjection,
   ContextManager,
   ContextMessage,
   ContextMessageRole,
@@ -8,7 +23,78 @@ export type {
   Observation,
   ObservationSource,
 } from "./context/index.js";
-export { InMemoryContextManager } from "./context/index.js";
+export {
+  applyContextUpdate,
+  createInitialContext,
+  InMemoryContextManager,
+  projectContext,
+} from "./context/index.js";
+export type {
+  AbandonPlanInput,
+  AbandonPlanResult,
+  ApplyPlanUpdateInput,
+  ApplyPlanUpdateResult,
+  Plan,
+  PlanLifecycleChange,
+  PlanLimits,
+  PlanProjection,
+  PlanStatus,
+  PlanStepStatus,
+  PlanUpdateObservation,
+  UpdatePlanInput,
+} from "./plan/index.js";
+export {
+  abandonPlan,
+  applyPlanUpdate,
+  assertValidPlanLimits,
+  projectPlan,
+} from "./plan/index.js";
+export type {
+  Action,
+  ActionCandidate,
+  ActionKind,
+  ActionProvenance,
+  BlockedRunResult,
+  CancellationContext,
+  CancelledRunResult,
+  CreateRunCancellationControllerInput,
+  CreateRunResultBaseInput,
+  FailedRunResult,
+  RunBlockedCode,
+  RunCancellationController,
+  RunCancellationOrigin,
+  RunCancellationReasonCode,
+  RunCancellationReceipt,
+  RunCancellationRequest,
+  RunCancellationRequestInput,
+  RunCancellationSummary,
+  RunCancelledCode,
+  RunConfig,
+  RunCounters,
+  RunFailureCode,
+  RunInfrastructureRequirement,
+  RunInput,
+  RunInputItem,
+  RunInputMessageRole,
+  RunItem,
+  RunItemBase,
+  RunLifecycleStatus,
+  RunLimits,
+  Runner,
+  RunResult,
+  RunResultCode,
+  RunResultStatus,
+  RunState,
+  SucceededRunResult,
+} from "./runner/index.js";
+export {
+  createBlockedRunResult,
+  createCancelledRunResult,
+  createFailedRunResult,
+  createRunCancellationController,
+  createSucceededRunResult,
+  toRunCancellationSummary,
+} from "./runner/index.js";
 export type {
   BuildProviderRequest,
   CallToolPlanStep,

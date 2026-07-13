@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/agent-core",
   "version": "0.0.0",
-  "description": "Agent runtime, loop, planner, context, events, and task contracts for AgentAnything platform packages.",
+  "description": "Agent, controller, runner, context, plan, event, host, and task contracts for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -9,6 +9,22 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"
+    },
+    "./agent": {
+      "types": "./src/agent/index.ts",
+      "import": "./dist/agent/index.js"
+    },
+    "./controller": {
+      "types": "./src/controller/index.ts",
+      "import": "./dist/controller/index.js"
+    },
+    "./runner": {
+      "types": "./src/runner/index.ts",
+      "import": "./dist/runner/index.js"
+    },
+    "./plan": {
+      "types": "./src/plan/index.ts",
+      "import": "./dist/plan/index.js"
     },
     "./runtime": {
       "types": "./src/runtime/index.ts",

@@ -1,7 +1,7 @@
 import type { AgentTask } from "../task/index.js";
 import type { ContextManager } from "./ContextManager.js";
 import type { ContextSnapshot } from "./ContextSnapshot.js";
-import type { ContextUpdate } from "./ContextUpdate.js";
+import type { LegacyContextUpdate } from "./ContextUpdate.js";
 
 export class InMemoryContextManager implements ContextManager {
   private readonly snapshots = new Map<string, ContextSnapshot>();
@@ -34,7 +34,7 @@ export class InMemoryContextManager implements ContextManager {
     return cloneSnapshot(snapshot);
   }
 
-  async applyUpdate(update: ContextUpdate): Promise<ContextSnapshot> {
+  async applyUpdate(update: LegacyContextUpdate): Promise<ContextSnapshot> {
     const snapshot = this.snapshots.get(update.taskId);
 
     if (!snapshot) {
