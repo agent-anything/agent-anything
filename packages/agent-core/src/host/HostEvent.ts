@@ -1,12 +1,13 @@
-import type { RuntimeEvent } from "../events/index.js";
-import type { RuntimeResult } from "../runtime/index.js";
-import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { PermissionDecision, PermissionRequest } from "@agent-anything/permission";
+import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
+import type { RuntimeEvent } from "../events/index.js";
 import type {
-  HostCancellation,
-  HostSessionId,
-  HostSessionState,
-} from "./HostSession.js";
+  BlockedRunResult,
+  CancelledRunResult,
+  FailedRunResult,
+  SucceededRunResult,
+} from "../runner/index.js";
+import type { HostSessionId, HostSessionState } from "./HostSession.js";
 
 export type HostEventName =
   | "host.session.created"
@@ -22,101 +23,100 @@ export type HostEventName =
   | "host.session.cancelled";
 
 export interface HostEventBase<TName extends HostEventName, TPayload = Metadata> {
-  id: string;
-  name: TName;
-  sessionId: HostSessionId;
-  taskId?: string;
-  sequence: number;
-  timestamp: ISODateTimeString;
-  payload: TPayload;
-  metadata: Metadata;
+  readonly id: string;
+  readonly name: TName;
+  readonly sessionId: HostSessionId;
+  readonly taskId?: string;
+  readonly sequence: number;
+  readonly timestamp: ISODateTimeString;
+  readonly payload: TPayload;
+  readonly metadata: Metadata;
 }
 
 export type HostSessionCreatedEvent = HostEventBase<
   "host.session.created",
-  { state: HostSessionState }
+  { readonly state: HostSessionState }
 >;
 
 export type HostSessionStartedEvent = HostEventBase<
   "host.session.started",
-  { state: HostSessionState }
+  { readonly state: HostSessionState }
 >;
 
-export type HostSessionStateChangedEvent = HostEventBase<
+export type HostSessionStateChangedEvent<TOutput = unknown> = HostEventBase<
   "host.session.state_changed",
-  { state: HostSessionState }
+  { readonly state: HostSessionState<TOutput> }
 >;
 
 export type HostRuntimeEvent = HostEventBase<
   "host.runtime.event",
-  { runtimeEvent: RuntimeEvent }
+  { readonly runtimeEvent: RuntimeEvent }
 >;
 
 export type HostPermissionRequestedEvent = HostEventBase<
   "host.permission.requested",
-  { permissionRequest: PermissionRequest }
+  { readonly permissionRequest: PermissionRequest }
 >;
 
 export type HostPermissionResolvedEvent = HostEventBase<
   "host.permission.resolved",
   {
-    permissionRequest: PermissionRequest;
-    permissionDecision: PermissionDecision;
+    readonly permissionRequest: PermissionRequest;
+    readonly permissionDecision: PermissionDecision;
   }
 >;
 
 export type HostOutputProducedEvent<TOutput = unknown> = HostEventBase<
   "host.output.produced",
-  { runtimeResult: RuntimeResult<TOutput> }
+  { readonly runResult: SucceededRunResult<TOutput> }
 >;
 
 export type HostSessionCompletedEvent<TOutput = unknown> = HostEventBase<
   "host.session.completed",
-  { runtimeResult: RuntimeResult<TOutput> }
+  { readonly runResult: SucceededRunResult<TOutput> }
 >;
 
 export type HostSessionBlockedEvent<TOutput = unknown> = HostEventBase<
   "host.session.blocked",
-  { runtimeResult: RuntimeResult<TOutput> }
+  { readonly runResult: BlockedRunResult<TOutput> }
 >;
 
-export type HostSessionFailedEvent = HostEventBase<
+export type HostSessionFailedEvent<TOutput = unknown> = HostEventBase<
   "host.session.failed",
-  { errors: RuntimeResult["errors"] }
+  { readonly runResult: FailedRunResult<TOutput> }
 >;
 
-export type HostSessionCancelledEvent = HostEventBase<
+export type HostSessionCancelledEvent<TOutput = unknown> = HostEventBase<
   "host.session.cancelled",
-  {
-    cancellation: HostCancellation;
-    runtimeResult?: RuntimeResult;
-  }
+  { readonly runResult: CancelledRunResult<TOutput> }
 >;
 
 export type HostEvent<TOutput = unknown> =
   | HostSessionCreatedEvent
   | HostSessionStartedEvent
-  | HostSessionStateChangedEvent
+  | HostSessionStateChangedEvent<TOutput>
   | HostRuntimeEvent
   | HostPermissionRequestedEvent
   | HostPermissionResolvedEvent
   | HostOutputProducedEvent<TOutput>
   | HostSessionCompletedEvent<TOutput>
   | HostSessionBlockedEvent<TOutput>
-  | HostSessionFailedEvent
-  | HostSessionCancelledEvent;
+  | HostSessionFailedEvent<TOutput>
+  | HostSessionCancelledEvent<TOutput>;
 
-export type HostEventSink<TOutput = unknown> = (event: HostEvent<TOutput>) => void | Promise<void>;
+export type HostEventSink<TOutput = unknown> = (
+  event: HostEvent<TOutput>,
+) => void | Promise<void>;
 
 export interface CreateHostEventInput<TName extends HostEventName, TPayload = Metadata> {
-  name: TName;
-  sessionId: HostSessionId;
-  payload: TPayload;
-  taskId?: string;
-  sequence?: number;
-  timestamp?: ISODateTimeString;
-  id?: string;
-  metadata?: Metadata;
+  readonly name: TName;
+  readonly sessionId: HostSessionId;
+  readonly payload: TPayload;
+  readonly taskId?: string;
+  readonly sequence?: number;
+  readonly timestamp?: ISODateTimeString;
+  readonly id?: string;
+  readonly metadata?: Metadata;
 }
 
 export function createHostEvent<TName extends HostEventName, TPayload = Metadata>(
@@ -124,23 +124,23 @@ export function createHostEvent<TName extends HostEventName, TPayload = Metadata
 ): HostEventBase<TName, TPayload> {
   const sequence = input.sequence ?? 0;
 
-  return {
+  return Object.freeze({
     id: input.id ?? `host_event_${sequence}`,
     name: input.name,
     sessionId: input.sessionId,
-    taskId: input.taskId,
+    ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
     sequence,
     timestamp: input.timestamp ?? new Date().toISOString(),
     payload: input.payload,
-    metadata: input.metadata ?? {},
-  };
+    metadata: Object.freeze({ ...(input.metadata ?? {}) }),
+  });
 }
 
 export interface MapRuntimeEventToHostEventInput {
-  sessionId: HostSessionId;
-  runtimeEvent: RuntimeEvent;
-  sequence?: number;
-  metadata?: Metadata;
+  readonly sessionId: HostSessionId;
+  readonly runtimeEvent: RuntimeEvent;
+  readonly sequence?: number;
+  readonly metadata?: Metadata;
 }
 
 export function mapRuntimeEventToHostEvent(
@@ -153,9 +153,9 @@ export function mapRuntimeEventToHostEvent(
     taskId: input.runtimeEvent.taskId,
     sequence: input.sequence ?? input.runtimeEvent.sequence,
     timestamp: input.runtimeEvent.timestamp,
-    payload: {
+    payload: Object.freeze({
       runtimeEvent: input.runtimeEvent,
-    },
+    }),
     metadata: input.metadata ?? {},
   });
 }

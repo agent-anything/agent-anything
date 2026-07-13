@@ -1,80 +1,164 @@
 import { describe, expect, it } from "vitest";
-import type { RuntimeResult, RuntimeStatus } from "../runtime/index.js";
-import { createHostRunResult } from "./HostRuntimeAdapter.js";
+import {
+  Runner,
+  createBlockedRunResult,
+  createCancelledRunResult,
+  createFailedRunResult,
+  createRunCancellationController,
+  createSucceededRunResult,
+} from "../runner/index.js";
+import type { Controller, ControllerDecision } from "../controller/index.js";
+import {
+  createHostRunResult,
+  createHostRuntimeAdapter,
+} from "./HostRuntimeAdapter.js";
 
-describe("createHostRunResult", () => {
-  it("maps succeeded runtime results to completed host state", () => {
+describe("HostRuntimeAdapter", () => {
+  it.each([
+    ["succeeded", "completed"],
+    ["blocked", "blocked"],
+    ["failed", "failed"],
+    ["cancelled", "cancelled"],
+  ] as const)("projects %s RunResult to %s without replacing it", (status, hostStatus) => {
+    const runResult = createRunResult(status);
     const result = createHostRunResult({
       sessionId: "session-1",
-      runtimeResult: createRuntimeResult("succeeded"),
+      runResult,
       timestamp: "2026-06-15T00:00:00.000Z",
     });
 
-    expect(result.state.status).toBe("completed");
-    expect(result.runtimeResult?.status).toBe("succeeded");
+    expect(result.state.status).toBe(hostStatus);
+    expect(result.runResult).toBe(runResult);
+    expect(result.state.runResult).toBe(runResult);
+    expect(result.runId).toBe("run-1");
   });
 
-  it("maps failed runtime results to failed host state", () => {
-    const result = createHostRunResult({
-      sessionId: "session-1",
-      runtimeResult: createRuntimeResult("failed"),
-      timestamp: "2026-06-15T00:00:00.000Z",
+  it("invokes Runner once and preserves its succeeded RunResult", async () => {
+    const controller = new CountingController();
+    const adapter = createHostRuntimeAdapter({
+      runner: new Runner({ controller }),
+      now: () => "2026-06-15T00:00:00.000Z",
     });
+    const cancellation = createRunCancellationController({ runId: "run-1" });
 
-    expect(result.state.status).toBe("failed");
-    expect(result.runtimeResult?.status).toBe("failed");
-  });
-
-  it("maps blocked runtime results to blocked host state", () => {
-    const result = createHostRunResult({
+    const result = await adapter.run({
       sessionId: "session-1",
-      runtimeResult: createRuntimeResult("blocked"),
-      timestamp: "2026-06-15T00:00:00.000Z",
-    });
-
-    expect(result.state.status).toBe("blocked");
-    expect(result.runtimeResult?.status).toBe("blocked");
-  });
-
-  it("maps cancelled runtime results to cancelled host state", () => {
-    const result = createHostRunResult({
-      sessionId: "session-1",
-      runtimeResult: createRuntimeResult("cancelled"),
-      cancellation: {
-        requested: true,
-        reason: "user cancelled",
-        requestedAt: "2026-06-15T00:00:00.000Z",
+      agent: {
+        id: "agent-1",
+        name: "Test Agent",
+        instructions: "Complete the task.",
+        tools: [],
+        output: {
+          validate(candidate) {
+            return candidate !== null && typeof candidate === "object"
+              ? { valid: true, output: candidate as { ok: true } }
+              : { valid: false, message: "Output must be an object." };
+          },
+        },
         metadata: {},
       },
-      timestamp: "2026-06-15T00:00:00.000Z",
+      runInput: {
+        runId: "run-1",
+        task: {
+          id: "task-1",
+          kind: "test.task",
+          input: {},
+          createdAt: "2026-06-15T00:00:00.000Z",
+          metadata: {},
+        },
+        conversationItems: [],
+        metadata: {},
+      },
+      runConfig: {
+        workspace: {
+          id: "workspace-1",
+          name: "Workspace",
+          rootRef: "workspace://test",
+          trustState: "trusted",
+          source: "test",
+          policyRefs: [],
+          metadata: {},
+        },
+        identity: {
+          id: "identity-1",
+          kind: "anonymous",
+          displayName: "Test identity",
+          metadata: {},
+        },
+        limits: {
+          maxIterations: 1,
+          maxActions: 0,
+          maxConsecutiveActionFailures: 0,
+          maxDurationMs: 1_000,
+          plan: {
+            maxSteps: 4,
+            maxStepLength: 100,
+            maxExplanationLength: 200,
+          },
+        },
+        audit: "optional",
+        telemetry: "optional",
+        cancellation,
+        metadata: {},
+      },
+      metadata: { surface: "test-host" },
     });
 
-    expect(result.state.status).toBe("cancelled");
-    expect(result.cancellation?.requested).toBe(true);
-    expect(result.runtimeResult?.status).toBe("cancelled");
+    expect(controller.calls).toBe(1);
+    expect(result).toMatchObject({
+      sessionId: "session-1",
+      runId: "run-1",
+      state: { status: "completed" },
+      runResult: {
+        status: "succeeded",
+        finalOutput: { ok: true },
+      },
+      metadata: { surface: "test-host" },
+    });
   });
 });
 
-function createRuntimeResult(status: RuntimeStatus): RuntimeResult<{ ok: boolean } | null> {
-  return {
-    taskId: "task-1",
-    status,
-    output: status === "succeeded" ? { ok: true } : null,
-    outputSpec: {
-      format: "json",
-      metadata: {},
-    },
-    evidenceRefs: [],
-    artifactRefs: [],
-    errors: status === "succeeded"
-      ? []
-      : [
-        {
-          code: status === "blocked" ? "permission_denied" : "runtime_invalid_options",
-          message: `${status} result`,
-          metadata: {},
-        },
-      ],
-    metadata: {},
-  };
+class CountingController implements Controller {
+  calls = 0;
+
+  async next(): Promise<ControllerDecision> {
+    this.calls += 1;
+    return {
+      kind: "final_output",
+      output: { ok: true },
+      modelItems: [{
+        id: "model-1",
+        kind: "assistant_output",
+        content: { ok: true },
+        metadata: {},
+      }],
+    };
+  }
+}
+
+function createRunResult(
+  status: "succeeded" | "blocked" | "failed" | "cancelled",
+) {
+  const base = { runId: "run-1", taskId: "task-1" };
+  switch (status) {
+    case "succeeded":
+      return createSucceededRunResult(base, { ok: true });
+    case "blocked":
+      return createBlockedRunResult(base, "runtime_no_safe_path");
+    case "failed":
+      return createFailedRunResult(base, "runtime_limit_exceeded", [{
+        owner: "runtime",
+        code: "runtime_limit_exceeded",
+        message: "Limit exceeded.",
+        retryable: false,
+        metadata: {},
+      }]);
+    case "cancelled":
+      return createCancelledRunResult(base, {
+        requestId: "run-1:cancellation",
+        origin: "host",
+        reasonCode: "host_requested",
+        requestedAt: "2026-06-15T00:00:00.000Z",
+      });
+  }
 }

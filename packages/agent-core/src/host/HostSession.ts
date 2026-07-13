@@ -1,8 +1,16 @@
-import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
 import type { PermissionRequest } from "@agent-anything/permission";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
-import type { AgentTask } from "../task/index.js";
-import type { RuntimeError, RuntimeOptions, RuntimeResult } from "../runtime/index.js";
+import type { Agent } from "../agent/index.js";
+import type {
+  BlockedRunResult,
+  CancelledRunResult,
+  FailedRunResult,
+  RunCancellationRequest,
+  RunConfig,
+  RunInput,
+  RunResult,
+  SucceededRunResult,
+} from "../runner/index.js";
 
 export type HostSessionId = string;
 
@@ -17,56 +25,63 @@ export type HostSessionStatus =
   | "cancelled";
 
 export interface HostSessionStateBase {
-  sessionId: HostSessionId;
-  status: HostSessionStatus;
-  timestamp: ISODateTimeString;
-  metadata: Metadata;
+  readonly sessionId: HostSessionId;
+  readonly status: HostSessionStatus;
+  readonly timestamp: ISODateTimeString;
+  readonly metadata: Metadata;
 }
 
 export interface HostSessionCreated extends HostSessionStateBase {
-  status: "created";
+  readonly status: "created";
 }
 
 export interface HostSessionRunning extends HostSessionStateBase {
-  status: "running";
-  taskId: string;
+  readonly status: "running";
+  readonly taskId: string;
+  readonly runId: string;
 }
 
 export interface HostSessionWaitingForPermission extends HostSessionStateBase {
-  status: "waiting_for_permission";
-  taskId: string;
-  permissionRequest: PermissionRequest;
+  readonly status: "waiting_for_permission";
+  readonly taskId: string;
+  readonly runId: string;
+  readonly permissionRequest: PermissionRequest;
 }
 
 export interface HostSessionCancelling extends HostSessionStateBase {
-  status: "cancelling";
-  taskId?: string;
-  cancellation: HostCancellation;
+  readonly status: "cancelling";
+  readonly taskId: string;
+  readonly runId: string;
+  readonly cancellationRequest: RunCancellationRequest;
 }
 
 export interface HostSessionCompleted<TOutput = unknown> extends HostSessionStateBase {
-  status: "completed";
-  taskId: string;
-  runtimeResult: RuntimeResult<TOutput>;
+  readonly status: "completed";
+  readonly taskId: string;
+  readonly runId: string;
+  readonly runResult: SucceededRunResult<TOutput>;
 }
 
 export interface HostSessionBlocked<TOutput = unknown> extends HostSessionStateBase {
-  status: "blocked";
-  taskId: string;
-  runtimeResult: RuntimeResult<TOutput>;
+  readonly status: "blocked";
+  readonly taskId: string;
+  readonly runId: string;
+  readonly runResult: BlockedRunResult<TOutput>;
 }
 
-export interface HostSessionFailed extends HostSessionStateBase {
-  status: "failed";
-  taskId?: string;
-  errors: RuntimeError[];
+export interface HostSessionFailed<TOutput = unknown> extends HostSessionStateBase {
+  readonly status: "failed";
+  readonly taskId: string;
+  readonly runId: string;
+  readonly runResult: FailedRunResult<TOutput>;
+  readonly errors: FailedRunResult<TOutput>["errors"];
 }
 
-export interface HostSessionCancelled extends HostSessionStateBase {
-  status: "cancelled";
-  taskId?: string;
-  cancellation: HostCancellation;
-  runtimeResult?: RuntimeResult<unknown>;
+export interface HostSessionCancelled<TOutput = unknown> extends HostSessionStateBase {
+  readonly status: "cancelled";
+  readonly taskId: string;
+  readonly runId: string;
+  readonly runResult: CancelledRunResult<TOutput>;
 }
 
 export type HostSessionState<TOutput = unknown> =
@@ -76,37 +91,34 @@ export type HostSessionState<TOutput = unknown> =
   | HostSessionCancelling
   | HostSessionCompleted<TOutput>
   | HostSessionBlocked<TOutput>
-  | HostSessionFailed
-  | HostSessionCancelled;
+  | HostSessionFailed<TOutput>
+  | HostSessionCancelled<TOutput>;
 
 export interface HostSession<TOutput = unknown> {
-  id: HostSessionId;
-  state: HostSessionState<TOutput>;
-  metadata: Metadata;
+  readonly id: HostSessionId;
+  readonly state: HostSessionState<TOutput>;
+  readonly metadata: Metadata;
 }
 
-export interface HostCancellation {
-  requested: boolean;
-  reason?: string;
-  requestedAt?: ISODateTimeString;
-  metadata: Metadata;
+export interface HostRunInput<TOutput = unknown> {
+  readonly sessionId: HostSessionId;
+  readonly agent: Agent<TOutput>;
+  readonly runInput: RunInput;
+  readonly runConfig: RunConfig;
+  readonly metadata: Metadata;
 }
 
-export interface HostRunInput<TTaskInput = unknown> {
-  sessionId: HostSessionId;
-  task: AgentTask<TTaskInput>;
-  runtimeOptions: RuntimeOptions;
-  workspace?: WorkspaceContext;
-  identity?: IdentityRef;
-  cancellation?: HostCancellation;
-  metadata: Metadata;
-}
+export type HostTerminalSessionState<TOutput = unknown> =
+  | HostSessionCompleted<TOutput>
+  | HostSessionBlocked<TOutput>
+  | HostSessionFailed<TOutput>
+  | HostSessionCancelled<TOutput>;
 
 export interface HostRunResult<TOutput = unknown> {
-  sessionId: HostSessionId;
-  taskId: string;
-  state: HostSessionCompleted<TOutput> | HostSessionBlocked<TOutput> | HostSessionFailed | HostSessionCancelled;
-  runtimeResult?: RuntimeResult<TOutput>;
-  cancellation?: HostCancellation;
-  metadata: Metadata;
+  readonly sessionId: HostSessionId;
+  readonly taskId: string;
+  readonly runId: string;
+  readonly state: HostTerminalSessionState<TOutput>;
+  readonly runResult: RunResult<TOutput>;
+  readonly metadata: Metadata;
 }

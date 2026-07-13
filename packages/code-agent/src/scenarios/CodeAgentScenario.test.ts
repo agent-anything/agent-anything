@@ -3,9 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
   AgentTask,
-  RuntimeError,
-  RuntimeResult,
+  RunResult,
   TaskWorkspaceScope,
+} from "@agent-anything/agent-core";
+import {
+  createFailedRunResult,
+  createSucceededRunResult,
 } from "@agent-anything/agent-core";
 import {
   createHostRunResult,
@@ -115,9 +118,9 @@ describe("Code-Agent scenario", () => {
       taskId: "task-code-edit",
       state: {
         status: "completed",
-        runtimeResult: {
+        runResult: {
           status: "succeeded",
-          output: {
+          finalOutput: {
             inspection: {
               rootName: "code",
               workspaceId: "workspace-code",
@@ -231,7 +234,8 @@ async function runCodeEditScenario(
     patch = decision;
   }
 
-  const runtimeResult = createScenarioRuntimeResult(
+  const runResult = createScenarioRunResult(
+    "run-code-edit",
     input.task.id,
     inspection,
     patch,
@@ -240,42 +244,38 @@ async function runCodeEditScenario(
 
   return createHostRunResult({
     sessionId: input.sessionId,
-    runtimeResult,
+    runResult,
     timestamp,
     metadata: { scenario: "phase6-code-edit" },
   });
 }
 
-function createScenarioRuntimeResult(
+function createScenarioRunResult(
+  runId: string,
   taskId: string,
   inspection: ReadFileOutput,
   patch: PatchStatus,
-): RuntimeResult<CodeEditScenarioOutput> {
+): RunResult<CodeEditScenarioOutput> {
   const failedPatch = patch.status === "failed" ? patch : null;
-  const errors: RuntimeError[] = failedPatch === null
-    ? []
-    : [{
-        code: "runtime_patch_failed",
-        message: failedPatch.result.message,
-        metadata: {
-          patchId: failedPatch.proposal.id,
-          patchCode: failedPatch.result.code,
-        },
-      }];
-
-  return {
+  const base = {
+    runId,
     taskId,
-    status: failedPatch === null ? "succeeded" : "failed",
-    output: { inspection, patch },
-    outputSpec: {
-      format: "json",
-      metadata: { capability: "code-agent", scenario: "patch" },
-    },
-    evidenceRefs: [],
-    artifactRefs: [],
-    errors,
     metadata: { terminalPatchStatus: patch.status },
   };
+  if (failedPatch === null) {
+    return createSucceededRunResult(base, { inspection, patch });
+  }
+
+  return createFailedRunResult(base, "tool_execution_failed", [{
+    owner: "tool",
+    code: failedPatch.result.code,
+    message: failedPatch.result.message,
+    retryable: false,
+    metadata: {
+      patchId: failedPatch.proposal.id,
+      patchCode: failedPatch.result.code,
+    },
+  }]);
 }
 
 function createWorkspace(id: string, rootRef: string): WorkspaceContext {

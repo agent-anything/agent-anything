@@ -1,5 +1,4 @@
 export type {
-  HostCancellation,
   HostRunInput,
   HostRunResult,
   HostSession,
@@ -15,12 +14,14 @@ export type {
   HostSessionStateBase,
   HostSessionStatus,
   HostSessionWaitingForPermission,
+  HostTerminalSessionState,
 } from "./HostSession.js";
 export {
+  createHostRuntimeAdapter,
   createHostRunResult,
+  type CreateHostRuntimeAdapterInput,
   type CreateHostRunResultInput,
   type HostRuntimeAdapter,
-  type HostRuntimeRun,
 } from "./HostRuntimeAdapter.js";
 export {
   createHostEvent,

@@ -1,134 +1,112 @@
 import { describe, expect, it } from "vitest";
-import type { HostRunInput, HostRunResult, HostSessionState } from "./HostSession.js";
+import { createRunCancellationController } from "../runner/index.js";
+import type { HostRunInput, HostSessionState } from "./HostSession.js";
 
-describe("HostSession types", () => {
-  it("represents in-progress host states separately from runtime results", () => {
+describe("HostSession contracts", () => {
+  it("represents active Host state separately from authoritative Run state", () => {
     const state: HostSessionState = {
       sessionId: "session-1",
       status: "running",
       taskId: "task-1",
+      runId: "run-1",
       timestamp: "2026-06-15T00:00:00.000Z",
       metadata: {},
     };
 
-    expect(state.status).toBe("running");
+    expect(state).toMatchObject({ status: "running", runId: "run-1" });
   });
 
-  it("accepts workspace and identity context in host run input", () => {
-    const input: HostRunInput<{ target: string }> = {
+  it("carries Agent, RunInput, and RunConfig as one Host invocation", () => {
+    const cancellation = createRunCancellationController({ runId: "run-1" });
+    const input: HostRunInput<{ ok: true }> = {
       sessionId: "session-1",
-      task: {
-        id: "task-1",
-        kind: "example.task",
-        input: { target: "example.com" },
-        createdAt: "2026-06-15T00:00:00.000Z",
+      agent: {
+        id: "agent-1",
+        name: "Test Agent",
+        instructions: "Complete the task.",
+        tools: [],
+        output: {
+          validate(candidate) {
+            return candidate !== null && typeof candidate === "object"
+              ? { valid: true, output: candidate as { ok: true } }
+              : { valid: false, message: "Output must be an object." };
+          },
+        },
         metadata: {},
       },
-      runtimeOptions: {
+      runInput: {
+        runId: "run-1",
+        task: {
+          id: "task-1",
+          kind: "example.task",
+          input: { target: "example.com" },
+          createdAt: "2026-06-15T00:00:00.000Z",
+          metadata: {},
+        },
+        conversationItems: [],
+        metadata: {},
+      },
+      runConfig: {
+        workspace: {
+          id: "workspace-1",
+          name: "Example",
+          rootRef: "file:///workspace",
+          trustState: "trusted",
+          source: "test",
+          policyRefs: [],
+          metadata: {},
+        },
+        identity: {
+          id: "identity-1",
+          kind: "user",
+          displayName: "Example User",
+          metadata: {},
+        },
         limits: {
           maxIterations: 1,
-          maxToolCalls: 1,
+          maxActions: 0,
+          maxConsecutiveActionFailures: 0,
           maxDurationMs: 1_000,
-          maxConsecutiveFailures: 1,
-        },
-        permissionMode: "trusted",
-        metadata: {},
-      },
-      workspace: {
-        id: "workspace-1",
-        name: "Example",
-        rootRef: "file:///workspace",
-        trustState: "trusted",
-        source: "test",
-        policyRefs: [],
-        metadata: {},
-      },
-      identity: {
-        id: "identity-1",
-        kind: "user",
-        displayName: "Example User",
-        metadata: {},
-      },
-      metadata: {},
-    };
-
-    expect(input.workspace?.id).toBe("workspace-1");
-    expect(input.identity?.kind).toBe("user");
-  });
-
-  it("represents terminal host run results with the underlying runtime result", () => {
-    const result: HostRunResult<{ ok: true }> = {
-      sessionId: "session-1",
-      taskId: "task-1",
-      state: {
-        sessionId: "session-1",
-        status: "completed",
-        taskId: "task-1",
-        timestamp: "2026-06-15T00:00:00.000Z",
-        runtimeResult: {
-          taskId: "task-1",
-          status: "succeeded",
-          output: { ok: true },
-          outputSpec: {
-            format: "json",
-            metadata: {},
+          plan: {
+            maxSteps: 4,
+            maxStepLength: 100,
+            maxExplanationLength: 200,
           },
-          evidenceRefs: [],
-          artifactRefs: [],
-          errors: [],
-          metadata: {},
         },
+        audit: "optional",
+        telemetry: "optional",
+        cancellation,
         metadata: {},
       },
-      runtimeResult: {
-        taskId: "task-1",
-        status: "succeeded",
-        output: { ok: true },
-        outputSpec: {
-          format: "json",
-          metadata: {},
-        },
-        evidenceRefs: [],
-        artifactRefs: [],
-        errors: [],
-        metadata: {},
-      },
-      metadata: {},
+      metadata: { surface: "test-host" },
     };
 
-    expect(result.state.status).toBe("completed");
-    expect(result.runtimeResult?.status).toBe("succeeded");
+    expect(input.runInput.runId).toBe(input.runConfig.cancellation.context.runId);
+    expect(input.agent.id).toBe("agent-1");
+    expect(input.metadata).toEqual({ surface: "test-host" });
   });
 
-  it("represents blocked host session states without collapsing them into failures", () => {
+  it("projects an accepted cancellation request as non-terminal cancelling state", () => {
+    const cancellation = createRunCancellationController({
+      runId: "run-1",
+      now: () => "2026-06-15T00:00:00.000Z",
+    });
+    const receipt = cancellation.requestCancellation({
+      origin: "host",
+      reasonCode: "host_requested",
+      reason: "Host requested cancellation.",
+    });
     const state: HostSessionState = {
       sessionId: "session-1",
-      status: "blocked",
+      status: "cancelling",
       taskId: "task-1",
-      timestamp: "2026-06-15T00:00:00.000Z",
-      runtimeResult: {
-        taskId: "task-1",
-        status: "blocked",
-        output: null,
-        outputSpec: {
-          format: "json",
-          metadata: {},
-        },
-        evidenceRefs: [],
-        artifactRefs: [],
-        errors: [
-          {
-            code: "permission_denied",
-            message: "Permission denied.",
-            metadata: {},
-          },
-        ],
-        metadata: {},
-      },
+      runId: "run-1",
+      timestamp: receipt.request.requestedAt,
+      cancellationRequest: receipt.request,
       metadata: {},
     };
 
-    expect(state.status).toBe("blocked");
-    expect(state.runtimeResult.status).toBe("blocked");
+    expect(state.status).toBe("cancelling");
+    expect(state.cancellationRequest).toBe(receipt.request);
   });
 });

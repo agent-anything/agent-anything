@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
+import {
+  createBlockedRunResult,
+  createSucceededRunResult,
+} from "../runner/index.js";
 import type { HostEventSink, HostSessionBlockedEvent } from "./HostEvent.js";
 import { createHostEvent, mapRuntimeEventToHostEvent } from "./HostEvent.js";
 
 describe("HostEvent", () => {
-  it("creates serializable host events with session ordering fields", () => {
+  it("creates serializable Host events with session ordering fields", () => {
     const event = createHostEvent({
       id: "host-event-1",
       name: "host.session.started",
@@ -16,75 +20,63 @@ describe("HostEvent", () => {
           sessionId: "session-1",
           status: "running",
           taskId: "task-1",
+          runId: "run-1",
           timestamp: "2026-06-15T00:00:00.000Z",
           metadata: {},
         },
       },
     });
 
-    expect(event.name).toBe("host.session.started");
-    expect(event.sessionId).toBe("session-1");
-    expect(event.sequence).toBe(1);
+    expect(event).toMatchObject({
+      name: "host.session.started",
+      sessionId: "session-1",
+      sequence: 1,
+    });
   });
 
-  it("maps runtime events into host runtime events without changing runtime event payload", () => {
+  it("maps Runtime events without changing the authoritative payload", () => {
+    const runtimeEvent = {
+      id: "runtime-event-1",
+      name: "tool.started" as const,
+      taskId: "task-1",
+      sequence: 3,
+      timestamp: "2026-06-15T00:00:00.000Z",
+      payload: { actionId: "action-1", toolName: "workspace.read" },
+    };
     const event = mapRuntimeEventToHostEvent({
       sessionId: "session-1",
-      runtimeEvent: {
-        id: "runtime-event-1",
-        name: "tool.started",
-        taskId: "task-1",
-        sequence: 3,
-        timestamp: "2026-06-15T00:00:00.000Z",
-        payload: {
-          toolName: "dns.lookup",
-        },
-      },
+      runtimeEvent,
     });
 
-    expect(event.name).toBe("host.runtime.event");
-    expect(event.id).toBe("host_runtime-event-1");
-    expect(event.payload.runtimeEvent.name).toBe("tool.started");
+    expect(event.payload.runtimeEvent).toBe(runtimeEvent);
     expect(event.sequence).toBe(3);
   });
 
-  it("represents blocked as its own terminal host event", () => {
+  it("carries the blocked RunResult rather than reconstructing a Host error", () => {
+    const runResult = createBlockedRunResult(
+      { runId: "run-1", taskId: "task-1" },
+      "policy_denied",
+    );
     const event: HostSessionBlockedEvent = createHostEvent({
       name: "host.session.blocked",
       sessionId: "session-1",
       taskId: "task-1",
       sequence: 4,
       timestamp: "2026-06-15T00:00:00.000Z",
-      payload: {
-        runtimeResult: {
-          taskId: "task-1",
-          status: "blocked",
-          output: null,
-          outputSpec: {
-            format: "json",
-            metadata: {},
-          },
-          evidenceRefs: [],
-          artifactRefs: [],
-          errors: [
-            {
-              code: "permission_denied",
-              message: "Permission denied.",
-              metadata: {},
-            },
-          ],
-          metadata: {},
-        },
-      },
+      payload: { runResult },
     });
 
-    expect(event.name).toBe("host.session.blocked");
-    expect(event.payload.runtimeResult.status).toBe("blocked");
+    expect(event.payload.runResult).toBe(runResult);
+    expect(event.payload.runResult.code).toBe("policy_denied");
   });
 
-  it("can be consumed through a host event sink", async () => {
+  it("publishes succeeded output through runResult vocabulary", async () => {
+    const runResult = createSucceededRunResult<{ ok: true }>(
+      { runId: "run-1", taskId: "task-1" },
+      { ok: true },
+    );
     const names: string[] = [];
-    const sink: HostEventSink = (event) => {
+    const sink: HostEventSink<{ ok: true }> = (event) => {
       names.push(event.name);
     };
 
@@ -94,21 +86,7 @@ describe("HostEvent", () => {
       taskId: "task-1",
       sequence: 5,
       timestamp: "2026-06-15T00:00:00.000Z",
-      payload: {
-        runtimeResult: {
-          taskId: "task-1",
-          status: "succeeded",
-          output: { ok: true },
-          outputSpec: {
-            format: "json",
-            metadata: {},
-          },
-          evidenceRefs: [],
-          artifactRefs: [],
-          errors: [],
-          metadata: {},
-        },
-      },
+      payload: { runResult },
     }));
 
     expect(names).toEqual(["host.output.produced"]);
