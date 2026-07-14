@@ -18,6 +18,8 @@ export interface ConfigValidationSuccess {
   readonly config: RunConfig;
 }
 
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 export function snapshotAgent<TOutput>(agent: Agent<TOutput>): Agent<TOutput> {
   if (!isRecord(agent)) {
     throw new TypeError("Agent must be an object.");
@@ -162,6 +164,25 @@ export function snapshotRunConfig(
     if (config.cancellation.context.runId !== runId) {
       throw new TypeError("RunConfig cancellation runId must match RunInput.runId.");
     }
+    if (!isRecord(config.cancellationLimits)) {
+      throw new TypeError("RunConfig.cancellationLimits must be a CancellationLimits object.");
+    }
+    assertPositiveTimerDelay(
+      config.cancellationLimits.boundarySettlementTimeoutMs,
+      "CancellationLimits.boundarySettlementTimeoutMs",
+    );
+    assertPositiveTimerDelay(
+      config.cancellationLimits.processGracePeriodMs,
+      "CancellationLimits.processGracePeriodMs",
+    );
+    assertPositiveTimerDelay(
+      config.cancellationLimits.processForceKillTimeoutMs,
+      "CancellationLimits.processForceKillTimeoutMs",
+    );
+    assertPositiveTimerDelay(
+      config.cancellationLimits.finalizationTimeoutMs,
+      "CancellationLimits.finalizationTimeoutMs",
+    );
     assertMetadata(config.metadata, "RunConfig.metadata");
 
     return {
@@ -179,6 +200,7 @@ export function snapshotRunConfig(
         audit: config.audit,
         telemetry: config.telemetry,
         cancellation: config.cancellation,
+        cancellationLimits: Object.freeze({ ...config.cancellationLimits }),
         metadata: Object.freeze({ ...config.metadata }),
       }),
     };
@@ -341,6 +363,14 @@ function assertRequirement(value: unknown, field: string): void {
 function assertPositiveInteger(value: number, field: string): void {
   if (!Number.isInteger(value) || value <= 0) {
     throw new TypeError(`${field} must be a positive integer.`);
+  }
+}
+
+function assertPositiveTimerDelay(value: number, field: string): void {
+  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_TIMER_DELAY_MS) {
+    throw new TypeError(
+      `${field} must be a positive integer no greater than ${MAX_TIMER_DELAY_MS}.`,
+    );
   }
 }
 

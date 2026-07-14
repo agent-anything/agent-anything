@@ -614,6 +614,12 @@ function createHostInput(input: {
       audit: "optional",
       telemetry: "optional",
       cancellation,
+      cancellationLimits: {
+        boundarySettlementTimeoutMs: 1_000,
+        processGracePeriodMs: 100,
+        processForceKillTimeoutMs: 500,
+        finalizationTimeoutMs: 1_000,
+      },
       metadata: {},
     },
     metadata: { fixture: "generic-host-conformance" },

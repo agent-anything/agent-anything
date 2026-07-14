@@ -82,4 +82,24 @@ describe("RunCancellationController", () => {
       reasonCode: "parent_run_cancelled",
     })).toThrow("parentRunId");
   });
+
+  it("rejects an invalid request timestamp and oversized reason", () => {
+    const invalidClock = createRunCancellationController({
+      runId: "run-1",
+      now: () => "not-a-date",
+    });
+    const oversizedReason = createRunCancellationController({ runId: "run-2" });
+
+    expect(() => invalidClock.requestCancellation({
+      origin: "user",
+      reasonCode: "user_requested",
+    })).toThrow("valid date-time");
+    expect(() => oversizedReason.requestCancellation({
+      origin: "user",
+      reasonCode: "user_requested",
+      reason: "x".repeat(501),
+    })).toThrow("must not exceed 500 characters");
+    expect(invalidClock.context.request).toBeNull();
+    expect(oversizedReason.context.request).toBeNull();
+  });
 });

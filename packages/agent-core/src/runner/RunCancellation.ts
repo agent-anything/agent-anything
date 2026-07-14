@@ -57,6 +57,47 @@ export interface RunCancellationSummary {
   readonly requestedAt: ISODateTimeString;
 }
 
+export type CancellationBoundary =
+  | "controller"
+  | "provider"
+  | "retry_wait"
+  | "tool"
+  | "process";
+
+export interface CancellationAttribution {
+  readonly requestId: string;
+  readonly runId: string;
+  readonly boundary: CancellationBoundary;
+  readonly observedAt: ISODateTimeString;
+}
+
+export interface CancellationLimits {
+  readonly boundarySettlementTimeoutMs: number;
+  readonly processGracePeriodMs: number;
+  readonly processForceKillTimeoutMs: number;
+  readonly finalizationTimeoutMs: number;
+}
+
+export interface RunFinalizationContext {
+  readonly runId: string;
+  readonly cancellation: RunCancellationSummary | null;
+  readonly deadlineAt: ISODateTimeString;
+  readonly signal: AbortSignal;
+}
+
+export type BoundaryExecutionResult<TValue, TFailure> =
+  | { readonly kind: "succeeded"; readonly value: TValue }
+  | { readonly kind: "failed"; readonly failure: TFailure }
+  | {
+      readonly kind: "cancelled";
+      readonly attribution: CancellationAttribution;
+    }
+  | {
+      readonly kind: "cancellation_unconfirmed";
+      readonly boundary: CancellationBoundary;
+      readonly message: string;
+    };
+
 export interface CreateRunCancellationControllerInput {
   readonly runId: string;
   readonly createRequestId?: (runId: string) => string;
@@ -70,6 +111,7 @@ const originReasonCodes: Readonly<Record<RunCancellationOrigin, readonly RunCanc
   parent_run: ["parent_run_cancelled"],
   runner: ["runner_shutdown"],
 };
+const MAX_CANCELLATION_REASON_LENGTH = 500;
 
 export function createRunCancellationController(
   input: CreateRunCancellationControllerInput,
@@ -99,14 +141,14 @@ export function createRunCancellationController(
       const requestId = createRequestId(input.runId);
       const requestedAt = now();
       assertNonEmpty(requestId, "cancellation request id");
-      assertNonEmpty(requestedAt, "cancellation requestedAt");
+      assertDateTime(requestedAt, "cancellation requestedAt");
 
       request = Object.freeze({
         id: requestId,
         runId: input.runId,
         origin: requestInput.origin,
         reasonCode: requestInput.reasonCode,
-        reason: normalizeOptionalText(requestInput.reason),
+        reason: normalizeReason(requestInput.reason),
         approvalRequestId: normalizeOptionalText(requestInput.approvalRequestId),
         parentRunId: normalizeOptionalText(requestInput.parentRunId),
         requestedAt,
@@ -157,6 +199,25 @@ function normalizeOptionalText(value: string | undefined): string | null {
 
   const normalized = value.trim();
   return normalized.length === 0 ? null : normalized;
+}
+
+function normalizeReason(value: string | undefined): string | null {
+  const normalized = normalizeOptionalText(value);
+  if (normalized === null) {
+    return null;
+  }
+  if (normalized.length > MAX_CANCELLATION_REASON_LENGTH) {
+    throw new TypeError(
+      `cancellation reason must not exceed ${MAX_CANCELLATION_REASON_LENGTH} characters.`,
+    );
+  }
+  return normalized;
+}
+
+function assertDateTime(value: string, field: string): void {
+  if (!Number.isFinite(Date.parse(value))) {
+    throw new TypeError(`${field} must be a valid date-time string.`);
+  }
 }
 
 function assertNonEmpty(value: string | undefined, field: string): asserts value is string {

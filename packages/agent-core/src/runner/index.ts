@@ -16,8 +16,13 @@ export type {
   ToolResultObservation,
 } from "./Observation.js";
 export type {
+  BoundaryExecutionResult,
+  CancellationAttribution,
+  CancellationBoundary,
   CancellationContext,
+  CancellationLimits,
   CreateRunCancellationControllerInput,
+  RunFinalizationContext,
   RunCancellationController,
   RunCancellationOrigin,
   RunCancellationReasonCode,

@@ -32,7 +32,10 @@ import type {
   PlanUpdateResultObservation,
   ToolResultObservation,
 } from "./Observation.js";
-import type { RunCancellationRequest } from "./RunCancellation.js";
+import type {
+  CancellationBoundary,
+  RunCancellationRequest,
+} from "./RunCancellation.js";
 import { toRunCancellationSummary } from "./RunCancellation.js";
 import type { RunConfig } from "./RunConfig.js";
 import type { RunInput } from "./RunInput.js";
@@ -91,6 +94,26 @@ interface ProcessActionResult {
   readonly terminalResult: RunResult<unknown> | null;
 }
 
+type ActiveBoundaryKind = Extract<CancellationBoundary, "controller" | "tool">;
+
+interface ActiveBoundary {
+  readonly kind: ActiveBoundaryKind;
+  readonly startedAt: ISODateTimeString;
+  readonly rejectSettlement: (error: CancellationSettlementTimeoutError) => void;
+  settlementTimer: ReturnType<typeof setTimeout> | null;
+}
+
+class CancellationSettlementTimeoutError extends Error {
+  constructor(
+    readonly boundary: ActiveBoundaryKind,
+    readonly startedAt: ISODateTimeString,
+    readonly timeoutMs: number,
+  ) {
+    super(`Cancellation settlement timed out at the ${boundary} boundary.`);
+    this.name = "CancellationSettlementTimeoutError";
+  }
+}
+
 export class RunExecution<TOutput> {
   private agent!: Agent<TOutput>;
   private input!: RunInput;
@@ -98,6 +121,8 @@ export class RunExecution<TOutput> {
   private state!: RunState<TOutput>;
   private startedAtMs = 0;
   private terminalResult: RunResult<TOutput> | null = null;
+  private cancellationListener: (() => void) | null = null;
+  private activeBoundary: ActiveBoundary | null = null;
 
   constructor(
     private readonly dependencies: ResolvedRunnerDependencies,
@@ -107,6 +132,15 @@ export class RunExecution<TOutput> {
   ) {}
 
   async run(): Promise<RunResult<TOutput>> {
+    try {
+      return await this.runInternal();
+    } finally {
+      this.disposeCancellationObservation();
+      this.clearActiveBoundary();
+    }
+  }
+
+  private async runInternal(): Promise<RunResult<TOutput>> {
     this.agent = snapshotAgent(this.rawAgent);
     this.input = snapshotRunInput(this.rawInput);
 
@@ -144,6 +178,7 @@ export class RunExecution<TOutput> {
         ...this.input.metadata,
       }),
     });
+    this.startCancellationObservation();
 
     if (this.cancellationRequest() !== null) {
       return this.cancelRun();
@@ -201,11 +236,26 @@ export class RunExecution<TOutput> {
 
       let decision: ControllerDecision<unknown>;
       try {
-        decision = await this.dependencies.controller.next(
-          this.createControllerInput(),
-          { cancellation: this.config.cancellation.context },
+        decision = await this.awaitBoundary(
+          "controller",
+          () => this.dependencies.controller.next(
+            this.createControllerInput(),
+            { cancellation: this.config.cancellation.context },
+          ),
         );
       } catch (error) {
+        if (error instanceof CancellationSettlementTimeoutError) {
+          this.emit("controller.finished", {
+            runId: this.state.runId,
+            iteration,
+            status: "failed",
+            code: "runtime_cancellation_settlement_timeout",
+          });
+          return this.fail(
+            cancellationSettlementRuntimeError(error),
+            "runtime_cancellation_settlement_timeout",
+          );
+        }
         if (this.cancellationRequest() !== null) {
           this.emit("controller.finished", {
             runId: this.state.runId,
@@ -460,22 +510,41 @@ export class RunExecution<TOutput> {
 
     let result;
     try {
-      result = await bridge.execute({
-        action,
-        task: this.input.task,
-        workspace: this.config.workspace,
-        identity: this.config.identity,
-        cancellation: this.config.cancellation.context,
-        audit: this.config.audit,
-        telemetry: this.config.telemetry,
-        toolRisk: tool.risk,
-        metadata: Object.freeze({
-          runId: this.state.runId,
-          taskId: this.state.taskId,
-          agentId: this.state.activeAgentId,
+      result = await this.awaitBoundary(
+        "tool",
+        () => bridge.execute({
+          action,
+          task: this.input.task,
+          workspace: this.config.workspace,
+          identity: this.config.identity,
+          cancellation: this.config.cancellation.context,
+          audit: this.config.audit,
+          telemetry: this.config.telemetry,
+          toolRisk: tool.risk,
+          metadata: Object.freeze({
+            runId: this.state.runId,
+            taskId: this.state.taskId,
+            agentId: this.state.activeAgentId,
+          }),
         }),
-      });
+      );
     } catch (error) {
+      if (error instanceof CancellationSettlementTimeoutError) {
+        this.emit("tool.finished", {
+          runId: this.state.runId,
+          actionId: action.id,
+          toolName: action.name,
+          status: "failed",
+          code: "runtime_cancellation_settlement_timeout",
+        });
+        return {
+          invalidatesBatch: true,
+          terminalResult: await this.fail(
+            cancellationSettlementRuntimeError(error),
+            "runtime_cancellation_settlement_timeout",
+          ),
+        };
+      }
       if (this.cancellationRequest() !== null) {
         this.emit("tool.finished", {
           runId: this.state.runId,
@@ -515,7 +584,7 @@ export class RunExecution<TOutput> {
     });
 
     if (result.status === "terminal_failure") {
-      this.commitRunning([], {
+      this.commitSettledToolState([], {
         evidenceRefs: result.evidenceRefs,
         artifactRefs: result.artifactRefs,
       });
@@ -602,10 +671,14 @@ export class RunExecution<TOutput> {
       },
     });
     const counters = nextActionCounters(this.state.counters, failed);
-    this.commitRunning(
+    this.commitSettledToolState(
       observation === null ? [] : [observationDraft<TOutput>(observation)],
       { context, counters, evidenceRefs, artifactRefs },
     );
+
+    if (this.state.status === "cancelling") {
+      return { invalidatesBatch: true, terminalResult: null };
+    }
 
     if (counters.consecutiveActionFailures > this.config.limits.maxConsecutiveActionFailures) {
       return {
@@ -852,6 +925,18 @@ export class RunExecution<TOutput> {
       };
     }
 
+    const acceptedCancellation = this.cancellationRequest();
+    if (
+      acceptedCancellation !== null &&
+      !(candidate.status === "failed" && candidate.cancellationRequest !== null)
+    ) {
+      this.enterCancelling(acceptedCancellation);
+      candidate = {
+        status: "cancelled",
+        cancellationRequest: acceptedCancellation,
+      };
+    }
+
     const completedAt = this.now();
     const completedAtMs = Date.parse(completedAt);
     const metadata = Object.freeze({
@@ -1069,6 +1154,30 @@ export class RunExecution<TOutput> {
     this.publishItems(items);
   }
 
+  private commitSettledToolState(
+    drafts: readonly RunItemDraft<TOutput>[],
+    update: {
+      readonly context?: Context;
+      readonly counters?: RunCounters;
+      readonly evidenceRefs?: readonly EvidenceRef[];
+      readonly artifactRefs?: readonly ArtifactRef[];
+    },
+  ): void {
+    if (this.state.status !== "running" && this.state.status !== "cancelling") {
+      throw new Error(`Cannot commit a settled Tool outcome while Run is ${this.state.status}.`);
+    }
+    const items = this.materializeItems(drafts);
+    this.replaceState(freezeState({
+      ...this.state,
+      context: update.context ?? this.state.context,
+      counters: update.counters ?? this.state.counters,
+      evidenceRefs: appendUnique(this.state.evidenceRefs, update.evidenceRefs ?? []),
+      artifactRefs: appendUnique(this.state.artifactRefs, update.artifactRefs ?? []),
+      items: Object.freeze([...this.state.items, ...items]),
+    }));
+    this.publishItems(items);
+  }
+
   private materializeItems(
     drafts: readonly RunItemDraft<TOutput>[],
   ): readonly RunItem<TOutput>[] {
@@ -1106,6 +1215,107 @@ export class RunExecution<TOutput> {
 
   private cancellationRequest(): RunCancellationRequest | null {
     return this.config?.cancellation.context.request ?? null;
+  }
+
+  private startCancellationObservation(): void {
+    if (this.cancellationListener !== null) {
+      throw new Error("Cancellation observation is already active.");
+    }
+    const signal = this.config.cancellation.context.signal;
+    const listener = () => this.observeCancellation();
+    this.cancellationListener = listener;
+    signal.addEventListener("abort", listener, { once: true });
+    if (signal.aborted) {
+      this.observeCancellation();
+    }
+  }
+
+  private disposeCancellationObservation(): void {
+    if (this.cancellationListener === null || this.config === undefined) {
+      return;
+    }
+    this.config.cancellation.context.signal.removeEventListener(
+      "abort",
+      this.cancellationListener,
+    );
+    this.cancellationListener = null;
+  }
+
+  private observeCancellation(): void {
+    const request = this.cancellationRequest();
+    if (request === null || this.state === undefined) {
+      return;
+    }
+    if (this.state.status === "initializing" || this.state.status === "running") {
+      this.enterCancelling(request);
+    }
+    this.startActiveBoundarySettlementTimer();
+  }
+
+  private async awaitBoundary<TValue>(
+    kind: ActiveBoundaryKind,
+    execute: () => Promise<TValue>,
+  ): Promise<TValue> {
+    if (this.activeBoundary !== null) {
+      throw new Error(
+        `Cannot start ${kind} while ${this.activeBoundary.kind} is still active.`,
+      );
+    }
+    if (this.cancellationRequest() !== null) {
+      this.observeCancellation();
+      throw this.config.cancellation.context.signal.reason;
+    }
+
+    let rejectSettlement!: (error: CancellationSettlementTimeoutError) => void;
+    const settlementTimeout = new Promise<never>((_resolve, reject) => {
+      rejectSettlement = reject;
+    });
+    const boundary: ActiveBoundary = {
+      kind,
+      startedAt: this.now(),
+      rejectSettlement,
+      settlementTimer: null,
+    };
+    this.activeBoundary = boundary;
+
+    const operation = Promise.resolve().then(() => {
+      if (this.cancellationRequest() !== null) {
+        this.observeCancellation();
+        throw this.config.cancellation.context.signal.reason;
+      }
+      return execute();
+    });
+
+    try {
+      return await Promise.race([operation, settlementTimeout]);
+    } finally {
+      if (this.activeBoundary === boundary) {
+        this.clearActiveBoundary();
+      }
+    }
+  }
+
+  private startActiveBoundarySettlementTimer(): void {
+    const boundary = this.activeBoundary;
+    if (boundary === null || boundary.settlementTimer !== null) {
+      return;
+    }
+    const timeoutMs = this.config.cancellationLimits.boundarySettlementTimeoutMs;
+    boundary.settlementTimer = setTimeout(() => {
+      boundary.rejectSettlement(new CancellationSettlementTimeoutError(
+        boundary.kind,
+        boundary.startedAt,
+        timeoutMs,
+      ));
+    }, timeoutMs);
+  }
+
+  private clearActiveBoundary(): void {
+    if (this.activeBoundary?.settlementTimer !== null &&
+        this.activeBoundary?.settlementTimer !== undefined) {
+      clearTimeout(this.activeBoundary.settlementTimer);
+    }
+    this.activeBoundary = null;
   }
 
   private createId(kind: Parameters<ResolvedRunnerDependencies["createId"]>[0]["kind"], sequence: number): string {
@@ -1231,6 +1441,22 @@ function controllerRuntimeError(error: unknown): RuntimeError {
 
 function limitRuntimeError(message: string, metadata: Metadata): RuntimeError {
   return runtimeError("runtime", "runtime_limit_exceeded", message, false, metadata);
+}
+
+function cancellationSettlementRuntimeError(
+  error: CancellationSettlementTimeoutError,
+): RuntimeError {
+  return runtimeError(
+    "runtime",
+    "runtime_cancellation_settlement_timeout",
+    error.message,
+    false,
+    {
+      boundary: error.boundary,
+      boundaryStartedAt: error.startedAt,
+      settlementTimeoutMs: error.timeoutMs,
+    },
+  );
 }
 
 function runtimeError(

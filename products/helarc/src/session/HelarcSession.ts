@@ -237,6 +237,12 @@ export async function runHelarcSession(
       audit: "optional",
       telemetry: "optional",
       cancellation,
+      cancellationLimits: {
+        boundarySettlementTimeoutMs: 10_000,
+        processGracePeriodMs: 1_000,
+        processForceKillTimeoutMs: 2_000,
+        finalizationTimeoutMs: 5_000,
+      },
       metadata: runMetadata,
     },
   );

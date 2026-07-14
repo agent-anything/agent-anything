@@ -1,7 +1,10 @@
 import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
 import type { Metadata } from "@agent-anything/shared";
 import type { PlanLimits } from "../plan/index.js";
-import type { RunCancellationController } from "./RunCancellation.js";
+import type {
+  CancellationLimits,
+  RunCancellationController,
+} from "./RunCancellation.js";
 
 export type RunInfrastructureRequirement = "optional" | "required";
 
@@ -20,5 +23,6 @@ export interface RunConfig {
   readonly audit: RunInfrastructureRequirement;
   readonly telemetry: RunInfrastructureRequirement;
   readonly cancellation: RunCancellationController;
+  readonly cancellationLimits: CancellationLimits;
   readonly metadata: Metadata;
 }

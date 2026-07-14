@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AuditPort, TelemetryPort } from "@agent-anything/observability";
 import type { ToolDefinition } from "@agent-anything/tools";
 import type { Agent } from "../agent/index.js";
@@ -329,6 +329,94 @@ describe("Runner", () => {
     ]);
   });
 
+  it("commits cancellation immediately while the Controller boundary is still active", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const controllerStarted = createDeferred<void>();
+    const controllerResult = createDeferred<ControllerDecision<unknown>>();
+    const appendedKinds: string[] = [];
+    const eventEmitter = new RuntimeEventEmitter();
+    eventEmitter.subscribe((event) => {
+      if (event.name === "run.item.appended" && typeof event.payload.itemKind === "string") {
+        appendedKinds.push(event.payload.itemKind);
+      }
+    });
+    const controller: Controller<unknown> = {
+      async next() {
+        controllerStarted.resolve();
+        return controllerResult.promise;
+      },
+    };
+
+    const run = createRunner(controller, { eventEmitter }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({ cancellation }),
+    );
+    await controllerStarted.promise;
+
+    cancellation.requestCancellation({
+      origin: "user",
+      reasonCode: "user_requested",
+    });
+
+    expect(appendedKinds).toEqual(["run_cancellation_requested"]);
+    controllerResult.resolve(finalDecision("Discarded"));
+    const result = await run;
+
+    expect(result.status).toBe("cancelled");
+    expect(result.items.map((item) => item.kind)).toEqual([
+      "run_cancellation_requested",
+      "run_cancelled",
+    ]);
+  });
+
+  it("fails with cancellation attribution when Controller settlement times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancellation = createRunCancellationController({ runId: "run_001" });
+      const controllerStarted = createDeferred<void>();
+      const controller: Controller<unknown> = {
+        async next() {
+          controllerStarted.resolve();
+          return new Promise<ControllerDecision<unknown>>(() => {});
+        },
+      };
+      const run = createRunner(controller).run(
+        createAgent(),
+        createRunInput(),
+        createRunConfig({
+          cancellation,
+          cancellationLimits: { boundarySettlementTimeoutMs: 25 },
+        }),
+      );
+      await controllerStarted.promise;
+
+      cancellation.requestCancellation({
+        origin: "host",
+        reasonCode: "host_requested",
+      });
+      await vi.advanceTimersByTimeAsync(25);
+      const result = await run;
+
+      expect(result).toMatchObject({
+        status: "failed",
+        code: "runtime_cancellation_settlement_timeout",
+        cancellation: { reasonCode: "host_requested" },
+        errors: [{
+          owner: "runtime",
+          code: "runtime_cancellation_settlement_timeout",
+          metadata: { boundary: "controller", settlementTimeoutMs: 25 },
+        }],
+      });
+      expect(result.items.map((item) => item.kind)).toEqual([
+        "run_cancellation_requested",
+        "run_failed",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns failed with cancellation attribution when required cancellation finalization fails", async () => {
     const cancellation = createRunCancellationController({ runId: "run_001" });
     const controller = new ScriptedController([
@@ -371,6 +459,70 @@ describe("Runner", () => {
       "run_cancellation_requested",
       "run_failed",
     ]);
+  });
+
+  it("lets accepted cancellation win before terminal commit", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const finalizationStarted = createDeferred<void>();
+    const releaseFinalization = createDeferred<void>();
+    let telemetryCalls = 0;
+    const telemetryPort: TelemetryPort = {
+      async record() {
+        telemetryCalls += 1;
+        if (telemetryCalls === 2) {
+          finalizationStarted.resolve();
+          await releaseFinalization.promise;
+        }
+      },
+    };
+    const run = createRunner(
+      new ScriptedController([finalDecision("Must not commit")]),
+      { telemetryPort },
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({ cancellation, telemetry: "required" }),
+    );
+    await finalizationStarted.promise;
+
+    cancellation.requestCancellation({
+      origin: "user",
+      reasonCode: "user_requested",
+    });
+    releaseFinalization.resolve();
+    const result = await run;
+
+    expect(result.status).toBe("cancelled");
+    expect(result.items.map((item) => item.kind)).toEqual([
+      "model_output",
+      "run_cancellation_requested",
+      "run_cancelled",
+    ]);
+  });
+
+  it("does not rewrite a terminal result when cancellation is requested later", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const events: RuntimeEvent[] = [];
+    const eventEmitter = new RuntimeEventEmitter();
+    eventEmitter.subscribe((event) => events.push(event));
+    const result = await createRunner(
+      new ScriptedController([finalDecision("Committed")]),
+      { eventEmitter },
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({ cancellation }),
+    );
+    const eventCount = events.length;
+
+    cancellation.requestCancellation({
+      origin: "user",
+      reasonCode: "user_requested",
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.items.some((item) => item.kind === "run_cancellation_requested")).toBe(false);
+    expect(events).toHaveLength(eventCount);
   });
 
   it("preserves typed Controller failure ownership", async () => {
@@ -509,6 +661,50 @@ describe("Runner", () => {
       errors: [{ owner: "runtime", code: "runtime_invalid_options" }],
     });
     expect(result.items.map((item) => item.kind)).toEqual(["run_failed"]);
+    expect(controller.calls).toHaveLength(0);
+  });
+
+  it.each([
+    "boundarySettlementTimeoutMs",
+    "processGracePeriodMs",
+    "processForceKillTimeoutMs",
+    "finalizationTimeoutMs",
+  ] as const)("rejects non-positive cancellation limit %s", async (field) => {
+    const controller = new ScriptedController([finalDecision("Unused")]);
+    const result = await createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        cancellationLimits: { [field]: 0 },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_invalid_options",
+      errors: [{
+        code: "runtime_invalid_options",
+        message: expect.stringContaining(field),
+      }],
+    });
+    expect(controller.calls).toHaveLength(0);
+  });
+
+  it("rejects cancellation limits above the platform timer range", async () => {
+    const controller = new ScriptedController([finalDecision("Unused")]);
+    const result = await createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        cancellationLimits: { boundarySettlementTimeoutMs: 2_147_483_648 },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_invalid_options",
+      errors: [{ message: expect.stringContaining("2147483647") }],
+    });
     expect(controller.calls).toHaveLength(0);
   });
 
@@ -795,10 +991,63 @@ describe("Runner", () => {
     expect(result.items.map((item) => item.kind)).toEqual([
       "model_output",
       "action",
-      "observation",
       "run_cancellation_requested",
+      "observation",
       "run_cancelled",
     ]);
+  });
+
+  it("fails when an active Tool boundary does not settle after cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancellation = createRunCancellationController({ runId: "run_001" });
+      const toolStarted = createDeferred<void>();
+      const bridge: ToolActionBridge = {
+        async execute() {
+          toolStarted.resolve();
+          return new Promise(() => {});
+        },
+      };
+      const run = createRunner(
+        new ScriptedController([actionsDecision([{
+          kind: "tool",
+          name: "test.write",
+          input: {},
+          modelItemId: "model_1",
+        }])]),
+        { toolActionBridge: bridge },
+      ).run(
+        createAgent([createAgentTool("test.write", "risky")]),
+        createRunInput(),
+        createRunConfig({
+          cancellation,
+          cancellationLimits: { boundarySettlementTimeoutMs: 30 },
+        }),
+      );
+      await toolStarted.promise;
+
+      cancellation.requestCancellation({
+        origin: "user",
+        reasonCode: "user_requested",
+      });
+      await vi.advanceTimersByTimeAsync(30);
+      const result = await run;
+
+      expect(result).toMatchObject({
+        status: "failed",
+        code: "runtime_cancellation_settlement_timeout",
+        cancellation: { reasonCode: "user_requested" },
+        errors: [{ metadata: { boundary: "tool", settlementTimeoutMs: 30 } }],
+      });
+      expect(result.items.map((item) => item.kind)).toEqual([
+        "model_output",
+        "action",
+        "run_cancellation_requested",
+        "run_failed",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps cancellation attribution when a settled bridge reports terminal failure", async () => {
@@ -945,6 +1194,7 @@ function createRunConfig(
     readonly audit?: RunConfig["audit"];
     readonly telemetry?: RunConfig["telemetry"];
     readonly cancellation?: RunConfig["cancellation"];
+    readonly cancellationLimits?: Partial<RunConfig["cancellationLimits"]>;
     readonly limits?: Partial<Omit<RunConfig["limits"], "plan">>;
   } = {},
 ): RunConfig {
@@ -981,6 +1231,13 @@ function createRunConfig(
     telemetry: overrides.telemetry ?? "optional",
     cancellation:
       overrides.cancellation ?? createRunCancellationController({ runId }),
+    cancellationLimits: {
+      boundarySettlementTimeoutMs: 1_000,
+      processGracePeriodMs: 100,
+      processForceKillTimeoutMs: 500,
+      finalizationTimeoutMs: 1_000,
+      ...overrides.cancellationLimits,
+    },
     metadata: {},
   };
 }
@@ -1024,4 +1281,14 @@ function modelItem(id: string, content: unknown) {
     content,
     metadata: {},
   };
+}
+
+function createDeferred<TValue>() {
+  let resolve!: (value: TValue | PromiseLike<TValue>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<TValue>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
