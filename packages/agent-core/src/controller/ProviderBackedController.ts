@@ -1,9 +1,15 @@
 import type {
   Provider,
+  ProviderCallResult,
+  ProviderFailure,
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/providers";
-import type { Metadata } from "@agent-anything/shared";
+import type {
+  InvocationInterruptionContext,
+  InvocationInterruptionRef,
+  Metadata,
+} from "@agent-anything/shared";
 import type { ActionCandidate, ActionKind } from "../runner/Action.js";
 import type { RuntimeError } from "../runner/RuntimeError.js";
 import type {
@@ -26,7 +32,9 @@ export type ParseProviderResponse<TOutput = unknown> = (
 export type ControllerFailureCode =
   | "model_request_failed"
   | "model_output_invalid"
-  | "provider_request_failed";
+  | "provider_request_failed"
+  | "provider_timeout"
+  | "provider_cancellation_unconfirmed";
 
 export interface ControllerFailure extends RuntimeError {
   readonly owner: "model" | "provider";
@@ -34,7 +42,10 @@ export interface ControllerFailure extends RuntimeError {
 }
 
 export class ControllerError extends Error {
-  constructor(readonly runtimeError: ControllerFailure) {
+  constructor(
+    readonly runtimeError: ControllerFailure,
+    readonly boundarySettlement: "unsettled" | "settled_failure" = "unsettled",
+  ) {
     super(runtimeError.message);
     this.name = "ControllerError";
   }
@@ -67,7 +78,7 @@ export class ProviderBackedController<TOutput = unknown>
     const request = await this.buildRequest(controllerInput);
 
     throwIfCancelled(callContext);
-    const response = await this.sendRequest(request);
+    const response = await this.sendRequest(request, callContext);
 
     throwIfCancelled(callContext);
     this.assertOutputLength(response);
@@ -93,10 +104,16 @@ export class ProviderBackedController<TOutput = unknown>
     }
   }
 
-  private async sendRequest(request: ProviderRequest): Promise<ProviderResponse> {
-    let response: ProviderResponse;
+  private async sendRequest(
+    request: ProviderRequest,
+    callContext: ControllerCallContext,
+  ): Promise<ProviderResponse> {
+    let result: ProviderCallResult;
     try {
-      response = await this.input.provider.send(request);
+      result = await this.input.provider.send(
+        request,
+        createInvocationInterruptionContext(callContext),
+      );
     } catch (error) {
       throw createControllerError(
         "provider",
@@ -110,20 +127,39 @@ export class ProviderBackedController<TOutput = unknown>
       );
     }
 
-    if (response.status === "failed") {
-      throw createControllerError(
-        "provider",
-        "provider_request_failed",
-        response.error?.message ?? "Provider request failed.",
-        false,
-        {
-          providerId: this.input.provider.descriptor.id,
-          providerErrorCode: response.error?.code ?? null,
-        },
-      );
-    }
+    switch (result.kind) {
+      case "succeeded":
+        return result.response;
 
-    return response;
+      case "failed":
+        throw providerFailureError(
+          result.failure.code === "provider_timeout"
+            ? "provider_timeout"
+            : "provider_request_failed",
+          result.failure,
+          this.input.provider.descriptor.id,
+        );
+
+      case "cancelled":
+        if (matchesActiveCancellation(result.cancellation, callContext)) {
+          throw callContext.cancellation.signal.reason;
+        }
+        throw providerCancellationUnconfirmedError(
+          "Provider returned cancellation without the active Run correlation.",
+          this.input.provider.descriptor.id,
+          {
+            reportedRunId: result.cancellation.runId,
+            reportedRequestId: result.cancellation.requestId,
+          },
+        );
+
+      case "cancellation_unconfirmed":
+        throw providerFailureError(
+          "provider_cancellation_unconfirmed",
+          result.failure,
+          this.input.provider.descriptor.id,
+        );
+    }
   }
 
   private assertOutputLength(response: ProviderResponse): void {
@@ -340,6 +376,7 @@ function createControllerError(
   message: string,
   retryable: boolean,
   metadata: Metadata,
+  boundarySettlement: "unsettled" | "settled_failure" = "unsettled",
 ): ControllerError {
   return new ControllerError(
     Object.freeze({
@@ -349,6 +386,79 @@ function createControllerError(
       retryable,
       metadata: Object.freeze({ ...metadata }),
     }),
+    boundarySettlement,
+  );
+}
+
+function createInvocationInterruptionContext(
+  context: ControllerCallContext,
+): InvocationInterruptionContext {
+  return Object.freeze({
+    signal: context.cancellation.signal,
+    get interruption(): InvocationInterruptionRef | null {
+      const request = context.cancellation.request;
+      return request === null
+        ? null
+        : Object.freeze({
+            kind: "run_cancellation" as const,
+            cancellation: Object.freeze({
+              runId: request.runId,
+              requestId: request.id,
+            }),
+          });
+    },
+  });
+}
+
+function matchesActiveCancellation(
+  candidate: { readonly runId: string; readonly requestId: string },
+  context: ControllerCallContext,
+): boolean {
+  const request = context.cancellation.request;
+  return context.cancellation.signal.aborted &&
+    request !== null &&
+    candidate.runId === request.runId &&
+    candidate.requestId === request.id;
+}
+
+function providerFailureError(
+  code: Extract<
+    ControllerFailureCode,
+    "provider_request_failed" | "provider_timeout" | "provider_cancellation_unconfirmed"
+  >,
+  failure: ProviderFailure,
+  providerId: string,
+): ControllerError {
+  return createControllerError(
+    "provider",
+    code,
+    failure.message,
+    false,
+    {
+      providerId,
+      providerFailureCategory: failure.category,
+      providerErrorCode: failure.code,
+      providerRequestId: failure.requestId ?? null,
+      providerStatusCode: failure.statusCode ?? null,
+      providerRetryAfterMs: failure.retryAfterMs ?? null,
+      ...failure.metadata,
+    },
+    "settled_failure",
+  );
+}
+
+function providerCancellationUnconfirmedError(
+  message: string,
+  providerId: string,
+  metadata: Metadata,
+): ControllerError {
+  return createControllerError(
+    "provider",
+    "provider_cancellation_unconfirmed",
+    message,
+    false,
+    { providerId, ...metadata },
+    "settled_failure",
   );
 }
 

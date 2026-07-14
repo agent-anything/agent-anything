@@ -195,10 +195,8 @@ function tool(
 
 function response(output: unknown): ProviderResponse {
   return {
-    status: "succeeded",
     output,
     usage: null,
-    error: null,
     metadata: {},
   };
 }

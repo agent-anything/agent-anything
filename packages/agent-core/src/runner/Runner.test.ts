@@ -417,6 +417,79 @@ describe("Runner", () => {
     }
   });
 
+  it("preserves Provider cancellation-unconfirmed failure with cancellation summary", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const controller: Controller<unknown> = {
+      async next() {
+        cancellation.requestCancellation({
+          origin: "host",
+          reasonCode: "host_requested",
+        });
+        throw new ControllerError(
+          {
+            owner: "provider",
+            code: "provider_cancellation_unconfirmed",
+            message: "Provider settlement could not be confirmed.",
+            retryable: false,
+            metadata: {},
+          },
+          "settled_failure",
+        );
+      },
+    };
+
+    const result = await createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({ cancellation }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "provider_cancellation_unconfirmed",
+      cancellation: { reasonCode: "host_requested" },
+      errors: [{
+        owner: "provider",
+        code: "provider_cancellation_unconfirmed",
+      }],
+    });
+  });
+
+  it("does not relabel a settled Provider timeout as Run cancellation", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const controller: Controller<unknown> = {
+      async next() {
+        cancellation.requestCancellation({
+          origin: "host",
+          reasonCode: "host_requested",
+        });
+        throw new ControllerError(
+          {
+            owner: "provider",
+            code: "provider_timeout",
+            message: "Provider request timed out.",
+            retryable: false,
+            metadata: {},
+          },
+          "settled_failure",
+        );
+      },
+    };
+
+    const result = await createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({ cancellation }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "provider_timeout",
+      cancellation: { reasonCode: "host_requested" },
+      errors: [{ owner: "provider", code: "provider_timeout" }],
+    });
+  });
+
   it("returns failed with cancellation attribution when required cancellation finalization fails", async () => {
     const cancellation = createRunCancellationController({ runId: "run_001" });
     const controller = new ScriptedController([

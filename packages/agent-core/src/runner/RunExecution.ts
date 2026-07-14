@@ -256,6 +256,21 @@ export class RunExecution<TOutput> {
             "runtime_cancellation_settlement_timeout",
           );
         }
+        if (
+          error instanceof ControllerError &&
+          error.boundarySettlement === "settled_failure"
+        ) {
+          this.emit("controller.finished", {
+            runId: this.state.runId,
+            iteration,
+            status: "failed",
+            code: error.runtimeError.code,
+          });
+          return this.fail(
+            error.runtimeError,
+            failureCode(error.runtimeError),
+          );
+        }
         if (this.cancellationRequest() !== null) {
           this.emit("controller.finished", {
             runId: this.state.runId,

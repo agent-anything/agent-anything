@@ -1,9 +1,14 @@
-import type { ProviderRequest } from "@agent-anything/providers";
-import { describe, expect, it } from "vitest";
+import type {
+  InvocationInterruptionContext,
+  ProviderRequest,
+} from "@agent-anything/providers";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OllamaProvider } from "./OllamaProvider.js";
 import type { FetchLike } from "./OpenAICompatibleProvider.js";
 
 describe("OllamaProvider", () => {
+  afterEach(() => vi.useRealTimers());
+
   it("sends an Ollama native generate request", async () => {
     const calls: Array<{ url: string; headers: Record<string, string>; body: unknown }> = [];
     const provider = new OllamaProvider(config(), async (url, init) => {
@@ -19,7 +24,7 @@ describe("OllamaProvider", () => {
       });
     });
 
-    const result = await provider.send(request());
+    const result = await provider.send(request(), context());
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
@@ -34,9 +39,11 @@ describe("OllamaProvider", () => {
       },
     });
     expect(result).toMatchObject({
-      status: "succeeded",
-      output: "{\"action\":\"complete\",\"summary\":\"done\"}",
-      usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+      kind: "succeeded",
+      response: {
+        output: "{\"action\":\"complete\",\"summary\":\"done\"}",
+        usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+      },
     });
   });
 
@@ -49,14 +56,14 @@ describe("OllamaProvider", () => {
       },
     }));
 
-    const result = await provider.send(request());
+    const result = await provider.send(request(), context());
 
     expect(result).toMatchObject({
-      status: "failed",
-      error: {
+      kind: "failed",
+      failure: {
         code: "provider_http_error",
         message: "Provider request failed with HTTP 500.",
-        metadata: { status: 500 },
+        statusCode: 500,
       },
     });
     expect(JSON.stringify(result)).not.toContain("secret");
@@ -65,22 +72,42 @@ describe("OllamaProvider", () => {
   it("maps malformed provider responses", async () => {
     const provider = new OllamaProvider(config(), async () => okResponse({ done: true }));
 
-    await expect(provider.send(request())).resolves.toMatchObject({
-      status: "failed",
-      error: { code: "provider_response_malformed" },
+    await expect(provider.send(request(), context())).resolves.toMatchObject({
+      kind: "failed",
+      failure: { code: "provider_response_malformed" },
     });
   });
 
   it("maps timeout failures", async () => {
+    vi.useFakeTimers();
     const abortingFetch: FetchLike = async (_url, init) => {
-      init.signal.dispatchEvent(new Event("abort"));
-      throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      await rejectWhenAborted(init.signal);
+      throw new Error("unreachable");
     };
     const provider = new OllamaProvider(config(), abortingFetch);
+    const result = provider.send(request(), context());
 
-    await expect(provider.send(request())).resolves.toMatchObject({
-      status: "failed",
-      error: { code: "provider_timeout" },
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await expect(result).resolves.toMatchObject({
+      kind: "failed",
+      failure: { code: "provider_timeout" },
+    });
+  });
+
+  it("returns exact Run cancellation when it aborts the active request", async () => {
+    const interruption = cancellableContext();
+    const provider = new OllamaProvider(config(), async (_url, init) => {
+      await rejectWhenAborted(init.signal);
+      throw new Error("unreachable");
+    });
+    const result = provider.send(request(), interruption.context);
+
+    interruption.cancel();
+
+    await expect(result).resolves.toEqual({
+      kind: "cancelled",
+      cancellation: { runId: "run_001", requestId: "cancel_001" },
     });
   });
 });
@@ -93,6 +120,41 @@ function config() {
     model: "gemma3:4b",
     timeoutMs: 1000,
   };
+}
+
+function context(): InvocationInterruptionContext {
+  return {
+    signal: new AbortController().signal,
+    interruption: null,
+  };
+}
+
+function cancellableContext() {
+  const controller = new AbortController();
+  let interruption: InvocationInterruptionContext["interruption"] = null;
+  return {
+    context: {
+      signal: controller.signal,
+      get interruption() {
+        return interruption;
+      },
+    } satisfies InvocationInterruptionContext,
+    cancel() {
+      interruption = {
+        kind: "run_cancellation",
+        cancellation: { runId: "run_001", requestId: "cancel_001" },
+      };
+      controller.abort(interruption);
+    },
+  };
+}
+
+function rejectWhenAborted(signal: AbortSignal): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => {
+      reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    }, { once: true });
+  });
 }
 
 function request(): ProviderRequest {

@@ -1,4 +1,6 @@
 import type {
+  InvocationInterruptionContext,
+  ProviderCallResult,
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/providers";
@@ -8,28 +10,28 @@ import { FakeProvider } from "./FakeProvider.js";
 describe("FakeProvider", () => {
   it("returns deterministic queued responses in order", async () => {
     const provider = new FakeProvider({
-      responses: [
-        createResponse("first"),
-        createResponse("second"),
+      results: [
+        succeeded("first"),
+        succeeded("second"),
       ],
     });
 
-    await expect(provider.send(createRequest("request_001"))).resolves.toMatchObject({
-      status: "succeeded",
-      output: "first",
+    await expect(provider.send(createRequest("request_001"), context())).resolves.toMatchObject({
+      kind: "succeeded",
+      response: { output: "first" },
     });
-    await expect(provider.send(createRequest("request_002"))).resolves.toMatchObject({
-      status: "succeeded",
-      output: "second",
+    await expect(provider.send(createRequest("request_002"), context())).resolves.toMatchObject({
+      kind: "succeeded",
+      response: { output: "second" },
     });
   });
 
   it("records provider requests for assertions", async () => {
     const provider = new FakeProvider({
-      responses: [createResponse("ok")],
+      results: [succeeded("ok")],
     });
 
-    await provider.send(createRequest("request_001"));
+    await provider.send(createRequest("request_001"), context());
 
     expect(provider.requests()).toEqual([
       {
@@ -53,18 +55,17 @@ describe("FakeProvider", () => {
   it("returns structured failure when responses are exhausted", async () => {
     const provider = new FakeProvider();
 
-    const response = await provider.send(createRequest("request_001"));
+    const response = await provider.send(createRequest("request_001"), context());
 
     expect(response).toEqual({
-      status: "failed",
-      output: null,
-      usage: null,
-      error: {
+      kind: "failed",
+      failure: {
+        category: "fake",
         code: "fake_provider_exhausted",
         message: "FakeProvider has no queued response.",
-      },
-      metadata: {
-        providerId: "fake-provider",
+        metadata: {
+          providerId: "fake-provider",
+        },
       },
     });
   });
@@ -110,9 +111,15 @@ function createRequest(requestId: string): ProviderRequest {
   };
 }
 
+function succeeded(output: string): ProviderCallResult<string> {
+  return {
+    kind: "succeeded",
+    response: createResponse(output),
+  };
+}
+
 function createResponse(output: string): ProviderResponse<string> {
   return {
-    status: "succeeded",
     output,
     usage: {
       inputTokens: 10,
@@ -120,7 +127,13 @@ function createResponse(output: string): ProviderResponse<string> {
       totalTokens: 15,
       metadata: {},
     },
-    error: null,
     metadata: {},
+  };
+}
+
+function context(): InvocationInterruptionContext {
+  return {
+    signal: new AbortController().signal,
+    interruption: null,
   };
 }

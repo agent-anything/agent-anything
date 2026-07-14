@@ -1,5 +1,10 @@
 import type { HelarcSessionHistoryRecord } from "@agent-anything/helarc";
-import type { Provider, ProviderRequest, ProviderResponse } from "@agent-anything/providers";
+import type {
+  InvocationInterruptionContext,
+  Provider,
+  ProviderCallResult,
+  ProviderRequest,
+} from "@agent-anything/providers";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -955,16 +960,20 @@ class CompleteProvider implements Provider {
     metadata: {},
   };
 
-  async send(_request: ProviderRequest): Promise<ProviderResponse> {
+  async send(
+    _request: ProviderRequest,
+    _context: InvocationInterruptionContext,
+  ): Promise<ProviderCallResult> {
     return {
-      status: "succeeded",
-      output: {
-        action: "complete",
-        summary: "No changes needed.",
+      kind: "succeeded",
+      response: {
+        output: {
+          action: "complete",
+          summary: "No changes needed.",
+        },
+        usage: null,
+        metadata: {},
       },
-      usage: null,
-      error: null,
-      metadata: {},
     };
   }
 }
@@ -983,24 +992,30 @@ class ScriptedProvider implements Provider {
 
   constructor(private readonly outputs: unknown[]) {}
 
-  async send(_request: ProviderRequest): Promise<ProviderResponse> {
+  async send(
+    _request: ProviderRequest,
+    _context: InvocationInterruptionContext,
+  ): Promise<ProviderCallResult> {
     const output = this.outputs.shift();
     if (!output) {
       return {
-        status: "failed",
-        output: null,
-        usage: null,
-        error: { code: "script_exhausted", message: "Scripted provider exhausted." },
-        metadata: {},
+        kind: "failed",
+        failure: {
+          category: "fake",
+          code: "script_exhausted",
+          message: "Scripted provider exhausted.",
+          metadata: {},
+        },
       };
     }
 
     return {
-      status: "succeeded",
-      output,
-      usage: null,
-      error: null,
-      metadata: {},
+      kind: "succeeded",
+      response: {
+        output,
+        usage: null,
+        metadata: {},
+      },
     };
   }
 }

@@ -1,21 +1,22 @@
 import type {
   Provider,
+  ProviderCallResult,
   ProviderCapabilities,
   ProviderDescriptor,
+  InvocationInterruptionContext,
   ProviderRequest,
-  ProviderResponse,
 } from "@agent-anything/providers";
 
 export interface FakeProviderInput {
   descriptor?: Partial<Omit<ProviderDescriptor, "capabilities">> & {
     capabilities?: Partial<ProviderCapabilities>;
   };
-  responses?: ProviderResponse[];
+  results?: ProviderCallResult[];
 }
 
 export class FakeProvider implements Provider {
   readonly descriptor: ProviderDescriptor;
-  private readonly responses: ProviderResponse[];
+  private readonly results: ProviderCallResult[];
   private readonly recordedRequests: ProviderRequest[] = [];
 
   constructor(input: FakeProviderInput = {}) {
@@ -30,29 +31,31 @@ export class FakeProvider implements Provider {
         ...input.descriptor?.capabilities,
       },
     };
-    this.responses = [...(input.responses ?? [])];
+    this.results = [...(input.results ?? [])];
   }
 
-  async send(request: ProviderRequest): Promise<ProviderResponse> {
+  async send(
+    request: ProviderRequest,
+    _context: InvocationInterruptionContext,
+  ): Promise<ProviderCallResult> {
     this.recordedRequests.push(cloneRequest(request));
 
-    const response = this.responses.shift();
-    if (!response) {
+    const result = this.results.shift();
+    if (!result) {
       return {
-        status: "failed",
-        output: null,
-        usage: null,
-        error: {
+        kind: "failed",
+        failure: {
+          category: "fake",
           code: "fake_provider_exhausted",
           message: "FakeProvider has no queued response.",
-        },
-        metadata: {
-          providerId: this.descriptor.id,
+          metadata: {
+            providerId: this.descriptor.id,
+          },
         },
       };
     }
 
-    return cloneResponse(response);
+    return cloneResult(result);
   }
 
   requests(): ProviderRequest[] {
@@ -64,8 +67,8 @@ function cloneRequest(request: ProviderRequest): ProviderRequest {
   return cloneStructured(request);
 }
 
-function cloneResponse(response: ProviderResponse): ProviderResponse {
-  return cloneStructured(response);
+function cloneResult(result: ProviderCallResult): ProviderCallResult {
+  return cloneStructured(result);
 }
 
 function cloneStructured<TValue>(value: TValue): TValue {

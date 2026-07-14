@@ -4,7 +4,9 @@ import {
   type ControllerInput,
 } from "@agent-anything/agent-core";
 import type {
+  InvocationInterruptionContext,
   Provider,
+  ProviderCallResult,
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/providers";
@@ -315,10 +317,8 @@ function tool(
 
 function response(output: unknown): ProviderResponse {
   return {
-    status: "succeeded",
     output,
     usage: null,
-    error: null,
     metadata: {},
   };
 }
@@ -352,8 +352,11 @@ class FakeProvider implements Provider {
 
   constructor(private readonly output: unknown) {}
 
-  async send(request: ProviderRequest): Promise<ProviderResponse> {
+  async send(
+    request: ProviderRequest,
+    _context: InvocationInterruptionContext,
+  ): Promise<ProviderCallResult> {
     this.requests.push(request);
-    return response(this.output);
+    return { kind: "succeeded", response: response(this.output) };
   }
 }

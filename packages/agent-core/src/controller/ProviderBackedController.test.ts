@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Provider, ProviderRequest, ProviderResponse } from "@agent-anything/providers";
+import type {
+  Provider,
+  ProviderCallResult,
+  ProviderRequest,
+  ProviderResponse,
+} from "@agent-anything/providers";
 import { FakeProvider } from "@agent-anything/testing";
 import type { Agent } from "../agent/index.js";
 import { projectContext, createInitialContext } from "../context/index.js";
@@ -21,7 +26,7 @@ interface TestOutput {
 describe("ProviderBackedController", () => {
   it("builds a request and returns Agent-validated final output with model provenance", async () => {
     const provider = new FakeProvider({
-      responses: [succeededResponse({ summary: "Done" })],
+      results: [succeededResult({ summary: "Done" })],
     });
     const controller = createController(provider, {
       buildRequest(input) {
@@ -48,7 +53,7 @@ describe("ProviderBackedController", () => {
 
   it("preserves ordered actions and validates their model-item references", async () => {
     const provider = new FakeProvider({
-      responses: [succeededResponse({ action: "tools" })],
+      results: [succeededResult({ action: "tools" })],
     });
     const controller = createController(provider, {
       parseResponse() {
@@ -94,7 +99,7 @@ describe("ProviderBackedController", () => {
 
   it("normalizes stop decisions", async () => {
     const controller = createController(
-      new FakeProvider({ responses: [succeededResponse({ action: "stop" })] }),
+      new FakeProvider({ results: [succeededResult({ action: "stop" })] }),
       {
         parseResponse() {
           return {
@@ -117,16 +122,15 @@ describe("ProviderBackedController", () => {
   it("maps failed provider responses to attributed ControllerError values", async () => {
     const controller = createController(
       new FakeProvider({
-        responses: [
+        results: [
           {
-            status: "failed",
-            output: null,
-            usage: null,
-            error: {
+            kind: "failed",
+            failure: {
+              category: "transport",
               code: "upstream_unavailable",
               message: "Provider unavailable.",
+              metadata: {},
             },
-            metadata: {},
           },
         ],
       }),
@@ -144,8 +148,108 @@ describe("ProviderBackedController", () => {
       retryable: false,
       metadata: {
         providerId: "fake-provider",
+        providerFailureCategory: "transport",
         providerErrorCode: "upstream_unavailable",
+        providerRequestId: null,
+        providerStatusCode: null,
+        providerRetryAfterMs: null,
       },
+    });
+  });
+
+  it("preserves Provider timeout as an owner-specific failure", async () => {
+    const controller = createController(new FakeProvider({
+      results: [{
+        kind: "failed",
+        failure: {
+          category: "timeout",
+          code: "provider_timeout",
+          message: "Provider request timed out.",
+          metadata: {},
+        },
+      }],
+    }));
+
+    const error = await captureError(
+      controller.next(createControllerInput(), callContext()),
+    );
+
+    expect((error as ControllerError).runtimeError).toMatchObject({
+      owner: "provider",
+      code: "provider_timeout",
+      metadata: {
+        providerFailureCategory: "timeout",
+        providerErrorCode: "provider_timeout",
+      },
+    });
+  });
+
+  it("accepts only cancellation correlated to the active Run request", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const provider: Provider = {
+      descriptor: providerDescriptor("cancelling-provider"),
+      async send(_request, context) {
+        const receipt = cancellation.requestCancellation({
+          origin: "host",
+          reasonCode: "host_requested",
+        });
+        expect(context.interruption).toEqual({
+          kind: "run_cancellation",
+          cancellation: {
+            runId: "run_001",
+            requestId: receipt.request.id,
+          },
+        });
+        return {
+          kind: "cancelled",
+          cancellation: {
+            runId: "run_001",
+            requestId: receipt.request.id,
+          },
+        };
+      },
+    };
+    const controller = createController(provider);
+
+    const error = await captureError(controller.next(createControllerInput(), {
+      cancellation: cancellation.context,
+    }));
+
+    expect(error).toBe(cancellation.context.request);
+  });
+
+  it("fails closed for mismatched or unconfirmed Provider cancellation", async () => {
+    const mismatched = createController(new FakeProvider({
+      results: [{
+        kind: "cancelled",
+        cancellation: { runId: "another_run", requestId: "unknown_request" },
+      }],
+    }));
+    const unconfirmed = createController(new FakeProvider({
+      results: [{
+        kind: "cancellation_unconfirmed",
+        failure: {
+          category: "cancellation",
+          code: "provider_cancellation_unconfirmed",
+          message: "Provider settlement could not be confirmed.",
+          metadata: {},
+        },
+      }],
+    }));
+
+    const mismatchedError = await captureError(
+      mismatched.next(createControllerInput(), callContext()),
+    );
+    const unconfirmedError = await captureError(
+      unconfirmed.next(createControllerInput(), callContext()),
+    );
+
+    expect((mismatchedError as ControllerError).runtimeError.code)
+      .toBe("provider_cancellation_unconfirmed");
+    expect((unconfirmedError as ControllerError).runtimeError).toMatchObject({
+      owner: "provider",
+      code: "provider_cancellation_unconfirmed",
+      message: "Provider settlement could not be confirmed.",
     });
   });
 
@@ -189,7 +293,7 @@ describe("ProviderBackedController", () => {
   it("rejects oversized provider output before product parsing", async () => {
     const parseResponse = vi.fn(() => finalDecision({ summary: "unused" }));
     const controller = createController(
-      new FakeProvider({ responses: [succeededResponse("123456")] }),
+      new FakeProvider({ results: [succeededResult("123456")] }),
       { parseResponse, maxProviderOutputLength: 5 },
     );
 
@@ -211,7 +315,7 @@ describe("ProviderBackedController", () => {
 
   it("rejects parser failures and Agent output contract failures", async () => {
     const parseFailure = createController(
-      new FakeProvider({ responses: [succeededResponse({ malformed: true })] }),
+      new FakeProvider({ results: [succeededResult({ malformed: true })] }),
       {
         parseResponse() {
           throw new SyntaxError("Expected action kind.");
@@ -219,7 +323,7 @@ describe("ProviderBackedController", () => {
       },
     );
     const outputFailure = createController(
-      new FakeProvider({ responses: [succeededResponse({ summary: 42 })] }),
+      new FakeProvider({ results: [succeededResult({ summary: 42 })] }),
       {
         parseResponse(response) {
           return finalDecision(response.output);
@@ -293,7 +397,7 @@ describe("ProviderBackedController", () => {
     ],
   ])("rejects malformed decision: %s", async (_name, malformedDecision) => {
     const controller = createController(
-      new FakeProvider({ responses: [succeededResponse({})] }),
+      new FakeProvider({ results: [succeededResult({})] }),
       {
         parseResponse() {
           return malformedDecision as unknown as ControllerDecision<TestOutput>;
@@ -310,7 +414,7 @@ describe("ProviderBackedController", () => {
   });
 
   it("does not start provider work after cancellation", async () => {
-    const provider = new FakeProvider({ responses: [succeededResponse({})] });
+    const provider = new FakeProvider({ results: [succeededResult({})] });
     const cancellation = createRunCancellationController({ runId: "run_001" });
     const receipt = cancellation.requestCancellation({
       origin: "user",
@@ -338,7 +442,7 @@ describe("ProviderBackedController", () => {
           origin: "host",
           reasonCode: "host_requested",
         });
-        return succeededResponse({ summary: "Too late" });
+        return succeededResult({ summary: "Too late" });
       },
     };
     const controller = createController(provider, { parseResponse });
@@ -456,13 +560,14 @@ function request(content: string): ProviderRequest {
   };
 }
 
-function succeededResponse(output: unknown): ProviderResponse {
+function succeededResult(output: unknown): ProviderCallResult {
   return {
-    status: "succeeded",
-    output,
-    usage: null,
-    error: null,
-    metadata: {},
+    kind: "succeeded",
+    response: {
+      output,
+      usage: null,
+      metadata: {},
+    },
   };
 }
 

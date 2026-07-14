@@ -1,6 +1,11 @@
 import type { ContextProjection } from "@agent-anything/agent-core";
 import type { HostPermissionBridge } from "@agent-anything/agent-core/host";
-import type { Provider, ProviderRequest, ProviderResponse } from "@agent-anything/providers";
+import type {
+  InvocationInterruptionContext,
+  Provider,
+  ProviderCallResult,
+  ProviderRequest,
+} from "@agent-anything/providers";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -425,27 +430,33 @@ class ScriptedProvider implements Provider {
 
   constructor(private readonly outputs: unknown[]) {}
 
-  async send(request: ProviderRequest): Promise<ProviderResponse> {
+  async send(
+    request: ProviderRequest,
+    _context: InvocationInterruptionContext,
+  ): Promise<ProviderCallResult> {
     this.requests.push(request);
     this.lastControllerInputContexts.push(readObservationCount(request));
     this.lastControllerInputPlans.push(readCurrentPlan(request));
     const output = this.outputs.shift();
     if (!output) {
       return {
-        status: "failed",
-        output: null,
-        usage: null,
-        error: { code: "script_exhausted", message: "Scripted provider exhausted." },
-        metadata: {},
+        kind: "failed",
+        failure: {
+          category: "fake",
+          code: "script_exhausted",
+          message: "Scripted provider exhausted.",
+          metadata: {},
+        },
       };
     }
 
     return {
-      status: "succeeded",
-      output,
-      usage: null,
-      error: null,
-      metadata: {},
+      kind: "succeeded",
+      response: {
+        output,
+        usage: null,
+        metadata: {},
+      },
     };
   }
 }

@@ -36,7 +36,6 @@ export type HelarcProviderStructuredOutput =
   | { action: "stop"; reason: string };
 
 export type HelarcControllerParseErrorCode =
-  | "provider_failed"
   | "controller_output_too_large"
   | "controller_output_not_json"
   | "controller_output_invalid"
@@ -92,13 +91,6 @@ export function parseHelarcProviderResponse(
   response: ProviderResponse,
   input: ControllerInput<HelarcAgentOutput>,
 ): ControllerDecision<HelarcAgentOutput> {
-  if (response.status === "failed") {
-    throw new HelarcControllerParseError(
-      "provider_failed",
-      response.error?.message ?? "Provider failed.",
-    );
-  }
-
   const output = parseStructuredOutput(response.output);
   const modelItem = createModelItem(output, input);
   const modelItems = Object.freeze([modelItem]) as readonly [ControllerModelItem];
