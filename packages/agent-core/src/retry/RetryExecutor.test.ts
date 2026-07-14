@@ -336,6 +336,7 @@ describe("RetryExecutor", () => {
 
     expect(result).toEqual({
       kind: "failed",
+      error: retryableError(),
       failure: {
         category: "transport",
         code: "transport_failed",

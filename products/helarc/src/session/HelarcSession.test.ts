@@ -79,6 +79,10 @@ describe("Helarc read-only session", () => {
       "run.item.appended",
       "retry.attempt.started",
       "run.item.appended",
+      "retry.attempt.started",
+      "run.item.appended",
+      "retry.attempt.finished",
+      "run.item.appended",
       "retry.attempt.finished",
       "run.item.appended",
       "controller.finished",
@@ -89,6 +93,10 @@ describe("Helarc read-only session", () => {
       "controller.started",
       "run.item.appended",
       "retry.attempt.started",
+      "run.item.appended",
+      "retry.attempt.started",
+      "run.item.appended",
+      "retry.attempt.finished",
       "run.item.appended",
       "retry.attempt.finished",
       "run.item.appended",
@@ -124,7 +132,9 @@ describe("Helarc read-only session", () => {
 
     expect(result.status).toBe("completed");
     expect(provider.requests).toHaveLength(2);
-    const retryActivity = result.activity.filter((item) => item.kind.startsWith("retry."));
+    const retryActivity = result.activity.filter((item) =>
+      item.kind.startsWith("retry.") && item.metadata.owner === "provider_request"
+    );
     expect(retryActivity.map((item) => item.kind)).toEqual([
       "retry.attempt.started",
       "retry.attempt.finished",
@@ -189,6 +199,40 @@ describe("Helarc read-only session", () => {
         toolName: "codeAgent.runCommand",
         input: createShellInput(markerPath),
       },
+      {
+        action: "complete",
+        summary: "Shell execution is not available in this session.",
+      },
+    ]);
+
+    const result = await runHelarcReadOnlySession({
+      task: createTask(workspaceRoot),
+      provider,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.output.safeErrors).toEqual([]);
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[1].metadata).toMatchObject({
+      structuredOutputAttemptNumber: 2,
+      structuredOutputCorrectionCategory: "structured_output_semantic",
+      structuredOutputCorrectionCode: "controller_tool_name_unsupported",
+    });
+    expect(provider.requests[1].messages.at(-1)?.content).toContain(
+      "Use only a Tool exposed in the active Tool catalog.",
+    );
+    expect(result.runResult.items.some((item) =>
+      item.kind === "action" && item.action.name === "codeAgent.runCommand"
+    )).toBe(false);
+    await expect(access(markerPath)).rejects.toThrow();
+  });
+
+  it("exhausts repeated malformed output without materializing model items or Actions", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-output-exhausted-"));
+    const firstInvalidOutput = "PRIVATE_INVALID_OUTPUT_1";
+    const provider = new ScriptedProvider([
+      firstInvalidOutput,
+      "PRIVATE_INVALID_OUTPUT_2",
     ]);
 
     const result = await runHelarcReadOnlySession({
@@ -197,10 +241,19 @@ describe("Helarc read-only session", () => {
     });
 
     expect(result.status).toBe("failed");
-    expect(result.output.safeErrors).toEqual([
-      { code: "model_output_invalid", message: "Tool is not exposed in the active tool catalog." },
-    ]);
-    await expect(access(markerPath)).rejects.toThrow();
+    expect(result.runResult).toMatchObject({
+      status: "failed",
+      code: "model_structured_output_retry_exhausted",
+      errors: [{
+        owner: "model",
+        code: "model_structured_output_retry_exhausted",
+      }],
+    });
+    expect(result.runResult.items.some((item) =>
+      item.kind === "model_output" || item.kind === "action"
+    )).toBe(false);
+    expect(provider.requests).toHaveLength(2);
+    expect(JSON.stringify(provider.requests[1])).not.toContain(firstInvalidOutput);
   });
 
   it("blocks shell execution when permission is denied before process start", async () => {

@@ -66,9 +66,14 @@ export interface RetryDeadlineExceeded {
 export type RetryExecutionResult<
   TResult,
   TFailure extends RetryFailure = RetryFailure,
+  TError = unknown,
 > =
   | { readonly kind: "succeeded"; readonly value: TResult }
-  | { readonly kind: "failed"; readonly failure: TFailure }
+  | {
+      readonly kind: "failed";
+      readonly failure: TFailure;
+      readonly error: TError;
+    }
   | {
       readonly kind: "budget_exhausted";
       readonly exhaustion: RetryBudgetExhausted<TFailure>;

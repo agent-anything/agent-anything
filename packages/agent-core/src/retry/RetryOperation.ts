@@ -32,7 +32,7 @@ export type RetryOperationSubject =
   | {
       readonly kind: "structured_output";
       readonly controllerRequestId: string;
-      readonly schemaId: string;
+      readonly contractId: string;
     };
 
 export interface RetryAttempt {
@@ -93,7 +93,7 @@ function snapshotSubject(subject: RetryOperationSubject): RetryOperationSubject 
       return Object.freeze({
         kind: subject.kind,
         controllerRequestId: subject.controllerRequestId,
-        schemaId: subject.schemaId,
+        contractId: subject.contractId,
       });
   }
 }
@@ -125,7 +125,7 @@ function validateSubject(owner: RetryOwner, subject: RetryOperationSubject): voi
       break;
     case "structured_output":
       assertNonEmpty(subject.controllerRequestId, "RetryOperation.subject.controllerRequestId");
-      assertNonEmpty(subject.schemaId, "RetryOperation.subject.schemaId");
+      assertNonEmpty(subject.contractId, "RetryOperation.subject.contractId");
       break;
   }
 }

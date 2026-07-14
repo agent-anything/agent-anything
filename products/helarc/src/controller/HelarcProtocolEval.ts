@@ -66,7 +66,10 @@ export function runHelarcProtocolEvalFixture(
   fixture: HelarcProtocolEvalFixture,
 ): HelarcProtocolEvalResult {
   const input = createProtocolEvalControllerInput(fixture);
-  const request = buildHelarcProviderRequest(input);
+  const request = buildHelarcProviderRequest(input, {
+    attemptNumber: 1,
+    correction: null,
+  });
   const actualExposedToolNames = readExposedToolNames(request.metadata.exposedToolNames);
   const exposedToolNamesFailure = compareArray(
     "exposedToolNames",

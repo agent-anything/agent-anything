@@ -37,7 +37,7 @@ export class RetryExecutor {
     executeAttempt: (
       context: import("./RetryExecution.js").RetryAttemptContext,
     ) => Promise<RetryAttemptExecutionResult<TResult, TError>>,
-  ): Promise<RetryExecutionResult<TResult, RetryFailure<TCategory>>> {
+  ): Promise<RetryExecutionResult<TResult, RetryFailure<TCategory>, TError>> {
     const operation = snapshotRetryOperation(input.operation);
     const policy = snapshotRetryPolicy(input.policy);
     const progress = snapshotProgress(input.priorProgress);
@@ -206,7 +206,7 @@ export class RetryExecutor {
           finishedAt.toISOString(),
           failure,
         ));
-        return { kind: "failed", failure };
+        return { kind: "failed", failure, error: attemptResult.error };
       }
 
       if (
@@ -222,7 +222,7 @@ export class RetryExecutor {
           finishedAt.toISOString(),
           failure,
         ));
-        return { kind: "failed", failure };
+        return { kind: "failed", failure, error: attemptResult.error };
       }
 
       if (deadlineElapsed(operation, this.dependencies)) {
@@ -283,7 +283,7 @@ export class RetryExecutor {
           finishedAt.toISOString(),
           failure,
         ));
-        return { kind: "failed", failure };
+        return { kind: "failed", failure, error: attemptResult.error };
       }
       if (
         operation.deadlineAt !== undefined &&

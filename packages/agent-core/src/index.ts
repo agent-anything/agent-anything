@@ -15,10 +15,16 @@ export type {
   ControllerInput,
   ControllerModelItem,
   ProviderBackedControllerInput,
+  ProviderRequestBuildContext,
+  StructuredOutputCorrection,
+  StructuredOutputFailure,
+  StructuredOutputFailureCategory,
 } from "./controller/index.js";
 export {
   ControllerError,
   ProviderBackedController,
+  snapshotStructuredOutputFailure,
+  StructuredOutputError,
 } from "./controller/index.js";
 export type {
   Context,

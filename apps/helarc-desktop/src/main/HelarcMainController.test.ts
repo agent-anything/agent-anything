@@ -717,23 +717,25 @@ describe("HelarcMainController", () => {
   it("keeps desktop runtime tool mode read-only by default", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-read-only-default-"));
     const markerPath = join(workspaceRoot, "marker.txt");
+    const unsupportedShellCall = {
+      action: "call_tool",
+      reason: "Try a shell command.",
+      toolName: "codeAgent.runCommand",
+      input: {
+        command: process.execPath,
+        args: [
+          "-e",
+          `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran')`,
+        ],
+        cwd: ".",
+        timeoutMs: 1_000,
+        reason: "Create a governed marker file.",
+      },
+    };
     const controller = new HelarcMainController({
       provider: new ScriptedProvider([
-        {
-          action: "call_tool",
-          reason: "Try a shell command.",
-          toolName: "codeAgent.runCommand",
-          input: {
-            command: process.execPath,
-            args: [
-              "-e",
-              `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran')`,
-            ],
-            cwd: ".",
-            timeoutMs: 1_000,
-            reason: "Create a governed marker file.",
-          },
-        },
+        unsupportedShellCall,
+        unsupportedShellCall,
       ]),
     });
     controller.selectWorkspacePath(workspaceRoot);
@@ -751,11 +753,11 @@ describe("HelarcMainController", () => {
         terminal: {
           status: "failed",
           runtimeStatus: "failed",
-          runtimeCode: "model_output_invalid",
+          runtimeCode: "model_structured_output_retry_exhausted",
         },
       },
       output: {
-        safeErrors: [{ code: "model_output_invalid" }],
+        safeErrors: [{ code: "model_structured_output_retry_exhausted" }],
       },
       sessionHistory: [{
         status: "failed",
@@ -765,7 +767,7 @@ describe("HelarcMainController", () => {
           terminal: {
             status: "failed",
             runtimeStatus: "failed",
-            runtimeCode: "model_output_invalid",
+            runtimeCode: "model_structured_output_retry_exhausted",
           },
         },
       }],

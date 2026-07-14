@@ -1,5 +1,6 @@
 import {
   ProviderBackedController,
+  StructuredOutputError,
   createSystemRetryExecutor,
   createRunCancellationController,
   systemRetryClock,
@@ -22,6 +23,7 @@ import {
   buildHelarcPromptAssembly,
   createHelarcActionContract,
   createHelarcToolCatalogMetadata,
+  HELARC_ACTION_CONTRACT_VERSION,
   HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
   HELARC_TOOL_CATALOG_METADATA_KEY,
   HelarcControllerParseError,
@@ -33,7 +35,10 @@ import {
 
 describe("Helarc controller", () => {
   it("builds a provider request from the current Runner state", () => {
-    const request = buildHelarcProviderRequest(createControllerInput());
+    const request = buildHelarcProviderRequest(createControllerInput(), {
+      attemptNumber: 1,
+      correction: null,
+    });
 
     expect(request.capability).toBe("helarc.code-agent.turn");
     expect(request.metadata).toMatchObject({
@@ -88,11 +93,58 @@ describe("Helarc controller", () => {
       tools: [...READ_ONLY_TOOLS, tool("codeAgent.runCommand", "Run a command.", "risky")],
       mode: "shell-enabled",
     });
-    const request = buildHelarcProviderRequest(input);
+    const request = buildHelarcProviderRequest(input, {
+      attemptNumber: 1,
+      correction: null,
+    });
 
     expect(request.metadata.exposedToolNames).toContain("codeAgent.runCommand");
     expect(request.messages[0]?.content).toContain("Active tool catalog (shell-enabled):");
     expect(request.messages[0]?.content).toContain("Risk: risky");
+  });
+
+  it("builds bounded correction diagnostics without copying rejected output", () => {
+    const rejectedOutput = "private rejected provider output";
+    const request = buildHelarcProviderRequest(createControllerInput(), {
+      attemptNumber: 2,
+      correction: {
+        previousAttemptNumber: 1,
+        failure: {
+          category: "structured_output_syntax",
+          code: "controller_output_not_json",
+          correctionFeedback: "Return one valid JSON object without markdown.",
+        },
+      },
+    });
+
+    expect(request.metadata).toMatchObject({
+      structuredOutputAttemptNumber: 2,
+      structuredOutputCorrectionCategory: "structured_output_syntax",
+      structuredOutputCorrectionCode: "controller_output_not_json",
+    });
+    expect(request.messages.at(-1)).toMatchObject({
+      role: "user",
+      metadata: { kind: "structured-output-correction" },
+    });
+    expect(request.messages.at(-1)?.content).toContain(
+      "Return one valid JSON object without markdown.",
+    );
+    expect(JSON.stringify(request)).not.toContain(rejectedOutput);
+  });
+
+  it("classifies known protocol errors as explicit correction failures", () => {
+    try {
+      parseStructuredOutput("{");
+    } catch (error) {
+      expect(error).toBeInstanceOf(StructuredOutputError);
+      expect((error as StructuredOutputError).failure).toEqual({
+        category: "structured_output_syntax",
+        code: "controller_output_not_json",
+        correctionFeedback: "Return one valid JSON object without markdown or surrounding text.",
+      });
+      return;
+    }
+    throw new Error("Expected structured-output correction failure.");
   });
 
   it("maps call_tool to a tool action without accepting a model-owned action id", () => {
@@ -223,6 +275,7 @@ describe("Helarc controller", () => {
       provider,
       buildRequest: buildHelarcProviderRequest,
       parseResponse: parseHelarcProviderResponse,
+      structuredOutputContractId: HELARC_ACTION_CONTRACT_VERSION,
       maxProviderOutputLength: HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
       retryExecutor: createSystemRetryExecutor(),
       retryClock: systemRetryClock,

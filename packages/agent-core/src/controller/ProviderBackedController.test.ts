@@ -20,6 +20,10 @@ import {
   ProviderBackedController,
 } from "./ProviderBackedController.js";
 import {
+  StructuredOutputError,
+  type ProviderRequestBuildContext,
+} from "./StructuredOutput.js";
+import {
   createSystemRetryExecutor,
   systemRetryClock,
 } from "../retry/index.js";
@@ -225,17 +229,18 @@ describe("ProviderBackedController", () => {
     expect(requests).toHaveLength(2);
     expect(requests[0]).not.toBe(requests[1]);
     expect(requests[1].messages[0].content).toBe("original request");
-    expect(events.map((event) => event.type)).toEqual([
+    const providerEvents = events.filter((event) => event.owner === "provider_request");
+    expect(providerEvents.map((event) => event.type)).toEqual([
       "retry_attempt_started",
       "retry_attempt_finished",
       "retry_scheduled",
       "retry_attempt_started",
       "retry_attempt_finished",
     ]);
-    expect(new Set(events.map((event) => event.operationId))).toEqual(new Set([
+    expect(new Set(providerEvents.map((event) => event.operationId))).toEqual(new Set([
       "run_001:controller:1:provider-request:1",
     ]));
-    expect(events[0].attemptId).not.toBe(events[3].attemptId);
+    expect(providerEvents[0].attemptId).not.toBe(providerEvents[3].attemptId);
   });
 
   it.each([
@@ -338,7 +343,9 @@ describe("ProviderBackedController", () => {
         providerFailureCategory: "transport",
       },
     });
-    expect(events.at(-1)).toMatchObject({
+    expect(events.find((event) =>
+      event.owner === "provider_request" && event.type === "retry_exhausted"
+    )).toMatchObject({
       type: "retry_exhausted",
       reason: "retry_budget_exhausted",
       totalAttempts: 3,
@@ -374,7 +381,8 @@ describe("ProviderBackedController", () => {
       code: "provider_retry_exhausted",
       metadata: { retryExhaustionReason: "deadline_exceeded", retryTotalAttempts: 1 },
     });
-    expect(events.map((event) => event.type)).toEqual([
+    expect(events.filter((event) => event.owner === "provider_request")
+      .map((event) => event.type)).toEqual([
       "retry_attempt_started",
       "retry_attempt_finished",
       "retry_exhausted",
@@ -410,7 +418,9 @@ describe("ProviderBackedController", () => {
 
     await expect(outcome).resolves.toBe(receipt.request);
     expect(provider.requests()).toHaveLength(1);
-    expect(events.at(-1)).toMatchObject({ type: "retry_cancelled", phase: "backoff" });
+    expect(events.find((event) =>
+      event.owner === "provider_request" && event.type === "retry_cancelled"
+    )).toMatchObject({ type: "retry_cancelled", phase: "backoff" });
   });
 
   it("rejects SDK-owned request Retry without a conforming projection path", () => {
@@ -552,10 +562,10 @@ describe("ProviderBackedController", () => {
     expect((error as ControllerError).runtimeError).toMatchObject({
       owner: "model",
       code: "model_output_invalid",
-      message: "Provider output exceeds the configured limit.",
+      message: "Model output did not satisfy the active structured-output contract.",
       metadata: {
-        maxProviderOutputLength: 5,
-        actualProviderOutputLength: 6,
+        structuredOutputFailureCategory: "structured_output_size",
+        structuredOutputFailureCode: "structured_output_too_large",
       },
     });
   });
@@ -587,11 +597,290 @@ describe("ProviderBackedController", () => {
 
     expect((parseError as ControllerError).runtimeError).toMatchObject({
       code: "model_output_invalid",
-      message: "Expected action kind.",
+      message: "Provider output parsing failed.",
     });
     expect((outputError as ControllerError).runtimeError).toMatchObject({
       code: "model_output_invalid",
-      message: "Final output must contain a summary string.",
+      message: "Model output did not satisfy the active structured-output contract.",
+      metadata: {
+        structuredOutputFailureCategory: "agent_output_contract",
+        structuredOutputFailureCode: "agent_output_invalid",
+      },
+    });
+  });
+
+  it("corrects one eligible structured-output failure within one stable operation", async () => {
+    const rawInvalidOutput = "raw invalid output with private content";
+    const buildContexts: ProviderRequestBuildContext[] = [];
+    const events: Array<Record<string, unknown>> = [];
+    const provider = new FakeProvider({
+      results: [
+        succeededResult(rawInvalidOutput),
+        succeededResult({ summary: "Recovered" }),
+      ],
+    });
+    const controller = createController(provider, {
+      buildRequest(_input, context) {
+        buildContexts.push(context);
+        return request(context.correction === null
+          ? "Initial request"
+          : `Correction: ${context.correction.failure.correctionFeedback}`);
+      },
+      parseResponse(response) {
+        if (response.output === rawInvalidOutput) {
+          throw correctionError(
+            "structured_output_syntax",
+            "test_output_not_json",
+            "Return one valid structured object.",
+          );
+        }
+        return finalDecision(response.output);
+      },
+    });
+
+    const decision = await controller.next(
+      createControllerInput(),
+      callContext(undefined, {
+        structuredMaxRetries: 1,
+        structuredRetryableCategories: ["structured_output_syntax"],
+        events,
+      }),
+    );
+
+    expect(decision).toMatchObject({
+      kind: "final_output",
+      output: { summary: "Recovered" },
+    });
+    expect(provider.requests()).toHaveLength(2);
+    expect(buildContexts).toHaveLength(2);
+    expect(buildContexts[0]).toEqual({ attemptNumber: 1, correction: null });
+    expect(buildContexts[1]).toMatchObject({
+      attemptNumber: 2,
+      correction: {
+        previousAttemptNumber: 1,
+        failure: {
+          category: "structured_output_syntax",
+          code: "test_output_not_json",
+          correctionFeedback: "Return one valid structured object.",
+        },
+      },
+    });
+    expect(JSON.stringify(buildContexts[1])).not.toContain(rawInvalidOutput);
+    expect(provider.requests()[1].messages[0].content).not.toContain(rawInvalidOutput);
+
+    const structuredEvents = events.filter((event) => event.owner === "structured_output");
+    expect(structuredEvents.map((event) => event.type)).toEqual([
+      "retry_attempt_started",
+      "retry_attempt_finished",
+      "retry_scheduled",
+      "retry_attempt_started",
+      "retry_attempt_finished",
+    ]);
+    expect(new Set(structuredEvents.map((event) => event.operationId))).toEqual(
+      new Set(["run_001:controller:1:structured-output:1"]),
+    );
+    expect(new Set(events
+      .filter((event) => event.owner === "provider_request")
+      .map((event) => event.operationId))).toEqual(new Set([
+        "run_001:controller:1:provider-request:1",
+        "run_001:controller:1:provider-request:2",
+      ]));
+  });
+
+  it("corrects an Agent output-contract failure before returning a decision", async () => {
+    const provider = new FakeProvider({
+      results: [
+        succeededResult({ summary: 42 }),
+        succeededResult({ summary: "Recovered" }),
+      ],
+    });
+    const controller = createController(provider, {
+      parseResponse(response) {
+        return finalDecision(response.output);
+      },
+    });
+
+    const decision = await controller.next(
+      createControllerInput(),
+      callContext(undefined, {
+        structuredMaxRetries: 1,
+        structuredRetryableCategories: ["agent_output_contract"],
+      }),
+    );
+
+    expect(provider.requests()).toHaveLength(2);
+    expect(decision).toMatchObject({
+      kind: "final_output",
+      output: { summary: "Recovered" },
+    });
+  });
+
+  it("does not retry an untyped parser exception as a model correction", async () => {
+    const provider = new FakeProvider({
+      results: [succeededResult("invalid-1"), succeededResult("invalid-2")],
+    });
+    const controller = createController(provider, {
+      parseResponse() {
+        throw new SyntaxError("Parser implementation failed.");
+      },
+    });
+
+    const error = await captureError(controller.next(
+      createControllerInput(),
+      callContext(undefined, {
+        structuredMaxRetries: 1,
+        structuredRetryableCategories: [
+          "structured_output_syntax",
+          "structured_output_schema",
+        ],
+      }),
+    ));
+
+    expect(provider.requests()).toHaveLength(1);
+    expect((error as ControllerError).runtimeError).toMatchObject({
+      owner: "model",
+      code: "model_output_invalid",
+      message: "Provider output parsing failed.",
+    });
+  });
+
+  it("maps repeated eligible output failures to structured-output exhaustion", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const provider = new FakeProvider({
+      results: [succeededResult("invalid-1"), succeededResult("invalid-2")],
+    });
+    const controller = createController(provider, {
+      parseResponse() {
+        throw correctionError(
+          "structured_output_schema",
+          "test_schema_invalid",
+          "Return the required summary field.",
+        );
+      },
+    });
+
+    const error = await captureError(controller.next(
+      createControllerInput(),
+      callContext(undefined, {
+        structuredMaxRetries: 1,
+        structuredRetryableCategories: ["structured_output_schema"],
+        events,
+      }),
+    ));
+
+    expect(provider.requests()).toHaveLength(2);
+    expect((error as ControllerError).runtimeError).toMatchObject({
+      owner: "model",
+      code: "model_structured_output_retry_exhausted",
+      metadata: {
+        retryExhaustionReason: "retry_budget_exhausted",
+        retryTotalAttempts: 2,
+        structuredOutputFailureCategory: "structured_output_schema",
+        structuredOutputFailureCode: "test_schema_invalid",
+      },
+    });
+    expect(events.find((event) =>
+      event.owner === "structured_output" && event.type === "retry_exhausted"
+    )).toMatchObject({ reason: "retry_budget_exhausted", totalAttempts: 2 });
+  });
+
+  it("preserves a Provider-owned failure during a correction request", async () => {
+    const provider = new FakeProvider({
+      results: [
+        succeededResult("invalid"),
+        failedResult("http", "provider_http_error", { statusCode: 401 }),
+      ],
+    });
+    const controller = createController(provider, {
+      parseResponse() {
+        throw correctionError(
+          "structured_output_syntax",
+          "test_output_not_json",
+          "Return valid structured output.",
+        );
+      },
+    });
+
+    const error = await captureError(controller.next(
+      createControllerInput(),
+      callContext(undefined, {
+        structuredMaxRetries: 1,
+        structuredRetryableCategories: ["structured_output_syntax"],
+      }),
+    ));
+
+    expect(provider.requests()).toHaveLength(2);
+    expect((error as ControllerError).runtimeError).toMatchObject({
+      owner: "provider",
+      code: "provider_request_failed",
+      metadata: {
+        providerFailureCategory: "authentication",
+        providerStatusCode: 401,
+      },
+    });
+  });
+
+  it("starts no correction attempt when cancellation wins during parsing", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const provider = new FakeProvider({ results: [succeededResult("invalid")] });
+    const controller = createController(provider, {
+      parseResponse() {
+        cancellation.requestCancellation({
+          origin: "user",
+          reasonCode: "user_requested",
+        });
+        throw correctionError(
+          "structured_output_syntax",
+          "test_output_not_json",
+          "Return valid structured output.",
+        );
+      },
+    });
+
+    const error = await captureError(controller.next(
+      createControllerInput(),
+      callContext(cancellation.context, {
+        structuredMaxRetries: 1,
+        structuredRetryableCategories: ["structured_output_syntax"],
+      }),
+    ));
+
+    expect(error).toBe(cancellation.context.request);
+    expect(provider.requests()).toHaveLength(1);
+  });
+
+  it("does not schedule a correction beyond the absolute Run deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-14T00:00:00.000Z");
+    const provider = new FakeProvider({ results: [succeededResult("invalid")] });
+    const controller = createController(provider, {
+      parseResponse() {
+        throw correctionError(
+          "structured_output_syntax",
+          "test_output_not_json",
+          "Return valid structured output.",
+        );
+      },
+    });
+
+    const error = await captureError(controller.next(
+      createControllerInput(),
+      callContext(undefined, {
+        structuredMaxRetries: 1,
+        structuredRetryableCategories: ["structured_output_syntax"],
+        structuredBaseDelayMs: 1_000,
+        structuredMaxDelayMs: 1_000,
+        deadlineAt: "2026-07-14T00:00:00.025Z",
+      }),
+    ));
+
+    expect(provider.requests()).toHaveLength(1);
+    expect((error as ControllerError).runtimeError).toMatchObject({
+      code: "model_structured_output_retry_exhausted",
+      metadata: {
+        retryExhaustionReason: "deadline_exceeded",
+        retryTotalAttempts: 1,
+      },
     });
   });
 
@@ -717,7 +1006,10 @@ describe("ProviderBackedController", () => {
 function createController(
   provider: Provider,
   overrides: Partial<{
-    buildRequest: (input: ControllerInput<TestOutput>) => ProviderRequest;
+    buildRequest: (
+      input: ControllerInput<TestOutput>,
+      context: ProviderRequestBuildContext,
+    ) => ProviderRequest;
     parseResponse: (
       response: ProviderResponse,
       input: ControllerInput<TestOutput>,
@@ -730,6 +1022,7 @@ function createController(
     buildRequest: overrides.buildRequest ?? (() => request("Choose the next action.")),
     parseResponse:
       overrides.parseResponse ?? (() => finalDecision({ summary: "Done" })),
+    structuredOutputContractId: "test-controller-output-v1",
     maxProviderOutputLength: overrides.maxProviderOutputLength ?? 10_000,
     retryExecutor: createSystemRetryExecutor(),
     retryClock: systemRetryClock,
@@ -840,6 +1133,14 @@ function failedResult(
   };
 }
 
+function correctionError(
+  category: ConstructorParameters<typeof StructuredOutputError>[0]["category"],
+  code: string,
+  correctionFeedback: string,
+): StructuredOutputError {
+  return new StructuredOutputError({ category, code, correctionFeedback });
+}
+
 function finalDecision(output: unknown): ControllerDecision<TestOutput> {
   return {
     kind: "final_output",
@@ -869,9 +1170,13 @@ function callContext(
       | { mode: "prefer_trusted"; maxServerDelayMs: number };
     deadlineAt: string;
     events: Array<Record<string, unknown>>;
+    structuredMaxRetries: number;
+    structuredRetryableCategories: string[];
+    structuredBaseDelayMs: number;
+    structuredMaxDelayMs: number;
   }> = {},
 ): ControllerCallContext {
-  const policy = {
+  const providerPolicy = {
     maxRetries: overrides.maxRetries ?? 0,
     delay: {
       kind: "exponential_jitter" as const,
@@ -883,11 +1188,23 @@ function callContext(
     retryableCategories: overrides.retryableCategories ?? [],
     serverDelay: overrides.serverDelay ?? { mode: "ignore" as const },
   };
+  const structuredOutputPolicy = {
+    maxRetries: overrides.structuredMaxRetries ?? 0,
+    delay: {
+      kind: "exponential_jitter" as const,
+      baseDelayMs: overrides.structuredBaseDelayMs ?? 0,
+      maxDelayMs: overrides.structuredMaxDelayMs ?? 0,
+      multiplier: 2 as const,
+      jitterRatio: 0.1 as const,
+    },
+    retryableCategories: overrides.structuredRetryableCategories ?? [],
+    serverDelay: { mode: "ignore" as const },
+  };
   return {
     cancellation,
     retry: {
-      providerRequest: policy,
-      structuredOutput: policy,
+      providerRequest: providerPolicy,
+      structuredOutput: structuredOutputPolicy,
       deadlineAt: overrides.deadlineAt ?? "2099-01-01T00:00:00.000Z",
       events: {
         emit(event) {

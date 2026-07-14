@@ -2,7 +2,10 @@ import type {
   ControllerDecision,
   ControllerInput,
   ControllerModelItem,
+  ProviderRequestBuildContext,
+  StructuredOutputFailure,
 } from "@agent-anything/agent-core";
+import { StructuredOutputError } from "@agent-anything/agent-core";
 import type { ProviderRequest, ProviderResponse } from "@agent-anything/providers";
 import type { Metadata } from "@agent-anything/shared";
 import {
@@ -52,20 +55,21 @@ export type HelarcControllerParseErrorCode =
   | "controller_change_content_required"
   | "controller_stop_reason_required";
 
-export class HelarcControllerParseError extends Error {
-  constructor(
-    readonly code: HelarcControllerParseErrorCode,
-    message: string,
-  ) {
-    super(message);
+export class HelarcControllerParseError extends StructuredOutputError {
+  constructor(readonly code: HelarcControllerParseErrorCode) {
+    super(helarcStructuredOutputFailure(code));
     this.name = "HelarcControllerParseError";
   }
 }
 
 export function buildHelarcProviderRequest(
   input: ControllerInput<HelarcAgentOutput>,
+  context: ProviderRequestBuildContext,
 ): ProviderRequest {
   const promptAssembly = buildHelarcPromptAssembly({ controllerInput: input });
+  const correctionMessage = context.correction === null
+    ? null
+    : buildHelarcCorrectionMessage(context.correction.failure);
 
   return {
     capability: HELARC_CONTROLLER_CAPABILITY,
@@ -79,12 +83,63 @@ export function buildHelarcProviderRequest(
       toolCatalogVersion: promptAssembly.versions.toolCatalogVersion,
       exposedToolNames: promptAssembly.exposedToolNames,
       promptSectionIds: promptAssembly.systemSections.map((section) => section.id),
+      structuredOutputAttemptNumber: context.attemptNumber,
+      ...(context.correction === null ? {} : {
+        structuredOutputCorrectionCategory: context.correction.failure.category,
+        structuredOutputCorrectionCode: context.correction.failure.code,
+      }),
     },
     messages: [
       { role: "system", content: promptAssembly.systemPrompt, metadata: {} },
       { role: "user", content: promptAssembly.userPrompt, metadata: {} },
+      ...(correctionMessage === null ? [] : [{
+        role: "user" as const,
+        content: correctionMessage,
+        metadata: { kind: "structured-output-correction" },
+      }]),
     ],
   };
+}
+
+function helarcStructuredOutputFailure(
+  code: HelarcControllerParseErrorCode,
+): StructuredOutputFailure {
+  switch (code) {
+    case "controller_output_not_json":
+      return {
+        category: "structured_output_syntax",
+        code,
+        correctionFeedback: "Return one valid JSON object without markdown or surrounding text.",
+      };
+    case "controller_output_too_large":
+      return {
+        category: "structured_output_size",
+        code,
+        correctionFeedback: "Return a shorter JSON object within the configured output limit.",
+      };
+    case "controller_tool_name_unsupported":
+      return {
+        category: "structured_output_semantic",
+        code,
+        correctionFeedback: "Use only a Tool exposed in the active Tool catalog.",
+      };
+    default:
+      return {
+        category: "structured_output_schema",
+        code,
+        correctionFeedback: "Return one JSON object that satisfies the active Helarc action contract.",
+      };
+  }
+}
+
+function buildHelarcCorrectionMessage(failure: StructuredOutputFailure): string {
+  return [
+    "Correct the previous response.",
+    `Issue category: ${failure.category}`,
+    `Issue code: ${failure.code}`,
+    failure.correctionFeedback,
+    "Return only the corrected JSON object.",
+  ].join("\n");
 }
 
 export function parseHelarcProviderResponse(
@@ -162,10 +217,7 @@ export function parseHelarcProviderResponse(
 export function parseStructuredOutput(output: unknown): HelarcProviderStructuredOutput {
   const value = normalizeProviderOutput(output);
   if (!isRecord(value)) {
-    throw new HelarcControllerParseError(
-      "controller_output_invalid",
-      "Provider output must be a JSON object.",
-    );
+    throw new HelarcControllerParseError("controller_output_invalid");
   }
 
   const action = readString(value, "action");
@@ -195,10 +247,7 @@ export function parseStructuredOutput(output: unknown): HelarcProviderStructured
         reason: readRequiredString(value, "reason", "controller_stop_reason_required"),
       };
     default:
-      throw new HelarcControllerParseError(
-        "controller_action_invalid",
-        "Provider output action is not supported.",
-      );
+      throw new HelarcControllerParseError("controller_action_invalid");
   }
 }
 
@@ -219,19 +268,13 @@ function normalizeProviderOutput(output: unknown): unknown {
     return output;
   }
   if (output.length > HELARC_CONTROLLER_OUTPUT_MAX_LENGTH) {
-    throw new HelarcControllerParseError(
-      "controller_output_too_large",
-      "Provider output is too large.",
-    );
+    throw new HelarcControllerParseError("controller_output_too_large");
   }
 
   try {
     return JSON.parse(output) as unknown;
   } catch {
-    throw new HelarcControllerParseError(
-      "controller_output_not_json",
-      "Provider output must be valid JSON.",
-    );
+    throw new HelarcControllerParseError("controller_output_not_json");
   }
 }
 
@@ -252,10 +295,7 @@ function assertToolNameSupported(
     return;
   }
 
-  throw new HelarcControllerParseError(
-    "controller_tool_name_unsupported",
-    "Tool is not exposed in the active tool catalog.",
-  );
+  throw new HelarcControllerParseError("controller_tool_name_unsupported");
 }
 
 function createControllerTraceMetadata(
@@ -285,26 +325,17 @@ function createControllerTraceMetadata(
 
 function readRequiredToolInput(value: Record<string, unknown>): Record<string, unknown> {
   if (!Object.hasOwn(value, "input")) {
-    throw new HelarcControllerParseError(
-      "controller_tool_input_required",
-      "input is required.",
-    );
+    throw new HelarcControllerParseError("controller_tool_input_required");
   }
   if (!isRecord(value.input)) {
-    throw new HelarcControllerParseError(
-      "controller_tool_input_invalid",
-      "input must be a JSON object.",
-    );
+    throw new HelarcControllerParseError("controller_tool_input_invalid");
   }
   return value.input;
 }
 
 function parseChangeIntent(value: unknown): HelarcChangeIntent {
   if (!isRecord(value)) {
-    throw new HelarcControllerParseError(
-      "controller_change_required",
-      "Proposed output requires a change object.",
-    );
+    throw new HelarcControllerParseError("controller_change_required");
   }
 
   const operation = readRequiredString(
@@ -313,19 +344,13 @@ function parseChangeIntent(value: unknown): HelarcChangeIntent {
     "controller_change_operation_required",
   );
   if (operation !== "create" && operation !== "update" && operation !== "delete") {
-    throw new HelarcControllerParseError(
-      "controller_change_operation_invalid",
-      "Change operation is not supported.",
-    );
+    throw new HelarcControllerParseError("controller_change_operation_invalid");
   }
 
   const path = readRequiredString(value, "path", "controller_change_path_required");
   const content = readRawOptionalString(value, "content");
   if ((operation === "create" || operation === "update") && content === undefined) {
-    throw new HelarcControllerParseError(
-      "controller_change_content_required",
-      "Create and update changes require content.",
-    );
+    throw new HelarcControllerParseError("controller_change_content_required");
   }
 
   return content === undefined ? { operation, path } : { operation, path, content };
@@ -351,7 +376,7 @@ function readRequiredString(
 ): string {
   const field = readOptionalString(value, key);
   if (!field) {
-    throw new HelarcControllerParseError(code, `${key} is required.`);
+    throw new HelarcControllerParseError(code);
   }
   return field;
 }

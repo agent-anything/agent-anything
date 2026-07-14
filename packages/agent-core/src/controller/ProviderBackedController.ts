@@ -29,9 +29,17 @@ import type {
   ControllerInput,
   ControllerModelItem,
 } from "./Controller.js";
+import {
+  StructuredOutputError,
+  snapshotStructuredOutputFailure,
+  type ProviderRequestBuildContext,
+  type StructuredOutputFailure,
+  type StructuredOutputFailureCategory,
+} from "./StructuredOutput.js";
 
 export type BuildProviderRequest<TOutput = unknown> = (
   input: ControllerInput<TOutput>,
+  context: ProviderRequestBuildContext,
 ) => ProviderRequest | Promise<ProviderRequest>;
 
 export type ParseProviderResponse<TOutput = unknown> = (
@@ -42,6 +50,7 @@ export type ParseProviderResponse<TOutput = unknown> = (
 export type ControllerFailureCode =
   | "model_request_failed"
   | "model_output_invalid"
+  | "model_structured_output_retry_exhausted"
   | "provider_request_failed"
   | "provider_timeout"
   | "provider_retry_exhausted"
@@ -66,6 +75,7 @@ export interface ProviderBackedControllerInput<TOutput = unknown> {
   readonly provider: Provider;
   readonly buildRequest: BuildProviderRequest<TOutput>;
   readonly parseResponse: ParseProviderResponse<TOutput>;
+  readonly structuredOutputContractId: string;
   readonly maxProviderOutputLength: number;
   readonly retryExecutor: RetryExecutor;
   readonly retryClock: RetryClock;
@@ -88,6 +98,26 @@ interface ProviderAttemptFailure {
   readonly deadlineReason: RetryAttemptContext["deadlineReason"];
 }
 
+type StructuredOutputRetryCategory =
+  | StructuredOutputFailureCategory
+  | "deadline"
+  | "owner_failure";
+
+type StructuredOutputAttemptFailure =
+  | {
+      readonly kind: "correction";
+      readonly failure: StructuredOutputFailure;
+    }
+  | {
+      readonly kind: "deadline";
+      readonly operationId: string;
+      readonly deadlineAt: ISODateTimeString;
+    }
+  | {
+      readonly kind: "terminal";
+      readonly error: unknown;
+    };
+
 export class ProviderBackedController<TOutput = unknown>
   implements Controller<TOutput>
 {
@@ -104,6 +134,14 @@ export class ProviderBackedController<TOutput = unknown>
     if (typeof input.retryClock?.now !== "function") {
       throw new TypeError("ProviderBackedController requires a RetryClock.");
     }
+    if (
+      typeof input.structuredOutputContractId !== "string" ||
+      input.structuredOutputContractId.trim().length === 0
+    ) {
+      throw new TypeError(
+        "ProviderBackedController requires a structuredOutputContractId.",
+      );
+    }
     if (input.provider.descriptor.requestRetryScheduler?.kind !== "platform") {
       throw new TypeError(
         "ProviderBackedController requires platform-owned Provider request Retry.",
@@ -116,24 +154,200 @@ export class ProviderBackedController<TOutput = unknown>
     callContext: ControllerCallContext,
   ): Promise<ControllerDecision<TOutput>> {
     throwIfCancelled(callContext);
-    const request = await this.buildRequest(controllerInput);
-
+    const decision = await this.executeStructuredOutput(
+      controllerInput,
+      callContext,
+    );
     throwIfCancelled(callContext);
-    const response = await this.sendRequest(request, controllerInput, callContext, 1);
+    return decision;
+  }
 
-    throwIfCancelled(callContext);
-    this.assertOutputLength(response);
-    const decision = await this.parseResponse(response, controllerInput);
+  private async executeStructuredOutput(
+    controllerInput: ControllerInput<TOutput>,
+    callContext: ControllerCallContext,
+  ): Promise<ControllerDecision<TOutput>> {
+    const operation = createStructuredOutputRetryOperation(
+      controllerInput,
+      this.input.structuredOutputContractId,
+      callContext.retry.deadlineAt,
+      this.input.retryClock,
+    );
+    const budgetId = `${operation.operationId}:budget:1`;
+    let correction: ProviderRequestBuildContext["correction"] = null;
+    let providerRequestNumber = 0;
+    let result;
 
-    throwIfCancelled(callContext);
-    return validateDecision(decision, controllerInput);
+    try {
+      result = await this.input.retryExecutor.execute(
+        {
+          operation,
+          budgetId,
+          priorProgress: { completedAttempts: 0, totalRetryDelayMs: 0 },
+          policy: callContext.retry.structuredOutput,
+          classifier: { classify: classifyStructuredOutputAttemptFailure },
+          cancellation: callContext.cancellation,
+          events: callContext.retry.events,
+        },
+        async (attempt) => {
+          const interruptedBeforeBuild = structuredOutputInterruption(
+            attempt,
+            callContext,
+            this.input.retryClock,
+          );
+          if (interruptedBeforeBuild !== null) {
+            return interruptedBeforeBuild;
+          }
+
+          const buildContext = Object.freeze({
+            attemptNumber: attempt.attempt.attemptNumber,
+            correction,
+          });
+          let request: ProviderRequest;
+          try {
+            request = await this.buildRequest(controllerInput, buildContext);
+          } catch (error) {
+            return terminalStructuredOutputFailure(error);
+          }
+
+          const interruptedBeforeProvider = structuredOutputInterruption(
+            attempt,
+            callContext,
+            this.input.retryClock,
+          );
+          if (interruptedBeforeProvider !== null) {
+            return interruptedBeforeProvider;
+          }
+
+          providerRequestNumber += 1;
+          let response: ProviderResponse;
+          try {
+            response = await this.sendRequest(
+              request,
+              controllerInput,
+              callContext,
+              providerRequestNumber,
+            );
+          } catch (error) {
+            if (matchesActiveCancellationError(error, callContext)) {
+              return {
+                kind: "cancelled" as const,
+                attribution: controllerCancellationAttribution(
+                  callContext,
+                  this.input.retryClock,
+                ),
+              };
+            }
+            return terminalStructuredOutputFailure(error);
+          }
+
+          const interruptedBeforeParsing = structuredOutputInterruption(
+            attempt,
+            callContext,
+            this.input.retryClock,
+          );
+          if (interruptedBeforeParsing !== null) {
+            return interruptedBeforeParsing;
+          }
+
+          try {
+            this.assertOutputLength(response);
+            const parsed = await this.parseResponse(response, controllerInput);
+            const decision = validateDecision(parsed, controllerInput);
+            const interruptedAfterValidation = structuredOutputInterruption(
+              attempt,
+              callContext,
+              this.input.retryClock,
+            );
+            return interruptedAfterValidation ?? {
+              kind: "succeeded" as const,
+              value: decision,
+            };
+          } catch (error) {
+            if (error instanceof StructuredOutputError) {
+              const interruptedDuringValidation = structuredOutputInterruption(
+                attempt,
+                callContext,
+                this.input.retryClock,
+              );
+              if (interruptedDuringValidation !== null) {
+                return interruptedDuringValidation;
+              }
+              const failure = snapshotStructuredOutputFailure(error.failure);
+              correction = Object.freeze({
+                previousAttemptNumber: attempt.attempt.attemptNumber,
+                failure,
+              });
+              return {
+                kind: "failed" as const,
+                error: Object.freeze({
+                  kind: "correction" as const,
+                  failure,
+                }),
+              };
+            }
+            return terminalStructuredOutputFailure(error);
+          }
+        },
+      );
+    } catch (error) {
+      throw createControllerError(
+        "model",
+        "model_output_invalid",
+        "Structured-output Retry failed internally.",
+        false,
+        errorMetadata(error),
+      );
+    }
+
+    switch (result.kind) {
+      case "succeeded":
+        return result.value;
+      case "cancelled":
+        throw callContext.cancellation.signal.reason;
+      case "failed":
+        if (result.error.kind === "terminal") {
+          throw result.error.error;
+        }
+        if (result.error.kind === "deadline") {
+          throw new TypeError("Structured-output deadline returned as non-terminal failure.");
+        }
+        throw structuredOutputFailureError(
+          result.failure,
+          operation.operationId,
+        );
+      case "budget_exhausted":
+        await callContext.retry.events.emit(retryBudgetExhaustedEvent(
+          operation,
+          result.exhaustion.budgetId,
+          result.exhaustion.progress.completedAttempts,
+          result.exhaustion.progress.totalRetryDelayMs,
+          result.exhaustion.lastFailure,
+          result.exhaustion.exhaustedAt,
+        ));
+        throw structuredOutputRetryExhaustedError(
+          "retry_budget_exhausted",
+          result.exhaustion.operationId,
+          result.exhaustion.progress.completedAttempts,
+          result.exhaustion.progress.totalRetryDelayMs,
+          result.exhaustion.lastFailure,
+        );
+      case "deadline_exhausted":
+        throw structuredOutputRetryExhaustedError(
+          "deadline_exceeded",
+          result.exhaustion.operationId,
+          result.exhaustion.totalAttempts,
+          result.exhaustion.totalRetryDelayMs,
+          result.exhaustion.lastFailure,
+        );
+    }
   }
 
   private async buildRequest(
     input: ControllerInput<TOutput>,
+    context: ProviderRequestBuildContext,
   ): Promise<ProviderRequest> {
     try {
-      return snapshotProviderRequest(await this.input.buildRequest(input));
+      return snapshotProviderRequest(await this.input.buildRequest(input, context));
     } catch (error) {
       throw createControllerError(
         "model",
@@ -248,7 +462,11 @@ export class ProviderBackedController<TOutput = unknown>
 
   private assertOutputLength(response: ProviderResponse): void {
     if (response.output === null || response.output === undefined) {
-      throw invalidOutput("Provider returned no output.");
+      throw structuredOutputError(
+        "structured_output_schema",
+        "structured_output_missing",
+        "Return one structured output value that satisfies the active contract.",
+      );
     }
 
     let serialized: string | undefined;
@@ -265,14 +483,19 @@ export class ProviderBackedController<TOutput = unknown>
     }
 
     if (serialized === undefined) {
-      throw invalidOutput("Provider output could not be measured.");
+      throw structuredOutputError(
+        "structured_output_schema",
+        "structured_output_missing",
+        "Return one structured output value that satisfies the active contract.",
+      );
     }
 
     if (serialized.length > this.input.maxProviderOutputLength) {
-      throw invalidOutput("Provider output exceeds the configured limit.", {
-        maxProviderOutputLength: this.input.maxProviderOutputLength,
-        actualProviderOutputLength: serialized.length,
-      });
+      throw structuredOutputError(
+        "structured_output_size",
+        "structured_output_too_large",
+        "Return a shorter structured output within the configured output limit.",
+      );
     }
   }
 
@@ -283,12 +506,12 @@ export class ProviderBackedController<TOutput = unknown>
     try {
       return await this.input.parseResponse(response, input);
     } catch (error) {
-      if (error instanceof ControllerError) {
+      if (error instanceof ControllerError || error instanceof StructuredOutputError) {
         throw error;
       }
 
       throw invalidOutput(
-        messageFrom(error, "Provider output parsing failed."),
+        "Provider output parsing failed.",
         errorMetadata(error),
       );
     }
@@ -300,7 +523,7 @@ function validateDecision<TOutput>(
   input: ControllerInput<TOutput>,
 ): ControllerDecision<TOutput> {
   if (!isRecord(candidate)) {
-    throw invalidOutput("Controller decision must be an object.");
+    throw decisionContractError("controller_decision_invalid");
   }
 
   const modelItems = validateModelItems(candidate.modelItems);
@@ -319,7 +542,11 @@ function validateDecision<TOutput>(
       }
 
       if (!validation.valid) {
-        throw invalidOutput(validation.message);
+        throw structuredOutputError(
+          "agent_output_contract",
+          "agent_output_invalid",
+          "Return a final output that satisfies the active Agent output contract.",
+        );
       }
 
       return Object.freeze({
@@ -339,39 +566,39 @@ function validateDecision<TOutput>(
     case "stop":
       return Object.freeze({
         kind: "stop",
-        reason: nonEmptyText(candidate.reason, "Stop reason"),
+        reason: nonEmptyDecisionText(candidate.reason),
         modelItems,
       });
 
     default:
-      throw invalidOutput("Controller decision kind is not supported.");
+      throw decisionContractError("controller_decision_kind_invalid");
   }
 }
 
 function validateModelItems(candidate: unknown): readonly ControllerModelItem[] {
   if (!Array.isArray(candidate) || candidate.length === 0) {
-    throw invalidOutput("Controller decision must include model items.");
+    throw decisionContractError("controller_model_items_required");
   }
 
   const ids = new Set<string>();
-  const items = candidate.map((item, index) => {
+  const items = candidate.map((item) => {
     if (!isRecord(item)) {
-      throw invalidOutput(`Model item at index ${index} must be an object.`);
+      throw decisionContractError("controller_model_item_invalid");
     }
 
-    const id = nonEmptyText(item.id, `Model item ${index} id`);
+    const id = nonEmptyDecisionText(item.id);
     if (ids.has(id)) {
-      throw invalidOutput(`Model item id ${id} is duplicated.`);
+      throw decisionContractError("controller_model_item_id_duplicated");
     }
     ids.add(id);
 
     if (!isRecord(item.metadata)) {
-      throw invalidOutput(`Model item ${id} metadata must be an object.`);
+      throw decisionContractError("controller_model_item_metadata_invalid");
     }
 
     return Object.freeze({
       id,
-      kind: nonEmptyText(item.kind, `Model item ${id} kind`),
+      kind: nonEmptyDecisionText(item.kind),
       content: item.content,
       metadata: Object.freeze({ ...item.metadata }),
     });
@@ -385,25 +612,23 @@ function validateActions(
   modelItemIds: ReadonlySet<string>,
 ): readonly [ActionCandidate, ...ActionCandidate[]] {
   if (!Array.isArray(candidate) || candidate.length === 0) {
-    throw invalidOutput("Actions decision must include at least one action.");
+    throw decisionContractError("controller_actions_required");
   }
 
-  const actions = candidate.map((action, index) => {
+  const actions = candidate.map((action) => {
     if (!isRecord(action)) {
-      throw invalidOutput(`Action at index ${index} must be an object.`);
+      throw decisionContractError("controller_action_invalid");
     }
 
-    const kind = validateActionKind(action.kind, index);
-    const modelItemId = nonEmptyText(action.modelItemId, `Action ${index} modelItemId`);
+    const kind = validateActionKind(action.kind);
+    const modelItemId = nonEmptyDecisionText(action.modelItemId);
     if (!modelItemIds.has(modelItemId)) {
-      throw invalidOutput(
-        `Action ${index} references unknown model item ${modelItemId}.`,
-      );
+      throw decisionContractError("controller_action_provenance_invalid");
     }
 
     return Object.freeze({
       kind,
-      name: nonEmptyText(action.name, `Action ${index} name`),
+      name: nonEmptyDecisionText(action.name),
       input: action.input,
       modelItemId,
     });
@@ -415,21 +640,21 @@ function validateActions(
   ];
 }
 
-function validateActionKind(candidate: unknown, index: number): ActionKind {
+function validateActionKind(candidate: unknown): ActionKind {
   if (
     candidate !== "internal" &&
     candidate !== "tool" &&
     candidate !== "permission_request"
   ) {
-    throw invalidOutput(`Action ${index} kind is not supported.`);
+    throw decisionContractError("controller_action_kind_invalid");
   }
 
   return candidate;
 }
 
-function nonEmptyText(candidate: unknown, field: string): string {
+function nonEmptyDecisionText(candidate: unknown): string {
   if (typeof candidate !== "string" || candidate.trim().length === 0) {
-    throw invalidOutput(`${field} must be a non-empty string.`);
+    throw decisionContractError("controller_text_field_invalid");
   }
 
   return candidate.trim();
@@ -451,6 +676,22 @@ function invalidOutput(
     message,
     false,
     metadata,
+  );
+}
+
+function structuredOutputError(
+  category: StructuredOutputFailureCategory,
+  code: string,
+  correctionFeedback: string,
+): StructuredOutputError {
+  return new StructuredOutputError({ category, code, correctionFeedback });
+}
+
+function decisionContractError(code: string): StructuredOutputError {
+  return structuredOutputError(
+    "structured_output_schema",
+    code,
+    "Return exactly one decision that satisfies the active Controller output contract.",
   );
 }
 
@@ -503,6 +744,81 @@ function createInvocationInterruptionContext(
           });
     },
   });
+}
+
+function structuredOutputInterruption(
+  attempt: RetryAttemptContext,
+  context: ControllerCallContext,
+  clock: RetryClock,
+) {
+  if (!attempt.signal.aborted) {
+    return null;
+  }
+  if (attempt.deadlineReason !== null) {
+    return {
+      kind: "failed" as const,
+      error: Object.freeze({
+        kind: "deadline" as const,
+        operationId: attempt.deadlineReason.operationId,
+        deadlineAt: attempt.deadlineReason.deadlineAt,
+      }),
+    };
+  }
+  if (context.cancellation.signal.aborted && context.cancellation.request !== null) {
+    return {
+      kind: "cancelled" as const,
+      attribution: controllerCancellationAttribution(context, clock),
+    };
+  }
+  return terminalStructuredOutputFailure(invalidOutput(
+    "Structured-output attempt was interrupted without trusted attribution.",
+  ));
+}
+
+function terminalStructuredOutputFailure(error: unknown) {
+  return {
+    kind: "failed" as const,
+    error: Object.freeze({ kind: "terminal" as const, error }),
+  };
+}
+
+function classifyStructuredOutputAttemptFailure(
+  error: StructuredOutputAttemptFailure,
+): RetryClassification<StructuredOutputRetryCategory> {
+  if (error.kind === "deadline") {
+    return {
+      failure: {
+        category: "deadline",
+        code: "structured_output_deadline_exceeded",
+        message: "Structured-output operation deadline was exceeded.",
+      },
+      disposition: "deadline_exceeded",
+      reasonCode: "structured_output_deadline_exceeded",
+    };
+  }
+  if (error.kind === "terminal") {
+    const code = error.error instanceof ControllerError
+      ? error.error.runtimeError.code
+      : "structured_output_owner_failure";
+    return {
+      failure: {
+        category: "owner_failure",
+        code,
+        message: "Structured-output attempt returned to its owner.",
+      },
+      disposition: "non_retryable",
+      reasonCode: code,
+    };
+  }
+  return {
+    failure: {
+      category: error.failure.category,
+      code: error.failure.code,
+      message: error.failure.correctionFeedback,
+    },
+    disposition: "retryable",
+    reasonCode: error.failure.code,
+  };
 }
 
 function providerAttemptResult(
@@ -641,6 +957,27 @@ function classification(
   };
 }
 
+function createStructuredOutputRetryOperation<TOutput>(
+  input: ControllerInput<TOutput>,
+  contractId: string,
+  deadlineAt: ISODateTimeString,
+  clock: RetryClock,
+): RetryOperation {
+  const controllerRequestId = `${input.runId}:controller:${input.iteration}`;
+  return Object.freeze({
+    operationId: `${controllerRequestId}:structured-output:1`,
+    owner: "structured_output",
+    runId: input.runId,
+    subject: Object.freeze({
+      kind: "structured_output",
+      controllerRequestId,
+      contractId,
+    }),
+    startedAt: retryNow(clock),
+    deadlineAt,
+  });
+}
+
 function createProviderRetryOperation<TOutput>(
   input: ControllerInput<TOutput>,
   deadlineAt: ISODateTimeString,
@@ -670,6 +1007,22 @@ function providerCancellationAttribution(
     requestId: request.id,
     runId: request.runId,
     boundary: "provider" as const,
+    observedAt: retryNow(clock),
+  });
+}
+
+function controllerCancellationAttribution(
+  context: ControllerCallContext,
+  clock: RetryClock,
+) {
+  const request = context.cancellation.request;
+  if (!context.cancellation.signal.aborted || request === null) {
+    throw new TypeError("Controller cancellation requires the active Run request.");
+  }
+  return Object.freeze({
+    requestId: request.id,
+    runId: request.runId,
+    boundary: "controller" as const,
     observedAt: retryNow(clock),
   });
 }
@@ -738,6 +1091,58 @@ function matchesActiveCancellation(
     request !== null &&
     candidate.runId === request.runId &&
     candidate.requestId === request.id;
+}
+
+function matchesActiveCancellationError(
+  error: unknown,
+  context: ControllerCallContext,
+): boolean {
+  const request = context.cancellation.request;
+  return context.cancellation.signal.aborted &&
+    request !== null &&
+    (error === request || error === context.cancellation.signal.reason);
+}
+
+function structuredOutputFailureError(
+  failure: RetryFailure,
+  operationId: string,
+): ControllerError {
+  return createControllerError(
+    "model",
+    "model_output_invalid",
+    "Model output did not satisfy the active structured-output contract.",
+    false,
+    {
+      retryOperationId: operationId,
+      structuredOutputFailureCategory: failure.category,
+      structuredOutputFailureCode: failure.code,
+    },
+    "settled_failure",
+  );
+}
+
+function structuredOutputRetryExhaustedError(
+  reason: "retry_budget_exhausted" | "deadline_exceeded",
+  operationId: string,
+  totalAttempts: number,
+  totalRetryDelayMs: number,
+  lastFailure: RetryFailure | null,
+): ControllerError {
+  return createControllerError(
+    "model",
+    "model_structured_output_retry_exhausted",
+    "Structured-output correction Retry was exhausted.",
+    false,
+    {
+      retryOperationId: operationId,
+      retryExhaustionReason: reason,
+      retryTotalAttempts: totalAttempts,
+      retryTotalDelayMs: totalRetryDelayMs,
+      structuredOutputFailureCategory: lastFailure?.category ?? null,
+      structuredOutputFailureCode: lastFailure?.code ?? null,
+    },
+    "settled_failure",
+  );
 }
 
 function providerRetryFailureError(
