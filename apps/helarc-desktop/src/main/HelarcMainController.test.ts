@@ -281,7 +281,10 @@ describe("HelarcMainController", () => {
     });
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
-    const completed = waitForStatus(controller, "completed");
+    const completed = waitForSnapshot(
+      controller,
+      (snapshot) => snapshot.status === "completed" && snapshot.sessionHistory.length === 1,
+    );
     controller.startSession({ taskText: "Update docs" });
 
     const snapshot = await completed;
@@ -329,6 +332,45 @@ describe("HelarcMainController", () => {
     expect(restoredController.getSnapshot().sessionHistory).toHaveLength(1);
   });
 
+  it("does not let persistence failure replace the authoritative RunResult", async () => {
+    const controller = new HelarcMainController({
+      provider: new CompleteProvider(),
+      onSessionHistoryRecord() {
+        throw new Error("History store unavailable.");
+      },
+    });
+    controller.selectWorkspacePath("D:/projects/agent-anything");
+
+    const settled = waitForSnapshot(
+      controller,
+      (snapshot) =>
+        snapshot.status === "completed"
+        && snapshot.error?.code === "session_persistence_failed",
+    );
+    controller.startSession({ taskText: "Update docs" });
+
+    const snapshot = await settled;
+    expect(snapshot).toMatchObject({
+      status: "completed",
+      output: {
+        runtimeStatus: "succeeded",
+      },
+      error: {
+        code: "session_persistence_failed",
+        message: "History store unavailable.",
+      },
+      activeRun: {
+        status: "completed",
+        terminal: {
+          status: "completed",
+          runtimeStatus: "succeeded",
+          runtimeCode: null,
+          cancellation: null,
+        },
+      },
+    });
+  });
+
   it("persists work context thread, trigger message, and run records", async () => {
     const threadStore = new FileHelarcThreadStore(await threadFilePath());
     const controller = new HelarcMainController({
@@ -349,7 +391,12 @@ describe("HelarcMainController", () => {
     });
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
-    const completed = waitForStatus(controller, "completed");
+    const completed = waitForSnapshot(
+      controller,
+      (snapshot) =>
+        snapshot.status === "completed"
+        && snapshot.threadSummaries[0]?.latestRun?.status === "completed",
+    );
     controller.startSession({ taskText: "Update docs" });
     await completed;
 
@@ -493,7 +540,10 @@ describe("HelarcMainController", () => {
     controller.selectWorkspacePath(workspaceRoot);
 
     const waiting = waitForStatus(controller, "waiting_for_permission");
-    const blocked = waitForStatus(controller, "blocked");
+    const blocked = waitForSnapshot(
+      controller,
+      (snapshot) => snapshot.status === "blocked" && snapshot.sessionHistory.length === 1,
+    );
     const result = controller.startSession({ taskText: "Run command" });
 
     expect(result).toMatchObject({ ok: true, snapshot: { status: "running" } });
@@ -670,13 +720,22 @@ describe("HelarcMainController", () => {
     expect(controller.cancelSession()).toMatchObject({
       ok: true,
       snapshot: {
-        status: "cancelled",
+        status: "cancelling",
         pendingPermission: null,
         activeRun: {
           status: "cancelling",
           pendingPermission: null,
+          cancellation: {
+            origin: "user",
+            reasonCode: "user_requested",
+          },
         },
       },
+    });
+    expect(controller.startSession({ taskText: "Start another run" })).toMatchObject({
+      ok: false,
+      error: { code: "session_already_running" },
+      snapshot: { status: "cancelling" },
     });
     expect(controller.resolvePermission({
       requestId,
@@ -686,7 +745,12 @@ describe("HelarcMainController", () => {
       error: { code: "permission_not_pending" },
     });
 
-    const terminalSnapshot = await waitForActiveRunTerminal(controller, "cancelled");
+    const terminalSnapshot = await waitForSnapshot(
+      controller,
+      (snapshot) =>
+        snapshot.activeRun.terminal?.status === "cancelled"
+        && snapshot.sessionHistory.length === 1,
+    );
     expect(terminalSnapshot).toMatchObject({
       status: "cancelled",
       activeRun: {
@@ -706,11 +770,21 @@ describe("HelarcMainController", () => {
             status: "cancelled",
             runtimeStatus: "cancelled",
             runtimeCode: "runtime_cancelled",
+            cancellation: {
+              origin: "user",
+              reasonCode: "user_requested",
+            },
           },
         },
       }],
     });
+    expect(JSON.stringify(terminalSnapshot.activeRun)).not.toContain(
+      "Cancelled from Helarc desktop.",
+    );
     expect(JSON.stringify(terminalSnapshot.sessionHistory)).not.toContain("pendingPermission");
+    expect(JSON.stringify(terminalSnapshot.sessionHistory)).not.toContain(
+      "Cancelled from Helarc desktop.",
+    );
     await expect(access(markerPath)).rejects.toThrow();
   });
 
@@ -740,7 +814,10 @@ describe("HelarcMainController", () => {
     });
     controller.selectWorkspacePath(workspaceRoot);
 
-    const failed = waitForStatus(controller, "failed");
+    const failed = waitForSnapshot(
+      controller,
+      (snapshot) => snapshot.status === "failed" && snapshot.sessionHistory.length === 1,
+    );
     controller.startSession({ taskText: "Run command" });
 
     const snapshot = await failed;
@@ -813,7 +890,12 @@ describe("HelarcMainController", () => {
     controller.selectWorkspacePath(workspaceRoot);
 
     const waiting = waitForStatus(controller, "waiting_for_patch_review");
-    const completed = waitForStatus(controller, "completed");
+    const completed = waitForSnapshot(
+      controller,
+      (snapshot) =>
+        snapshot.status === "completed"
+        && snapshot.activeThread?.artifacts.length === 3,
+    );
     const result = controller.startSession({ taskText: "Create file" });
 
     expect(result).toMatchObject({ ok: true, snapshot: { status: "running" } });
@@ -1041,6 +1123,31 @@ function waitForStatus(
 
     const unsubscribe = controller.subscribeSnapshot((nextSnapshot) => {
       if (nextSnapshot.status === status) {
+        clearTimeout(timeout);
+        unsubscribe();
+        resolve(nextSnapshot);
+      }
+    });
+  });
+}
+
+function waitForSnapshot(
+  controller: HelarcMainController,
+  predicate: (snapshot: HelarcMainSnapshot) => boolean,
+): Promise<HelarcMainSnapshot> {
+  const snapshot = controller.getSnapshot();
+  if (predicate(snapshot)) {
+    return Promise.resolve(snapshot);
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      unsubscribe();
+      reject(new Error("Timed out waiting for matching Helarc snapshot."));
+    }, 2_000);
+
+    const unsubscribe = controller.subscribeSnapshot((nextSnapshot) => {
+      if (predicate(nextSnapshot)) {
         clearTimeout(timeout);
         unsubscribe();
         resolve(nextSnapshot);

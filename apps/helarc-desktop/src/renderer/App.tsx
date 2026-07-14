@@ -59,6 +59,7 @@ const initialSnapshot: HelarcMainSnapshot = {
     provider: null,
     events: [],
     pendingPermission: null,
+    cancellation: null,
     terminal: null,
     startedAt: null,
     metadata: {},
@@ -932,6 +933,7 @@ function readProviderKind(formData: FormData, fallback: HelarcProviderKind): Hel
 
 function isSessionActive(status: HelarcMainSnapshot["status"]): boolean {
   return status === "running" ||
+    status === "cancelling" ||
     status === "waiting_for_permission" ||
     status === "waiting_for_patch_review" ||
     status === "applying_patch";

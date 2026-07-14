@@ -89,6 +89,7 @@ describe("Helarc workbench shell", () => {
             event("event-2", "tool.completed", "Tool completed", "warning"),
           ],
           pendingPermission: null,
+          cancellation: null,
           terminal: null,
           startedAt: "2026-07-05T01:00:00.000Z",
           metadata: {},
@@ -131,6 +132,7 @@ describe("Helarc workbench shell", () => {
             }),
           ],
           pendingPermission: null,
+          cancellation: null,
           terminal: null,
           startedAt: "2026-07-05T01:00:00.000Z",
           metadata: {},
@@ -267,6 +269,14 @@ describe("Helarc workbench shell", () => {
           status,
           runtimeStatus,
           runtimeCode: status === "completed" ? null : `${status}_code`,
+          cancellation: status === "cancelled"
+            ? {
+                requestId: "run-1:cancellation",
+                origin: "user",
+                reasonCode: "user_requested",
+                requestedAt: "2026-07-05T01:00:00.500Z",
+              }
+            : null,
           safeOutput: {
             taskId: "task-1",
             workspaceId: "workspace",

@@ -1,7 +1,8 @@
-import type {
-  HelarcRunEventViewModel,
-  HelarcRunTerminalStatus,
-  HelarcRunTerminalSummary,
+import {
+  createHelarcRunTerminalSummary,
+  type HelarcRunEventViewModel,
+  type HelarcRunTerminalStatus,
+  type HelarcRunTerminalSummary,
 } from "../run/index.js";
 import type { HelarcActivityItem, HelarcPatchStatus, HelarcSessionOutput, HelarcSessionStatus } from "../session/index.js";
 
@@ -183,11 +184,13 @@ function normalizeRun(
   run: HelarcSessionHistoryRunRecord,
 ): { ok: true; run: HelarcSessionHistoryRunRecord } | { ok: false; error: HelarcSessionHistoryRecordError } {
   const runId = run.runId.trim();
+  const terminal = createHelarcRunTerminalSummary(run.terminal);
   if (
     runId.length === 0 ||
     !isRunTerminalStatus(run.status) ||
-    run.terminal.status !== run.status ||
-    run.terminal.eventCount !== run.events.length
+    !terminal.ok ||
+    terminal.terminal.status !== run.status ||
+    terminal.terminal.eventCount !== run.events.length
   ) {
     return reject("session_history_run_invalid", "Session history run record is invalid.");
   }
@@ -198,7 +201,7 @@ function normalizeRun(
       runId,
       status: run.status,
       events: [...run.events],
-      terminal: run.terminal,
+      terminal: terminal.terminal,
     },
   };
 }

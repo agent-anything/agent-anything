@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createRunCancellationController } from "../runner/index.js";
+import {
+  createRunCancellationController,
+  toRunCancellationSummary,
+} from "../runner/index.js";
 import type { HostRunInput, HostSessionState } from "./HostSession.js";
 
 describe("HostSession contracts", () => {
@@ -134,11 +137,17 @@ describe("HostSession contracts", () => {
       taskId: "task-1",
       runId: "run-1",
       timestamp: receipt.request.requestedAt,
-      cancellationRequest: receipt.request,
+      cancellation: toRunCancellationSummary(receipt.request),
       metadata: {},
     };
 
     expect(state.status).toBe("cancelling");
-    expect(state.cancellationRequest).toBe(receipt.request);
+    expect(state.cancellation).toEqual({
+      requestId: "run-1:cancellation",
+      origin: "host",
+      reasonCode: "host_requested",
+      requestedAt: "2026-06-15T00:00:00.000Z",
+    });
+    expect(JSON.stringify(state)).not.toContain("Host requested cancellation.");
   });
 });

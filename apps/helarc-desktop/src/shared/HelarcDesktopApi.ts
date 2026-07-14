@@ -84,6 +84,7 @@ export type HelarcMainSnapshotStatus =
   | "idle"
   | "workspace_selected"
   | "running"
+  | "cancelling"
   | "waiting_for_permission"
   | "waiting_for_patch_review"
   | "applying_patch"

@@ -104,6 +104,7 @@ function record(id: string, endedAt: string) {
         status: "completed" as const,
         runtimeStatus: "succeeded" as const,
         runtimeCode: null,
+        cancellation: null,
         safeOutput: {
           taskId: "task-1",
           agentSummary: "Done.",

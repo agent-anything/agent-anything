@@ -44,6 +44,7 @@ export {
   type HostSessionStateChangedEvent,
   type MapRuntimeEventToHostEventInput,
 } from "./HostEvent.js";
+export { projectRuntimeEventForHost } from "./HostRuntimeProjection.js";
 export {
   createHostIdentityProvider,
   createHostWorkspaceResolver,

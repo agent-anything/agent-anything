@@ -34,22 +34,74 @@ describe("HostEvent", () => {
     });
   });
 
-  it("maps Runtime events without changing the authoritative payload", () => {
+  it("maps Runtime events through an immutable allowlisted payload", () => {
     const runtimeEvent = {
       id: "runtime-event-1",
       name: "tool.started" as const,
       taskId: "task-1",
       sequence: 3,
       timestamp: "2026-06-15T00:00:00.000Z",
-      payload: { actionId: "action-1", toolName: "workspace.read" },
+      payload: {
+        actionId: "action-1",
+        toolName: "workspace.read",
+        rawInput: { path: "secret.txt" },
+      },
     };
     const event = mapRuntimeEventToHostEvent({
       sessionId: "session-1",
       runtimeEvent,
     });
 
-    expect(event.payload.runtimeEvent).toBe(runtimeEvent);
+    expect(event.payload.runtimeEvent).not.toBe(runtimeEvent);
+    expect(event.payload.runtimeEvent.payload).toEqual({
+      actionId: "action-1",
+      toolName: "workspace.read",
+    });
+    expect(Object.isFrozen(event.payload.runtimeEvent)).toBe(true);
+    expect(Object.isFrozen(event.payload.runtimeEvent.payload)).toBe(true);
     expect(event.sequence).toBe(3);
+  });
+
+  it("projects only safe Retry cancellation attribution fields", () => {
+    const event = mapRuntimeEventToHostEvent({
+      sessionId: "session-1",
+      runtimeEvent: {
+        id: "runtime-event-retry-cancelled",
+        name: "retry.cancelled",
+        taskId: "task-1",
+        sequence: 4,
+        timestamp: "2026-06-15T00:00:00.000Z",
+        payload: {
+          type: "retry_cancelled",
+          runId: "run-1",
+          operationId: "operation-1",
+          owner: "provider_request",
+          occurredAt: "2026-06-15T00:00:00.000Z",
+          phase: "backoff",
+          budgetId: "budget-1",
+          attemptId: null,
+          attemptNumber: null,
+          attribution: {
+            requestId: "cancel-1",
+            runId: "run-1",
+            boundary: "retry_wait",
+            observedAt: "2026-06-15T00:00:00.000Z",
+            reason: "private reason",
+          },
+          rawError: "private provider error",
+        },
+      },
+    });
+
+    expect(event.payload.runtimeEvent.payload).toMatchObject({
+      owner: "provider_request",
+      phase: "backoff",
+      attribution: {
+        requestId: "cancel-1",
+        boundary: "retry_wait",
+      },
+    });
+    expect(JSON.stringify(event)).not.toContain("private");
   });
 
   it("carries the blocked RunResult rather than reconstructing a Host error", () => {

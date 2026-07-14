@@ -8,6 +8,7 @@ import type {
   HelarcRunTerminalSummary,
   HelarcRunWorkspaceRef,
 } from "@agent-anything/helarc";
+import type { RunCancellationSummary } from "@agent-anything/agent-core";
 
 type ISODateTimeString = string;
 type Metadata = Record<string, unknown>;
@@ -87,6 +88,7 @@ export class HelarcActiveRunController {
       provider: input.provider,
       events: [],
       pendingPermission: null,
+      cancellation: null,
       terminal: null,
       startedAt: input.startedAt ?? input.run.createdAt,
       metadata: {
@@ -160,7 +162,7 @@ export class HelarcActiveRunController {
     return { ok: true, snapshot: this.publishSnapshot() };
   }
 
-  requestCancel(): UpdateHelarcActiveRunResult {
+  requestCancel(cancellation: RunCancellationSummary): UpdateHelarcActiveRunResult {
     if (!isActiveStatus(this.snapshot.status)) {
       return this.reject(
         "active_run_not_running",
@@ -172,6 +174,7 @@ export class HelarcActiveRunController {
       ...this.snapshot,
       status: "cancelling",
       pendingPermission: null,
+      cancellation: Object.freeze({ ...cancellation }),
     };
     return { ok: true, snapshot: this.publishSnapshot() };
   }
@@ -188,6 +191,7 @@ export class HelarcActiveRunController {
       ...this.snapshot,
       status: terminal.status,
       pendingPermission: null,
+      cancellation: terminal.cancellation,
       terminal,
     };
     return { ok: true, snapshot: this.publishSnapshot() };
@@ -229,6 +233,7 @@ function createIdleSnapshot(): HelarcRunSnapshot {
     provider: null,
     events: [],
     pendingPermission: null,
+    cancellation: null,
     terminal: null,
     startedAt: null,
     metadata: {},

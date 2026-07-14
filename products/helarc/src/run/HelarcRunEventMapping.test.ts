@@ -169,6 +169,55 @@ describe("mapRuntimeEventToHelarcRunEvent", () => {
       severity: "info",
     });
   });
+
+  it("maps Retry progress from the closed Host projection", () => {
+    const event = mapRuntimeEventToHelarcRunEvent(runtimeEvent({
+      name: "retry.scheduled",
+      payload: {
+        type: "retry_scheduled",
+        runId: "run-1",
+        operationId: "provider-operation-1",
+        owner: "provider_request",
+        occurredAt: "2026-07-04T00:00:00.000Z",
+        afterAttemptId: "attempt-1",
+        budgetId: "budget-1",
+        retryNumber: 1,
+        nextAttemptNumber: 2,
+        nextBudgetAttemptNumber: 2,
+        delayMs: 250,
+        delaySource: "policy",
+        nextAttemptAt: "2026-07-04T00:00:00.250Z",
+        failureCategory: "transport",
+        failureCode: "provider_transport_failed",
+        rawProviderResponse: "secret response",
+        apiKey: "secret key",
+      },
+    }));
+
+    expect(event).toMatchObject({
+      kind: "retry.progress",
+      title: "Retry 2 scheduled",
+      detail: "provider-operation-1",
+      severity: "info",
+      metadata: {
+        runtimeEventName: "retry.scheduled",
+        taskId: "task-1",
+        type: "retry_scheduled",
+        runId: "run-1",
+        operationId: "provider-operation-1",
+        owner: "provider_request",
+        retryNumber: 1,
+        nextAttemptNumber: 2,
+        delayMs: 250,
+        delaySource: "policy",
+        failureCategory: "transport",
+        failureCode: "provider_transport_failed",
+      },
+    });
+    expect(JSON.stringify(event)).not.toContain("secret");
+    expect(event.metadata).not.toHaveProperty("rawProviderResponse");
+    expect(event.metadata).not.toHaveProperty("apiKey");
+  });
 });
 
 function runtimeEvent(input: {

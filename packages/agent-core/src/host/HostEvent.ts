@@ -8,6 +8,7 @@ import type {
   SucceededRunResult,
 } from "../runner/index.js";
 import type { HostSessionId, HostSessionState } from "./HostSession.js";
+import { projectRuntimeEventForHost } from "./HostRuntimeProjection.js";
 
 export type HostEventName =
   | "host.session.created"
@@ -146,15 +147,16 @@ export interface MapRuntimeEventToHostEventInput {
 export function mapRuntimeEventToHostEvent(
   input: MapRuntimeEventToHostEventInput,
 ): HostRuntimeEvent {
+  const runtimeEvent = projectRuntimeEventForHost(input.runtimeEvent);
   return createHostEvent({
-    id: `host_${input.runtimeEvent.id}`,
+    id: `host_${runtimeEvent.id}`,
     name: "host.runtime.event",
     sessionId: input.sessionId,
-    taskId: input.runtimeEvent.taskId,
-    sequence: input.sequence ?? input.runtimeEvent.sequence,
-    timestamp: input.runtimeEvent.timestamp,
+    taskId: runtimeEvent.taskId,
+    sequence: input.sequence ?? runtimeEvent.sequence,
+    timestamp: runtimeEvent.timestamp,
     payload: Object.freeze({
-      runtimeEvent: input.runtimeEvent,
+      runtimeEvent,
     }),
     metadata: input.metadata ?? {},
   });

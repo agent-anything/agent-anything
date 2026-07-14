@@ -38,6 +38,7 @@ import {
 } from "@agent-anything/code-agent";
 import {
   createHostPermissionService,
+  projectRuntimeEventForHost,
   type HostEventSink,
   type HostPermissionBridge,
   type HostSessionId,
@@ -431,14 +432,15 @@ function resolveHelarcRunWorkspace(task: AgentTask) {
 export function mapRuntimeEventToHelarcActivity(
   event: RuntimeEvent,
 ): HelarcActivityItem {
-  const payload = isRecord(event.payload) ? event.payload : {};
+  const projectedEvent = projectRuntimeEventForHost(event);
+  const payload = isRecord(projectedEvent.payload) ? projectedEvent.payload : {};
   return {
-    id: event.id,
-    sequence: event.sequence,
-    timestamp: event.timestamp,
-    kind: event.name,
-    title: titleForEvent(event.name, payload),
-    detail: detailForEvent(event.name, payload),
+    id: projectedEvent.id,
+    sequence: projectedEvent.sequence,
+    timestamp: projectedEvent.timestamp,
+    kind: projectedEvent.name,
+    title: titleForEvent(projectedEvent.name, payload),
+    detail: detailForEvent(projectedEvent.name, payload),
     metadata: payload,
   };
 }
@@ -654,6 +656,18 @@ function titleForEvent(name: string, payload: Metadata): string {
       return `Tool started: ${payload.toolName ?? "unknown"}`;
     case "tool.finished":
       return `Tool ${payload.status ?? "finished"}: ${payload.toolName ?? "unknown"}`;
+    case "retry.attempt.started":
+      return `Retry attempt ${payload.attemptNumber ?? ""} started`.trim();
+    case "retry.attempt.finished":
+      return `Retry attempt ${payload.attemptNumber ?? ""} ${payload.outcome ?? "finished"}`.trim();
+    case "retry.scheduled":
+      return `Retry ${payload.nextAttemptNumber ?? ""} scheduled`.trim();
+    case "retry.exhausted":
+      return "Retry exhausted";
+    case "retry.cancelled":
+      return "Retry cancelled";
+    case "retry.fallback.selected":
+      return "Retry fallback selected";
     default:
       return name;
   }
@@ -676,6 +690,10 @@ function detailForEvent(name: string, payload: Metadata): string | null {
     return typeof payload.controllerAction === "string"
       ? payload.controllerAction
       : null;
+  }
+
+  if (name.startsWith("retry.")) {
+    return typeof payload.operationId === "string" ? payload.operationId : null;
   }
 
   return null;

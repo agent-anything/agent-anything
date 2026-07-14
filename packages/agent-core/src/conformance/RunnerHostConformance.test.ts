@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type {
+  Provider,
+  ProviderCallResult,
+  ProviderRequest,
+} from "@agent-anything/providers";
 import type { ToolDefinition, ToolResult } from "@agent-anything/tools";
 import type { Agent } from "../agent/index.js";
 import type {
@@ -7,16 +12,22 @@ import type {
   ControllerDecision,
   ControllerInput,
 } from "../controller/index.js";
+import { ProviderBackedController } from "../controller/index.js";
+import { RuntimeEventEmitter } from "../events/index.js";
 import {
   createHostRuntimeAdapter,
+  mapRuntimeEventToHostEvent,
+  type HostEvent,
   type HostRunInput,
   type HostRunResult,
   type HostRuntimeAdapter,
   type HostSessionState,
 } from "../host/index.js";
+import { createSystemRetryExecutor, type RetryClock } from "../retry/index.js";
 import {
   Runner,
   createRunCancellationController,
+  toRunCancellationSummary,
   type ActionCandidate,
   type RunConfig,
   type ToolActionBridge,
@@ -107,6 +118,96 @@ describe("Runner and generic Host conformance", () => {
         attemptId: "run-conformance:controller:1:provider-request:1:attempt:1",
       },
     });
+  });
+
+  it("carries real Provider Retry through Controller, Runner, and the safe Host projection", async () => {
+    const provider = new RetryOnceProvider();
+    const clock = fixedRetryClock();
+    const controller = new ProviderBackedController<ConformanceOutput>({
+      provider,
+      buildRequest: () => ({
+        messages: [{ role: "user", content: "Complete the conformance task.", metadata: {} }],
+        capability: "agent-control",
+        metadata: {},
+      }),
+      parseResponse: (_response, input) => finalDecision(
+        input,
+        "Recovered through the generic Host",
+      ),
+      structuredOutputContractId: "conformance-output-v1",
+      maxProviderOutputLength: 10_000,
+      retryExecutor: createSystemRetryExecutor(clock),
+      retryClock: clock,
+    });
+    const eventEmitter = new RuntimeEventEmitter();
+    const hostEvents: HostEvent[] = [];
+    eventEmitter.subscribe((runtimeEvent) => {
+      hostEvents.push(mapRuntimeEventToHostEvent({
+        sessionId: "session-conformance",
+        runtimeEvent,
+      }));
+    });
+    const harness = createHostHarness(controller, undefined, eventEmitter);
+    const input = createHostInput({
+      retry: {
+        providerRequest: {
+          maxRetries: 1,
+          delay: {
+            kind: "exponential_jitter",
+            baseDelayMs: 0,
+            maxDelayMs: 0,
+            multiplier: 2,
+            jitterRatio: 0.1,
+          },
+          retryableCategories: ["transport"],
+          serverDelay: { mode: "ignore" },
+        },
+        structuredOutput: disabledRetryConfiguration().structuredOutput,
+      },
+    });
+
+    const result = await harness.run(input);
+
+    expect(result).toMatchObject({
+      state: { status: "completed" },
+      runResult: {
+        status: "succeeded",
+        finalOutput: { summary: "Recovered through the generic Host" },
+      },
+    });
+    expect(provider.requests).toHaveLength(2);
+    expect(result.runResult.items.map((item) => item.kind)).toEqual([
+      "retry_attempt_started",
+      "retry_attempt_started",
+      "retry_attempt_finished",
+      "retry_scheduled",
+      "retry_attempt_started",
+      "retry_attempt_finished",
+      "retry_attempt_finished",
+      "model_output",
+      "final_output",
+    ]);
+
+    const retryEvents = hostEvents.filter((event) =>
+      event.name === "host.runtime.event"
+      && event.payload.runtimeEvent.name.startsWith("retry.")
+      && event.payload.runtimeEvent.payload.owner === "provider_request"
+    );
+    expect(retryEvents.map((event) =>
+      event.name === "host.runtime.event" ? event.payload.runtimeEvent.name : null
+    )).toEqual([
+      "retry.attempt.started",
+      "retry.attempt.finished",
+      "retry.scheduled",
+      "retry.attempt.started",
+      "retry.attempt.finished",
+    ]);
+    expect(JSON.stringify(retryEvents)).not.toContain("secret transport details");
+    expect(retryEvents.every((event) =>
+      event.name === "host.runtime.event"
+      && Object.isFrozen(event.payload.runtimeEvent)
+      && Object.isFrozen(event.payload.runtimeEvent.payload)
+    )).toBe(true);
   });
 
   it("supports optional Plan and multi-iteration Tool execution in one Runner loop", async () => {
@@ -469,8 +570,8 @@ describe("Runner and generic Host conformance", () => {
     expect(receipt.accepted).toBe(true);
     expect(harness.states.at(-1)).toMatchObject({
       status: "cancelling",
-      cancellationRequest: {
-        id: "run-conformance:cancellation",
+      cancellation: {
+        requestId: "run-conformance:cancellation",
         reasonCode: "host_requested",
       },
     });
@@ -590,7 +691,7 @@ class InMemoryHostHarness {
         taskId: input.runInput.task.id,
         runId: input.runInput.runId,
         timestamp: receipt.request.requestedAt,
-        cancellationRequest: receipt.request,
+        cancellation: toRunCancellationSummary(receipt.request),
         metadata: {},
       });
     }
@@ -601,10 +702,12 @@ class InMemoryHostHarness {
 function createHostHarness(
   controller: Controller,
   toolActionBridge?: ToolActionBridge,
+  eventEmitter?: RuntimeEventEmitter,
 ): InMemoryHostHarness {
   const runner = new Runner({
     controller,
     ...(toolActionBridge ? { toolActionBridge } : {}),
+    ...(eventEmitter ? { eventEmitter } : {}),
     now: () => "2026-07-14T00:00:00.000Z",
   });
   return new InMemoryHostHarness(createHostRuntimeAdapter({
@@ -616,6 +719,7 @@ function createHostHarness(
 function createHostInput(input: {
   tools?: readonly ToolDefinition[];
   limits?: Partial<Omit<RunConfig["limits"], "plan">>;
+  retry?: RunConfig["retry"];
 } = {}): HostRunInput<ConformanceOutput> {
   const cancellation = createRunCancellationController({
     runId: "run-conformance",
@@ -673,10 +777,17 @@ function createHostInput(input: {
         processForceKillTimeoutMs: 500,
         finalizationTimeoutMs: 1_000,
       },
-      retry: disabledRetryConfiguration(),
+      retry: input.retry ?? disabledRetryConfiguration(),
       metadata: {},
     },
     metadata: { fixture: "generic-host-conformance" },
+  };
+}
+
+function fixedRetryClock(): RetryClock {
+  const value = "2026-07-14T00:00:00.000Z";
+  return {
+    now: () => new Date(value),
   };
 }
 
@@ -788,4 +899,42 @@ function succeededToolResult(): ToolActionBridgeResult {
     evidenceRefs: [],
     artifactRefs: [],
   };
+}
+
+class RetryOnceProvider implements Provider {
+  readonly descriptor = {
+    id: "retry-once-conformance-provider",
+    name: "Retry Once Conformance Provider",
+    capabilities: {
+      supportsToolPlanning: true,
+      supportsStructuredOutput: true,
+      supportsStreaming: false,
+    },
+    requestRetryScheduler: { kind: "platform" as const },
+    metadata: {},
+  };
+  readonly requests: ProviderRequest[] = [];
+
+  async send(request: ProviderRequest): Promise<ProviderCallResult> {
+    this.requests.push(request);
+    if (this.requests.length === 1) {
+      return {
+        kind: "failed",
+        failure: {
+          category: "transport",
+          code: "provider_unavailable",
+          message: "secret transport details",
+          metadata: { rawError: "secret transport details" },
+        },
+      };
+    }
+    return {
+      kind: "succeeded",
+      response: {
+        output: { summary: "Recovered through the generic Host" },
+        usage: null,
+        metadata: {},
+      },
+    };
+  }
 }

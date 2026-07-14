@@ -145,6 +145,15 @@ describe("Helarc read-only session", () => {
     expect(new Set(retryActivity.map((item) => item.metadata.operationId))).toEqual(
       new Set(["helarc-task-1:controller:1:provider-request:1"]),
     );
+    expect(retryActivity.find((item) => item.kind === "retry.scheduled")?.metadata).toMatchObject({
+      owner: "provider_request",
+      nextAttemptNumber: 2,
+      delayMs: 0,
+      failureCategory: "transport",
+      failureCode: "provider_unavailable",
+    });
+    expect(retryActivity.every((item) => Object.isFrozen(item.metadata))).toBe(true);
+    expect(JSON.stringify(retryActivity)).not.toContain("Provider is temporarily unavailable.");
   });
 
   it("runs list, read, and search tools inside the workspace boundary", async () => {

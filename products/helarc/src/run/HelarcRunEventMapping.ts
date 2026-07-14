@@ -1,4 +1,5 @@
 import type { RuntimeEvent, RuntimeEventName } from "@agent-anything/agent-core";
+import { projectRuntimeEventForHost } from "@agent-anything/agent-core/host";
 import type { Metadata } from "@agent-anything/shared";
 import type {
   HelarcRunEventKind,
@@ -9,17 +10,18 @@ import type {
 export function mapRuntimeEventToHelarcRunEvent(
   event: RuntimeEvent,
 ): HelarcRunEventViewModel {
-  const payload = isRecord(event.payload) ? event.payload : {};
+  const projectedEvent = projectRuntimeEventForHost(event);
+  const payload = isRecord(projectedEvent.payload) ? projectedEvent.payload : {};
 
   return {
-    id: event.id,
-    sequence: event.sequence,
-    timestamp: event.timestamp,
-    kind: kindForEvent(event.name, payload),
-    title: titleForEvent(event.name, payload),
-    detail: detailForEvent(event.name, payload),
-    severity: severityForEvent(event.name, payload),
-    metadata: metadataForEvent(event, payload),
+    id: projectedEvent.id,
+    sequence: projectedEvent.sequence,
+    timestamp: projectedEvent.timestamp,
+    kind: kindForEvent(projectedEvent.name, payload),
+    title: titleForEvent(projectedEvent.name, payload),
+    detail: detailForEvent(projectedEvent.name, payload),
+    severity: severityForEvent(projectedEvent.name, payload),
+    metadata: metadataForEvent(projectedEvent, payload),
   };
 }
 
@@ -51,6 +53,13 @@ function kindForEvent(
       return "tool.started";
     case "tool.finished":
       return "tool.completed";
+    case "retry.attempt.started":
+    case "retry.attempt.finished":
+    case "retry.scheduled":
+    case "retry.fallback.selected":
+    case "retry.exhausted":
+    case "retry.cancelled":
+      return "retry.progress";
     default:
       return "runtime.output";
   }
@@ -82,6 +91,18 @@ function titleForEvent(name: RuntimeEventName, payload: Metadata): string {
       return `Tool started: ${readString(payload, "toolName") ?? "unknown"}`;
     case "tool.finished":
       return `Tool ${readString(payload, "status") ?? "finished"}: ${readString(payload, "toolName") ?? "unknown"}`;
+    case "retry.attempt.started":
+      return `Retry attempt ${readNumber(payload, "attemptNumber") ?? ""} started`.trim();
+    case "retry.attempt.finished":
+      return `Retry attempt ${readNumber(payload, "attemptNumber") ?? ""} ${readString(payload, "outcome") ?? "finished"}`.trim();
+    case "retry.scheduled":
+      return `Retry ${readNumber(payload, "nextAttemptNumber") ?? ""} scheduled`.trim();
+    case "retry.exhausted":
+      return "Retry exhausted";
+    case "retry.cancelled":
+      return "Retry cancelled";
+    case "retry.fallback.selected":
+      return "Retry fallback selected";
     default:
       return name;
   }
@@ -102,6 +123,10 @@ function detailForEvent(name: RuntimeEventName, payload: Metadata): string | nul
 
   if (name === "run.item.appended") {
     return readString(payload, "itemId");
+  }
+
+  if (name.startsWith("retry.")) {
+    return readString(payload, "operationId");
   }
 
   return null;
@@ -146,7 +171,13 @@ function severityForEvent(
     return "error";
   }
 
-  if (name === "run.cancelled" || status === "stopped" || decision === "review") {
+  if (
+    name === "run.cancelled" ||
+    name === "retry.exhausted" ||
+    name === "retry.cancelled" ||
+    status === "stopped" ||
+    decision === "review"
+  ) {
     return "warning";
   }
 
@@ -189,8 +220,47 @@ function metadataForEvent(event: RuntimeEvent, payload: Metadata): Metadata {
   copyNumber(metadata, payload, "evidenceCount");
   copyNumber(metadata, payload, "artifactCount");
   copyStringArray(metadata, payload, "errorCodes");
+  copyString(metadata, payload, "type");
+  copyString(metadata, payload, "operationId");
+  copyString(metadata, payload, "owner");
+  copyString(metadata, payload, "occurredAt");
+  copyString(metadata, payload, "attemptId");
+  copyString(metadata, payload, "budgetId");
+  copyNumber(metadata, payload, "attemptNumber");
+  copyNumber(metadata, payload, "budgetAttemptNumber");
+  copyNumber(metadata, payload, "maxBudgetAttempts");
+  copyString(metadata, payload, "outcome");
+  copyString(metadata, payload, "failureCategory");
+  copyString(metadata, payload, "failureCode");
+  copyString(metadata, payload, "next");
+  copyNumber(metadata, payload, "retryNumber");
+  copyNumber(metadata, payload, "nextAttemptNumber");
+  copyNumber(metadata, payload, "delayMs");
+  copyString(metadata, payload, "delaySource");
+  copyString(metadata, payload, "nextAttemptAt");
+  copyString(metadata, payload, "reason");
+  copyNumber(metadata, payload, "totalAttempts");
+  copyNumber(metadata, payload, "totalRetryDelayMs");
+  copyString(metadata, payload, "lastFailureCategory");
+  copyString(metadata, payload, "lastFailureCode");
+  copyString(metadata, payload, "phase");
+  copyAttribution(metadata, payload);
 
   return metadata;
+}
+
+function copyAttribution(target: Metadata, source: Metadata): void {
+  if (!isRecord(source.attribution)) {
+    return;
+  }
+  const attribution: Metadata = {};
+  copyString(attribution, source.attribution, "requestId");
+  copyString(attribution, source.attribution, "runId");
+  copyString(attribution, source.attribution, "boundary");
+  copyString(attribution, source.attribution, "observedAt");
+  if (Object.keys(attribution).length === 4) {
+    target.attribution = Object.freeze(attribution);
+  }
 }
 
 function copyString(target: Metadata, source: Metadata, key: string): void {

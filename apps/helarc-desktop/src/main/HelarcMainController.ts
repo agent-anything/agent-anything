@@ -1,7 +1,9 @@
 import type { HostPermissionBridge } from "@agent-anything/agent-core/host";
 import {
   createRunCancellationController,
+  toRunCancellationSummary,
   type RunCancellationController,
+  type RunCancellationSummary,
 } from "@agent-anything/agent-core";
 import {
   createHelarcRunInput,
@@ -73,6 +75,7 @@ export type HelarcMainSnapshotStatus =
   | "idle"
   | "workspace_selected"
   | "running"
+  | "cancelling"
   | "waiting_for_permission"
   | "waiting_for_patch_review"
   | "applying_patch"
@@ -160,6 +163,8 @@ export type HelarcMainErrorCode =
   | "provider_config_missing"
   | "provider_config_invalid"
   | "provider_not_available"
+  | "session_execution_failed"
+  | "session_persistence_failed"
   | "session_already_running"
   | "session_not_running"
   | "permission_not_pending"
@@ -262,7 +267,6 @@ export class HelarcMainController {
   private readonly runtimeToolMode: HelarcRuntimeToolMode;
   private status: HelarcMainSnapshotStatus = "idle";
   private nextTaskNumber = 1;
-  private cancellationRequested = false;
   private runCancellation: RunCancellationController | null = null;
   private readonly activeRunController = new HelarcActiveRunController();
   private readonly snapshotSubscribers = new Set<(snapshot: HelarcMainSnapshot) => void>();
@@ -388,7 +392,6 @@ export class HelarcMainController {
     this.currentThreadRecord = null;
     this.currentThreadWrite = null;
     this.lastPatchReview = null;
-    this.cancellationRequested = false;
     this.runCancellation = null;
     this.activeRunController.reset();
     return this.publishSnapshot();
@@ -410,12 +413,7 @@ export class HelarcMainController {
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
-    if (
-      this.status === "running" ||
-      this.status === "waiting_for_permission" ||
-      this.status === "waiting_for_patch_review" ||
-      this.status === "applying_patch"
-    ) {
+    if (isActiveSessionStatus(this.status)) {
       const error = this.setError("session_already_running", "A Helarc session is already running.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
@@ -489,7 +487,6 @@ export class HelarcMainController {
     );
     this.currentThreadWrite = this.persistInitialThreadRecord(threadRecordResult.record);
     this.lastPatchReview = null;
-    this.cancellationRequested = false;
     this.runCancellation = createRunCancellationController({
       runId: runResult.input.runId,
     });
@@ -550,13 +547,16 @@ export class HelarcMainController {
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
-    this.cancellationRequested = true;
-    this.runCancellation?.requestCancellation({
+    const receipt = this.runCancellation?.requestCancellation({
       origin: "user",
       reasonCode: "user_requested",
       reason: "Cancelled from Helarc desktop.",
     });
-    this.activeRunController.requestCancel();
+    if (!receipt) {
+      const error = this.setError("session_not_running", "No Helarc session is running.");
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+    this.activeRunController.requestCancel(toRunCancellationSummary(receipt.request));
 
     if (this.pendingPermission) {
       const pending = this.pendingPermission;
@@ -567,7 +567,7 @@ export class HelarcMainController {
       });
     }
 
-    this.status = "cancelled";
+    this.status = "cancelling";
     this.pendingPatchReview = null;
     this.lastError = null;
     return { ok: true, snapshot: this.publishSnapshot() };
@@ -618,6 +618,7 @@ export class HelarcMainController {
   private async runLiveSession(
     task: Parameters<typeof runHelarcSession>[0]["task"],
   ): Promise<void> {
+    let terminal: HelarcRunTerminalSummary | null;
     try {
       const sessionResult = await runHelarcSession({
         task,
@@ -650,18 +651,16 @@ export class HelarcMainController {
           message: firstError.message,
         };
       }
-      const terminal = this.createActiveRunTerminalSummary({
+      terminal = this.createActiveRunTerminalSummary({
         status: mapSessionStatusToRunTerminalStatus(this.status, sessionResult.output),
         runtimeStatus: sessionResult.runResult.status,
         runtimeCode: sessionResult.runResult.code,
+        cancellation: sessionResult.runResult.cancellation,
         safeOutput: sessionResult.output,
         errorSummary: sessionResult.output.safeErrors,
       });
-      await this.persistSessionHistory(task, terminal);
-      await this.persistWorkContextRun(terminal);
-      this.completeActiveRun(terminal);
     } catch (error) {
-      this.status = this.cancellationRequested ? "cancelled" : "failed";
+      this.status = "failed";
       this.pendingPermission = null;
       this.pendingPatchReview = null;
       this.output = {
@@ -672,30 +671,38 @@ export class HelarcMainController {
         patchStatus: null,
         appliedPath: null,
         safeErrors: [{
-          code: "provider_not_available",
+          code: "session_execution_failed",
           message: error instanceof Error ? error.message : "Helarc session failed.",
         }],
       };
-      this.lastError = this.cancellationRequested
-        ? null
-        : {
-            code: "provider_not_available",
-            message: error instanceof Error ? error.message : "Helarc session failed.",
-          };
-      const terminal = this.createActiveRunTerminalSummary({
-        status: this.cancellationRequested ? "cancelled" : "failed",
+      this.lastError = {
+        code: "session_execution_failed",
+        message: error instanceof Error ? error.message : "Helarc session failed.",
+      };
+      terminal = this.createActiveRunTerminalSummary({
+        status: "failed",
         runtimeStatus: "failed",
-        runtimeCode: "provider_not_available",
+        runtimeCode: "session_execution_failed",
+        cancellation: this.activeRunController.getSnapshot().cancellation,
         safeOutput: this.output,
         errorSummary: this.output.safeErrors,
       });
+    }
+
+    this.completeActiveRun(terminal);
+    try {
       await this.persistSessionHistory(task, terminal);
       await this.persistWorkContextRun(terminal);
-      this.completeActiveRun(terminal);
-    } finally {
-      this.runCancellation = null;
-      this.publishSnapshot();
+    } catch (error) {
+      this.lastError ??= {
+        code: "session_persistence_failed",
+        message: error instanceof Error
+          ? error.message
+          : "Helarc session persistence failed.",
+      };
     }
+    this.runCancellation = null;
+    this.publishSnapshot();
   }
 
   private createPermissionBridge(): HostPermissionBridge {
@@ -993,6 +1000,7 @@ export class HelarcMainController {
     status: HelarcRunTerminalStatus;
     runtimeStatus: "succeeded" | "failed" | "blocked" | "cancelled";
     runtimeCode: string | null;
+    cancellation: RunCancellationSummary | null;
     safeOutput: unknown;
     errorSummary: Array<{ code: string; message: string }>;
   }): HelarcRunTerminalSummary | null {
@@ -1001,6 +1009,7 @@ export class HelarcMainController {
       status: input.status,
       runtimeStatus: input.runtimeStatus,
       runtimeCode: input.runtimeCode,
+      cancellation: input.cancellation,
       safeOutput: input.safeOutput,
       errorSummary: input.errorSummary,
       startedAt: activeRun.startedAt ?? this.currentSessionStartedAt ?? new Date().toISOString(),
@@ -1044,7 +1053,7 @@ interface CompletedPatchReview {
 
 function isTerminalSessionStatus(
   status: HelarcMainSnapshotStatus,
-): status is Exclude<HelarcMainSnapshotStatus, "idle" | "workspace_selected" | "running" | "waiting_for_permission" | "waiting_for_patch_review" | "applying_patch"> {
+): status is Exclude<HelarcMainSnapshotStatus, "idle" | "workspace_selected" | "running" | "cancelling" | "waiting_for_permission" | "waiting_for_patch_review" | "applying_patch"> {
   return status === "completed" ||
     status === "rejected" ||
     status === "failed" ||
@@ -1054,6 +1063,7 @@ function isTerminalSessionStatus(
 
 function isActiveSessionStatus(status: HelarcMainSnapshotStatus): boolean {
   return status === "running" ||
+    status === "cancelling" ||
     status === "waiting_for_permission" ||
     status === "waiting_for_patch_review" ||
     status === "applying_patch";

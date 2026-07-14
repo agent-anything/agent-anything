@@ -5,7 +5,7 @@ import type {
   BlockedRunResult,
   CancelledRunResult,
   FailedRunResult,
-  RunCancellationRequest,
+  RunCancellationSummary,
   RunConfig,
   RunInput,
   RunResult,
@@ -52,7 +52,7 @@ export interface HostSessionCancelling extends HostSessionStateBase {
   readonly status: "cancelling";
   readonly taskId: string;
   readonly runId: string;
-  readonly cancellationRequest: RunCancellationRequest;
+  readonly cancellation: RunCancellationSummary;
 }
 
 export interface HostSessionCompleted<TOutput = unknown> extends HostSessionStateBase {

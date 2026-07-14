@@ -83,6 +83,7 @@ describe("HelarcRun", () => {
       status: "failed",
       runtimeStatus: "failed",
       runtimeCode: " provider_failed ",
+      cancellation: null,
       safeOutput: { summary: "Provider failed." },
       errorSummary: [{ code: " provider_failed ", message: " Provider failed. " }],
       startedAt: "2026-07-04T00:00:00.000Z",
@@ -96,6 +97,7 @@ describe("HelarcRun", () => {
         status: "failed",
         runtimeStatus: "failed",
         runtimeCode: "provider_failed",
+        cancellation: null,
         safeOutput: { summary: "Provider failed." },
         errorSummary: [{ code: "provider_failed", message: "Provider failed." }],
         startedAt: "2026-07-04T00:00:00.000Z",
@@ -129,6 +131,36 @@ describe("HelarcRun", () => {
       ok: false,
       error: { code: "run_terminal_error_summary_invalid" },
     });
+
+    expect(createHelarcRunTerminalSummary({
+      ...terminalInput(),
+      status: "cancelled",
+      runtimeStatus: "cancelled",
+    })).toMatchObject({
+      ok: false,
+      error: { code: "run_terminal_cancellation_invalid" },
+    });
+  });
+
+  it("retains a safe cancellation summary in cancelled terminal state", () => {
+    const result = createHelarcRunTerminalSummary({
+      ...terminalInput(),
+      status: "cancelled",
+      runtimeStatus: "cancelled",
+      runtimeCode: "runtime_cancelled",
+      cancellation: cancellationSummary(),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      terminal: {
+        status: "cancelled",
+        cancellation: {
+          requestId: "run-1:cancellation",
+          reasonCode: "user_requested",
+        },
+      },
+    });
   });
 
   it("creates renderer-safe idle snapshots", () => {
@@ -143,6 +175,7 @@ describe("HelarcRun", () => {
       provider: null,
       events: [],
       pendingPermission: null,
+      cancellation: null,
       terminal: null,
       startedAt: null,
       metadata: { product: "helarc" },
@@ -166,10 +199,20 @@ function terminalInput() {
     status: "completed" as const,
     runtimeStatus: "succeeded" as const,
     runtimeCode: null,
+    cancellation: null,
     safeOutput: { summary: "Done." },
     errorSummary: [],
     startedAt: "2026-07-04T00:00:00.000Z",
     completedAt: "2026-07-04T00:00:10.000Z",
     eventCount: 1,
+  };
+}
+
+function cancellationSummary() {
+  return {
+    requestId: "run-1:cancellation",
+    origin: "user" as const,
+    reasonCode: "user_requested" as const,
+    requestedAt: "2026-07-04T00:00:05.000Z",
   };
 }

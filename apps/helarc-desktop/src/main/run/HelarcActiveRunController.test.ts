@@ -30,6 +30,7 @@ describe("HelarcActiveRunController", () => {
         },
         events: [],
         pendingPermission: null,
+        cancellation: null,
         terminal: null,
         startedAt: "2026-07-04T00:00:00.000Z",
         metadata: { product: "helarc", source: "test" },
@@ -119,9 +120,13 @@ describe("HelarcActiveRunController", () => {
     controller.startRun(activeRunInput());
     controller.markRunning();
 
-    expect(controller.requestCancel()).toMatchObject({
+    expect(controller.requestCancel(cancellationSummary())).toMatchObject({
       ok: true,
-      snapshot: { status: "cancelling", pendingPermission: null },
+      snapshot: {
+        status: "cancelling",
+        pendingPermission: null,
+        cancellation: cancellationSummary(),
+      },
     });
 
     expect(controller.completeRun(terminalSummary("cancelled"))).toMatchObject({
@@ -130,7 +135,8 @@ describe("HelarcActiveRunController", () => {
         status: "cancelled",
         terminal: {
           status: "cancelled",
-          runtimeStatus: null,
+          runtimeStatus: "cancelled",
+          cancellation: cancellationSummary(),
           eventCount: 0,
         },
       },
@@ -191,6 +197,7 @@ describe("HelarcActiveRunController", () => {
       provider: null,
       events: [],
       pendingPermission: null,
+      cancellation: null,
       terminal: null,
       startedAt: null,
       metadata: {},
@@ -242,12 +249,26 @@ function permissionPrompt() {
 function terminalSummary(status: "completed" | "failed" | "denied" | "cancelled") {
   return {
     status,
-    runtimeStatus: status === "completed" ? "succeeded" as const : null,
-    runtimeCode: null,
+    runtimeStatus: status === "completed"
+      ? "succeeded" as const
+      : status === "cancelled"
+        ? "cancelled" as const
+        : "failed" as const,
+    runtimeCode: status === "cancelled" ? "runtime_cancelled" : null,
+    cancellation: status === "cancelled" ? cancellationSummary() : null,
     safeOutput: null,
     errorSummary: [],
     startedAt: "2026-07-04T00:00:00.000Z",
     completedAt: "2026-07-04T00:00:10.000Z",
     eventCount: 0,
+  };
+}
+
+function cancellationSummary() {
+  return {
+    requestId: "run-1:cancellation",
+    origin: "user" as const,
+    reasonCode: "user_requested" as const,
+    requestedAt: "2026-07-04T00:00:05.000Z",
   };
 }
