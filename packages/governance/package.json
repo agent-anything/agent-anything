@@ -21,6 +21,10 @@
     "./identity": {
       "types": "./src/identity/index.ts",
       "import": "./dist/identity/index.js"
+    },
+    "./managed-permission": {
+      "types": "./src/managed-permission/index.ts",
+      "import": "./dist/managed-permission/index.js"
     }
   },
   "files": [
@@ -34,7 +38,6 @@
   "license": "Apache-2.0",
   "private": true,
   "dependencies": {
-    "@agent-anything/permission": "workspace:*",
     "@agent-anything/shared": "workspace:*",
     "@agent-anything/tools": "workspace:*"
   }

@@ -24,3 +24,4 @@ export {
   resolvePermissionDecision,
   type ResolvePermissionDecisionInput,
 } from "./resolvePermissionDecision.js";
+export * from "./profile/index.js";

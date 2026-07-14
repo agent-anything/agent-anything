@@ -9,6 +9,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"
+    },
+    "./profile": {
+      "types": "./src/profile/index.ts",
+      "import": "./dist/profile/index.js"
     }
   },
   "files": [
@@ -22,6 +26,7 @@
   "license": "Apache-2.0",
   "private": true,
   "dependencies": {
+    "@agent-anything/governance": "workspace:*",
     "@agent-anything/shared": "workspace:*",
     "@agent-anything/tools": "workspace:*"
   }

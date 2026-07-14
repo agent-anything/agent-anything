@@ -141,9 +141,6 @@ importers:
 
   packages/governance:
     dependencies:
-      '@agent-anything/permission':
-        specifier: workspace:*
-        version: link:../permission
       '@agent-anything/shared':
         specifier: workspace:*
         version: link:../shared
@@ -162,6 +159,9 @@ importers:
 
   packages/permission:
     dependencies:
+      '@agent-anything/governance':
+        specifier: workspace:*
+        version: link:../governance
       '@agent-anything/shared':
         specifier: workspace:*
         version: link:../shared

@@ -26,3 +26,11 @@ export type {
   ResolveIdentityInput,
 } from "./identity/index.js";
 export { createAnonymousIdentityProvider } from "./identity/index.js";
+export type {
+  ManagedFileSystemConstraint,
+  ManagedFileSystemMaximumAccess,
+  ManagedFileSystemTarget,
+  ManagedNetworkPermissionConstraints,
+  ManagedPermissionConstraints,
+  ManagedProfileSelectionConstraints,
+} from "./managed-permission/index.js";
