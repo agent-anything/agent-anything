@@ -59,6 +59,7 @@ export type {
   RetryBudgetExhausted,
   RetryClassification,
   RetryClassifier,
+  RetryClock,
   RetryDecision,
   RetryDelay,
   RetryDelayPolicy,
@@ -79,6 +80,7 @@ export type {
 export {
   createRetryAttemptInterruptionFactory,
   createRetryWait,
+  createSystemRetryExecutor,
   defaultRetryIdGenerator,
   RetryExecutor,
   snapshotRetryEvent,

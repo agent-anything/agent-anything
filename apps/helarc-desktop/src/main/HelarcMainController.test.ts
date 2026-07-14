@@ -957,6 +957,7 @@ class CompleteProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
+    requestRetryScheduler: { kind: "platform" as const },
     metadata: {},
   };
 
@@ -987,6 +988,7 @@ class ScriptedProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
+    requestRetryScheduler: { kind: "platform" as const },
     metadata: {},
   };
 

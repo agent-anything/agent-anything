@@ -69,6 +69,33 @@ describe("OllamaProvider", () => {
     expect(JSON.stringify(result)).not.toContain("secret");
   });
 
+  it("projects trusted HTTP retry metadata into ProviderFailure", async () => {
+    const provider = new OllamaProvider(config(), async () => ({
+      ok: false,
+      status: 503,
+      headers: {
+        get(name) {
+          if (name === "retry-after") return "0";
+          if (name === "request-id") return "ollama_503";
+          return null;
+        },
+      },
+      async json() {
+        return {};
+      },
+    }));
+
+    await expect(provider.send(request(), context())).resolves.toMatchObject({
+      kind: "failed",
+      failure: {
+        statusCode: 503,
+        retryAfterMs: 0,
+        requestId: "ollama_503",
+        metadata: {},
+      },
+    });
+  });
+
   it("maps malformed provider responses", async () => {
     const provider = new OllamaProvider(config(), async () => okResponse({ done: true }));
 

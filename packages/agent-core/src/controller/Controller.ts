@@ -1,5 +1,5 @@
 import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
-import type { Metadata } from "@agent-anything/shared";
+import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { Agent } from "../agent/index.js";
 import type { ContextProjection } from "../context/Context.js";
 import type { ActionCandidate } from "../runner/Action.js";
@@ -35,6 +35,7 @@ export interface ControllerCallContext {
 export interface ControllerRetryContext {
   readonly providerRequest: RetryPolicy<string>;
   readonly structuredOutput: RetryPolicy<string>;
+  readonly deadlineAt: ISODateTimeString;
   readonly events: RetryEventSink;
 }
 

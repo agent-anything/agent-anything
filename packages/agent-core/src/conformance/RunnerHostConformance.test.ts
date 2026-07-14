@@ -56,6 +56,59 @@ describe("Runner and generic Host conformance", () => {
     ]);
   });
 
+  it("preserves Runner-owned Provider retry history through the generic Host", async () => {
+    const controller = new FakeController([
+      async (input, context) => {
+        const operationId = `${input.runId}:controller:1:provider-request:1`;
+        const budgetId = `${operationId}:budget:1`;
+        const attemptId = `${operationId}:attempt:1`;
+        await context.retry.events.emit({
+          type: "retry_attempt_started",
+          runId: input.runId,
+          operationId,
+          owner: "provider_request",
+          occurredAt: "2026-07-14T00:00:00.000Z",
+          attemptId,
+          budgetId,
+          attemptNumber: 1,
+          budgetAttemptNumber: 1,
+          maxBudgetAttempts: 1,
+        });
+        await context.retry.events.emit({
+          type: "retry_attempt_finished",
+          runId: input.runId,
+          operationId,
+          owner: "provider_request",
+          occurredAt: "2026-07-14T00:00:00.000Z",
+          attemptId,
+          budgetId,
+          attemptNumber: 1,
+          budgetAttemptNumber: 1,
+          durationMs: 0,
+          outcome: "succeeded",
+          next: "return_to_owner",
+        });
+        return finalDecision(input, "Completed with retry history");
+      },
+    ]);
+
+    const result = await createHostHarness(controller).run(createHostInput());
+
+    expect(result.state.runResult).toBe(result.runResult);
+    expect(result.runResult.items.map((item) => item.kind)).toEqual([
+      "retry_attempt_started",
+      "retry_attempt_finished",
+      "model_output",
+      "final_output",
+    ]);
+    expect(result.runResult.items[0]).toMatchObject({
+      retry: {
+        operationId: "run-conformance:controller:1:provider-request:1",
+        attemptId: "run-conformance:controller:1:provider-request:1:attempt:1",
+      },
+    });
+  });
+
   it("supports optional Plan and multi-iteration Tool execution in one Runner loop", async () => {
     const controller = new FakeController([
       (input) => actionsDecision(input, [{

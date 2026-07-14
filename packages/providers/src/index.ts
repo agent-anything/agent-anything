@@ -11,7 +11,11 @@ export {
   type ProviderAttemptInterruption,
   type ProviderAttemptInterruptionCause,
 } from "./ProviderAttemptInterruption.js";
-export type { ProviderCapabilities, ProviderDescriptor } from "./ProviderCapabilities.js";
+export type {
+  ProviderCapabilities,
+  ProviderDescriptor,
+  RetrySchedulerOwnership,
+} from "./ProviderCapabilities.js";
 export type { ProviderMessage, ProviderMessageRole } from "./ProviderMessage.js";
 export type { ProviderRequest } from "./ProviderRequest.js";
 export type {

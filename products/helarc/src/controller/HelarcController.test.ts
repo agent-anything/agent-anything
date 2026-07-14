@@ -1,6 +1,8 @@
 import {
   ProviderBackedController,
+  createSystemRetryExecutor,
   createRunCancellationController,
+  systemRetryClock,
   type ControllerCallContext,
   type ControllerInput,
 } from "@agent-anything/agent-core";
@@ -222,6 +224,8 @@ describe("Helarc controller", () => {
       buildRequest: buildHelarcProviderRequest,
       parseResponse: parseHelarcProviderResponse,
       maxProviderOutputLength: HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
+      retryExecutor: createSystemRetryExecutor(),
+      retryClock: systemRetryClock,
     });
 
     const decision = await controller.next(createControllerInput(), controllerCallContext());
@@ -258,6 +262,7 @@ function controllerCallContext(): ControllerCallContext {
     retry: {
       providerRequest: policy,
       structuredOutput: policy,
+      deadlineAt: "2099-01-01T00:00:00.000Z",
       events: { emit() {} },
     },
   };
@@ -368,6 +373,7 @@ class FakeProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
+    requestRetryScheduler: { kind: "platform" as const },
     metadata: {},
   };
   readonly requests: ProviderRequest[] = [];

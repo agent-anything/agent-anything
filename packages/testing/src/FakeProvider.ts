@@ -30,6 +30,9 @@ export class FakeProvider implements Provider {
         supportsStreaming: false,
         ...input.descriptor?.capabilities,
       },
+      requestRetryScheduler: input.descriptor?.requestRetryScheduler ?? {
+        kind: "platform",
+      },
     };
     this.results = [...(input.results ?? [])];
   }

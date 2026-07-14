@@ -93,6 +93,7 @@ function controllerCallContext(): ControllerCallContext {
     retry: {
       providerRequest: policy,
       structuredOutput: policy,
+      deadlineAt: "2099-01-01T00:00:00.000Z",
       events: { emit() {} },
     },
   };

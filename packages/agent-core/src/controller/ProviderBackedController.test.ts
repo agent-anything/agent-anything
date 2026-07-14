@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   Provider,
   ProviderCallResult,
@@ -19,12 +19,18 @@ import {
   ControllerError,
   ProviderBackedController,
 } from "./ProviderBackedController.js";
+import {
+  createSystemRetryExecutor,
+  systemRetryClock,
+} from "../retry/index.js";
 
 interface TestOutput {
   readonly summary: string;
 }
 
 describe("ProviderBackedController", () => {
+  afterEach(() => vi.useRealTimers());
+
   it("builds a request and returns Agent-validated final output with model provenance", async () => {
     const provider = new FakeProvider({
       results: [succeededResult({ summary: "Done" })],
@@ -183,6 +189,246 @@ describe("ProviderBackedController", () => {
         providerErrorCode: "provider_timeout",
       },
     });
+  });
+
+  it("retries a safe transport failure with one stable operation and fresh requests", async () => {
+    const requests: ProviderRequest[] = [];
+    const events: Array<Record<string, unknown>> = [];
+    const buildRequest = vi.fn(() => request("original request"));
+    const provider: Provider = {
+      descriptor: providerDescriptor("retrying-provider"),
+      async send(candidate) {
+        requests.push(candidate);
+        if (requests.length === 1) {
+          candidate.messages[0].content = "mutated by first attempt";
+          return failedResult("transport", "network_unavailable");
+        }
+        return succeededResult({ summary: "Recovered" });
+      },
+    };
+    const controller = createController(provider, {
+      buildRequest,
+      parseResponse: (response) => finalDecision(response.output),
+    });
+
+    const result = await controller.next(
+      createControllerInput(),
+      callContext(undefined, {
+        maxRetries: 1,
+        retryableCategories: ["transport"],
+        events,
+      }),
+    );
+
+    expect(result).toMatchObject({ kind: "final_output", output: { summary: "Recovered" } });
+    expect(buildRequest).toHaveBeenCalledTimes(1);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).not.toBe(requests[1]);
+    expect(requests[1].messages[0].content).toBe("original request");
+    expect(events.map((event) => event.type)).toEqual([
+      "retry_attempt_started",
+      "retry_attempt_finished",
+      "retry_scheduled",
+      "retry_attempt_started",
+      "retry_attempt_finished",
+    ]);
+    expect(new Set(events.map((event) => event.operationId))).toEqual(new Set([
+      "run_001:controller:1:provider-request:1",
+    ]));
+    expect(events[0].attemptId).not.toBe(events[3].attemptId);
+  });
+
+  it.each([
+    [429, "rate_limit"],
+    [503, "server_error"],
+    [408, "timeout"],
+  ])("retries technically safe HTTP %s as %s", async (statusCode, category) => {
+    const events: Array<Record<string, unknown>> = [];
+    const provider = new FakeProvider({
+      results: [
+        failedResult("http", "provider_http_error", { statusCode, retryAfterMs: 0 }),
+        succeededResult({ summary: "Recovered" }),
+      ],
+    });
+    const controller = createController(provider);
+
+    await controller.next(createControllerInput(), callContext(undefined, {
+      maxRetries: 1,
+      retryableCategories: [category],
+      serverDelay: { mode: "prefer_trusted", maxServerDelayMs: 1_000 },
+      events,
+    }));
+
+    expect(provider.requests()).toHaveLength(2);
+    expect(events.find((event) => event.type === "retry_scheduled")).toMatchObject({
+      failureCategory: category,
+      delaySource: "trusted_server_delay",
+    });
+  });
+
+  it.each(["timeout", "rate_limit", "server_error"])(
+    "retries an adapter-normalized %s failure without an HTTP status",
+    async (category) => {
+      const provider = new FakeProvider({
+        results: [
+          failedResult(category, `provider_${category}`),
+          succeededResult({ summary: "Recovered" }),
+        ],
+      });
+
+      await createController(provider).next(
+        createControllerInput(),
+        callContext(undefined, {
+          maxRetries: 1,
+          retryableCategories: [category],
+        }),
+      );
+
+      expect(provider.requests()).toHaveLength(2);
+    },
+  );
+
+  it("does not retry a non-retryable authentication failure", async () => {
+    const provider = new FakeProvider({
+      results: [failedResult("http", "provider_http_error", { statusCode: 401 })],
+    });
+    const controller = createController(provider);
+
+    const error = await captureError(controller.next(
+      createControllerInput(),
+      callContext(undefined, {
+        maxRetries: 3,
+        retryableCategories: ["transport", "timeout", "rate_limit", "server_error"],
+      }),
+    ));
+
+    expect(provider.requests()).toHaveLength(1);
+    expect((error as ControllerError).runtimeError).toMatchObject({
+      code: "provider_request_failed",
+      metadata: { providerFailureCategory: "authentication", providerStatusCode: 401 },
+    });
+  });
+
+  it("maps exact budget consumption to provider_retry_exhausted", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const provider = new FakeProvider({
+      results: [
+        failedResult("transport", "network_unavailable"),
+        failedResult("transport", "network_unavailable"),
+        failedResult("transport", "network_unavailable"),
+      ],
+    });
+    const controller = createController(provider);
+
+    const error = await captureError(controller.next(
+      createControllerInput(),
+      callContext(undefined, {
+        maxRetries: 2,
+        retryableCategories: ["transport"],
+        events,
+      }),
+    ));
+
+    expect(provider.requests()).toHaveLength(3);
+    expect((error as ControllerError).runtimeError).toMatchObject({
+      code: "provider_retry_exhausted",
+      metadata: {
+        retryExhaustionReason: "retry_budget_exhausted",
+        retryTotalAttempts: 3,
+        providerFailureCategory: "transport",
+      },
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: "retry_exhausted",
+      reason: "retry_budget_exhausted",
+      totalAttempts: 3,
+    });
+  });
+
+  it("stops at the absolute operation deadline without Run cancellation", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-14T00:00:00.000Z");
+    const events: Array<Record<string, unknown>> = [];
+    const provider: Provider = {
+      descriptor: providerDescriptor("deadline-provider"),
+      async send(_request, context) {
+        await new Promise<void>((resolve) => {
+          context.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        expect(context.interruption).toMatchObject({ kind: "operation_deadline" });
+        return failedResult("deadline", "provider_operation_deadline");
+      },
+    };
+    const controller = createController(provider);
+    const run = captureError(controller.next(createControllerInput(), callContext(undefined, {
+      maxRetries: 2,
+      retryableCategories: ["transport", "timeout"],
+      deadlineAt: "2026-07-14T00:00:00.025Z",
+      events,
+    })));
+
+    await vi.advanceTimersByTimeAsync(25);
+    const error = await run;
+
+    expect((error as ControllerError).runtimeError).toMatchObject({
+      code: "provider_retry_exhausted",
+      metadata: { retryExhaustionReason: "deadline_exceeded", retryTotalAttempts: 1 },
+    });
+    expect(events.map((event) => event.type)).toEqual([
+      "retry_attempt_started",
+      "retry_attempt_finished",
+      "retry_exhausted",
+    ]);
+  });
+
+  it("cancels during Provider backoff without starting another attempt", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-14T00:00:00.000Z");
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const events: Array<Record<string, unknown>> = [];
+    const provider = new FakeProvider({
+      results: [
+        failedResult("transport", "network_unavailable"),
+        succeededResult({ summary: "must not run" }),
+      ],
+    });
+    const controller = createController(provider);
+    const run = controller.next(createControllerInput(), callContext(cancellation.context, {
+      maxRetries: 1,
+      retryableCategories: ["transport"],
+      baseDelayMs: 1_000,
+      maxDelayMs: 1_000,
+      deadlineAt: "2026-07-14T00:00:10.000Z",
+      events,
+    }));
+    await waitForRetryEvent(events, "retry_scheduled");
+    const outcome = captureError(run);
+    const receipt = cancellation.requestCancellation({
+      origin: "user",
+      reasonCode: "user_requested",
+    });
+
+    await expect(outcome).resolves.toBe(receipt.request);
+    expect(provider.requests()).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: "retry_cancelled", phase: "backoff" });
+  });
+
+  it("rejects SDK-owned request Retry without a conforming projection path", () => {
+    const provider = new FakeProvider({
+      descriptor: {
+        requestRetryScheduler: {
+          kind: "sdk",
+          sdkName: "example-sdk",
+          maxRetries: 2,
+          exposesAttemptEvents: false,
+          supportsCancellation: true,
+        },
+      },
+    });
+
+    expect(() => createController(provider)).toThrow(
+      "requires platform-owned Provider request Retry",
+    );
   });
 
   it("accepts only cancellation correlated to the active Run request", async () => {
@@ -485,6 +731,8 @@ function createController(
     parseResponse:
       overrides.parseResponse ?? (() => finalDecision({ summary: "Done" })),
     maxProviderOutputLength: overrides.maxProviderOutputLength ?? 10_000,
+    retryExecutor: createSystemRetryExecutor(),
+    retryClock: systemRetryClock,
   });
 }
 
@@ -572,6 +820,26 @@ function succeededResult(output: unknown): ProviderCallResult {
   };
 }
 
+function failedResult(
+  category: string,
+  code: string,
+  metadata: Record<string, unknown> = {},
+): ProviderCallResult {
+  const { retryAfterMs, requestId, statusCode, ...safeMetadata } = metadata;
+  return {
+    kind: "failed",
+    failure: {
+      category,
+      code,
+      message: "Provider request failed.",
+      ...(typeof retryAfterMs === "number" ? { retryAfterMs } : {}),
+      ...(typeof requestId === "string" ? { requestId } : {}),
+      ...(typeof statusCode === "number" ? { statusCode } : {}),
+      metadata: safeMetadata,
+    },
+  };
+}
+
 function finalDecision(output: unknown): ControllerDecision<TestOutput> {
   return {
     kind: "final_output",
@@ -591,27 +859,57 @@ function modelItem(id: string, content: unknown) {
 
 function callContext(
   cancellation = createRunCancellationController({ runId: "run_001" }).context,
+  overrides: Partial<{
+    maxRetries: number;
+    retryableCategories: string[];
+    baseDelayMs: number;
+    maxDelayMs: number;
+    serverDelay:
+      | { mode: "ignore" }
+      | { mode: "prefer_trusted"; maxServerDelayMs: number };
+    deadlineAt: string;
+    events: Array<Record<string, unknown>>;
+  }> = {},
 ): ControllerCallContext {
   const policy = {
-    maxRetries: 0,
+    maxRetries: overrides.maxRetries ?? 0,
     delay: {
       kind: "exponential_jitter" as const,
-      baseDelayMs: 0,
-      maxDelayMs: 0,
+      baseDelayMs: overrides.baseDelayMs ?? 0,
+      maxDelayMs: overrides.maxDelayMs ?? 0,
       multiplier: 2 as const,
       jitterRatio: 0.1 as const,
     },
-    retryableCategories: [] as string[],
-    serverDelay: { mode: "ignore" as const },
+    retryableCategories: overrides.retryableCategories ?? [],
+    serverDelay: overrides.serverDelay ?? { mode: "ignore" as const },
   };
   return {
     cancellation,
     retry: {
       providerRequest: policy,
       structuredOutput: policy,
-      events: { emit() {} },
+      deadlineAt: overrides.deadlineAt ?? "2099-01-01T00:00:00.000Z",
+      events: {
+        emit(event) {
+          overrides.events?.push(event as unknown as Record<string, unknown>);
+        },
+      },
     },
   };
+}
+
+async function waitForRetryEvent(
+  events: readonly Record<string, unknown>[],
+  type: string,
+): Promise<void> {
+  for (let check = 0; check < 20; check += 1) {
+    if (events.some((event) => event.type === type)) {
+      return;
+    }
+    await Promise.resolve();
+  }
+
+  throw new Error(`Timed out waiting for ${type}.`);
 }
 
 function throwingProvider(): Provider {
@@ -632,6 +930,7 @@ function providerDescriptor(id: string) {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
+    requestRetryScheduler: { kind: "platform" as const },
     metadata: {},
   };
 }

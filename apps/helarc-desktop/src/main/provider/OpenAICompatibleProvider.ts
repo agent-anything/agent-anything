@@ -10,10 +10,15 @@ import {
   type ProviderResponse,
 } from "@agent-anything/providers";
 import type { HelarcProviderConfig } from "./resolveHelarcProviderConfig.js";
+import {
+  readProviderHttpFailureMetadata,
+  type HttpResponseHeadersLike,
+} from "./ProviderHttpFailureMetadata.js";
 
 export interface FetchResponseLike {
   ok: boolean;
   status: number;
+  headers?: HttpResponseHeadersLike;
   json(): Promise<unknown>;
 }
 
@@ -36,6 +41,7 @@ export class OpenAICompatibleProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
+    requestRetryScheduler: { kind: "platform" },
     metadata: {},
   };
 
@@ -79,7 +85,7 @@ export class OpenAICompatibleProvider implements Provider {
           "http",
           "provider_http_error",
           `Provider request failed with HTTP ${response.status}.`,
-          { statusCode: response.status },
+          readProviderHttpFailureMetadata(response),
         );
       }
 
@@ -177,13 +183,20 @@ function failed(
   category: string,
   code: string,
   message: string,
-  input: { statusCode?: number; metadata?: Record<string, unknown> } = {},
+  input: {
+    statusCode?: number;
+    retryAfterMs?: number;
+    requestId?: string;
+    metadata?: Record<string, unknown>;
+  } = {},
 ): ProviderCallResult {
   const failure: ProviderFailure = {
     category,
     code,
     message,
     statusCode: input.statusCode,
+    retryAfterMs: input.retryAfterMs,
+    requestId: input.requestId,
     metadata: input.metadata ?? {},
   };
   return {

@@ -1,8 +1,10 @@
 import {
   ProviderBackedController,
+  createSystemRetryExecutor,
   Runner,
   RuntimeEventEmitter,
   RuntimeEventRecorder,
+  systemRetryClock,
   ToolExecutionBoundary,
   createRunCancellationController,
   type Agent,
@@ -10,6 +12,7 @@ import {
   type RunCancellationController,
   type RunResult,
   type RunResultStatus,
+  type RetryClock,
   type RuntimeEvent,
 } from "@agent-anything/agent-core";
 import { TemporaryToolActionBridge } from "@agent-anything/agent-core/runtime";
@@ -150,6 +153,7 @@ export async function runHelarcReadOnlySession(
 export async function runHelarcSession(
   input: RunHelarcSessionInput,
 ): Promise<HelarcSessionResult> {
+  const retryClock = createHelarcRetryClock(input.now);
   const eventEmitter = new RuntimeEventEmitter();
   const recorder = new RuntimeEventRecorder();
   const controllerTraceByIteration = new Map<number, Metadata>();
@@ -184,6 +188,8 @@ export async function runHelarcSession(
     buildRequest: buildHelarcProviderRequest,
     parseResponse: parseHelarcProviderResponse,
     maxProviderOutputLength: HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
+    retryExecutor: createSystemRetryExecutor(retryClock),
+    retryClock,
   }), controllerTraceByIteration);
   const sessionMode = input.enableShell ? "shell-enabled" : "read-only";
   const runMetadata = Object.freeze({
@@ -253,7 +259,7 @@ export async function runHelarcSession(
             multiplier: 2,
             jitterRatio: 0.1,
           },
-          retryableCategories: ["transport", "timeout"],
+          retryableCategories: ["transport", "timeout", "rate_limit", "server_error"],
           serverDelay: {
             mode: "prefer_trusted",
             maxServerDelayMs: 10_000,
@@ -288,6 +294,18 @@ export async function runHelarcSession(
     output,
     activity,
   };
+}
+
+function createHelarcRetryClock(
+  now: RunHelarcSessionInput["now"],
+): RetryClock {
+  if (now === undefined) {
+    return systemRetryClock;
+  }
+
+  return Object.freeze({
+    now: () => new Date(now()),
+  });
 }
 
 export function createHelarcToolRegistry(

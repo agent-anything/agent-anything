@@ -77,12 +77,20 @@ describe("Helarc read-only session", () => {
       "run.started",
       "controller.started",
       "run.item.appended",
+      "retry.attempt.started",
+      "run.item.appended",
+      "retry.attempt.finished",
+      "run.item.appended",
       "controller.finished",
       "run.item.appended",
       "tool.started",
       "tool.finished",
       "run.item.appended",
       "controller.started",
+      "run.item.appended",
+      "retry.attempt.started",
+      "run.item.appended",
+      "retry.attempt.finished",
       "run.item.appended",
       "controller.finished",
       "run.item.appended",
@@ -102,6 +110,31 @@ describe("Helarc read-only session", () => {
         "codeAgent.searchFiles",
       ],
     });
+  });
+
+  it("projects Provider request retry history through Runner activity", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-provider-retry-"));
+    const provider = new RetryThenCompleteProvider();
+
+    const result = await runHelarcReadOnlySession({
+      task: createTask(workspaceRoot),
+      provider,
+      now: () => "2026-07-14T00:00:00.000Z",
+    });
+
+    expect(result.status).toBe("completed");
+    expect(provider.requests).toHaveLength(2);
+    const retryActivity = result.activity.filter((item) => item.kind.startsWith("retry."));
+    expect(retryActivity.map((item) => item.kind)).toEqual([
+      "retry.attempt.started",
+      "retry.attempt.finished",
+      "retry.scheduled",
+      "retry.attempt.started",
+      "retry.attempt.finished",
+    ]);
+    expect(new Set(retryActivity.map((item) => item.metadata.operationId))).toEqual(
+      new Set(["helarc-task-1:controller:1:provider-request:1"]),
+    );
   });
 
   it("runs list, read, and search tools inside the workspace boundary", async () => {
@@ -422,6 +455,7 @@ class ScriptedProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
+    requestRetryScheduler: { kind: "platform" as const },
     metadata: {},
   };
   readonly requests: ProviderRequest[] = [];
@@ -454,6 +488,46 @@ class ScriptedProvider implements Provider {
       kind: "succeeded",
       response: {
         output,
+        usage: null,
+        metadata: {},
+      },
+    };
+  }
+}
+
+class RetryThenCompleteProvider implements Provider {
+  readonly descriptor = {
+    id: "retry-then-complete-provider",
+    name: "Retry Then Complete Provider",
+    capabilities: {
+      supportsToolPlanning: true,
+      supportsStructuredOutput: true,
+      supportsStreaming: false,
+    },
+    requestRetryScheduler: { kind: "platform" as const },
+    metadata: {},
+  };
+  readonly requests: ProviderRequest[] = [];
+
+  async send(request: ProviderRequest): Promise<ProviderCallResult> {
+    this.requests.push(request);
+    if (this.requests.length === 1) {
+      return {
+        kind: "failed",
+        failure: {
+          category: "transport",
+          code: "provider_unavailable",
+          message: "Provider is temporarily unavailable.",
+          retryAfterMs: 0,
+          metadata: {},
+        },
+      };
+    }
+
+    return {
+      kind: "succeeded",
+      response: {
+        output: { action: "complete", summary: "Recovered after retry." },
         usage: null,
         metadata: {},
       },

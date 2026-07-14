@@ -253,6 +253,7 @@ export class RunExecution<TOutput> {
               retry: Object.freeze({
                 providerRequest: this.config.retry.providerRequest,
                 structuredOutput: this.config.retry.structuredOutput,
+                deadlineAt: this.runDeadlineAt(),
                 events: this.createRetryEventSink(),
               }),
             }),
@@ -870,6 +871,14 @@ export class RunExecution<TOutput> {
       });
     }
     return null;
+  }
+
+  private runDeadlineAt(): ISODateTimeString {
+    const value = new Date(this.startedAtMs + this.config.limits.maxDurationMs);
+    if (!Number.isFinite(value.getTime())) {
+      throw new TypeError("Run maxDurationMs produces an invalid deadline.");
+    }
+    return value.toISOString();
   }
 
   private fail(

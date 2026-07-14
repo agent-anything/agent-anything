@@ -10,6 +10,7 @@ import {
   type ProviderResponse,
 } from "@agent-anything/providers";
 import type { FetchLike } from "./OpenAICompatibleProvider.js";
+import { readProviderHttpFailureMetadata } from "./ProviderHttpFailureMetadata.js";
 import type { HelarcProviderConfig } from "./resolveHelarcProviderConfig.js";
 
 export class OllamaProvider implements Provider {
@@ -21,6 +22,7 @@ export class OllamaProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
+    requestRetryScheduler: { kind: "platform" },
     metadata: {},
   };
 
@@ -61,7 +63,7 @@ export class OllamaProvider implements Provider {
           "http",
           "provider_http_error",
           `Provider request failed with HTTP ${response.status}.`,
-          { statusCode: response.status },
+          readProviderHttpFailureMetadata(response),
         );
       }
 
@@ -134,13 +136,20 @@ function failed(
   category: string,
   code: string,
   message: string,
-  input: { statusCode?: number; metadata?: Record<string, unknown> } = {},
+  input: {
+    statusCode?: number;
+    retryAfterMs?: number;
+    requestId?: string;
+    metadata?: Record<string, unknown>;
+  } = {},
 ): ProviderCallResult {
   const failure: ProviderFailure = {
     category,
     code,
     message,
     statusCode: input.statusCode,
+    retryAfterMs: input.retryAfterMs,
+    requestId: input.requestId,
     metadata: input.metadata ?? {},
   };
   return {

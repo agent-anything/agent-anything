@@ -56,5 +56,6 @@ export {
   systemRetryRandomSource,
 } from "./RetryDependencies.js";
 export { RetryExecutor } from "./RetryExecutor.js";
+export { createSystemRetryExecutor } from "./createSystemRetryExecutor.js";
 export { snapshotRetryOperation } from "./RetryOperation.js";
 export { snapshotRetryPolicy } from "./RetryPolicy.js";

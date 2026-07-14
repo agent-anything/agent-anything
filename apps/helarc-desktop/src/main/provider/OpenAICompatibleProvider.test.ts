@@ -80,6 +80,33 @@ describe("OpenAICompatibleProvider", () => {
     expect(JSON.stringify(result)).not.toContain("secret-key");
   });
 
+  it("projects trusted HTTP retry metadata into ProviderFailure", async () => {
+    const provider = new OpenAICompatibleProvider(config(), async () => ({
+      ok: false,
+      status: 429,
+      headers: {
+        get(name) {
+          if (name === "retry-after") return "2";
+          if (name === "x-request-id") return "request_429";
+          return null;
+        },
+      },
+      async json() {
+        return {};
+      },
+    }));
+
+    await expect(provider.send(request(), context())).resolves.toMatchObject({
+      kind: "failed",
+      failure: {
+        statusCode: 429,
+        retryAfterMs: 2_000,
+        requestId: "request_429",
+        metadata: {},
+      },
+    });
+  });
+
   it("maps malformed provider responses", async () => {
     const provider = new OpenAICompatibleProvider(config(), async () => okResponse({ choices: [] }));
 
