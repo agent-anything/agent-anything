@@ -10,6 +10,7 @@ import {
   ToolRegistry,
   type ToolCall,
   type ToolDefinition,
+  type ToolInvocationContext,
   type ToolResult,
 } from "@agent-anything/tools";
 import type { AgentTask } from "../task/index.js";
@@ -435,6 +436,136 @@ describe("ToolExecutionBoundary", () => {
       ],
     });
   });
+
+  it("stops before tool dispatch after an attributed cancellation", async () => {
+    let executed = false;
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled"));
+    const boundary = createBoundary(createToolResult("succeeded"), {
+      onExecute: () => { executed = true; },
+    });
+
+    const outcome = await boundary.execute(createExecuteInput({
+      invocation: createInvocationContext(controller, {
+        kind: "run_cancellation",
+        cancellation: { runId: "run-001", requestId: "cancel-001" },
+      }),
+    }));
+
+    expect(executed).toBe(false);
+    expect(outcome).toMatchObject({
+      status: "cancelled",
+      cancellation: { runId: "run-001", requestId: "cancel-001" },
+    });
+  });
+
+  it("does not continue from policy to permission after cancellation", async () => {
+    const controller = new AbortController();
+    let interruption: ToolInvocationContext["interruption"]["interruption"] = null;
+    let permissionChecked = false;
+    const boundary = createBoundary(createToolResult("succeeded"), {
+      policyPort: new FakePolicyPort((input) => {
+        interruption = {
+          kind: "run_cancellation",
+          cancellation: { runId: "run-001", requestId: "cancel-policy" },
+        };
+        controller.abort(new Error("cancel during policy"));
+        return {
+          checkId: input.id,
+          status: "allowed",
+          decidedAt: "2026-06-12T00:00:00.000Z",
+        };
+      }),
+      permissionService: new FakePermissionService((request) => {
+        permissionChecked = true;
+        return {
+          requestId: request.id,
+          status: "granted",
+          reason: "Allowed by test service.",
+          decidedAt: "2026-06-12T00:00:00.000Z",
+        };
+      }),
+    });
+
+    const outcome = await boundary.execute(createExecuteInput({
+      toolCall: createToolCall({ risk: "risky" }),
+      invocation: createInvocationContext(controller, () => interruption),
+    }));
+
+    expect(permissionChecked).toBe(false);
+    expect(outcome).toMatchObject({
+      status: "cancelled",
+      cancellation: { requestId: "cancel-policy" },
+    });
+  });
+
+  it("retains a settled tool fact when cancellation races with completion", async () => {
+    const controller = new AbortController();
+    let interruption: ToolInvocationContext["interruption"]["interruption"] = null;
+    const boundary = createBoundary(createToolResult("succeeded"), {
+      onExecute: () => {
+        interruption = {
+          kind: "run_cancellation",
+          cancellation: { runId: "run-001", requestId: "cancel-race" },
+        };
+        controller.abort(new Error("completion race"));
+      },
+    });
+
+    const outcome = await boundary.execute(createExecuteInput({
+      invocation: createInvocationContext(controller, () => interruption),
+    }));
+
+    expect(outcome).toMatchObject({
+      status: "succeeded",
+      toolResult: {
+        status: "succeeded",
+        output: { records: ["93.184.216.34"] },
+      },
+      evidence: [],
+    });
+  });
+
+  it("fails closed when a tool reports unconfirmed cancellation", async () => {
+    const boundary = createBoundary({
+      ...createToolResult("interrupted"),
+      error: {
+        code: "tool_cancellation_unconfirmed",
+        message: "Process settlement was not observed.",
+      },
+    });
+
+    const outcome = await boundary.execute(createExecuteInput());
+
+    expect(outcome).toMatchObject({
+      status: "failed",
+      errors: [{ code: "tool_cancellation_unconfirmed" }],
+    });
+  });
+
+  it("maps an attributed operation deadline to tool timeout", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("deadline"));
+    const boundary = createBoundary(createToolResult("succeeded"));
+
+    const outcome = await boundary.execute(createExecuteInput({
+      invocation: createInvocationContext(controller, {
+        kind: "operation_deadline",
+        deadline: {
+          operationId: "tool-attempt-001",
+          deadlineAt: "2026-07-14T00:00:00.000Z",
+        },
+      }),
+    }));
+
+    expect(outcome).toMatchObject({
+      status: "failed",
+      errors: [{
+        code: "tool_timeout",
+        metadata: { operationId: "tool-attempt-001" },
+      }],
+    });
+  });
 });
 
 function createBoundary(
@@ -477,13 +608,37 @@ function createExecuteInput(
     task: AgentTask;
     toolCall: ToolCall;
     config: ToolExecutionConfig;
+    invocation: ToolInvocationContext;
   }> = {},
 ) {
   return {
     task: createTask(),
     toolCall: createToolCall(),
     config: createConfig(),
+    invocation: createInvocationContext(),
     ...overrides,
+  };
+}
+
+function createInvocationContext(
+  controller = new AbortController(),
+  interruptionOrGetter:
+    | ToolInvocationContext["interruption"]["interruption"]
+    | (() => ToolInvocationContext["interruption"]["interruption"]) = null,
+): ToolInvocationContext {
+  return {
+    interruption: {
+      signal: controller.signal,
+      get interruption() {
+        return typeof interruptionOrGetter === "function"
+          ? interruptionOrGetter()
+          : interruptionOrGetter;
+      },
+    },
+    processTermination: {
+      gracePeriodMs: 50,
+      forceKillTimeoutMs: 250,
+    },
   };
 }
 

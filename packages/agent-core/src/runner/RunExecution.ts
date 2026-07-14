@@ -533,6 +533,7 @@ export class RunExecution<TOutput> {
           workspace: this.config.workspace,
           identity: this.config.identity,
           cancellation: this.config.cancellation.context,
+          cancellationLimits: this.config.cancellationLimits,
           audit: this.config.audit,
           telemetry: this.config.telemetry,
           toolRisk: tool.risk,

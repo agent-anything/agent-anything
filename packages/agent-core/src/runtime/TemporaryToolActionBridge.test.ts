@@ -116,7 +116,7 @@ describe("TemporaryToolActionBridge", () => {
     });
   });
 
-  it("maps recoverable tool failures without terminating the Run", async () => {
+  it("maps tool timeout to a terminal owner failure", async () => {
     const bridge = createBridge({
       tool: createTool("safe", async (call) => ({
         ...toolResult(call, "timeout", null),
@@ -127,12 +127,9 @@ describe("TemporaryToolActionBridge", () => {
     const result = await bridge.execute(createInput());
 
     expect(result).toMatchObject({
-      status: "observed",
-      outcome: "failed",
-      observation: {
-        kind: "action_failure",
-        error: { owner: "tool", code: "tool_timeout" },
-      },
+      status: "terminal_failure",
+      code: "tool_timeout",
+      errors: [{ owner: "tool", code: "tool_timeout" }],
     });
   });
 
@@ -297,6 +294,12 @@ function createInput(
       metadata: {},
     },
     cancellation: createRunCancellationController({ runId: "run_001" }).context,
+    cancellationLimits: {
+      boundarySettlementTimeoutMs: 1_000,
+      processGracePeriodMs: 50,
+      processForceKillTimeoutMs: 250,
+      finalizationTimeoutMs: 1_000,
+    },
     audit: "optional",
     telemetry: "optional",
     toolRisk: "safe",

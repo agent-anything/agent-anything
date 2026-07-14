@@ -185,16 +185,28 @@ async function runCodeEditScenario(
     workspaceScope,
     now: () => timestamp,
   });
-  const inspectionResult = await registry.execute({
-    id: "tool-call-inspect",
-    toolName: CODE_AGENT_READ_FILE_TOOL,
-    input: {
-      rootName: input.task.input.rootName,
-      path: input.task.input.path,
+  const inspectionResult = await registry.execute(
+    {
+      id: "tool-call-inspect",
+      toolName: CODE_AGENT_READ_FILE_TOOL,
+      input: {
+        rootName: input.task.input.rootName,
+        path: input.task.input.path,
+      },
+      risk: "safe",
+      metadata: { taskId: input.task.id },
     },
-    risk: "safe",
-    metadata: { taskId: input.task.id },
-  });
+    {
+      interruption: {
+        signal: new AbortController().signal,
+        interruption: null,
+      },
+      processTermination: {
+        gracePeriodMs: 50,
+        forceKillTimeoutMs: 250,
+      },
+    },
+  );
   if (inspectionResult.status !== "succeeded" || inspectionResult.output === null) {
     throw new Error("Scenario file inspection failed.");
   }

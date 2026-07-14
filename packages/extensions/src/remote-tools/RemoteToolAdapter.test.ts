@@ -130,6 +130,7 @@ describe("RemoteToolAdapter", () => {
       task: createTask(),
       toolCall: createToolCall(),
       config: createConfig(),
+      invocation: createInvocationContext(),
     });
 
     expect(result.status).toBe("succeeded");
@@ -160,6 +161,7 @@ describe("RemoteToolAdapter", () => {
       task: createTask(),
       toolCall: createToolCall({ risk: "risky" }),
       config: createConfig(),
+      invocation: createInvocationContext(),
     });
 
     expect(result.status).toBe("blocked");
@@ -190,6 +192,7 @@ describe("RemoteToolAdapter", () => {
       task: createTask(),
       toolCall: createToolCall({ risk: "risky" }),
       config: createConfig(),
+      invocation: createInvocationContext(),
     });
 
     expect(result.status).toBe("blocked");
@@ -272,5 +275,18 @@ function createConfig() {
     permissionMode: "trusted" as const,
     audit: "optional" as const,
     telemetry: "optional" as const,
+  };
+}
+
+function createInvocationContext() {
+  return {
+    interruption: {
+      signal: new AbortController().signal,
+      interruption: null,
+    },
+    processTermination: {
+      gracePeriodMs: 50,
+      forceKillTimeoutMs: 250,
+    },
   };
 }

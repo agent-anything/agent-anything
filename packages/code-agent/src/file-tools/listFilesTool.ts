@@ -1,7 +1,10 @@
 import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { TaskWorkspaceScope } from "@agent-anything/agent-core";
-import type { ToolDefinition } from "@agent-anything/tools";
+import type {
+  ToolDefinition,
+  ToolInvocationContext,
+} from "@agent-anything/tools";
 import {
   CODE_AGENT_LIST_FILES_TOOL,
   type CodeAgentFileToolLimits,
@@ -9,7 +12,10 @@ import {
   type WorkspaceFileEntry,
   type WorkspaceFileEntryKind,
 } from "./FileToolContracts.js";
-import { executeFileTool } from "./fileToolResult.js";
+import {
+  executeFileTool,
+  throwIfFileToolInterrupted,
+} from "./fileToolResult.js";
 import { parseListFilesInput } from "./fileToolInput.js";
 import {
   resolveExistingTarget,
@@ -36,8 +42,9 @@ export function createListFilesTool(input: {
         },
       },
     },
-    async execute(call) {
-      return executeFileTool(call, input.now, async () => {
+    async execute(call, context) {
+      return executeFileTool(call, input.now, context, async () => {
+        throwIfFileToolInterrupted(context);
         const toolInput = parseListFilesInput(call.input);
         const target = await resolveExistingTarget({
           workspaceScope: input.workspaceScope,
@@ -45,6 +52,7 @@ export function createListFilesTool(input: {
           path: toolInput.path,
           expectedKind: "directory",
         });
+        throwIfFileToolInterrupted(context);
         const entries: WorkspaceFileEntry[] = [];
         const state = { truncated: false };
 
@@ -55,6 +63,7 @@ export function createListFilesTool(input: {
           input.limits.maxListEntries,
           entries,
           state,
+          context,
         );
 
         return {
@@ -76,10 +85,12 @@ async function collectEntries(
   maxEntries: number,
   output: WorkspaceFileEntry[],
   state: { truncated: boolean },
+  context: ToolInvocationContext,
 ): Promise<void> {
   const directoryEntries = (await readdir(directory, {
     withFileTypes: true,
   })).sort((left, right) => left.name.localeCompare(right.name));
+  throwIfFileToolInterrupted(context);
 
   for (const entry of directoryEntries) {
     if (output.length >= maxEntries) {
@@ -90,6 +101,7 @@ async function collectEntries(
     const absolutePath = join(directory, entry.name);
     const kind = entryKind(entry);
     const stats = kind === "file" ? await lstat(absolutePath) : null;
+    throwIfFileToolInterrupted(context);
 
     output.push({
       path: workspaceRelativePath(canonicalRoot, absolutePath),
@@ -105,6 +117,7 @@ async function collectEntries(
         maxEntries,
         output,
         state,
+        context,
       );
       if (state.truncated) {
         return;

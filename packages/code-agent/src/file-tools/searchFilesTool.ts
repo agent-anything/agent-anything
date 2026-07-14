@@ -1,7 +1,10 @@
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { TaskWorkspaceScope } from "@agent-anything/agent-core";
-import type { ToolDefinition } from "@agent-anything/tools";
+import type {
+  ToolDefinition,
+  ToolInvocationContext,
+} from "@agent-anything/tools";
 import {
   CODE_AGENT_SEARCH_FILES_TOOL,
   type CodeAgentFileToolLimits,
@@ -9,7 +12,10 @@ import {
   type SearchFilesOutput,
 } from "./FileToolContracts.js";
 import { parseSearchFilesInput } from "./fileToolInput.js";
-import { executeFileTool } from "./fileToolResult.js";
+import {
+  executeFileTool,
+  throwIfFileToolInterrupted,
+} from "./fileToolResult.js";
 import {
   resolveExistingTarget,
   workspaceRelativePath,
@@ -36,8 +42,9 @@ export function createSearchFilesTool(input: {
         },
       },
     },
-    async execute(call) {
-      return executeFileTool(call, input.now, async () => {
+    async execute(call, context) {
+      return executeFileTool(call, input.now, context, async () => {
+        throwIfFileToolInterrupted(context);
         const toolInput = parseSearchFilesInput(call.input);
         const target = await resolveExistingTarget({
           workspaceScope: input.workspaceScope,
@@ -45,6 +52,7 @@ export function createSearchFilesTool(input: {
           path: toolInput.path,
           expectedKind: "fileOrDirectory",
         });
+        throwIfFileToolInterrupted(context);
         const state: SearchState = {
           matches: [],
           truncated: false,
@@ -58,6 +66,7 @@ export function createSearchFilesTool(input: {
             toolInput.query,
             input.limits,
             state,
+            context,
           );
         } else {
           await searchDirectory(
@@ -66,6 +75,7 @@ export function createSearchFilesTool(input: {
             toolInput.query,
             input.limits,
             state,
+            context,
           );
         }
 
@@ -95,10 +105,12 @@ async function searchDirectory(
   query: string,
   limits: CodeAgentFileToolLimits,
   state: SearchState,
+  context: ToolInvocationContext,
 ): Promise<void> {
   const entries = (await readdir(directory, {
     withFileTypes: true,
   })).sort((left, right) => left.name.localeCompare(right.name));
+  throwIfFileToolInterrupted(context);
 
   for (const entry of entries) {
     if (state.truncated) {
@@ -116,6 +128,7 @@ async function searchDirectory(
         query,
         limits,
         state,
+        context,
       );
     } else if (entry.isFile()) {
       await searchFile(
@@ -124,6 +137,7 @@ async function searchDirectory(
         query,
         limits,
         state,
+        context,
       );
     }
   }
@@ -135,14 +149,17 @@ async function searchFile(
   query: string,
   limits: CodeAgentFileToolLimits,
   state: SearchState,
+  context: ToolInvocationContext,
 ): Promise<void> {
   const fileStats = await lstat(absolutePath);
+  throwIfFileToolInterrupted(context);
   if (fileStats.size > limits.maxSearchFileBytes) {
     state.skippedFiles += 1;
     return;
   }
 
   const bytes = await readFile(absolutePath);
+  throwIfFileToolInterrupted(context);
   if (
     bytes.byteLength > limits.maxSearchFileBytes ||
     bytes.includes(0)
@@ -160,6 +177,7 @@ async function searchFile(
   const content = decoded.replaceAll(String.fromCharCode(13), "");
   const lines = content.split(String.fromCharCode(10));
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    throwIfFileToolInterrupted(context);
     const line = lines[lineIndex]!;
     let fromIndex = 0;
 

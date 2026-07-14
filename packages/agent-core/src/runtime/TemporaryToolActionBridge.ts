@@ -1,6 +1,12 @@
 import type { Evidence } from "@agent-anything/evidence";
 import type { PermissionMode } from "@agent-anything/permission";
-import type { ArtifactRef, EvidenceRef, Metadata } from "@agent-anything/shared";
+import type {
+  ArtifactRef,
+  EvidenceRef,
+  InvocationInterruptionContext,
+  InvocationInterruptionRef,
+  Metadata,
+} from "@agent-anything/shared";
 import type { StoragePort } from "@agent-anything/storage";
 import type { ToolCall, ToolResult } from "@agent-anything/tools";
 import type {
@@ -51,6 +57,7 @@ export class TemporaryToolActionBridge implements ToolActionBridge {
       config: createToolExecutionConfig(input, this.dependencies),
       workspace: input.workspace,
       identity: input.identity,
+      invocation: createToolInvocationContext(input),
     });
 
     return this.mapOutcome(input, outcome);
@@ -60,6 +67,25 @@ export class TemporaryToolActionBridge implements ToolActionBridge {
     input: ToolActionBridgeInput,
     outcome: ToolExecutionOutcome,
   ): Promise<ToolActionBridgeResult> {
+    if (outcome.status === "cancelled") {
+      if (matchesActiveCancellation(input, outcome.cancellation)) {
+        throw input.cancellation.signal.reason;
+      }
+      return terminalFailure(
+        "tool_cancellation_unconfirmed",
+        [runnerError(
+          "tool",
+          "tool_cancellation_unconfirmed",
+          "Tool cancellation did not match the active Run cancellation request.",
+          {
+            actionId: input.action.id,
+            reportedRunId: outcome.cancellation.runId,
+            reportedRequestId: outcome.cancellation.requestId,
+          },
+        )],
+      );
+    }
+
     if (outcome.status === "succeeded") {
       return this.mapSucceeded(input, outcome.toolResult, outcome.evidence);
     }
@@ -187,6 +213,44 @@ function createToolExecutionConfig(
   });
 }
 
+function createToolInvocationContext(
+  input: ToolActionBridgeInput,
+) {
+  const interruption: InvocationInterruptionContext = Object.freeze({
+    signal: input.cancellation.signal,
+    get interruption(): InvocationInterruptionRef | null {
+      const request = input.cancellation.request;
+      return request === null
+        ? null
+        : Object.freeze({
+            kind: "run_cancellation" as const,
+            cancellation: Object.freeze({
+              runId: request.runId,
+              requestId: request.id,
+            }),
+          });
+    },
+  });
+  return Object.freeze({
+    interruption,
+    processTermination: Object.freeze({
+      gracePeriodMs: input.cancellationLimits.processGracePeriodMs,
+      forceKillTimeoutMs: input.cancellationLimits.processForceKillTimeoutMs,
+    }),
+  });
+}
+
+function matchesActiveCancellation(
+  input: ToolActionBridgeInput,
+  candidate: { readonly runId: string; readonly requestId: string },
+): boolean {
+  const request = input.cancellation.request;
+  return input.cancellation.signal.aborted &&
+    request !== null &&
+    candidate.runId === request.runId &&
+    candidate.requestId === request.id;
+}
+
 function observed(
   outcome: "denied" | "failed",
   observation: ToolActionObservationPayload,
@@ -252,6 +316,12 @@ function terminalCodeFor(errors: readonly RuntimeError[]): RunFailureCode | null
     }
     if (error.code === "runtime_evidence_creation_failed") {
       return "tool_execution_failed";
+    }
+    if (error.code === "tool_cancellation_unconfirmed") {
+      return "tool_cancellation_unconfirmed";
+    }
+    if (error.code === "tool_timeout") {
+      return "tool_timeout";
     }
   }
   return null;

@@ -1,16 +1,17 @@
-import { spawn } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
 import type { TaskWorkspaceScope } from "@agent-anything/agent-core";
 import type {
   ToolCall,
   ToolDefinition,
+  ToolInvocationContext,
   ToolResult,
 } from "@agent-anything/tools";
-import {
-  resolveExistingTarget,
-} from "../file-tools/filesystemBoundary.js";
 import { FileToolError } from "../file-tools/FileToolError.js";
-import { BoundedOutput } from "./BoundedOutput.js";
+import { resolveExistingTarget } from "../file-tools/filesystemBoundary.js";
+import {
+  executeProcess,
+  type CapturedProcessOutput,
+  type ProcessExecutionOutcome,
+} from "./ProcessExecutor.js";
 import {
   CODE_AGENT_RUN_COMMAND_TOOL,
   type CodeAgentShellLimits,
@@ -19,7 +20,6 @@ import {
 import {
   parseRunCommandInput,
   ShellInputError,
-  type ParsedRunCommandInput,
 } from "./shellInput.js";
 
 export function createRunCommandTool(input: {
@@ -52,30 +52,65 @@ export function createRunCommandTool(input: {
       maxStdoutBytes: input.limits.maxStdoutBytes,
       maxStderrBytes: input.limits.maxStderrBytes,
     },
-    async execute(call) {
+    async execute(call, context) {
       const startedAt = input.now();
       const startedMs = input.nowMs();
 
       try {
-        const commandInput = parseRunCommandInput(
-          call.input,
-          input.limits,
-        );
+        const beforeStart = interruptionResult(call, startedAt, input.now(), context);
+        if (beforeStart !== null) {
+          return beforeStart;
+        }
+
+        const commandInput = parseRunCommandInput(call.input, input.limits);
         const target = await resolveExistingTarget({
           workspaceScope: input.workspaceScope,
           rootName: commandInput.rootName,
           path: commandInput.cwd,
           expectedKind: "directory",
         });
-        const processResult = await runProcess({
-          commandInput,
+        const afterResolution = interruptionResult(
+          call,
+          startedAt,
+          input.now(),
+          context,
+        );
+        if (afterResolution !== null) {
+          return afterResolution;
+        }
+
+        const processResult = await executeProcess({
+          command: commandInput.command,
+          args: commandInput.args,
           cwd: target.canonicalTarget,
           environment: input.environment,
-          limits: input.limits,
-          nowMs: input.nowMs,
+          timeoutMs: commandInput.timeoutMs,
+          maxStdoutBytes: input.limits.maxStdoutBytes,
+          maxStderrBytes: input.limits.maxStderrBytes,
+          interruption: context.interruption,
+          termination: context.processTermination,
           startedMs,
+          nowMs: input.nowMs,
         });
 
+        const targetMetadata = {
+          rootName: target.resolved.rootName,
+          workspaceId: target.resolved.workspaceId,
+          command: commandInput.command,
+          args: commandInput.args,
+          cwd: target.resolved.relativePath,
+        };
+
+        if (processResult.kind === "cancelled_before_start") {
+          return interruptionResult(call, startedAt, input.now(), context) ??
+            failedResult(
+              call,
+              startedAt,
+              input.now(),
+              "tool_cancellation_unconfirmed",
+              "Command was not started because interruption attribution was unavailable.",
+            );
+        }
         if (processResult.kind === "failed") {
           return failedResult(
             call,
@@ -85,30 +120,70 @@ export function createRunCommandTool(input: {
             "Failed to start or monitor the command process.",
           );
         }
-
         if (processResult.kind === "timeout") {
+          return timeoutResult(
+            call,
+            startedAt,
+            input.now(),
+            commandInput.timeoutMs,
+            targetMetadata,
+            processResult,
+          );
+        }
+        if (processResult.kind === "cancellation_unconfirmed") {
           return {
             toolCallId: call.id,
             toolName: call.toolName,
-            status: "timeout",
-            output: null,
+            status: "interrupted",
+            output: processOutput(
+              targetMetadata,
+              processResult,
+              null,
+              null,
+              true,
+              false,
+              "forced",
+              false,
+            ),
             error: {
-              code: "shell_timeout",
-              message: "Command exceeded the configured timeout.",
-              metadata: {
-                rootName: target.resolved.rootName,
-                workspaceId: target.resolved.workspaceId,
-                command: commandInput.command,
-                args: commandInput.args,
-                cwd: target.resolved.relativePath,
-                timeoutMs: commandInput.timeoutMs,
-                durationMs: processResult.durationMs,
-                stdout: processResult.stdout,
-                stderr: processResult.stderr,
-                stdoutTruncated: processResult.stdoutTruncated,
-                stderrTruncated: processResult.stderrTruncated,
-              },
+              code: "tool_cancellation_unconfirmed",
+              message: processResult.message,
             },
+            startedAt,
+            finishedAt: input.now(),
+            metadata: call.metadata,
+          };
+        }
+        if (processResult.kind === "cancelled") {
+          const cancellation = context.interruption.interruption;
+          const exact = cancellation?.kind === "run_cancellation";
+          return {
+            toolCallId: call.id,
+            toolName: call.toolName,
+            status: "interrupted",
+            output: processOutput(
+              targetMetadata,
+              processResult,
+              processResult.exitCode,
+              processResult.signal,
+              true,
+              exact,
+              processResult.termination,
+              true,
+            ),
+            error: exact
+              ? {
+                  code: "shell_cancelled",
+                  message: "Command process was terminated after Run cancellation.",
+                  metadata: {
+                    runId: cancellation.cancellation.runId,
+                    requestId: cancellation.cancellation.requestId,
+                  },
+                }
+              : {
+                  code: "tool_cancellation_unconfirmed",
+                  message: "Command process stopped without trusted Run cancellation attribution.",
+                },
             startedAt,
             finishedAt: input.now(),
             metadata: call.metadata,
@@ -119,21 +194,16 @@ export function createRunCommandTool(input: {
           toolCallId: call.id,
           toolName: call.toolName,
           status: "succeeded",
-          output: {
-            rootName: target.resolved.rootName,
-            workspaceId: target.resolved.workspaceId,
-            command: commandInput.command,
-            args: [...commandInput.args],
-            cwd: target.resolved.relativePath,
-            exitCode: processResult.exitCode,
-            signal: processResult.signal,
-            stdout: processResult.stdout,
-            stderr: processResult.stderr,
-            durationMs: processResult.durationMs,
-            stdoutTruncated: processResult.stdoutTruncated,
-            stderrTruncated: processResult.stderrTruncated,
-            timedOut: false,
-          },
+          output: processOutput(
+            targetMetadata,
+            processResult,
+            processResult.exitCode,
+            processResult.signal,
+            false,
+            false,
+            null,
+            true,
+          ),
           error: null,
           startedAt,
           finishedAt: input.now(),
@@ -150,7 +220,6 @@ export function createRunCommandTool(input: {
             "metadata" in error ? error.metadata : undefined,
           );
         }
-
         return failedResult(
           call,
           startedAt,
@@ -163,140 +232,151 @@ export function createRunCommandTool(input: {
   };
 }
 
-interface RunProcessInput {
-  commandInput: ParsedRunCommandInput;
-  cwd: string;
-  environment?: Readonly<Record<string, string>>;
-  limits: CodeAgentShellLimits;
-  nowMs: () => number;
-  startedMs: number;
-}
-
-type ProcessOutcome =
-  | {
-    kind: "completed";
-    exitCode: number | null;
-    signal: string | null;
-    stdout: string;
-    stderr: string;
-    durationMs: number;
-    stdoutTruncated: boolean;
-    stderrTruncated: boolean;
-  }
-  | {
-    kind: "timeout";
-    stdout: string;
-    stderr: string;
-    durationMs: number;
-    stdoutTruncated: boolean;
-    stderrTruncated: boolean;
-  }
-  | { kind: "failed" };
-
-function runProcess(input: RunProcessInput): Promise<ProcessOutcome> {
-  return new Promise((resolve) => {
-    const stdout = new BoundedOutput(input.limits.maxStdoutBytes);
-    const stderr = new BoundedOutput(input.limits.maxStderrBytes);
-    let child: ChildProcess;
-
-    try {
-      child = spawn(
-        input.commandInput.command,
-        input.commandInput.args,
-        {
-          cwd: input.cwd,
-          env: input.environment === undefined
-            ? undefined
-            : { ...process.env, ...input.environment },
-          shell: false,
-          windowsHide: true,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
-    } catch {
-      resolve({ kind: "failed" });
-      return;
-    }
-
-    let timedOut = false;
-    let settled = false;
-    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout.append(chunk);
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr.append(chunk);
-    });
-
-    const timeoutTimer = setTimeout(() => {
-      timedOut = true;
-      tryKill(child);
-      forceKillTimer = setTimeout(() => {
-        if (!settled) {
-          tryKill(child, "SIGKILL");
-        }
-      }, 250);
-    }, input.commandInput.timeoutMs);
-
-    child.once("error", () => {
-      if (timedOut || settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeoutTimer);
-      if (forceKillTimer) {
-        clearTimeout(forceKillTimer);
-      }
-      resolve({ kind: "failed" });
-    });
-
-    child.once("close", (exitCode, signal) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeoutTimer);
-      if (forceKillTimer) {
-        clearTimeout(forceKillTimer);
-      }
-
-      const common = {
-        stdout: stdout.toString(),
-        stderr: stderr.toString(),
-        durationMs: Math.max(0, input.nowMs() - input.startedMs),
-        stdoutTruncated: stdout.truncated,
-        stderrTruncated: stderr.truncated,
-      };
-
-      if (timedOut) {
-        resolve({
-          kind: "timeout",
-          ...common,
-        });
-        return;
-      }
-
-      resolve({
-        kind: "completed",
-        exitCode,
-        signal,
+function processOutput(
+  target: {
+    rootName: string;
+    workspaceId: string;
+    command: string;
+    args: readonly string[];
+    cwd: string;
+  },
+  captured: CapturedProcessOutput,
+  exitCode: number | null,
+  signal: string | null,
+  interrupted: boolean,
+  cancellationAttributed: boolean,
+  termination: "graceful" | "forced" | null,
+  settlementConfirmed: boolean,
+): RunCommandOutput {
+  const common = {
+    ...target,
+    args: [...target.args],
+    exitCode,
+    signal,
+    stdout: captured.stdout,
+    stderr: captured.stderr,
+    durationMs: captured.durationMs,
+    stdoutTruncated: captured.stdoutTruncated,
+    stderrTruncated: captured.stderrTruncated,
+    timedOut: false as const,
+    settlementConfirmed,
+  };
+  return interrupted
+    ? {
         ...common,
-      });
-    });
-  });
+        interrupted: true,
+        cancellationAttributed,
+        termination: termination ?? "forced",
+      }
+    : {
+        ...common,
+        interrupted: false,
+        cancellationAttributed: false,
+        termination: null,
+        settlementConfirmed: true,
+      };
 }
 
-function tryKill(
-  child: ChildProcess,
-  signal?: NodeJS.Signals,
-): void {
-  try {
-    child.kill(signal);
-  } catch {
-    // The process may have exited between the timeout and termination attempt.
-  }
+function timeoutResult(
+  call: ToolCall,
+  startedAt: string,
+  finishedAt: string,
+  timeoutMs: number,
+  target: Record<string, unknown>,
+  outcome: Extract<ProcessExecutionOutcome, { kind: "timeout" }>,
+): ToolResult<RunCommandOutput> {
+  return {
+    toolCallId: call.id,
+    toolName: call.toolName,
+    status: "timeout",
+    output: null,
+    error: {
+      code: outcome.terminationConfirmed
+        ? "shell_timeout"
+        : "shell_timeout_termination_unconfirmed",
+      message: outcome.terminationConfirmed
+        ? "Command exceeded the configured timeout."
+        : "Command exceeded its timeout and process termination could not be confirmed.",
+      metadata: {
+        ...target,
+        timeoutMs,
+        durationMs: outcome.durationMs,
+        stdout: outcome.stdout,
+        stderr: outcome.stderr,
+        stdoutTruncated: outcome.stdoutTruncated,
+        stderrTruncated: outcome.stderrTruncated,
+        terminationConfirmed: outcome.terminationConfirmed,
+      },
+    },
+    startedAt,
+    finishedAt,
+    metadata: call.metadata,
+  };
 }
+
+function interruptionResult(
+  call: ToolCall,
+  startedAt: string,
+  finishedAt: string,
+  context: ToolInvocationContext,
+): ToolResult<RunCommandOutput> | null {
+  if (!context.interruption.signal.aborted) {
+    return null;
+  }
+  const interruption = context.interruption.interruption;
+  if (interruption?.kind === "run_cancellation") {
+    return {
+      toolCallId: call.id,
+      toolName: call.toolName,
+      status: "cancelled",
+      output: null,
+      error: {
+        code: "tool_cancelled",
+        message: "Command was cancelled before process execution.",
+        metadata: {
+          runId: interruption.cancellation.runId,
+          requestId: interruption.cancellation.requestId,
+        },
+      },
+      startedAt,
+      finishedAt,
+      metadata: call.metadata,
+    };
+  }
+  if (interruption?.kind === "operation_deadline") {
+    return {
+      toolCallId: call.id,
+      toolName: call.toolName,
+      status: "timeout",
+      output: null,
+      error: {
+        code: "tool_timeout",
+        message: "Command operation exceeded its invocation deadline.",
+        metadata: {
+          operationId: interruption.deadline.operationId,
+          deadlineAt: interruption.deadline.deadlineAt,
+        },
+      },
+      startedAt,
+      finishedAt,
+      metadata: call.metadata,
+    };
+  }
+  return {
+    toolCallId: call.id,
+    toolName: call.toolName,
+    status: "interrupted",
+    output: null,
+    error: {
+      code: "tool_cancellation_unconfirmed",
+      message: "Command was aborted without trusted interruption attribution.",
+    },
+    startedAt,
+    finishedAt,
+    metadata: call.metadata,
+  };
+}
+
 function failedResult<TOutput>(
   call: ToolCall,
   startedAt: string,

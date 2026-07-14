@@ -44,6 +44,8 @@ export type {
   CreateCodeAgentShellCapabilityInput,
   RunCommandInput,
   RunCommandOutput,
+  RunCommandCompletedOutput,
+  RunCommandInterruptedOutput,
 } from "./shell-tool/index.js";
 export type {
   AcceptedPatchDecision,

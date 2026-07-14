@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolCall } from "../ToolCall.js";
+import type { ToolInvocationContext } from "../ToolInvocationContext.js";
 import { ToolRegistry } from "../ToolRegistry.js";
 import { FunctionToolAdapter } from "./FunctionToolAdapter.js";
 import { ToolAdapterRegistry } from "./ToolAdapterRegistry.js";
@@ -120,9 +121,10 @@ describe("ToolAdapterRegistry", () => {
     }
 
     expect(adapterRegistry.has("example.echo")).toBe(true);
-    await expect(toolRegistry.execute(createToolCall({
-      message: "hello",
-    }))).resolves.toMatchObject({
+    await expect(toolRegistry.execute(
+      createToolCall({ message: "hello" }),
+      createInvocationContext(),
+    )).resolves.toMatchObject({
       status: "succeeded",
       output: {
         message: "hello",
@@ -158,6 +160,19 @@ function createToolCall(input: unknown, toolName = "example.echo"): ToolCall {
     risk: "safe",
     metadata: {
       taskId: "task_001",
+    },
+  };
+}
+
+function createInvocationContext(): ToolInvocationContext {
+  return {
+    interruption: {
+      signal: new AbortController().signal,
+      interruption: null,
+    },
+    processTermination: {
+      gracePeriodMs: 10,
+      forceKillTimeoutMs: 10,
     },
   };
 }

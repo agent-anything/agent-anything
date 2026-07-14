@@ -213,6 +213,16 @@ describe("shell governance integration", () => {
       toolCall: createShellCall(),
       config: createConfig(),
       workspace: createWorkspace("workspace-code", codeRoot),
+      invocation: {
+        interruption: {
+          signal: new AbortController().signal,
+          interruption: null,
+        },
+        processTermination: {
+          gracePeriodMs: 50,
+          forceKillTimeoutMs: 250,
+        },
+      },
     };
   }
 

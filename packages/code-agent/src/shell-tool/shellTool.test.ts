@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { TaskWorkspaceScope } from "@agent-anything/agent-core";
 import type { WorkspaceContext } from "@agent-anything/governance";
-import { ToolRegistry, type ToolCall } from "@agent-anything/tools";
+import {
+  ToolRegistry,
+  type ToolCall,
+  type ToolInvocationContext,
+} from "@agent-anything/tools";
 import {
   CODE_AGENT_RUN_COMMAND_TOOL,
   registerCodeAgentShellTool,
@@ -167,6 +171,47 @@ describe("codeAgent.runCommand", () => {
     });
   });
 
+  it("terminates a running process and retains bounded output on cancellation", async () => {
+    const registry = createRegistry({
+      defaultTimeoutMs: 5_000,
+      maxTimeoutMs: 5_000,
+    });
+    const controller = new AbortController();
+    let interruption: ToolInvocationContext["interruption"]["interruption"] = null;
+    const context = createInvocationContext(controller, () => interruption);
+
+    const pending = registry.execute(createCall({
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write('started'); setTimeout(() => {}, 5000)",
+      ],
+      reason: "Verify command cancellation.",
+    }), context);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    interruption = {
+      kind: "run_cancellation",
+      cancellation: { runId: "run-shell", requestId: "cancel-shell" },
+    };
+    controller.abort(new Error("cancel command"));
+
+    const result = await pending;
+
+    expect(result).toMatchObject({
+      status: "interrupted",
+      output: {
+        interrupted: true,
+        cancellationAttributed: true,
+        settlementConfirmed: true,
+        stdout: "started",
+      },
+      error: {
+        code: "shell_cancelled",
+        metadata: { runId: "run-shell", requestId: "cancel-shell" },
+      },
+    });
+  });
+
   it("rejects invalid input and timeout above trusted maximum", async () => {
     const registry = createRegistry({
       defaultTimeoutMs: 50,
@@ -248,8 +293,8 @@ describe("codeAgent.runCommand", () => {
 
   function createRegistry(
     limits: Parameters<typeof registerCodeAgentShellTool>[1]["limits"] = {},
-  ): ToolRegistry {
-    const registry = new ToolRegistry();
+  ): TestToolRegistry {
+    const registry = new TestToolRegistry();
     registerCodeAgentShellTool(registry, {
       workspaceScope: createScope(),
       limits,
@@ -280,6 +325,33 @@ function createWorkspace(
     source: "test",
     policyRefs: [],
     metadata: {},
+  };
+}
+
+class TestToolRegistry extends ToolRegistry {
+  override execute(
+    call: ToolCall,
+    context: ToolInvocationContext = createInvocationContext(),
+  ) {
+    return super.execute(call, context);
+  }
+}
+
+function createInvocationContext(
+  controller = new AbortController(),
+  getInterruption: () => ToolInvocationContext["interruption"]["interruption"] = () => null,
+): ToolInvocationContext {
+  return {
+    interruption: {
+      signal: controller.signal,
+      get interruption() {
+        return getInterruption();
+      },
+    },
+    processTermination: {
+      gracePeriodMs: 50,
+      forceKillTimeoutMs: 1_000,
+    },
   };
 }
 

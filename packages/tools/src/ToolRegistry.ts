@@ -2,6 +2,7 @@ import type { Metadata } from "@agent-anything/shared";
 import type { ToolCall } from "./ToolCall.js";
 import type { ToolDefinition } from "./ToolDefinition.js";
 import type { ToolResult } from "./ToolResult.js";
+import type { ToolInvocationContext } from "./ToolInvocationContext.js";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition>();
@@ -28,7 +29,15 @@ export class ToolRegistry {
     return [...this.tools.values()];
   }
 
-  async execute(call: ToolCall): Promise<ToolResult> {
+  async execute(
+    call: ToolCall,
+    context: ToolInvocationContext,
+  ): Promise<ToolResult> {
+    const interruption = interruptedResult(call, context);
+    if (interruption !== null) {
+      return interruption;
+    }
+
     const tool = this.tools.get(call.toolName);
 
     if (!tool) {
@@ -39,7 +48,7 @@ export class ToolRegistry {
     }
 
     try {
-      return await tool.execute(call);
+      return await tool.execute(call, context);
     } catch (error) {
       return createFailedToolResult(call, {
         code: "tool_execution_failed",
@@ -47,6 +56,71 @@ export class ToolRegistry {
       });
     }
   }
+}
+
+function interruptedResult(
+  call: ToolCall,
+  context: ToolInvocationContext,
+): ToolResult | null {
+  if (!context.interruption.signal.aborted) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const interruption = context.interruption.interruption;
+  if (interruption?.kind === "run_cancellation") {
+    return {
+      toolCallId: call.id,
+      toolName: call.toolName,
+      status: "cancelled",
+      output: null,
+      error: {
+        code: "tool_cancelled",
+        message: "Tool execution was cancelled before dispatch.",
+        metadata: {
+          runId: interruption.cancellation.runId,
+          requestId: interruption.cancellation.requestId,
+        },
+      },
+      startedAt: now,
+      finishedAt: now,
+      metadata: call.metadata,
+    };
+  }
+
+  if (interruption?.kind === "operation_deadline") {
+    return {
+      toolCallId: call.id,
+      toolName: call.toolName,
+      status: "timeout",
+      output: null,
+      error: {
+        code: "tool_timeout",
+        message: "Tool invocation exceeded its operation deadline before dispatch.",
+        metadata: {
+          operationId: interruption.deadline.operationId,
+          deadlineAt: interruption.deadline.deadlineAt,
+        },
+      },
+      startedAt: now,
+      finishedAt: now,
+      metadata: call.metadata,
+    };
+  }
+
+  return {
+    toolCallId: call.id,
+    toolName: call.toolName,
+    status: "interrupted",
+    output: null,
+    error: {
+      code: "tool_cancellation_unconfirmed",
+      message: "Tool invocation was aborted without trusted interruption attribution.",
+    },
+    startedAt: now,
+    finishedAt: now,
+    metadata: call.metadata,
+  };
 }
 
 function assertToolName(name: string): void {

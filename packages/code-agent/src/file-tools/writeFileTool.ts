@@ -9,7 +9,10 @@ import {
 } from "./FileToolContracts.js";
 import { FileToolError } from "./FileToolError.js";
 import { parseWriteFileInput } from "./fileToolInput.js";
-import { executeFileTool } from "./fileToolResult.js";
+import {
+  executeFileTool,
+  throwIfFileToolInterrupted,
+} from "./fileToolResult.js";
 import { resolveWritableTarget } from "./filesystemBoundary.js";
 
 export function createWriteFileTool(input: {
@@ -33,8 +36,9 @@ export function createWriteFileTool(input: {
         },
       },
     },
-    async execute(call) {
-      return executeFileTool(call, input.now, async () => {
+    async execute(call, context) {
+      return executeFileTool(call, input.now, context, async () => {
+        throwIfFileToolInterrupted(context);
         const toolInput = parseWriteFileInput(call.input);
         const bytesWritten = Buffer.byteLength(toolInput.content, "utf8");
 
@@ -56,6 +60,7 @@ export function createWriteFileTool(input: {
           path: toolInput.path,
           overwrite: toolInput.overwrite ?? false,
         });
+        throwIfFileToolInterrupted(context);
 
         try {
           await writeFile(target.canonicalTarget, toolInput.content, {

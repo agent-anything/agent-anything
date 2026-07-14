@@ -4,7 +4,10 @@ import type { ToolResult, ToolRisk } from "@agent-anything/tools";
 import type { AgentTask } from "../task/index.js";
 import type { Action } from "./Action.js";
 import type { ActionDeniedOwner, ActionRejectedCode } from "./Observation.js";
-import type { CancellationContext } from "./RunCancellation.js";
+import type {
+  CancellationContext,
+  CancellationLimits,
+} from "./RunCancellation.js";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
 import type { RunFailureCode } from "./RunResult.js";
 import type { RuntimeError } from "./RuntimeError.js";
@@ -15,6 +18,7 @@ export interface ToolActionBridgeInput {
   readonly workspace: WorkspaceContext;
   readonly identity: IdentityRef;
   readonly cancellation: CancellationContext;
+  readonly cancellationLimits: CancellationLimits;
   readonly audit: RunInfrastructureRequirement;
   readonly telemetry: RunInfrastructureRequirement;
   readonly toolRisk: ToolRisk;

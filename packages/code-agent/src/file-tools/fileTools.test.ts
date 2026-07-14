@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { TaskWorkspaceScope } from "@agent-anything/agent-core";
 import type { WorkspaceContext } from "@agent-anything/governance";
-import { ToolRegistry, type ToolCall } from "@agent-anything/tools";
+import {
+  ToolRegistry,
+  type ToolCall,
+  type ToolInvocationContext,
+} from "@agent-anything/tools";
 import {
   CODE_AGENT_LIST_FILES_TOOL,
   CODE_AGENT_READ_FILE_TOOL,
@@ -343,7 +347,7 @@ describe("code-agent file tools", () => {
     });
   });
   it("rejects missing trusted workspace scope", async () => {
-    const registry = new ToolRegistry();
+    const registry = new TestToolRegistry();
     registerCodeAgentFileTools(registry, {
       workspaceScope: undefined,
     });
@@ -359,10 +363,45 @@ describe("code-agent file tools", () => {
     });
   });
 
+  it("observes attributed cancellation inside a file tool", async () => {
+    const registry = createRegistry();
+    const controller = new AbortController();
+    controller.abort(new Error("cancel file read"));
+    const tool = registry.get(CODE_AGENT_READ_FILE_TOOL);
+    if (tool === undefined) {
+      throw new Error("Read tool was not registered.");
+    }
+
+    const result = await tool.execute(
+      createCall(CODE_AGENT_READ_FILE_TOOL, { path: "README.md" }),
+      {
+        interruption: {
+          signal: controller.signal,
+          interruption: {
+            kind: "run_cancellation",
+            cancellation: { runId: "run-file", requestId: "cancel-file" },
+          },
+        },
+        processTermination: {
+          gracePeriodMs: 50,
+          forceKillTimeoutMs: 250,
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "cancelled",
+      error: {
+        code: "tool_cancelled",
+        metadata: { runId: "run-file", requestId: "cancel-file" },
+      },
+    });
+  });
+
   function createRegistry(
     limits: Parameters<typeof registerCodeAgentFileTools>[1]["limits"] = {},
-  ): ToolRegistry {
-    const registry = new ToolRegistry();
+  ): TestToolRegistry {
+    const registry = new TestToolRegistry();
     registerCodeAgentFileTools(registry, {
       workspaceScope: createScope(),
       limits,
@@ -394,6 +433,28 @@ function createWorkspace(
     source: "test",
     policyRefs: [],
     metadata: {},
+  };
+}
+
+class TestToolRegistry extends ToolRegistry {
+  override execute(
+    call: ToolCall,
+    context: ToolInvocationContext = createInvocationContext(),
+  ) {
+    return super.execute(call, context);
+  }
+}
+
+function createInvocationContext(): ToolInvocationContext {
+  return {
+    interruption: {
+      signal: new AbortController().signal,
+      interruption: null,
+    },
+    processTermination: {
+      gracePeriodMs: 50,
+      forceKillTimeoutMs: 250,
+    },
   };
 }
 

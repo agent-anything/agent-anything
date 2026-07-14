@@ -3,7 +3,9 @@ export type {
   CodeAgentShellCapability,
   CodeAgentShellLimits,
   CreateCodeAgentShellCapabilityInput,
+  RunCommandCompletedOutput,
   RunCommandInput,
+  RunCommandInterruptedOutput,
   RunCommandOutput,
 } from "./ShellToolContracts.js";
 export {

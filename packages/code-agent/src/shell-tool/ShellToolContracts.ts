@@ -33,7 +33,7 @@ export interface RunCommandInput {
   reason: string;
 }
 
-export interface RunCommandOutput {
+interface RunCommandOutputBase {
   rootName: string;
   workspaceId: string;
   command: string;
@@ -47,7 +47,25 @@ export interface RunCommandOutput {
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
   timedOut: false;
+  settlementConfirmed: boolean;
 }
+
+export interface RunCommandCompletedOutput extends RunCommandOutputBase {
+  interrupted: false;
+  cancellationAttributed: false;
+  termination: null;
+  settlementConfirmed: true;
+}
+
+export interface RunCommandInterruptedOutput extends RunCommandOutputBase {
+  interrupted: true;
+  cancellationAttributed: boolean;
+  termination: "graceful" | "forced";
+}
+
+export type RunCommandOutput =
+  | RunCommandCompletedOutput
+  | RunCommandInterruptedOutput;
 
 export interface CodeAgentShellCapability {
   tool: ToolDefinition<unknown, RunCommandOutput>;

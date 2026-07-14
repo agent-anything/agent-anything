@@ -8,7 +8,10 @@ import {
 } from "./FileToolContracts.js";
 import { FileToolError } from "./FileToolError.js";
 import { parseWorkspaceFileInput } from "./fileToolInput.js";
-import { executeFileTool } from "./fileToolResult.js";
+import {
+  executeFileTool,
+  throwIfFileToolInterrupted,
+} from "./fileToolResult.js";
 import { resolveExistingTarget } from "./filesystemBoundary.js";
 import { decodeUtf8 } from "./utf8.js";
 
@@ -31,8 +34,9 @@ export function createReadFileTool(input: {
         },
       },
     },
-    async execute(call) {
-      return executeFileTool(call, input.now, async () => {
+    async execute(call, context) {
+      return executeFileTool(call, input.now, context, async () => {
+        throwIfFileToolInterrupted(context);
         const toolInput = parseWorkspaceFileInput(call.input);
         const target = await resolveExistingTarget({
           workspaceScope: input.workspaceScope,
@@ -40,6 +44,7 @@ export function createReadFileTool(input: {
           path: toolInput.path,
           expectedKind: "file",
         });
+        throwIfFileToolInterrupted(context);
 
         if (target.stats.size > input.limits.maxReadBytes) {
           throw new FileToolError(
@@ -56,6 +61,7 @@ export function createReadFileTool(input: {
         }
 
         const bytes = await readFile(target.canonicalTarget);
+        throwIfFileToolInterrupted(context);
         if (bytes.byteLength > input.limits.maxReadBytes) {
           throw new FileToolError(
             "file_read_limit_exceeded",

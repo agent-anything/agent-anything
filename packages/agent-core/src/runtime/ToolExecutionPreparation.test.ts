@@ -138,6 +138,16 @@ function createExecuteInput(
     },
     config: createConfig(),
     workspace: createWorkspace("workspace-default"),
+    invocation: {
+      interruption: {
+        signal: new AbortController().signal,
+        interruption: null,
+      },
+      processTermination: {
+        gracePeriodMs: 50,
+        forceKillTimeoutMs: 250,
+      },
+    },
   };
 }
 

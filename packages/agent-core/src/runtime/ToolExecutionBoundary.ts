@@ -17,7 +17,13 @@ import {
   type PermissionService,
 } from "@agent-anything/permission";
 import { createTelemetryRecord, type TelemetryPort } from "@agent-anything/observability/telemetry";
-import type { ToolCall, ToolRegistry, ToolResult } from "@agent-anything/tools";
+import type {
+  ToolCall,
+  ToolInvocationContext,
+  ToolRegistry,
+  ToolResult,
+} from "@agent-anything/tools";
+import type { InvocationCancellationRef } from "@agent-anything/shared";
 import type { WorkspaceContext } from "@agent-anything/governance/workspace";
 import type { RunInfrastructureRequirement } from "../runner/RunConfig.js";
 import type { RuntimeError } from "../runner/RuntimeError.js";
@@ -40,6 +46,7 @@ export interface ExecuteToolInput {
   workspace?: WorkspaceContext;
   identity?: IdentityRef;
   executionContext?: ToolExecutionContext;
+  invocation: ToolInvocationContext;
 }
 
 export interface ToolExecutionConfig {
@@ -51,7 +58,8 @@ export interface ToolExecutionConfig {
 export type ToolExecutionOutcome =
   | ToolExecutionSucceeded
   | ToolExecutionFailed
-  | ToolExecutionBlocked;
+  | ToolExecutionBlocked
+  | ToolExecutionCancelled;
 
 export interface ToolExecutionSucceeded {
   status: "succeeded";
@@ -71,34 +79,74 @@ export interface ToolExecutionBlocked {
   errors: RuntimeError[];
 }
 
+export interface ToolExecutionCancelled {
+  status: "cancelled";
+  toolResult: ToolResult | null;
+  cancellation: InvocationCancellationRef;
+}
+
 export class ToolExecutionBoundary {
   constructor(
     private readonly dependencies: ToolExecutionBoundaryDependencies,
   ) {}
 
   async execute(input: ExecuteToolInput): Promise<ToolExecutionOutcome> {
+    const cancelledBeforePreparation = cancellationOutcome(input, null);
+    if (cancelledBeforePreparation !== null) {
+      return cancelledBeforePreparation;
+    }
+
     const preparation = await this.prepareExecutionInput(input);
     if ("status" in preparation) {
       return preparation;
     }
     input = preparation.input;
+    const cancelledAfterPreparation = cancellationOutcome(input, null);
+    if (cancelledAfterPreparation !== null) {
+      return cancelledAfterPreparation;
+    }
+
     const policyOutcome = await this.checkPolicy(input);
+    const cancelledAfterPolicy = cancellationOutcome(input, null);
+    if (cancelledAfterPolicy !== null) {
+      return cancelledAfterPolicy;
+    }
     if (policyOutcome) {
       return policyOutcome;
     }
 
     const permissionOutcome = await this.checkPermission(input);
+    const cancelledAfterPermission = cancellationOutcome(input, null);
+    if (cancelledAfterPermission !== null) {
+      return cancelledAfterPermission;
+    }
     if (permissionOutcome) {
       return permissionOutcome;
     }
 
-    const toolResult = await this.dependencies.toolRegistry.execute(input.toolCall);
+    const toolResult = await this.dependencies.toolRegistry.execute(
+      input.toolCall,
+      input.invocation,
+    );
+    const toolCancellation = classifyToolCancellation(input, toolResult);
+    if (toolCancellation !== null) {
+      return toolCancellation;
+    }
+
     const statusError = validateToolResultStatus(toolResult);
     if (statusError) {
       return {
         status: "failed",
         toolResult,
         errors: [statusError],
+      };
+    }
+
+    if (input.invocation.interruption.signal.aborted) {
+      return {
+        status: "succeeded",
+        toolResult,
+        evidence: [],
       };
     }
 
@@ -145,7 +193,9 @@ export class ToolExecutionBoundary {
 
   private async prepareExecutionInput(
     input: ExecuteToolInput,
-  ): Promise<{ input: ExecuteToolInput } | ToolExecutionFailed> {
+  ): Promise<
+    { input: ExecuteToolInput } | ToolExecutionFailed | ToolExecutionCancelled
+  > {
     const definition = this.dependencies.toolRegistry.get(input.toolCall.toolName);
     if (definition?.risk === "risky" && input.toolCall.risk !== "risky") {
       return {
@@ -181,6 +231,10 @@ export class ToolExecutionBoundary {
             toolCall: input.toolCall,
             defaultWorkspace: input.workspace,
           });
+        const cancellation = cancellationOutcome(input, null);
+        if (cancellation !== null) {
+          return cancellation;
+        }
       } catch (error) {
         return {
           status: "failed",
@@ -219,7 +273,9 @@ export class ToolExecutionBoundary {
       },
     };
   }
-  private async checkPolicy(input: ExecuteToolInput): Promise<ToolExecutionFailed | ToolExecutionBlocked | null> {
+  private async checkPolicy(input: ExecuteToolInput): Promise<
+    ToolExecutionFailed | ToolExecutionBlocked | ToolExecutionCancelled | null
+  > {
     if (!isGovernedToolCall(input.toolCall)) {
       return null;
     }
@@ -246,6 +302,10 @@ export class ToolExecutionBoundary {
           ...input.executionContext?.metadata,
         },
       });
+      const cancellation = cancellationOutcome(input, null);
+      if (cancellation !== null) {
+        return cancellation;
+      }
       const recordError = await this.recordPolicyDecision(input, decision);
       if (recordError) {
         return recordError;
@@ -279,6 +339,10 @@ export class ToolExecutionBoundary {
         ],
       };
     } catch (error) {
+      const cancellation = cancellationOutcome(input, null);
+      if (cancellation !== null) {
+        return cancellation;
+      }
       return {
         status: "failed",
         toolResult: null,
@@ -301,7 +365,9 @@ export class ToolExecutionBoundary {
     }
   }
 
-  private async checkPermission(input: ExecuteToolInput): Promise<ToolExecutionFailed | ToolExecutionBlocked | null> {
+  private async checkPermission(input: ExecuteToolInput): Promise<
+    ToolExecutionFailed | ToolExecutionBlocked | ToolExecutionCancelled | null
+  > {
     if (!isGovernedToolCall(input.toolCall)) {
       return null;
     }
@@ -324,6 +390,10 @@ export class ToolExecutionBoundary {
         ?? createPermissionServiceFromMode(input.config.permissionMode);
       decision = await permissionService.request(permissionRequest);
     } catch (error) {
+      const cancellation = cancellationOutcome(input, null);
+      if (cancellation !== null) {
+        return cancellation;
+      }
       return {
         status: "failed",
         toolResult: null,
@@ -343,6 +413,11 @@ export class ToolExecutionBoundary {
           },
         ],
       };
+    }
+
+    const cancellation = cancellationOutcome(input, null);
+    if (cancellation !== null) {
+      return cancellation;
     }
 
     const recordError = await this.recordPermissionDecision(input, decision);
@@ -376,7 +451,11 @@ export class ToolExecutionBoundary {
   private async recordPolicyDecision(
     input: ExecuteToolInput,
     decision: PolicyDecision,
-  ): Promise<ToolExecutionFailed | null> {
+  ): Promise<ToolExecutionFailed | ToolExecutionCancelled | null> {
+    const cancellationBeforeAudit = cancellationOutcome(input, null);
+    if (cancellationBeforeAudit !== null) {
+      return cancellationBeforeAudit;
+    }
     const auditError = await this.recordAudit(input, {
       id: `audit_policy_checked_${input.toolCall.id}`,
       eventName: "policy.checked",
@@ -392,6 +471,11 @@ export class ToolExecutionBoundary {
     });
     if (auditError) {
       return auditError;
+    }
+
+    const cancellationBeforeTelemetry = cancellationOutcome(input, null);
+    if (cancellationBeforeTelemetry !== null) {
+      return cancellationBeforeTelemetry;
     }
 
     return this.recordTelemetry(input, {
@@ -411,7 +495,11 @@ export class ToolExecutionBoundary {
   private async recordPermissionDecision(
     input: ExecuteToolInput,
     decision: PermissionDecision,
-  ): Promise<ToolExecutionFailed | null> {
+  ): Promise<ToolExecutionFailed | ToolExecutionCancelled | null> {
+    const cancellationBeforeAudit = cancellationOutcome(input, null);
+    if (cancellationBeforeAudit !== null) {
+      return cancellationBeforeAudit;
+    }
     const auditError = await this.recordAudit(input, {
       id: `audit_permission_resolved_${input.toolCall.id}`,
       eventName: "permission.resolved",
@@ -428,6 +516,11 @@ export class ToolExecutionBoundary {
     });
     if (auditError) {
       return auditError;
+    }
+
+    const cancellationBeforeTelemetry = cancellationOutcome(input, null);
+    if (cancellationBeforeTelemetry !== null) {
+      return cancellationBeforeTelemetry;
     }
 
     return this.recordTelemetry(input, {
@@ -454,7 +547,11 @@ export class ToolExecutionBoundary {
       outcome: "succeeded" | "failed" | "blocked" | "cancelled";
       payload: Record<string, unknown>;
     },
-  ): Promise<ToolExecutionFailed | null> {
+  ): Promise<ToolExecutionFailed | ToolExecutionCancelled | null> {
+    const cancellationBeforeRecord = cancellationOutcome(input, null);
+    if (cancellationBeforeRecord !== null) {
+      return cancellationBeforeRecord;
+    }
     if (!this.dependencies.auditPort) {
       return null;
     }
@@ -486,8 +583,12 @@ export class ToolExecutionBoundary {
           source: "tool-execution-boundary",
         },
       }));
-      return null;
+      return cancellationOutcome(input, null);
     } catch (error) {
+      const cancellation = cancellationOutcome(input, null);
+      if (cancellation !== null) {
+        return cancellation;
+      }
       if (input.config.audit !== "required") {
         return null;
       }
@@ -520,7 +621,11 @@ export class ToolExecutionBoundary {
       counters: Record<string, number>;
       dimensions: Record<string, string | number | boolean | null>;
     },
-  ): Promise<ToolExecutionFailed | null> {
+  ): Promise<ToolExecutionFailed | ToolExecutionCancelled | null> {
+    const cancellationBeforeRecord = cancellationOutcome(input, null);
+    if (cancellationBeforeRecord !== null) {
+      return cancellationBeforeRecord;
+    }
     if (!this.dependencies.telemetryPort) {
       return null;
     }
@@ -534,8 +639,12 @@ export class ToolExecutionBoundary {
         counters: event.counters,
         dimensions: event.dimensions,
       }));
-      return null;
+      return cancellationOutcome(input, null);
     } catch (error) {
+      const cancellation = cancellationOutcome(input, null);
+      if (cancellation !== null) {
+        return cancellation;
+      }
       if (input.config.telemetry !== "required") {
         return null;
       }
@@ -594,6 +703,91 @@ function mapWorkspaceToPolicyWorkspace(workspace: WorkspaceContext | undefined):
 
 function isGovernedToolCall(toolCall: ToolCall): boolean {
   return toolCall.risk === "risky";
+}
+
+function cancellationOutcome(
+  input: ExecuteToolInput,
+  toolResult: ToolResult | null,
+): ToolExecutionCancelled | ToolExecutionFailed | null {
+  if (!input.invocation.interruption.signal.aborted) {
+    return null;
+  }
+
+  const interruption = input.invocation.interruption.interruption;
+  if (interruption?.kind === "run_cancellation") {
+    return {
+      status: "cancelled",
+      toolResult,
+      cancellation: interruption.cancellation,
+    };
+  }
+
+  if (interruption?.kind === "operation_deadline") {
+    return {
+      status: "failed",
+      toolResult,
+      errors: [{
+        owner: "tool",
+        code: "tool_timeout",
+        message: "Tool invocation exceeded its operation deadline.",
+        retryable: false,
+        metadata: {
+          toolCallId: input.toolCall.id,
+          toolName: input.toolCall.toolName,
+          operationId: interruption.deadline.operationId,
+          deadlineAt: interruption.deadline.deadlineAt,
+        },
+      }],
+    };
+  }
+
+  return cancellationUnconfirmed(
+    input,
+    toolResult,
+    "Tool invocation was aborted without trusted Run cancellation attribution.",
+  );
+}
+
+function classifyToolCancellation(
+  input: ExecuteToolInput,
+  toolResult: ToolResult,
+): ToolExecutionCancelled | ToolExecutionFailed | null {
+  if (toolResult.error?.code === "tool_cancellation_unconfirmed") {
+    return cancellationUnconfirmed(input, toolResult, toolResult.error.message);
+  }
+
+  if (toolResult.status !== "cancelled") {
+    return null;
+  }
+
+  const exact = cancellationOutcome(input, toolResult);
+  return exact ?? cancellationUnconfirmed(
+    input,
+    toolResult,
+    "Tool returned cancelled without an active attributed Run cancellation.",
+  );
+}
+
+function cancellationUnconfirmed(
+  input: ExecuteToolInput,
+  toolResult: ToolResult | null,
+  message: string,
+): ToolExecutionFailed {
+  return {
+    status: "failed",
+    toolResult,
+    errors: [{
+      owner: "tool",
+      code: "tool_cancellation_unconfirmed",
+      message,
+      retryable: false,
+      metadata: {
+        toolCallId: input.toolCall.id,
+        toolName: input.toolCall.toolName,
+        toolResultStatus: toolResult?.status ?? null,
+      },
+    }],
+  };
 }
 
 function validateToolResultStatus(toolResult: ToolResult): RuntimeError | null {
