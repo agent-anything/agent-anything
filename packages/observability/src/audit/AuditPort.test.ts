@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ObservabilityRecordContext } from "../ObservabilityRecordContext.js";
 import type { AuditPort } from "./AuditPort.js";
 import type { AuditRecord } from "./AuditRecord.js";
 import { createAuditRecord } from "./createAuditRecord.js";
@@ -59,7 +60,7 @@ describe("AuditPort", () => {
       outcome: "succeeded",
     });
 
-    await port.record(record);
+    await port.record(record, runtimeContext());
 
     expect(port.records).toEqual([record]);
   });
@@ -86,7 +87,7 @@ describe("AuditPort", () => {
         metadata: {},
       },
       outcome: "failed",
-    }))).rejects.toThrow("Audit storage failed.");
+    }), runtimeContext())).rejects.toThrow("Audit storage failed.");
   });
 });
 
@@ -95,8 +96,19 @@ class FakeAuditPort implements AuditPort {
 
   constructor(private readonly onRecord?: (record: AuditRecord) => void) {}
 
-  async record(record: AuditRecord): Promise<void> {
+  async record(
+    record: AuditRecord,
+    _context: ObservabilityRecordContext,
+  ): Promise<void> {
     this.onRecord?.(record);
     this.records.push(record);
   }
+}
+
+function runtimeContext(): ObservabilityRecordContext {
+  return {
+    purpose: "runtime",
+    signal: new AbortController().signal,
+    deadlineAt: null,
+  };
 }

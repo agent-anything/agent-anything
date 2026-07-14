@@ -1,4 +1,8 @@
 export type {
+  ObservabilityRecordContext,
+  ObservabilityRecordPurpose,
+} from "./ObservabilityRecordContext.js";
+export type {
   AuditOutcome,
   AuditPort,
   AuditRecord,

@@ -48,6 +48,11 @@ describe("testing fake ports", () => {
   it("records audit and telemetry records", async () => {
     const auditPort = new FakeAuditPort();
     const telemetryPort = new FakeTelemetryPort();
+    const context = {
+      purpose: "runtime" as const,
+      signal: new AbortController().signal,
+      deadlineAt: null,
+    };
 
     await auditPort.record({
       id: "audit_001",
@@ -57,7 +62,7 @@ describe("testing fake ports", () => {
       target: { kind: "tool", id: "tool_001", metadata: {} },
       createdAt: "2026-06-15T00:00:00.000Z",
       metadata: {},
-    });
+    }, context);
     await telemetryPort.record({
       id: "telemetry_001",
       name: "tool.execution",
@@ -65,7 +70,7 @@ describe("testing fake ports", () => {
       dimensions: {},
       counters: {},
       metadata: {},
-    });
+    }, context);
 
     expect(auditPort.records).toHaveLength(1);
     expect(telemetryPort.records).toHaveLength(1);

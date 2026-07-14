@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AuditPort, TelemetryPort } from "@agent-anything/observability";
+import type {
+  AuditPort,
+  ObservabilityRecordContext,
+  TelemetryPort,
+  TelemetryRecord,
+} from "@agent-anything/observability";
 import type { ToolDefinition } from "@agent-anything/tools";
 import type { Agent } from "../agent/index.js";
 import {
@@ -534,15 +539,116 @@ describe("Runner", () => {
     ]);
   });
 
+  it.each([
+    ["audit", "audit_finalization_timeout"],
+    ["telemetry", "runtime_telemetry_finalization_timeout"],
+  ] as const)(
+    "bounds an unresponsive required %s finalization recorder",
+    async (owner, expectedCode) => {
+      vi.useFakeTimers();
+      try {
+        const finalizationStarted = createDeferred<void>();
+        const hangingPort = {
+          async record(_record: unknown, context: ObservabilityRecordContext) {
+            if (context.purpose !== "finalization") {
+              return;
+            }
+            finalizationStarted.resolve();
+            await new Promise<void>(() => {});
+          },
+        };
+        const run = createRunner(
+          new ScriptedController([finalDecision("Candidate")]),
+          owner === "audit"
+            ? { auditPort: hangingPort as AuditPort }
+            : { telemetryPort: hangingPort as TelemetryPort },
+        ).run(
+          createAgent(),
+          createRunInput(),
+          createRunConfig({
+            audit: owner === "audit" ? "required" : "optional",
+            telemetry: owner === "telemetry" ? "required" : "optional",
+            cancellationLimits: { finalizationTimeoutMs: 25 },
+          }),
+        );
+        await finalizationStarted.promise;
+
+        await vi.advanceTimersByTimeAsync(25);
+        const result = await run;
+
+        expect(result).toMatchObject({
+          status: "failed",
+          code: expectedCode,
+          errors: [{ owner, code: expectedCode }],
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("records required finalization before optional work consumes the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const optionalFinalizationStarted = createDeferred<void>();
+      const finalizationOrder: string[] = [];
+      const auditPort: AuditPort = {
+        async record(_record, context) {
+          if (context.purpose !== "finalization") {
+            return;
+          }
+          finalizationOrder.push("audit");
+          optionalFinalizationStarted.resolve();
+          await new Promise<void>(() => {});
+        },
+      };
+      const telemetryPort: TelemetryPort = {
+        async record(_record, context) {
+          if (context.purpose === "finalization") {
+            finalizationOrder.push("telemetry");
+          }
+        },
+      };
+      const run = createRunner(
+        new ScriptedController([finalDecision("Done")]),
+        { auditPort, telemetryPort },
+      ).run(
+        createAgent(),
+        createRunInput(),
+        createRunConfig({
+          audit: "optional",
+          telemetry: "required",
+          cancellationLimits: { finalizationTimeoutMs: 25 },
+        }),
+      );
+      await optionalFinalizationStarted.promise;
+
+      await vi.advanceTimersByTimeAsync(25);
+      const result = await run;
+
+      expect(result.status).toBe("succeeded");
+      expect(finalizationOrder).toEqual(["telemetry", "audit"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("lets accepted cancellation win before terminal commit", async () => {
     const cancellation = createRunCancellationController({ runId: "run_001" });
+    const events: RuntimeEvent[] = [];
+    const eventEmitter = new RuntimeEventEmitter();
+    eventEmitter.subscribe((event) => events.push(event));
     const finalizationStarted = createDeferred<void>();
     const releaseFinalization = createDeferred<void>();
-    let telemetryCalls = 0;
+    const finalizationRecords: string[] = [];
+    const finalizationSignals: AbortSignal[] = [];
     const telemetryPort: TelemetryPort = {
-      async record() {
-        telemetryCalls += 1;
-        if (telemetryCalls === 2) {
+      async record(record: TelemetryRecord, context) {
+        if (context.purpose === "finalization") {
+          finalizationRecords.push(record.eventName);
+          finalizationSignals.push(context.signal);
+        }
+        if (record.eventName === "runner.run.succeeded") {
           finalizationStarted.resolve();
           await releaseFinalization.promise;
         }
@@ -550,7 +656,7 @@ describe("Runner", () => {
     };
     const run = createRunner(
       new ScriptedController([finalDecision("Must not commit")]),
-      { telemetryPort },
+      { eventEmitter, telemetryPort },
     ).run(
       createAgent(),
       createRunInput(),
@@ -571,6 +677,56 @@ describe("Runner", () => {
       "run_cancellation_requested",
       "run_cancelled",
     ]);
+    expect(finalizationRecords).toEqual([
+      "runner.run.succeeded",
+      "runner.run.cancelled",
+    ]);
+    expect(finalizationSignals).toHaveLength(2);
+    expect(finalizationSignals[0]).not.toBe(cancellation.context.signal);
+    expect(finalizationSignals[1]).not.toBe(finalizationSignals[0]);
+    expect(events.filter((event) => [
+      "run.completed",
+      "run.blocked",
+      "run.failed",
+      "run.cancelled",
+    ].includes(event.name))).toMatchObject([{ name: "run.cancelled" }]);
+  });
+
+  it("abandons an active Plan with the authoritative finalization failure", async () => {
+    const telemetryPort: TelemetryPort = {
+      async record(_record, context) {
+        if (context.purpose === "finalization") {
+          throw new Error("Terminal telemetry failed.");
+        }
+      },
+    };
+    const controller = new ScriptedController([
+      actionsDecision([{
+        kind: "internal",
+        name: "update_plan",
+        input: {
+          explanation: "Track finalization.",
+          plan: [{ step: "Finish", status: "in_progress" }],
+        },
+        modelItemId: "model_1",
+      }]),
+      finalDecision("Candidate"),
+    ]);
+
+    const result = await createRunner(controller, { telemetryPort }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({ telemetry: "required" }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_telemetry_required_failed",
+    });
+    expect(result.items.find((item) => item.kind === "plan_abandoned")).toMatchObject({
+      terminalStatus: "failed",
+      reasonCode: "runtime_telemetry_required_failed",
+    });
   });
 
   it("does not rewrite a terminal result when cancellation is requested later", async () => {

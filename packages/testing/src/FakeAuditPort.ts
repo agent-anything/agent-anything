@@ -1,7 +1,12 @@
-import type { AuditPort, AuditRecord } from "@agent-anything/observability/audit";
+import type {
+  AuditPort,
+  AuditRecord,
+  ObservabilityRecordContext,
+} from "@agent-anything/observability/audit";
 
 export type FakeAuditPortHandler = (
   record: AuditRecord,
+  context: ObservabilityRecordContext,
 ) => void | Promise<void>;
 
 export class FakeAuditPort implements AuditPort {
@@ -11,8 +16,11 @@ export class FakeAuditPort implements AuditPort {
     private readonly handler?: FakeAuditPortHandler,
   ) {}
 
-  async record(record: AuditRecord): Promise<void> {
-    await this.handler?.(record);
+  async record(
+    record: AuditRecord,
+    context: ObservabilityRecordContext,
+  ): Promise<void> {
+    await this.handler?.(record, context);
     this.records.push(record);
   }
 }

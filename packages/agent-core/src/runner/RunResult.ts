@@ -50,7 +50,9 @@ export type RunFailureCode =
   | "tool_cancellation_unconfirmed"
   | "storage_write_failed"
   | "audit_required_failed"
-  | "runtime_telemetry_required_failed";
+  | "audit_finalization_timeout"
+  | "runtime_telemetry_required_failed"
+  | "runtime_telemetry_finalization_timeout";
 
 export type RunCancelledCode = "runtime_cancelled";
 

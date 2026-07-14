@@ -6,4 +6,8 @@ export type {
   CreateAuditRecordInput,
 } from "./AuditRecord.js";
 export type { AuditPort } from "./AuditPort.js";
+export type {
+  ObservabilityRecordContext,
+  ObservabilityRecordPurpose,
+} from "../ObservabilityRecordContext.js";
 export { createAuditRecord } from "./createAuditRecord.js";

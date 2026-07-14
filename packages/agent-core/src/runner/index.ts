@@ -35,6 +35,8 @@ export {
   createRunCancellationController,
   toRunCancellationSummary,
 } from "./RunCancellation.js";
+export type { RunFinalizationScope } from "./RunFinalization.js";
+export { createRunFinalizationContext } from "./RunFinalization.js";
 export type {
   RunConfig,
   RunInfrastructureRequirement,

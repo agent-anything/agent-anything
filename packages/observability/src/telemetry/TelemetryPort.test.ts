@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createTelemetryRecord } from "./createTelemetryRecord.js";
+import type { ObservabilityRecordContext } from "../ObservabilityRecordContext.js";
 import type { TelemetryPort } from "./TelemetryPort.js";
 import type { TelemetryRecord } from "./TelemetryRecord.js";
 
@@ -49,7 +50,7 @@ describe("TelemetryPort", () => {
       timestamp: "2026-06-12T00:00:00.000Z",
     });
 
-    await port.record(record);
+    await port.record(record, runtimeContext());
 
     expect(port.records).toEqual([record]);
   });
@@ -63,7 +64,7 @@ describe("TelemetryPort", () => {
       id: "telemetry_001",
       eventName: "task.failed",
       timestamp: "2026-06-12T00:00:00.000Z",
-    }))).rejects.toThrow("Telemetry backend failed.");
+    }), runtimeContext())).rejects.toThrow("Telemetry backend failed.");
   });
 });
 
@@ -72,8 +73,19 @@ class FakeTelemetryPort implements TelemetryPort {
 
   constructor(private readonly onRecord?: (record: TelemetryRecord) => void) {}
 
-  async record(record: TelemetryRecord): Promise<void> {
+  async record(
+    record: TelemetryRecord,
+    _context: ObservabilityRecordContext,
+  ): Promise<void> {
     this.onRecord?.(record);
     this.records.push(record);
   }
+}
+
+function runtimeContext(): ObservabilityRecordContext {
+  return {
+    purpose: "runtime",
+    signal: new AbortController().signal,
+    deadlineAt: null,
+  };
 }

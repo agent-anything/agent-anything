@@ -4,6 +4,7 @@ import type {
   ISODateTimeString,
   Metadata,
 } from "@agent-anything/shared";
+import type { ObservabilityRecordContext } from "@agent-anything/observability";
 import type { Agent } from "../agent/index.js";
 import {
   ControllerError,
@@ -34,9 +35,11 @@ import type {
 } from "./Observation.js";
 import type {
   CancellationBoundary,
+  RunFinalizationContext,
   RunCancellationRequest,
 } from "./RunCancellation.js";
 import { toRunCancellationSummary } from "./RunCancellation.js";
+import { createRunFinalizationContext } from "./RunFinalization.js";
 import type { RunConfig } from "./RunConfig.js";
 import type { RunInput } from "./RunInput.js";
 import type { RunItem, RunItemBase } from "./RunItem.js";
@@ -916,41 +919,17 @@ export class RunExecution<TOutput> {
       return this.terminalResult;
     }
 
-    let candidate = initial;
-    const finalizationErrors = await this.recordLifecycle(
-      initial.status,
-      auditOutcome(initial.status),
-      skipOwners,
-    );
-    if (finalizationErrors.length > 0) {
-      const priorErrors = initial.status === "failed" ? [...initial.errors] : [];
-      const cancellationRequest = initial.status === "cancelled"
-        ? initial.cancellationRequest
-        : initial.status === "failed"
-          ? initial.cancellationRequest
-          : this.state.status === "cancelling"
-            ? this.state.cancellationRequest
-            : null;
-      candidate = {
-        status: "failed",
-        code: initial.status === "failed"
-          ? initial.code
-          : failureCode(finalizationErrors[0]),
-        errors: asErrorTuple([...priorErrors, ...finalizationErrors]),
-        cancellationRequest,
-      };
-    }
+    let candidate = this.reconcileTerminalCancellation(initial);
+    const firstFinalization = await this.finalizeCandidate(candidate, skipOwners);
+    candidate = firstFinalization.candidate;
 
-    const acceptedCancellation = this.cancellationRequest();
-    if (
-      acceptedCancellation !== null &&
-      !(candidate.status === "failed" && candidate.cancellationRequest !== null)
-    ) {
-      this.enterCancelling(acceptedCancellation);
-      candidate = {
-        status: "cancelled",
-        cancellationRequest: acceptedCancellation,
-      };
+    if (!firstFinalization.failed) {
+      const correctedCandidate = this.reconcileTerminalCancellation(candidate);
+      if (correctedCandidate.status !== candidate.status) {
+        candidate = (
+          await this.finalizeCandidate(correctedCandidate, skipOwners)
+        ).candidate;
+      }
     }
 
     const completedAt = this.now();
@@ -1074,6 +1053,73 @@ export class RunExecution<TOutput> {
     });
     this.terminalResult = this.createResult();
     return this.terminalResult;
+  }
+
+  private reconcileTerminalCancellation(
+    candidate: TerminalCandidate<TOutput>,
+  ): TerminalCandidate<TOutput> {
+    const acceptedCancellation = this.cancellationRequest();
+    if (
+      acceptedCancellation === null ||
+      (candidate.status === "failed" && candidate.cancellationRequest !== null)
+    ) {
+      return candidate;
+    }
+
+    this.enterCancelling(acceptedCancellation);
+    return {
+      status: "cancelled",
+      cancellationRequest: acceptedCancellation,
+    };
+  }
+
+  private async finalizeCandidate(
+    candidate: TerminalCandidate<TOutput>,
+    skipOwners: ReadonlySet<RuntimeError["owner"]>,
+  ): Promise<{
+    readonly candidate: TerminalCandidate<TOutput>;
+    readonly failed: boolean;
+  }> {
+    const scope = createRunFinalizationContext({
+      runId: this.state.runId,
+      cancellation: terminalCancellationSummary(candidate),
+      timeoutMs: this.config.cancellationLimits.finalizationTimeoutMs,
+      startedAt: this.now(),
+    });
+
+    let finalizationErrors: RuntimeError[];
+    try {
+      finalizationErrors = await this.recordLifecycle(
+        candidate.status,
+        auditOutcome(candidate.status),
+        skipOwners,
+        finalizationObservabilityContext(scope.context),
+      );
+    } finally {
+      scope.dispose();
+    }
+
+    if (finalizationErrors.length === 0) {
+      return { candidate, failed: false };
+    }
+
+    const priorErrors = candidate.status === "failed" ? [...candidate.errors] : [];
+    const acceptedCancellation = this.cancellationRequest();
+    const cancellationRequest = candidate.status === "cancelled"
+      ? candidate.cancellationRequest
+      : candidate.status === "failed" && candidate.cancellationRequest !== null
+        ? candidate.cancellationRequest
+        : acceptedCancellation;
+
+    return {
+      candidate: {
+        status: "failed",
+        code: failureCode(finalizationErrors[0]),
+        errors: asErrorTuple([...priorErrors, ...finalizationErrors]),
+        cancellationRequest,
+      },
+      failed: true,
+    };
   }
 
   private createResult(): RunResult<TOutput> {
@@ -1365,6 +1411,7 @@ export class RunExecution<TOutput> {
     phase: "started" | "succeeded" | "blocked" | "failed" | "cancelled",
     outcome: "succeeded" | "failed" | "blocked" | "cancelled",
     skipOwners: ReadonlySet<RuntimeError["owner"]> = new Set(),
+    context: ObservabilityRecordContext = this.runtimeObservabilityContext(),
   ): Promise<RuntimeError[]> {
     const timestamp = this.now();
     return recordRunnerLifecycle({
@@ -1384,8 +1431,39 @@ export class RunExecution<TOutput> {
       auditPort: this.dependencies.auditPort,
       telemetryPort: this.dependencies.telemetryPort,
       skipOwners,
+      context,
     });
   }
+
+  private runtimeObservabilityContext(): ObservabilityRecordContext {
+    return Object.freeze({
+      purpose: "runtime",
+      signal: this.config.cancellation.context.signal,
+      deadlineAt: null,
+    });
+  }
+}
+
+function finalizationObservabilityContext(
+  context: RunFinalizationContext,
+): ObservabilityRecordContext {
+  return Object.freeze({
+    purpose: "finalization",
+    signal: context.signal,
+    deadlineAt: context.deadlineAt,
+  });
+}
+
+function terminalCancellationSummary(
+  candidate: TerminalCandidate<unknown>,
+) {
+  if (candidate.status === "cancelled") {
+    return toRunCancellationSummary(candidate.cancellationRequest);
+  }
+  if (candidate.status === "failed" && candidate.cancellationRequest !== null) {
+    return toRunCancellationSummary(candidate.cancellationRequest);
+  }
+  return null;
 }
 
 function planLifecycleDraft<TOutput>(

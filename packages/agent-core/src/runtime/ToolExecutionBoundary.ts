@@ -582,7 +582,7 @@ export class ToolExecutionBoundary {
         metadata: {
           source: "tool-execution-boundary",
         },
-      }));
+      }), createToolObservabilityContext(input));
       return cancellationOutcome(input, null);
     } catch (error) {
       const cancellation = cancellationOutcome(input, null);
@@ -638,7 +638,7 @@ export class ToolExecutionBoundary {
         timestamp: new Date().toISOString(),
         counters: event.counters,
         dimensions: event.dimensions,
-      }));
+      }), createToolObservabilityContext(input));
       return cancellationOutcome(input, null);
     } catch (error) {
       const cancellation = cancellationOutcome(input, null);
@@ -681,6 +681,17 @@ function mapIdentityToPolicySubject(identity: IdentityRef | undefined): PolicySu
     displayName: identity.displayName,
     metadata: identity.metadata,
   };
+}
+
+function createToolObservabilityContext(input: ExecuteToolInput) {
+  const interruption = input.invocation.interruption.interruption;
+  return Object.freeze({
+    purpose: "runtime" as const,
+    signal: input.invocation.interruption.signal,
+    deadlineAt: interruption?.kind === "operation_deadline"
+      ? interruption.deadline.deadlineAt
+      : null,
+  });
 }
 
 function mapWorkspaceToPolicyWorkspace(workspace: WorkspaceContext | undefined): PolicyWorkspace | undefined {
