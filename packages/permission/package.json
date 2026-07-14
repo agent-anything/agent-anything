@@ -13,6 +13,14 @@
     "./profile": {
       "types": "./src/profile/index.ts",
       "import": "./dist/profile/index.js"
+    },
+    "./approval": {
+      "types": "./src/approval/index.ts",
+      "import": "./dist/approval/index.js"
+    },
+    "./authority": {
+      "types": "./src/authority/index.ts",
+      "import": "./dist/authority/index.js"
     }
   },
   "files": [

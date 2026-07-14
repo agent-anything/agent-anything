@@ -25,6 +25,10 @@
     "./managed-permission": {
       "types": "./src/managed-permission/index.ts",
       "import": "./dist/managed-permission/index.js"
+    },
+    "./amendment": {
+      "types": "./src/amendment/index.ts",
+      "import": "./dist/amendment/index.js"
     }
   },
   "files": [

@@ -34,3 +34,4 @@ export type {
   ManagedPermissionConstraints,
   ManagedProfileSelectionConstraints,
 } from "./managed-permission/index.js";
+export * from "./amendment/index.js";

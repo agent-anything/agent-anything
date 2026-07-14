@@ -32,3 +32,14 @@ export {
   resolvePermissionProfile,
   type ResolvePermissionProfileInput,
 } from "./resolvePermissionProfile.js";
+export {
+  canonicalizePermissionAbsolutePath,
+  canonicalizePermissionDomain,
+  canonicalizePermissionDomains,
+  canonicalizePermissionFileSystemTarget,
+  canonicalizePermissionPathFromCwd,
+  matchesPermissionDomainPattern,
+  matchesPermissionFileSystemTarget,
+  resolvePermissionWorkspaceRoots,
+  type CanonicalPermissionWorkspaceRoot,
+} from "./PermissionCanonicalization.js";
