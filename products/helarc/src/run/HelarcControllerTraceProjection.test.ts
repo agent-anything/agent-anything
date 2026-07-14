@@ -1,6 +1,7 @@
 import {
   createRunCancellationController,
   type Controller,
+  type ControllerCallContext,
   type ControllerDecision,
   type ControllerInput,
   type RuntimeEvent,
@@ -36,9 +37,7 @@ describe("Helarc controller trace projection", () => {
       }],
     }), traceByIteration);
 
-    await controller.next(createControllerInput(), {
-      cancellation: createRunCancellationController({ runId: "run-1" }).context,
-    });
+    await controller.next(createControllerInput(), controllerCallContext());
 
     expect(traceByIteration.get(1)).toEqual({
       source: "helarc-controller",
@@ -85,6 +84,33 @@ class FakeController implements Controller {
   async next(): Promise<ControllerDecision> {
     return this.decision;
   }
+}
+
+function controllerCallContext(): ControllerCallContext {
+  const policy = disabledRetryPolicy();
+  return {
+    cancellation: createRunCancellationController({ runId: "run-1" }).context,
+    retry: {
+      providerRequest: policy,
+      structuredOutput: policy,
+      events: { emit() {} },
+    },
+  };
+}
+
+function disabledRetryPolicy() {
+  return {
+    maxRetries: 0,
+    delay: {
+      kind: "exponential_jitter" as const,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      multiplier: 2 as const,
+      jitterRatio: 0.1 as const,
+    },
+    retryableCategories: [] as string[],
+    serverDelay: { mode: "ignore" as const },
+  };
 }
 
 function createControllerInput(): ControllerInput {

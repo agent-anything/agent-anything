@@ -22,6 +22,10 @@
       "types": "./src/runner/index.ts",
       "import": "./dist/runner/index.js"
     },
+    "./retry": {
+      "types": "./src/retry/index.ts",
+      "import": "./dist/retry/index.js"
+    },
     "./plan": {
       "types": "./src/plan/index.ts",
       "import": "./dist/plan/index.js"

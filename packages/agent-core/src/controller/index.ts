@@ -4,6 +4,7 @@ export type {
   ControllerDecision,
   ControllerInput,
   ControllerModelItem,
+  ControllerRetryContext,
 } from "./Controller.js";
 export type {
   BuildProviderRequest,

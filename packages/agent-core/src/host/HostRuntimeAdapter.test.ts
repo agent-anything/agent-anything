@@ -99,13 +99,39 @@ describe("HostRuntimeAdapter", () => {
         audit: "optional",
         telemetry: "optional",
         cancellation,
-        cancellationLimits: {
-          boundarySettlementTimeoutMs: 1_000,
-          processGracePeriodMs: 100,
-          processForceKillTimeoutMs: 500,
-          finalizationTimeoutMs: 1_000,
-        },
-        metadata: {},
+          cancellationLimits: {
+            boundarySettlementTimeoutMs: 1_000,
+            processGracePeriodMs: 100,
+            processForceKillTimeoutMs: 500,
+            finalizationTimeoutMs: 1_000,
+          },
+          retry: {
+            providerRequest: {
+              maxRetries: 0,
+              delay: {
+                kind: "exponential_jitter",
+                baseDelayMs: 0,
+                maxDelayMs: 0,
+                multiplier: 2,
+                jitterRatio: 0.1,
+              },
+              retryableCategories: [],
+              serverDelay: { mode: "ignore" },
+            },
+            structuredOutput: {
+              maxRetries: 0,
+              delay: {
+                kind: "exponential_jitter",
+                baseDelayMs: 0,
+                maxDelayMs: 0,
+                multiplier: 2,
+                jitterRatio: 0.1,
+              },
+              retryableCategories: [],
+              serverDelay: { mode: "ignore" },
+            },
+          },
+          metadata: {},
       },
       metadata: { surface: "test-host" },
     });

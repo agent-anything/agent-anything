@@ -1,6 +1,7 @@
 import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
 import type { Metadata } from "@agent-anything/shared";
 import type { PlanLimits } from "../plan/index.js";
+import type { RetryPolicy } from "../retry/index.js";
 import type {
   CancellationLimits,
   RunCancellationController,
@@ -16,6 +17,11 @@ export interface RunLimits {
   readonly plan: PlanLimits;
 }
 
+export interface ResolvedRunRetryConfiguration {
+  readonly providerRequest: RetryPolicy<string>;
+  readonly structuredOutput: RetryPolicy<string>;
+}
+
 export interface RunConfig {
   readonly workspace: WorkspaceContext;
   readonly identity: IdentityRef;
@@ -24,5 +30,6 @@ export interface RunConfig {
   readonly telemetry: RunInfrastructureRequirement;
   readonly cancellation: RunCancellationController;
   readonly cancellationLimits: CancellationLimits;
+  readonly retry: ResolvedRunRetryConfiguration;
   readonly metadata: Metadata;
 }

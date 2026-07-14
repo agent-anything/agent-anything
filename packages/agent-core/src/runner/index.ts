@@ -38,6 +38,7 @@ export {
 export type { RunFinalizationScope } from "./RunFinalization.js";
 export { createRunFinalizationContext } from "./RunFinalization.js";
 export type {
+  ResolvedRunRetryConfiguration,
   RunConfig,
   RunInfrastructureRequirement,
   RunLimits,
@@ -60,6 +61,13 @@ export type {
   RunCancellationRequestedRunItem,
   RunCancelledRunItem,
   RunFailedRunItem,
+  RetryAttemptFinishedRunItem,
+  RetryAttemptStartedRunItem,
+  RetryCancelledRunItem,
+  RetryExhaustedRunItem,
+  RetryFallbackSelectedRunItem,
+  RetryRunItem,
+  RetryScheduledRunItem,
   RunItem,
   RunItemBase,
   StopRunItem,

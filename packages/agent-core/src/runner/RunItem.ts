@@ -6,6 +6,14 @@ import type { Observation } from "./Observation.js";
 import type { RunCancellationSummary } from "./RunCancellation.js";
 import type { RunBlockedCode, RunFailureCode } from "./RunResult.js";
 import type { RuntimeError } from "./RuntimeError.js";
+import type {
+  RetryAttemptFinishedEvent,
+  RetryAttemptStartedEvent,
+  RetryCancelledEvent,
+  RetryExhaustedEvent,
+  RetryFallbackSelectedEvent,
+  RetryScheduledEvent,
+} from "../retry/index.js";
 
 export interface RunItemBase {
   readonly id: string;
@@ -88,6 +96,26 @@ export interface RunCancelledRunItem extends RunItemBase {
   readonly completedAt: ISODateTimeString;
 }
 
+type RetryEventRunItem<TEvent extends { readonly type: string }> = RunItemBase & {
+  readonly kind: TEvent["type"];
+  readonly retry: TEvent;
+};
+
+export type RetryAttemptStartedRunItem = RetryEventRunItem<RetryAttemptStartedEvent>;
+export type RetryAttemptFinishedRunItem = RetryEventRunItem<RetryAttemptFinishedEvent>;
+export type RetryScheduledRunItem = RetryEventRunItem<RetryScheduledEvent>;
+export type RetryFallbackSelectedRunItem = RetryEventRunItem<RetryFallbackSelectedEvent>;
+export type RetryExhaustedRunItem = RetryEventRunItem<RetryExhaustedEvent>;
+export type RetryCancelledRunItem = RetryEventRunItem<RetryCancelledEvent>;
+
+export type RetryRunItem =
+  | RetryAttemptStartedRunItem
+  | RetryAttemptFinishedRunItem
+  | RetryScheduledRunItem
+  | RetryFallbackSelectedRunItem
+  | RetryExhaustedRunItem
+  | RetryCancelledRunItem;
+
 export type RunItem<TOutput = unknown> =
   | ModelOutputRunItem
   | ActionRunItem
@@ -101,4 +129,5 @@ export type RunItem<TOutput = unknown> =
   | RunCancellationRequestedRunItem
   | RunBlockedRunItem
   | RunFailedRunItem
-  | RunCancelledRunItem;
+  | RunCancelledRunItem
+  | RetryRunItem;

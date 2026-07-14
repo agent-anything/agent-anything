@@ -6,6 +6,7 @@ import type { ActionCandidate } from "../runner/Action.js";
 import type { CancellationContext } from "../runner/RunCancellation.js";
 import type { RunInputItem } from "../runner/RunInput.js";
 import type { AgentTask } from "../task/index.js";
+import type { RetryEventSink, RetryPolicy } from "../retry/index.js";
 
 export interface ControllerModelItem {
   readonly id: string;
@@ -28,6 +29,13 @@ export interface ControllerInput<TOutput = unknown> {
 
 export interface ControllerCallContext {
   readonly cancellation: CancellationContext;
+  readonly retry: ControllerRetryContext;
+}
+
+export interface ControllerRetryContext {
+  readonly providerRequest: RetryPolicy<string>;
+  readonly structuredOutput: RetryPolicy<string>;
+  readonly events: RetryEventSink;
 }
 
 export type ControllerDecision<TOutput = unknown> =

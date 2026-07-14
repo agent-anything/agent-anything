@@ -243,6 +243,35 @@ export async function runHelarcSession(
         processForceKillTimeoutMs: 2_000,
         finalizationTimeoutMs: 5_000,
       },
+      retry: {
+        providerRequest: {
+          maxRetries: 2,
+          delay: {
+            kind: "exponential_jitter",
+            baseDelayMs: 500,
+            maxDelayMs: 4_000,
+            multiplier: 2,
+            jitterRatio: 0.1,
+          },
+          retryableCategories: ["transport", "timeout"],
+          serverDelay: {
+            mode: "prefer_trusted",
+            maxServerDelayMs: 10_000,
+          },
+        },
+        structuredOutput: {
+          maxRetries: 1,
+          delay: {
+            kind: "exponential_jitter",
+            baseDelayMs: 0,
+            maxDelayMs: 0,
+            multiplier: 2,
+            jitterRatio: 0.1,
+          },
+          retryableCategories: ["structured_output_invalid"],
+          serverDelay: { mode: "ignore" },
+        },
+      },
       metadata: runMetadata,
     },
   );

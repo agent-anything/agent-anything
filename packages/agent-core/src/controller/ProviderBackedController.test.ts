@@ -11,6 +11,7 @@ import { projectContext, createInitialContext } from "../context/index.js";
 import { createRunCancellationController } from "../runner/index.js";
 import type { AgentTask } from "../task/index.js";
 import type {
+  ControllerCallContext,
   ControllerDecision,
   ControllerInput,
 } from "./Controller.js";
@@ -212,7 +213,7 @@ describe("ProviderBackedController", () => {
     const controller = createController(provider);
 
     const error = await captureError(controller.next(createControllerInput(), {
-      cancellation: cancellation.context,
+      ...callContext(cancellation.context),
     }));
 
     expect(error).toBe(cancellation.context.request);
@@ -424,7 +425,7 @@ describe("ProviderBackedController", () => {
 
     const error = await captureError(
       controller.next(createControllerInput(), {
-        cancellation: cancellation.context,
+        ...callContext(cancellation.context),
       }),
     );
 
@@ -449,7 +450,7 @@ describe("ProviderBackedController", () => {
 
     const error = await captureError(
       controller.next(createControllerInput(), {
-        cancellation: cancellation.context,
+        ...callContext(cancellation.context),
       }),
     );
 
@@ -588,9 +589,28 @@ function modelItem(id: string, content: unknown) {
   };
 }
 
-function callContext() {
+function callContext(
+  cancellation = createRunCancellationController({ runId: "run_001" }).context,
+): ControllerCallContext {
+  const policy = {
+    maxRetries: 0,
+    delay: {
+      kind: "exponential_jitter" as const,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      multiplier: 2 as const,
+      jitterRatio: 0.1 as const,
+    },
+    retryableCategories: [] as string[],
+    serverDelay: { mode: "ignore" as const },
+  };
   return {
-    cancellation: createRunCancellationController({ runId: "run_001" }).context,
+    cancellation,
+    retry: {
+      providerRequest: policy,
+      structuredOutput: policy,
+      events: { emit() {} },
+    },
   };
 }
 

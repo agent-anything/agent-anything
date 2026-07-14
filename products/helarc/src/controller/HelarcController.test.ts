@@ -1,6 +1,7 @@
 import {
   ProviderBackedController,
   createRunCancellationController,
+  type ControllerCallContext,
   type ControllerInput,
 } from "@agent-anything/agent-core";
 import type {
@@ -223,9 +224,7 @@ describe("Helarc controller", () => {
       maxProviderOutputLength: HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
     });
 
-    const decision = await controller.next(createControllerInput(), {
-      cancellation: createRunCancellationController({ runId: "run-1" }).context,
-    });
+    const decision = await controller.next(createControllerInput(), controllerCallContext());
 
     expect(provider.requests).toHaveLength(1);
     expect(decision).toMatchObject({
@@ -240,6 +239,29 @@ const READ_ONLY_TOOLS = [
   tool("codeAgent.readFile", "Read a file.", "safe"),
   tool("codeAgent.searchFiles", "Search files.", "safe"),
 ];
+
+function controllerCallContext(): ControllerCallContext {
+  const policy = {
+    maxRetries: 0,
+    delay: {
+      kind: "exponential_jitter" as const,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      multiplier: 2 as const,
+      jitterRatio: 0.1 as const,
+    },
+    retryableCategories: [] as string[],
+    serverDelay: { mode: "ignore" as const },
+  };
+  return {
+    cancellation: createRunCancellationController({ runId: "run-1" }).context,
+    retry: {
+      providerRequest: policy,
+      structuredOutput: policy,
+      events: { emit() {} },
+    },
+  };
+}
 
 function createControllerInput(input: {
   tools?: ToolDefinition[];

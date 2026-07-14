@@ -2,6 +2,7 @@ import type { Agent } from "../agent/index.js";
 import type { ControllerDecision } from "../controller/index.js";
 import type { WorkspaceContext } from "@agent-anything/governance";
 import { assertValidPlanLimits } from "../plan/index.js";
+import { snapshotRetryPolicy } from "../retry/index.js";
 import type { Metadata } from "@agent-anything/shared";
 import type { ToolDefinition } from "@agent-anything/tools";
 import type { RunConfig } from "./RunConfig.js";
@@ -183,6 +184,19 @@ export function snapshotRunConfig(
       config.cancellationLimits.finalizationTimeoutMs,
       "CancellationLimits.finalizationTimeoutMs",
     );
+    if (!isRecord(config.retry)) {
+      throw new TypeError("RunConfig.retry must be a ResolvedRunRetryConfiguration.");
+    }
+    const retry = Object.freeze({
+      providerRequest: snapshotRetryPolicy(
+        config.retry.providerRequest,
+        "RunConfig.retry.providerRequest",
+      ),
+      structuredOutput: snapshotRetryPolicy(
+        config.retry.structuredOutput,
+        "RunConfig.retry.structuredOutput",
+      ),
+    });
     assertMetadata(config.metadata, "RunConfig.metadata");
 
     return {
@@ -201,6 +215,7 @@ export function snapshotRunConfig(
         telemetry: config.telemetry,
         cancellation: config.cancellation,
         cancellationLimits: Object.freeze({ ...config.cancellationLimits }),
+        retry,
         metadata: Object.freeze({ ...config.metadata }),
       }),
     };

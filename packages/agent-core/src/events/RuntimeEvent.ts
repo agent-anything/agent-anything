@@ -23,7 +23,13 @@ export type RuntimeEventName =
   | "tool.finished"
   | "observation.created"
   | "context.updated"
-  | "evidence.created";
+  | "evidence.created"
+  | "retry.attempt.started"
+  | "retry.attempt.finished"
+  | "retry.scheduled"
+  | "retry.fallback.selected"
+  | "retry.exhausted"
+  | "retry.cancelled";
 
 export interface RuntimeEvent<TPayload = Metadata> {
   id: string;

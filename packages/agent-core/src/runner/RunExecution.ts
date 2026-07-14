@@ -63,6 +63,11 @@ import {
 import type { RunCounters, RunState } from "./RunState.js";
 import type { RuntimeError } from "./RuntimeError.js";
 import type { ToolActionObservationPayload } from "./ToolActionBridge.js";
+import {
+  snapshotRetryEvent,
+  type RetryEvent,
+  type RetryEventSink,
+} from "../retry/index.js";
 
 type ResolvedRunnerDependencies = RunnerDependencies & {
   readonly now: NonNullable<RunnerDependencies["now"]>;
@@ -243,7 +248,14 @@ export class RunExecution<TOutput> {
           "controller",
           () => this.dependencies.controller.next(
             this.createControllerInput(),
-            { cancellation: this.config.cancellation.context },
+            Object.freeze({
+              cancellation: this.config.cancellation.context,
+              retry: Object.freeze({
+                providerRequest: this.config.retry.providerRequest,
+                structuredOutput: this.config.retry.structuredOutput,
+                events: this.createRetryEventSink(),
+              }),
+            }),
           ),
         );
       } catch (error) {
@@ -1240,6 +1252,32 @@ export class RunExecution<TOutput> {
     this.publishItems(items);
   }
 
+  private createRetryEventSink(): RetryEventSink {
+    return Object.freeze({
+      emit: (event: RetryEvent) => this.commitRetryEvent(event),
+    });
+  }
+
+  private commitRetryEvent(candidate: RetryEvent): void {
+    if (this.state.status !== "running" && this.state.status !== "cancelling") {
+      throw new Error(`Cannot commit Retry history while Run is ${this.state.status}.`);
+    }
+    const retry = snapshotRetryEvent(candidate, this.state.runId);
+    const items = this.materializeItems([
+      (base) => Object.freeze({
+        ...base,
+        kind: retry.type,
+        retry,
+      }) as RunItem<TOutput>,
+    ]);
+    this.replaceState(freezeState({
+      ...this.state,
+      items: Object.freeze([...this.state.items, ...items]),
+    }));
+    this.publishItems(items);
+    this.emit(retryRuntimeEventName(retry.type), { ...retry }, retry.occurredAt);
+  }
+
   private materializeItems(
     drafts: readonly RunItemDraft<TOutput>[],
   ): readonly RunItem<TOutput>[] {
@@ -1394,13 +1432,17 @@ export class RunExecution<TOutput> {
     return value;
   }
 
-  private emit(name: RuntimeEventName, payload: Metadata): void {
+  private emit(
+    name: RuntimeEventName,
+    payload: Metadata,
+    timestamp?: ISODateTimeString,
+  ): void {
     try {
       this.dependencies.eventEmitter?.emit({
         name,
         taskId: this.input.task.id,
         payload,
-        timestamp: this.now(),
+        timestamp: timestamp ?? this.now(),
       });
     } catch {
       // Runtime notifications are non-authoritative; RunState remains the source of truth.
@@ -1598,6 +1640,17 @@ function terminalEventName(status: TerminalCandidate<unknown>["status"]): Runtim
     case "blocked": return "run.blocked";
     case "failed": return "run.failed";
     case "cancelled": return "run.cancelled";
+  }
+}
+
+function retryRuntimeEventName(type: RetryEvent["type"]): RuntimeEventName {
+  switch (type) {
+    case "retry_attempt_started": return "retry.attempt.started";
+    case "retry_attempt_finished": return "retry.attempt.finished";
+    case "retry_scheduled": return "retry.scheduled";
+    case "retry_fallback_selected": return "retry.fallback.selected";
+    case "retry_exhausted": return "retry.exhausted";
+    case "retry_cancelled": return "retry.cancelled";
   }
 }
 

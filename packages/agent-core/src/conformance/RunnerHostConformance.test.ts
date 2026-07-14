@@ -620,10 +620,27 @@ function createHostInput(input: {
         processForceKillTimeoutMs: 500,
         finalizationTimeoutMs: 1_000,
       },
+      retry: disabledRetryConfiguration(),
       metadata: {},
     },
     metadata: { fixture: "generic-host-conformance" },
   };
+}
+
+function disabledRetryConfiguration(): RunConfig["retry"] {
+  const policy = {
+    maxRetries: 0,
+    delay: {
+      kind: "exponential_jitter" as const,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      multiplier: 2 as const,
+      jitterRatio: 0.1 as const,
+    },
+    retryableCategories: [] as string[],
+    serverDelay: { mode: "ignore" as const },
+  };
+  return { providerRequest: policy, structuredOutput: policy };
 }
 
 function createAgent(tools: readonly ToolDefinition[]): Agent<ConformanceOutput> {

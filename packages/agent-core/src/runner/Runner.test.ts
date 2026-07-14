@@ -20,6 +20,7 @@ import type { RunConfig } from "./RunConfig.js";
 import type { RunInput } from "./RunInput.js";
 import { Runner } from "./Runner.js";
 import type { ToolActionBridge } from "./ToolActionBridge.js";
+import type { RetryEvent } from "../retry/index.js";
 
 interface TestOutput {
   readonly summary: string;
@@ -78,6 +79,84 @@ describe("Runner", () => {
       context: { plan: null, observations: [] },
     });
     expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it("commits safe Retry RunItems before their Runtime notifications", async () => {
+    const runtimeEvents: RuntimeEvent[] = [];
+    const eventEmitter = new RuntimeEventEmitter();
+    eventEmitter.subscribe((event) => runtimeEvents.push(event));
+    const controller = new ScriptedController([
+      async (_input, context) => {
+        expect(context.retry.providerRequest.retryableCategories).toEqual([
+          "transport",
+          "timeout",
+        ]);
+        expect(Object.isFrozen(context.retry.providerRequest)).toBe(true);
+        await context.retry.events.emit({
+          type: "retry_attempt_started",
+          runId: "run_001",
+          operationId: "retry_001",
+          owner: "provider_request",
+          occurredAt: "2026-07-13T00:00:00.000Z",
+          attemptId: "attempt_001",
+          budgetId: "budget_001",
+          attemptNumber: 1,
+          budgetAttemptNumber: 1,
+          maxBudgetAttempts: 2,
+          secret: "must not survive",
+        } as RetryEvent);
+        await context.retry.events.emit({
+          type: "retry_attempt_finished",
+          runId: "run_001",
+          operationId: "retry_001",
+          owner: "provider_request",
+          occurredAt: "2026-07-13T00:00:00.010Z",
+          attemptId: "attempt_001",
+          budgetId: "budget_001",
+          attemptNumber: 1,
+          budgetAttemptNumber: 1,
+          durationMs: 10,
+          outcome: "succeeded",
+          next: "return_to_owner",
+        });
+        return finalDecision("Done");
+      },
+    ]);
+    const baseRetry = createTestRetryConfiguration();
+    const retry: RunConfig["retry"] = {
+      ...baseRetry,
+      providerRequest: {
+        ...baseRetry.providerRequest,
+        maxRetries: 1,
+        retryableCategories: ["transport", "transport", "timeout"],
+      },
+    };
+
+    const result = await createRunner(controller, { eventEmitter }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({ retry }),
+    );
+
+    expect(result.items.map((item) => item.kind)).toEqual([
+      "retry_attempt_started",
+      "retry_attempt_finished",
+      "model_output",
+      "final_output",
+    ]);
+    const startedItem = result.items[0];
+    expect(startedItem).toHaveProperty("retry.type", "retry_attempt_started");
+    expect(startedItem).not.toHaveProperty("retry.secret");
+    for (const [itemKind, eventName] of [
+      ["retry_attempt_started", "retry.attempt.started"],
+      ["retry_attempt_finished", "retry.attempt.finished"],
+    ] as const) {
+      const itemEventIndex = runtimeEvents.findIndex((event) =>
+        event.name === "run.item.appended" && event.payload.itemKind === itemKind);
+      const retryEventIndex = runtimeEvents.findIndex((event) => event.name === eventName);
+      expect(itemEventIndex).toBeGreaterThanOrEqual(0);
+      expect(retryEventIndex).toBeGreaterThan(itemEventIndex);
+    }
   });
 
   it("commits update_plan, exposes it to the next turn, and abandons an active Plan on success", async () => {
@@ -893,6 +972,30 @@ describe("Runner", () => {
     expect(controller.calls).toHaveLength(0);
   });
 
+  it("rejects malformed resolved Retry policy before invoking Controller", async () => {
+    const controller = new ScriptedController([finalDecision("Unused")]);
+    const baseRetry = createTestRetryConfiguration();
+    const retry = {
+      ...baseRetry,
+      providerRequest: {
+        ...baseRetry.providerRequest,
+        maxRetries: -1,
+      },
+    };
+    const result = await createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({ retry }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_invalid_options",
+      errors: [{ message: expect.stringContaining("maxRetries") }],
+    });
+    expect(controller.calls).toHaveLength(0);
+  });
+
   it.each([
     "boundarySettlementTimeoutMs",
     "processGracePeriodMs",
@@ -1424,6 +1527,7 @@ function createRunConfig(
     readonly telemetry?: RunConfig["telemetry"];
     readonly cancellation?: RunConfig["cancellation"];
     readonly cancellationLimits?: Partial<RunConfig["cancellationLimits"]>;
+    readonly retry?: RunConfig["retry"];
     readonly limits?: Partial<Omit<RunConfig["limits"], "plan">>;
   } = {},
 ): RunConfig {
@@ -1467,7 +1571,27 @@ function createRunConfig(
       finalizationTimeoutMs: 1_000,
       ...overrides.cancellationLimits,
     },
+    retry: overrides.retry ?? createTestRetryConfiguration(),
     metadata: {},
+  };
+}
+
+function createTestRetryConfiguration(): RunConfig["retry"] {
+  const disabledPolicy = {
+    maxRetries: 0,
+    delay: {
+      kind: "exponential_jitter" as const,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      multiplier: 2 as const,
+      jitterRatio: 0.1 as const,
+    },
+    retryableCategories: [] as string[],
+    serverDelay: { mode: "ignore" as const },
+  };
+  return {
+    providerRequest: disabledPolicy,
+    structuredOutput: disabledPolicy,
   };
 }
 
