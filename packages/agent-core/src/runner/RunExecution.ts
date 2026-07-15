@@ -62,6 +62,12 @@ import {
 } from "./RunnerValidation.js";
 import type { RunCounters, RunState } from "./RunState.js";
 import type { RuntimeError } from "./RuntimeError.js";
+import {
+  assertRunPermissionStateInvariant,
+  createInitialRunPermissionState,
+  projectPermissionContext,
+} from "./RunPermissionState.js";
+import { deriveRunDeadline } from "./RunPermissionConfig.js";
 import type { ToolActionObservationPayload } from "./ToolActionBridge.js";
 import {
   snapshotRetryEvent,
@@ -171,6 +177,7 @@ export class RunExecution<TOutput> {
       finalOutput: null,
       errors: Object.freeze([]) as readonly [],
       cancellationRequest: null,
+      permission: createInitialRunPermissionState(this.config.permissions),
       context: createInitialContext(this.input.task),
       plan: null,
       items: Object.freeze([]),
@@ -443,7 +450,11 @@ export class RunExecution<TOutput> {
       agent: this.agent,
       task: this.input.task,
       conversationItems: this.input.conversationItems,
-      context: projectContext(this.state.context, this.state.plan),
+      context: projectContext(
+        this.state.context,
+        this.state.plan,
+        projectPermissionContext(this.config.permissions, this.state.permission),
+      ),
       workspace: this.config.workspace,
       identity: this.config.identity,
       metadata: Object.freeze({ ...this.state.metadata }),
@@ -874,11 +885,7 @@ export class RunExecution<TOutput> {
   }
 
   private runDeadlineAt(): ISODateTimeString {
-    const value = new Date(this.startedAtMs + this.config.limits.maxDurationMs);
-    if (!Number.isFinite(value.getTime())) {
-      throw new TypeError("Run maxDurationMs produces an invalid deadline.");
-    }
-    return value.toISOString();
+    return deriveRunDeadline(this.state.startedAt, this.config.limits.maxDurationMs);
   }
 
   private fail(
@@ -1021,8 +1028,13 @@ export class RunExecution<TOutput> {
 
     const items = this.materializeItems(drafts);
     const allItems = Object.freeze([...this.state.items, ...items]);
+    const permission = this.state.permission;
+    if (permission.pendingApproval !== null) {
+      throw new Error("Run cannot terminalize while approval is pending.");
+    }
     const base = {
       ...this.state,
+      permission,
       plan,
       items: allItems,
       metadata,
@@ -1682,6 +1694,7 @@ function assertStateTransition<TOutput>(
 }
 
 function freezeState<TOutput>(state: RunState<TOutput>): RunState<TOutput> {
+  assertRunPermissionStateInvariant(state.permission, state.status);
   return Object.freeze(state);
 }
 

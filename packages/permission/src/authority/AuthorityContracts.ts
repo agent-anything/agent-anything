@@ -122,6 +122,7 @@ export type SessionAuthorityCommitResult =
 export interface SessionAuthorityPort {
   listApplicable(
     input: SessionAuthorityLookup,
+    context: InvocationInterruptionContext,
   ): Promise<readonly SessionAuthorityRecord[]>;
 
   commit(

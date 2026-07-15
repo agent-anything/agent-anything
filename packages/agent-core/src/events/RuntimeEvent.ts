@@ -19,6 +19,8 @@ export type RuntimeEventName =
   | "plan.created"
   | "permission.requested"
   | "permission.resolved"
+  | "approval.requested"
+  | "approval.resolved"
   | "tool.started"
   | "tool.finished"
   | "observation.created"

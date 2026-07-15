@@ -21,6 +21,9 @@ import type { RunInput } from "./RunInput.js";
 import { Runner } from "./Runner.js";
 import type { ToolActionBridge } from "./ToolActionBridge.js";
 import type { RetryEvent } from "../retry/index.js";
+import { resolvePermissionProfile } from "@agent-anything/permission";
+import type { ManagedPermissionConstraints } from "@agent-anything/governance";
+import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
 
 interface TestOutput {
   readonly summary: string;
@@ -76,8 +79,25 @@ describe("Runner", () => {
       runId: "run_001",
       iteration: 1,
       task: { id: "task_001" },
-      context: { plan: null, observations: [] },
+      context: {
+        plan: null,
+        observations: [],
+        permission: {
+          profile: {
+            profileId: ":read-only",
+            canRequestAdditionalPermissions: false,
+          },
+          approval: {
+            canRequest: false,
+            reviewer: null,
+            pending: false,
+          },
+        },
+      },
     });
+    expect(JSON.stringify(controller.calls[0]?.context.permission)).not.toContain(
+      "C:/workspace",
+    );
     expect(Object.isFrozen(result)).toBe(true);
   });
 
@@ -1548,6 +1568,7 @@ function createRunConfig(
       displayName: "Test User",
       metadata: {},
     },
+    permissions: createTestPermissionConfig(),
     limits: {
       maxIterations: 4,
       maxActions: 8,
@@ -1592,6 +1613,42 @@ function createTestRetryConfiguration(): RunConfig["retry"] {
   return {
     providerRequest: disabledPolicy,
     structuredOutput: disabledPolicy,
+    approvalsReviewer: disabledPolicy,
+  };
+}
+
+function createTestPermissionConfig(): ResolvedRunPermissionConfig {
+  const managedConstraints: ManagedPermissionConstraints = {
+    constraintSetId: "test-managed",
+    selectableProfiles: { allowedProfileIds: null, deniedProfileIds: [] },
+    fileSystem: [],
+    network: { enabled: null, allowedDomains: [], deniedDomains: [] },
+    allowUnenforcedExecution: false,
+  };
+  return {
+    permissionProfile: resolvePermissionProfile({
+      profileId: ":read-only",
+      profiles: [],
+      environment: {
+        environmentId: "test-local",
+        platform: "win32",
+        workspaceRoots: [{ rootId: "workspace_001", path: "C:/workspace" }],
+      },
+      managedConstraints,
+    }),
+    approvalPolicy: "never",
+    reviewer: null,
+    rules: [],
+    managedConstraints,
+    sessionAuthority: null,
+    persistentPolicyAmendments: null,
+    approvalLimits: {
+      maxRequestsPerRun: 8,
+      maxRequestsPerActionFingerprint: 2,
+      maxConsecutiveDeclines: 3,
+      maxConsecutiveReviewFailures: 3,
+    },
+    authorityApplicationLimits: { commitTimeoutMs: 1_000 },
   };
 }
 

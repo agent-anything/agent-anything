@@ -9,7 +9,19 @@ import type { RunInput } from "./RunInput.js";
 import type { RunResult } from "./RunResult.js";
 import type { ToolActionBridge } from "./ToolActionBridge.js";
 
-export type RunnerIdentityKind = "run_item" | "action" | "observation" | "plan";
+export type RunnerIdentityKind =
+  | "run_item"
+  | "action"
+  | "observation"
+  | "plan"
+  | "approval_request"
+  | "approval_record"
+  | "approval_review_operation"
+  | "authority_operation"
+  | "action_authority"
+  | "run_permission_grant"
+  | "session_authority_record"
+  | "policy_amendment_record";
 
 export interface CreateRunnerIdentityInput {
   readonly kind: RunnerIdentityKind;

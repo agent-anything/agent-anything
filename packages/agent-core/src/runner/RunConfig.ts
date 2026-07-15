@@ -6,6 +6,7 @@ import type {
   CancellationLimits,
   RunCancellationController,
 } from "./RunCancellation.js";
+import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
 
 export type RunInfrastructureRequirement = "optional" | "required";
 
@@ -20,11 +21,13 @@ export interface RunLimits {
 export interface ResolvedRunRetryConfiguration {
   readonly providerRequest: RetryPolicy<string>;
   readonly structuredOutput: RetryPolicy<string>;
+  readonly approvalsReviewer: RetryPolicy<string>;
 }
 
 export interface RunConfig {
   readonly workspace: WorkspaceContext;
   readonly identity: IdentityRef;
+  readonly permissions: ResolvedRunPermissionConfig;
   readonly limits: RunLimits;
   readonly audit: RunInfrastructureRequirement;
   readonly telemetry: RunInfrastructureRequirement;

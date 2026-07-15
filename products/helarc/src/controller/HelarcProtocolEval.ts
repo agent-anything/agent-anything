@@ -140,6 +140,49 @@ function createProtocolEvalControllerInput(
       observations: [],
       evidenceRefs: [],
       plan: null,
+      permission: {
+        profile: {
+          profileId: fixture.mode === "read-only" ? ":read-only" : ":workspace",
+          sourceProfileIds: [
+            ...(fixture.mode === "read-only"
+              ? [":read-only"]
+              : [":read-only", ":workspace"]),
+          ],
+          environmentId: "eval-local",
+          enforcement: "managed",
+          workspaceRootCount: 1,
+          fileSystem: {
+            unrestricted: false,
+            allowsRead: true,
+            allowsWrite: fixture.mode !== "read-only",
+            hasDenials: false,
+            managed: false,
+          },
+          network: {
+            enabled: false,
+            profileRestricted: false,
+            managedRestricted: false,
+            hasDenials: false,
+          },
+          managedConstraintSetId: "eval-managed",
+          canRequestAdditionalPermissions: false,
+        },
+        authority: {
+          hasAdditionalFileSystemRead: false,
+          hasAdditionalFileSystemWrite: false,
+          hasAdditionalNetwork: false,
+          actionCoverageCount: 0,
+          runGrantCount: 0,
+          sessionAuthorityCount: 0,
+          policyAmendmentCount: 0,
+        },
+        approval: {
+          canRequest: false,
+          reviewer: null,
+          pending: false,
+          requestsRemaining: 0,
+        },
+      },
       metadata: {},
     },
     workspace: {

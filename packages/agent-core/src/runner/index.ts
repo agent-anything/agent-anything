@@ -10,11 +10,26 @@ export type {
   ActionFailureObservation,
   ActionRejectedCode,
   ActionRejectedObservation,
+  ApprovalApplicationFailedObservation,
+  ApprovalDeclinedObservation,
+  ApprovalLimitReachedObservation,
+  ApprovalObservation,
+  ApprovalPolicyRejectedObservation,
+  ApprovalReviewFailedObservation,
   Observation,
   ObservationBase,
   PlanUpdateResultObservation,
   ToolResultObservation,
+  PermissionsGrantedObservation,
 } from "./Observation.js";
+export type {
+  ApprovalRecordSummary,
+  ApprovalRequestSummary,
+} from "./ApprovalSummary.js";
+export {
+  createApprovalRecordSummary,
+  createApprovalRequestSummary,
+} from "./ApprovalSummary.js";
 export type {
   BoundaryExecutionResult,
   CancellationAttribution,
@@ -44,12 +59,28 @@ export type {
   RunLimits,
 } from "./RunConfig.js";
 export type {
+  ApprovalLimits,
+  ApprovalReviewerBinding,
+  AuthorityApplicationLimits,
+  ResolvedRunPermissionConfig,
+  ResolvedSessionAuthorityConfig,
+} from "./RunPermissionConfig.js";
+export {
+  deriveApprovalReviewDeadline,
+  deriveAuthorityCommitDeadline,
+  deriveRunDeadline,
+  isReviewCapablePolicy,
+  snapshotResolvedRunPermissionConfig,
+} from "./RunPermissionConfig.js";
+export type {
   RunInput,
   RunInputItem,
   RunInputMessageRole,
 } from "./RunInput.js";
 export type {
   ActionRunItem,
+  ApprovalRequestedRunItem,
+  ApprovalResolvedRunItem,
   FinalOutputRunItem,
   ModelOutputRunItem,
   ObservationRunItem,
@@ -72,6 +103,21 @@ export type {
   RunItemBase,
   StopRunItem,
 } from "./RunItem.js";
+export type {
+  ApprovalCounters,
+  ApprovalFingerprintRequestCount,
+  EffectivePermissionContext,
+  PendingApproval,
+  PermissionContextProjection,
+  RunPermissionLifecycleStatus,
+  RunPermissionState,
+} from "./RunPermissionState.js";
+export {
+  assertRunPermissionStateInvariant,
+  createInitialRunPermissionState,
+  deriveEffectivePermissionContext,
+  projectPermissionContext,
+} from "./RunPermissionState.js";
 export type {
   BlockedRunResult,
   CancelledRunResult,

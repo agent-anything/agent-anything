@@ -1,6 +1,10 @@
 import type { ManagedPermissionConstraints } from "@agent-anything/governance/managed-permission";
 import type { PermissionResolutionEnvironmentInput } from "../profile/PermissionProfile.js";
-import { validateGrantedPermissions } from "../approval/PermissionDelta.js";
+import {
+  canonicalizeAdditionalPermissions,
+  validateGrantedPermissions,
+  type CanonicalAdditionalPermissions,
+} from "../approval/PermissionDelta.js";
 import type {
   ActionApprovalCoverage,
   ApprovalApplicabilityKey,
@@ -79,9 +83,25 @@ export function validateSessionAuthorityRecord(
 
   let grantedPermissions = null;
   if (record.grantedPermissions) {
+    const canonical = canonicalizeAdditionalPermissions({
+      permissions: record.grantedPermissions,
+      cwd: input.cwd,
+      environment: input.environment,
+    });
+    if (
+      canonical.status === "invalid" ||
+      !sameCanonicalPermissions(record.grantedPermissions, canonical.permissions)
+    ) {
+      return invalid(
+        "session_authority_permissions_invalid",
+        canonical.status === "invalid"
+          ? canonical.message
+          : "Session authority permissions are not in canonical form.",
+      );
+    }
     const validated = validateGrantedPermissions({
-      requested: record.grantedPermissions,
-      granted: record.grantedPermissions,
+      requested: canonical.permissions,
+      granted: canonical.permissions,
       cwd: input.cwd,
       environment: input.environment,
       managedConstraints: input.managedConstraints,
@@ -106,6 +126,28 @@ export function validateSessionAuthorityRecord(
       grantedPermissions,
     }),
   });
+}
+
+function sameCanonicalPermissions(
+  left: CanonicalAdditionalPermissions,
+  right: CanonicalAdditionalPermissions,
+): boolean {
+  return (
+    sameStrings(left.fileSystem?.read, right.fileSystem?.read) &&
+    sameStrings(left.fileSystem?.write, right.fileSystem?.write) &&
+    (left.network?.enabled ?? false) === (right.network?.enabled ?? false) &&
+    sameStrings(left.network?.domains, right.network?.domains)
+  );
+}
+
+function sameStrings(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  const leftValues = left ?? [];
+  const rightValues = right ?? [];
+  return leftValues.length === rightValues.length &&
+    leftValues.every((value, index) => value === rightValues[index]);
 }
 
 export function isSessionAuthorityApplicable(

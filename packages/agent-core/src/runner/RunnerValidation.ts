@@ -8,6 +8,7 @@ import type { ToolDefinition } from "@agent-anything/tools";
 import type { RunConfig } from "./RunConfig.js";
 import type { RunInput, RunInputItem } from "./RunInput.js";
 import type { RuntimeError } from "./RuntimeError.js";
+import { snapshotResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
 
 export interface ConfigValidationFailure {
   readonly valid: false;
@@ -141,6 +142,15 @@ export function snapshotRunConfig(
     }
     assertNonEmpty(config.identity.displayName, "RunConfig.identity.displayName");
     assertMetadata(config.identity.metadata, "RunConfig.identity.metadata");
+    const identity = Object.freeze({
+      ...config.identity,
+      metadata: Object.freeze({ ...config.identity.metadata }),
+    });
+    const permissions = snapshotResolvedRunPermissionConfig({
+      permissions: config.permissions,
+      workspace,
+      identity,
+    });
 
     if (!isRecord(config.limits)) {
       throw new TypeError("RunConfig.limits must be a RunLimits object.");
@@ -151,7 +161,7 @@ export function snapshotRunConfig(
       config.limits.maxConsecutiveActionFailures,
       "RunLimits.maxConsecutiveActionFailures",
     );
-    assertPositiveInteger(config.limits.maxDurationMs, "RunLimits.maxDurationMs");
+    assertPositiveTimerDelay(config.limits.maxDurationMs, "RunLimits.maxDurationMs");
     assertValidPlanLimits(config.limits.plan);
     assertRequirement(config.audit, "RunConfig.audit");
     assertRequirement(config.telemetry, "RunConfig.telemetry");
@@ -196,6 +206,10 @@ export function snapshotRunConfig(
         config.retry.structuredOutput,
         "RunConfig.retry.structuredOutput",
       ),
+      approvalsReviewer: snapshotRetryPolicy(
+        config.retry.approvalsReviewer,
+        "RunConfig.retry.approvalsReviewer",
+      ),
     });
     assertMetadata(config.metadata, "RunConfig.metadata");
 
@@ -203,10 +217,8 @@ export function snapshotRunConfig(
       valid: true,
       config: Object.freeze({
         workspace,
-        identity: Object.freeze({
-          ...config.identity,
-          metadata: Object.freeze({ ...config.identity.metadata }),
-        }),
+        identity,
+        permissions,
         limits: Object.freeze({
           ...config.limits,
           plan: Object.freeze({ ...config.limits.plan }),

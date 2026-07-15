@@ -221,6 +221,9 @@ importers:
       '@agent-anything/governance':
         specifier: workspace:*
         version: link:../../packages/governance
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../../packages/permission
       '@agent-anything/providers':
         specifier: workspace:*
         version: link:../../packages/providers

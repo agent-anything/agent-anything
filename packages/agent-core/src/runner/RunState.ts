@@ -5,10 +5,15 @@ import type { RunCancellationRequest } from "./RunCancellation.js";
 import type { RunItem } from "./RunItem.js";
 import type { RunBlockedCode, RunFailureCode } from "./RunResult.js";
 import type { RuntimeError } from "./RuntimeError.js";
+import type {
+  PendingApproval,
+  RunPermissionState,
+} from "./RunPermissionState.js";
 
 export type RunLifecycleStatus =
   | "initializing"
   | "running"
+  | "waiting_for_approval"
   | "cancelling"
   | "succeeded"
   | "blocked"
@@ -36,12 +41,32 @@ interface RunStateBase<TOutput> {
   readonly metadata: Metadata;
 }
 
+type RunPermissionStateWithoutPending = Omit<
+  RunPermissionState,
+  "pendingApproval"
+> & { readonly pendingApproval: null };
+
+type RunPermissionStateWithPending = Omit<
+  RunPermissionState,
+  "pendingApproval"
+> & { readonly pendingApproval: PendingApproval };
+
 type ActiveRunState<TOutput> = RunStateBase<TOutput> & {
   readonly status: "initializing" | "running";
   readonly code: null;
   readonly finalOutput: null;
   readonly errors: readonly [];
   readonly cancellationRequest: null;
+  readonly permission: RunPermissionStateWithoutPending;
+};
+
+type WaitingForApprovalRunState<TOutput> = RunStateBase<TOutput> & {
+  readonly status: "waiting_for_approval";
+  readonly code: null;
+  readonly finalOutput: null;
+  readonly errors: readonly [];
+  readonly cancellationRequest: null;
+  readonly permission: RunPermissionStateWithPending;
 };
 
 type CancellingRunState<TOutput> = RunStateBase<TOutput> & {
@@ -50,6 +75,7 @@ type CancellingRunState<TOutput> = RunStateBase<TOutput> & {
   readonly finalOutput: null;
   readonly errors: readonly [];
   readonly cancellationRequest: RunCancellationRequest;
+  readonly permission: RunPermissionStateWithoutPending;
 };
 
 type SucceededRunState<TOutput> = RunStateBase<TOutput> & {
@@ -58,6 +84,7 @@ type SucceededRunState<TOutput> = RunStateBase<TOutput> & {
   readonly finalOutput: NonNullable<TOutput>;
   readonly errors: readonly [];
   readonly cancellationRequest: null;
+  readonly permission: RunPermissionStateWithoutPending;
 };
 
 type BlockedRunState<TOutput> = RunStateBase<TOutput> & {
@@ -66,6 +93,7 @@ type BlockedRunState<TOutput> = RunStateBase<TOutput> & {
   readonly finalOutput: null;
   readonly errors: readonly [];
   readonly cancellationRequest: null;
+  readonly permission: RunPermissionStateWithoutPending;
 };
 
 type FailedRunState<TOutput> = RunStateBase<TOutput> & {
@@ -74,6 +102,7 @@ type FailedRunState<TOutput> = RunStateBase<TOutput> & {
   readonly finalOutput: null;
   readonly errors: readonly [RuntimeError, ...RuntimeError[]];
   readonly cancellationRequest: RunCancellationRequest | null;
+  readonly permission: RunPermissionStateWithoutPending;
 };
 
 type CancelledRunState<TOutput> = RunStateBase<TOutput> & {
@@ -82,10 +111,12 @@ type CancelledRunState<TOutput> = RunStateBase<TOutput> & {
   readonly finalOutput: null;
   readonly errors: readonly [];
   readonly cancellationRequest: RunCancellationRequest;
+  readonly permission: RunPermissionStateWithoutPending;
 };
 
 export type RunState<TOutput = unknown> =
   | ActiveRunState<TOutput>
+  | WaitingForApprovalRunState<TOutput>
   | CancellingRunState<TOutput>
   | SucceededRunState<TOutput>
   | BlockedRunState<TOutput>

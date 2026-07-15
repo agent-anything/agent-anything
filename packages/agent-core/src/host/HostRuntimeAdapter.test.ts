@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { ManagedPermissionConstraints } from "@agent-anything/governance";
+import { resolvePermissionProfile } from "@agent-anything/permission";
 import {
   Runner,
   createBlockedRunResult,
@@ -6,6 +8,7 @@ import {
   createFailedRunResult,
   createRunCancellationController,
   createSucceededRunResult,
+  type ResolvedRunPermissionConfig,
 } from "../runner/index.js";
 import type { Controller, ControllerDecision } from "../controller/index.js";
 import {
@@ -85,6 +88,7 @@ describe("HostRuntimeAdapter", () => {
           displayName: "Test identity",
           metadata: {},
         },
+        permissions: createTestPermissionConfig(),
         limits: {
           maxIterations: 1,
           maxActions: 0,
@@ -130,6 +134,18 @@ describe("HostRuntimeAdapter", () => {
               retryableCategories: [],
               serverDelay: { mode: "ignore" },
             },
+            approvalsReviewer: {
+              maxRetries: 0,
+              delay: {
+                kind: "exponential_jitter",
+                baseDelayMs: 0,
+                maxDelayMs: 0,
+                multiplier: 2,
+                jitterRatio: 0.1,
+              },
+              retryableCategories: [],
+              serverDelay: { mode: "ignore" },
+            },
           },
           metadata: {},
       },
@@ -149,6 +165,41 @@ describe("HostRuntimeAdapter", () => {
     });
   });
 });
+
+function createTestPermissionConfig(): ResolvedRunPermissionConfig {
+  const managedConstraints: ManagedPermissionConstraints = {
+    constraintSetId: "host-adapter-managed",
+    selectableProfiles: { allowedProfileIds: null, deniedProfileIds: [] },
+    fileSystem: [],
+    network: { enabled: null, allowedDomains: [], deniedDomains: [] },
+    allowUnenforcedExecution: false,
+  };
+  return {
+    permissionProfile: resolvePermissionProfile({
+      profileId: ":read-only",
+      profiles: [],
+      environment: {
+        environmentId: "host-adapter-local",
+        platform: "win32",
+        workspaceRoots: [{ rootId: "workspace-1", path: "C:/workspace" }],
+      },
+      managedConstraints,
+    }),
+    approvalPolicy: "never",
+    reviewer: null,
+    rules: [],
+    managedConstraints,
+    sessionAuthority: null,
+    persistentPolicyAmendments: null,
+    approvalLimits: {
+      maxRequestsPerRun: 8,
+      maxRequestsPerActionFingerprint: 2,
+      maxConsecutiveDeclines: 3,
+      maxConsecutiveReviewFailures: 3,
+    },
+    authorityApplicationLimits: { commitTimeoutMs: 1_000 },
+  };
+}
 
 class CountingController implements Controller {
   calls = 0;

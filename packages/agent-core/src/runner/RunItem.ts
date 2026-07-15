@@ -6,6 +6,11 @@ import type { Observation } from "./Observation.js";
 import type { RunCancellationSummary } from "./RunCancellation.js";
 import type { RunBlockedCode, RunFailureCode } from "./RunResult.js";
 import type { RuntimeError } from "./RuntimeError.js";
+import type { ApprovalsReviewer } from "@agent-anything/permission";
+import type {
+  ApprovalRecordSummary,
+  ApprovalRequestSummary,
+} from "./ApprovalSummary.js";
 import type {
   RetryAttemptFinishedEvent,
   RetryAttemptStartedEvent,
@@ -96,6 +101,19 @@ export interface RunCancelledRunItem extends RunItemBase {
   readonly completedAt: ISODateTimeString;
 }
 
+export interface ApprovalRequestedRunItem extends RunItemBase {
+  readonly kind: "approval_requested";
+  readonly request: ApprovalRequestSummary;
+  readonly pendingVersion: number;
+  readonly reviewer: ApprovalsReviewer;
+  readonly reviewOperationId: string;
+}
+
+export interface ApprovalResolvedRunItem extends RunItemBase {
+  readonly kind: "approval_resolved";
+  readonly record: ApprovalRecordSummary;
+}
+
 type RetryEventRunItem<TEvent extends { readonly type: string }> = RunItemBase & {
   readonly kind: TEvent["type"];
   readonly retry: TEvent;
@@ -130,4 +148,6 @@ export type RunItem<TOutput = unknown> =
   | RunBlockedRunItem
   | RunFailedRunItem
   | RunCancelledRunItem
+  | ApprovalRequestedRunItem
+  | ApprovalResolvedRunItem
   | RetryRunItem;

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { ManagedPermissionConstraints } from "@agent-anything/governance";
+import { resolvePermissionProfile } from "@agent-anything/permission";
 import {
   createRunCancellationController,
   toRunCancellationSummary,
 } from "../runner/index.js";
+import type { ResolvedRunPermissionConfig } from "../runner/index.js";
 import type { HostRunInput, HostSessionState } from "./HostSession.js";
 
 describe("HostSession contracts", () => {
@@ -65,6 +68,7 @@ describe("HostSession contracts", () => {
           displayName: "Example User",
           metadata: {},
         },
+        permissions: createTestPermissionConfig(),
         limits: {
           maxIterations: 1,
           maxActions: 0,
@@ -99,6 +103,18 @@ describe("HostSession contracts", () => {
               serverDelay: { mode: "ignore" },
             },
             structuredOutput: {
+              maxRetries: 0,
+              delay: {
+                kind: "exponential_jitter",
+                baseDelayMs: 0,
+                maxDelayMs: 0,
+                multiplier: 2,
+                jitterRatio: 0.1,
+              },
+              retryableCategories: [],
+              serverDelay: { mode: "ignore" },
+            },
+            approvalsReviewer: {
               maxRetries: 0,
               delay: {
                 kind: "exponential_jitter",
@@ -151,3 +167,38 @@ describe("HostSession contracts", () => {
     expect(JSON.stringify(state)).not.toContain("Host requested cancellation.");
   });
 });
+
+function createTestPermissionConfig(): ResolvedRunPermissionConfig {
+  const managedConstraints: ManagedPermissionConstraints = {
+    constraintSetId: "host-session-managed",
+    selectableProfiles: { allowedProfileIds: null, deniedProfileIds: [] },
+    fileSystem: [],
+    network: { enabled: null, allowedDomains: [], deniedDomains: [] },
+    allowUnenforcedExecution: false,
+  };
+  return {
+    permissionProfile: resolvePermissionProfile({
+      profileId: ":read-only",
+      profiles: [],
+      environment: {
+        environmentId: "host-session-local",
+        platform: "posix",
+        workspaceRoots: [{ rootId: "workspace-1", path: "/workspace" }],
+      },
+      managedConstraints,
+    }),
+    approvalPolicy: "never",
+    reviewer: null,
+    rules: [],
+    managedConstraints,
+    sessionAuthority: null,
+    persistentPolicyAmendments: null,
+    approvalLimits: {
+      maxRequestsPerRun: 8,
+      maxRequestsPerActionFingerprint: 2,
+      maxConsecutiveDeclines: 3,
+      maxConsecutiveReviewFailures: 3,
+    },
+    authorityApplicationLimits: { commitTimeoutMs: 1_000 },
+  };
+}

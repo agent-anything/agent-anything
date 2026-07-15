@@ -6,6 +6,7 @@ import {
   createActionApprovalCoverage,
   type SessionAuthorityCommit,
   type SessionAuthorityCommitResult,
+  type SessionAuthorityLookup,
   type SessionAuthorityPort,
   type SessionAuthorityRecord,
   type SessionAuthorityRecordInput,
@@ -119,6 +120,26 @@ describe("authority contracts", () => {
     });
   });
 
+  it("rejects stored Session permissions that are not already canonical", () => {
+    const result = validateSessionAuthorityRecord({
+      record: {
+        ...sessionRecordInput(),
+        grantedPermissions: {
+          fileSystem: { read: ["relative/path"] },
+        },
+      },
+      expectedContext: sessionContext(),
+      cwd: "/work/repo",
+      environment: environment(),
+      managedConstraints: noManagedConstraints(),
+    });
+
+    expect(result).toMatchObject({
+      status: "invalid",
+      code: "session_authority_permissions_invalid",
+    });
+  });
+
   it("keeps Session commit outcome certainty explicit", async () => {
     const record = validatedRecord();
     const port = new FakeSessionAuthorityPort({
@@ -140,7 +161,10 @@ class FakeSessionAuthorityPort implements SessionAuthorityPort {
 
   constructor(private readonly result: SessionAuthorityCommitResult) {}
 
-  async listApplicable(): Promise<readonly SessionAuthorityRecord[]> {
+  async listApplicable(
+    _input: SessionAuthorityLookup,
+    _context: InvocationInterruptionContext,
+  ): Promise<readonly SessionAuthorityRecord[]> {
     return [];
   }
 

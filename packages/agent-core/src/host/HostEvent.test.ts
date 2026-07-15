@@ -104,10 +104,48 @@ describe("HostEvent", () => {
     expect(JSON.stringify(event)).not.toContain("private");
   });
 
-  it("carries the blocked RunResult rather than reconstructing a Host error", () => {
+  it("projects approval notifications through a fixed safe allowlist", () => {
+    const event = mapRuntimeEventToHostEvent({
+      sessionId: "session-1",
+      runtimeEvent: {
+        id: "runtime-event-approval",
+        name: "approval.requested",
+        taskId: "task-1",
+        sequence: 5,
+        timestamp: "2026-07-15T00:00:00.000Z",
+        payload: {
+          runId: "run-1",
+          requestId: "request-1",
+          actionId: "action-1",
+          pendingVersion: 1,
+          category: "commandExecution",
+          reviewer: "user",
+          phase: "reviewing",
+          reviewOperationId: "review-operation-1",
+          trustedProposals: [{ secret: true }],
+          command: ["private", "command"],
+          metadata: { private: true },
+        },
+      },
+    });
+
+    expect(event.payload.runtimeEvent.payload).toEqual({
+      runId: "run-1",
+      requestId: "request-1",
+      actionId: "action-1",
+      pendingVersion: 1,
+      category: "commandExecution",
+      reviewer: "user",
+      phase: "reviewing",
+      reviewOperationId: "review-operation-1",
+    });
+    expect(JSON.stringify(event)).not.toContain("private");
+  });
+
+  it("carries the no-safe-path RunResult rather than reconstructing a Host error", () => {
     const runResult = createBlockedRunResult(
       { runId: "run-1", taskId: "task-1" },
-      "policy_denied",
+      "runtime_no_safe_path",
     );
     const event: HostSessionBlockedEvent = createHostEvent({
       name: "host.session.blocked",
@@ -119,7 +157,7 @@ describe("HostEvent", () => {
     });
 
     expect(event.payload.runResult).toBe(runResult);
-    expect(event.payload.runResult.code).toBe("policy_denied");
+    expect(event.payload.runResult.code).toBe("runtime_no_safe_path");
   });
 
   it("publishes succeeded output through runResult vocabulary", async () => {

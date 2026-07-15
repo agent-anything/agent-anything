@@ -68,9 +68,11 @@ describe("Context transitions", () => {
       throw new Error("Expected Plan creation to succeed.");
     }
 
-    const projection = projectContext(context, planResult.plan);
+    const permission = permissionProjection();
+    const projection = projectContext(context, planResult.plan, permission);
 
     expect(projection.observations).toEqual(context.observations);
+    expect(projection.permission).toBe(permission);
     expect(projection.plan).toEqual({
       id: "plan-1",
       version: 1,
@@ -82,6 +84,48 @@ describe("Context transitions", () => {
     expect(Object.isFrozen(projection.plan?.steps)).toBe(true);
   });
 });
+
+function permissionProjection() {
+  return {
+    profile: {
+      profileId: ":read-only",
+      sourceProfileIds: [":read-only"],
+      environmentId: "test",
+      enforcement: "managed" as const,
+      workspaceRootCount: 1,
+      fileSystem: {
+        unrestricted: false,
+        allowsRead: true,
+        allowsWrite: false,
+        hasDenials: false,
+        managed: false,
+      },
+      network: {
+        enabled: false,
+        profileRestricted: false,
+        managedRestricted: false,
+        hasDenials: false,
+      },
+      managedConstraintSetId: "test",
+      canRequestAdditionalPermissions: false,
+    },
+    authority: {
+      hasAdditionalFileSystemRead: false,
+      hasAdditionalFileSystemWrite: false,
+      hasAdditionalNetwork: false,
+      actionCoverageCount: 0,
+      runGrantCount: 0,
+      sessionAuthorityCount: 0,
+      policyAmendmentCount: 0,
+    },
+    approval: {
+      canRequest: false,
+      reviewer: null,
+      pending: false,
+      requestsRemaining: 0,
+    },
+  };
+}
 
 function createTask(): AgentTask {
   return {

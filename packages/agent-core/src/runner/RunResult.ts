@@ -5,15 +5,7 @@ import type { RuntimeError } from "./RuntimeError.js";
 
 export type RunResultStatus = "succeeded" | "blocked" | "failed" | "cancelled";
 
-export type RunBlockedCode =
-  | "runtime_no_safe_path"
-  | "approval_declined"
-  | "approval_policy_disabled"
-  | "approval_request_limit_exceeded"
-  | "approval_decline_limit_exceeded"
-  | "policy_rule_forbidden"
-  | "policy_denied"
-  | "sandbox_denied";
+export type RunBlockedCode = "runtime_no_safe_path";
 
 export type RunFailureCode =
   | "runtime_invalid_options"

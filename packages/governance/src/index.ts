@@ -3,13 +3,15 @@ export type {
   PolicyDecision,
   PolicyDecisionCode,
   PolicyDecisionStatus,
+  ExecPolicyRule,
+  ExecPolicyRuleDecision,
   PolicyPort,
   PolicyRisk,
   PolicySubject,
   PolicyTarget,
   PolicyWorkspace,
 } from "./policy/index.js";
-export { createAllowAllPolicyPort } from "./policy/index.js";
+export { createAllowAllPolicyPort, snapshotExecPolicyRule } from "./policy/index.js";
 export type {
   CreateDefaultWorkspaceResolverInput,
   ResolveWorkspaceInput,

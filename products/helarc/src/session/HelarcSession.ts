@@ -14,7 +14,10 @@ import {
   type RunResultStatus,
   type RetryClock,
   type RuntimeEvent,
+  type ResolvedRunPermissionConfig,
 } from "@agent-anything/agent-core";
+import type { ManagedPermissionConstraints, WorkspaceContext } from "@agent-anything/governance";
+import { resolvePermissionProfile } from "@agent-anything/permission";
 import { TemporaryToolActionBridge } from "@agent-anything/agent-core/runtime";
 import {
   acceptPatch,
@@ -216,6 +219,13 @@ export async function runHelarcSession(
   });
   const runId = input.runId ?? input.sessionId ?? input.task.id;
   const cancellation = input.cancellation ?? createRunCancellationController({ runId });
+  const workspace = resolveHelarcRunWorkspace(input.task);
+  const identity = {
+    id: input.sessionId ?? runId,
+    kind: "anonymous" as const,
+    displayName: "Helarc user",
+    metadata: { product: "helarc" },
+  };
   const runResult = await runner.run(
     createHelarcAgent(registryResult.registry.list()),
     {
@@ -225,13 +235,12 @@ export async function runHelarcSession(
       metadata: runMetadata,
     },
     {
-      workspace: resolveHelarcRunWorkspace(input.task),
-      identity: {
-        id: input.sessionId ?? runId,
-        kind: "anonymous",
-        displayName: "Helarc user",
-        metadata: { product: "helarc" },
-      },
+      workspace,
+      identity,
+      permissions: createHelarcRunPermissionConfig(
+        input.task,
+        input.enableShell === true,
+      ),
       limits: {
         maxIterations: 5,
         maxActions: 8,
@@ -284,6 +293,18 @@ export async function runHelarcSession(
             "agent_output_contract",
             "structured_output_size",
           ],
+          serverDelay: { mode: "ignore" },
+        },
+        approvalsReviewer: {
+          maxRetries: 0,
+          delay: {
+            kind: "exponential_jitter",
+            baseDelayMs: 0,
+            maxDelayMs: 0,
+            multiplier: 2,
+            jitterRatio: 0.1,
+          },
+          retryableCategories: [],
           serverDelay: { mode: "ignore" },
         },
       },
@@ -427,6 +448,66 @@ function resolveHelarcRunWorkspace(task: AgentTask) {
     return workspaces[0];
   }
   throw new TypeError("Helarc requires one resolvable default workspace.");
+}
+
+function createHelarcRunPermissionConfig(
+  task: AgentTask,
+  enableShell: boolean,
+): ResolvedRunPermissionConfig {
+  const scope = task.workspaceScope;
+  if (!scope) {
+    throw new TypeError("Helarc requires workspace roots for permission resolution.");
+  }
+  const workspaceRoots = Object.entries(scope.roots).map(([rootName, workspace]) => ({
+    rootId: workspace.id || rootName,
+    path: requireWorkspacePath(workspace),
+  }));
+  if (workspaceRoots.length === 0) {
+    throw new TypeError("Helarc requires at least one permission workspace root.");
+  }
+  const platform = workspaceRoots.some((root) => /^[A-Za-z]:[\\/]/.test(root.path))
+    ? "win32" as const
+    : "posix" as const;
+  const managedConstraints: ManagedPermissionConstraints = {
+    constraintSetId: "helarc-local-default",
+    selectableProfiles: { allowedProfileIds: null, deniedProfileIds: [] },
+    fileSystem: [],
+    network: { enabled: null, allowedDomains: [], deniedDomains: [] },
+    allowUnenforcedExecution: false,
+  };
+  return {
+    permissionProfile: resolvePermissionProfile({
+      profileId: enableShell ? ":workspace" : ":read-only",
+      profiles: [],
+      environment: {
+        environmentId: "helarc-local",
+        platform,
+        workspaceRoots,
+      },
+      managedConstraints,
+    }),
+    // Slice4 snapshots the final model while the legacy Tool path remains active.
+    approvalPolicy: "never",
+    reviewer: null,
+    rules: [],
+    managedConstraints,
+    sessionAuthority: null,
+    persistentPolicyAmendments: null,
+    approvalLimits: {
+      maxRequestsPerRun: 8,
+      maxRequestsPerActionFingerprint: 2,
+      maxConsecutiveDeclines: 3,
+      maxConsecutiveReviewFailures: 3,
+    },
+    authorityApplicationLimits: { commitTimeoutMs: 5_000 },
+  };
+}
+
+function requireWorkspacePath(workspace: WorkspaceContext): string {
+  if (workspace.rootRef === null || workspace.rootRef.trim().length === 0) {
+    throw new TypeError(`Workspace '${workspace.id}' has no filesystem root.`);
+  }
+  return workspace.rootRef;
 }
 
 export function mapRuntimeEventToHelarcActivity(

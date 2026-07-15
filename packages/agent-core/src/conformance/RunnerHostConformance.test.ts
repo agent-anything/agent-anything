@@ -5,6 +5,8 @@ import type {
   ProviderRequest,
 } from "@agent-anything/providers";
 import type { ToolDefinition, ToolResult } from "@agent-anything/tools";
+import { resolvePermissionProfile } from "@agent-anything/permission";
+import type { ManagedPermissionConstraints } from "@agent-anything/governance";
 import type { Agent } from "../agent/index.js";
 import type {
   Controller,
@@ -30,6 +32,7 @@ import {
   toRunCancellationSummary,
   type ActionCandidate,
   type RunConfig,
+  type ResolvedRunPermissionConfig,
   type ToolActionBridge,
   type ToolActionBridgeInput,
   type ToolActionBridgeResult,
@@ -163,6 +166,7 @@ describe("Runner and generic Host conformance", () => {
           serverDelay: { mode: "ignore" },
         },
         structuredOutput: disabledRetryConfiguration().structuredOutput,
+        approvalsReviewer: disabledRetryConfiguration().approvalsReviewer,
       },
     });
 
@@ -756,6 +760,7 @@ function createHostInput(input: {
         displayName: "Conformance identity",
         metadata: {},
       },
+      permissions: createTestPermissionConfig(),
       limits: {
         maxIterations: 5,
         maxActions: 5,
@@ -804,7 +809,48 @@ function disabledRetryConfiguration(): RunConfig["retry"] {
     retryableCategories: [] as string[],
     serverDelay: { mode: "ignore" as const },
   };
-  return { providerRequest: policy, structuredOutput: policy };
+  return {
+    providerRequest: policy,
+    structuredOutput: policy,
+    approvalsReviewer: policy,
+  };
+}
+
+function createTestPermissionConfig(): ResolvedRunPermissionConfig {
+  const managedConstraints: ManagedPermissionConstraints = {
+    constraintSetId: "conformance-managed",
+    selectableProfiles: { allowedProfileIds: null, deniedProfileIds: [] },
+    fileSystem: [],
+    network: { enabled: null, allowedDomains: [], deniedDomains: [] },
+    allowUnenforcedExecution: false,
+  };
+  return {
+    permissionProfile: resolvePermissionProfile({
+      profileId: ":read-only",
+      profiles: [],
+      environment: {
+        environmentId: "conformance-local",
+        platform: "win32",
+        workspaceRoots: [
+          { rootId: "workspace-conformance", path: "C:/workspace" },
+        ],
+      },
+      managedConstraints,
+    }),
+    approvalPolicy: "never",
+    reviewer: null,
+    rules: [],
+    managedConstraints,
+    sessionAuthority: null,
+    persistentPolicyAmendments: null,
+    approvalLimits: {
+      maxRequestsPerRun: 8,
+      maxRequestsPerActionFingerprint: 2,
+      maxConsecutiveDeclines: 3,
+      maxConsecutiveReviewFailures: 3,
+    },
+    authorityApplicationLimits: { commitTimeoutMs: 1_000 },
+  };
 }
 
 function createAgent(tools: readonly ToolDefinition[]): Agent<ConformanceOutput> {
