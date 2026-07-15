@@ -5,6 +5,17 @@ import type {
   Metadata,
 } from "@agent-anything/shared";
 import type { ObservabilityRecordContext } from "@agent-anything/observability";
+import {
+  createApprovalRequest,
+  projectApprovalReviewRequest,
+  validateApprovalDecision,
+  type ApprovalDecisionOption,
+  type ApprovalRecord,
+  type ApprovalReviewFailure,
+  type ApprovalReviewInput,
+  type ApprovalScope,
+  type ValidatedApprovalDecision,
+} from "@agent-anything/permission";
 import type { Agent } from "../agent/index.js";
 import {
   ControllerError,
@@ -29,7 +40,12 @@ import type {
   ActionDeniedObservation,
   ActionFailureObservation,
   ActionRejectedObservation,
+  ApprovalDeclinedObservation,
+  ApprovalLimitReachedObservation,
+  ApprovalPolicyRejectedObservation,
+  ApprovalReviewFailedObservation,
   Observation,
+  PermissionsGrantedObservation,
   PlanUpdateResultObservation,
   ToolResultObservation,
 } from "./Observation.js";
@@ -66,18 +82,50 @@ import {
   assertRunPermissionStateInvariant,
   createInitialRunPermissionState,
   projectPermissionContext,
+  type PendingApproval,
+  type RunPermissionState,
 } from "./RunPermissionState.js";
-import { deriveRunDeadline } from "./RunPermissionConfig.js";
+import {
+  deriveApprovalReviewDeadline,
+  deriveRunDeadline,
+} from "./RunPermissionConfig.js";
 import type { ToolActionObservationPayload } from "./ToolActionBridge.js";
 import {
   snapshotRetryEvent,
   type RetryEvent,
   type RetryEventSink,
 } from "../retry/index.js";
+import {
+  executeApprovalReviewer,
+  type ApprovalReviewerExecutionResult,
+} from "./ApprovalReviewerExecution.js";
+import {
+  allowsExplicitPermissionRequest,
+  preparePermissionRequestAction,
+  type PreparedPermissionRequestAction,
+} from "./PermissionRequestAction.js";
+import {
+  applyImmediateApprovalAuthority,
+} from "./RunApprovalAuthority.js";
+import {
+  beginApprovalAuthorityApplication,
+  beginApprovalReview,
+  settleApproval,
+  type ApprovalSettlementCounterEffect,
+} from "./RunApprovalLifecycle.js";
+import {
+  recordApprovalRequestAudit,
+  recordApprovalValidatedDecisionAudit,
+} from "./RunnerApprovalAudit.js";
+import {
+  createApprovalRecordSummary,
+  createApprovalRequestSummary,
+} from "./ApprovalSummary.js";
 
 type ResolvedRunnerDependencies = RunnerDependencies & {
   readonly now: NonNullable<RunnerDependencies["now"]>;
   readonly createId: NonNullable<RunnerDependencies["createId"]>;
+  readonly retryExecutor: NonNullable<RunnerDependencies["retryExecutor"]>;
 };
 
 type RunItemDraft<TOutput> = (base: RunItemBase) => RunItem<TOutput>;
@@ -108,7 +156,10 @@ interface ProcessActionResult {
   readonly terminalResult: RunResult<unknown> | null;
 }
 
-type ActiveBoundaryKind = Extract<CancellationBoundary, "controller" | "tool">;
+type ActiveBoundaryKind = Extract<
+  CancellationBoundary,
+  "controller" | "tool" | "approval_reviewer"
+>;
 
 interface ActiveBoundary {
   readonly kind: ActiveBoundaryKind;
@@ -509,6 +560,11 @@ export class RunExecution<TOutput> {
     if (action.kind === "tool") {
       return this.processToolAction(action as Action & { readonly kind: "tool" });
     }
+    if (action.kind === "permission_request") {
+      return this.processPermissionRequest(
+        action as Action & { readonly kind: "permission_request" },
+      );
+    }
 
     const observation = Object.freeze({
       ...this.createObservationBase(action),
@@ -517,6 +573,674 @@ export class RunExecution<TOutput> {
       message: `Action ${action.kind}:${action.name} is not supported by this Runner slice.`,
     });
     return this.commitActionObservation(observation, true, true);
+  }
+
+  private async processPermissionRequest(
+    action: Action & { readonly kind: "permission_request" },
+  ): Promise<ProcessActionResult> {
+    if (action.name !== "request_permissions") {
+      return this.rejectPermissionRequestAction(
+        action,
+        "Only permission_request:request_permissions is supported.",
+      );
+    }
+    const prepared = preparePermissionRequestAction({
+      actionInput: action.input,
+      config: this.config.permissions,
+    });
+    if (prepared.status === "invalid") {
+      return this.rejectPermissionRequestAction(action, prepared.message);
+    }
+
+    const createdAt = this.now();
+    const requestId = this.createId("approval_request", action.sequence);
+    const deadlineAt = deriveApprovalReviewDeadline({
+      runDeadlineAt: this.runDeadlineAt(),
+      reviewStartedAt: createdAt,
+      reviewTimeoutMs: this.config.permissions.reviewer?.reviewTimeoutMs ?? null,
+    });
+    if (Date.parse(deadlineAt) <= Date.parse(createdAt)) {
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(limitRuntimeError(
+          "Run deadline elapsed before approval review could start.",
+          { requestId, deadlineAt },
+        )),
+      };
+    }
+    const request = createApprovalRequest({
+      id: requestId,
+      createdAt,
+      requirement: {
+        category: "permissions",
+        subject: {
+          runId: this.state.runId,
+          actionId: action.id,
+          actionFingerprint: prepared.request.actionFingerprint,
+          environmentId: prepared.request.environment.environmentId,
+          applicabilityKeys: [],
+        },
+        reason: prepared.request.reason,
+        payload: {
+          permissions: prepared.request.permissions,
+          cwd: prepared.request.cwd,
+          cwdDisplay: prepared.request.cwdDisplay,
+          environmentId: prepared.request.environment.environmentId,
+        },
+        decisionOptions: permissionRequestDecisionOptions(requestId),
+        trustedProposals: [],
+        deadlineAt,
+        metadata: {},
+      },
+    });
+
+    if (prepared.status === "managed_denied") {
+      const observation: ApprovalPolicyRejectedObservation = Object.freeze({
+        ...this.createObservationBase(action),
+        kind: "approval_policy_rejected",
+        requestId: request.id,
+        category: request.category,
+        code: prepared.code,
+        message: prepared.message,
+      });
+      return this.commitActionObservation(observation, true, true);
+    }
+    if (!allowsExplicitPermissionRequest(this.config.permissions.approvalPolicy)) {
+      const observation: ApprovalPolicyRejectedObservation = Object.freeze({
+        ...this.createObservationBase(action),
+        kind: "approval_policy_rejected",
+        requestId: request.id,
+        category: request.category,
+        code: "approval_policy_rejected",
+        message: "The active Approval Policy does not allow explicit permission requests.",
+      });
+      return this.commitActionObservation(observation, true, true);
+    }
+
+    const limit = this.approvalRequestLimit(request.actionFingerprint);
+    if (limit !== null) {
+      const observation: ApprovalLimitReachedObservation = Object.freeze({
+        ...this.createObservationBase(action),
+        kind: "approval_limit_reached",
+        requestId: request.id,
+        category: request.category,
+        ...limit,
+      });
+      return this.commitActionObservation(observation, true, true);
+    }
+    if (
+      this.state.permission.counters.consecutiveReviewFailures >=
+      this.config.permissions.approvalLimits.maxConsecutiveReviewFailures
+    ) {
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(runtimeError(
+          "approval",
+          "approval_review_failure_limit_exceeded",
+          "Approval reviewer failure circuit is open.",
+          false,
+          { requestId: request.id },
+        ), "approval_review_failure_limit_exceeded"),
+      };
+    }
+
+    const reviewer = this.config.permissions.reviewer;
+    if (reviewer === null) {
+      const observation: ApprovalReviewFailedObservation = Object.freeze({
+        ...this.createObservationBase(action),
+        kind: "approval_review_failed",
+        requestId: request.id,
+        category: request.category,
+        code: "approval_reviewer_unavailable",
+        message: "No approval reviewer is available.",
+        retryable: false,
+      });
+      return this.commitActionObservation(observation, true, true);
+    }
+
+    const pendingVersion = this.state.permission.counters.lastPendingVersion + 1;
+    const pending: PendingApproval & { readonly phase: "reviewing" } = Object.freeze({
+      phase: "reviewing",
+      request,
+      reviewerBindingId: reviewer.bindingId,
+      reviewer: reviewer.kind,
+      reviewOperationId: this.createId("approval_review_operation", action.sequence),
+      version: pendingVersion,
+      createdAt,
+    });
+    this.enterApprovalReview(pending);
+
+    const requestAuditError = await recordApprovalRequestAudit({
+      request,
+      pendingVersion,
+      taskId: this.state.taskId,
+      workspace: this.config.workspace,
+      identity: this.config.identity,
+      timestamp: this.now(),
+      requirement: this.config.audit,
+      signal: this.config.cancellation.context.signal,
+      port: this.dependencies.auditPort,
+    });
+    if (this.cancellationRequest() !== null) {
+      return this.settleCancelledApproval(null);
+    }
+    if (requestAuditError !== null) {
+      const record = this.createApprovalRecord(
+        {
+          kind: "request_failure",
+          owner: "audit",
+          code: requestAuditError.code,
+        },
+        { kind: "not_applied", code: requestAuditError.code },
+      );
+      this.settlePendingApproval(record, "neutral", null, true);
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(
+          requestAuditError,
+          "audit_required_failed",
+          new Set(["audit"]),
+        ),
+      };
+    }
+
+    let review: ApprovalReviewerExecutionResult;
+    try {
+      review = await this.awaitBoundary(
+        "approval_reviewer",
+        () => this.executeApprovalReview(prepared.request),
+      );
+    } catch (error) {
+      if (error instanceof CancellationSettlementTimeoutError) {
+        const cancellation = this.cancellationRequest();
+        if (cancellation !== null) {
+          this.settlePendingApproval(this.createApprovalRecord({
+            kind: "run_cancelled",
+            cancellationRequestId: cancellation.id,
+            initiatingDecision: null,
+          }, { kind: "not_applicable" }), "neutral", null, true);
+          this.enterCancelling(cancellation);
+        }
+        return {
+          invalidatesBatch: true,
+          terminalResult: await this.fail(
+            cancellationSettlementRuntimeError(error),
+            "runtime_cancellation_settlement_timeout",
+          ),
+        };
+      }
+      const failure = approvalReviewFailure(
+        "approval_review_failed",
+        "Approval review operation failed.",
+        false,
+      );
+      return this.settleReviewFailure(failure);
+    }
+
+    if (this.cancellationRequest() !== null || review.kind === "cancelled") {
+      return this.settleCancelledApproval(null);
+    }
+    if (review.kind === "failed") {
+      return this.settleReviewFailure(review.failure);
+    }
+
+    const validatedAt = this.now();
+    const validation = validateApprovalDecision({
+      request,
+      pendingVersion,
+      submission: review.outcome.submission,
+      cwd: prepared.request.cwd,
+      environment: prepared.request.environment,
+      managedConstraints: this.config.permissions.managedConstraints,
+      identities: {
+        actionAuthorityId: this.createId("action_authority", pendingVersion),
+        runPermissionGrantId: this.createId("run_permission_grant", pendingVersion),
+        sessionAuthorityRecordId: this.createId("session_authority_record", pendingVersion),
+      },
+      validatedAt,
+    });
+    if (validation.status === "invalid") {
+      return this.settleReviewFailure(approvalReviewFailure(
+        "approval_review_malformed",
+        validation.message,
+        false,
+      ));
+    }
+    return this.applyValidatedPermissionDecision(validation.decision, review.outcome.rationale);
+  }
+
+  private rejectPermissionRequestAction(
+    action: Action,
+    message: string,
+  ): Promise<ProcessActionResult> {
+    const observation: ActionRejectedObservation = Object.freeze({
+      ...this.createObservationBase(action),
+      kind: "action_rejected",
+      code: "action_invalid",
+      message,
+    });
+    return this.commitActionObservation(observation, true, true);
+  }
+
+  private approvalRequestLimit(
+    actionFingerprint: string,
+  ): Pick<ApprovalLimitReachedObservation, "limit" | "current" | "maximum"> | null {
+    const counters = this.state.permission.counters;
+    const limits = this.config.permissions.approvalLimits;
+    if (counters.totalRequests >= limits.maxRequestsPerRun) {
+      return {
+        limit: "requests_per_run",
+        current: counters.totalRequests,
+        maximum: limits.maxRequestsPerRun,
+      };
+    }
+    const fingerprintCount = counters.requestsByActionFingerprint.find(
+      (entry) => entry.actionFingerprint === actionFingerprint,
+    )?.count ?? 0;
+    if (fingerprintCount >= limits.maxRequestsPerActionFingerprint) {
+      return {
+        limit: "requests_per_action_fingerprint",
+        current: fingerprintCount,
+        maximum: limits.maxRequestsPerActionFingerprint,
+      };
+    }
+    if (counters.consecutiveDeclines >= limits.maxConsecutiveDeclines) {
+      return {
+        limit: "consecutive_declines",
+        current: counters.consecutiveDeclines,
+        maximum: limits.maxConsecutiveDeclines,
+      };
+    }
+    return null;
+  }
+
+  private enterApprovalReview(
+    pending: PendingApproval & { readonly phase: "reviewing" },
+  ): void {
+    if (this.state.status !== "running") {
+      throw new Error(`Cannot request approval while Run is ${this.state.status}.`);
+    }
+    const permission = beginApprovalReview({
+      permission: this.state.permission,
+      pending,
+    });
+    const items = this.materializeItems([(base) => Object.freeze({
+      ...base,
+      kind: "approval_requested" as const,
+      request: createApprovalRequestSummary(pending.request),
+      pendingVersion: pending.version,
+      reviewer: pending.reviewer,
+      reviewOperationId: pending.reviewOperationId,
+    })]);
+    this.replaceState(freezeState({
+      ...this.state,
+      status: "waiting_for_approval",
+      permission: permission as RunPermissionState & { readonly pendingApproval: PendingApproval },
+      items: Object.freeze([...this.state.items, ...items]),
+    }));
+    this.publishItems(items);
+    this.emit("approval.requested", {
+      runId: pending.request.runId,
+      requestId: pending.request.id,
+      actionId: pending.request.actionId,
+      actionFingerprint: pending.request.actionFingerprint,
+      category: pending.request.category,
+      pendingVersion: pending.version,
+      reviewer: pending.reviewer,
+      phase: pending.phase,
+      reviewOperationId: pending.reviewOperationId,
+    });
+  }
+
+  private async executeApprovalReview(
+    prepared: PreparedPermissionRequestAction,
+  ): Promise<ApprovalReviewerExecutionResult> {
+    const pending = this.requirePendingApproval();
+    const reviewer = this.config.permissions.reviewer;
+    if (reviewer === null) {
+      return { kind: "failed", failure: approvalReviewFailure(
+        "approval_reviewer_unavailable",
+        "Approval reviewer became unavailable.",
+        false,
+      ) };
+    }
+    const permissionProjection = projectPermissionContext(
+      this.config.permissions,
+      this.state.permission,
+    );
+    const reviewInput: ApprovalReviewInput = Object.freeze({
+      request: projectApprovalReviewRequest(pending.request),
+      pendingVersion: pending.version,
+      context: Object.freeze({
+        workspaceTrustState: this.config.workspace.trustState,
+        ruleOutcome: "none" as const,
+        currentAuthority: Object.freeze({
+          fileSystemRead: permissionProjection.authority.hasAdditionalFileSystemRead,
+          fileSystemWrite: permissionProjection.authority.hasAdditionalFileSystemWrite,
+          network: permissionProjection.authority.hasAdditionalNetwork,
+        }),
+        annotations: Object.freeze({ rootId: prepared.rootId }),
+      }),
+    });
+    return executeApprovalReviewer({
+      reviewer,
+      review: reviewInput,
+      operationId: pending.reviewOperationId,
+      startedAt: pending.createdAt,
+      deadlineAt: pending.request.deadlineAt,
+      retryPolicy: this.config.retry.approvalsReviewer,
+      retryExecutor: this.dependencies.retryExecutor,
+      cancellation: this.config.cancellation.context,
+      events: this.createRetryEventSink(),
+      now: () => this.now(),
+    });
+  }
+
+  private async applyValidatedPermissionDecision(
+    decision: ValidatedApprovalDecision,
+    rationale: string | null,
+  ): Promise<ProcessActionResult> {
+    if (decision.kind === "cancel") {
+      const pending = this.requirePendingApproval();
+      this.config.cancellation.requestCancellation({
+        origin: "approval",
+        reasonCode: "approval_cancelled",
+        reason: rationale ?? undefined,
+        approvalRequestId: pending.request.id,
+      });
+      return this.settleCancelledApproval("cancel");
+    }
+    if (decision.kind === "decline") {
+      const record = this.createApprovalRecord(
+        { kind: "decision", decision },
+        { kind: "not_applicable" },
+      );
+      const pending = this.requirePendingApproval();
+      const observation: ApprovalDeclinedObservation = Object.freeze({
+        ...this.createObservationBaseFromPending(pending),
+        kind: "approval_declined",
+        requestId: pending.request.id,
+        category: pending.request.category,
+        reason: decision.reason,
+      });
+      this.settlePendingApproval(record, "declined", observation, true);
+      return { invalidatesBatch: true, terminalResult: null };
+    }
+
+    const authorityOperationId = this.createId(
+      "authority_operation",
+      this.requirePendingApproval().version,
+    );
+    if (this.state.status !== "waiting_for_approval") {
+      throw new Error("Approval authority application requires a waiting Run.");
+    }
+    const waitingState = this.state;
+    this.replaceState(freezeState({
+      ...waitingState,
+      permission: beginApprovalAuthorityApplication({
+        permission: waitingState.permission,
+        decision,
+        authorityOperationId,
+      }) as RunPermissionState & { readonly pendingApproval: PendingApproval },
+    }));
+    const pending = this.requirePendingApproval();
+    const auditError = await recordApprovalValidatedDecisionAudit({
+      request: pending.request,
+      pendingVersion: pending.version,
+      decision,
+      taskId: this.state.taskId,
+      workspace: this.config.workspace,
+      identity: this.config.identity,
+      timestamp: this.now(),
+      requirement: this.config.audit,
+      signal: this.config.cancellation.context.signal,
+      port: this.dependencies.auditPort,
+    });
+    if (this.cancellationRequest() !== null) {
+      return this.settleCancelledApproval(null);
+    }
+    if (auditError !== null) {
+      const record = this.createApprovalRecord(
+        { kind: "decision", decision },
+        { kind: "not_applied", code: auditError.code },
+      );
+      this.settlePendingApproval(record, "neutral", null, true);
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(
+          auditError,
+          "audit_required_failed",
+          new Set(["audit"]),
+        ),
+      };
+    }
+
+    const applied = applyImmediateApprovalAuthority({
+      permission: this.state.permission,
+      decision,
+    });
+    if (applied.status === "deferred") {
+      const record = this.createApprovalRecord(
+        { kind: "decision", decision },
+        { kind: "not_applied", code: "approval_scope_unavailable" },
+      );
+      const observation = Object.freeze({
+        ...this.createObservationBaseFromPending(pending),
+        kind: "approval_application_failed" as const,
+        requestId: pending.request.id,
+        category: pending.request.category,
+        scope: applied.scope as ApprovalScope,
+        code: "approval_scope_unavailable",
+        message: "The selected approval scope is not active in this Runner slice.",
+      });
+      this.settlePendingApproval(record, "neutral", observation, true);
+      return { invalidatesBatch: true, terminalResult: null };
+    }
+    if (applied.status === "not_applicable") {
+      throw new Error("A non-authority approval decision reached authority application.");
+    }
+    const record = this.createApprovalRecord(
+      { kind: "decision", decision },
+      applied.application,
+    );
+    const grant = decision.kind === "grantPermissions" &&
+        decision.authority.scope === "run"
+      ? decision.authority.grant
+      : null;
+    const observation: PermissionsGrantedObservation | null = grant === null
+      ? null
+      : Object.freeze({
+          ...this.createObservationBaseFromPending(pending),
+          kind: "permissions_granted" as const,
+          requestId: pending.request.id,
+          category: pending.request.category,
+          scope: "run" as const,
+          summary: Object.freeze({
+            fileSystemReadTargetCount: grant.permissions.fileSystem?.read?.length ?? 0,
+            fileSystemWriteTargetCount: grant.permissions.fileSystem?.write?.length ?? 0,
+            networkEnabled: grant.permissions.network?.enabled === true,
+            networkDomainCount: grant.permissions.network?.domains?.length ?? 0,
+          }),
+        });
+    this.settlePendingApproval(
+      record,
+      "applied",
+      observation,
+      false,
+      applied.permission,
+    );
+    return { invalidatesBatch: true, terminalResult: null };
+  }
+
+  private settleReviewFailure(
+    failure: ApprovalReviewFailure,
+  ): Promise<ProcessActionResult> {
+    const pending = this.requirePendingApproval();
+    const record = this.createApprovalRecord(
+      { kind: "review_failure", failure },
+      { kind: "not_applicable" },
+    );
+    const observation: ApprovalReviewFailedObservation = Object.freeze({
+      ...this.createObservationBaseFromPending(pending),
+      kind: "approval_review_failed",
+      requestId: pending.request.id,
+      category: pending.request.category,
+      code: failure.code,
+      message: failure.message,
+      retryable: failure.retryable,
+    });
+    this.settlePendingApproval(record, "review_failure", observation, true);
+    if (
+      failure.code === "approval_review_timeout" &&
+      pending.request.deadlineAt === this.runDeadlineAt()
+    ) {
+      return this.fail(limitRuntimeError(
+        "Run deadline elapsed during approval review.",
+        { requestId: pending.request.id, deadlineAt: pending.request.deadlineAt },
+      )).then((terminalResult) => ({
+        invalidatesBatch: true,
+        terminalResult,
+      }));
+    }
+    if (
+      this.state.permission.counters.consecutiveReviewFailures >=
+      this.config.permissions.approvalLimits.maxConsecutiveReviewFailures
+    ) {
+      return this.fail(runtimeError(
+        "approval",
+        "approval_review_failure_limit_exceeded",
+        "Approval reviewer failure circuit limit was reached.",
+        false,
+        { requestId: pending.request.id },
+      ), "approval_review_failure_limit_exceeded").then((terminalResult) => ({
+        invalidatesBatch: true,
+        terminalResult,
+      }));
+    }
+    return Promise.resolve({ invalidatesBatch: true, terminalResult: null });
+  }
+
+  private settleCancelledApproval(
+    initiatingDecision: "cancel" | null,
+  ): Promise<ProcessActionResult> {
+    const cancellation = this.cancellationRequest();
+    if (cancellation === null) {
+      throw new Error("Approval cancellation requires an accepted Run cancellation.");
+    }
+    const record = this.createApprovalRecord({
+      kind: "run_cancelled",
+      cancellationRequestId: cancellation.id,
+      initiatingDecision,
+    }, { kind: "not_applicable" });
+    this.settlePendingApproval(record, "neutral", null, true);
+    return this.cancelRun().then((terminalResult) => ({
+      invalidatesBatch: true,
+      terminalResult,
+    }));
+  }
+
+  private settlePendingApproval(
+    record: ApprovalRecord,
+    counterEffect: ApprovalSettlementCounterEffect,
+    observation: Observation | null,
+    failed: boolean,
+    permissionBase: RunPermissionState = this.state.permission,
+  ): void {
+    if (this.state.status !== "waiting_for_approval") {
+      throw new Error(`Cannot settle approval while Run is ${this.state.status}.`);
+    }
+    const permission = settleApproval({
+      permission: permissionBase,
+      record,
+      counterEffect,
+    });
+    const drafts: RunItemDraft<TOutput>[] = [
+      (base) => Object.freeze({
+        ...base,
+        kind: "approval_resolved" as const,
+        record: createApprovalRecordSummary(record),
+      }),
+      ...(observation === null ? [] : [observationDraft<TOutput>(observation)]),
+    ];
+    const items = this.materializeItems(drafts);
+    const context = observation === null
+      ? this.state.context
+      : applyContextUpdate(this.state.context, {
+          observations: [observation],
+          metadata: { lastActionId: observation.actionId },
+        });
+    this.replaceState(freezeState({
+      ...this.state,
+      status: "running",
+      permission,
+      context,
+      counters: nextActionCounters(this.state.counters, failed),
+      items: Object.freeze([...this.state.items, ...items]),
+    }));
+    this.publishItems(items);
+    const summary = createApprovalRecordSummary(record);
+    this.emit("approval.resolved", {
+      runId: record.runId,
+      requestId: record.requestId,
+      actionId: record.actionId,
+      actionFingerprint: record.actionFingerprint,
+      pendingVersion: record.pendingVersion,
+      reviewer: record.reviewer,
+      resolutionKind: summary.resolutionKind,
+      decisionKind: summary.decisionKind,
+      applicationKind: summary.applicationKind,
+      code: summary.code,
+      authorityRecordIds: summary.authorityRecordIds,
+    });
+  }
+
+  private createApprovalRecord(
+    resolution: ApprovalRecord["resolution"],
+    application: ApprovalRecord["application"],
+  ): ApprovalRecord {
+    const pending = this.requirePendingApproval();
+    return deepFreezeValue({
+      id: this.createId("approval_record", pending.version),
+      runId: pending.request.runId,
+      requestId: pending.request.id,
+      actionId: pending.request.actionId,
+      actionFingerprint: pending.request.actionFingerprint,
+      pendingVersion: pending.version,
+      reviewer: pending.reviewer,
+      resolution,
+      application,
+      resolvedAt: this.now(),
+      metadata: {},
+    });
+  }
+
+  private requirePendingApproval(): PendingApproval {
+    if (
+      this.state.status !== "waiting_for_approval" ||
+      this.state.permission.pendingApproval === null
+    ) {
+      throw new Error("Run has no active PendingApproval.");
+    }
+    return this.state.permission.pendingApproval;
+  }
+
+  private createObservationBaseFromPending(pending: PendingApproval) {
+    const actionItem = this.state.items.find(
+      (item) => item.kind === "action" && item.action.id === pending.request.actionId,
+    );
+    if (actionItem === undefined || actionItem.kind !== "action") {
+      throw new Error("PendingApproval has no authoritative Action RunItem.");
+    }
+    return {
+      id: this.createId("observation", actionItem.action.sequence),
+      runId: pending.request.runId,
+      actionId: pending.request.actionId,
+      createdAt: this.now(),
+      metadata: Object.freeze({
+        actionKind: "permission_request",
+        actionName: "request_permissions",
+      }),
+    };
   }
 
   private async processToolAction(
@@ -891,6 +1615,7 @@ export class RunExecution<TOutput> {
   private fail(
     error: RuntimeError,
     code: RunFailureCode = "runtime_limit_exceeded",
+    skipOwners: ReadonlySet<RuntimeError["owner"]> = new Set(),
   ): Promise<RunResult<TOutput>> {
     return this.terminalize({
       status: "failed",
@@ -899,7 +1624,7 @@ export class RunExecution<TOutput> {
       cancellationRequest: this.state.status === "cancelling"
         ? this.state.cancellationRequest
         : null,
-    });
+    }, skipOwners);
   }
 
   private cancelRun(): Promise<RunResult<TOutput>> {
@@ -1280,7 +2005,11 @@ export class RunExecution<TOutput> {
   }
 
   private commitRetryEvent(candidate: RetryEvent): void {
-    if (this.state.status !== "running" && this.state.status !== "cancelling") {
+    if (
+      this.state.status !== "running" &&
+      this.state.status !== "waiting_for_approval" &&
+      this.state.status !== "cancelling"
+    ) {
       throw new Error(`Cannot commit Retry history while Run is ${this.state.status}.`);
     }
     const retry = snapshotRetryEvent(candidate, this.state.runId);
@@ -1515,6 +2244,61 @@ function finalizationObservabilityContext(
     signal: context.signal,
     deadlineAt: context.deadlineAt,
   });
+}
+
+function permissionRequestDecisionOptions(
+  requestId: string,
+): readonly [ApprovalDecisionOption, ...ApprovalDecisionOption[]] {
+  return deepFreezeValue([
+    {
+      id: `${requestId}:grant_run`,
+      kind: "grantPermissions" as const,
+      scope: "run" as const,
+      label: "Grant for this run",
+      description: "Grant a selected subset for the active run.",
+      trustedProposalRef: null,
+      metadata: {},
+    },
+    {
+      id: `${requestId}:decline`,
+      kind: "decline" as const,
+      scope: null,
+      label: "Decline",
+      description: "Continue without granting these permissions.",
+      trustedProposalRef: null,
+      metadata: {},
+    },
+    {
+      id: `${requestId}:cancel`,
+      kind: "cancel" as const,
+      scope: null,
+      label: "Cancel run",
+      description: "Cancel the active run.",
+      trustedProposalRef: null,
+      metadata: {},
+    },
+  ]);
+}
+
+function approvalReviewFailure(
+  code: ApprovalReviewFailure["code"],
+  message: string,
+  retryable: boolean,
+): ApprovalReviewFailure {
+  return Object.freeze({
+    code,
+    message,
+    retryable,
+    metadata: Object.freeze({}),
+  });
+}
+
+function deepFreezeValue<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const child of Object.values(value)) deepFreezeValue(child);
+  return Object.freeze(value);
 }
 
 function terminalCancellationSummary(

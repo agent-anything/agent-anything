@@ -86,6 +86,9 @@ function resolutionCode(record: ApprovalRecord): string | null {
   if (record.resolution.kind === "review_failure") {
     return record.resolution.failure.code;
   }
+  if (record.resolution.kind === "request_failure") {
+    return record.resolution.code;
+  }
   if (record.resolution.kind === "run_cancelled") {
     return "runtime_cancelled";
   }

@@ -3,6 +3,10 @@ import type { ISODateTimeString } from "@agent-anything/shared";
 import type { Agent } from "../agent/index.js";
 import type { Controller } from "../controller/index.js";
 import type { RuntimeEventEmitter } from "../events/index.js";
+import {
+  createSystemRetryExecutor,
+  type RetryExecutor,
+} from "../retry/index.js";
 import { RunExecution } from "./RunExecution.js";
 import type { RunConfig } from "./RunConfig.js";
 import type { RunInput } from "./RunInput.js";
@@ -37,24 +41,29 @@ export interface RunnerDependencies {
   readonly auditPort?: AuditPort;
   readonly telemetryPort?: TelemetryPort;
   readonly toolActionBridge?: ToolActionBridge;
+  readonly retryExecutor?: RetryExecutor;
   readonly now?: () => ISODateTimeString;
   readonly createId?: CreateRunnerIdentity;
 }
 
 export class Runner {
   private readonly dependencies: Required<
-    Pick<RunnerDependencies, "controller" | "now" | "createId">
-  > & Omit<RunnerDependencies, "controller" | "now" | "createId">;
+    Pick<RunnerDependencies, "controller" | "now" | "createId" | "retryExecutor">
+  > & Omit<RunnerDependencies, "controller" | "now" | "createId" | "retryExecutor">;
 
   constructor(dependencies: RunnerDependencies) {
     if (!dependencies.controller || typeof dependencies.controller.next !== "function") {
       throw new TypeError("Runner requires a Controller.");
     }
 
+    const now = dependencies.now ?? (() => new Date().toISOString());
     this.dependencies = Object.freeze({
       ...dependencies,
-      now: dependencies.now ?? (() => new Date().toISOString()),
+      now,
       createId: dependencies.createId ?? createDefaultIdentity,
+      retryExecutor: dependencies.retryExecutor ?? createSystemRetryExecutor({
+        now: () => new Date(now()),
+      }),
     });
   }
 

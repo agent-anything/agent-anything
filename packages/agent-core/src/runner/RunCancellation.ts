@@ -61,6 +61,7 @@ export type CancellationBoundary =
   | "controller"
   | "provider"
   | "retry_wait"
+  | "approval_reviewer"
   | "tool"
   | "process";
 

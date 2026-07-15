@@ -24,6 +24,12 @@ import type { RetryEvent } from "../retry/index.js";
 import { resolvePermissionProfile } from "@agent-anything/permission";
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
 import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
+import { FakeApprovalReviewer } from "@agent-anything/testing";
+import type {
+  AdditionalPermissions,
+  ApprovalReviewInput,
+  ApprovalReviewOutcome,
+} from "@agent-anything/permission";
 
 interface TestOutput {
   readonly summary: string;
@@ -1456,6 +1462,344 @@ describe("Runner", () => {
   });
 });
 
+describe("Runner approval lifecycle", () => {
+  it("waits, applies a Run permission grant, and continues the same invocation", async () => {
+    const reviewer = createApprovalReviewer((input) => decidedReview(input, {
+      fileSystem: { write: ["C:/workspace/output.txt"] },
+    }));
+    const controller = new ScriptedController([
+      permissionRequestDecision(),
+      (input) => {
+        expect(input.context.permission.authority).toMatchObject({
+          hasAdditionalFileSystemWrite: true,
+          runGrantCount: 1,
+        });
+        return finalDecision("Granted");
+      },
+    ]);
+
+    const result = await createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({ permissions: createReviewPermissionConfig(reviewer) }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(controller.calls).toHaveLength(2);
+    expect(result.items.map((item) => item.kind)).toContain("approval_requested");
+    expect(result.items.map((item) => item.kind)).toContain("approval_resolved");
+    expect(result.items.find(
+      (item) => item.kind === "observation" &&
+        item.observation.kind === "permissions_granted",
+    )).toBeDefined();
+  });
+
+  it("returns decline to Controller without granting authority", async () => {
+    const reviewer = createApprovalReviewer((input) => decidedReview(input, null, "decline"));
+    const controller = new ScriptedController([
+      permissionRequestDecision(),
+      (input) => {
+        expect(input.context.permission.authority.runGrantCount).toBe(0);
+        expect(input.context.observations.at(-1)).toMatchObject({
+          kind: "approval_declined",
+        });
+        return finalDecision("Declined safely");
+      },
+    ]);
+    const result = await createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({ permissions: createReviewPermissionConfig(reviewer) }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(controller.calls).toHaveLength(2);
+  });
+
+  it("routes approval cancel through RunCancellationController", async () => {
+    const reviewer = createApprovalReviewer((input) => decidedReview(input, null, "cancel"));
+    const controller = new ScriptedController([permissionRequestDecision()]);
+    const result = await createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({ permissions: createReviewPermissionConfig(reviewer) }),
+    );
+
+    expect(result.status).toBe("cancelled");
+    expect(result.cancellation).toMatchObject({
+      origin: "approval",
+      reasonCode: "approval_cancelled",
+    });
+    expect(controller.calls).toHaveLength(1);
+  });
+
+  it("retries automatic reviewer failure without replacing the request", async () => {
+    const seen: ApprovalReviewInput[] = [];
+    const reviewer = createApprovalReviewer((input) => {
+      seen.push(input);
+      return seen.length === 1
+        ? {
+            status: "failed",
+            failure: {
+              code: "approval_review_failed",
+              message: "Temporary reviewer failure.",
+              retryable: true,
+              metadata: {},
+            },
+          }
+        : decidedReview(input, null, "decline");
+    });
+    const retry = createTestRetryConfiguration();
+    const controller = new ScriptedController([
+      permissionRequestDecision(),
+      finalDecision("Recovered"),
+    ]);
+    const result = await createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        permissions: createReviewPermissionConfig(reviewer),
+        retry: {
+          ...retry,
+          approvalsReviewer: {
+            ...retry.approvalsReviewer,
+            maxRetries: 1,
+            retryableCategories: ["reviewer_failure"],
+          },
+        },
+      }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(seen).toHaveLength(2);
+    expect(seen[1]?.request.id).toBe(seen[0]?.request.id);
+    expect(seen[1]?.pendingVersion).toBe(seen[0]?.pendingVersion);
+    expect(result.items.filter((item) => item.kind === "approval_requested")).toHaveLength(1);
+  });
+
+  it("does not call Controller again while review is pending and honours external cancellation", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    let reviewStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      reviewStarted = resolve;
+    });
+    const reviewer = new FakeApprovalReviewer({
+      descriptor: {
+        id: "reviewer_001",
+        kind: "auto_review",
+        displayName: "Test automatic reviewer",
+        source: "runner-test",
+        metadata: {},
+      },
+      handler: (_input, context) => new Promise((resolve) => {
+        reviewStarted();
+        const settle = () => {
+          if (context.interruption === null) {
+            throw new Error("Cancellation must carry exact interruption correlation.");
+          }
+          resolve({ status: "interrupted", interruption: context.interruption });
+        };
+        context.signal.addEventListener("abort", settle, { once: true });
+        if (context.signal.aborted) settle();
+      }),
+    });
+    const controller = new ScriptedController([
+      permissionRequestDecision(),
+      finalDecision("Must not run"),
+    ]);
+    const running = createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        cancellation,
+        permissions: createReviewPermissionConfig(reviewer),
+      }),
+    );
+
+    await started;
+    expect(controller.calls).toHaveLength(1);
+    cancellation.requestCancellation({
+      origin: "user",
+      reasonCode: "user_requested",
+    });
+    const result = await running;
+
+    expect(result.status).toBe("cancelled");
+    expect(result.cancellation?.origin).toBe("user");
+    expect(controller.calls).toHaveLength(1);
+    expect(result.items.filter((item) => item.kind === "approval_resolved")).toHaveLength(1);
+  });
+
+  it("settles request_failure and never calls reviewer when required request audit fails", async () => {
+    const reviewerHandler = vi.fn<(input: ApprovalReviewInput) => ApprovalReviewOutcome>();
+    const reviewer = createApprovalReviewer(reviewerHandler);
+    const auditPort: AuditPort = {
+      async record(record) {
+        if (record.eventName === "approval.requested") {
+          throw new Error("audit unavailable");
+        }
+      },
+    };
+    const controller = new ScriptedController([permissionRequestDecision()]);
+    const result = await createRunner(controller, { auditPort }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        audit: "required",
+        permissions: createReviewPermissionConfig(reviewer),
+      }),
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.code).toBe("audit_required_failed");
+    expect(reviewerHandler).not.toHaveBeenCalled();
+    expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({
+      record: { resolutionKind: "request_failure", code: "audit_required_failed" },
+    });
+  });
+
+  it("records a valid decision without authority when required decision audit fails", async () => {
+    const reviewer = createApprovalReviewer((input) => decidedReview(input, {
+      fileSystem: { write: ["C:/workspace/output.txt"] },
+    }));
+    const auditPort: AuditPort = {
+      async record(record) {
+        if (record.eventName === "approval.decision_validated") {
+          throw new Error("decision audit unavailable");
+        }
+      },
+    };
+    const result = await createRunner(
+      new ScriptedController([permissionRequestDecision()]),
+      { auditPort },
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        audit: "required",
+        permissions: createReviewPermissionConfig(reviewer),
+      }),
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.code).toBe("audit_required_failed");
+    expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({
+      record: {
+        resolutionKind: "decision",
+        decisionKind: "grantPermissions",
+        applicationKind: "not_applied",
+        code: "audit_required_failed",
+        authorityRecordIds: [],
+      },
+    });
+    expect(result.items.some(
+      (item) => item.kind === "observation" &&
+        item.observation.kind === "permissions_granted",
+    )).toBe(false);
+  });
+
+  it("enforces the per-fingerprint request limit before a second reviewer call", async () => {
+    const handler = vi.fn((input: ApprovalReviewInput) => decidedReview(input, null, "decline"));
+    const reviewer = createApprovalReviewer(handler);
+    const permissions = createReviewPermissionConfig(reviewer);
+    const controller = new ScriptedController([
+      permissionRequestDecision(),
+      permissionRequestDecision(),
+      finalDecision("Limit observed"),
+    ]);
+    const result = await createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        permissions: {
+          ...permissions,
+          approvalLimits: {
+            ...permissions.approvalLimits,
+            maxRequestsPerActionFingerprint: 1,
+          },
+        },
+      }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(result.items.find(
+      (item) => item.kind === "observation" &&
+        item.observation.kind === "approval_limit_reached",
+    )).toMatchObject({
+      observation: { limit: "requests_per_action_fingerprint" },
+    });
+  });
+});
+
+function createApprovalReviewer(
+  handler: (input: ApprovalReviewInput) => ApprovalReviewOutcome | Promise<ApprovalReviewOutcome>,
+): FakeApprovalReviewer {
+  return new FakeApprovalReviewer({
+    descriptor: {
+      id: "reviewer_001",
+      kind: "auto_review",
+      displayName: "Test automatic reviewer",
+      source: "runner-test",
+      metadata: {},
+    },
+    handler,
+  });
+}
+
+function createReviewPermissionConfig(
+  reviewer: FakeApprovalReviewer,
+): ResolvedRunPermissionConfig {
+  return {
+    ...createTestPermissionConfig(),
+    approvalPolicy: "on-request",
+    reviewer: {
+      bindingId: "reviewer_binding_001",
+      kind: "auto_review",
+      reviewer,
+      descriptor: reviewer.descriptor,
+      reviewTimeoutMs: 60_000,
+    },
+  };
+}
+
+function permissionRequestDecision(): ControllerDecision<unknown> {
+  return actionsDecision([{
+    kind: "permission_request",
+    name: "request_permissions",
+    input: {
+      rootId: "workspace_001",
+      permissions: { fileSystem: { write: ["output.txt"] } },
+      reason: "Create the requested output file.",
+    },
+    modelItemId: "model_1",
+  }]);
+}
+
+function decidedReview(
+  input: ApprovalReviewInput,
+  grantedPermissions: AdditionalPermissions | null,
+  kind: "grantPermissions" | "decline" | "cancel" = "grantPermissions",
+): ApprovalReviewOutcome {
+  const option = input.request.decisionOptions.find(
+    (candidate) => candidate.kind === kind,
+  );
+  if (option === undefined) throw new Error(`Approval option ${kind} was not offered.`);
+  return {
+    status: "decided",
+    submission: {
+      submissionId: `submission_${kind}`,
+      runId: input.request.runId,
+      requestId: input.request.id,
+      pendingVersion: input.pendingVersion,
+      optionId: option.id,
+      grantedPermissions,
+      reason: kind === "decline" ? "Not needed." : null,
+    },
+    rationale: null,
+  };
+}
+
 function createRunner(
   controller: Controller<unknown>,
   dependencies: Partial<ConstructorParameters<typeof Runner>[0]> = {},
@@ -1549,6 +1893,7 @@ function createRunConfig(
     readonly cancellationLimits?: Partial<RunConfig["cancellationLimits"]>;
     readonly retry?: RunConfig["retry"];
     readonly limits?: Partial<Omit<RunConfig["limits"], "plan">>;
+    readonly permissions?: ResolvedRunPermissionConfig;
   } = {},
 ): RunConfig {
   const runId = overrides.runId ?? "run_001";
@@ -1568,7 +1913,7 @@ function createRunConfig(
       displayName: "Test User",
       metadata: {},
     },
-    permissions: createTestPermissionConfig(),
+    permissions: overrides.permissions ?? createTestPermissionConfig(),
     limits: {
       maxIterations: 4,
       maxActions: 8,

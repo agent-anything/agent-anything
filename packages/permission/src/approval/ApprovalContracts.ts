@@ -377,6 +377,11 @@ export interface ApprovalRecord {
     | { readonly kind: "decision"; readonly decision: ValidatedApprovalDecision }
     | { readonly kind: "review_failure"; readonly failure: ApprovalReviewFailure }
     | {
+        readonly kind: "request_failure";
+        readonly owner: "audit";
+        readonly code: string;
+      }
+    | {
         readonly kind: "run_cancelled";
         readonly cancellationRequestId: string;
         readonly initiatingDecision: "cancel" | null;

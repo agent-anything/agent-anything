@@ -41,6 +41,23 @@ export {
   normalizeApprovalReviewOutcome,
 } from "./ApprovalReviewOperation.js";
 export type {
+  PreparedPermissionRequestAction,
+  PreparePermissionRequestActionResult,
+  RequestPermissionsActionInput,
+} from "./PermissionRequestAction.js";
+export {
+  allowsExplicitPermissionRequest,
+  preparePermissionRequestAction,
+} from "./PermissionRequestAction.js";
+export type {
+  ApplyImmediateApprovalAuthorityResult,
+  ConsumeActionApprovalCoverageResult,
+} from "./RunApprovalAuthority.js";
+export {
+  applyImmediateApprovalAuthority,
+  consumeActionApprovalCoverage,
+} from "./RunApprovalAuthority.js";
+export type {
   BoundaryExecutionResult,
   CancellationAttribution,
   CancellationBoundary,
