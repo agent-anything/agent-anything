@@ -17,7 +17,7 @@ describe("TelemetryPort", () => {
       },
       dimensions: {
         status: "succeeded",
-        permissionMode: "trusted",
+        approvalPolicy: "never",
       },
     });
 

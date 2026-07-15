@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/permission",
   "version": "0.0.0",
-  "description": "Permission contracts and default permission services for AgentAnything platform packages.",
+  "description": "Permission profile, approval, and authority contracts for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -35,7 +35,6 @@
   "private": true,
   "dependencies": {
     "@agent-anything/governance": "workspace:*",
-    "@agent-anything/shared": "workspace:*",
-    "@agent-anything/tools": "workspace:*"
+    "@agent-anything/shared": "workspace:*"
   }
 }

@@ -45,10 +45,6 @@ function kindForEvent(
       return "provider.output";
     case "run.item.appended":
       return "runtime.output";
-    case "permission.requested":
-      return "permission.requested";
-    case "permission.resolved":
-      return "permission.resolved";
     case "approval.requested":
       return "approval.requested";
     case "approval.resolved":
@@ -87,10 +83,6 @@ function titleForEvent(name: RuntimeEventName, payload: Metadata): string {
       return `Controller ${readString(payload, "status") ?? "finished"}`;
     case "run.item.appended":
       return `Run item appended: ${readString(payload, "itemKind") ?? "unknown"}`;
-    case "permission.requested":
-      return `Permission requested: ${readString(payload, "toolName") ?? "tool"}`;
-    case "permission.resolved":
-      return `Permission ${readString(payload, "decision") ?? "resolved"}`;
     case "approval.requested":
       return `Approval requested: ${readString(payload, "category") ?? "action"}`;
     case "approval.resolved":
@@ -125,13 +117,8 @@ function detailForEvent(name: RuntimeEventName, payload: Metadata): string | nul
     return detailForControllerFinished(payload);
   }
 
-  if (
-    name === "permission.requested" ||
-    name === "permission.resolved" ||
-    name === "approval.requested" ||
-    name === "approval.resolved"
-  ) {
-    return readString(payload, "requestId") ?? readString(payload, "permissionRequestId");
+  if (name === "approval.requested" || name === "approval.resolved") {
+    return readString(payload, "requestId");
   }
 
   if (name === "run.item.appended") {

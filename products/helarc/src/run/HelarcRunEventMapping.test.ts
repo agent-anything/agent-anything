@@ -142,27 +142,12 @@ describe("mapRuntimeEventToHelarcRunEvent", () => {
     expect(event.metadata).not.toHaveProperty("observation");
   });
 
-  it("maps permission decisions and terminal Run events", () => {
-    const denied = mapRuntimeEventToHelarcRunEvent(runtimeEvent({
-      name: "permission.resolved",
-      payload: {
-        requestId: "permission-1",
-        toolName: "codeAgent.runCommand",
-        decision: "denied",
-        riskLevel: "high",
-      },
-    }));
+  it("maps terminal Run events", () => {
     const completed = mapRuntimeEventToHelarcRunEvent(runtimeEvent({
       name: "run.completed",
       payload: { runId: "run-1", status: "succeeded" },
     }));
 
-    expect(denied).toMatchObject({
-      kind: "permission.resolved",
-      title: "Permission denied",
-      detail: "permission-1",
-      severity: "error",
-    });
     expect(completed).toMatchObject({
       kind: "run.completed",
       title: "Run completed",

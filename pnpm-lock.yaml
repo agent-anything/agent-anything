@@ -104,9 +104,6 @@ importers:
         specifier: workspace:*
         version: link:../tools
     devDependencies:
-      '@agent-anything/permission':
-        specifier: workspace:*
-        version: link:../permission
       '@types/node':
         specifier: ^25.9.1
         version: 25.9.1
@@ -165,9 +162,6 @@ importers:
       '@agent-anything/shared':
         specifier: workspace:*
         version: link:../shared
-      '@agent-anything/tools':
-        specifier: workspace:*
-        version: link:../tools
 
   packages/providers:
     dependencies:

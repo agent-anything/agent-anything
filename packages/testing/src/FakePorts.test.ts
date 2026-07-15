@@ -1,15 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { FakeAuditPort } from "./FakeAuditPort.js";
 import { FakeIdentityProvider } from "./FakeIdentityProvider.js";
-import { FakePermissionService } from "./FakePermissionService.js";
 import { FakePolicyPort } from "./FakePolicyPort.js";
 import { FakeTelemetryPort } from "./FakeTelemetryPort.js";
 import { FakeWorkspaceResolver } from "./FakeWorkspaceResolver.js";
 
 describe("testing fake ports", () => {
-  it("records policy checks and permission requests", async () => {
+  it("records policy checks", async () => {
     const policyPort = new FakePolicyPort();
-    const permissionService = new FakePermissionService();
 
     await expect(policyPort.evaluate({
       id: "policy_check_001",
@@ -23,26 +21,7 @@ describe("testing fake ports", () => {
       status: "allowed",
     });
 
-    await expect(permissionService.request({
-      id: "permission_request_001",
-      toolCall: {
-        id: "tool_call_001",
-        toolName: "tool.lookup",
-        input: {},
-        risk: "safe",
-        metadata: {},
-      },
-      reason: "Test permission.",
-      risk: "safe",
-      subject: null,
-      workspace: null,
-      metadata: {},
-    })).resolves.toMatchObject({
-      status: "granted",
-    });
-
     expect(policyPort.checks).toHaveLength(1);
-    expect(permissionService.requests).toHaveLength(1);
   });
 
   it("records audit and telemetry records", async () => {

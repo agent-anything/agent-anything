@@ -1,4 +1,3 @@
-import type { PermissionDecision, PermissionRequest } from "@agent-anything/permission";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { RuntimeEvent } from "../events/index.js";
 import type {
@@ -15,8 +14,6 @@ export type HostEventName =
   | "host.session.started"
   | "host.session.state_changed"
   | "host.runtime.event"
-  | "host.permission.requested"
-  | "host.permission.resolved"
   | "host.output.produced"
   | "host.session.completed"
   | "host.session.blocked"
@@ -54,19 +51,6 @@ export type HostRuntimeEvent = HostEventBase<
   { readonly runtimeEvent: RuntimeEvent }
 >;
 
-export type HostPermissionRequestedEvent = HostEventBase<
-  "host.permission.requested",
-  { readonly permissionRequest: PermissionRequest }
->;
-
-export type HostPermissionResolvedEvent = HostEventBase<
-  "host.permission.resolved",
-  {
-    readonly permissionRequest: PermissionRequest;
-    readonly permissionDecision: PermissionDecision;
-  }
->;
-
 export type HostOutputProducedEvent<TOutput = unknown> = HostEventBase<
   "host.output.produced",
   { readonly runResult: SucceededRunResult<TOutput> }
@@ -97,8 +81,6 @@ export type HostEvent<TOutput = unknown> =
   | HostSessionStartedEvent
   | HostSessionStateChangedEvent<TOutput>
   | HostRuntimeEvent
-  | HostPermissionRequestedEvent
-  | HostPermissionResolvedEvent
   | HostOutputProducedEvent<TOutput>
   | HostSessionCompletedEvent<TOutput>
   | HostSessionBlockedEvent<TOutput>

@@ -32,22 +32,6 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
   "planner.started": ["runId", "iteration"],
   "planner.finished": ["runId", "iteration", "status", "code", "durationMs"],
   "plan.created": ["runId", "planId", "planVersion"],
-  "permission.requested": [
-    "runId",
-    "actionId",
-    "toolName",
-    "requestId",
-    "permissionRequestId",
-    "riskLevel",
-  ],
-  "permission.resolved": [
-    "runId",
-    "actionId",
-    "toolName",
-    "requestId",
-    "permissionRequestId",
-    "decision",
-  ],
   "approval.requested": [
     "runId",
     "requestId",

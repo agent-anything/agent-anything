@@ -53,8 +53,6 @@ export type HelarcRunEventKind =
   | "tool.proposed"
   | "tool.started"
   | "tool.completed"
-  | "permission.requested"
-  | "permission.resolved"
   | "approval.requested"
   | "approval.resolved"
   | "runtime.output"

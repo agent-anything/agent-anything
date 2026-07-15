@@ -1,4 +1,3 @@
-import type { PermissionRequest } from "@agent-anything/permission";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { Agent } from "../agent/index.js";
 import type {
@@ -11,13 +10,14 @@ import type {
   RunResult,
   SucceededRunResult,
 } from "../runner/index.js";
+import type { UserApprovalPendingProjection } from "./UserApprovalReviewBridge.js";
 
 export type HostSessionId = string;
 
 export type HostSessionStatus =
   | "created"
   | "running"
-  | "waiting_for_permission"
+  | "waiting_for_approval"
   | "cancelling"
   | "completed"
   | "blocked"
@@ -41,11 +41,11 @@ export interface HostSessionRunning extends HostSessionStateBase {
   readonly runId: string;
 }
 
-export interface HostSessionWaitingForPermission extends HostSessionStateBase {
-  readonly status: "waiting_for_permission";
+export interface HostSessionWaitingForApproval extends HostSessionStateBase {
+  readonly status: "waiting_for_approval";
   readonly taskId: string;
   readonly runId: string;
-  readonly permissionRequest: PermissionRequest;
+  readonly pendingApproval: UserApprovalPendingProjection;
 }
 
 export interface HostSessionCancelling extends HostSessionStateBase {
@@ -87,7 +87,7 @@ export interface HostSessionCancelled<TOutput = unknown> extends HostSessionStat
 export type HostSessionState<TOutput = unknown> =
   | HostSessionCreated
   | HostSessionRunning
-  | HostSessionWaitingForPermission
+  | HostSessionWaitingForApproval
   | HostSessionCancelling
   | HostSessionCompleted<TOutput>
   | HostSessionBlocked<TOutput>

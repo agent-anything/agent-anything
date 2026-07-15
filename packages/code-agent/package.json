@@ -28,7 +28,6 @@
     "@agent-anything/tools": "workspace:*"
   },
   "devDependencies": {
-    "@agent-anything/permission": "workspace:*",
     "@types/node": "^25.9.1"
   }
 }

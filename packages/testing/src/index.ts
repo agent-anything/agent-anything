@@ -13,10 +13,6 @@ export {
   type FakeIdentityProviderHandler,
 } from "./FakeIdentityProvider.js";
 export {
-  FakePermissionService,
-  type FakePermissionServiceHandler,
-} from "./FakePermissionService.js";
-export {
   FakePolicyPort,
   type FakePolicyPortHandler,
 } from "./FakePolicyPort.js";

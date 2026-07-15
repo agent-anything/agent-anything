@@ -13,7 +13,7 @@ export type {
   HostSessionState,
   HostSessionStateBase,
   HostSessionStatus,
-  HostSessionWaitingForPermission,
+  HostSessionWaitingForApproval,
   HostTerminalSessionState,
 } from "./HostSession.js";
 export {
@@ -32,8 +32,6 @@ export {
   type HostEventName,
   type HostEventSink,
   type HostOutputProducedEvent,
-  type HostPermissionRequestedEvent,
-  type HostPermissionResolvedEvent,
   type HostRuntimeEvent,
   type HostSessionBlockedEvent,
   type HostSessionCancelledEvent,
@@ -51,16 +49,6 @@ export {
   type CreateHostIdentityProviderInput,
   type CreateHostWorkspaceResolverInput,
 } from "./HostContext.js";
-export {
-  createHostPermissionService,
-  mapHostPermissionBridgeResult,
-  type CreateHostPermissionServiceInput,
-  type HostPermissionBridge,
-  type HostPermissionBridgeInput,
-  type HostPermissionBridgeResult,
-  type HostPermissionBridgeStatus,
-  type MapHostPermissionBridgeResultInput,
-} from "./HostPermissionBridge.js";
 export type {
   CreateUserApprovalReviewBridgeInput,
   UserApprovalNotificationFailure,
