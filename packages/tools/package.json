@@ -13,6 +13,10 @@
     "./adapters": {
       "types": "./src/adapters/index.ts",
       "import": "./dist/adapters/index.js"
+    },
+    "./catalog": {
+      "types": "./src/catalog/index.ts",
+      "import": "./dist/catalog/index.js"
     }
   },
   "files": [

@@ -18,6 +18,10 @@
       "types": "./src/controller/index.ts",
       "import": "./dist/controller/index.js"
     },
+    "./action-execution": {
+      "types": "./src/action-execution/index.ts",
+      "import": "./dist/action-execution/index.js"
+    },
     "./runner": {
       "types": "./src/runner/index.ts",
       "import": "./dist/runner/index.js"
