@@ -84,7 +84,7 @@ describe("HostEvent", () => {
           attribution: {
             requestId: "cancel-1",
             runId: "run-1",
-            boundary: "retry_wait",
+            operation: "retry_wait",
             observedAt: "2026-06-15T00:00:00.000Z",
             reason: "private reason",
           },
@@ -98,7 +98,7 @@ describe("HostEvent", () => {
       phase: "backoff",
       attribution: {
         requestId: "cancel-1",
-        boundary: "retry_wait",
+        operation: "retry_wait",
       },
     });
     expect(JSON.stringify(event)).not.toContain("private");

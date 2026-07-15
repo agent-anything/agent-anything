@@ -10,6 +10,7 @@ import type {
 } from "@agent-anything/governance";
 import { createRunCancellationController } from "./RunCancellation.js";
 import {
+  authorityCommitOwner,
   executeAuthorityCommit,
   type DurableAuthorityDecision,
 } from "./AuthorityCommitExecution.js";
@@ -17,6 +18,10 @@ import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
 import type { PendingApproval } from "./RunPermissionState.js";
 
 describe("executeAuthorityCommit", () => {
+  it("attributes persistent commit settlement to policy", () => {
+    expect(authorityCommitOwner(persistentDecision())).toBe("policy");
+  });
+
   it("commits and correlates an exact persistent policy amendment", async () => {
     const commits: PersistentPolicyAmendmentCommit[] = [];
     let portOwnedRecord: object | null = null;
@@ -153,7 +158,8 @@ function createInput(config: ResolvedRunPermissionConfig) {
     pending: pendingApproval(decision),
     config,
     cancellation: createRunCancellationController({ runId: "run_001" }).context,
-    runDeadlineAt: "2026-07-15T00:00:10.000Z",
+    startedAt: "2026-07-15T00:00:00.000Z",
+    deadlineAt: "2026-07-15T00:00:01.000Z",
     policyAmendmentRecordId: "policy_record_1",
     now: () => "2026-07-15T00:00:00.000Z",
   };

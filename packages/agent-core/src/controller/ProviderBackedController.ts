@@ -64,7 +64,7 @@ export interface ControllerFailure extends RuntimeError {
 export class ControllerError extends Error {
   constructor(
     readonly runtimeError: ControllerFailure,
-    readonly boundarySettlement: "unsettled" | "settled_failure" = "unsettled",
+    readonly operationSettlement: "unsettled" | "settled_failure" = "unsettled",
   ) {
     super(runtimeError.message);
     this.name = "ControllerError";
@@ -701,7 +701,7 @@ function createControllerError(
   message: string,
   retryable: boolean,
   metadata: Metadata,
-  boundarySettlement: "unsettled" | "settled_failure" = "unsettled",
+  operationSettlement: "unsettled" | "settled_failure" = "unsettled",
 ): ControllerError {
   return new ControllerError(
     Object.freeze({
@@ -711,7 +711,7 @@ function createControllerError(
       retryable,
       metadata: Object.freeze({ ...metadata }),
     }),
-    boundarySettlement,
+    operationSettlement,
   );
 }
 
@@ -1006,7 +1006,7 @@ function providerCancellationAttribution(
   return Object.freeze({
     requestId: request.id,
     runId: request.runId,
-    boundary: "provider" as const,
+    operation: "provider" as const,
     observedAt: retryNow(clock),
   });
 }
@@ -1022,7 +1022,7 @@ function controllerCancellationAttribution(
   return Object.freeze({
     requestId: request.id,
     runId: request.runId,
-    boundary: "controller" as const,
+    operation: "controller" as const,
     observedAt: retryNow(clock),
   });
 }

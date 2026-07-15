@@ -179,8 +179,8 @@ export function snapshotRunConfig(
       throw new TypeError("RunConfig.cancellationLimits must be a CancellationLimits object.");
     }
     assertPositiveTimerDelay(
-      config.cancellationLimits.boundarySettlementTimeoutMs,
-      "CancellationLimits.boundarySettlementTimeoutMs",
+      config.cancellationLimits.operationSettlementTimeoutMs,
+      "CancellationLimits.operationSettlementTimeoutMs",
     );
     assertPositiveTimerDelay(
       config.cancellationLimits.processGracePeriodMs,

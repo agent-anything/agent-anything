@@ -57,23 +57,24 @@ export interface RunCancellationSummary {
   readonly requestedAt: ISODateTimeString;
 }
 
-export type CancellationBoundary =
+export type InterruptibleOperationKind =
   | "controller"
   | "provider"
   | "retry_wait"
   | "approval_reviewer"
+  | "authority_commit"
   | "tool"
   | "process";
 
 export interface CancellationAttribution {
   readonly requestId: string;
   readonly runId: string;
-  readonly boundary: CancellationBoundary;
+  readonly operation: InterruptibleOperationKind;
   readonly observedAt: ISODateTimeString;
 }
 
 export interface CancellationLimits {
-  readonly boundarySettlementTimeoutMs: number;
+  readonly operationSettlementTimeoutMs: number;
   readonly processGracePeriodMs: number;
   readonly processForceKillTimeoutMs: number;
   readonly finalizationTimeoutMs: number;
@@ -86,7 +87,7 @@ export interface RunFinalizationContext {
   readonly signal: AbortSignal;
 }
 
-export type BoundaryExecutionResult<TValue, TFailure> =
+export type InterruptibleOperationResult<TValue, TFailure> =
   | { readonly kind: "succeeded"; readonly value: TValue }
   | { readonly kind: "failed"; readonly failure: TFailure }
   | {
@@ -95,7 +96,7 @@ export type BoundaryExecutionResult<TValue, TFailure> =
     }
   | {
       readonly kind: "cancellation_unconfirmed";
-      readonly boundary: CancellationBoundary;
+      readonly operation: InterruptibleOperationKind;
       readonly message: string;
     };
 

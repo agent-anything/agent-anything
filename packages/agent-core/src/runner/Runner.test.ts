@@ -503,7 +503,7 @@ describe("Runner", () => {
         createRunInput(),
         createRunConfig({
           cancellation,
-          cancellationLimits: { boundarySettlementTimeoutMs: 25 },
+          cancellationLimits: { operationSettlementTimeoutMs: 25 },
         }),
       );
       await controllerStarted.promise;
@@ -522,7 +522,7 @@ describe("Runner", () => {
         errors: [{
           owner: "runtime",
           code: "runtime_cancellation_settlement_timeout",
-          metadata: { boundary: "controller", settlementTimeoutMs: 25 },
+          metadata: { operation: "controller", settlementTimeoutMs: 25 },
         }],
       });
       expect(result.items.map((item) => item.kind)).toEqual([
@@ -1030,7 +1030,7 @@ describe("Runner", () => {
   });
 
   it.each([
-    "boundarySettlementTimeoutMs",
+    "operationSettlementTimeoutMs",
     "processGracePeriodMs",
     "processForceKillTimeoutMs",
     "finalizationTimeoutMs",
@@ -1061,7 +1061,7 @@ describe("Runner", () => {
       createAgent(),
       createRunInput(),
       createRunConfig({
-        cancellationLimits: { boundarySettlementTimeoutMs: 2_147_483_648 },
+        cancellationLimits: { operationSettlementTimeoutMs: 2_147_483_648 },
       }),
     );
 
@@ -1386,7 +1386,7 @@ describe("Runner", () => {
         createRunInput(),
         createRunConfig({
           cancellation,
-          cancellationLimits: { boundarySettlementTimeoutMs: 30 },
+          cancellationLimits: { operationSettlementTimeoutMs: 30 },
         }),
       );
       await toolStarted.promise;
@@ -1402,7 +1402,7 @@ describe("Runner", () => {
         status: "failed",
         code: "runtime_cancellation_settlement_timeout",
         cancellation: { reasonCode: "user_requested" },
-        errors: [{ metadata: { boundary: "tool", settlementTimeoutMs: 30 } }],
+        errors: [{ metadata: { operation: "tool", settlementTimeoutMs: 30 } }],
       });
       expect(result.items.map((item) => item.kind)).toEqual([
         "model_output",
@@ -1470,6 +1470,74 @@ describe("Runner", () => {
 });
 
 describe("Runner approval lifecycle", () => {
+  it("publishes approval history only after required audit and telemetry gates", async () => {
+    const order: string[] = [];
+    const safeOutputs: unknown[] = [];
+    const eventEmitter = new RuntimeEventEmitter();
+    eventEmitter.subscribe((event) => {
+      if (event.name === "approval.requested" || event.name === "approval.resolved") {
+        order.push(`event:${event.name}`);
+        safeOutputs.push(event);
+      }
+      if (
+        event.name === "run.item.appended" &&
+        (event.payload.itemKind === "approval_requested" ||
+          event.payload.itemKind === "approval_resolved")
+      ) {
+        order.push(`event:item:${event.payload.itemKind}`);
+      }
+    });
+    const auditPort: AuditPort = {
+      async record(record) {
+        if (record.eventName.startsWith("approval.")) {
+          order.push(`audit:${record.eventName}`);
+          safeOutputs.push(record);
+        }
+      },
+    };
+    const telemetryPort: TelemetryPort = {
+      async record(record) {
+        if (record.eventName === "runner.approval.resolved") {
+          order.push(`telemetry:${record.eventName}`);
+          safeOutputs.push(record);
+        }
+      },
+    };
+    const reviewer = createApprovalReviewer((input) => ({
+      ...decidedReview(input, null, "decline"),
+      rationale: "private-review-rationale",
+    }));
+
+    const result = await createRunner(
+      new ScriptedController([
+        permissionRequestDecision(),
+        finalDecision("Declined safely"),
+      ]),
+      { eventEmitter, auditPort, telemetryPort },
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        audit: "required",
+        telemetry: "required",
+        permissions: createReviewPermissionConfig(reviewer),
+      }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(order).toEqual([
+      "audit:approval.requested",
+      "event:item:approval_requested",
+      "event:approval.requested",
+      "audit:approval.decision_validated",
+      "audit:approval.resolved",
+      "telemetry:runner.approval.resolved",
+      "event:item:approval_resolved",
+      "event:approval.resolved",
+    ]);
+    expect(JSON.stringify(safeOutputs)).not.toContain("private-review-rationale");
+  });
+
   it("waits, applies a Run permission grant, and continues the same invocation", async () => {
     const reviewer = createApprovalReviewer((input) => decidedReview(input, {
       fileSystem: { write: ["C:/workspace/output.txt"] },
@@ -1665,6 +1733,102 @@ describe("Runner approval lifecycle", () => {
     });
   });
 
+  it("counts one failed logical review after Retry exhaustion and opens the circuit", async () => {
+    const handler = vi.fn((): ApprovalReviewOutcome => ({
+      status: "failed",
+      failure: {
+        code: "approval_review_failed",
+        message: "Reviewer unavailable.",
+        retryable: true,
+        metadata: {},
+      },
+    }));
+    const reviewer = createApprovalReviewer(handler);
+    const retry = createTestRetryConfiguration();
+    const permissions = createReviewPermissionConfig(reviewer);
+    const result = await createRunner(
+      new ScriptedController([permissionRequestDecision()]),
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        permissions: {
+          ...permissions,
+          approvalLimits: {
+            ...permissions.approvalLimits,
+            maxConsecutiveReviewFailures: 1,
+          },
+        },
+        retry: {
+          ...retry,
+          approvalsReviewer: {
+            ...retry.approvalsReviewer,
+            maxRetries: 1,
+            retryableCategories: ["reviewer_failure"],
+          },
+        },
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "approval_review_failure_limit_exceeded",
+    });
+    expect(result.items.filter((item) => item.kind === "approval_requested")).toHaveLength(1);
+    expect(result.items.filter((item) => item.kind === "approval_resolved")).toHaveLength(1);
+  });
+
+  it("bounds a reviewer that ignores cancellation and rejects its late result", async () => {
+    vi.useFakeTimers();
+    try {
+        const cancellation = createRunCancellationController({ runId: "run_001" });
+        const reviewStarted = createDeferred<void>();
+        const lateReview = createDeferred<ApprovalReviewOutcome>();
+        let reviewInput: ApprovalReviewInput | null = null;
+        const reviewer = createApprovalReviewer((input) => {
+          reviewInput = input;
+          reviewStarted.resolve();
+          return lateReview.promise;
+        });
+        const events: RuntimeEvent[] = [];
+        const eventEmitter = new RuntimeEventEmitter();
+        eventEmitter.subscribe((event) => events.push(event));
+        const running = createRunner(
+          new ScriptedController([permissionRequestDecision()]),
+          { eventEmitter },
+        ).run(
+          createAgent(),
+          createRunInput(),
+          createRunConfig({
+            cancellation,
+            cancellationLimits: { operationSettlementTimeoutMs: 20 },
+            permissions: createReviewPermissionConfig(reviewer),
+          }),
+        );
+
+        await reviewStarted.promise;
+        cancellation.requestCancellation({ origin: "user", reasonCode: "user_requested" });
+        await vi.advanceTimersByTimeAsync(20);
+        const result = await running;
+        const eventCount = events.length;
+
+        expect(result).toMatchObject({
+          status: "failed",
+          code: "approval_cancellation_unconfirmed",
+          cancellation: { reasonCode: "user_requested" },
+          errors: [{ owner: "approval", code: "approval_cancellation_unconfirmed" }],
+        });
+        expect(result.items.filter((item) => item.kind === "approval_resolved")).toHaveLength(1);
+        lateReview.resolve(decidedReview(reviewInput!, null, "decline"));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(events).toHaveLength(eventCount);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("records a valid decision without authority when required decision audit fails", async () => {
     const reviewer = createApprovalReviewer((input) => decidedReview(input, {
       fileSystem: { write: ["C:/workspace/output.txt"] },
@@ -1778,6 +1942,149 @@ describe("Runner approval lifecycle", () => {
         authorityRecordIds: ["run_001:session_authority_record:1"],
       },
     });
+  });
+
+  it("preserves applied Session authority when required resolution audit fails", async () => {
+    const events: RuntimeEvent[] = [];
+    const eventEmitter = new RuntimeEventEmitter();
+    eventEmitter.subscribe((event) => events.push(event));
+    const auditPort: AuditPort = {
+      async record(record) {
+        if (record.eventName === "approval.resolved") {
+          throw new Error("resolution audit unavailable");
+        }
+      },
+    };
+    const port = createSessionAuthorityPort(async (input) => ({
+      kind: "applied",
+      record: input.record,
+    }));
+    const reviewer = createApprovalReviewer((input) => decidedSessionReview(input, {
+      fileSystem: { write: ["C:/workspace/output.txt"] },
+    }));
+    const controller = new ScriptedController([
+      permissionRequestDecision(),
+      finalDecision("Must not run"),
+    ]);
+
+    const result = await createRunner(controller, { eventEmitter, auditPort }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        audit: "required",
+        permissions: createSessionReviewPermissionConfig(reviewer, port),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "audit_required_failed",
+      errors: [{ owner: "audit" }],
+    });
+    expect(controller.calls).toHaveLength(1);
+    expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({
+      record: {
+        applicationKind: "applied",
+        authorityRecordIds: ["run_001:session_authority_record:1"],
+      },
+    });
+    expect(events.some((event) => event.name === "approval.resolved")).toBe(false);
+  });
+
+  it("preserves applied Session authority when required resolution telemetry fails", async () => {
+    const events: RuntimeEvent[] = [];
+    const eventEmitter = new RuntimeEventEmitter();
+    eventEmitter.subscribe((event) => events.push(event));
+    const telemetryPort: TelemetryPort = {
+      async record(record) {
+        if (record.eventName === "runner.approval.resolved") {
+          throw new Error("resolution telemetry unavailable");
+        }
+      },
+    };
+    const port = createSessionAuthorityPort(async (input) => ({
+      kind: "applied",
+      record: input.record,
+    }));
+    const reviewer = createApprovalReviewer((input) => decidedSessionReview(input, {
+      fileSystem: { write: ["C:/workspace/output.txt"] },
+    }));
+
+    const result = await createRunner(
+      new ScriptedController([permissionRequestDecision()]),
+      { eventEmitter, telemetryPort },
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        telemetry: "required",
+        permissions: createSessionReviewPermissionConfig(reviewer, port),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_telemetry_required_failed",
+      errors: [{ owner: "telemetry" }],
+    });
+    expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({
+      record: {
+        applicationKind: "applied",
+        authorityRecordIds: ["run_001:session_authority_record:1"],
+      },
+    });
+    expect(events.some((event) => event.name === "approval.resolved")).toBe(false);
+  });
+
+  it("fails with the Session owner when a commit ignores its deadline", async () => {
+    vi.useFakeTimers();
+    try {
+        const commitStarted = createDeferred<void>();
+        const port: SessionAuthorityPort = {
+          async listApplicable() {
+            return [];
+          },
+          commit: () => new Promise(() => {
+            commitStarted.resolve();
+          }),
+        };
+        const reviewer = createApprovalReviewer((input) => decidedSessionReview(input, {
+          fileSystem: { write: ["C:/workspace/output.txt"] },
+        }));
+        const permissions = createSessionReviewPermissionConfig(reviewer, port);
+        const running = createRunner(
+          new ScriptedController([permissionRequestDecision()]),
+        ).run(
+          createAgent(),
+          createRunInput(),
+          createRunConfig({
+            cancellationLimits: { operationSettlementTimeoutMs: 20 },
+            permissions: {
+              ...permissions,
+              authorityApplicationLimits: { commitTimeoutMs: 20 },
+            },
+          }),
+        );
+
+        await commitStarted.promise;
+        await vi.advanceTimersByTimeAsync(40);
+        const result = await running;
+
+        expect(result).toMatchObject({
+          status: "failed",
+          code: "session_authority_commit_unconfirmed",
+          cancellation: null,
+          errors: [{ owner: "permission", code: "session_authority_commit_outcome_unknown" }],
+        });
+        expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({
+          record: {
+            applicationKind: "outcome_unknown",
+            authorityRecordIds: [],
+          },
+        });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("continues without Session authority after confirmed commit rejection", async () => {
@@ -2199,7 +2506,7 @@ function createRunConfig(
     cancellation:
       overrides.cancellation ?? createRunCancellationController({ runId }),
     cancellationLimits: {
-      boundarySettlementTimeoutMs: 1_000,
+      operationSettlementTimeoutMs: 1_000,
       processGracePeriodMs: 100,
       processForceKillTimeoutMs: 500,
       finalizationTimeoutMs: 1_000,

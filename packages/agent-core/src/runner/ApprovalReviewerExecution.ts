@@ -118,7 +118,7 @@ async function executeAutomaticReviewer(
           attribution: {
             requestId: request.id,
             runId: request.runId,
-            boundary: "approval_reviewer" as const,
+            operation: "approval_reviewer" as const,
             observedAt: input.now(),
           },
         };

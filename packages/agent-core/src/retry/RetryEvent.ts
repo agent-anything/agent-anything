@@ -245,10 +245,18 @@ export function snapshotRetryEvent(event: RetryEvent, runId: string): RetryEvent
       if (event.attribution.runId !== runId) {
         throw new TypeError("RetryEvent cancellation attribution has a mismatched Run.");
       }
-      if (!["controller", "provider", "retry_wait", "tool", "process"].includes(
-        event.attribution.boundary,
+      if (![
+        "controller",
+        "provider",
+        "retry_wait",
+        "approval_reviewer",
+        "authority_commit",
+        "tool",
+        "process",
+      ].includes(
+        event.attribution.operation,
       )) {
-        throw new TypeError("RetryEvent cancellation attribution boundary is unsupported.");
+        throw new TypeError("RetryEvent cancellation attribution operation is unsupported.");
       }
       assertDateTime(event.attribution.observedAt, "RetryEvent.attribution.observedAt");
       return Object.freeze({
@@ -261,7 +269,7 @@ export function snapshotRetryEvent(event: RetryEvent, runId: string): RetryEvent
         attribution: Object.freeze({
           requestId: event.attribution.requestId,
           runId: event.attribution.runId,
-          boundary: event.attribution.boundary,
+          operation: event.attribution.operation,
           observedAt: event.attribution.observedAt,
         }),
       });

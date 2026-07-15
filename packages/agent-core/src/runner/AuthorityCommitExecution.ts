@@ -19,7 +19,6 @@ import type {
 } from "@agent-anything/shared";
 import type { CancellationContext } from "./RunCancellation.js";
 import {
-  deriveAuthorityCommitDeadline,
   type ResolvedRunPermissionConfig,
 } from "./RunPermissionConfig.js";
 import type { PendingApproval } from "./RunPermissionState.js";
@@ -77,7 +76,8 @@ export interface ExecuteAuthorityCommitInput {
   readonly pending: PendingApproval & { readonly phase: "applying_authority" };
   readonly config: ResolvedRunPermissionConfig;
   readonly cancellation: CancellationContext;
-  readonly runDeadlineAt: ISODateTimeString;
+  readonly startedAt: ISODateTimeString;
+  readonly deadlineAt: ISODateTimeString;
   readonly policyAmendmentRecordId: string;
   readonly now: () => ISODateTimeString;
 }
@@ -91,19 +91,22 @@ export function isDurableAuthorityDecision(
     decision.kind === "applyNetworkPolicyAmendment";
 }
 
+export function authorityCommitOwner(
+  decision: DurableAuthorityDecision,
+): AuthorityCommitOwner {
+  return decision.kind === "acceptForSession" ||
+      (decision.kind === "grantPermissions" && decision.authority.scope === "session")
+    ? "permission"
+    : "policy";
+}
+
 export async function executeAuthorityCommit(
   input: ExecuteAuthorityCommitInput,
 ): Promise<AuthorityCommitExecutionResult> {
-  const startedAt = input.now();
-  const deadlineAt = deriveAuthorityCommitDeadline({
-    runDeadlineAt: input.runDeadlineAt,
-    commitStartedAt: startedAt,
-    commitTimeoutMs: input.config.authorityApplicationLimits.commitTimeoutMs,
-  });
   const commitId = `${input.pending.authorityOperationId}:commit`;
   const interruption = createCommitInterruption({
     operationId: input.pending.authorityOperationId,
-    deadlineAt,
+    deadlineAt: input.deadlineAt,
     cancellation: input.cancellation,
     now: input.now,
   });
@@ -113,15 +116,15 @@ export async function executeAuthorityCommit(
       return await executeSessionCommit(
         { ...input, decision: input.decision },
         commitId,
-        deadlineAt,
+        input.deadlineAt,
         interruption,
       );
     }
     return await executePersistentCommit(
       { ...input, decision: input.decision },
       commitId,
-      startedAt,
-      deadlineAt,
+      input.startedAt,
+      input.deadlineAt,
       interruption,
     );
   } finally {

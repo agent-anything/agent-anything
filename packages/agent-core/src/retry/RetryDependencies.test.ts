@@ -75,7 +75,7 @@ describe("Retry deterministic dependencies", () => {
       attribution: {
         requestId: receipt.request.id,
         runId: "run_001",
-        boundary: "retry_wait",
+        operation: "retry_wait",
       },
     });
   });

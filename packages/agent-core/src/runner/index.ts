@@ -58,9 +58,9 @@ export {
   consumeActionApprovalCoverage,
 } from "./RunApprovalAuthority.js";
 export type {
-  BoundaryExecutionResult,
+  InterruptibleOperationResult,
   CancellationAttribution,
-  CancellationBoundary,
+  InterruptibleOperationKind,
   CancellationContext,
   CancellationLimits,
   CreateRunCancellationControllerInput,

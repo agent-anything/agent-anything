@@ -46,40 +46,43 @@ async function recordApprovalAudit(
       : null;
   }
   try {
-    await input.port.record(createAuditRecord({
-      id: `${input.request.runId}:audit:approval:${input.request.id}:${phase}`,
-      taskId: input.taskId,
-      eventName: `approval.${phase}`,
-      timestamp: input.timestamp,
-      actorRef: input.identity.id,
-      workspaceId: input.workspace.id,
-      subject: {
-        kind: input.identity.kind,
-        id: input.identity.id,
-        metadata: {},
-      },
-      action: `approval.${phase}`,
-      target: {
-        kind: "approval_request",
-        id: input.request.id,
-        metadata: {
-          runId: input.request.runId,
-          actionId: input.request.actionId,
-          category: input.request.category,
+    await recordWithinSignal(
+      () => input.port!.record(createAuditRecord({
+        id: `${input.request.runId}:audit:approval:${input.request.id}:${phase}`,
+        taskId: input.taskId,
+        eventName: `approval.${phase}`,
+        timestamp: input.timestamp,
+        actorRef: input.identity.id,
+        workspaceId: input.workspace.id,
+        subject: {
+          kind: input.identity.kind,
+          id: input.identity.id,
+          metadata: {},
         },
-      },
-      outcome: "succeeded",
-      payload: {
-        pendingVersion: input.pendingVersion,
-        optionIds: input.request.decisionOptions.map((option) => option.id),
-        decisionKind,
-      },
-      metadata: { source: "runner" },
-    }), Object.freeze({
-      purpose: "runtime" as const,
-      signal: input.signal,
-      deadlineAt: null,
-    }));
+        action: `approval.${phase}`,
+        target: {
+          kind: "approval_request",
+          id: input.request.id,
+          metadata: {
+            runId: input.request.runId,
+            actionId: input.request.actionId,
+            category: input.request.category,
+          },
+        },
+        outcome: "succeeded",
+        payload: {
+          pendingVersion: input.pendingVersion,
+          optionIds: input.request.decisionOptions.map((option) => option.id),
+          decisionKind,
+        },
+        metadata: { source: "runner" },
+      }), Object.freeze({
+        purpose: "runtime" as const,
+        signal: input.signal,
+        deadlineAt: null,
+      })),
+      input.signal,
+    );
     return null;
   } catch (error) {
     return input.requirement === "required"
@@ -89,6 +92,35 @@ async function recordApprovalAudit(
         )
       : null;
   }
+}
+
+function recordWithinSignal(
+  start: () => Promise<void>,
+  signal: AbortSignal,
+): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = (): void => finish(() => reject(signal.reason));
+    signal.addEventListener("abort", onAbort, { once: true });
+    let operation: Promise<void>;
+    try {
+      operation = start();
+    } catch (error) {
+      finish(() => reject(error));
+      return;
+    }
+    operation.then(
+      () => finish(resolve),
+      (error) => finish(() => reject(error)),
+    );
+  });
 }
 
 function requiredAuditError(message: string, causeName: string | null = null): RuntimeError {

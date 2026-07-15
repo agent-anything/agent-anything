@@ -52,7 +52,7 @@ import type {
   ToolResultObservation,
 } from "./Observation.js";
 import type {
-  CancellationBoundary,
+  InterruptibleOperationKind,
   RunFinalizationContext,
   RunCancellationRequest,
 } from "./RunCancellation.js";
@@ -60,7 +60,11 @@ import { toRunCancellationSummary } from "./RunCancellation.js";
 import { createRunFinalizationContext } from "./RunFinalization.js";
 import type { RunConfig } from "./RunConfig.js";
 import type { RunInput } from "./RunInput.js";
-import type { RunItem, RunItemBase } from "./RunItem.js";
+import type {
+  ApprovalRequestedRunItem,
+  RunItem,
+  RunItemBase,
+} from "./RunItem.js";
 import {
   createBlockedRunResult,
   createCancelledRunResult,
@@ -89,6 +93,7 @@ import {
 } from "./RunPermissionState.js";
 import {
   deriveApprovalReviewDeadline,
+  deriveAuthorityCommitDeadline,
   deriveRunDeadline,
 } from "./RunPermissionConfig.js";
 import type { ToolActionObservationPayload } from "./ToolActionBridge.js";
@@ -122,11 +127,13 @@ import {
   recordApprovalRequestAudit,
   recordApprovalValidatedDecisionAudit,
 } from "./RunnerApprovalAudit.js";
+import { recordApprovalResolution } from "./RunnerApprovalObservability.js";
 import {
   createApprovalRecordSummary,
   createApprovalRequestSummary,
 } from "./ApprovalSummary.js";
 import {
+  authorityCommitOwner,
   executeAuthorityCommit,
   isDurableAuthorityDecision,
   type AuthorityCommitExecutionResult,
@@ -167,26 +174,39 @@ interface ProcessActionResult {
   readonly terminalResult: RunResult<unknown> | null;
 }
 
-type ActiveBoundaryKind = Extract<
-  CancellationBoundary,
-  "controller" | "tool" | "approval_reviewer"
+type RetryEventAcceptance =
+  | { readonly kind: "controller" }
+  | {
+      readonly kind: "approval_reviewer";
+      readonly requestId: string;
+      readonly pendingVersion: number;
+      readonly operationId: string;
+    };
+
+type ActiveOperationKind = Extract<
+  InterruptibleOperationKind,
+  "controller" | "tool" | "approval_reviewer" | "authority_commit"
 >;
 
-interface ActiveBoundary {
-  readonly kind: ActiveBoundaryKind;
+interface ActiveOperation {
+  readonly kind: ActiveOperationKind;
   readonly startedAt: ISODateTimeString;
-  readonly rejectSettlement: (error: CancellationSettlementTimeoutError) => void;
+  readonly rejectSettlement: (error: OperationSettlementTimeoutError) => void;
+  interruptionTimer: ReturnType<typeof setTimeout> | null;
   settlementTimer: ReturnType<typeof setTimeout> | null;
 }
 
-class CancellationSettlementTimeoutError extends Error {
+class OperationSettlementTimeoutError extends Error {
   constructor(
-    readonly boundary: ActiveBoundaryKind,
+    readonly operation: ActiveOperationKind,
+    readonly interruptionKind: "run_cancellation" | "operation_deadline",
     readonly startedAt: ISODateTimeString,
     readonly timeoutMs: number,
   ) {
-    super(`Cancellation settlement timed out at the ${boundary} boundary.`);
-    this.name = "CancellationSettlementTimeoutError";
+    super(
+      `${interruptionKind} settlement timed out for the ${operation} operation.`,
+    );
+    this.name = "OperationSettlementTimeoutError";
   }
 }
 
@@ -198,7 +218,7 @@ export class RunExecution<TOutput> {
   private startedAtMs = 0;
   private terminalResult: RunResult<TOutput> | null = null;
   private cancellationListener: (() => void) | null = null;
-  private activeBoundary: ActiveBoundary | null = null;
+  private activeOperation: ActiveOperation | null = null;
 
   constructor(
     private readonly dependencies: ResolvedRunnerDependencies,
@@ -212,7 +232,7 @@ export class RunExecution<TOutput> {
       return await this.runInternal();
     } finally {
       this.disposeCancellationObservation();
-      this.clearActiveBoundary();
+      this.clearActiveOperation();
     }
   }
 
@@ -313,7 +333,7 @@ export class RunExecution<TOutput> {
 
       let decision: ControllerDecision<unknown>;
       try {
-        decision = await this.awaitBoundary(
+        decision = await this.awaitInterruptibleOperation(
           "controller",
           () => this.dependencies.controller.next(
             this.createControllerInput(),
@@ -323,13 +343,13 @@ export class RunExecution<TOutput> {
                 providerRequest: this.config.retry.providerRequest,
                 structuredOutput: this.config.retry.structuredOutput,
                 deadlineAt: this.runDeadlineAt(),
-                events: this.createRetryEventSink(),
+                events: this.createRetryEventSink({ kind: "controller" }),
               }),
             }),
           ),
         );
       } catch (error) {
-        if (error instanceof CancellationSettlementTimeoutError) {
+        if (error instanceof OperationSettlementTimeoutError) {
           this.emit("controller.finished", {
             runId: this.state.runId,
             iteration,
@@ -343,7 +363,7 @@ export class RunExecution<TOutput> {
         }
         if (
           error instanceof ControllerError &&
-          error.boundarySettlement === "settled_failure"
+          error.operationSettlement === "settled_failure"
         ) {
           this.emit("controller.finished", {
             runId: this.state.runId,
@@ -724,7 +744,7 @@ export class RunExecution<TOutput> {
       version: pendingVersion,
       createdAt,
     });
-    this.enterApprovalReview(pending);
+    const requestedItem = this.enterApprovalReview(pending);
 
     const requestAuditError = await recordApprovalRequestAudit({
       request,
@@ -749,39 +769,69 @@ export class RunExecution<TOutput> {
         },
         { kind: "not_applied", code: requestAuditError.code },
       );
-      this.settlePendingApproval(record, "neutral", null, true);
+      const settlementErrors = await this.settlePendingApproval(
+        record,
+        "neutral",
+        null,
+        true,
+        this.state.permission,
+        new Set(["audit"]),
+      );
       return {
         invalidatesBatch: true,
-        terminalResult: await this.fail(
-          requestAuditError,
+        terminalResult: await this.failMany(
+          asErrorTuple([requestAuditError, ...settlementErrors]),
           "audit_required_failed",
-          new Set(["audit"]),
         ),
       };
     }
+    this.publishItems([requestedItem]);
+    this.emitApprovalRequested(requestedItem);
 
     let review: ApprovalReviewerExecutionResult;
     try {
-      review = await this.awaitBoundary(
+      review = await this.awaitInterruptibleOperation(
         "approval_reviewer",
         () => this.executeApprovalReview(prepared.request),
+        pending.request.deadlineAt,
       );
     } catch (error) {
-      if (error instanceof CancellationSettlementTimeoutError) {
+      if (error instanceof OperationSettlementTimeoutError) {
         const cancellation = this.cancellationRequest();
+        let settlementErrors: RuntimeError[];
         if (cancellation !== null) {
-          this.settlePendingApproval(this.createApprovalRecord({
-            kind: "run_cancelled",
-            cancellationRequestId: cancellation.id,
-            initiatingDecision: null,
-          }, { kind: "not_applicable" }), "neutral", null, true);
+          settlementErrors = await this.settlePendingApproval(
+            this.createApprovalRecord({
+              kind: "run_cancelled",
+              cancellationRequestId: cancellation.id,
+              initiatingDecision: null,
+            }, { kind: "not_applicable" }),
+            "neutral",
+            null,
+            true,
+          );
           this.enterCancelling(cancellation);
+        } else {
+          settlementErrors = await this.settlePendingApproval(
+            this.createApprovalRecord({
+              kind: "review_failure",
+              failure: approvalReviewFailure(
+                "approval_review_timeout",
+                "Approval reviewer did not settle after its deadline.",
+                false,
+              ),
+            }, { kind: "not_applicable" }),
+            "review_failure",
+            null,
+            true,
+          );
         }
+        const settlementError = approvalSettlementRuntimeError(error);
         return {
           invalidatesBatch: true,
-          terminalResult: await this.fail(
-            cancellationSettlementRuntimeError(error),
-            "runtime_cancellation_settlement_timeout",
+          terminalResult: await this.failMany(
+            asErrorTuple([settlementError, ...settlementErrors]),
+            "approval_cancellation_unconfirmed",
           ),
         };
       }
@@ -872,7 +922,7 @@ export class RunExecution<TOutput> {
 
   private enterApprovalReview(
     pending: PendingApproval & { readonly phase: "reviewing" },
-  ): void {
+  ): ApprovalRequestedRunItem {
     if (this.state.status !== "running") {
       throw new Error(`Cannot request approval while Run is ${this.state.status}.`);
     }
@@ -894,17 +944,26 @@ export class RunExecution<TOutput> {
       permission: permission as RunPermissionState & { readonly pendingApproval: PendingApproval },
       items: Object.freeze([...this.state.items, ...items]),
     }));
-    this.publishItems(items);
+    const item = items[0];
+    if (item === undefined || item.kind !== "approval_requested") {
+      throw new Error("Approval request transition did not materialize its RunItem.");
+    }
+    return item;
+  }
+
+  private emitApprovalRequested(
+    item: ApprovalRequestedRunItem,
+  ): void {
     this.emit("approval.requested", {
-      runId: pending.request.runId,
-      requestId: pending.request.id,
-      actionId: pending.request.actionId,
-      actionFingerprint: pending.request.actionFingerprint,
-      category: pending.request.category,
-      pendingVersion: pending.version,
-      reviewer: pending.reviewer,
-      phase: pending.phase,
-      reviewOperationId: pending.reviewOperationId,
+      runId: item.runId,
+      requestId: item.request.requestId,
+      actionId: item.request.actionId,
+      actionFingerprint: item.request.actionFingerprint,
+      category: item.request.category,
+      pendingVersion: item.pendingVersion,
+      reviewer: item.reviewer,
+      phase: "reviewing",
+      reviewOperationId: item.reviewOperationId,
     });
   }
 
@@ -947,7 +1006,12 @@ export class RunExecution<TOutput> {
       retryPolicy: this.config.retry.approvalsReviewer,
       retryExecutor: this.dependencies.retryExecutor,
       cancellation: this.config.cancellation.context,
-      events: this.createRetryEventSink(),
+      events: this.createRetryEventSink({
+        kind: "approval_reviewer",
+        requestId: pending.request.id,
+        pendingVersion: pending.version,
+        operationId: pending.reviewOperationId,
+      }),
       now: () => this.now(),
     });
   }
@@ -956,6 +1020,44 @@ export class RunExecution<TOutput> {
     decision: ValidatedApprovalDecision,
     rationale: string | null,
   ): Promise<ProcessActionResult> {
+    const pendingAtValidation = this.requirePendingApproval();
+    const auditError = await recordApprovalValidatedDecisionAudit({
+      request: pendingAtValidation.request,
+      pendingVersion: pendingAtValidation.version,
+      decision,
+      taskId: this.state.taskId,
+      workspace: this.config.workspace,
+      identity: this.config.identity,
+      timestamp: this.now(),
+      requirement: this.config.audit,
+      signal: this.config.cancellation.context.signal,
+      port: this.dependencies.auditPort,
+    });
+    if (this.cancellationRequest() !== null) {
+      return this.settleCancelledApproval(null);
+    }
+    if (auditError !== null) {
+      const record = this.createApprovalRecord(
+        { kind: "decision", decision },
+        { kind: "not_applied", code: auditError.code },
+      );
+      const settlementErrors = await this.settlePendingApproval(
+        record,
+        "neutral",
+        null,
+        true,
+        this.state.permission,
+        new Set(["audit"]),
+      );
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.failMany(
+          asErrorTuple([auditError, ...settlementErrors]),
+          "audit_required_failed",
+        ),
+      };
+    }
+
     if (decision.kind === "cancel") {
       const pending = this.requirePendingApproval();
       this.config.cancellation.requestCancellation({
@@ -979,8 +1081,18 @@ export class RunExecution<TOutput> {
         category: pending.request.category,
         reason: decision.reason,
       });
-      this.settlePendingApproval(record, "declined", observation, true);
-      return { invalidatesBatch: true, terminalResult: null };
+      const settlementErrors = await this.settlePendingApproval(
+        record,
+        "declined",
+        observation,
+        true,
+      );
+      return {
+        invalidatesBatch: true,
+        terminalResult: settlementErrors.length === 0
+          ? null
+          : await this.failMany(asErrorTuple(settlementErrors)),
+      };
     }
 
     const authorityOperationId = this.createId(
@@ -999,38 +1111,6 @@ export class RunExecution<TOutput> {
         authorityOperationId,
       }) as RunPermissionState & { readonly pendingApproval: PendingApproval },
     }));
-    const pending = this.requirePendingApproval();
-    const auditError = await recordApprovalValidatedDecisionAudit({
-      request: pending.request,
-      pendingVersion: pending.version,
-      decision,
-      taskId: this.state.taskId,
-      workspace: this.config.workspace,
-      identity: this.config.identity,
-      timestamp: this.now(),
-      requirement: this.config.audit,
-      signal: this.config.cancellation.context.signal,
-      port: this.dependencies.auditPort,
-    });
-    if (this.cancellationRequest() !== null) {
-      return this.settleCancelledApproval(null);
-    }
-    if (auditError !== null) {
-      const record = this.createApprovalRecord(
-        { kind: "decision", decision },
-        { kind: "not_applied", code: auditError.code },
-      );
-      this.settlePendingApproval(record, "neutral", null, true);
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(
-          auditError,
-          "audit_required_failed",
-          new Set(["audit"]),
-        ),
-      };
-    }
-
     const applied = applyImmediateApprovalAuthority({
       permission: this.state.permission,
       decision,
@@ -1043,23 +1123,48 @@ export class RunExecution<TOutput> {
       if (applying.phase !== "applying_authority") {
         throw new Error("Durable authority application requires an applying PendingApproval.");
       }
-      const result = await executeAuthorityCommit({
-        decision,
-        pending: applying,
-        config: this.config.permissions,
-        cancellation: this.config.cancellation.context,
+      const commitStartedAt = this.now();
+      const commitDeadlineAt = deriveAuthorityCommitDeadline({
         runDeadlineAt: this.runDeadlineAt(),
-        policyAmendmentRecordId: this.createId(
-          "policy_amendment_record",
-          applying.version,
-        ),
-        now: () => this.now(),
+        commitStartedAt,
+        commitTimeoutMs: this.config.permissions.authorityApplicationLimits.commitTimeoutMs,
       });
+      let result: AuthorityCommitExecutionResult;
+      try {
+        result = await this.awaitInterruptibleOperation(
+          "authority_commit",
+          () => executeAuthorityCommit({
+            decision,
+            pending: applying,
+            config: this.config.permissions,
+            cancellation: this.config.cancellation.context,
+            startedAt: commitStartedAt,
+            deadlineAt: commitDeadlineAt,
+            policyAmendmentRecordId: this.createId(
+              "policy_amendment_record",
+              applying.version,
+            ),
+            now: () => this.now(),
+          }),
+          commitDeadlineAt,
+        );
+      } catch (error) {
+        if (error instanceof OperationSettlementTimeoutError) {
+          return this.settleUnconfirmedAuthorityCommit(
+            decision,
+            applying,
+            commitDeadlineAt,
+            error,
+          );
+        }
+        throw error;
+      }
       return this.settleAuthorityCommit(decision, result);
     }
     if (applied.status === "not_applicable") {
       throw new Error("A non-authority approval decision reached authority application.");
     }
+    const pending = this.requirePendingApproval();
     const record = this.createApprovalRecord(
       { kind: "decision", decision },
       applied.application,
@@ -1083,14 +1188,19 @@ export class RunExecution<TOutput> {
             networkDomainCount: grant.permissions.network?.domains?.length ?? 0,
           }),
         });
-    this.settlePendingApproval(
+    const settlementErrors = await this.settlePendingApproval(
       record,
       "applied",
       observation,
       false,
       applied.permission,
     );
-    return { invalidatesBatch: true, terminalResult: null };
+    return {
+      invalidatesBatch: true,
+      terminalResult: settlementErrors.length === 0
+        ? null
+        : await this.failMany(asErrorTuple(settlementErrors)),
+    };
   }
 
   private async settleAuthorityCommit(
@@ -1116,7 +1226,19 @@ export class RunExecution<TOutput> {
         { kind: "decision", decision },
         result.application,
       );
-      this.settlePendingApproval(record, "applied", observation, false, permission);
+      const settlementErrors = await this.settlePendingApproval(
+        record,
+        "applied",
+        observation,
+        false,
+        permission,
+      );
+      if (settlementErrors.length > 0) {
+        return {
+          invalidatesBatch: true,
+          terminalResult: await this.failMany(asErrorTuple(settlementErrors)),
+        };
+      }
       return this.finishAuthoritySettlement(result, true);
     }
 
@@ -1137,8 +1259,69 @@ export class RunExecution<TOutput> {
         ? "Authority application was interrupted before durable commit."
         : result.message,
     });
-    this.settlePendingApproval(record, "neutral", observation, true);
+    const settlementErrors = await this.settlePendingApproval(
+      record,
+      "neutral",
+      observation,
+      true,
+    );
+    if (settlementErrors.length > 0) {
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.failMany(asErrorTuple(settlementErrors)),
+      };
+    }
     return this.finishAuthoritySettlement(result, false);
+  }
+
+  private settleUnconfirmedAuthorityCommit(
+    decision: ValidatedApprovalDecision,
+    pending: PendingApproval & { readonly phase: "applying_authority" },
+    deadlineAt: ISODateTimeString,
+    error: OperationSettlementTimeoutError,
+  ): Promise<ProcessActionResult> {
+    if (!isDurableAuthorityDecision(decision)) {
+      throw new Error("An unconfirmed authority commit requires a durable decision.");
+    }
+    const owner = authorityCommitOwner(decision);
+    const cancellation = this.cancellationRequest();
+    const interruption = error.interruptionKind === "run_cancellation" && cancellation !== null
+      ? Object.freeze({
+          kind: "run_cancellation" as const,
+          cancellation: Object.freeze({
+            runId: cancellation.runId,
+            requestId: cancellation.id,
+          }),
+        })
+      : Object.freeze({
+          kind: "operation_deadline" as const,
+          deadline: Object.freeze({
+            operationId: pending.authorityOperationId,
+            deadlineAt,
+          }),
+        });
+    const result: Extract<
+      AuthorityCommitExecutionResult,
+      { readonly kind: "outcome_unknown" }
+    > = Object.freeze({
+      kind: "outcome_unknown" as const,
+      owner,
+      scope: owner === "permission" ? "session" as const : "persistent" as const,
+      commitId: `${pending.authorityOperationId}:commit`,
+      deadlineAt,
+      interruption,
+      code: owner === "permission"
+        ? "session_authority_commit_outcome_unknown"
+        : "policy_amendment_commit_outcome_unknown",
+      message: error.message,
+      application: Object.freeze({
+        kind: "outcome_unknown" as const,
+        code: owner === "permission"
+          ? "session_authority_commit_outcome_unknown"
+          : "policy_amendment_commit_outcome_unknown",
+      }),
+    });
+    return this.settleAuthorityCommit(decision, result);
   }
 
   private createSessionPermissionsGrantedObservation(
@@ -1218,7 +1401,7 @@ export class RunExecution<TOutput> {
     return { invalidatesBatch: true, terminalResult: null };
   }
 
-  private settleReviewFailure(
+  private async settleReviewFailure(
     failure: ApprovalReviewFailure,
   ): Promise<ProcessActionResult> {
     const pending = this.requirePendingApproval();
@@ -1235,38 +1418,45 @@ export class RunExecution<TOutput> {
       message: failure.message,
       retryable: failure.retryable,
     });
-    this.settlePendingApproval(record, "review_failure", observation, true);
+    const settlementErrors = await this.settlePendingApproval(
+      record,
+      "review_failure",
+      observation,
+      true,
+    );
+    if (settlementErrors.length > 0) {
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.failMany(asErrorTuple(settlementErrors)),
+      };
+    }
     if (
       failure.code === "approval_review_timeout" &&
       pending.request.deadlineAt === this.runDeadlineAt()
     ) {
-      return this.fail(limitRuntimeError(
+      const terminalResult = await this.fail(limitRuntimeError(
         "Run deadline elapsed during approval review.",
         { requestId: pending.request.id, deadlineAt: pending.request.deadlineAt },
-      )).then((terminalResult) => ({
-        invalidatesBatch: true,
-        terminalResult,
-      }));
+      ));
+      return { invalidatesBatch: true, terminalResult };
     }
     if (
       this.state.permission.counters.consecutiveReviewFailures >=
       this.config.permissions.approvalLimits.maxConsecutiveReviewFailures
     ) {
-      return this.fail(runtimeError(
+      const terminalResult = await this.fail(runtimeError(
         "approval",
         "approval_review_failure_limit_exceeded",
         "Approval reviewer failure circuit limit was reached.",
         false,
         { requestId: pending.request.id },
-      ), "approval_review_failure_limit_exceeded").then((terminalResult) => ({
-        invalidatesBatch: true,
-        terminalResult,
-      }));
+      ), "approval_review_failure_limit_exceeded");
+      return { invalidatesBatch: true, terminalResult };
     }
-    return Promise.resolve({ invalidatesBatch: true, terminalResult: null });
+    return { invalidatesBatch: true, terminalResult: null };
   }
 
-  private settleCancelledApproval(
+  private async settleCancelledApproval(
     initiatingDecision: "cancel" | null,
   ): Promise<ProcessActionResult> {
     const cancellation = this.cancellationRequest();
@@ -1278,20 +1468,33 @@ export class RunExecution<TOutput> {
       cancellationRequestId: cancellation.id,
       initiatingDecision,
     }, { kind: "not_applicable" });
-    this.settlePendingApproval(record, "neutral", null, true);
-    return this.cancelRun().then((terminalResult) => ({
+    const settlementErrors = await this.settlePendingApproval(
+      record,
+      "neutral",
+      null,
+      true,
+    );
+    if (settlementErrors.length > 0) {
+      this.enterCancelling(cancellation);
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.failMany(asErrorTuple(settlementErrors)),
+      };
+    }
+    return {
       invalidatesBatch: true,
-      terminalResult,
-    }));
+      terminalResult: await this.cancelRun(),
+    };
   }
 
-  private settlePendingApproval(
+  private async settlePendingApproval(
     record: ApprovalRecord,
     counterEffect: ApprovalSettlementCounterEffect,
     observation: Observation | null,
     failed: boolean,
     permissionBase: RunPermissionState = this.state.permission,
-  ): void {
+    skipOwners: ReadonlySet<RuntimeError["owner"]> = new Set(),
+  ): Promise<RuntimeError[]> {
     if (this.state.status !== "waiting_for_approval") {
       throw new Error(`Cannot settle approval while Run is ${this.state.status}.`);
     }
@@ -1300,11 +1503,12 @@ export class RunExecution<TOutput> {
       record,
       counterEffect,
     });
+    const summary = createApprovalRecordSummary(record);
     const drafts: RunItemDraft<TOutput>[] = [
       (base) => Object.freeze({
         ...base,
         kind: "approval_resolved" as const,
-        record: createApprovalRecordSummary(record),
+        record: summary,
       }),
       ...(observation === null ? [] : [observationDraft<TOutput>(observation)]),
     ];
@@ -1323,15 +1527,56 @@ export class RunExecution<TOutput> {
       counters: nextActionCounters(this.state.counters, failed),
       items: Object.freeze([...this.state.items, ...items]),
     }));
-    this.publishItems(items);
-    const summary = createApprovalRecordSummary(record);
+    const recordingStartedAt = this.now();
+    const scope = createRunFinalizationContext({
+      runId: this.state.runId,
+      cancellation: this.cancellationRequest() === null
+        ? null
+        : toRunCancellationSummary(this.cancellationRequest()!),
+      timeoutMs: this.config.cancellationLimits.finalizationTimeoutMs,
+      startedAt: recordingStartedAt,
+    });
+    let errors: RuntimeError[];
+    try {
+      errors = await recordApprovalResolution({
+        runId: record.runId,
+        summary,
+        taskId: this.state.taskId,
+        workspace: this.config.workspace,
+        identity: this.config.identity,
+        timestamp: recordingStartedAt,
+        counters: permission.counters,
+        auditRequirement: this.config.audit,
+        telemetryRequirement: this.config.telemetry,
+        context: Object.freeze({
+          purpose: "finalization" as const,
+          signal: scope.context.signal,
+          deadlineAt: scope.context.deadlineAt,
+        }),
+        auditPort: this.dependencies.auditPort,
+        telemetryPort: this.dependencies.telemetryPort,
+        skipOwners,
+      });
+    } finally {
+      scope.dispose();
+    }
+    if (errors.length === 0 && skipOwners.size === 0) {
+      this.publishItems(items);
+      this.emitApprovalResolved(summary);
+    }
+    return errors;
+  }
+
+  private emitApprovalResolved(
+    summary: ReturnType<typeof createApprovalRecordSummary>,
+  ): void {
     this.emit("approval.resolved", {
-      runId: record.runId,
-      requestId: record.requestId,
-      actionId: record.actionId,
-      actionFingerprint: record.actionFingerprint,
-      pendingVersion: record.pendingVersion,
-      reviewer: record.reviewer,
+      runId: this.state.runId,
+      requestId: summary.requestId,
+      actionId: summary.actionId,
+      actionFingerprint: summary.actionFingerprint,
+      pendingVersion: summary.pendingVersion,
+      reviewer: summary.reviewer,
       resolutionKind: summary.resolutionKind,
       decisionKind: summary.decisionKind,
       applicationKind: summary.applicationKind,
@@ -1422,7 +1667,7 @@ export class RunExecution<TOutput> {
 
     let result;
     try {
-      result = await this.awaitBoundary(
+      result = await this.awaitInterruptibleOperation(
         "tool",
         () => bridge.execute({
           action,
@@ -1442,7 +1687,7 @@ export class RunExecution<TOutput> {
         }),
       );
     } catch (error) {
-      if (error instanceof CancellationSettlementTimeoutError) {
+      if (error instanceof OperationSettlementTimeoutError) {
         this.emit("tool.finished", {
           runId: this.state.runId,
           actionId: action.id,
@@ -1771,6 +2016,21 @@ export class RunExecution<TOutput> {
         ? this.state.cancellationRequest
         : null,
     }, skipOwners);
+  }
+
+  private failMany(
+    errors: readonly [RuntimeError, ...RuntimeError[]],
+    code: RunFailureCode = failureCode(errors[0]),
+  ): Promise<RunResult<TOutput>> {
+    return this.terminalize({
+      status: "failed",
+      code,
+      errors: Object.freeze([...errors]) as unknown as readonly [
+        RuntimeError,
+        ...RuntimeError[],
+      ],
+      cancellationRequest: this.cancellationRequest(),
+    }, new Set(errors.map((error) => error.owner)));
   }
 
   private cancelRun(): Promise<RunResult<TOutput>> {
@@ -2144,10 +2404,34 @@ export class RunExecution<TOutput> {
     this.publishItems(items);
   }
 
-  private createRetryEventSink(): RetryEventSink {
+  private createRetryEventSink(
+    acceptance: RetryEventAcceptance,
+  ): RetryEventSink {
     return Object.freeze({
-      emit: (event: RetryEvent) => this.commitRetryEvent(event),
+      emit: (event: RetryEvent) => {
+        if (this.acceptsRetryEvent(acceptance, event)) {
+          this.commitRetryEvent(event);
+        }
+      },
     });
+  }
+
+  private acceptsRetryEvent(
+    acceptance: RetryEventAcceptance,
+    event: RetryEvent,
+  ): boolean {
+    if (acceptance.kind === "controller") {
+      return this.activeOperation?.kind === "controller" &&
+        this.state.status === "running";
+    }
+    const pending = this.state.permission.pendingApproval;
+    return this.activeOperation?.kind === "approval_reviewer" &&
+      this.state.status === "waiting_for_approval" &&
+      pending?.phase === "reviewing" &&
+      pending.request.id === acceptance.requestId &&
+      pending.version === acceptance.pendingVersion &&
+      pending.reviewOperationId === acceptance.operationId &&
+      event.operationId === acceptance.operationId;
   }
 
   private commitRetryEvent(candidate: RetryEvent): void {
@@ -2245,16 +2529,17 @@ export class RunExecution<TOutput> {
     if (this.state.status === "initializing" || this.state.status === "running") {
       this.enterCancelling(request);
     }
-    this.startActiveBoundarySettlementTimer();
+    this.startActiveOperationSettlementTimer("run_cancellation");
   }
 
-  private async awaitBoundary<TValue>(
-    kind: ActiveBoundaryKind,
+  private async awaitInterruptibleOperation<TValue>(
+    kind: ActiveOperationKind,
     execute: () => Promise<TValue>,
+    interruptionDeadlineAt: ISODateTimeString | null = null,
   ): Promise<TValue> {
-    if (this.activeBoundary !== null) {
+    if (this.activeOperation !== null) {
       throw new Error(
-        `Cannot start ${kind} while ${this.activeBoundary.kind} is still active.`,
+        `Cannot start ${kind} while ${this.activeOperation.kind} is still active.`,
       );
     }
     if (this.cancellationRequest() !== null) {
@@ -2262,17 +2547,25 @@ export class RunExecution<TOutput> {
       throw this.config.cancellation.context.signal.reason;
     }
 
-    let rejectSettlement!: (error: CancellationSettlementTimeoutError) => void;
+    let rejectSettlement!: (error: OperationSettlementTimeoutError) => void;
     const settlementTimeout = new Promise<never>((_resolve, reject) => {
       rejectSettlement = reject;
     });
-    const boundary: ActiveBoundary = {
+    const operationState: ActiveOperation = {
       kind,
       startedAt: this.now(),
       rejectSettlement,
+      interruptionTimer: null,
       settlementTimer: null,
     };
-    this.activeBoundary = boundary;
+    this.activeOperation = operationState;
+    if (interruptionDeadlineAt !== null) {
+      const delayMs = Math.max(0, Date.parse(interruptionDeadlineAt) - Date.parse(this.now()));
+      operationState.interruptionTimer = setTimeout(
+        () => this.startActiveOperationSettlementTimer("operation_deadline"),
+        delayMs,
+      );
+    }
 
     const operation = Promise.resolve().then(() => {
       if (this.cancellationRequest() !== null) {
@@ -2285,33 +2578,40 @@ export class RunExecution<TOutput> {
     try {
       return await Promise.race([operation, settlementTimeout]);
     } finally {
-      if (this.activeBoundary === boundary) {
-        this.clearActiveBoundary();
+      if (this.activeOperation === operationState) {
+        this.clearActiveOperation();
       }
     }
   }
 
-  private startActiveBoundarySettlementTimer(): void {
-    const boundary = this.activeBoundary;
-    if (boundary === null || boundary.settlementTimer !== null) {
+  private startActiveOperationSettlementTimer(
+    cause: "run_cancellation" | "operation_deadline",
+  ): void {
+    const operation = this.activeOperation;
+    if (operation === null || operation.settlementTimer !== null) {
       return;
     }
-    const timeoutMs = this.config.cancellationLimits.boundarySettlementTimeoutMs;
-    boundary.settlementTimer = setTimeout(() => {
-      boundary.rejectSettlement(new CancellationSettlementTimeoutError(
-        boundary.kind,
-        boundary.startedAt,
+    const timeoutMs = this.config.cancellationLimits.operationSettlementTimeoutMs;
+    operation.settlementTimer = setTimeout(() => {
+      operation.rejectSettlement(new OperationSettlementTimeoutError(
+        operation.kind,
+        cause,
+        operation.startedAt,
         timeoutMs,
       ));
     }, timeoutMs);
   }
 
-  private clearActiveBoundary(): void {
-    if (this.activeBoundary?.settlementTimer !== null &&
-        this.activeBoundary?.settlementTimer !== undefined) {
-      clearTimeout(this.activeBoundary.settlementTimer);
+  private clearActiveOperation(): void {
+    if (this.activeOperation?.interruptionTimer !== null &&
+        this.activeOperation?.interruptionTimer !== undefined) {
+      clearTimeout(this.activeOperation.interruptionTimer);
     }
-    this.activeBoundary = null;
+    if (this.activeOperation?.settlementTimer !== null &&
+        this.activeOperation?.settlementTimer !== undefined) {
+      clearTimeout(this.activeOperation.settlementTimer);
+    }
+    this.activeOperation = null;
   }
 
   private createId(kind: Parameters<ResolvedRunnerDependencies["createId"]>[0]["kind"], sequence: number): string {
@@ -2529,7 +2829,7 @@ function limitRuntimeError(message: string, metadata: Metadata): RuntimeError {
 }
 
 function cancellationSettlementRuntimeError(
-  error: CancellationSettlementTimeoutError,
+  error: OperationSettlementTimeoutError,
 ): RuntimeError {
   return runtimeError(
     "runtime",
@@ -2537,8 +2837,24 @@ function cancellationSettlementRuntimeError(
     error.message,
     false,
     {
-      boundary: error.boundary,
-      boundaryStartedAt: error.startedAt,
+      operation: error.operation,
+      operationStartedAt: error.startedAt,
+      settlementTimeoutMs: error.timeoutMs,
+    },
+  );
+}
+
+function approvalSettlementRuntimeError(
+  error: OperationSettlementTimeoutError,
+): RuntimeError {
+  return runtimeError(
+    "approval",
+    "approval_cancellation_unconfirmed",
+    error.message,
+    false,
+    {
+      operation: error.operation,
+      operationStartedAt: error.startedAt,
       settlementTimeoutMs: error.timeoutMs,
     },
   );

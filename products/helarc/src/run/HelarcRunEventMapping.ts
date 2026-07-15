@@ -256,7 +256,7 @@ function copyAttribution(target: Metadata, source: Metadata): void {
   const attribution: Metadata = {};
   copyString(attribution, source.attribution, "requestId");
   copyString(attribution, source.attribution, "runId");
-  copyString(attribution, source.attribution, "boundary");
+  copyString(attribution, source.attribution, "operation");
   copyString(attribution, source.attribution, "observedAt");
   if (Object.keys(attribution).length === 4) {
     target.attribution = Object.freeze(attribution);

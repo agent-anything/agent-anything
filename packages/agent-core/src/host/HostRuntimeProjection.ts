@@ -201,7 +201,7 @@ function projectCancellationAttribution(value: unknown): Metadata | undefined {
     return undefined;
   }
   const attribution: Metadata = {};
-  for (const field of ["requestId", "runId", "boundary", "observedAt"] as const) {
+  for (const field of ["requestId", "runId", "operation", "observedAt"] as const) {
     if (typeof value[field] === "string" && value[field].length > 0) {
       attribution[field] = value[field];
     }

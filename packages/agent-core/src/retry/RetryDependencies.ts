@@ -82,7 +82,7 @@ export function cancellationAttribution(
   return Object.freeze({
     requestId: request.id,
     runId: request.runId,
-    boundary: "retry_wait",
+    operation: "retry_wait",
     observedAt: now(clock).toISOString(),
   });
 }

@@ -103,7 +103,7 @@ describe("Retry contracts", () => {
       attribution: {
         requestId: "cancel_001",
         runId: "run_001",
-        boundary: "retry_wait" as const,
+        operation: "retry_wait" as const,
         observedAt: "2026-07-14T00:00:00.000Z",
         secret: "must not survive",
       },
@@ -113,8 +113,8 @@ describe("Retry contracts", () => {
     expect(event).not.toHaveProperty("attribution.secret");
     expect(() => snapshotRetryEvent({
       ...candidate,
-      attribution: { ...candidate.attribution, boundary: "unknown" },
-    } as never, "run_001")).toThrow("boundary is unsupported");
+      attribution: { ...candidate.attribution, operation: "unknown" },
+    } as never, "run_001")).toThrow("operation is unsupported");
   });
 });
 

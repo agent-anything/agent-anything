@@ -609,7 +609,7 @@ function retryCancelledEvent(
     attribution: Object.freeze({
       requestId: attribution.requestId,
       runId: attribution.runId,
-      boundary: attribution.boundary,
+      operation: attribution.operation,
       observedAt: attribution.observedAt,
     }),
   });

@@ -295,7 +295,7 @@ function createInput(
     },
     cancellation: createRunCancellationController({ runId: "run_001" }).context,
     cancellationLimits: {
-      boundarySettlementTimeoutMs: 1_000,
+      operationSettlementTimeoutMs: 1_000,
       processGracePeriodMs: 50,
       processForceKillTimeoutMs: 250,
       finalizationTimeoutMs: 1_000,
