@@ -26,27 +26,7 @@ export {
   snapshotStructuredOutputFailure,
   StructuredOutputError,
 } from "./controller/index.js";
-export type {
-  ActionAdapterDescriptor,
-  ActionExecutorDescriptor,
-  ActionRegistration,
-  ActionRegistrationInput,
-  ActionRegistrationSnapshot,
-  ActionRegistrationValidationCode,
-  PreparedActionInvocation,
-  PreparedActionInvocationInput,
-  PreparedActionInvocationValidationCode,
-  SerializableObject,
-  SerializableValue,
-} from "./action-execution/index.js";
-export {
-  ActionRegistrationValidationError,
-  assertPreparedInvocationMatchesExecutor,
-  createActionRegistrationSnapshot,
-  createPreparedActionInvocation,
-  findActionRegistration,
-  PreparedActionInvocationValidationError,
-} from "./action-execution/index.js";
+export * from "./action-execution/index.js";
 export type {
   Context,
   ContextProjection,
