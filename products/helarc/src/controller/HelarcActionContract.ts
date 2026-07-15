@@ -1,5 +1,6 @@
 export type HelarcControllerActionName =
   | "call_tool"
+  | "request_permissions"
   | "update_plan"
   | "complete"
   | "propose"
@@ -24,6 +25,7 @@ export interface HelarcActionContract {
 
 export const HELARC_CONTROLLER_ACTIONS = [
   "call_tool",
+  "request_permissions",
   "update_plan",
   "complete",
   "propose",
@@ -36,6 +38,12 @@ const HELARC_ACTION_DESCRIPTIONS: HelarcControllerActionDescription[] = [
     purpose: "Request one tool execution from the active tool catalog.",
     requiredFields: ["action", "toolName", "input"],
     optionalFields: ["reason"],
+  },
+  {
+    action: "request_permissions",
+    purpose: "Request a scoped filesystem or network permission delta before continuing.",
+    requiredFields: ["action", "rootId", "permissions", "reason"],
+    optionalFields: [],
   },
   {
     action: "update_plan",
@@ -67,6 +75,10 @@ const HELARC_ACTION_DECISION_RULES: HelarcActionDecisionRule[] = [
   {
     id: "active_tool_catalog_only",
     text: "Use call_tool only for tools listed in the active tool catalog.",
+  },
+  {
+    id: "request_permissions_before_expansion",
+    text: "Use request_permissions when the task requires filesystem or network authority beyond the current permission context.",
   },
   {
     id: "plan_when_useful",

@@ -19,6 +19,14 @@ import {
 } from "./validateAuthority.js";
 
 describe("authority contracts", () => {
+  it("loads all records for an exact Session context when category is null", () => {
+    const record = validatedRecord();
+    expect(isSessionAuthorityApplicable(record, {
+      context: sessionContext(),
+      category: null,
+      applicabilityKeys: [],
+    })).toBe(true);
+  });
   it("creates exact consumable Action coverage", () => {
     const authority: ValidatedActionAuthority = {
       id: "coverage_1",

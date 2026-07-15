@@ -91,6 +91,12 @@ export {
   selectHelarcProviderProfile,
 } from "./provider-profile/index.js";
 export type {
+  CreateHelarcPermissionCompositionInput,
+  HelarcPermissionComposition,
+  HelarcPermissionPreset,
+} from "./permission/index.js";
+export { createHelarcPermissionComposition } from "./permission/index.js";
+export type {
   CreateHelarcArtifactInput,
   CreateHelarcArtifactResult,
   CreateHelarcConversationInput,

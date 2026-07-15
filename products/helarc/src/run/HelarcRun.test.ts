@@ -13,7 +13,7 @@ describe("HelarcRun", () => {
       workspaceProfileId: " workspace-1 ",
       providerProfileId: " provider-1 ",
       taskTemplateId: " template-1 ",
-      permissionPreset: "trusted",
+      permissionPreset: "full_access",
       createdAt: "2026-07-04T00:00:00.000Z",
       metadata: { source: "test" },
     });
@@ -26,7 +26,7 @@ describe("HelarcRun", () => {
         workspaceProfileId: "workspace-1",
         providerProfileId: "provider-1",
         taskTemplateId: "template-1",
-        permissionPreset: "trusted",
+        permissionPreset: "full_access",
         createdAt: "2026-07-04T00:00:00.000Z",
         metadata: { source: "test" },
       },
@@ -46,7 +46,7 @@ describe("HelarcRun", () => {
       ok: true,
       input: {
         taskTemplateId: null,
-        permissionPreset: "ask",
+        permissionPreset: "ask_for_approval",
         metadata: {},
       },
     });
@@ -189,7 +189,7 @@ function runInput() {
     taskText: "Inspect workspace",
     workspaceProfileId: "workspace-1",
     providerProfileId: "provider-1",
-    permissionPreset: "ask" as const,
+    permissionPreset: "ask_for_approval" as const,
     createdAt: "2026-07-04T00:00:00.000Z",
   };
 }

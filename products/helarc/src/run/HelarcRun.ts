@@ -4,6 +4,7 @@ import type {
 } from "@agent-anything/agent-core";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { HelarcProviderKind } from "../provider-profile/index.js";
+import type { HelarcPermissionPreset } from "../permission/index.js";
 
 export type HelarcRunStatus =
   | "idle"
@@ -21,7 +22,7 @@ export type HelarcRunTerminalStatus = Extract<
   "completed" | "failed" | "denied" | "cancelled"
 >;
 
-export type HelarcRunPermissionPreset = "trusted" | "ask" | "deny";
+export type HelarcRunPermissionPreset = HelarcPermissionPreset;
 
 export interface CreateHelarcRunInput {
   runId: string;
@@ -54,6 +55,8 @@ export type HelarcRunEventKind =
   | "tool.completed"
   | "permission.requested"
   | "permission.resolved"
+  | "approval.requested"
+  | "approval.resolved"
   | "runtime.output"
   | "retry.progress"
   | "run.completed"
@@ -205,7 +208,7 @@ export function createHelarcRunInput(
     return reject("run_created_at_invalid", "Run created timestamp is invalid.");
   }
 
-  const permissionPreset = input.permissionPreset ?? "ask";
+  const permissionPreset = input.permissionPreset ?? "ask_for_approval";
   if (!isPermissionPreset(permissionPreset)) {
     return reject(
       "run_permission_preset_invalid",
@@ -350,7 +353,9 @@ function isRunCancellationSummary(value: unknown): value is RunCancellationSumma
 }
 
 function isPermissionPreset(value: unknown): value is HelarcRunPermissionPreset {
-  return value === "trusted" || value === "ask" || value === "deny";
+  return value === "ask_for_approval" ||
+    value === "approve_for_me" ||
+    value === "full_access";
 }
 
 function isTerminalStatus(value: unknown): value is HelarcRunTerminalStatus {

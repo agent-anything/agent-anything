@@ -18,7 +18,7 @@ describe("prepareHelarcRunStart", () => {
           workspaceProfileId: "workspace-1",
           providerProfileId: "provider-1",
           taskTemplateId: null,
-          permissionPreset: "ask",
+          permissionPreset: "ask_for_approval",
         },
         task: {
           id: "task-1",

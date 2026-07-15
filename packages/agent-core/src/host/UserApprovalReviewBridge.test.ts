@@ -18,9 +18,11 @@ describe("UserApprovalReviewBridge", () => {
     const source = reviewInput();
     const pending = bridge.review(source, interruptionContext());
 
-    expect(bridge.getPendingProjection()).toEqual(source);
-    expect(bridge.getPendingProjection()).not.toBe(source);
-    expect(Object.isFrozen(bridge.getPendingProjection()?.request)).toBe(true);
+    const firstProjection = bridge.getPendingProjection();
+    expect(firstProjection).toEqual(source);
+    expect(firstProjection).not.toBe(source);
+    expect(bridge.getPendingProjection()).toBe(firstProjection);
+    expect(Object.isFrozen(firstProjection?.request)).toBe(true);
 
     const receipt = bridge.submitDecision(submission());
     expect(receipt).toEqual({

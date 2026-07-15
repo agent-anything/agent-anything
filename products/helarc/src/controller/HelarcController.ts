@@ -33,6 +33,12 @@ export type HelarcAgentOutput =
 
 export type HelarcProviderStructuredOutput =
   | { action: "call_tool"; reason?: string; toolName: string; input: unknown }
+  | {
+      action: "request_permissions";
+      rootId: string;
+      permissions: Record<string, unknown>;
+      reason: string;
+    }
   | { action: "update_plan"; explanation?: string; plan: unknown }
   | { action: "complete"; summary: string }
   | { action: "propose"; summary: string; change: HelarcChangeIntent }
@@ -169,6 +175,27 @@ export function parseHelarcProviderResponse(
         modelItems,
       });
 
+    case "request_permissions":
+      return Object.freeze({
+        kind: "actions",
+        actions: Object.freeze([Object.freeze({
+          kind: "permission_request" as const,
+          name: "request_permissions" as const,
+          input: Object.freeze({
+            rootId: output.rootId,
+            permissions: output.permissions,
+            reason: output.reason,
+          }),
+          modelItemId: modelItem.id,
+        })]) as readonly [{
+          readonly kind: "permission_request";
+          readonly name: "request_permissions";
+          readonly input: unknown;
+          readonly modelItemId: string;
+        }],
+        modelItems,
+      });
+
     case "update_plan":
       return Object.freeze({
         kind: "actions",
@@ -224,6 +251,25 @@ export function parseStructuredOutput(output: unknown): HelarcProviderStructured
   switch (action) {
     case "call_tool":
       return parseCallToolOutput(value);
+    case "request_permissions":
+      return {
+        action,
+        rootId: readRequiredString(
+          value,
+          "rootId",
+          "controller_tool_input_invalid",
+        ),
+        permissions: readRequiredRecord(
+          value,
+          "permissions",
+          "controller_tool_input_invalid",
+        ),
+        reason: readRequiredString(
+          value,
+          "reason",
+          "controller_tool_input_invalid",
+        ),
+      };
     case "update_plan":
       return {
         action,
@@ -376,6 +422,18 @@ function readRequiredString(
 ): string {
   const field = readOptionalString(value, key);
   if (!field) {
+    throw new HelarcControllerParseError(code);
+  }
+  return field;
+}
+
+function readRequiredRecord(
+  value: Record<string, unknown>,
+  key: string,
+  code: HelarcControllerParseErrorCode,
+): Record<string, unknown> {
+  const field = value[key];
+  if (!isRecord(field)) {
     throw new HelarcControllerParseError(code);
   }
   return field;

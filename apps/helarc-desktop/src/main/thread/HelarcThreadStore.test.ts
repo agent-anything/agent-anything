@@ -255,7 +255,7 @@ function run(
       endpointLabel: "localhost:11434",
       model: "gemma3",
     },
-    permissionPreset: "ask",
+    permissionPreset: "ask_for_approval",
     startedAt: STARTED_AT,
     completedAt,
     runtime: completedAt

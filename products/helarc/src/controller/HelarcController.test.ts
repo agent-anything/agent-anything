@@ -77,6 +77,7 @@ describe("Helarc controller", () => {
     ]);
     expect(contract.actions.map((item) => item.action)).toEqual([
       "call_tool",
+      "request_permissions",
       "update_plan",
       "complete",
       "propose",
@@ -84,6 +85,8 @@ describe("Helarc controller", () => {
     ]);
     expect(buildHelarcActionProtocolText(contract))
       .toContain("For call_tool, return action, toolName, input, and optional reason.");
+    expect(buildHelarcActionProtocolText(contract))
+      .toContain("For request_permissions, return action, rootId, permissions, reason.");
     expect(buildHelarcActionDecisionRulesText(contract))
       .toContain("Use update_plan only when an explicit plan improves multi-step execution");
   });
@@ -199,6 +202,29 @@ describe("Helarc controller", () => {
             { step: "Prepare change", status: "pending" },
           ],
         },
+      }],
+    });
+  });
+
+  it("maps request_permissions to the Runner-owned permission Action", () => {
+    const decision = parseHelarcProviderResponse(response({
+      action: "request_permissions",
+      rootId: "workspace",
+      permissions: { fileSystem: { write: ["output.txt"] } },
+      reason: "Write the requested output.",
+    }), createControllerInput());
+
+    expect(decision).toMatchObject({
+      kind: "actions",
+      actions: [{
+        kind: "permission_request",
+        name: "request_permissions",
+        input: {
+          rootId: "workspace",
+          permissions: { fileSystem: { write: ["output.txt"] } },
+          reason: "Write the requested output.",
+        },
+        modelItemId: "run-1:model:1",
       }],
     });
   });

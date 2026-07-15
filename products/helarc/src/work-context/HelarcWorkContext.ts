@@ -435,7 +435,7 @@ export function createHelarcRun(input: CreateHelarcRunInput): CreateHelarcRunRes
     return provider;
   }
 
-  const permissionPreset = input.permissionPreset ?? "ask";
+  const permissionPreset = input.permissionPreset ?? "ask_for_approval";
   if (!isPermissionPreset(permissionPreset)) {
     return reject("run_permission_preset_invalid", "Run permission preset is invalid.");
   }
@@ -849,7 +849,9 @@ function isProviderKind(value: unknown): value is HelarcProviderKind {
 }
 
 function isPermissionPreset(value: unknown): value is HelarcRunPermissionPreset {
-  return value === "trusted" || value === "ask" || value === "deny";
+  return value === "ask_for_approval" ||
+    value === "approve_for_me" ||
+    value === "full_access";
 }
 
 function isRunResultStatus(value: unknown): value is RunResultStatus {

@@ -155,6 +155,7 @@ export function isSessionAuthorityApplicable(
   lookup: SessionAuthorityLookup,
 ): boolean {
   if (!sameContext(record, lookup.context)) return false;
+  if (lookup.category === null) return true;
   if (lookup.category !== null && lookup.category !== record.category) return false;
   const keys = new Set(
     lookup.applicabilityKeys.map((key) => `${key.category}:${key.value}`),

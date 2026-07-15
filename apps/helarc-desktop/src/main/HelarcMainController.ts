@@ -1,4 +1,10 @@
-import type { HostPermissionBridge } from "@agent-anything/agent-core/host";
+import {
+  createInMemoryHostPolicyAmendmentStore,
+  createInMemoryHostSessionAuthorityStore,
+  createUserApprovalReviewBridge,
+  type UserApprovalPendingProjection,
+  type UserApprovalReviewBridge,
+} from "@agent-anything/agent-core/host";
 import {
   createRunCancellationController,
   toRunCancellationSummary,
@@ -39,7 +45,6 @@ import {
   type HelarcWorkContextRun,
   type HelarcWorkspaceProfile,
 } from "@agent-anything/helarc";
-import type { PermissionRequest } from "@agent-anything/permission";
 import type { Provider } from "@agent-anything/providers";
 import { basename, isAbsolute, normalize } from "node:path";
 import type { ProviderCredentialStoreError } from "./provider/ProviderCredentialStore.js";
@@ -268,6 +273,14 @@ export class HelarcMainController {
   private status: HelarcMainSnapshotStatus = "idle";
   private nextTaskNumber = 1;
   private runCancellation: RunCancellationController | null = null;
+  private userApprovalBridge: UserApprovalReviewBridge | null = null;
+  private nextApprovalSubmissionNumber = 1;
+  private readonly sessionAuthorityStore = createInMemoryHostSessionAuthorityStore({
+    maxRecords: 64,
+  });
+  private readonly policyAmendmentStore = createInMemoryHostPolicyAmendmentStore({
+    maxRecords: 64,
+  });
   private readonly activeRunController = new HelarcActiveRunController();
   private readonly snapshotSubscribers = new Set<(snapshot: HelarcMainSnapshot) => void>();
 
@@ -442,7 +455,7 @@ export class HelarcMainController {
       taskText: taskResult.task.input.prompt,
       workspaceProfileId: this.selectedWorkspace.id,
       providerProfileId: this.provider.activeProfile.id,
-      permissionPreset: "ask",
+      permissionPreset: "ask_for_approval",
       createdAt: startedAt,
       metadata: {
         product: "helarc",
@@ -518,26 +531,50 @@ export class HelarcMainController {
   }
 
   resolvePermission(input: ResolveHelarcPermissionInput): ResolveHelarcPermissionResult {
-    if (!this.pendingPermission) {
+    const pending = this.pendingPermission;
+    const bridge = this.userApprovalBridge;
+    if (!pending || !bridge) {
       const error = this.setError("permission_not_pending", "No permission request is pending.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
-    if (this.pendingPermission.prompt.requestId !== input.requestId) {
+    if (pending.prompt.requestId !== input.requestId) {
       const error = this.setError("permission_request_mismatch", "Permission request is stale.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
-    const pending = this.pendingPermission;
-    this.pendingPermission = null;
-    this.status = "running";
-    this.activeRunController.resolvePermission();
-    pending.resolve({
-      status: input.decision,
+    const option = selectTemporaryDesktopApprovalOption(
+      pending.projection,
+      input.decision,
+    );
+    if (option === null) {
+      const error = this.setError(
+        "permission_request_mismatch",
+        "The pending approval does not offer the selected decision.",
+      );
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+    const receipt = bridge.submitDecision({
+      submissionId: `${pending.projection.request.runId}:desktop:${this.nextApprovalSubmissionNumber++}`,
+      runId: pending.projection.request.runId,
+      requestId: pending.projection.request.id,
+      pendingVersion: pending.projection.pendingVersion,
+      optionId: option.id,
+      grantedPermissions: grantedPermissionsForTemporaryOption(
+        pending.projection,
+        option.kind,
+      ),
       reason: input.decision === "granted"
-        ? "Granted from Helarc desktop."
-        : "Denied from Helarc desktop.",
+        ? "Accepted from Helarc desktop."
+        : "Declined from Helarc desktop.",
     });
+    if (receipt.status === "rejected") {
+      const error = this.setError(
+        "permission_request_mismatch",
+        `Approval submission was rejected: ${receipt.code}.`,
+      );
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
     return { ok: true, snapshot: this.publishSnapshot() };
   }
 
@@ -559,12 +596,7 @@ export class HelarcMainController {
     this.activeRunController.requestCancel(toRunCancellationSummary(receipt.request));
 
     if (this.pendingPermission) {
-      const pending = this.pendingPermission;
       this.pendingPermission = null;
-      pending.resolve({
-        status: "unavailable",
-        reason: "Cancelled from Helarc desktop.",
-      });
     }
 
     this.status = "cancelling";
@@ -619,18 +651,32 @@ export class HelarcMainController {
     task: Parameters<typeof runHelarcSession>[0]["task"],
   ): Promise<void> {
     let terminal: HelarcRunTerminalSummary | null;
+    const runId = this.activeRunController.getSnapshot().runId;
+    const userApprovalBridge = this.createApprovalReviewBridge(runId, task.id);
+    this.userApprovalBridge = userApprovalBridge;
     try {
       const sessionResult = await runHelarcSession({
         task,
-        runId: this.activeRunController.getSnapshot().runId,
+        runId,
+        sessionId: this.currentThreadRecord?.thread.id ?? runId,
         cancellation: this.runCancellation ?? undefined,
         provider: this.providerInstance as Provider,
         enableShell: this.runtimeToolMode === "shell-enabled",
-        permissionBridge: this.createPermissionBridge(),
+        permissionPreset: "ask_for_approval",
+        userApprovalBridge,
+        sessionAuthorityPort: this.sessionAuthorityStore,
+        persistentPolicyAmendments: this.policyAmendmentStore,
         patchReviewBridge: this.createPatchReviewBridge(),
         onActivity: (item, event) => {
           this.activity = [...this.activity, item];
           this.activeRunController.appendEvent(mapRuntimeEventToHelarcRunEvent(event));
+          if (event.name === "approval.resolved") {
+            this.pendingPermission = null;
+            if (this.status === "waiting_for_permission") {
+              this.status = "running";
+              this.activeRunController.resolvePermission();
+            }
+          }
           this.publishSnapshot();
         },
       });
@@ -702,28 +748,35 @@ export class HelarcMainController {
       };
     }
     this.runCancellation = null;
+    this.userApprovalBridge = null;
     this.publishSnapshot();
   }
 
-  private createPermissionBridge(): HostPermissionBridge {
-    return async ({ request }) => new Promise((resolve) => {
-      if (this.pendingPermission) {
-        resolve({
-          status: "unavailable",
-          reason: "Another permission request is already pending.",
-        });
-        return;
-      }
-
-      this.pendingPermission = {
-        prompt: createPermissionPromptSnapshot(request),
-        resolve,
-      };
-      this.status = "waiting_for_permission";
-      this.activeRunController.requestPermission(
-        createRunPermissionPromptSnapshot(request, this.selectedWorkspace),
-      );
-      this.publishSnapshot();
+  private createApprovalReviewBridge(
+    runId: string,
+    taskId: string,
+  ): UserApprovalReviewBridge {
+    return createUserApprovalReviewBridge({
+      runId,
+      descriptor: {
+        id: "helarc-desktop-user-reviewer",
+        kind: "user",
+        displayName: "Helarc user",
+        source: "helarc-desktop",
+        metadata: { product: "helarc" },
+      },
+      onProjectionChanged: (projection) => {
+        if (projection === null) return;
+        this.pendingPermission = {
+          prompt: createPermissionPromptSnapshot(projection, taskId),
+          projection,
+        };
+        this.status = "waiting_for_permission";
+        this.activeRunController.requestPermission(
+          createRunPermissionPromptSnapshot(projection, this.selectedWorkspace),
+        );
+        this.publishSnapshot();
+      },
     });
   }
 
@@ -889,7 +942,7 @@ export class HelarcMainController {
         endpointLabel: this.provider.activeProfile.endpointLabel,
         model: this.provider.activeProfile.model,
       },
-      permissionPreset: "ask",
+      permissionPreset: "ask_for_approval",
       startedAt: input.startedAt,
       metadata: {
         product: "helarc",
@@ -1037,7 +1090,7 @@ export class HelarcMainController {
 
 interface PendingPermission {
   prompt: HelarcPermissionPromptSnapshot;
-  resolve: (result: { status: "granted" | "denied" | "unavailable"; reason: string }) => void;
+  projection: UserApprovalPendingProjection;
 }
 
 interface PendingPatchReview {
@@ -1498,54 +1551,92 @@ function createThreadTitle(taskText: string): string {
   return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
 }
 
-function createPermissionPromptSnapshot(request: PermissionRequest): HelarcPermissionPromptSnapshot {
+function createPermissionPromptSnapshot(
+  projection: UserApprovalPendingProjection,
+  taskId: string,
+): HelarcPermissionPromptSnapshot {
+  const request = projection.request;
+  const isCommand = request.category === "commandExecution";
   return {
     requestId: request.id,
-    taskId: request.taskId,
-    toolName: request.toolName ?? request.target?.name ?? "unknown",
+    taskId,
+    toolName: isCommand ? "commandExecution" : "request_permissions",
     reason: request.reason,
-    command: readString(request.metadata.command),
-    args: readStringArray(request.metadata.args),
-    cwd: readString(request.metadata.cwd),
-    rootName: readString(request.metadata.rootName),
+    command: isCommand ? request.payload.commandDisplay : null,
+    args: [],
+    cwd: isCommand
+      ? request.payload.cwdDisplay
+      : request.category === "permissions"
+        ? request.payload.cwdDisplay
+        : null,
+    rootName: request.category === "permissions"
+      ? request.payload.cwdDisplay
+      : null,
   };
 }
 
 function createRunPermissionPromptSnapshot(
-  request: PermissionRequest,
+  projection: UserApprovalPendingProjection,
   workspace: HelarcWorkspaceSnapshot | null,
 ): HelarcRunPermissionPrompt {
+  const request = projection.request;
   return {
     requestId: request.id,
-    actionLabel: request.action,
-    toolName: request.toolName ?? request.target?.name ?? "unknown",
-    riskLevel: request.risk === "risky" ? "high" : "low",
+    actionLabel: request.category,
+    toolName: request.category === "commandExecution"
+      ? "commandExecution"
+      : "request_permissions",
+    riskLevel: "high",
     workspaceDisplayName: workspace?.name ?? null,
     explanation: request.reason,
-    inputSummary: createPermissionInputSummary(request),
+    inputSummary: createPermissionInputSummary(projection),
     createdAt: new Date().toISOString(),
   };
 }
 
-function createPermissionInputSummary(request: PermissionRequest): string | null {
-  const command = readString(request.metadata.command);
-  const args = readStringArray(request.metadata.args);
-  if (command) {
-    return [command, ...args].join(" ");
+function createPermissionInputSummary(
+  projection: UserApprovalPendingProjection,
+): string | null {
+  const request = projection.request;
+  if (request.category === "commandExecution") {
+    return request.payload.commandDisplay;
   }
-
-  const resource = readString(request.target?.resource);
-  return resource ?? request.toolCallId ?? null;
+  if (request.category === "permissions") {
+    const permissions = request.payload.permissions;
+    const readCount = permissions.fileSystem?.read?.length ?? 0;
+    const writeCount = permissions.fileSystem?.write?.length ?? 0;
+    const network = permissions.network?.enabled === true ? "network" : null;
+    return [
+      readCount > 0 ? `${readCount} read target(s)` : null,
+      writeCount > 0 ? `${writeCount} write target(s)` : null,
+      network,
+    ].filter((value): value is string => value !== null).join(", ") || null;
+  }
+  return request.category;
 }
 
-function readString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
+function selectTemporaryDesktopApprovalOption(
+  projection: UserApprovalPendingProjection,
+  decision: "granted" | "denied",
+) {
+  return projection.request.decisionOptions.find((option) =>
+    decision === "denied"
+      ? option.kind === "decline"
+      : option.kind !== "decline" && option.kind !== "cancel"
+  ) ?? null;
 }
 
-function readStringArray(value: unknown): string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string")
-    ? value
-    : [];
+function grantedPermissionsForTemporaryOption(
+  projection: UserApprovalPendingProjection,
+  optionKind: string,
+) {
+  if (
+    optionKind !== "grantPermissions" ||
+    projection.request.category !== "permissions"
+  ) {
+    return null;
+  }
+  return projection.request.payload.permissions;
 }
 
 function createConfiguredProviderSnapshot(

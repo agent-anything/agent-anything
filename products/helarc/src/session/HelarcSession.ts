@@ -14,10 +14,13 @@ import {
   type RunResultStatus,
   type RetryClock,
   type RuntimeEvent,
-  type ResolvedRunPermissionConfig,
+  type ApprovalReviewerBinding,
 } from "@agent-anything/agent-core";
-import type { ManagedPermissionConstraints, WorkspaceContext } from "@agent-anything/governance";
-import { resolvePermissionProfile } from "@agent-anything/permission";
+import type {
+  PersistentPolicyAmendmentPort,
+  WorkspaceContext,
+} from "@agent-anything/governance";
+import type { SessionAuthorityPort } from "@agent-anything/permission";
 import { TemporaryToolActionBridge } from "@agent-anything/agent-core/runtime";
 import {
   acceptPatch,
@@ -40,11 +43,9 @@ import {
   CODE_AGENT_SEARCH_FILES_TOOL,
 } from "@agent-anything/code-agent";
 import {
-  createHostPermissionService,
   projectRuntimeEventForHost,
-  type HostEventSink,
-  type HostPermissionBridge,
   type HostSessionId,
+  type UserApprovalReviewBridge,
 } from "@agent-anything/agent-core/host";
 import { EvidenceBuilder, type Evidence } from "@agent-anything/evidence";
 import type { Provider } from "@agent-anything/providers";
@@ -66,6 +67,10 @@ import {
   HelarcTracingController,
 } from "../run/HelarcControllerTraceProjection.js";
 import type { HelarcTaskInput } from "../task/index.js";
+import {
+  createHelarcPermissionComposition,
+  type HelarcPermissionPreset,
+} from "../permission/index.js";
 
 export type HelarcSessionStatus =
   | "running"
@@ -111,14 +116,19 @@ export interface RunHelarcReadOnlySessionInput {
   cancellation?: RunCancellationController;
   storage?: StoragePort;
   now?: () => ISODateTimeString;
+  permissionPreset?: HelarcPermissionPreset;
+  userApprovalBridge?: UserApprovalReviewBridge;
+  automaticApprovalReviewer?: ApprovalReviewerBinding & {
+    readonly kind: "auto_review";
+  };
+  sessionAuthorityPort?: SessionAuthorityPort;
+  persistentPolicyAmendments?: PersistentPolicyAmendmentPort;
 }
 
 export interface RunHelarcSessionInput extends RunHelarcReadOnlySessionInput {
   sessionId?: HostSessionId;
   enableShell?: boolean;
   shellLimits?: Partial<CodeAgentShellLimits>;
-  permissionBridge?: HostPermissionBridge;
-  hostEventSink?: HostEventSink;
   patchReviewBridge?: HelarcPatchReviewBridge;
   onActivity?: (item: HelarcActivityItem, event: RuntimeEvent) => void;
 }
@@ -158,6 +168,32 @@ export async function runHelarcReadOnlySession(
 export async function runHelarcSession(
   input: RunHelarcSessionInput,
 ): Promise<HelarcSessionResult> {
+  const runId = input.runId ?? input.sessionId ?? input.task.id;
+  const hostSessionId = input.sessionId ?? runId;
+  const cancellation = input.cancellation ?? createRunCancellationController({ runId });
+  const workspace = resolveHelarcRunWorkspace(input.task);
+  const identity = {
+    id: hostSessionId,
+    kind: "anonymous" as const,
+    displayName: "Helarc user",
+    metadata: { product: "helarc" },
+  };
+  const workspaceRoots = resolvePermissionWorkspaceRoots(input.task);
+  const permissionComposition = await createHelarcPermissionComposition({
+    preset: input.permissionPreset ?? "ask_for_approval",
+    runId,
+    hostSessionId,
+    workspace,
+    workspaceRoots,
+    platform: workspaceRoots.some((root) => /^[A-Za-z]:[\\/]/.test(root.path))
+      ? "win32"
+      : "posix",
+    cancellation,
+    userApprovalBridge: input.userApprovalBridge,
+    automaticReviewer: input.automaticApprovalReviewer,
+    sessionAuthorityPort: input.sessionAuthorityPort,
+    persistentPolicyAmendments: input.persistentPolicyAmendments,
+  });
   const retryClock = createHelarcRetryClock(input.now);
   const eventEmitter = new RuntimeEventEmitter();
   const recorder = new RuntimeEventRecorder();
@@ -179,13 +215,6 @@ export async function runHelarcSession(
   const toolExecutionBoundary = new ToolExecutionBoundary({
     toolRegistry: registryResult.registry,
     evidenceBuilder,
-    permissionService: input.enableShell && input.permissionBridge
-      ? createHostPermissionService({
-          sessionId: input.sessionId ?? input.task.id,
-          bridge: input.permissionBridge,
-          eventSink: input.hostEventSink,
-        })
-      : undefined,
     toolExecutionContextResolver: registryResult.toolExecutionContextResolver,
   });
   const controller = new HelarcTracingController(new ProviderBackedController<HelarcAgentOutput>({
@@ -217,15 +246,6 @@ export async function runHelarcSession(
     eventEmitter,
     now: input.now,
   });
-  const runId = input.runId ?? input.sessionId ?? input.task.id;
-  const cancellation = input.cancellation ?? createRunCancellationController({ runId });
-  const workspace = resolveHelarcRunWorkspace(input.task);
-  const identity = {
-    id: input.sessionId ?? runId,
-    kind: "anonymous" as const,
-    displayName: "Helarc user",
-    metadata: { product: "helarc" },
-  };
   const runResult = await runner.run(
     createHelarcAgent(registryResult.registry.list()),
     {
@@ -237,10 +257,7 @@ export async function runHelarcSession(
     {
       workspace,
       identity,
-      permissions: createHelarcRunPermissionConfig(
-        input.task,
-        input.enableShell === true,
-      ),
+      permissions: permissionComposition.permissions,
       limits: {
         maxIterations: 5,
         maxActions: 8,
@@ -450,10 +467,9 @@ function resolveHelarcRunWorkspace(task: AgentTask) {
   throw new TypeError("Helarc requires one resolvable default workspace.");
 }
 
-function createHelarcRunPermissionConfig(
+function resolvePermissionWorkspaceRoots(
   task: AgentTask,
-  enableShell: boolean,
-): ResolvedRunPermissionConfig {
+): Array<{ rootId: string; path: string }> {
   const scope = task.workspaceScope;
   if (!scope) {
     throw new TypeError("Helarc requires workspace roots for permission resolution.");
@@ -465,42 +481,7 @@ function createHelarcRunPermissionConfig(
   if (workspaceRoots.length === 0) {
     throw new TypeError("Helarc requires at least one permission workspace root.");
   }
-  const platform = workspaceRoots.some((root) => /^[A-Za-z]:[\\/]/.test(root.path))
-    ? "win32" as const
-    : "posix" as const;
-  const managedConstraints: ManagedPermissionConstraints = {
-    constraintSetId: "helarc-local-default",
-    selectableProfiles: { allowedProfileIds: null, deniedProfileIds: [] },
-    fileSystem: [],
-    network: { enabled: null, allowedDomains: [], deniedDomains: [] },
-    allowUnenforcedExecution: false,
-  };
-  return {
-    permissionProfile: resolvePermissionProfile({
-      profileId: enableShell ? ":workspace" : ":read-only",
-      profiles: [],
-      environment: {
-        environmentId: "helarc-local",
-        platform,
-        workspaceRoots,
-      },
-      managedConstraints,
-    }),
-    // Slice4 snapshots the final model while the legacy Tool path remains active.
-    approvalPolicy: "never",
-    reviewer: null,
-    rules: [],
-    managedConstraints,
-    sessionAuthority: null,
-    persistentPolicyAmendments: null,
-    approvalLimits: {
-      maxRequestsPerRun: 8,
-      maxRequestsPerActionFingerprint: 2,
-      maxConsecutiveDeclines: 3,
-      maxConsecutiveReviewFailures: 3,
-    },
-    authorityApplicationLimits: { commitTimeoutMs: 5_000 },
-  };
+  return workspaceRoots;
 }
 
 function requireWorkspacePath(workspace: WorkspaceContext): string {
@@ -733,6 +714,10 @@ function titleForEvent(name: string, payload: Metadata): string {
       return `Controller ${payload.status ?? "finished"}`;
     case "run.item.appended":
       return `Run item appended: ${payload.itemKind ?? "unknown"}`;
+    case "approval.requested":
+      return `Approval requested: ${payload.category ?? "action"}`;
+    case "approval.resolved":
+      return `Approval ${payload.decisionKind ?? payload.resolutionKind ?? "resolved"}`;
     case "tool.started":
       return `Tool started: ${payload.toolName ?? "unknown"}`;
     case "tool.finished":
@@ -771,6 +756,10 @@ function detailForEvent(name: string, payload: Metadata): string | null {
     return typeof payload.controllerAction === "string"
       ? payload.controllerAction
       : null;
+  }
+
+  if (name === "approval.requested" || name === "approval.resolved") {
+    return typeof payload.requestId === "string" ? payload.requestId : null;
   }
 
   if (name.startsWith("retry.")) {

@@ -91,7 +91,7 @@ describe("Helarc work context domain", () => {
         endpointLabel: " localhost:11434 ",
         model: " gemma3 ",
       },
-      permissionPreset: "ask",
+      permissionPreset: "ask_for_approval",
       startedAt: NOW,
       completedAt: NOW,
       runtime: {
@@ -306,7 +306,7 @@ function createRecord(): HelarcThreadRecord {
         triggerMessageRole: "user",
         status: "completed",
         provider: null,
-        permissionPreset: "ask",
+        permissionPreset: "ask_for_approval",
         startedAt: NOW,
         completedAt: NOW,
         runtime: {

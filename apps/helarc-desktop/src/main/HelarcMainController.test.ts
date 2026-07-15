@@ -510,26 +510,17 @@ describe("HelarcMainController", () => {
     });
   });
 
-  it("correlates shell permission decisions and blocks denied commands", async () => {
+  it("correlates explicit permission decisions and preserves a decline", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
       runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
         {
-          action: "call_tool",
-          reason: "Create a marker.",
-          toolName: "codeAgent.runCommand",
-          input: {
-            command: process.execPath,
-            args: [
-              "-e",
-              `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran')`,
-            ],
-            cwd: ".",
-            timeoutMs: 1_000,
-            reason: "Create a governed marker file.",
-          },
+          action: "request_permissions",
+          rootId: "workspace",
+          permissions: { fileSystem: { write: ["marker.txt"] } },
+          reason: "Create a governed marker file.",
         },
         {
           action: "stop",
@@ -550,19 +541,25 @@ describe("HelarcMainController", () => {
     const waitingSnapshot = await waiting;
     const requestId = waitingSnapshot.pendingPermission?.requestId ?? "";
     expect(waitingSnapshot.pendingPermission).toMatchObject({
-      toolName: "codeAgent.runCommand",
+      toolName: "request_permissions",
       reason: "Create a governed marker file.",
-      command: process.execPath,
+      command: null,
+      rootName: "workspace",
     });
     expect(waitingSnapshot.activeRun).toMatchObject({
       status: "waiting_for_permission",
       pendingPermission: {
         requestId,
-        toolName: "codeAgent.runCommand",
+        toolName: "request_permissions",
         riskLevel: "high",
         workspaceDisplayName: workspaceRoot.split(/[\\/]/).pop(),
-        inputSummary: expect.stringContaining(process.execPath),
+        inputSummary: "1 write target(s)",
       },
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "waiting_for_permission",
+      pendingPermission: { requestId },
+      activeRun: { pendingPermission: { requestId } },
     });
 
     expect(controller.resolvePermission({
@@ -579,10 +576,9 @@ describe("HelarcMainController", () => {
     })).toMatchObject({
       ok: true,
       snapshot: {
-        status: "running",
+        status: "waiting_for_permission",
         activeRun: {
-          status: "running",
-          pendingPermission: null,
+          status: "waiting_for_permission",
         },
       },
     });
@@ -591,22 +587,22 @@ describe("HelarcMainController", () => {
     expect(blockedSnapshot).toMatchObject({
       status: "blocked",
       activeRun: {
-        status: "denied",
+        status: "failed",
         terminal: {
-          status: "denied",
+          status: "failed",
           runtimeStatus: "blocked",
         },
       },
       output: {
-        safeErrors: [{ code: "permission_denied" }],
+        safeErrors: [],
       },
       sessionHistory: [{
         status: "blocked",
         run: {
           runId: "helarc-run-1",
-          status: "denied",
+          status: "failed",
           terminal: {
-            status: "denied",
+            status: "failed",
             runtimeStatus: "blocked",
           },
         },
@@ -623,30 +619,21 @@ describe("HelarcMainController", () => {
     await expect(access(markerPath)).rejects.toThrow();
   });
 
-  it("allows a shell permission request once and completes the run", async () => {
+  it("accepts one explicit permission request and completes the same run", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-allow-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
       runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
         {
-          action: "call_tool",
-          reason: "Create a marker.",
-          toolName: "codeAgent.runCommand",
-          input: {
-            command: process.execPath,
-            args: [
-              "-e",
-              `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran')`,
-            ],
-            cwd: ".",
-            timeoutMs: 1_000,
-            reason: "Create a governed marker file.",
-          },
+          action: "request_permissions",
+          rootId: "workspace",
+          permissions: { fileSystem: { write: ["marker.txt"] } },
+          reason: "Create a governed marker file.",
         },
         {
           action: "complete",
-          summary: "Marker created.",
+          summary: "Permission was granted for this run.",
         },
       ]),
     });
@@ -663,9 +650,9 @@ describe("HelarcMainController", () => {
     })).toMatchObject({
       ok: true,
       snapshot: {
-        status: "running",
+        status: "waiting_for_permission",
         activeRun: {
-          pendingPermission: null,
+          status: "waiting_for_permission",
         },
       },
     });
@@ -681,32 +668,23 @@ describe("HelarcMainController", () => {
         },
       },
       output: {
-        agentSummary: "Marker created.",
+        agentSummary: "Permission was granted for this run.",
       },
     });
-    await expect(readFile(markerPath, "utf8")).resolves.toBe("ran");
+    await expect(access(markerPath)).rejects.toThrow();
   });
 
-  it("cancels while a permission request is pending", async () => {
+  it("cancels while an explicit approval request is pending", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-cancel-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
       runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
         {
-          action: "call_tool",
-          reason: "Create a marker.",
-          toolName: "codeAgent.runCommand",
-          input: {
-            command: process.execPath,
-            args: [
-              "-e",
-              `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran')`,
-            ],
-            cwd: ".",
-            timeoutMs: 1_000,
-            reason: "Create a governed marker file.",
-          },
+          action: "request_permissions",
+          rootId: "workspace",
+          permissions: { fileSystem: { write: ["marker.txt"] } },
+          reason: "Create a governed marker file.",
         },
       ]),
     });

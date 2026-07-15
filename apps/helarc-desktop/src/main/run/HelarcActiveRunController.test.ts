@@ -213,7 +213,7 @@ function activeRunInput() {
       workspaceProfileId: "workspace-1",
       providerProfileId: "provider-1",
       taskTemplateId: "inspect-code",
-      permissionPreset: "ask" as const,
+      permissionPreset: "ask_for_approval" as const,
       createdAt: "2026-07-04T00:00:00.000Z",
       metadata: { product: "helarc" },
     },

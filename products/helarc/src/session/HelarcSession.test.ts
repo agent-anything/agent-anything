@@ -1,5 +1,4 @@
 import type { ContextProjection } from "@agent-anything/agent-core";
-import type { HostPermissionBridge } from "@agent-anything/agent-core/host";
 import type {
   InvocationInterruptionContext,
   Provider,
@@ -265,7 +264,7 @@ describe("Helarc read-only session", () => {
     expect(JSON.stringify(provider.requests[1])).not.toContain(firstInvalidOutput);
   });
 
-  it("blocks shell execution when permission is denied before process start", async () => {
+  it("fails closed before shell process start without Phase16 enforcement", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-shell-denied-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const provider = new ScriptedProvider([
@@ -280,26 +279,23 @@ describe("Helarc read-only session", () => {
         reason: "Permission was denied.",
       },
     ]);
-    const permissionBridge: HostPermissionBridge = async () => ({
-      status: "denied",
-      reason: "Denied by test.",
-    });
-
     const result = await runHelarcSession({
       task: createTask(workspaceRoot),
       provider,
       enableShell: true,
-      permissionBridge,
     });
 
     expect(result.status).toBe("blocked");
     expect(result.output.safeErrors).toEqual([
-      { code: "permission_denied", message: "Denied by test." },
+      {
+        code: "permission_unavailable",
+        message: "Denied because permissionMode: ask requires a host-provided prompt service.",
+      },
     ]);
     await expect(access(markerPath)).rejects.toThrow();
   });
 
-  it("continues the same session after shell permission is granted", async () => {
+  it("does not let a Host approval composition bypass the temporary shell path", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-shell-granted-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const provider = new ScriptedProvider([
@@ -311,24 +307,19 @@ describe("Helarc read-only session", () => {
       },
       {
         action: "complete",
-        summary: "Shell command completed.",
+        summary: "Shell command was not executed.",
       },
     ]);
-    const permissionBridge: HostPermissionBridge = async () => ({
-      status: "granted",
-      reason: "Granted by test.",
-    });
 
     const result = await runHelarcSession({
       task: createTask(workspaceRoot),
       provider,
       enableShell: true,
-      permissionBridge,
     });
 
     expect(result.status).toBe("completed");
-    expect(result.output.agentSummary).toBe("Shell command completed.");
-    await expect(access(markerPath)).resolves.toBeUndefined();
+    expect(result.output.agentSummary).toBe("Shell command was not executed.");
+    await expect(access(markerPath)).rejects.toThrow();
     expect(provider.lastControllerInputContexts).toEqual([0, 1]);
   });
 

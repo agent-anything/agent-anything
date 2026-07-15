@@ -170,6 +170,56 @@ describe("mapRuntimeEventToHelarcRunEvent", () => {
     });
   });
 
+  it("maps approval lifecycle summaries without internal request data", () => {
+    const requested = mapRuntimeEventToHelarcRunEvent(runtimeEvent({
+      name: "approval.requested",
+      payload: {
+        runId: "run-1",
+        requestId: "approval-1",
+        actionId: "action-1",
+        pendingVersion: 2,
+        category: "permissions",
+        reviewer: "user",
+        phase: "reviewing",
+        reviewOperationId: "review-1",
+        trustedProposals: [{ secret: true }],
+      },
+    }));
+    const resolved = mapRuntimeEventToHelarcRunEvent(runtimeEvent({
+      name: "approval.resolved",
+      payload: {
+        runId: "run-1",
+        requestId: "approval-1",
+        actionId: "action-1",
+        pendingVersion: 2,
+        reviewer: "user",
+        resolutionKind: "decision",
+        decisionKind: "grantPermissions",
+        applicationKind: "applied",
+        authorityRecordIds: ["grant-1"],
+        internalRequest: { secret: true },
+      },
+    }));
+
+    expect(requested).toMatchObject({
+      kind: "approval.requested",
+      title: "Approval requested: permissions",
+      detail: "approval-1",
+      metadata: { pendingVersion: 2, reviewer: "user", phase: "reviewing" },
+    });
+    expect(resolved).toMatchObject({
+      kind: "approval.resolved",
+      title: "Approval grantPermissions",
+      detail: "approval-1",
+      metadata: {
+        resolutionKind: "decision",
+        applicationKind: "applied",
+        authorityRecordIds: ["grant-1"],
+      },
+    });
+    expect(JSON.stringify([requested, resolved])).not.toContain("secret");
+  });
+
   it("maps Retry progress from the closed Host projection", () => {
     const event = mapRuntimeEventToHelarcRunEvent(runtimeEvent({
       name: "retry.scheduled",

@@ -68,3 +68,19 @@ export type {
   UserApprovalReviewBridge,
 } from "./UserApprovalReviewBridge.js";
 export { createUserApprovalReviewBridge } from "./UserApprovalReviewBridge.js";
+export {
+  resolveHostRunPermissionConfig,
+  type HostPermissionProfileSelection,
+  type HostRunPermissionCompositionInput,
+  type HostSessionAuthorityComposition,
+} from "./HostRunPermissionComposition.js";
+export {
+  createInMemoryHostSessionAuthorityStore,
+  type CreateInMemoryHostSessionAuthorityStoreInput,
+  type InMemoryHostSessionAuthorityStore,
+} from "./InMemoryHostSessionAuthorityStore.js";
+export {
+  createInMemoryHostPolicyAmendmentStore,
+  type CreateInMemoryHostPolicyAmendmentStoreInput,
+  type InMemoryHostPolicyAmendmentStore,
+} from "./InMemoryHostPolicyAmendmentStore.js";

@@ -49,6 +49,10 @@ function kindForEvent(
       return "permission.requested";
     case "permission.resolved":
       return "permission.resolved";
+    case "approval.requested":
+      return "approval.requested";
+    case "approval.resolved":
+      return "approval.resolved";
     case "tool.started":
       return "tool.started";
     case "tool.finished":
@@ -87,6 +91,10 @@ function titleForEvent(name: RuntimeEventName, payload: Metadata): string {
       return `Permission requested: ${readString(payload, "toolName") ?? "tool"}`;
     case "permission.resolved":
       return `Permission ${readString(payload, "decision") ?? "resolved"}`;
+    case "approval.requested":
+      return `Approval requested: ${readString(payload, "category") ?? "action"}`;
+    case "approval.resolved":
+      return `Approval ${readString(payload, "decisionKind") ?? readString(payload, "resolutionKind") ?? "resolved"}`;
     case "tool.started":
       return `Tool started: ${readString(payload, "toolName") ?? "unknown"}`;
     case "tool.finished":
@@ -117,7 +125,12 @@ function detailForEvent(name: RuntimeEventName, payload: Metadata): string | nul
     return detailForControllerFinished(payload);
   }
 
-  if (name === "permission.requested" || name === "permission.resolved") {
+  if (
+    name === "permission.requested" ||
+    name === "permission.resolved" ||
+    name === "approval.requested" ||
+    name === "approval.resolved"
+  ) {
     return readString(payload, "requestId") ?? readString(payload, "permissionRequestId");
   }
 
@@ -167,6 +180,7 @@ function severityForEvent(
     status === "failed" ||
     status === "blocked" ||
     decision === "denied"
+    || name === "approval.resolved" && readString(payload, "code") !== null
   ) {
     return "error";
   }
@@ -213,6 +227,13 @@ function metadataForEvent(event: RuntimeEvent, payload: Metadata): Metadata {
   copyString(metadata, payload, "permissionRequestId");
   copyString(metadata, payload, "decision");
   copyString(metadata, payload, "riskLevel");
+  copyNumber(metadata, payload, "pendingVersion");
+  copyString(metadata, payload, "category");
+  copyString(metadata, payload, "reviewer");
+  copyString(metadata, payload, "reviewOperationId");
+  copyString(metadata, payload, "resolutionKind");
+  copyString(metadata, payload, "applicationKind");
+  copyStringArray(metadata, payload, "authorityRecordIds");
   copyString(metadata, payload, "observationId");
   copyStringArray(metadata, payload, "evidenceRefs");
   copyString(metadata, payload, "evidenceId");
