@@ -31,6 +31,16 @@ export {
   createApprovalRequestSummary,
 } from "./ApprovalSummary.js";
 export type {
+  ApprovalReviewAttemptError,
+  ApprovalReviewRetryCategory,
+  ExecuteApprovalReviewAttemptInput,
+} from "./ApprovalReviewOperation.js";
+export {
+  approvalReviewRetryClassifier,
+  executeApprovalReviewAttempt,
+  normalizeApprovalReviewOutcome,
+} from "./ApprovalReviewOperation.js";
+export type {
   BoundaryExecutionResult,
   CancellationAttribution,
   CancellationBoundary,

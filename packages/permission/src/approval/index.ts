@@ -59,6 +59,13 @@ export {
   snapshotApprovalReviewContext,
 } from "./projectApprovalReviewRequest.js";
 export {
+  snapshotApprovalDecisionSubmission,
+  snapshotApprovalInterruption,
+  snapshotApprovalReviewerDescriptor,
+  snapshotApprovalReviewFailure,
+  snapshotApprovalReviewInput,
+} from "./ApprovalSnapshots.js";
+export {
   validateApprovalDecision,
   type ApprovalDecisionValidationCode,
   type ValidateApprovalDecisionInput,

@@ -200,6 +200,9 @@ importers:
       '@agent-anything/providers':
         specifier: workspace:*
         version: link:../providers
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../shared
 
   packages/tools:
     dependencies:

@@ -61,3 +61,10 @@ export {
   type HostPermissionBridgeStatus,
   type MapHostPermissionBridgeResultInput,
 } from "./HostPermissionBridge.js";
+export type {
+  CreateUserApprovalReviewBridgeInput,
+  UserApprovalNotificationFailure,
+  UserApprovalPendingProjection,
+  UserApprovalReviewBridge,
+} from "./UserApprovalReviewBridge.js";
+export { createUserApprovalReviewBridge } from "./UserApprovalReviewBridge.js";
