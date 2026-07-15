@@ -2,7 +2,9 @@ import {
   canonicalizeAdditionalPermissions,
   validateGrantedPermissions,
   type AdditionalPermissions,
+  type ApprovalDecisionOption,
   type ApprovalPolicy,
+  type ApprovalTrustedProposal,
   type CanonicalAdditionalPermissions,
   type PermissionResolutionEnvironmentInput,
 } from "@agent-anything/permission";
@@ -24,6 +26,11 @@ export interface PreparedPermissionRequestAction {
   readonly permissions: CanonicalAdditionalPermissions;
   readonly reason: string;
   readonly actionFingerprint: string;
+}
+
+export interface PermissionRequestDecisionContract {
+  readonly decisionOptions: readonly [ApprovalDecisionOption, ...ApprovalDecisionOption[]];
+  readonly trustedProposals: readonly ApprovalTrustedProposal[];
 }
 
 export type PreparePermissionRequestActionResult =
@@ -122,6 +129,75 @@ export function allowsExplicitPermissionRequest(policy: ApprovalPolicy): boolean
   if (policy === "never") return false;
   if (policy === "untrusted" || policy === "on-request") return true;
   return policy.granular.requestPermissions;
+}
+
+export function createPermissionRequestDecisionContract(input: {
+  readonly requestId: string;
+  readonly prepared: PreparedPermissionRequestAction;
+  readonly config: ResolvedRunPermissionConfig;
+}): PermissionRequestDecisionContract {
+  const session = input.config.sessionAuthority;
+  const proposalRef = `${input.requestId}:session_authority_proposal`;
+  const sessionOption: ApprovalDecisionOption[] = session === null
+    ? []
+    : [{
+        id: `${input.requestId}:grant_session`,
+        kind: "grantPermissions",
+        scope: "session",
+        label: "Grant for this session",
+        description: "Grant a selected subset for the active host session.",
+        trustedProposalRef: proposalRef,
+        metadata: {},
+      }];
+  const proposals: ApprovalTrustedProposal[] = session === null
+    ? []
+    : [{
+        kind: "session_authority",
+        ref: proposalRef,
+        proposal: {
+          proposalRef,
+          context: session.context,
+          category: "permissions",
+          applicabilityKeys: [{
+            category: "permissions",
+            value: input.prepared.actionFingerprint,
+          }],
+          defaultGrantedPermissions: null,
+        },
+      }];
+  return deepFreeze({
+    decisionOptions: [
+      {
+        id: `${input.requestId}:grant_run`,
+        kind: "grantPermissions",
+        scope: "run",
+        label: "Grant for this run",
+        description: "Grant a selected subset for the active run.",
+        trustedProposalRef: null,
+        metadata: {},
+      },
+      ...sessionOption,
+      {
+        id: `${input.requestId}:decline`,
+        kind: "decline",
+        scope: null,
+        label: "Decline",
+        description: "Continue without granting these permissions.",
+        trustedProposalRef: null,
+        metadata: {},
+      },
+      {
+        id: `${input.requestId}:cancel`,
+        kind: "cancel",
+        scope: null,
+        label: "Cancel run",
+        description: "Cancel the active run.",
+        trustedProposalRef: null,
+        metadata: {},
+      },
+    ] as [ApprovalDecisionOption, ...ApprovalDecisionOption[]],
+    trustedProposals: proposals,
+  });
 }
 
 function snapshotInput(input: unknown):
@@ -224,4 +300,10 @@ function invalid(code: string, message: string) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
 }

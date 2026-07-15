@@ -21,7 +21,14 @@ import type { RunInput } from "./RunInput.js";
 import { Runner } from "./Runner.js";
 import type { ToolActionBridge } from "./ToolActionBridge.js";
 import type { RetryEvent } from "../retry/index.js";
-import { resolvePermissionProfile } from "@agent-anything/permission";
+import {
+  resolvePermissionProfile,
+  type SessionAuthorityCommit,
+  type SessionAuthorityCommitResult,
+  type SessionAuthorityLookup,
+  type SessionAuthorityPort,
+  type SessionAuthorityRecord,
+} from "@agent-anything/permission";
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
 import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
 import { FakeApprovalReviewer } from "@agent-anything/testing";
@@ -1730,6 +1737,209 @@ describe("Runner approval lifecycle", () => {
       observation: { limit: "requests_per_action_fingerprint" },
     });
   });
+
+  it("commits a Session permission grant before exposing it to Controller", async () => {
+    const commits: SessionAuthorityCommit[] = [];
+    const port = createSessionAuthorityPort(async (input) => {
+      commits.push(input);
+      return { kind: "applied", record: input.record };
+    });
+    const reviewer = createApprovalReviewer((input) => decidedSessionReview(input, {
+      fileSystem: { write: ["C:/workspace/output.txt"] },
+    }));
+    const controller = new ScriptedController([
+      permissionRequestDecision(),
+      (input) => {
+        expect(input.context.permission.authority).toMatchObject({
+          hasAdditionalFileSystemWrite: true,
+          sessionAuthorityCount: 1,
+        });
+        return finalDecision("Session grant committed");
+      },
+    ]);
+
+    const result = await createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        permissions: createSessionReviewPermissionConfig(reviewer, port),
+      }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(commits).toHaveLength(1);
+    expect(commits[0]?.commitId).toBe(
+      "run_001:authority_operation:1:commit",
+    );
+    expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({
+      record: {
+        resolutionKind: "decision",
+        applicationKind: "applied",
+        authorityRecordIds: ["run_001:session_authority_record:1"],
+      },
+    });
+  });
+
+  it("continues without Session authority after confirmed commit rejection", async () => {
+    const port = createSessionAuthorityPort(async () => ({
+      kind: "not_applied",
+      code: "session_authority_conflict",
+      message: "The idempotency key conflicts with another record.",
+    }));
+    const reviewer = createApprovalReviewer((input) => decidedSessionReview(input, {
+      fileSystem: { write: ["C:/workspace/output.txt"] },
+    }));
+    const controller = new ScriptedController([
+      permissionRequestDecision(),
+      (input) => {
+        expect(input.context.permission.authority.sessionAuthorityCount).toBe(0);
+        expect(input.context.observations.at(-1)).toMatchObject({
+          kind: "approval_application_failed",
+          scope: "session",
+          code: "session_authority_conflict",
+        });
+        return finalDecision("Commit rejected safely");
+      },
+    ]);
+
+    const result = await createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        permissions: createSessionReviewPermissionConfig(reviewer, port),
+      }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({
+      record: {
+        resolutionKind: "decision",
+        applicationKind: "not_applied",
+        code: "session_authority_conflict",
+      },
+    });
+  });
+
+  it("fails closed when Session commit reports a mismatched applied record", async () => {
+    const port = createSessionAuthorityPort(async (input) => ({
+      kind: "applied",
+      record: { ...input.record, id: "session_authority_other" },
+    }));
+    const reviewer = createApprovalReviewer((input) => decidedSessionReview(input, {
+      fileSystem: { write: ["C:/workspace/output.txt"] },
+    }));
+    const result = await createRunner(
+      new ScriptedController([permissionRequestDecision()]),
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        permissions: createSessionReviewPermissionConfig(reviewer, port),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "session_authority_commit_unconfirmed",
+      errors: [{ owner: "permission", code: "session_authority_commit_outcome_unknown" }],
+    });
+    expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({
+      record: {
+        resolutionKind: "decision",
+        applicationKind: "outcome_unknown",
+        authorityRecordIds: [],
+      },
+    });
+  });
+
+  it("preserves an applied Session record when cancellation wins after durable commit", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const port = createSessionAuthorityPort(async (input) => {
+      cancellation.requestCancellation({
+        origin: "user",
+        reasonCode: "user_requested",
+      });
+      return { kind: "applied", record: input.record };
+    });
+    const reviewer = createApprovalReviewer((input) => decidedSessionReview(input, {
+      fileSystem: { write: ["C:/workspace/output.txt"] },
+    }));
+    const controller = new ScriptedController([
+      permissionRequestDecision(),
+      finalDecision("Must not run"),
+    ]);
+    const result = await createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        cancellation,
+        permissions: createSessionReviewPermissionConfig(reviewer, port),
+      }),
+    );
+
+    expect(result.status).toBe("cancelled");
+    expect(controller.calls).toHaveLength(1);
+    expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({
+      record: {
+        resolutionKind: "decision",
+        applicationKind: "applied",
+        authorityRecordIds: ["run_001:session_authority_record:1"],
+      },
+    });
+  });
+
+  it("records interrupted non-application when cancellation wins before durable commit", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const commitStarted = createDeferred<void>();
+    const port: SessionAuthorityPort = {
+      async listApplicable() {
+        return [];
+      },
+      commit: (_input, context) => new Promise((resolve) => {
+        commitStarted.resolve();
+        const settle = () => {
+          if (context.interruption === null) {
+            throw new Error("Authority interruption must be attributed.");
+          }
+          resolve({ kind: "interrupted", interruption: context.interruption });
+        };
+        context.signal.addEventListener("abort", settle, { once: true });
+        if (context.signal.aborted) settle();
+      }),
+    };
+    const reviewer = createApprovalReviewer((input) => decidedSessionReview(input, {
+      fileSystem: { write: ["C:/workspace/output.txt"] },
+    }));
+    const controller = new ScriptedController([
+      permissionRequestDecision(),
+      finalDecision("Must not run"),
+    ]);
+    const running = createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        cancellation,
+        permissions: createSessionReviewPermissionConfig(reviewer, port),
+      }),
+    );
+
+    await commitStarted.promise;
+    cancellation.requestCancellation({
+      origin: "user",
+      reasonCode: "user_requested",
+    });
+    const result = await running;
+
+    expect(result.status).toBe("cancelled");
+    expect(controller.calls).toHaveLength(1);
+    expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({
+      record: {
+        resolutionKind: "decision",
+        applicationKind: "interrupted",
+        authorityRecordIds: [],
+      },
+    });
+  });
 });
 
 function createApprovalReviewer(
@@ -1760,6 +1970,41 @@ function createReviewPermissionConfig(
       descriptor: reviewer.descriptor,
       reviewTimeoutMs: 60_000,
     },
+  };
+}
+
+function createSessionReviewPermissionConfig(
+  reviewer: FakeApprovalReviewer,
+  port: SessionAuthorityPort,
+): ResolvedRunPermissionConfig {
+  return {
+    ...createReviewPermissionConfig(reviewer),
+    sessionAuthority: {
+      context: {
+        hostSessionId: "host_session_001",
+        authorityContextKey: "authority_context_001",
+        workspaceId: "workspace_001",
+        identityId: "user_001",
+        environmentId: "test-local",
+      },
+      initialRecords: [],
+      port,
+    },
+  };
+}
+
+function createSessionAuthorityPort(
+  commit: (
+    input: SessionAuthorityCommit,
+  ) => SessionAuthorityCommitResult | Promise<SessionAuthorityCommitResult>,
+): SessionAuthorityPort {
+  return {
+    async listApplicable(
+      _input: SessionAuthorityLookup,
+    ): Promise<readonly SessionAuthorityRecord[]> {
+      return [];
+    },
+    commit: async (input) => commit(input),
   };
 }
 
@@ -1795,6 +2040,29 @@ function decidedReview(
       optionId: option.id,
       grantedPermissions,
       reason: kind === "decline" ? "Not needed." : null,
+    },
+    rationale: null,
+  };
+}
+
+function decidedSessionReview(
+  input: ApprovalReviewInput,
+  grantedPermissions: AdditionalPermissions,
+): ApprovalReviewOutcome {
+  const option = input.request.decisionOptions.find(
+    (candidate) => candidate.kind === "grantPermissions" && candidate.scope === "session",
+  );
+  if (option === undefined) throw new Error("Session permission option was not offered.");
+  return {
+    status: "decided",
+    submission: {
+      submissionId: "submission_grant_session",
+      runId: input.request.runId,
+      requestId: input.request.id,
+      pendingVersion: input.pendingVersion,
+      optionId: option.id,
+      grantedPermissions,
+      reason: null,
     },
     rationale: null,
   };

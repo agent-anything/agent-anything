@@ -5,15 +5,16 @@ import type {
   Metadata,
 } from "@agent-anything/shared";
 import type { ObservabilityRecordContext } from "@agent-anything/observability";
+import type { AppliedPolicyAmendmentRecord } from "@agent-anything/governance";
 import {
   createApprovalRequest,
   projectApprovalReviewRequest,
   validateApprovalDecision,
-  type ApprovalDecisionOption,
   type ApprovalRecord,
   type ApprovalReviewFailure,
   type ApprovalReviewInput,
   type ApprovalScope,
+  type SessionAuthorityRecord,
   type ValidatedApprovalDecision,
 } from "@agent-anything/permission";
 import type { Agent } from "../agent/index.js";
@@ -44,6 +45,7 @@ import type {
   ApprovalLimitReachedObservation,
   ApprovalPolicyRejectedObservation,
   ApprovalReviewFailedObservation,
+  ApprovalApplicationFailedObservation,
   Observation,
   PermissionsGrantedObservation,
   PlanUpdateResultObservation,
@@ -101,10 +103,13 @@ import {
 } from "./ApprovalReviewerExecution.js";
 import {
   allowsExplicitPermissionRequest,
+  createPermissionRequestDecisionContract,
   preparePermissionRequestAction,
   type PreparedPermissionRequestAction,
 } from "./PermissionRequestAction.js";
 import {
+  applyCommittedPolicyAmendment,
+  applyCommittedSessionAuthority,
   applyImmediateApprovalAuthority,
 } from "./RunApprovalAuthority.js";
 import {
@@ -121,6 +126,12 @@ import {
   createApprovalRecordSummary,
   createApprovalRequestSummary,
 } from "./ApprovalSummary.js";
+import {
+  executeAuthorityCommit,
+  isDurableAuthorityDecision,
+  type AuthorityCommitExecutionResult,
+  type AuthorityCommitOwner,
+} from "./AuthorityCommitExecution.js";
 
 type ResolvedRunnerDependencies = RunnerDependencies & {
   readonly now: NonNullable<RunnerDependencies["now"]>;
@@ -608,6 +619,11 @@ export class RunExecution<TOutput> {
         )),
       };
     }
+    const decisionContract = createPermissionRequestDecisionContract({
+      requestId,
+      prepared: prepared.request,
+      config: this.config.permissions,
+    });
     const request = createApprovalRequest({
       id: requestId,
       createdAt,
@@ -627,8 +643,8 @@ export class RunExecution<TOutput> {
           cwdDisplay: prepared.request.cwdDisplay,
           environmentId: prepared.request.environment.environmentId,
         },
-        decisionOptions: permissionRequestDecisionOptions(requestId),
-        trustedProposals: [],
+        decisionOptions: decisionContract.decisionOptions,
+        trustedProposals: decisionContract.trustedProposals,
         deadlineAt,
         metadata: {},
       },
@@ -1020,21 +1036,26 @@ export class RunExecution<TOutput> {
       decision,
     });
     if (applied.status === "deferred") {
-      const record = this.createApprovalRecord(
-        { kind: "decision", decision },
-        { kind: "not_applied", code: "approval_scope_unavailable" },
-      );
-      const observation = Object.freeze({
-        ...this.createObservationBaseFromPending(pending),
-        kind: "approval_application_failed" as const,
-        requestId: pending.request.id,
-        category: pending.request.category,
-        scope: applied.scope as ApprovalScope,
-        code: "approval_scope_unavailable",
-        message: "The selected approval scope is not active in this Runner slice.",
+      if (!isDurableAuthorityDecision(decision)) {
+        throw new Error("A deferred approval decision has no durable authority operation.");
+      }
+      const applying = this.requirePendingApproval();
+      if (applying.phase !== "applying_authority") {
+        throw new Error("Durable authority application requires an applying PendingApproval.");
+      }
+      const result = await executeAuthorityCommit({
+        decision,
+        pending: applying,
+        config: this.config.permissions,
+        cancellation: this.config.cancellation.context,
+        runDeadlineAt: this.runDeadlineAt(),
+        policyAmendmentRecordId: this.createId(
+          "policy_amendment_record",
+          applying.version,
+        ),
+        now: () => this.now(),
       });
-      this.settlePendingApproval(record, "neutral", observation, true);
-      return { invalidatesBatch: true, terminalResult: null };
+      return this.settleAuthorityCommit(decision, result);
     }
     if (applied.status === "not_applicable") {
       throw new Error("A non-authority approval decision reached authority application.");
@@ -1069,6 +1090,131 @@ export class RunExecution<TOutput> {
       false,
       applied.permission,
     );
+    return { invalidatesBatch: true, terminalResult: null };
+  }
+
+  private async settleAuthorityCommit(
+    decision: ValidatedApprovalDecision,
+    result: AuthorityCommitExecutionResult,
+  ): Promise<ProcessActionResult> {
+    const pending = this.requirePendingApproval();
+    if (result.kind === "applied") {
+      const permission = result.application.target === "session_authority"
+        ? applyCommittedSessionAuthority({
+            permission: this.state.permission,
+            record: result.record as SessionAuthorityRecord,
+          })
+        : applyCommittedPolicyAmendment({
+            permission: this.state.permission,
+            record: result.record as AppliedPolicyAmendmentRecord,
+          });
+      const observation = result.application.target === "session_authority" &&
+          "grantedPermissions" in result.record && result.record.grantedPermissions !== null
+        ? this.createSessionPermissionsGrantedObservation(pending, result.record)
+        : null;
+      const record = this.createApprovalRecord(
+        { kind: "decision", decision },
+        result.application,
+      );
+      this.settlePendingApproval(record, "applied", observation, false, permission);
+      return this.finishAuthoritySettlement(result, true);
+    }
+
+    const record = this.createApprovalRecord(
+      { kind: "decision", decision },
+      result.application,
+    );
+    const observation: ApprovalApplicationFailedObservation = Object.freeze({
+      ...this.createObservationBaseFromPending(pending),
+      kind: "approval_application_failed",
+      requestId: pending.request.id,
+      category: pending.request.category,
+      scope: result.scope,
+      code: result.kind === "interrupted"
+        ? authorityInterruptionCode(result.owner)
+        : result.code,
+      message: result.kind === "interrupted"
+        ? "Authority application was interrupted before durable commit."
+        : result.message,
+    });
+    this.settlePendingApproval(record, "neutral", observation, true);
+    return this.finishAuthoritySettlement(result, false);
+  }
+
+  private createSessionPermissionsGrantedObservation(
+    pending: PendingApproval,
+    record: SessionAuthorityRecord,
+  ): PermissionsGrantedObservation {
+    const permissions = record.grantedPermissions!;
+    return Object.freeze({
+      ...this.createObservationBaseFromPending(pending),
+      kind: "permissions_granted",
+      requestId: pending.request.id,
+      category: pending.request.category,
+      scope: "session",
+      summary: Object.freeze({
+        fileSystemReadTargetCount: permissions.fileSystem?.read?.length ?? 0,
+        fileSystemWriteTargetCount: permissions.fileSystem?.write?.length ?? 0,
+        networkEnabled: permissions.network?.enabled === true,
+        networkDomainCount: permissions.network?.domains?.length ?? 0,
+      }),
+    });
+  }
+
+  private async finishAuthoritySettlement(
+    result: AuthorityCommitExecutionResult,
+    applied: boolean,
+  ): Promise<ProcessActionResult> {
+    const cancellation = this.cancellationRequest();
+    if (cancellation !== null) {
+      if (result.kind === "outcome_unknown") {
+        this.enterCancelling(cancellation);
+        return {
+          invalidatesBatch: true,
+          terminalResult: await this.fail(
+            authorityCommitRuntimeError(result),
+            authorityCommitFailureCode(result.owner, true),
+          ),
+        };
+      }
+      return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
+    }
+
+    if (result.kind === "outcome_unknown") {
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(
+          authorityCommitRuntimeError(result),
+          authorityCommitFailureCode(result.owner, true),
+        ),
+      };
+    }
+    if (result.interruption?.kind === "operation_deadline") {
+      if (result.deadlineAt === this.runDeadlineAt()) {
+        return {
+          invalidatesBatch: true,
+          terminalResult: await this.fail(limitRuntimeError(
+            "Run deadline elapsed during authority application.",
+            { commitId: result.commitId, deadlineAt: result.deadlineAt },
+          )),
+        };
+      }
+      if (applied) {
+        return {
+          invalidatesBatch: true,
+          terminalResult: await this.fail(
+            runtimeError(
+              result.owner,
+              authorityCommitFailureCode(result.owner, false),
+              "Authority was durably committed, but completion was confirmed after its operation deadline.",
+              false,
+              { commitId: result.commitId, deadlineAt: result.deadlineAt },
+            ),
+            authorityCommitFailureCode(result.owner, false),
+          ),
+        };
+      }
+    }
     return { invalidatesBatch: true, terminalResult: null };
   }
 
@@ -2246,40 +2392,6 @@ function finalizationObservabilityContext(
   });
 }
 
-function permissionRequestDecisionOptions(
-  requestId: string,
-): readonly [ApprovalDecisionOption, ...ApprovalDecisionOption[]] {
-  return deepFreezeValue([
-    {
-      id: `${requestId}:grant_run`,
-      kind: "grantPermissions" as const,
-      scope: "run" as const,
-      label: "Grant for this run",
-      description: "Grant a selected subset for the active run.",
-      trustedProposalRef: null,
-      metadata: {},
-    },
-    {
-      id: `${requestId}:decline`,
-      kind: "decline" as const,
-      scope: null,
-      label: "Decline",
-      description: "Continue without granting these permissions.",
-      trustedProposalRef: null,
-      metadata: {},
-    },
-    {
-      id: `${requestId}:cancel`,
-      kind: "cancel" as const,
-      scope: null,
-      label: "Cancel run",
-      description: "Cancel the active run.",
-      trustedProposalRef: null,
-      metadata: {},
-    },
-  ]);
-}
-
 function approvalReviewFailure(
   code: ApprovalReviewFailure["code"],
   message: string,
@@ -2291,6 +2403,38 @@ function approvalReviewFailure(
     retryable,
     metadata: Object.freeze({}),
   });
+}
+
+function authorityCommitFailureCode(
+  owner: AuthorityCommitOwner,
+  unconfirmed: boolean,
+): RunFailureCode {
+  if (owner === "permission") {
+    return unconfirmed
+      ? "session_authority_commit_unconfirmed"
+      : "session_authority_commit_failed";
+  }
+  return unconfirmed
+    ? "policy_amendment_commit_unconfirmed"
+    : "policy_amendment_commit_failed";
+}
+
+function authorityInterruptionCode(owner: AuthorityCommitOwner): string {
+  return owner === "permission"
+    ? "session_authority_commit_interrupted"
+    : "policy_amendment_commit_interrupted";
+}
+
+function authorityCommitRuntimeError(
+  result: Extract<AuthorityCommitExecutionResult, { readonly kind: "outcome_unknown" }>,
+): RuntimeError {
+  return runtimeError(
+    result.owner,
+    result.code,
+    result.message,
+    false,
+    { commitId: result.commitId, deadlineAt: result.deadlineAt },
+  );
 }
 
 function deepFreezeValue<T>(value: T): T {

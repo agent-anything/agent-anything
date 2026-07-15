@@ -1,8 +1,10 @@
 import {
   createActionApprovalCoverage,
   type ApprovalApplicationOutcome,
+  type SessionAuthorityRecord,
   type ValidatedApprovalDecision,
 } from "@agent-anything/permission";
+import type { AppliedPolicyAmendmentRecord } from "@agent-anything/governance";
 import type { RunPermissionState } from "./RunPermissionState.js";
 
 export type ApplyImmediateApprovalAuthorityResult =
@@ -102,6 +104,34 @@ export function consumeActionApprovalCoverage(input: {
       ...input.permission,
       actionCoverage: Object.freeze(next),
     }),
+  });
+}
+
+export function applyCommittedSessionAuthority(input: {
+  readonly permission: RunPermissionState;
+  readonly record: SessionAuthorityRecord;
+}): RunPermissionState {
+  assertUniqueAuthorityId(input.permission, input.record.id);
+  return Object.freeze({
+    ...input.permission,
+    sessionAuthorityRecords: Object.freeze([
+      ...input.permission.sessionAuthorityRecords,
+      input.record,
+    ]),
+  });
+}
+
+export function applyCommittedPolicyAmendment(input: {
+  readonly permission: RunPermissionState;
+  readonly record: AppliedPolicyAmendmentRecord;
+}): RunPermissionState {
+  assertUniqueAuthorityId(input.permission, input.record.id);
+  return Object.freeze({
+    ...input.permission,
+    appliedPolicyAmendments: Object.freeze([
+      ...input.permission.appliedPolicyAmendments,
+      input.record,
+    ]),
   });
 }
 

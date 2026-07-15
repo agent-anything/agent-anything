@@ -7,6 +7,8 @@ import {
   type ApprovalReviewerPort,
   type ApprovalReviewOutcome,
   type ResolvedPermissionProfile,
+  type SessionAuthorityPort,
+  type SessionAuthorityRecord,
 } from "@agent-anything/permission";
 import type { InvocationInterruptionContext } from "@agent-anything/shared";
 import { describe, expect, it } from "vitest";
@@ -136,6 +138,59 @@ describe("Run permission configuration", () => {
       workspace: workspace(),
       identity: identity(),
     })).toThrow("cwd must already be canonical");
+  });
+
+  it("validates and restores only exact initial Session authority records", () => {
+    const context = {
+      hostSessionId: "session.test",
+      authorityContextKey: "authority-context.test",
+      workspaceId: "workspace.test",
+      identityId: "identity.test",
+      environmentId: "local",
+    };
+    const record: SessionAuthorityRecord = {
+      id: "session-authority.test",
+      ...context,
+      category: "permissions",
+      applicabilityKeys: [{
+        category: "permissions",
+        value: "permissions.write-output",
+      }],
+      grantedPermissions: {
+        fileSystem: { write: ["/work/repo/output.txt"] },
+      },
+      sourceRequestId: "request.test",
+      sourceActionFingerprint: "fingerprint.test",
+      createdAt: "2026-07-15T00:00:00.000Z",
+    };
+    const sessionAuthority = {
+      context,
+      initialRecords: [record],
+      port: sessionAuthorityPort(),
+    };
+    const config = snapshotResolvedRunPermissionConfig({
+      permissions: createPermissionConfig({ sessionAuthority }),
+      workspace: workspace(),
+      identity: identity(),
+    });
+
+    const state = createInitialRunPermissionState(config);
+    expect(projectPermissionContext(config, state).authority).toMatchObject({
+      hasAdditionalFileSystemWrite: true,
+      sessionAuthorityCount: 1,
+    });
+    expect(Object.isFrozen(state.sessionAuthorityRecords[0])).toBe(true);
+
+    expect(() => snapshotResolvedRunPermissionConfig({
+      permissions: createPermissionConfig({
+        sessionAuthority: {
+          ...sessionAuthority,
+          initialRecords: [{ ...record, workspaceId: "workspace.other" }],
+        },
+      }),
+      workspace: workspace(),
+      identity: identity(),
+    })).toThrow("does not match the active authority context");
   });
 });
 
@@ -353,6 +408,17 @@ function reviewerBinding(
       metadata: {},
     },
     reviewTimeoutMs,
+  };
+}
+
+function sessionAuthorityPort(): SessionAuthorityPort {
+  return {
+    async listApplicable() {
+      return [];
+    },
+    async commit(input) {
+      return { kind: "applied", record: input.record };
+    },
   };
 }
 
