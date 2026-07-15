@@ -63,6 +63,11 @@ describe("Run permission configuration", () => {
       reviewStartedAt: "2026-07-15T00:00:02.000Z",
       reviewTimeoutMs: 3_000,
     })).toBe("2026-07-15T00:00:05.000Z");
+    expect(deriveApprovalReviewDeadline({
+      runDeadlineAt: "2026-07-15T00:00:10.000Z",
+      reviewStartedAt: "2026-07-15T00:00:09.000Z",
+      reviewTimeoutMs: 5_000,
+    })).toBe("2026-07-15T00:00:10.000Z");
     expect(deriveAuthorityCommitDeadline({
       runDeadlineAt: "2026-07-15T00:00:10.000Z",
       commitStartedAt: "2026-07-15T00:00:09.000Z",

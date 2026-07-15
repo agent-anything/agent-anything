@@ -66,6 +66,13 @@ describe("in-memory Host authority stores", () => {
     });
     await expect(store.commit(commit, activeContext())).resolves.toBe(first);
     await expect(store.commit({
+      ...commit,
+      recordId: "amendment.record.conflict",
+    }, activeContext())).resolves.toMatchObject({
+      kind: "not_applied",
+      code: "policy_amendment_conflict",
+    });
+    await expect(store.commit({
       ...amendmentCommit(),
       commitId: "commit.2",
       recordId: "amendment.record.2",

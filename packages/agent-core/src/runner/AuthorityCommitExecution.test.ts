@@ -144,6 +144,55 @@ describe("executeAuthorityCommit", () => {
       vi.useRealTimers();
     }
   });
+
+  it("preserves exact Run cancellation attribution during persistent commit", async () => {
+    const cancellation = createRunCancellationController({
+      runId: "run_001",
+      createRequestId: () => "cancellation_001",
+      now: () => "2026-07-15T00:00:00.500Z",
+    });
+    const config = createConfig((_input, context) => new Promise((resolve) => {
+      const settle = () => {
+        if (context.interruption === null) {
+          throw new Error("Run cancellation must carry interruption attribution.");
+        }
+        resolve({ kind: "interrupted", interruption: context.interruption });
+      };
+      context.signal.addEventListener("abort", settle, { once: true });
+      if (context.signal.aborted) settle();
+    }));
+
+    const running = executeAuthorityCommit(createInput(config, cancellation.context));
+    const receipt = cancellation.requestCancellation({
+      origin: "host",
+      reasonCode: "host_requested",
+    });
+    const result = await running;
+
+    expect(receipt.accepted).toBe(true);
+    expect(result).toMatchObject({
+      kind: "interrupted",
+      owner: "policy",
+      scope: "persistent",
+      interruption: {
+        kind: "run_cancellation",
+        cancellation: {
+          runId: "run_001",
+          requestId: receipt.request.id,
+        },
+      },
+      application: {
+        kind: "interrupted",
+        interruption: {
+          kind: "run_cancellation",
+          cancellation: {
+            runId: "run_001",
+            requestId: receipt.request.id,
+          },
+        },
+      },
+    });
+  });
 });
 
 type PersistentPolicyAmendmentCommitResultRecord = Extract<
@@ -151,13 +200,16 @@ type PersistentPolicyAmendmentCommitResultRecord = Extract<
   { readonly kind: "applied" }
 >["record"];
 
-function createInput(config: ResolvedRunPermissionConfig) {
+function createInput(
+  config: ResolvedRunPermissionConfig,
+  cancellation = createRunCancellationController({ runId: "run_001" }).context,
+) {
   const decision = persistentDecision();
   return {
     decision,
     pending: pendingApproval(decision),
     config,
-    cancellation: createRunCancellationController({ runId: "run_001" }).context,
+    cancellation,
     startedAt: "2026-07-15T00:00:00.000Z",
     deadlineAt: "2026-07-15T00:00:01.000Z",
     policyAmendmentRecordId: "policy_record_1",
