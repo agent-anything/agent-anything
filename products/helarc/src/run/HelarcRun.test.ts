@@ -174,7 +174,7 @@ describe("HelarcRun", () => {
       workspace: null,
       provider: null,
       events: [],
-      pendingPermission: null,
+      pendingApproval: null,
       cancellation: null,
       terminal: null,
       startedAt: null,

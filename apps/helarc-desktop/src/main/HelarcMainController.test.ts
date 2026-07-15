@@ -1,5 +1,9 @@
 import type { HelarcSessionHistoryRecord } from "@agent-anything/helarc";
 import type {
+  ApprovalDecisionKind,
+  ApprovalDecisionSubmission,
+} from "@agent-anything/permission";
+import type {
   InvocationInterruptionContext,
   Provider,
   ProviderCallResult,
@@ -319,7 +323,7 @@ describe("HelarcMainController", () => {
     );
     expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("secret");
     expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("rawProvider");
-    expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("pendingPermission");
+    expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("pendingApproval");
 
     const restoredController = new HelarcMainController({
       providerConfigError: {
@@ -510,7 +514,7 @@ describe("HelarcMainController", () => {
     });
   });
 
-  it("correlates explicit permission decisions and preserves a decline", async () => {
+  it("correlates versioned approval submissions and preserves a decline", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
@@ -530,7 +534,7 @@ describe("HelarcMainController", () => {
     });
     controller.selectWorkspacePath(workspaceRoot);
 
-    const waiting = waitForStatus(controller, "waiting_for_permission");
+    const waiting = waitForStatus(controller, "waiting_for_approval");
     const blocked = waitForSnapshot(
       controller,
       (snapshot) => snapshot.status === "blocked" && snapshot.sessionHistory.length === 1,
@@ -539,17 +543,20 @@ describe("HelarcMainController", () => {
 
     expect(result).toMatchObject({ ok: true, snapshot: { status: "running" } });
     const waitingSnapshot = await waiting;
-    const requestId = waitingSnapshot.pendingPermission?.requestId ?? "";
-    expect(waitingSnapshot.pendingPermission).toMatchObject({
-      toolName: "request_permissions",
-      reason: "Create a governed marker file.",
-      command: null,
-      rootName: "workspace",
+    const pending = waitingSnapshot.pendingApproval;
+    expect(pending).toMatchObject({
+      phase: "reviewing",
+      pendingVersion: 1,
+      receipt: null,
+      request: {
+        category: "permissions",
+        reason: "Create a governed marker file.",
+      },
     });
     expect(waitingSnapshot.activeRun).toMatchObject({
-      status: "waiting_for_permission",
-      pendingPermission: {
-        requestId,
+      status: "waiting_for_approval",
+      pendingApproval: {
+        requestId: pending?.request.id,
         toolName: "request_permissions",
         riskLevel: "high",
         workspaceDisplayName: workspaceRoot.split(/[\\/]/).pop(),
@@ -557,30 +564,58 @@ describe("HelarcMainController", () => {
       },
     });
     expect(controller.getSnapshot()).toMatchObject({
-      status: "waiting_for_permission",
-      pendingPermission: { requestId },
-      activeRun: { pendingPermission: { requestId } },
-    });
-
-    expect(controller.resolvePermission({
-      requestId: "stale-request",
-      decision: "granted",
-    })).toMatchObject({
-      ok: false,
-      error: { code: "permission_request_mismatch" },
-    });
-
-    expect(controller.resolvePermission({
-      requestId,
-      decision: "denied",
-    })).toMatchObject({
-      ok: true,
-      snapshot: {
-        status: "waiting_for_permission",
-        activeRun: {
-          status: "waiting_for_permission",
-        },
+      status: "waiting_for_approval",
+      pendingApproval: {
+        request: { id: pending?.request.id },
+        pendingVersion: pending?.pendingVersion,
       },
+      activeRun: { pendingApproval: { requestId: pending?.request.id } },
+    });
+
+    const decline = approvalSubmission(waitingSnapshot, "decline", {
+      submissionId: "desktop-decline-1",
+    });
+    expect(controller.submitApprovalDecision({
+      ...decline,
+      requestId: "stale-request",
+    })).toEqual({
+      status: "rejected",
+      submissionId: "desktop-decline-1",
+      code: "approval_not_pending",
+    });
+    expect(controller.submitApprovalDecision({
+      ...decline,
+      submissionId: "desktop-stale-version-1",
+      pendingVersion: decline.pendingVersion + 1,
+    })).toEqual({
+      status: "rejected",
+      submissionId: "desktop-stale-version-1",
+      code: "approval_version_mismatch",
+    });
+
+    const receipt = controller.submitApprovalDecision(decline);
+    expect(receipt).toMatchObject({
+      status: "accepted_for_resolution",
+      submissionId: "desktop-decline-1",
+      requestId: pending?.request.id,
+      pendingVersion: pending?.pendingVersion,
+    });
+    expect(controller.submitApprovalDecision(decline)).toBe(receipt);
+    expect(controller.submitApprovalDecision({
+      ...decline,
+      optionId: approvalSubmission(waitingSnapshot, "cancel").optionId,
+    })).toEqual({
+      status: "rejected",
+      submissionId: "desktop-decline-1",
+      code: "approval_submission_invalid",
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "waiting_for_approval",
+      pendingApproval: {
+        phase: "submitted_for_resolution",
+        receipt: { status: "accepted_for_resolution" },
+      },
+      activeRun: { status: "waiting_for_approval" },
     });
 
     const blockedSnapshot = await blocked;
@@ -608,18 +643,19 @@ describe("HelarcMainController", () => {
         },
       }],
     });
-    expect(JSON.stringify(blockedSnapshot.sessionHistory)).not.toContain("pendingPermission");
-    expect(controller.resolvePermission({
-      requestId,
-      decision: "granted",
-    })).toMatchObject({
-      ok: false,
-      error: { code: "permission_not_pending" },
+    expect(JSON.stringify(blockedSnapshot.sessionHistory)).not.toContain("pendingApproval");
+    expect(controller.submitApprovalDecision({
+      ...decline,
+      submissionId: "desktop-late-1",
+    })).toEqual({
+      status: "rejected",
+      submissionId: "desktop-late-1",
+      code: "approval_not_pending",
     });
     await expect(access(markerPath)).rejects.toThrow();
   });
 
-  it("accepts one explicit permission request and completes the same run", async () => {
+  it("accepts one explicit approval request and completes the same run", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-allow-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
@@ -639,22 +675,22 @@ describe("HelarcMainController", () => {
     });
     controller.selectWorkspacePath(workspaceRoot);
 
-    const waiting = waitForStatus(controller, "waiting_for_permission");
+    const waiting = waitForStatus(controller, "waiting_for_approval");
     const completed = waitForStatus(controller, "completed");
     controller.startSession({ taskText: "Run command" });
 
-    const requestId = (await waiting).pendingPermission?.requestId ?? "";
-    expect(controller.resolvePermission({
-      requestId,
-      decision: "granted",
-    })).toMatchObject({
-      ok: true,
-      snapshot: {
-        status: "waiting_for_permission",
-        activeRun: {
-          status: "waiting_for_permission",
-        },
-      },
+    const waitingSnapshot = await waiting;
+    expect(controller.submitApprovalDecision(
+      approvalSubmission(waitingSnapshot, "grantPermissions"),
+    )).toMatchObject({
+      status: "accepted_for_resolution",
+      requestId: waitingSnapshot.pendingApproval?.request.id,
+      pendingVersion: waitingSnapshot.pendingApproval?.pendingVersion,
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "waiting_for_approval",
+      pendingApproval: { phase: "submitted_for_resolution" },
+      activeRun: { status: "waiting_for_approval" },
     });
 
     const completedSnapshot = await completed;
@@ -690,19 +726,21 @@ describe("HelarcMainController", () => {
     });
     controller.selectWorkspacePath(workspaceRoot);
 
-    const waiting = waitForStatus(controller, "waiting_for_permission");
+    const waiting = waitForStatus(controller, "waiting_for_approval");
     controller.startSession({ taskText: "Run command" });
     const waitingSnapshot = await waiting;
-    const requestId = waitingSnapshot.pendingPermission?.requestId ?? "";
+    const lateSubmission = approvalSubmission(waitingSnapshot, "grantPermissions", {
+      submissionId: "desktop-after-cancel-1",
+    });
 
     expect(controller.cancelSession()).toMatchObject({
       ok: true,
       snapshot: {
         status: "cancelling",
-        pendingPermission: null,
+        pendingApproval: null,
         activeRun: {
           status: "cancelling",
-          pendingPermission: null,
+          pendingApproval: null,
           cancellation: {
             origin: "user",
             reasonCode: "user_requested",
@@ -715,12 +753,10 @@ describe("HelarcMainController", () => {
       error: { code: "session_already_running" },
       snapshot: { status: "cancelling" },
     });
-    expect(controller.resolvePermission({
-      requestId,
-      decision: "granted",
-    })).toMatchObject({
-      ok: false,
-      error: { code: "permission_not_pending" },
+    expect(controller.submitApprovalDecision(lateSubmission)).toEqual({
+      status: "rejected",
+      submissionId: "desktop-after-cancel-1",
+      code: "approval_already_resolved",
     });
 
     const terminalSnapshot = await waitForSnapshot(
@@ -759,11 +795,54 @@ describe("HelarcMainController", () => {
     expect(JSON.stringify(terminalSnapshot.activeRun)).not.toContain(
       "Cancelled from Helarc desktop.",
     );
-    expect(JSON.stringify(terminalSnapshot.sessionHistory)).not.toContain("pendingPermission");
+    expect(JSON.stringify(terminalSnapshot.sessionHistory)).not.toContain("pendingApproval");
     expect(JSON.stringify(terminalSnapshot.sessionHistory)).not.toContain(
       "Cancelled from Helarc desktop.",
     );
     await expect(access(markerPath)).rejects.toThrow();
+  });
+
+  it("routes the approval cancel option through Run cancellation", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-approval-cancel-"));
+    const controller = new HelarcMainController({
+      provider: new ScriptedProvider([{
+        action: "request_permissions",
+        rootId: "workspace",
+        permissions: { fileSystem: { write: ["marker.txt"] } },
+        reason: "Create a governed marker file.",
+      }]),
+    });
+    controller.selectWorkspacePath(workspaceRoot);
+
+    const waiting = waitForStatus(controller, "waiting_for_approval");
+    const cancelled = waitForActiveRunTerminal(controller, "cancelled");
+    controller.startSession({ taskText: "Request then cancel" });
+    const waitingSnapshot = await waiting;
+
+    expect(controller.submitApprovalDecision(
+      approvalSubmission(waitingSnapshot, "cancel", {
+        submissionId: "desktop-approval-cancel-1",
+      }),
+    )).toMatchObject({
+      status: "accepted_for_resolution",
+      submissionId: "desktop-approval-cancel-1",
+    });
+
+    expect(await cancelled).toMatchObject({
+      status: "cancelled",
+      pendingApproval: null,
+      activeRun: {
+        status: "cancelled",
+        cancellation: {
+          origin: "approval",
+          reasonCode: "approval_cancelled",
+        },
+        terminal: {
+          status: "cancelled",
+          runtimeStatus: "cancelled",
+        },
+      },
+    });
   });
 
   it("keeps desktop runtime tool mode read-only by default", async () => {
@@ -801,10 +880,10 @@ describe("HelarcMainController", () => {
     const snapshot = await failed;
     expect(snapshot).toMatchObject({
       status: "failed",
-      pendingPermission: null,
+      pendingApproval: null,
       activeRun: {
         status: "failed",
-        pendingPermission: null,
+        pendingApproval: null,
         terminal: {
           status: "failed",
           runtimeStatus: "failed",
@@ -827,19 +906,25 @@ describe("HelarcMainController", () => {
         },
       }],
     });
-    expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("pendingPermission");
+    expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("pendingApproval");
     await expect(access(markerPath)).rejects.toThrow();
   });
 
-  it("rejects unknown permission decisions and cancellation without a running session", () => {
+  it("rejects approval submissions and cancellation without a running session", () => {
     const controller = new HelarcMainController({ provider: new CompleteProvider() });
 
-    expect(controller.resolvePermission({
+    expect(controller.submitApprovalDecision({
+      submissionId: "desktop-unknown-1",
+      runId: "run-unknown",
       requestId: "unknown",
-      decision: "granted",
-    })).toMatchObject({
-      ok: false,
-      error: { code: "permission_not_pending" },
+      pendingVersion: 1,
+      optionId: "accept",
+      grantedPermissions: null,
+      reason: null,
+    })).toEqual({
+      status: "rejected",
+      submissionId: "desktop-unknown-1",
+      code: "approval_not_pending",
     });
 
     expect(controller.cancelSession()).toMatchObject({
@@ -1082,6 +1167,35 @@ class ScriptedProvider implements Provider {
       },
     };
   }
+}
+
+function approvalSubmission(
+  snapshot: HelarcMainSnapshot,
+  kind: ApprovalDecisionKind,
+  overrides: Partial<ApprovalDecisionSubmission> = {},
+): ApprovalDecisionSubmission {
+  const pending = snapshot.pendingApproval;
+  if (pending === null) {
+    throw new Error("Expected a pending approval.");
+  }
+  const option = pending.request.decisionOptions.find((candidate) => candidate.kind === kind);
+  if (option === undefined) {
+    throw new Error(`Expected approval option ${kind}.`);
+  }
+  const grantedPermissions = kind === "grantPermissions" &&
+      pending.request.category === "permissions"
+    ? pending.request.payload.permissions
+    : null;
+  return {
+    submissionId: "desktop-submission-1",
+    runId: pending.request.runId,
+    requestId: pending.request.id,
+    pendingVersion: pending.pendingVersion,
+    optionId: option.id,
+    grantedPermissions,
+    reason: kind === "decline" ? "Declined in test." : null,
+    ...overrides,
+  };
 }
 
 function waitForStatus(

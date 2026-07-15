@@ -5,7 +5,7 @@ const channels = Object.freeze({
   chooseWorkspace: "helarc:choose-workspace",
   getSnapshot: "helarc:get-snapshot",
   resolvePatchReview: "helarc:resolve-patch-review",
-  resolvePermission: "helarc:resolve-permission",
+  submitApprovalDecision: "helarc:submit-approval-decision",
   saveProviderConfig: "helarc:save-provider-config",
   selectWorkspaceProfile: "helarc:select-workspace-profile",
   snapshotUpdated: "helarc:snapshot-updated",
@@ -13,7 +13,7 @@ const channels = Object.freeze({
 });
 
 contextBridge.exposeInMainWorld("helarc", Object.freeze({
-  bridgeVersion: 1,
+  bridgeVersion: 2,
   productId: "helarc",
   chooseWorkspace: () => ipcRenderer.invoke(channels.chooseWorkspace),
   getSnapshot: () => ipcRenderer.invoke(channels.getSnapshot),
@@ -35,9 +35,14 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
     taskText: typeof input?.taskText === "string" ? input.taskText : "",
   }),
   cancelSession: () => ipcRenderer.invoke(channels.cancelSession),
-  resolvePermission: (input) => ipcRenderer.invoke(channels.resolvePermission, {
+  submitApprovalDecision: (input) => ipcRenderer.invoke(channels.submitApprovalDecision, {
+    submissionId: typeof input?.submissionId === "string" ? input.submissionId : "",
+    runId: typeof input?.runId === "string" ? input.runId : "",
     requestId: typeof input?.requestId === "string" ? input.requestId : "",
-    decision: input?.decision === "granted" ? "granted" : "denied",
+    pendingVersion: typeof input?.pendingVersion === "number" ? input.pendingVersion : Number(input?.pendingVersion),
+    optionId: typeof input?.optionId === "string" ? input.optionId : "",
+    grantedPermissions: sanitizeGrantedPermissions(input?.grantedPermissions),
+    reason: typeof input?.reason === "string" ? input.reason : null,
   }),
   resolvePatchReview: (input) => ipcRenderer.invoke(channels.resolvePatchReview, {
     patchId: typeof input?.patchId === "string" ? input.patchId : "",
@@ -56,3 +61,27 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
     };
   },
 }));
+
+function sanitizeGrantedPermissions(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const fileSystem = value.fileSystem && typeof value.fileSystem === "object" && !Array.isArray(value.fileSystem)
+    ? value.fileSystem
+    : null;
+  const network = value.network && typeof value.network === "object" && !Array.isArray(value.network)
+    ? value.network
+    : null;
+  return {
+    ...(fileSystem === null ? {} : {
+      fileSystem: {
+        ...(Array.isArray(fileSystem.read) ? { read: fileSystem.read.filter((item) => typeof item === "string") } : {}),
+        ...(Array.isArray(fileSystem.write) ? { write: fileSystem.write.filter((item) => typeof item === "string") } : {}),
+      },
+    }),
+    ...(network === null || typeof network.enabled !== "boolean" ? {} : {
+      network: {
+        enabled: network.enabled,
+        ...(Array.isArray(network.domains) ? { domains: network.domains.filter((item) => typeof item === "string") } : {}),
+      },
+    }),
+  };
+}

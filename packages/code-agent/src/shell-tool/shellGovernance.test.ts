@@ -12,7 +12,6 @@ import type {
   PolicyPort,
   WorkspaceContext,
 } from "@agent-anything/governance";
-import type { PermissionRequest, PermissionService } from "@agent-anything/permission";
 
 import { ToolRegistry, type ToolCall } from "@agent-anything/tools";
 import {
@@ -39,8 +38,7 @@ describe("shell governance integration", () => {
     await rm(testRoot, { recursive: true, force: true });
   });
 
-  it("policy denial prevents process creation and permission", async () => {
-    let permissionRequested = false;
+  it("policy denial prevents process creation before the approval gate", async () => {
     const setup = createBoundary({
       policyPort: createPolicyPort((input) => ({
         checkId: input.id,
@@ -49,15 +47,6 @@ describe("shell governance integration", () => {
         reason: "Command denied by policy.",
         decidedAt: "2026-06-20T00:00:00.000Z",
       })),
-      permissionService: createPermissionService((request) => {
-        permissionRequested = true;
-        return {
-          requestId: request.id,
-          status: "granted",
-          reason: "Unexpected grant.",
-          decidedAt: "2026-06-20T00:00:00.000Z",
-        };
-      }),
     });
 
     const outcome = await setup.boundary.execute(createExecuteInput());
@@ -66,34 +55,29 @@ describe("shell governance integration", () => {
       status: "blocked",
       errors: [{ code: "policy_denied" }],
     });
-    expect(permissionRequested).toBe(false);
     await expect(access(markerPath)).rejects.toThrow();
   });
 
-  it("permission denial prevents process creation", async () => {
+  it("the temporary approval gate prevents risky process creation", async () => {
     const setup = createBoundary({
       policyPort: allowPolicy(),
-      permissionService: createPermissionService((request) => ({
-        requestId: request.id,
-        status: "denied",
-        code: "permission_denied",
-        reason: "Command denied by user.",
-        decidedAt: "2026-06-20T00:00:00.000Z",
-      })),
     });
 
     const outcome = await setup.boundary.execute(createExecuteInput());
 
     expect(outcome).toMatchObject({
       status: "blocked",
-      errors: [{ code: "permission_denied" }],
+      errors: [{
+        owner: "permission",
+        code: "permission_approval_required",
+        message: "Create a governed marker file.",
+      }],
     });
     await expect(access(markerPath)).rejects.toThrow();
   });
 
   it("passes selected workspace and command metadata to governance", async () => {
     let policyInput: PolicyCheckInput | undefined;
-    let permissionInput: PermissionRequest | undefined;
     const setup = createBoundary({
       policyPort: createPolicyPort((input) => {
         policyInput = input;
@@ -103,20 +87,18 @@ describe("shell governance integration", () => {
           decidedAt: "2026-06-20T00:00:00.000Z",
         };
       }),
-      permissionService: createPermissionService((request) => {
-        permissionInput = request;
-        return {
-          requestId: request.id,
-          status: "granted",
-          reason: "Command approved.",
-          decidedAt: "2026-06-20T00:00:00.000Z",
-        };
-      }),
     });
 
     const outcome = await setup.boundary.execute(createExecuteInput());
 
-    expect(outcome.status).toBe("succeeded");
+    expect(outcome).toMatchObject({
+      status: "blocked",
+      errors: [{
+        owner: "permission",
+        code: "permission_approval_required",
+        message: "Create a governed marker file.",
+      }],
+    });
     expect(policyInput).toMatchObject({
       risk: "risky",
       workspace: {
@@ -136,18 +118,7 @@ describe("shell governance integration", () => {
         taskKind: "code.change",
       },
     });
-    expect(permissionInput).toMatchObject({
-      risk: "risky",
-      reason: "Create a governed marker file.",
-      metadata: {
-        command: process.execPath,
-        cwd: "work",
-        rootName: "docs",
-        workspaceId: "workspace-docs",
-        timeoutMs: 1_000,
-      },
-    });
-    await expect(access(markerPath)).resolves.toBeUndefined();
+    await expect(access(markerPath)).rejects.toThrow();
   });
 
   it("rejects a ToolCall that downgrades risky definition to safe", async () => {
@@ -179,7 +150,6 @@ describe("shell governance integration", () => {
   });
   function createBoundary(input: {
     policyPort?: PolicyPort;
-    permissionService?: PermissionService;
   }) {
     const registry = new ToolRegistry();
     const workspaceScope = createScope();
@@ -201,7 +171,6 @@ describe("shell governance integration", () => {
           buildFromToolResult: () => [],
         },
         policyPort: input.policyPort,
-        permissionService: input.permissionService,
         toolExecutionContextResolver: executionContextResolver,
       }),
     };
@@ -270,7 +239,6 @@ function createShellCall(): ToolCall {
 
 function createConfig(): ToolExecutionConfig {
   return {
-    permissionMode: "trusted",
     audit: "optional",
     telemetry: "optional",
   };
@@ -306,18 +274,6 @@ function createPolicyPort(
   return {
     async evaluate(input) {
       return evaluate(input);
-    },
-  };
-}
-
-function createPermissionService(
-  request: (
-    input: Parameters<PermissionService["request"]>[0],
-  ) => Awaited<ReturnType<PermissionService["request"]>> | ReturnType<PermissionService["request"]>,
-): PermissionService {
-  return {
-    async request(input) {
-      return request(input);
     },
   };
 }

@@ -10,7 +10,7 @@ export type HelarcRunStatus =
   | "idle"
   | "starting"
   | "running"
-  | "waiting_for_permission"
+  | "waiting_for_approval"
   | "cancelling"
   | "completed"
   | "failed"
@@ -90,13 +90,13 @@ export interface HelarcRunProviderRef {
   model: string;
 }
 
-export type HelarcRunPermissionRiskLevel = "low" | "medium" | "high";
+export type HelarcRunApprovalRiskLevel = "low" | "medium" | "high";
 
-export interface HelarcRunPermissionPrompt {
+export interface HelarcRunApprovalPrompt {
   requestId: string;
   actionLabel: string;
   toolName: string;
-  riskLevel: HelarcRunPermissionRiskLevel;
+  riskLevel: HelarcRunApprovalRiskLevel;
   workspaceDisplayName: string | null;
   explanation: string;
   inputSummary: string | null;
@@ -142,7 +142,7 @@ export interface HelarcRunSnapshot {
   workspace: HelarcRunWorkspaceRef | null;
   provider: HelarcRunProviderRef | null;
   events: HelarcRunEventViewModel[];
-  pendingPermission: HelarcRunPermissionPrompt | null;
+  pendingApproval: HelarcRunApprovalPrompt | null;
   cancellation: RunCancellationSummary | null;
   terminal: HelarcRunTerminalSummary | null;
   startedAt: ISODateTimeString | null;
@@ -301,7 +301,7 @@ export function createIdleHelarcRunSnapshot(
     workspace: null,
     provider: null,
     events: [],
-      pendingPermission: null,
+    pendingApproval: null,
       cancellation: null,
       terminal: null,
     startedAt: null,

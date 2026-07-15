@@ -7,13 +7,14 @@ import type {
   SaveHelarcProviderProfileInput,
 } from "./provider/HelarcProviderProfileStore.js";
 import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
+import type { ApprovalDecisionSubmission } from "@agent-anything/permission";
 
 export const HELARC_IPC_CHANNELS = {
   cancelSession: "helarc:cancel-session",
   chooseWorkspace: "helarc:choose-workspace",
   getSnapshot: "helarc:get-snapshot",
   resolvePatchReview: "helarc:resolve-patch-review",
-  resolvePermission: "helarc:resolve-permission",
+  submitApprovalDecision: "helarc:submit-approval-decision",
   saveProviderConfig: "helarc:save-provider-config",
   selectWorkspaceProfile: "helarc:select-workspace-profile",
   snapshotUpdated: "helarc:snapshot-updated",
@@ -127,8 +128,8 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
     return input.controller.cancelSession();
   });
 
-  ipcMain.handle(HELARC_IPC_CHANNELS.resolvePermission, (_event, payload: unknown) => {
-    return input.controller.resolvePermission(readPermissionDecision(payload));
+  ipcMain.handle(HELARC_IPC_CHANNELS.submitApprovalDecision, (_event, payload: unknown) => {
+    return input.controller.submitApprovalDecision(readApprovalDecisionSubmission(payload));
   });
 
   ipcMain.handle(HELARC_IPC_CHANNELS.resolvePatchReview, (_event, payload: unknown) => {
@@ -190,14 +191,61 @@ function readPositiveNumber(value: unknown, fallback: number): number {
   return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : fallback;
 }
 
-function readPermissionDecision(payload: unknown): { requestId: string; decision: "granted" | "denied" } {
+function readApprovalDecisionSubmission(payload: unknown): ApprovalDecisionSubmission {
   if (!isRecord(payload)) {
-    return { requestId: "", decision: "denied" };
+    return {
+      submissionId: "",
+      runId: "",
+      requestId: "",
+      pendingVersion: 0,
+      optionId: "",
+      grantedPermissions: null,
+      reason: null,
+    };
   }
 
   return {
+    submissionId: typeof payload.submissionId === "string" ? payload.submissionId : "",
+    runId: typeof payload.runId === "string" ? payload.runId : "",
     requestId: typeof payload.requestId === "string" ? payload.requestId : "",
-    decision: payload.decision === "granted" ? "granted" : "denied",
+    pendingVersion: typeof payload.pendingVersion === "number"
+      ? payload.pendingVersion
+      : Number(payload.pendingVersion),
+    optionId: typeof payload.optionId === "string" ? payload.optionId : "",
+    grantedPermissions: readGrantedPermissions(payload.grantedPermissions),
+    reason: typeof payload.reason === "string" ? payload.reason : null,
+  };
+}
+
+function readGrantedPermissions(
+  value: unknown,
+): ApprovalDecisionSubmission["grantedPermissions"] {
+  if (!isRecord(value)) return null;
+  const fileSystem = isRecord(value.fileSystem) ? value.fileSystem : null;
+  const network = isRecord(value.network) ? value.network : null;
+  return {
+    ...(fileSystem === null
+      ? {}
+      : {
+          fileSystem: {
+            ...(Array.isArray(fileSystem.read)
+              ? { read: fileSystem.read.filter((item): item is string => typeof item === "string") }
+              : {}),
+            ...(Array.isArray(fileSystem.write)
+              ? { write: fileSystem.write.filter((item): item is string => typeof item === "string") }
+              : {}),
+          },
+        }),
+    ...(network === null || typeof network.enabled !== "boolean"
+      ? {}
+      : {
+          network: {
+            enabled: network.enabled,
+            ...(Array.isArray(network.domains)
+              ? { domains: network.domains.filter((item): item is string => typeof item === "string") }
+              : {}),
+          },
+        }),
   };
 }
 

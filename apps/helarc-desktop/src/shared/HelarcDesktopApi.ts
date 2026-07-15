@@ -2,6 +2,11 @@ import type {
   HelarcRunSnapshot,
   HelarcSessionHistoryRunRecord,
 } from "@agent-anything/helarc";
+import type { UserApprovalPendingProjection } from "@agent-anything/agent-core/host";
+import type {
+  ApprovalDecisionSubmission,
+  ApprovalSubmissionReceipt,
+} from "@agent-anything/permission";
 
 export interface HelarcWorkspaceSnapshot {
   id: string;
@@ -85,7 +90,7 @@ export type HelarcMainSnapshotStatus =
   | "workspace_selected"
   | "running"
   | "cancelling"
-  | "waiting_for_permission"
+  | "waiting_for_approval"
   | "waiting_for_patch_review"
   | "applying_patch"
   | "completed"
@@ -94,16 +99,16 @@ export type HelarcMainSnapshotStatus =
   | "blocked"
   | "cancelled";
 
-export interface HelarcPermissionPromptSnapshot {
-  requestId: string;
-  taskId: string;
-  toolName: string;
-  reason: string;
-  command: string | null;
-  args: string[];
-  cwd: string | null;
-  rootName: string | null;
+export interface HelarcPendingApprovalSnapshot extends UserApprovalPendingProjection {
+  phase: "reviewing" | "submitted_for_resolution";
+  receipt: Extract<
+    ApprovalSubmissionReceipt,
+    { readonly status: "accepted_for_resolution" }
+  > | null;
 }
+
+export type HelarcSubmitApprovalDecisionInput = ApprovalDecisionSubmission;
+export type HelarcApprovalSubmissionReceipt = ApprovalSubmissionReceipt;
 
 export type HelarcConversationMessageRole =
   | "user"
@@ -151,7 +156,7 @@ export interface HelarcActiveThreadSnapshot {
 export type HelarcThreadRunStatus =
   | "starting"
   | "running"
-  | "waiting_for_permission"
+  | "waiting_for_approval"
   | "cancelling"
   | "completed"
   | "failed"
@@ -256,7 +261,7 @@ export interface HelarcMainSnapshot {
   taskTemplates: HelarcTaskTemplateSnapshot[];
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
-  pendingPermission: HelarcPermissionPromptSnapshot | null;
+  pendingApproval: HelarcPendingApprovalSnapshot | null;
   pendingPatchReview: HelarcPatchReviewViewModel | null;
   activeThread: HelarcActiveThreadSnapshot | null;
   threadSummaries: HelarcThreadSummarySnapshot[];
@@ -272,15 +277,6 @@ export interface HelarcStartSessionInput {
 
 export type HelarcStartSessionResult =
   | { ok: true; taskId: string; snapshot: HelarcMainSnapshot }
-  | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
-
-export interface HelarcResolvePermissionInput {
-  requestId: string;
-  decision: "granted" | "denied";
-}
-
-export type HelarcResolvePermissionResult =
-  | { ok: true; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
 export type HelarcCancelSessionResult =
@@ -312,7 +308,7 @@ export interface HelarcSaveProviderConfigInput {
 }
 
 export interface HelarcDesktopApi {
-  readonly bridgeVersion: 1;
+  readonly bridgeVersion: 2;
   readonly productId: "helarc";
   chooseWorkspace(): Promise<HelarcMainSnapshot>;
   getSnapshot(): Promise<HelarcMainSnapshot>;
@@ -320,7 +316,9 @@ export interface HelarcDesktopApi {
   selectWorkspaceProfile(input: HelarcSelectWorkspaceProfileInput): Promise<HelarcMainSnapshot>;
   startSession(input: HelarcStartSessionInput): Promise<HelarcStartSessionResult>;
   cancelSession(): Promise<HelarcCancelSessionResult>;
-  resolvePermission(input: HelarcResolvePermissionInput): Promise<HelarcResolvePermissionResult>;
+  submitApprovalDecision(
+    input: HelarcSubmitApprovalDecisionInput,
+  ): Promise<HelarcApprovalSubmissionReceipt>;
   resolvePatchReview(input: HelarcResolvePatchReviewInput): Promise<HelarcResolvePatchReviewResult>;
   subscribeSnapshot(listener: (snapshot: HelarcMainSnapshot) => void): () => void;
 }

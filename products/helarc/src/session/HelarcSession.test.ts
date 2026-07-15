@@ -288,8 +288,8 @@ describe("Helarc read-only session", () => {
     expect(result.status).toBe("blocked");
     expect(result.output.safeErrors).toEqual([
       {
-        code: "permission_unavailable",
-        message: "Denied because permissionMode: ask requires a host-provided prompt service.",
+        code: "permission_approval_required",
+        message: "Create a governed marker file.",
       },
     ]);
     await expect(access(markerPath)).rejects.toThrow();

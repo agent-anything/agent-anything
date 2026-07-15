@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EvidenceBuilder } from "@agent-anything/evidence";
 import type { PolicyCheckInput, WorkspaceContext } from "@agent-anything/governance";
-import type { PermissionRequest } from "@agent-anything/permission";
 import {
   ToolRegistry,
   type ToolCall,
@@ -44,12 +43,12 @@ describe("ToolExecutionBoundary preparation", () => {
     expect(executed).toBe(false);
   });
 
-  it("resolves workspace and metadata before policy and permission", async () => {
+  it("resolves workspace and metadata before policy and the approval gate", async () => {
     let policyInput: PolicyCheckInput | undefined;
-    let permissionInput: PermissionRequest | undefined;
+    let executed = false;
     const selectedWorkspace = createWorkspace("workspace-selected");
     const registry = new ToolRegistry();
-    registry.register(createTool());
+    registry.register(createTool(() => { executed = true; }));
 
     const boundary = new ToolExecutionBoundary({
       toolRegistry: registry,
@@ -76,22 +75,18 @@ describe("ToolExecutionBoundary preparation", () => {
           };
         },
       },
-      permissionService: {
-        async request(input) {
-          permissionInput = input;
-          return {
-            requestId: input.id,
-            status: "granted",
-            reason: "Approved.",
-            decidedAt: "2026-06-20T00:00:00.000Z",
-          };
-        },
-      },
     });
 
     const outcome = await boundary.execute(createExecuteInput());
 
-    expect(outcome.status).toBe("succeeded");
+    expect(outcome).toMatchObject({
+      status: "blocked",
+      errors: [{
+        owner: "permission",
+        code: "permission_approval_required",
+        message: "Run governed command.",
+      }],
+    });
     expect(policyInput).toMatchObject({
       workspace: { id: "workspace-selected" },
       target: {
@@ -101,14 +96,7 @@ describe("ToolExecutionBoundary preparation", () => {
         },
       },
     });
-    expect(permissionInput).toMatchObject({
-      reason: "Run governed command.",
-      metadata: {
-        workspaceId: "workspace-selected",
-        command: "example",
-        cwd: "src",
-      },
-    });
+    expect(executed).toBe(false);
   });
 });
 
@@ -163,7 +151,6 @@ function createTask(): AgentTask {
 
 function createConfig(): ToolExecutionConfig {
   return {
-    permissionMode: "trusted",
     audit: "optional",
     telemetry: "optional",
   };

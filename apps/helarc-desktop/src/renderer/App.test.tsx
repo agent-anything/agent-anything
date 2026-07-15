@@ -1,9 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import type { HelarcMainSnapshot } from "../shared/HelarcDesktopApi.js";
 import {
   App,
+  ApprovalPromptPanel,
   ConversationPanel,
-  PermissionPromptPanel,
   RunTerminalPanel,
   RunTimelinePanel,
   ThreadPanel,
@@ -23,53 +24,36 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Templates");
   });
 
-  it("renders permission prompt decision actions", () => {
+  it("renders offered approval decision actions", () => {
     const html = renderToStaticMarkup(
-      <PermissionPromptPanel
-        prompt={{
-          requestId: "permission-1",
-          taskId: "task-1",
-          toolName: "codeAgent.runCommand",
-          reason: "Create a governed marker file.",
-          command: "node",
-          args: ["-e", "..."],
-          cwd: ".",
-          rootName: "workspace",
-        }}
+      <ApprovalPromptPanel
+        approval={pendingApproval("reviewing")}
+        submissionError={null}
         isBusy={false}
-        onCancel={() => undefined}
-        onResolve={() => undefined}
+        onSubmit={() => undefined}
       />,
     );
 
-    expect(html).toContain("codeAgent.runCommand");
+    expect(html).toContain("Additional permissions");
     expect(html).toContain("Create a governed marker file.");
-    expect(html).toContain("node -e ...");
+    expect(html).toContain("1 write target(s)");
     expect(html).toContain("Cancel");
-    expect(html).toContain("Deny");
-    expect(html).toContain("Approve");
+    expect(html).toContain("Decline");
+    expect(html).toContain("Grant for run");
   });
 
-  it("disables permission controls while a decision is in flight", () => {
+  it("disables approval controls after submission is accepted", () => {
     const html = renderToStaticMarkup(
-      <PermissionPromptPanel
-        prompt={{
-          requestId: "permission-1",
-          taskId: "task-1",
-          toolName: "codeAgent.runCommand",
-          reason: "Create a governed marker file.",
-          command: "node",
-          args: ["-e", "..."],
-          cwd: ".",
-          rootName: "workspace",
-        }}
-        isBusy={true}
-        onCancel={() => undefined}
-        onResolve={() => undefined}
+      <ApprovalPromptPanel
+        approval={pendingApproval("submitted_for_resolution")}
+        submissionError={null}
+        isBusy={false}
+        onSubmit={() => undefined}
       />,
     );
 
     expect(html.match(/disabled=""/g)).toHaveLength(3);
+    expect(html).toContain("Submitted for resolution");
   });
 
   it("renders the active run timeline from safe run events", () => {
@@ -88,7 +72,7 @@ describe("Helarc workbench shell", () => {
             event("event-1", "planning.started", "Planning started", "info"),
             event("event-2", "tool.completed", "Tool completed", "warning"),
           ],
-          pendingPermission: null,
+          pendingApproval: null,
           cancellation: null,
           terminal: null,
           startedAt: "2026-07-05T01:00:00.000Z",
@@ -131,7 +115,7 @@ describe("Helarc workbench shell", () => {
               ],
             }),
           ],
-          pendingPermission: null,
+          pendingApproval: null,
           cancellation: null,
           terminal: null,
           startedAt: "2026-07-05T01:00:00.000Z",
@@ -302,6 +286,79 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Event summary");
   });
 });
+
+function pendingApproval(
+  phase: NonNullable<HelarcMainSnapshot["pendingApproval"]>["phase"],
+): NonNullable<HelarcMainSnapshot["pendingApproval"]> {
+  return {
+    phase,
+    receipt: phase === "submitted_for_resolution"
+      ? {
+          status: "accepted_for_resolution",
+          submissionId: "desktop-submission-1",
+          runId: "run-1",
+          requestId: "approval-1",
+          pendingVersion: 1,
+        }
+      : null,
+    pendingVersion: 1,
+    request: {
+      id: "approval-1",
+      runId: "run-1",
+      actionId: "action-1",
+      actionFingerprint: "fingerprint-1",
+      category: "permissions",
+      reason: "Create a governed marker file.",
+      subject: {
+        runId: "run-1",
+        actionId: "action-1",
+        actionFingerprint: "fingerprint-1",
+        environmentId: "environment-1",
+        applicabilityKeyCount: 1,
+      },
+      payload: {
+        permissions: { fileSystem: { write: ["D:\\workspace\\marker.txt"] } },
+        cwdDisplay: "workspace",
+        environmentId: "environment-1",
+      },
+      decisionOptions: [
+        {
+          id: "grant-run",
+          kind: "grantPermissions",
+          scope: "run",
+          label: "Grant for run",
+          description: "Grant the requested permissions for this run.",
+        },
+        {
+          id: "decline",
+          kind: "decline",
+          scope: null,
+          label: "Decline",
+          description: null,
+        },
+        {
+          id: "cancel",
+          kind: "cancel",
+          scope: null,
+          label: "Cancel",
+          description: null,
+        },
+      ],
+      createdAt: "2026-07-15T00:00:00.000Z",
+      deadlineAt: "2026-07-15T00:01:00.000Z",
+    },
+    context: {
+      workspaceTrustState: "trusted",
+      ruleOutcome: "prompt",
+      currentAuthority: {
+        fileSystemRead: true,
+        fileSystemWrite: false,
+        network: false,
+      },
+      annotations: {},
+    },
+  };
+}
 
 function event(
   id: string,

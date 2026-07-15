@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FakePermissionService, FakePolicyPort } from "@agent-anything/testing";
+import { FakePolicyPort } from "@agent-anything/testing";
 import { FakeRemoteToolPort } from "../testing/index.js";
 import { ToolRegistry } from "@agent-anything/tools";
 import { EvidenceBuilder } from "@agent-anything/evidence";
@@ -168,7 +168,7 @@ describe("RemoteToolAdapter", () => {
     expect(remotePort.calls).toHaveLength(0);
   });
 
-  it("blocks remote execution before remote port call when permission denies", async () => {
+  it("blocks risky remote execution at the temporary approval gate", async () => {
     const remotePort = new FakeRemoteToolPort((input) => ({
       remoteCallId: input.id,
       toolResult: createToolResult(input.toolCallId, input.toolName),
@@ -179,13 +179,6 @@ describe("RemoteToolAdapter", () => {
     const boundary = new ToolExecutionBoundary({
       toolRegistry: registry,
       evidenceBuilder: new EvidenceBuilder(),
-      permissionService: new FakePermissionService((request) => ({
-        requestId: request.id,
-        status: "denied",
-        code: "permission_denied",
-        reason: "Permission denied.",
-        decidedAt: "2026-06-13T00:00:00.000Z",
-      })),
     });
 
     const result = await boundary.execute({
@@ -195,7 +188,10 @@ describe("RemoteToolAdapter", () => {
       invocation: createInvocationContext(),
     });
 
-    expect(result.status).toBe("blocked");
+    expect(result).toMatchObject({
+      status: "blocked",
+      errors: [{ owner: "permission", code: "permission_approval_required" }],
+    });
     expect(remotePort.calls).toHaveLength(0);
   });
 });
@@ -272,7 +268,6 @@ function createTask() {
 
 function createConfig() {
   return {
-    permissionMode: "trusted" as const,
     audit: "optional" as const,
     telemetry: "optional" as const,
   };

@@ -9,13 +9,6 @@ import {
   type PolicyWorkspace,
 } from "@agent-anything/governance";
 import type { IdentityRef } from "@agent-anything/governance/identity";
-import {
-  createPermissionRequest,
-  createPermissionServiceFromMode,
-  type PermissionDecision,
-  type PermissionMode,
-  type PermissionService,
-} from "@agent-anything/permission";
 import { createTelemetryRecord, type TelemetryPort } from "@agent-anything/observability/telemetry";
 import type {
   ToolCall,
@@ -33,7 +26,6 @@ export interface ToolExecutionBoundaryDependencies {
   toolRegistry: ToolRegistry;
   evidenceBuilder: EvidenceBuilderPort;
   policyPort?: PolicyPort;
-  permissionService?: PermissionService;
   auditPort?: AuditPort;
   telemetryPort?: TelemetryPort;
   toolExecutionContextResolver?: ToolExecutionContextResolver;
@@ -50,7 +42,6 @@ export interface ExecuteToolInput {
 }
 
 export interface ToolExecutionConfig {
-  readonly permissionMode: PermissionMode;
   readonly audit: RunInfrastructureRequirement;
   readonly telemetry: RunInfrastructureRequirement;
 }
@@ -115,13 +106,13 @@ export class ToolExecutionBoundary {
       return policyOutcome;
     }
 
-    const permissionOutcome = await this.checkPermission(input);
-    const cancelledAfterPermission = cancellationOutcome(input, null);
-    if (cancelledAfterPermission !== null) {
-      return cancelledAfterPermission;
+    const approvalOutcome = await this.denyApprovalDependentExecution(input);
+    const cancelledAfterApprovalGate = cancellationOutcome(input, null);
+    if (cancelledAfterApprovalGate !== null) {
+      return cancelledAfterApprovalGate;
     }
-    if (permissionOutcome) {
-      return permissionOutcome;
+    if (approvalOutcome) {
+      return approvalOutcome;
     }
 
     const toolResult = await this.dependencies.toolRegistry.execute(
@@ -365,68 +356,41 @@ export class ToolExecutionBoundary {
     }
   }
 
-  private async checkPermission(input: ExecuteToolInput): Promise<
+  private async denyApprovalDependentExecution(input: ExecuteToolInput): Promise<
     ToolExecutionFailed | ToolExecutionBlocked | ToolExecutionCancelled | null
   > {
     if (!isGovernedToolCall(input.toolCall)) {
       return null;
     }
 
-    const permissionRequest = createPermissionRequest({
-      id: `permission_request_${input.toolCall.id}`,
-      taskId: input.task.id,
-      toolCall: input.toolCall,
-      reason: input.executionContext?.permissionReason
-        ?? `Tool ${input.toolCall.toolName} is marked as risky.`,
-      metadata: {
-        source: "tool-execution-boundary",
-        workspaceId: input.workspace?.id ?? null,
-        ...input.executionContext?.metadata,
+    const auditError = await this.recordAudit(input, {
+      id: `audit_approval_required_${input.toolCall.id}`,
+      eventName: "approval.required",
+      action: "approval.require",
+      outcome: "blocked",
+      payload: {
+        code: "permission_approval_required",
+        toolCallId: input.toolCall.id,
+        toolName: input.toolCall.toolName,
       },
     });
-    let decision;
-    try {
-      const permissionService = this.dependencies.permissionService
-        ?? createPermissionServiceFromMode(input.config.permissionMode);
-      decision = await permissionService.request(permissionRequest);
-    } catch (error) {
-      const cancellation = cancellationOutcome(input, null);
-      if (cancellation !== null) {
-        return cancellation;
-      }
-      return {
-        status: "failed",
-        toolResult: null,
-        errors: [
-          {
-            owner: "permission",
-            code: "permission_check_failed",
-            message: error instanceof Error
-              ? error.message
-              : "Permission service failed.",
-            metadata: {
-              requestId: permissionRequest.id,
-              toolCallId: input.toolCall.id,
-              toolName: input.toolCall.toolName,
-            },
-            retryable: false,
-          },
-        ],
-      };
+    if (auditError !== null) {
+      return auditError;
     }
 
-    const cancellation = cancellationOutcome(input, null);
-    if (cancellation !== null) {
-      return cancellation;
-    }
-
-    const recordError = await this.recordPermissionDecision(input, decision);
-    if (recordError) {
-      return recordError;
-    }
-
-    if (decision.status === "granted") {
-      return null;
+    const telemetryError = await this.recordTelemetry(input, {
+      id: `telemetry_approval_required_${input.toolCall.id}`,
+      eventName: "runtime.approval.required",
+      dimensions: {
+        code: "permission_approval_required",
+        toolName: input.toolCall.toolName,
+      },
+      counters: {
+        approvalRequired: 1,
+      },
+    });
+    if (telemetryError !== null) {
+      return telemetryError;
     }
 
     return {
@@ -435,12 +399,13 @@ export class ToolExecutionBoundary {
       errors: [
         {
           owner: "permission",
-          code: decision.code ?? "permission_denied",
-          message: decision.reason,
+          code: "permission_approval_required",
+          message: input.executionContext?.permissionReason
+            ?? `Tool ${input.toolCall.toolName} requires canonical approval enforcement that is unavailable before Phase16.`,
           metadata: {
-            requestId: decision.requestId,
             toolCallId: input.toolCall.id,
             toolName: input.toolCall.toolName,
+            enforcementPhase: "phase16",
           },
           retryable: false,
         },
@@ -488,52 +453,6 @@ export class ToolExecutionBoundary {
       },
       counters: {
         policyChecks: 1,
-      },
-    });
-  }
-
-  private async recordPermissionDecision(
-    input: ExecuteToolInput,
-    decision: PermissionDecision,
-  ): Promise<ToolExecutionFailed | ToolExecutionCancelled | null> {
-    const cancellationBeforeAudit = cancellationOutcome(input, null);
-    if (cancellationBeforeAudit !== null) {
-      return cancellationBeforeAudit;
-    }
-    const auditError = await this.recordAudit(input, {
-      id: `audit_permission_resolved_${input.toolCall.id}`,
-      eventName: "permission.resolved",
-      action: "permission.resolve",
-      outcome: decision.status === "granted" ? "succeeded" : "blocked",
-      payload: {
-        requestId: decision.requestId,
-        decisionStatus: decision.status,
-        code: decision.code ?? null,
-        permissionMode: input.config.permissionMode,
-        toolCallId: input.toolCall.id,
-        toolName: input.toolCall.toolName,
-      },
-    });
-    if (auditError) {
-      return auditError;
-    }
-
-    const cancellationBeforeTelemetry = cancellationOutcome(input, null);
-    if (cancellationBeforeTelemetry !== null) {
-      return cancellationBeforeTelemetry;
-    }
-
-    return this.recordTelemetry(input, {
-      id: `telemetry_permission_resolved_${input.toolCall.id}`,
-      eventName: "runtime.permission.resolved",
-      dimensions: {
-        decisionStatus: decision.status,
-        code: decision.code ?? null,
-        permissionMode: input.config.permissionMode,
-        toolName: input.toolCall.toolName,
-      },
-      counters: {
-        permissionDecisions: 1,
       },
     });
   }

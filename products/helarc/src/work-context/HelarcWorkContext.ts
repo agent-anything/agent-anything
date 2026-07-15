@@ -20,7 +20,7 @@ export type HelarcRunTriggerMessageRole = Extract<
 export type HelarcWorkContextRunStatus =
   | "starting"
   | "running"
-  | "waiting_for_permission"
+  | "waiting_for_approval"
   | "cancelling"
   | "completed"
   | "failed"
@@ -827,7 +827,7 @@ function isRunTriggerMessageRole(value: unknown): value is HelarcRunTriggerMessa
 function isWorkContextRunStatus(value: unknown): value is HelarcWorkContextRunStatus {
   return value === "starting" ||
     value === "running" ||
-    value === "waiting_for_permission" ||
+    value === "waiting_for_approval" ||
     value === "cancelling" ||
     value === "completed" ||
     value === "failed" ||

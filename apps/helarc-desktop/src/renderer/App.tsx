@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type {
+  HelarcApprovalSubmissionReceipt,
   HelarcMainSnapshot,
   HelarcProviderKind,
   HelarcStartSessionResult,
@@ -43,7 +44,7 @@ const initialSnapshot: HelarcMainSnapshot = {
     error: null,
   },
   acceptedTask: null,
-  pendingPermission: null,
+  pendingApproval: null,
   pendingPatchReview: null,
   activeThread: null,
   threadSummaries: [],
@@ -58,7 +59,7 @@ const initialSnapshot: HelarcMainSnapshot = {
     workspace: null,
     provider: null,
     events: [],
-    pendingPermission: null,
+    pendingApproval: null,
     cancellation: null,
     terminal: null,
     startedAt: null,
@@ -77,9 +78,10 @@ export function App() {
   const [startResult, setStartResult] = useState<HelarcStartSessionResult | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [sidePanelMode, setSidePanelMode] = useState<SidePanelMode>("review");
+  const [approvalSubmissionError, setApprovalSubmissionError] = useState<string | null>(null);
   const sessionActive = isSessionActive(snapshot.status);
   const selectedThread = snapshot.threadSummaries.find((thread) => thread.id === selectedThreadId) ?? null;
-  const activePanelMode: SidePanelMode = snapshot.pendingPermission || snapshot.pendingPatchReview
+  const activePanelMode: SidePanelMode = snapshot.pendingApproval || snapshot.pendingPatchReview
     ? "review"
     : sidePanelMode;
 
@@ -164,20 +166,33 @@ export function App() {
     setStartResult(null);
   }
 
-  async function resolvePermission(decision: "granted" | "denied") {
+  async function submitApprovalDecision(
+    option: NonNullable<HelarcMainSnapshot["pendingApproval"]>["request"]["decisionOptions"][number],
+  ) {
     const api = getHelarcApi();
-    const pendingPermission = snapshot.pendingPermission;
-    if (!api || !pendingPermission) {
+    const pendingApproval = snapshot.pendingApproval;
+    if (!api || !pendingApproval || pendingApproval.phase !== "reviewing") {
       return;
     }
 
     setIsBusy(true);
     try {
-      const result = await api.resolvePermission({
-        requestId: pendingPermission.requestId,
-        decision,
+      const receipt: HelarcApprovalSubmissionReceipt = await api.submitApprovalDecision({
+        submissionId: `helarc-desktop-${crypto.randomUUID()}`,
+        runId: pendingApproval.request.runId,
+        requestId: pendingApproval.request.id,
+        pendingVersion: pendingApproval.pendingVersion,
+        optionId: option.id,
+        grantedPermissions: defaultGrantedPermissions(pendingApproval, option.kind),
+        reason: option.kind === "decline"
+          ? "Declined from Helarc desktop."
+          : option.kind === "cancel"
+            ? "Cancelled from Helarc desktop."
+            : null,
       });
-      setSnapshot(result.snapshot);
+      setApprovalSubmissionError(
+        receipt.status === "rejected" ? receipt.code : null,
+      );
     } finally {
       setIsBusy(false);
     }
@@ -338,7 +353,7 @@ export function App() {
                 ? <Settings size={19} aria-hidden="true" />
                 : <ShieldCheck size={19} aria-hidden="true" />}
           </div>
-          <div className={activePanelMode !== "review" || snapshot.pendingPermission || snapshot.pendingPatchReview || snapshot.activeRun.terminal || snapshot.error
+          <div className={activePanelMode !== "review" || snapshot.pendingApproval || snapshot.pendingPatchReview || snapshot.activeRun.terminal || snapshot.error
             ? "review-content"
             : "review-empty"}
           >
@@ -351,12 +366,12 @@ export function App() {
               />
             ) : activePanelMode === "settings" ? (
               <SettingsPanel snapshot={snapshot} onSaved={setSnapshot} />
-            ) : snapshot.pendingPermission ? (
-              <PermissionPromptPanel
-                prompt={snapshot.pendingPermission}
+            ) : snapshot.pendingApproval ? (
+              <ApprovalPromptPanel
+                approval={snapshot.pendingApproval}
+                submissionError={approvalSubmissionError}
                 isBusy={isBusy}
-                onCancel={() => void cancelSession()}
-                onResolve={(decision) => void resolvePermission(decision)}
+                onSubmit={(option) => void submitApprovalDecision(option)}
               />
             ) : snapshot.pendingPatchReview ? (
               <div className="patch-panel">
@@ -617,56 +632,49 @@ export function RunTerminalPanel({
   );
 }
 
-export function PermissionPromptPanel({
-  prompt,
+export function ApprovalPromptPanel({
+  approval,
+  submissionError,
   isBusy,
-  onCancel,
-  onResolve,
+  onSubmit,
 }: {
-  prompt: HelarcMainSnapshot["pendingPermission"];
+  approval: HelarcMainSnapshot["pendingApproval"];
+  submissionError: string | null;
   isBusy: boolean;
-  onCancel: () => void;
-  onResolve: (decision: "granted" | "denied") => void;
+  onSubmit: (
+    option: NonNullable<HelarcMainSnapshot["pendingApproval"]>["request"]["decisionOptions"][number],
+  ) => void;
 }) {
-  if (!prompt) {
+  if (!approval) {
     return null;
   }
+  const request = approval.request;
+  const submitted = approval.phase === "submitted_for_resolution";
 
   return (
     <div className="permission-panel">
       <ShieldCheck size={24} aria-hidden="true" />
-      <strong>{prompt.toolName}</strong>
-      <span>{prompt.reason}</span>
-      <code>{formatCommand(prompt.command, prompt.args)}</code>
+      <strong>{approvalCategoryLabel(request.category)}</strong>
+      <span>{request.reason}</span>
+      <code>{approvalRequestSummary(request)}</code>
       <div className="permission-meta">
-        <span>{prompt.rootName ?? "workspace"}</span>
-        <span>{prompt.cwd ?? "."}</span>
+        <span>{request.category}</span>
+        <span>{approval.phase === "reviewing" ? "Awaiting review" : "Submitted for resolution"}</span>
       </div>
+      {submissionError ? <span className="error-text">{submissionError}</span> : null}
       <div className="permission-actions">
-        <button
-          className="secondary-button"
-          type="button"
-          onClick={onCancel}
-          disabled={isBusy}
-        >
-          Cancel
-        </button>
-        <button
-          className="secondary-button danger"
-          type="button"
-          onClick={() => onResolve("denied")}
-          disabled={isBusy}
-        >
-          Deny
-        </button>
-        <button
-          className="primary-button compact"
-          type="button"
-          onClick={() => onResolve("granted")}
-          disabled={isBusy}
-        >
-          Approve
-        </button>
+        {request.decisionOptions.map((option) => (
+          <button
+            className={approvalOptionButtonClass(option.kind)}
+            key={option.id}
+            type="button"
+            title={option.description ?? undefined}
+            onClick={() => onSubmit(option)}
+            disabled={isBusy || submitted}
+          >
+            {option.label}
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -934,7 +942,7 @@ function readProviderKind(formData: FormData, fallback: HelarcProviderKind): Hel
 function isSessionActive(status: HelarcMainSnapshot["status"]): boolean {
   return status === "running" ||
     status === "cancelling" ||
-    status === "waiting_for_permission" ||
+    status === "waiting_for_approval" ||
     status === "waiting_for_patch_review" ||
     status === "applying_patch";
 }
@@ -942,7 +950,7 @@ function isSessionActive(status: HelarcMainSnapshot["status"]): boolean {
 function isRunCancellable(status: HelarcMainSnapshot["activeRun"]["status"]): boolean {
   return status === "starting" ||
     status === "running" ||
-    status === "waiting_for_permission" ||
+    status === "waiting_for_approval" ||
     status === "cancelling";
 }
 
@@ -1067,12 +1075,75 @@ function getHelarcApi() {
   return typeof window === "undefined" ? null : window.helarc;
 }
 
-function formatCommand(command: string | null, args: string[]): string {
-  if (!command) {
-    return "unknown command";
+function approvalCategoryLabel(
+  category: NonNullable<HelarcMainSnapshot["pendingApproval"]>["request"]["category"],
+): string {
+  switch (category) {
+    case "commandExecution": return "Command execution";
+    case "fileChange": return "File change";
+    case "permissions": return "Additional permissions";
+    case "mcpToolCall": return "MCP tool call";
+    case "skill": return "Skill action";
+    case "networkAccess": return "Network access";
   }
+}
 
-  return [command, ...args].join(" ");
+function approvalRequestSummary(
+  request: NonNullable<HelarcMainSnapshot["pendingApproval"]>["request"],
+): string {
+  switch (request.category) {
+    case "commandExecution":
+      return request.payload.commandDisplay;
+    case "fileChange":
+      return request.payload.changes
+        .map((change) => `${change.operation} ${change.displayPath}`)
+        .join(", ");
+    case "permissions": {
+      const readCount = request.payload.permissions.fileSystem?.read?.length ?? 0;
+      const writeCount = request.payload.permissions.fileSystem?.write?.length ?? 0;
+      const network = request.payload.permissions.network?.enabled === true ? "network" : null;
+      return [
+        readCount > 0 ? `${readCount} read target(s)` : null,
+        writeCount > 0 ? `${writeCount} write target(s)` : null,
+        network,
+      ].filter((value): value is string => value !== null).join(", ") || "Permission expansion";
+    }
+    case "mcpToolCall":
+      return `${request.payload.serverDisplayName}: ${request.payload.toolName}`;
+    case "skill":
+      return `${request.payload.skillDisplayName}: ${request.payload.action}`;
+    case "networkAccess":
+      return request.payload.actionSummary;
+  }
+}
+
+function approvalOptionButtonClass(
+  kind: NonNullable<HelarcMainSnapshot["pendingApproval"]>["request"]["decisionOptions"][number]["kind"],
+): string {
+  if (kind === "decline" || kind === "cancel") {
+    return "secondary-button danger";
+  }
+  return "primary-button compact";
+}
+
+function defaultGrantedPermissions(
+  approval: NonNullable<HelarcMainSnapshot["pendingApproval"]>,
+  optionKind: NonNullable<HelarcMainSnapshot["pendingApproval"]>["request"]["decisionOptions"][number]["kind"],
+) {
+  if (optionKind !== "grantPermissions") return null;
+  const request = approval.request;
+  switch (request.category) {
+    case "commandExecution":
+    case "fileChange":
+      return request.payload.additionalPermissions;
+    case "permissions":
+      return request.payload.permissions;
+    case "skill":
+      return request.payload.requiredPermissions;
+    case "mcpToolCall":
+    case "networkAccess":
+      return null;
+  }
 }
 
 function renderTaskTemplatePrompt(promptText: string, constraints: string[]): string {

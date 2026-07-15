@@ -1,5 +1,4 @@
 import type { Evidence } from "@agent-anything/evidence";
-import type { PermissionMode } from "@agent-anything/permission";
 import type {
   ArtifactRef,
   EvidenceRef,
@@ -28,7 +27,6 @@ import {
 export interface TemporaryToolActionBridgeDependencies {
   readonly boundary: ToolExecutionBoundary;
   readonly storage: StoragePort;
-  readonly permissionMode: PermissionMode;
 }
 
 /** Transitional Tool bridge retained until Phase16 ActionExecutionBoundary replaces it. */
@@ -54,7 +52,7 @@ export class TemporaryToolActionBridge implements ToolActionBridge {
     const outcome = await this.dependencies.boundary.execute({
       task: input.task,
       toolCall,
-      config: createToolExecutionConfig(input, this.dependencies),
+      config: createToolExecutionConfig(input),
       workspace: input.workspace,
       identity: input.identity,
       invocation: createToolInvocationContext(input),
@@ -204,10 +202,8 @@ export class TemporaryToolActionBridge implements ToolActionBridge {
 
 function createToolExecutionConfig(
   input: ToolActionBridgeInput,
-  dependencies: TemporaryToolActionBridgeDependencies,
 ): ToolExecutionConfig {
   return Object.freeze({
-    permissionMode: dependencies.permissionMode,
     audit: input.audit,
     telemetry: input.telemetry,
   });

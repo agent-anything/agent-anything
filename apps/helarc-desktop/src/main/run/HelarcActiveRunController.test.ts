@@ -29,7 +29,7 @@ describe("HelarcActiveRunController", () => {
           model: "model-a",
         },
         events: [],
-        pendingPermission: null,
+        pendingApproval: null,
         cancellation: null,
         terminal: null,
         startedAt: "2026-07-04T00:00:00.000Z",
@@ -124,7 +124,7 @@ describe("HelarcActiveRunController", () => {
       ok: true,
       snapshot: {
         status: "cancelling",
-        pendingPermission: null,
+        pendingApproval: null,
         cancellation: cancellationSummary(),
       },
     });
@@ -156,28 +156,28 @@ describe("HelarcActiveRunController", () => {
     });
   });
 
-  it("tracks pending permission and clears it after a decision", () => {
+  it("tracks pending approval and clears it after authoritative resolution", () => {
     const controller = new HelarcActiveRunController();
     controller.startRun(activeRunInput());
     controller.markRunning();
 
-    expect(controller.requestPermission(permissionPrompt())).toMatchObject({
+    expect(controller.requestApproval(approvalPrompt())).toMatchObject({
       ok: true,
       snapshot: {
-        status: "waiting_for_permission",
-        pendingPermission: {
-          requestId: "permission-1",
+        status: "waiting_for_approval",
+        pendingApproval: {
+          requestId: "approval-1",
           toolName: "codeAgent.runCommand",
           inputSummary: "node -e ...",
         },
       },
     });
 
-    expect(controller.resolvePermission()).toMatchObject({
+    expect(controller.resolveApproval()).toMatchObject({
       ok: true,
       snapshot: {
         status: "running",
-        pendingPermission: null,
+        pendingApproval: null,
       },
     });
   });
@@ -196,7 +196,7 @@ describe("HelarcActiveRunController", () => {
       workspace: null,
       provider: null,
       events: [],
-      pendingPermission: null,
+      pendingApproval: null,
       cancellation: null,
       terminal: null,
       startedAt: null,
@@ -233,9 +233,9 @@ function activeRunInput() {
   };
 }
 
-function permissionPrompt() {
+function approvalPrompt() {
   return {
-    requestId: "permission-1",
+    requestId: "approval-1",
     actionLabel: "Execute shell command",
     toolName: "codeAgent.runCommand",
     riskLevel: "high" as const,

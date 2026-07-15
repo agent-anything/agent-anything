@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { EvidenceBuilder } from "@agent-anything/evidence";
 import type { PolicyPort } from "@agent-anything/governance";
-import type { PermissionService } from "@agent-anything/permission";
+import type { AuditPort } from "@agent-anything/observability/audit";
+import type { TelemetryPort } from "@agent-anything/observability/telemetry";
 import {
-  FakePermissionService,
+  FakeAuditPort,
   FakePolicyPort,
+  FakeTelemetryPort,
 } from "@agent-anything/testing";
 import {
   ToolRegistry,
@@ -161,10 +163,6 @@ describe("ToolExecutionBoundary", () => {
         toolCall: createToolCall({
           risk: "risky",
         }),
-        config: {
-          ...createConfig(),
-          permissionMode: "deny",
-        },
       }),
     );
 
@@ -172,16 +170,59 @@ describe("ToolExecutionBoundary", () => {
       status: "blocked",
       errors: [
         {
-          code: "permission_mode_denied",
+          owner: "permission",
+          code: "permission_approval_required",
         },
       ],
     });
     expect(executed).toBe(false);
   });
 
-  it("blocks risky tools when policy denies before permission and execution", async () => {
+  it("records approval-required audit and telemetry facts for risky tools", async () => {
+    const auditPort = new FakeAuditPort();
+    const telemetryPort = new FakeTelemetryPort();
+    const boundary = createBoundary(createToolResult("succeeded"), {
+      auditPort,
+      telemetryPort,
+    });
+
+    const outcome = await boundary.execute(
+      createExecuteInput({
+        toolCall: createToolCall({ risk: "risky" }),
+      }),
+    );
+
+    expect(outcome.status).toBe("blocked");
+    expect(auditPort.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventName: "approval.required",
+          action: "approval.require",
+          outcome: "blocked",
+          payload: expect.objectContaining({
+            code: "permission_approval_required",
+            toolCallId: "tool_call_001",
+            toolName: "net.lookupDns",
+          }),
+        }),
+      ]),
+    );
+    expect(telemetryPort.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventName: "runtime.approval.required",
+          dimensions: expect.objectContaining({
+            code: "permission_approval_required",
+            toolName: "net.lookupDns",
+          }),
+          counters: expect.objectContaining({ approvalRequired: 1 }),
+        }),
+      ]),
+    );
+  });
+
+  it("blocks risky tools when policy denies before the approval gate and execution", async () => {
     let executed = false;
-    let permissionRequested = false;
     const boundary = createBoundary(createToolResult("succeeded"), {
       onExecute: () => {
         executed = true;
@@ -193,15 +234,6 @@ describe("ToolExecutionBoundary", () => {
         reason: "Policy denies risky tool.",
         decidedAt: "2026-06-12T00:00:00.000Z",
       })),
-      permissionService: new FakePermissionService((request) => {
-        permissionRequested = true;
-        return {
-          requestId: request.id,
-          status: "granted",
-          reason: "Allowed by test service.",
-          decidedAt: "2026-06-12T00:00:00.000Z",
-        };
-      }),
     });
 
     const outcome = await boundary.execute(
@@ -221,11 +253,10 @@ describe("ToolExecutionBoundary", () => {
         },
       ],
     });
-    expect(permissionRequested).toBe(false);
     expect(executed).toBe(false);
   });
 
-  it("runs policy before permission and execution on allow path", async () => {
+  it("runs policy before the fail-closed approval gate", async () => {
     const order: string[] = [];
     const boundary = createBoundary(createToolResult("succeeded"), {
       onExecute: () => {
@@ -239,15 +270,6 @@ describe("ToolExecutionBoundary", () => {
           decidedAt: "2026-06-12T00:00:00.000Z",
         };
       }),
-      permissionService: new FakePermissionService((request) => {
-        order.push("permission");
-        return {
-          requestId: request.id,
-          status: "granted",
-          reason: "Allowed by test service.",
-          decidedAt: "2026-06-12T00:00:00.000Z",
-        };
-      }),
     });
 
     const outcome = await boundary.execute(
@@ -258,8 +280,11 @@ describe("ToolExecutionBoundary", () => {
       }),
     );
 
-    expect(outcome.status).toBe("succeeded");
-    expect(order).toEqual(["policy", "permission", "execute"]);
+    expect(outcome).toMatchObject({
+      status: "blocked",
+      errors: [{ owner: "permission", code: "permission_approval_required" }],
+    });
+    expect(order).toEqual(["policy"]);
   });
 
   it("blocks risky tools when policy requires review", async () => {
@@ -315,128 +340,6 @@ describe("ToolExecutionBoundary", () => {
     });
   });
 
-  it("uses injected permission service to allow risky tools", async () => {
-    let executed = false;
-    const boundary = createBoundary(createToolResult("succeeded"), {
-      onExecute: () => {
-        executed = true;
-      },
-      permissionService: new FakePermissionService((request) => ({
-        requestId: request.id,
-        status: "granted",
-        reason: "Allowed by test service.",
-        decidedAt: "2026-06-07T00:00:00.000Z",
-      })),
-    });
-
-    const outcome = await boundary.execute(
-      createExecuteInput({
-        toolCall: createToolCall({
-          risk: "risky",
-        }),
-        config: {
-          ...createConfig(),
-          permissionMode: "deny",
-        },
-      }),
-    );
-
-    expect(outcome.status).toBe("succeeded");
-    expect(executed).toBe(true);
-  });
-
-  it("blocks risky tools when permission service denies", async () => {
-    let executed = false;
-    const boundary = createBoundary(createToolResult("succeeded"), {
-      onExecute: () => {
-        executed = true;
-      },
-      permissionService: new FakePermissionService((request) => ({
-        requestId: request.id,
-        status: "denied",
-        code: "permission_denied",
-        reason: "Denied by test service.",
-        decidedAt: "2026-06-12T00:00:00.000Z",
-      })),
-    });
-
-    const outcome = await boundary.execute(
-      createExecuteInput({
-        toolCall: createToolCall({
-          risk: "risky",
-        }),
-      }),
-    );
-
-    expect(outcome).toMatchObject({
-      status: "blocked",
-      errors: [
-        {
-          code: "permission_denied",
-          message: "Denied by test service.",
-        },
-      ],
-    });
-    expect(executed).toBe(false);
-  });
-
-  it("blocks ask mode when no host permission service is available", async () => {
-    let executed = false;
-    const boundary = createBoundary(createToolResult("succeeded"), {
-      onExecute: () => {
-        executed = true;
-      },
-    });
-
-    const outcome = await boundary.execute(
-      createExecuteInput({
-        toolCall: createToolCall({
-          risk: "risky",
-        }),
-        config: {
-          ...createConfig(),
-          permissionMode: "ask",
-        },
-      }),
-    );
-
-    expect(outcome).toMatchObject({
-      status: "blocked",
-      errors: [
-        {
-          code: "permission_unavailable",
-        },
-      ],
-    });
-    expect(executed).toBe(false);
-  });
-
-  it("maps permission service failure to structured runtime error", async () => {
-    const boundary = createBoundary(createToolResult("succeeded"), {
-      permissionService: new FakePermissionService(() => {
-        throw new Error("Permission UI failed.");
-      }),
-    });
-
-    const outcome = await boundary.execute(
-      createExecuteInput({
-        toolCall: createToolCall({
-          risk: "risky",
-        }),
-      }),
-    );
-
-    expect(outcome).toMatchObject({
-      status: "failed",
-      errors: [
-        {
-          code: "permission_check_failed",
-          message: "Permission UI failed.",
-        },
-      ],
-    });
-  });
-
   it("stops before tool dispatch after an attributed cancellation", async () => {
     let executed = false;
     const controller = new AbortController();
@@ -459,11 +362,12 @@ describe("ToolExecutionBoundary", () => {
     });
   });
 
-  it("does not continue from policy to permission after cancellation", async () => {
+  it("does not continue from policy to the approval gate after cancellation", async () => {
     const controller = new AbortController();
     let interruption: ToolInvocationContext["interruption"]["interruption"] = null;
-    let permissionChecked = false;
+    let executed = false;
     const boundary = createBoundary(createToolResult("succeeded"), {
+      onExecute: () => { executed = true; },
       policyPort: new FakePolicyPort((input) => {
         interruption = {
           kind: "run_cancellation",
@@ -476,15 +380,6 @@ describe("ToolExecutionBoundary", () => {
           decidedAt: "2026-06-12T00:00:00.000Z",
         };
       }),
-      permissionService: new FakePermissionService((request) => {
-        permissionChecked = true;
-        return {
-          requestId: request.id,
-          status: "granted",
-          reason: "Allowed by test service.",
-          decidedAt: "2026-06-12T00:00:00.000Z",
-        };
-      }),
     });
 
     const outcome = await boundary.execute(createExecuteInput({
@@ -492,7 +387,7 @@ describe("ToolExecutionBoundary", () => {
       invocation: createInvocationContext(controller, () => interruption),
     }));
 
-    expect(permissionChecked).toBe(false);
+    expect(executed).toBe(false);
     expect(outcome).toMatchObject({
       status: "cancelled",
       cancellation: { requestId: "cancel-policy" },
@@ -573,7 +468,8 @@ function createBoundary(
   options: {
     onExecute?: () => void;
     policyPort?: PolicyPort;
-    permissionService?: PermissionService;
+    auditPort?: AuditPort;
+    telemetryPort?: TelemetryPort;
   } = {},
 ): ToolExecutionBoundary {
   const registry = new ToolRegistry();
@@ -583,7 +479,8 @@ function createBoundary(
     toolRegistry: registry,
     evidenceBuilder: new EvidenceBuilder(),
     policyPort: options.policyPort,
-    permissionService: options.permissionService,
+    auditPort: options.auditPort,
+    telemetryPort: options.telemetryPort,
   });
 }
 
@@ -665,7 +562,6 @@ function createToolCall(overrides: Partial<ToolCall> = {}): ToolCall {
 
 function createConfig(): ToolExecutionConfig {
   return {
-    permissionMode: "trusted",
     audit: "optional",
     telemetry: "optional",
   };

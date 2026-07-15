@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { EvidenceBuilder, type EvidenceBuilderPort } from "@agent-anything/evidence";
 import type { AuditPort, TelemetryPort } from "@agent-anything/observability";
 import { InMemoryStorage, type StoragePort } from "@agent-anything/storage";
-import { FakePermissionService, FakePolicyPort } from "@agent-anything/testing";
+import { FakePolicyPort } from "@agent-anything/testing";
 import {
   ToolRegistry,
   type ToolCall,
@@ -91,16 +91,9 @@ describe("TemporaryToolActionBridge", () => {
     });
   });
 
-  it("maps permission denial after policy allow to a permission-owned denial", async () => {
+  it("maps the temporary risky Tool gate to a permission-owned denial", async () => {
     const bridge = createBridge({
       tool: createTool("risky", async (call) => toolResult(call, "succeeded", "unused")),
-      permissionService: new FakePermissionService((input) => ({
-        requestId: input.id,
-        status: "denied",
-        code: "permission_denied",
-        reason: "User declined the request.",
-        decidedAt: "2026-07-13T00:00:00.000Z",
-      })),
     });
 
     const result = await bridge.execute(createInput({ toolRisk: "risky" }));
@@ -111,7 +104,7 @@ describe("TemporaryToolActionBridge", () => {
       observation: {
         kind: "action_denied",
         owner: "permission",
-        code: "permission_denied",
+        code: "permission_approval_required",
       },
     });
   });
@@ -237,7 +230,6 @@ function createBridge(options: {
   readonly storage?: StoragePort;
   readonly evidenceBuilder?: EvidenceBuilderPort;
   readonly policyPort?: ConstructorParameters<typeof ToolExecutionBoundary>[0]["policyPort"];
-  readonly permissionService?: ConstructorParameters<typeof ToolExecutionBoundary>[0]["permissionService"];
   readonly auditPort?: AuditPort;
   readonly telemetryPort?: TelemetryPort;
 }): TemporaryToolActionBridge {
@@ -247,14 +239,12 @@ function createBridge(options: {
     toolRegistry: registry,
     evidenceBuilder: options.evidenceBuilder ?? new EvidenceBuilder(),
     policyPort: options.policyPort,
-    permissionService: options.permissionService,
     auditPort: options.auditPort,
     telemetryPort: options.telemetryPort,
   });
   return new TemporaryToolActionBridge({
     boundary,
     storage: options.storage ?? new InMemoryStorage(),
-    permissionMode: "trusted",
   });
 }
 

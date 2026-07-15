@@ -1,7 +1,7 @@
 import type {
   HelarcRunEventViewModel,
+  HelarcRunApprovalPrompt,
   HelarcRunInput,
-  HelarcRunPermissionPrompt,
   HelarcRunProviderRef,
   HelarcRunSnapshot,
   HelarcRunStatus,
@@ -87,7 +87,7 @@ export class HelarcActiveRunController {
       workspace: input.workspace,
       provider: input.provider,
       events: [],
-      pendingPermission: null,
+      pendingApproval: null,
       cancellation: null,
       terminal: null,
       startedAt: input.startedAt ?? input.run.createdAt,
@@ -130,7 +130,7 @@ export class HelarcActiveRunController {
     return { ok: true, snapshot: this.publishSnapshot() };
   }
 
-  requestPermission(prompt: HelarcRunPermissionPrompt): UpdateHelarcActiveRunResult {
+  requestApproval(prompt: HelarcRunApprovalPrompt): UpdateHelarcActiveRunResult {
     if (!isActiveStatus(this.snapshot.status)) {
       return this.reject(
         "active_run_not_running",
@@ -140,13 +140,13 @@ export class HelarcActiveRunController {
 
     this.snapshot = {
       ...this.snapshot,
-      status: "waiting_for_permission",
-      pendingPermission: prompt,
+      status: "waiting_for_approval",
+      pendingApproval: prompt,
     };
     return { ok: true, snapshot: this.publishSnapshot() };
   }
 
-  resolvePermission(): UpdateHelarcActiveRunResult {
+  resolveApproval(): UpdateHelarcActiveRunResult {
     if (!isActiveStatus(this.snapshot.status)) {
       return this.reject(
         "active_run_not_running",
@@ -157,7 +157,7 @@ export class HelarcActiveRunController {
     this.snapshot = {
       ...this.snapshot,
       status: "running",
-      pendingPermission: null,
+      pendingApproval: null,
     };
     return { ok: true, snapshot: this.publishSnapshot() };
   }
@@ -173,7 +173,7 @@ export class HelarcActiveRunController {
     this.snapshot = {
       ...this.snapshot,
       status: "cancelling",
-      pendingPermission: null,
+      pendingApproval: null,
       cancellation: Object.freeze({ ...cancellation }),
     };
     return { ok: true, snapshot: this.publishSnapshot() };
@@ -190,7 +190,7 @@ export class HelarcActiveRunController {
     this.snapshot = {
       ...this.snapshot,
       status: terminal.status,
-      pendingPermission: null,
+      pendingApproval: null,
       cancellation: terminal.cancellation,
       terminal,
     };
@@ -232,7 +232,7 @@ function createIdleSnapshot(): HelarcRunSnapshot {
     workspace: null,
     provider: null,
     events: [],
-    pendingPermission: null,
+    pendingApproval: null,
     cancellation: null,
     terminal: null,
     startedAt: null,
@@ -243,6 +243,6 @@ function createIdleSnapshot(): HelarcRunSnapshot {
 function isActiveStatus(status: HelarcRunStatus): boolean {
   return status === "starting" ||
     status === "running" ||
-    status === "waiting_for_permission" ||
+    status === "waiting_for_approval" ||
     status === "cancelling";
 }

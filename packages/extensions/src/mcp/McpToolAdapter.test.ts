@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ToolExecutionBoundary } from "@agent-anything/agent-core";
 import { EvidenceBuilder } from "@agent-anything/evidence";
-import { FakePermissionService, FakePolicyPort } from "@agent-anything/testing";
+import { FakePolicyPort } from "@agent-anything/testing";
 import {
   FakeMcpConnectionPort,
 } from "../testing/index.js";
@@ -164,7 +164,7 @@ describe("McpToolAdapter", () => {
     expect(connectionPort.calls).toHaveLength(0);
   });
 
-  it("blocks MCP execution before connection call when permission denies", async () => {
+  it("blocks risky MCP execution at the temporary approval gate", async () => {
     const connectionPort = new FakeMcpConnectionPort((input) => ({
       toolCallId: input.toolCallId,
       toolName: input.toolName,
@@ -178,13 +178,6 @@ describe("McpToolAdapter", () => {
     const boundary = new ToolExecutionBoundary({
       toolRegistry: registry,
       evidenceBuilder: new EvidenceBuilder(),
-      permissionService: new FakePermissionService((request) => ({
-        requestId: request.id,
-        status: "denied",
-        code: "permission_denied",
-        reason: "Permission denied.",
-        decidedAt: "2026-06-13T00:00:00.000Z",
-      })),
     });
 
     const result = await boundary.execute({
@@ -194,7 +187,10 @@ describe("McpToolAdapter", () => {
       invocation: createInvocationContext(),
     });
 
-    expect(result.status).toBe("blocked");
+    expect(result).toMatchObject({
+      status: "blocked",
+      errors: [{ owner: "permission", code: "permission_approval_required" }],
+    });
     expect(connectionPort.calls).toHaveLength(0);
   });
 });
@@ -266,7 +262,6 @@ function createTask() {
 
 function createConfig() {
   return {
-    permissionMode: "trusted" as const,
     audit: "optional" as const,
     telemetry: "optional" as const,
   };

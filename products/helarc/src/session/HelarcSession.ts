@@ -238,7 +238,6 @@ export async function runHelarcSession(
   const toolActionBridge = new TemporaryToolActionBridge({
     boundary: toolExecutionBoundary,
     storage: input.storage ?? new InMemoryHelarcStorage(input.now),
-    permissionMode: input.enableShell ? "ask" : "trusted",
   });
   const runner = new Runner({
     controller,
