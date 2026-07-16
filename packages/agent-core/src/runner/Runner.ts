@@ -1,7 +1,10 @@
 import type { AuditPort, TelemetryPort } from "@agent-anything/observability";
 import type { ISODateTimeString } from "@agent-anything/shared";
 import type { Agent } from "../agent/index.js";
-import type { ActionEnforcementPipeline } from "../action-execution/index.js";
+import type {
+  ActionEnforcementPipeline,
+  SandboxExecutionGateway,
+} from "../action-execution/index.js";
 import type { Controller } from "../controller/index.js";
 import type { RuntimeEventEmitter } from "../events/index.js";
 import {
@@ -43,6 +46,7 @@ export interface RunnerDependencies {
   readonly telemetryPort?: TelemetryPort;
   readonly toolActionBridge?: ToolActionBridge;
   readonly actionEnforcementPipeline?: ActionEnforcementPipeline;
+  readonly sandboxExecutionGateway?: SandboxExecutionGateway;
   readonly retryExecutor?: RetryExecutor;
   readonly now?: () => ISODateTimeString;
   readonly createId?: CreateRunnerIdentity;

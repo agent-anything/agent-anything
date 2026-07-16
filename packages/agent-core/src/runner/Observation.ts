@@ -25,7 +25,7 @@ export interface ToolResultObservation<TOutput = unknown> extends ObservationBas
   readonly result: ToolResult<TOutput>;
 }
 
-export type ActionDeniedOwner = "policy" | "permission" | "tool";
+export type ActionDeniedOwner = "policy" | "permission" | "sandbox" | "tool";
 
 export interface ActionDeniedObservation extends ObservationBase {
   readonly kind: "action_denied";

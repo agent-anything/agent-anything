@@ -275,12 +275,16 @@ export class RunExecution<TOutput> {
       return this.createInvalidConfigResult(config.error);
     }
     this.config = config.config;
-    if ((this.dependencies.actionEnforcementPipeline === undefined) !==
-      (this.config.actionContext === null)) {
+    const actionPipelineParts = [
+      this.dependencies.actionEnforcementPipeline !== undefined,
+      this.dependencies.sandboxExecutionGateway !== undefined,
+      this.config.actionContext !== null,
+    ];
+    if (actionPipelineParts.some(Boolean) && !actionPipelineParts.every(Boolean)) {
       return this.createInvalidConfigResult(runtimeError(
         "runtime",
         "runtime_invalid_options",
-        "ActionEnforcementPipeline and RunConfig.actionContext must be configured together.",
+        "ActionEnforcementPipeline, SandboxExecutionGateway, and RunConfig.actionContext must be configured together.",
         false,
         {},
       ));
@@ -1982,7 +1986,7 @@ export class RunExecution<TOutput> {
       if (revalidation.status !== "ready") {
         return this.commitActionRevalidation(action, revalidation);
       }
-      return this.commitActionDispatchPlan(action, revalidation.plan);
+      return this.commitActionDispatchPlan(action, prepared, revalidation.plan);
     }
 
     if (this.cancellationRequest() !== null) {
@@ -2191,6 +2195,7 @@ export class RunExecution<TOutput> {
 
   private async commitActionDispatchPlan(
     action: Action,
+    prepared: PreparedExternalAction,
     plan: ActionDispatchPlan,
   ): Promise<ProcessActionResult> {
     if (this.cancellationRequest() !== null) {
@@ -2280,17 +2285,91 @@ export class RunExecution<TOutput> {
       return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
     }
 
-    return this.commitActionFailure(action, runtimeError(
-      "runtime",
-      "runtime_action_dispatch_unavailable",
-      "The Action is revalidated and authorized, but the execution gateway is not attached yet.",
-      false,
-      {
-        actionId: action.id,
-        actionFingerprint: plan.actionFingerprint,
-        dispatchPlanFingerprint: plan.dispatchPlanFingerprint,
-      },
-    ));
+    const gateway = this.dependencies.sandboxExecutionGateway;
+    if (gateway === undefined) {
+      throw new Error("Authorized Action dispatch requires SandboxExecutionGateway.");
+    }
+    let execution;
+    try {
+      execution = await this.awaitInterruptibleOperation(
+        "tool",
+        () => gateway.dispatch({
+          plan,
+          preparedInvocation: prepared.preparedInvocation,
+          deadlineAt: this.runDeadlineAt(),
+          interruption: this.createActionInterruptionContext(),
+        }),
+        this.runDeadlineAt(),
+      );
+    } catch (error) {
+      return this.handleActionPipelineOperationError(action, error, "dispatch");
+    }
+
+    if (execution.status === "executed") {
+      let observation: ToolResultObservation | null = null;
+      if (execution.toolResult.status !== "skipped") {
+        const base = this.createObservationBase(action);
+        observation = Object.freeze({
+            ...base,
+            kind: "tool_result" as const,
+            result: execution.toolResult,
+            metadata: Object.freeze({
+              ...base.metadata,
+              toolName: execution.toolResult.toolName,
+              toolResultStatus: execution.toolResult.status,
+              sandboxAttemptId: execution.attempt.id,
+              sandboxEnforcement: execution.attempt.enforcement,
+              sandboxIsolation: execution.isolation,
+            }),
+          });
+      }
+      return this.commitToolOutcome(
+        action,
+        observation,
+        execution.toolResult.status !== "succeeded" &&
+          execution.toolResult.status !== "skipped",
+        [],
+        [],
+      );
+    }
+    if (execution.status === "sandbox_denied") {
+      const observation: ActionDeniedObservation = Object.freeze({
+        ...this.createObservationBase(action),
+        kind: "action_denied",
+        owner: "sandbox",
+        code: execution.denial.code,
+        message: execution.denial.message,
+      });
+      return this.commitActionObservation(observation, true, true);
+    }
+    if (execution.status === "sandbox_unavailable") {
+      const error = runtimeError(
+        "sandbox",
+        execution.code,
+        "The selected sandbox enforcement could not execute the Action.",
+        false,
+        {
+          actionId: action.id,
+          attemptId: execution.attempt.id,
+          stage: execution.stage,
+          effectState: execution.effectState,
+        },
+      );
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(error, "sandbox_enforcement_failed"),
+      };
+    }
+    if (execution.status === "interrupted") {
+      return this.handleActionInterruption(action);
+    }
+    if (execution.error.owner === "tool") {
+      return this.commitActionFailure(action, execution.error);
+    }
+    return {
+      invalidatesBatch: true,
+      terminalResult: await this.fail(execution.error, "sandbox_enforcement_failed"),
+    };
   }
 
   private commitActionFailure(
@@ -2324,7 +2403,7 @@ export class RunExecution<TOutput> {
   private async handleActionPipelineOperationError(
     action: Action,
     error: unknown,
-    phase: "preparation" | "assessment" | "revalidation",
+    phase: "preparation" | "assessment" | "revalidation" | "dispatch",
   ): Promise<ProcessActionResult> {
     if (error instanceof OperationSettlementTimeoutError) {
       return {

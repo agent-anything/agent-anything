@@ -15,6 +15,8 @@ import type {
 import type { ActionRegistration } from "./ActionRegistration.js";
 import { createCanonicalSha256Digest } from "./CanonicalEncoding.js";
 import type { CanonicalEffectivePermissions } from "./CanonicalEffectivePermissions.js";
+import type { CanonicalEnvironmentIdentity } from "./CanonicalIdentity.js";
+import type { ActionEffectSet } from "./CapabilityEffect.js";
 import type { PreparedExternalAction } from "./PreparedExternalAction.js";
 import type { TargetStateAssertion } from "./TargetStateAssertion.js";
 
@@ -36,6 +38,9 @@ export interface ActionDispatchPlan {
   readonly actionName: string;
   readonly actionFingerprint: string;
   readonly preparedInvocationDigest: string;
+  readonly authorizedEffects: ActionEffectSet;
+  readonly allowedSecretReferences: readonly string[];
+  readonly environment: CanonicalEnvironmentIdentity;
   readonly authoritySnapshotId: string;
   readonly policyCheckId: string;
   readonly ruleOutcome: ActionRuleOutcome;
@@ -81,6 +86,9 @@ export async function createActionDispatchPlan(input: {
     actionName: input.prepared.action.name,
     actionFingerprint: input.prepared.actionFingerprint,
     preparedInvocationDigest: input.prepared.subject.preparedInvocationDigest,
+    authorizedEffects: input.prepared.subject.effectSet,
+    allowedSecretReferences: input.prepared.preparedInvocation.secretReferences,
+    environment: input.prepared.subject.environment,
     authoritySnapshotId: input.authorization.authoritySnapshotId,
     policyCheckId: input.authorization.policyCheckId,
     ruleOutcome: input.authorization.ruleOutcome,

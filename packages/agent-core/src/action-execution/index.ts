@@ -7,6 +7,13 @@ export {
 export * from "./ActionAdapter.js";
 export * from "./ActionEnforcementPipeline.js";
 export type {
+  ActionExecutor,
+  ActionExecutorContext,
+  ActionExecutorDispatchPermit,
+  ResolvedActionSecret,
+} from "./ActionExecutor.js";
+export { assertActionExecutorDispatchContext } from "./ActionExecutor.js";
+export type {
   ActionAssessment,
   ActionAssessmentReviewContext,
   ActionAssessmentAuthoritySnapshot,
@@ -35,4 +42,11 @@ export type {
   PreparedExternalAction,
 } from "./PreparedExternalAction.js";
 export * from "./SafeActionSummary.js";
+export * from "./SandboxContracts.js";
+export {
+  createSandboxExecutionGateway,
+  type ActionSecretResolver,
+  type CreateSandboxExecutionGatewayInput,
+  type ResolveActionSecretsInput,
+} from "./SandboxExecutionGateway.js";
 export * from "./TargetStateAssertion.js";

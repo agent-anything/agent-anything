@@ -36,6 +36,10 @@ import type {
 import type { ActionAdapterPreparedData } from "../action-execution/ActionAdapter.js";
 import { ActionEnforcementPipeline } from "../action-execution/ActionEnforcementPipeline.js";
 import { createActionRegistrationSnapshot } from "../action-execution/ActionRegistration.js";
+import {
+  assertActionExecutorDispatchContext,
+  createSandboxExecutionGateway,
+} from "../action-execution/index.js";
 import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
 import { FakeApprovalReviewer } from "@agent-anything/testing";
 import type {
@@ -1525,13 +1529,14 @@ describe("Runner external Action approval attachment", () => {
     ]);
     const result = await createRunner(controller, {
       actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
       auditPort,
     }).run(
       createAgent([createAgentTool("test.external")]),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
-        permissions: createReviewPermissionConfig(reviewer),
+        permissions: createDisabledReviewPermissionConfig(reviewer),
         audit: "required",
       }),
     );
@@ -1545,10 +1550,11 @@ describe("Runner external Action approval attachment", () => {
     expect(result.items).toContainEqual(expect.objectContaining({
       kind: "observation",
       observation: expect.objectContaining({
-        kind: "action_failure",
-        error: expect.objectContaining({ code: "runtime_action_dispatch_unavailable" }),
+        kind: "tool_result",
+        result: expect.objectContaining({ status: "succeeded", output: { ok: true } }),
       }),
     }));
+    expect(fixture.executionCalls()).toBe(1);
     expect(auditRecords.find(({ eventName }) => eventName === "action.dispatch_authorized"))
       .toEqual(expect.objectContaining({
         payload: expect.objectContaining({ actionCoverageId: expect.any(String) }),
@@ -1585,6 +1591,7 @@ describe("Runner external Action approval attachment", () => {
     ]);
     const result = await createRunner(controller, {
       actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
     }).run(
       createAgent([createAgentTool("test.external")]),
       createRunInput(),
@@ -1643,6 +1650,7 @@ describe("Runner external Action approval attachment", () => {
     ]), {
       actionEnforcementPipeline: fixture.pipeline,
       auditPort,
+      sandboxExecutionGateway: fixture.gateway,
     }).run(
       createAgent([createAgentTool("test.external")]),
       createRunInput(),
@@ -1688,6 +1696,7 @@ describe("Runner external Action approval attachment", () => {
     ]), {
       actionEnforcementPipeline: fixture.pipeline,
       auditPort,
+      sandboxExecutionGateway: fixture.gateway,
     }).run(
       createAgent([createAgentTool("test.external")]),
       createRunInput(),
@@ -2521,6 +2530,38 @@ function createReviewPermissionConfig(
   };
 }
 
+function createDisabledReviewPermissionConfig(
+  reviewer: FakeApprovalReviewer,
+): ResolvedRunPermissionConfig {
+  const base = createReviewPermissionConfig(reviewer);
+  const managedConstraints: ManagedPermissionConstraints = {
+    ...base.managedConstraints,
+    allowUnenforcedExecution: true,
+  };
+  return {
+    ...base,
+    permissionProfile: resolvePermissionProfile({
+      profileId: "test-disabled",
+      profiles: [{
+        id: "test-disabled",
+        extends: ":read-only",
+        enforcement: "disabled",
+        unrestrictedFileSystem: false,
+        fileSystem: [],
+        network: { enabled: false, allowedDomains: [], deniedDomains: [] },
+        metadata: {},
+      }],
+      environment: {
+        environmentId: "test-local",
+        platform: "win32",
+        workspaceRoots: [{ rootId: "workspace_001", path: "C:/workspace" }],
+      },
+      managedConstraints,
+    }),
+    managedConstraints,
+  };
+}
+
 function createSessionReviewPermissionConfig(
   reviewer: FakeApprovalReviewer,
   port: SessionAuthorityPort,
@@ -2822,6 +2863,7 @@ function createExternalActionPipeline(
   let prepareCallCount = 0;
   let policyCallCount = 0;
   let revalidationCallCount = 0;
+  let executionCallCount = 0;
   const adapterDescriptor = {
     id: "test.external.adapter",
     version: "1",
@@ -2871,12 +2913,13 @@ function createExternalActionPipeline(
       };
     },
   };
-  const pipeline = new ActionEnforcementPipeline({
-    registrations: createActionRegistrationSnapshot([{
+  const registrations = createActionRegistrationSnapshot([{
       actionName: "test.external",
       adapter: adapterDescriptor,
       executor: executorDescriptor,
-    }]),
+    }]);
+  const pipeline = new ActionEnforcementPipeline({
+    registrations,
     adapters: [{
       actionName: "test.external",
       adapter: {
@@ -2894,11 +2937,35 @@ function createExternalActionPipeline(
     policyPort,
     now: () => "2026-07-13T00:00:00.000Z",
   });
+  const gateway = createSandboxExecutionGateway({
+    registrations,
+    executors: [{
+      descriptor: executorDescriptor,
+      async execute(invocation, context) {
+        assertActionExecutorDispatchContext(context);
+        executionCallCount += 1;
+        return {
+          toolCallId: context.attempt.actionId,
+          toolName: "test.external",
+          status: "succeeded" as const,
+          output: { ok: true },
+          error: null,
+          startedAt: "2026-07-13T00:00:00.000Z",
+          finishedAt: "2026-07-13T00:00:01.000Z",
+          metadata: { invocationContractVersion: invocation.contractVersion },
+        };
+      },
+    }],
+    limits: { maxResultBytes: 64 * 1024 },
+    now: () => "2026-07-13T00:00:00.000Z",
+  });
   return {
     pipeline,
+    gateway,
     prepareCalls: () => prepareCallCount,
     policyCalls: () => policyCallCount,
     revalidationCalls: () => revalidationCallCount,
+    executionCalls: () => executionCallCount,
   };
 }
 
