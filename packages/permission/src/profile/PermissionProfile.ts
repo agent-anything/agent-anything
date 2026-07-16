@@ -71,6 +71,9 @@ export interface PermissionProfileDefinition {
   readonly enforcement: PermissionEnforcement;
   readonly unrestrictedFileSystem: boolean;
   readonly fileSystem: readonly FileSystemPermissionEntry[];
+  readonly process: {
+    readonly unrestricted: boolean;
+  };
   readonly network: NetworkPermissionPolicy;
   readonly metadata: Metadata;
 }
@@ -116,6 +119,9 @@ export interface ResolvedPermissionProfile {
   readonly workspaceRoots: readonly ResolvedPermissionWorkspaceRoot[];
   readonly enforcement: PermissionEnforcement;
   readonly fileSystem: ResolvedFileSystemPermissionPolicy;
+  readonly process: {
+    readonly unrestricted: boolean;
+  };
   readonly network: ResolvedNetworkPermissionPolicy;
   readonly managedConstraintSetId: string;
   readonly metadata: Readonly<Metadata>;
@@ -133,6 +139,9 @@ export interface PermissionProfileSafeProjection {
     readonly allowsWrite: boolean;
     readonly hasDenials: boolean;
     readonly managed: boolean;
+  };
+  readonly process: {
+    readonly unrestricted: boolean;
   };
   readonly network: {
     readonly enabled: boolean;

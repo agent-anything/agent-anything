@@ -193,7 +193,10 @@ export {
   selectHelarcWorkspaceProfile,
 } from "./workspace-profile/index.js";
 export type {
+  CreateHelarcActionCompositionInput,
+  HelarcActionComposition,
   HelarcActivityItem,
+  HelarcEnforcementSummary,
   HelarcPatchReviewBridge,
   HelarcPatchReviewDecision,
   HelarcPatchReviewViewModel,
@@ -205,8 +208,7 @@ export type {
   RunHelarcSessionInput,
 } from "./session/index.js";
 export {
-  createHelarcToolRegistry,
-  createHelarcReadOnlyToolRegistry,
+  createHelarcActionComposition,
   mapRuntimeEventToHelarcActivity,
   runHelarcReadOnlySession,
   runHelarcSession,

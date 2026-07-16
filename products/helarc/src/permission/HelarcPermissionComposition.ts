@@ -20,6 +20,10 @@ import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
 } from "@agent-anything/shared";
+import type {
+  PermissionEnforcement,
+  PermissionProfileDefinition,
+} from "@agent-anything/permission/profile";
 
 export type HelarcPermissionPreset =
   | "ask_for_approval"
@@ -33,6 +37,7 @@ export interface CreateHelarcPermissionCompositionInput {
   readonly workspace: WorkspaceContext;
   readonly workspaceRoots: readonly { readonly rootId: string; readonly path: string }[];
   readonly platform: "win32" | "posix";
+  readonly enforcement: PermissionEnforcement;
   readonly cancellation: RunCancellationController;
   readonly userApprovalBridge?: UserApprovalReviewBridge;
   readonly automaticReviewer?: ApprovalReviewerBinding & {
@@ -59,19 +64,16 @@ const MANAGED_CONSTRAINTS: ManagedPermissionConstraints = Object.freeze({
     allowedDomains: Object.freeze([]),
     deniedDomains: Object.freeze([]),
   }),
-  allowUnenforcedExecution: false,
+  allowUnenforcedExecution: true,
 });
 
 export async function createHelarcPermissionComposition(
   input: CreateHelarcPermissionCompositionInput,
 ): Promise<HelarcPermissionComposition> {
-  const managedConstraints = input.preset === "full_access"
-    ? Object.freeze({
-        ...MANAGED_CONSTRAINTS,
-        constraintSetId: "helarc-local-full-access",
-        allowUnenforcedExecution: true,
-      })
-    : MANAGED_CONSTRAINTS;
+  const managedConstraints = Object.freeze({
+    ...MANAGED_CONSTRAINTS,
+    constraintSetId: `helarc-local-${input.preset}`,
+  });
   const userApprovalBridge = input.preset === "ask_for_approval"
     ? input.userApprovalBridge ?? createUserApprovalReviewBridge({
         runId: input.runId,
@@ -92,8 +94,8 @@ export async function createHelarcPermissionComposition(
 
   const permissions = await resolveHostRunPermissionConfig({
     profile: {
-      profileId: profileIdForPreset(input.preset),
-      profiles: [],
+      profileId: profileIdForPreset(input.preset, input.enforcement),
+      profiles: [profileForPreset(input.preset, input.enforcement)],
       environment: {
         environmentId: "helarc-local",
         platform: input.platform,
@@ -157,8 +159,34 @@ function resolveReviewer(
 
 function profileIdForPreset(
   preset: HelarcPermissionPreset,
-): ":workspace" | ":danger-full-access" {
-  return preset === "full_access" ? ":danger-full-access" : ":workspace";
+  enforcement: PermissionEnforcement,
+): string {
+  const authority = preset === "full_access" ? "full-access" : "workspace";
+  return `helarc-${authority}-${enforcement}`;
+}
+
+function profileForPreset(
+  preset: HelarcPermissionPreset,
+  enforcement: PermissionEnforcement,
+): PermissionProfileDefinition {
+  return Object.freeze({
+    id: profileIdForPreset(preset, enforcement),
+    extends: preset === "full_access" ? ":danger-full-access" : ":workspace",
+    enforcement,
+    unrestrictedFileSystem: false,
+    fileSystem: Object.freeze([]),
+    process: Object.freeze({ unrestricted: false }),
+    network: Object.freeze({
+      enabled: false,
+      allowedDomains: Object.freeze([]),
+      deniedDomains: Object.freeze([]),
+    }),
+    metadata: Object.freeze({
+      product: "helarc",
+      permissionPreset: preset,
+      enforcement,
+    }),
+  });
 }
 
 function createInterruptionContext(

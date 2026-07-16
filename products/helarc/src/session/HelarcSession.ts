@@ -1,11 +1,13 @@
 import {
+  ActionEnforcementPipeline,
   ProviderBackedController,
+  createCanonicalSha256Digest,
+  createSandboxExecutionGateway,
   createSystemRetryExecutor,
   Runner,
   RuntimeEventEmitter,
   RuntimeEventRecorder,
   systemRetryClock,
-  ToolExecutionBoundary,
   createRunCancellationController,
   type Agent,
   type AgentTask,
@@ -15,32 +17,20 @@ import {
   type RetryClock,
   type RuntimeEvent,
   type ApprovalReviewerBinding,
+  type SandboxEnforcement,
+  type SandboxProvider,
 } from "@agent-anything/agent-core";
-import type {
-  PersistentPolicyAmendmentPort,
-  WorkspaceContext,
+import {
+  createAllowAllActionPolicyPort,
+  type PersistentPolicyAmendmentPort,
+  type WorkspaceContext,
 } from "@agent-anything/governance";
 import type { SessionAuthorityPort } from "@agent-anything/permission";
-import { TemporaryToolActionBridge } from "@agent-anything/agent-core/runtime";
 import {
-  acceptPatch,
-  applyAcceptedPatch,
-  createCodeAgentFileTools,
-  createPatchProposal,
-  materializePatchReview,
-  PatchWorkflowError,
-  rejectPatch,
-  registerCodeAgentShellTool,
+  CODE_AGENT_RUN_COMMAND_ACTION,
+  createCodeAgentCanonicalWorkspaceRoots,
   type CodeAgentShellLimits,
   type MaterializedPatchReview,
-  type PatchProposalChange,
-  type ProposedPatchStatus,
-} from "@agent-anything/code-agent";
-import {
-  CODE_AGENT_LIST_FILES_TOOL,
-  CODE_AGENT_RUN_COMMAND_TOOL,
-  CODE_AGENT_READ_FILE_TOOL,
-  CODE_AGENT_SEARCH_FILES_TOOL,
 } from "@agent-anything/code-agent";
 import {
   projectRuntimeEventForHost,
@@ -51,7 +41,7 @@ import { EvidenceBuilder, type Evidence } from "@agent-anything/evidence";
 import type { Provider } from "@agent-anything/providers";
 import type { ArtifactRef, ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { StoragePort, StoredArtifact } from "@agent-anything/storage";
-import { ToolRegistry, type ToolDefinition } from "@agent-anything/tools";
+import type { ToolDefinition } from "@agent-anything/tools";
 import {
   buildHelarcProviderRequest,
   createHelarcToolCatalogMetadata,
@@ -71,6 +61,8 @@ import {
   createHelarcPermissionComposition,
   type HelarcPermissionPreset,
 } from "../permission/index.js";
+import { createHelarcActionComposition } from "./HelarcActionComposition.js";
+import { HelarcPatchActionController } from "./HelarcPatchActionController.js";
 
 export type HelarcSessionStatus =
   | "running"
@@ -99,7 +91,21 @@ export interface HelarcSessionOutput {
   runtimeStatus: RunResultStatus;
   patchStatus: HelarcPatchStatus | null;
   appliedPath: string | null;
+  enforcement: HelarcEnforcementSummary;
   safeErrors: Array<{ code: string; message: string }>;
+}
+
+export interface HelarcEnforcementSummary {
+  selected: SandboxEnforcement;
+  status:
+    | "not_exercised"
+    | "unisolated"
+    | "enforced"
+    | "unavailable"
+    | "denied"
+    | "interrupted"
+    | "failed";
+  code: string | null;
 }
 
 export interface HelarcSessionResult {
@@ -123,6 +129,8 @@ export interface RunHelarcReadOnlySessionInput {
   };
   sessionAuthorityPort?: SessionAuthorityPort;
   persistentPolicyAmendments?: PersistentPolicyAmendmentPort;
+  enforcement?: SandboxEnforcement;
+  sandboxProviders?: readonly SandboxProvider[];
 }
 
 export interface RunHelarcSessionInput extends RunHelarcReadOnlySessionInput {
@@ -179,15 +187,27 @@ export async function runHelarcSession(
     metadata: { product: "helarc" },
   };
   const workspaceRoots = resolvePermissionWorkspaceRoots(input.task);
+  const platform = workspaceRoots.some((root) => /^[A-Za-z]:[\\/]/.test(root.path))
+    ? "win32" as const
+    : "posix" as const;
+  const enforcement = input.enforcement ?? "disabled";
+  const sandboxProviders = input.sandboxProviders ?? [];
+  assertSelectedSandboxProvider(enforcement, sandboxProviders);
+  const canonicalRoots = await createCodeAgentCanonicalWorkspaceRoots({
+    workspaceScope: input.task.workspaceScope,
+    platform,
+  });
   const permissionComposition = await createHelarcPermissionComposition({
     preset: input.permissionPreset ?? "ask_for_approval",
     runId,
     hostSessionId,
     workspace,
-    workspaceRoots,
-    platform: workspaceRoots.some((root) => /^[A-Za-z]:[\\/]/.test(root.path))
-      ? "win32"
-      : "posix",
+    workspaceRoots: canonicalRoots.map((root) => ({
+      rootId: root.rootId,
+      path: root.resolvedPath,
+    })),
+    platform,
+    enforcement,
     cancellation,
     userApprovalBridge: input.userApprovalBridge,
     automaticReviewer: input.automaticApprovalReviewer,
@@ -207,17 +227,25 @@ export async function runHelarcSession(
     input.onActivity?.(mapRuntimeEventToHelarcActivity(tracedEvent), tracedEvent);
   });
 
-  const registryResult = createHelarcToolRegistry(input.task, {
+  const actionComposition = await createHelarcActionComposition(input.task, {
     enableShell: input.enableShell ?? false,
     shellLimits: input.shellLimits,
   });
   const evidenceBuilder = new EvidenceBuilder();
-  const toolExecutionBoundary = new ToolExecutionBoundary({
-    toolRegistry: registryResult.registry,
-    evidenceBuilder,
-    toolExecutionContextResolver: registryResult.toolExecutionContextResolver,
+  const actionEnforcementPipeline = new ActionEnforcementPipeline({
+    registrations: actionComposition.registrations,
+    adapters: actionComposition.adapters,
+    policyPort: createAllowAllActionPolicyPort(),
+    now: input.now,
   });
-  const controller = new HelarcTracingController(new ProviderBackedController<HelarcAgentOutput>({
+  const sandboxExecutionGateway = createSandboxExecutionGateway({
+    registrations: actionComposition.registrations,
+    executors: actionComposition.executors,
+    providers: sandboxProviders,
+    limits: { maxResultBytes: 2 * 1024 * 1024 },
+    now: input.now,
+  });
+  const providerController = new HelarcTracingController(new ProviderBackedController<HelarcAgentOutput>({
     provider: input.provider,
     buildRequest: buildHelarcProviderRequest,
     parseResponse: parseHelarcProviderResponse,
@@ -226,27 +254,58 @@ export async function runHelarcSession(
     retryExecutor: createSystemRetryExecutor(retryClock),
     retryClock,
   }), controllerTraceByIteration);
+  const controller = new HelarcPatchActionController({
+    controller: providerController,
+    patchReviewBridge: input.patchReviewBridge,
+    now: input.now,
+  });
   const sessionMode = input.enableShell ? "shell-enabled" : "read-only";
   const runMetadata = Object.freeze({
     product: "helarc",
     sessionMode,
     [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
       mode: sessionMode,
-      tools: registryResult.registry.list(),
+      tools: actionComposition.exposedCatalog.tools,
     }),
+    enforcement,
   });
-  const toolActionBridge = new TemporaryToolActionBridge({
-    boundary: toolExecutionBoundary,
-    storage: input.storage ?? new InMemoryHelarcStorage(input.now),
-  });
+  const evidenceStorage = input.storage ?? new InMemoryHelarcStorage(input.now);
   const runner = new Runner({
     controller,
-    toolActionBridge,
+    actionEnforcementPipeline,
+    sandboxExecutionGateway,
+    evidenceBuilder,
+    evidenceStorage,
     eventEmitter,
     now: input.now,
   });
+  const actionContext = {
+    workspace: {
+      workspaceId: workspace.id,
+      trustState: workspace.trustState,
+      roots: canonicalRoots,
+    },
+    actor: { identityId: identity.id, kind: identity.kind },
+    environment: {
+      environmentId: permissionComposition.permissions.permissionProfile.environmentId,
+      platform,
+      configurationFingerprint: await createCanonicalSha256Digest(
+        "agent-anything.helarc.local-environment.v1",
+        {
+          platform,
+          enforcement,
+          registrationFingerprints: actionComposition.registrations.registrations.map(
+            (registration) => registration.registrationFingerprint,
+          ),
+          workspaceRootFingerprints: canonicalRoots.map(
+            (root) => root.resolutionFingerprint,
+          ),
+        },
+      ),
+    },
+  } as const;
   const runResult = await runner.run(
-    createHelarcAgent(registryResult.registry.list()),
+    createHelarcAgent(actionComposition.agentTools),
     {
       runId,
       task: input.task,
@@ -256,7 +315,7 @@ export async function runHelarcSession(
     {
       workspace,
       identity,
-      actionContext: null,
+      actionContext,
       permissions: permissionComposition.permissions,
       limits: {
         maxIterations: 5,
@@ -332,8 +391,8 @@ export async function runHelarcSession(
     .map((event) => mapRuntimeEventToHelarcActivity(
       enrichRuntimeEventWithControllerTrace(event, controllerTraceByIteration),
     ));
-  const patchOutcome = await resolvePatchOutcome(input, runResult);
-  const output = createSessionOutput(input.task, runResult, patchOutcome);
+  const patchOutcome = controller.getPatchOutcome();
+  const output = createSessionOutput(input.task, runResult, patchOutcome, enforcement);
 
   return {
     status: patchOutcome?.sessionStatus ?? mapRunStatus(runResult.status),
@@ -353,51 +412,6 @@ function createHelarcRetryClock(
   return Object.freeze({
     now: () => new Date(now()),
   });
-}
-
-export function createHelarcToolRegistry(
-  task: AgentTask,
-  input: {
-    enableShell?: boolean;
-    shellLimits?: Partial<CodeAgentShellLimits>;
-  } = {},
-): {
-  registry: ToolRegistry;
-  toolExecutionContextResolver?: ReturnType<typeof registerCodeAgentShellTool>;
-} {
-  const registry = createHelarcReadOnlyToolRegistry(task);
-  if (!input.enableShell) {
-    return { registry };
-  }
-
-  const toolExecutionContextResolver = registerCodeAgentShellTool(registry, {
-    workspaceScope: task.workspaceScope,
-    limits: input.shellLimits,
-  });
-
-  return {
-    registry,
-    toolExecutionContextResolver,
-  };
-}
-
-export function createHelarcReadOnlyToolRegistry(
-  task: AgentTask,
-): ToolRegistry {
-  const registry = new ToolRegistry();
-  const allowedTools = new Set([
-    CODE_AGENT_LIST_FILES_TOOL,
-    CODE_AGENT_READ_FILE_TOOL,
-    CODE_AGENT_SEARCH_FILES_TOOL,
-  ]);
-
-  for (const tool of createCodeAgentFileTools({ workspaceScope: task.workspaceScope })) {
-    if (allowedTools.has(tool.name)) {
-      registry.register(tool);
-    }
-  }
-
-  return registry;
 }
 
 function createHelarcAgent(
@@ -491,6 +505,18 @@ function requireWorkspacePath(workspace: WorkspaceContext): string {
   return workspace.rootRef;
 }
 
+function assertSelectedSandboxProvider(
+  enforcement: SandboxEnforcement,
+  providers: readonly SandboxProvider[],
+): void {
+  if (enforcement === "disabled") return;
+  if (!providers.some((provider) => provider.kind === enforcement)) {
+    throw new TypeError(
+      `Helarc '${enforcement}' enforcement requires a matching SandboxProvider.`,
+    );
+  }
+}
+
 export function mapRuntimeEventToHelarcActivity(
   event: RuntimeEvent,
 ): HelarcActivityItem {
@@ -507,145 +533,17 @@ export function mapRuntimeEventToHelarcActivity(
   };
 }
 
-interface HelarcPatchOutcome {
-  sessionStatus: HelarcSessionStatus;
-  patchStatus: HelarcPatchStatus;
-  appliedPath: string | null;
-  errors: Array<{ code: string; message: string }>;
-}
-
-async function resolvePatchOutcome(
-  input: RunHelarcSessionInput,
-  runResult: RunResult<HelarcAgentOutput>,
-): Promise<HelarcPatchOutcome | null> {
-  if (runResult.status !== "succeeded" || runResult.finalOutput.kind !== "propose") {
-    return null;
-  }
-
-  if (!input.patchReviewBridge) {
-    return {
-      sessionStatus: "blocked",
-      patchStatus: "proposed",
-      appliedPath: null,
-      errors: [{
-        code: "patch_review_unavailable",
-        message: "Patch review bridge is unavailable.",
-      }],
-    };
-  }
-
-  try {
-    const proposed = await createHelarcPatchProposal(input, runResult.finalOutput);
-    const review = toHelarcPatchReviewViewModel(await materializePatchReview({
-      patch: proposed,
-      workspaceScope: input.task.workspaceScope,
-    }));
-    const decision = await input.patchReviewBridge(review);
-
-    if (decision.decision === "rejected") {
-      rejectPatch(proposed, {
-        reason: decision.reason,
-        now: input.now,
-      });
-      return {
-        sessionStatus: "rejected",
-        patchStatus: "rejected",
-        appliedPath: null,
-        errors: [],
-      };
-    }
-
-    const accepted = acceptPatch(proposed, {
-      reason: decision.reason,
-      now: input.now,
-    });
-    const applied = await applyAcceptedPatch({
-      patch: accepted,
-      workspaceScope: input.task.workspaceScope,
-      now: input.now,
-    });
-
-    if (applied.status === "failed") {
-      return {
-        sessionStatus: "failed",
-        patchStatus: "failed",
-        appliedPath: null,
-        errors: [{ code: applied.result.code, message: applied.result.message }],
-      };
-    }
-
-    return {
-      sessionStatus: "completed",
-      patchStatus: "applied",
-      appliedPath: applied.proposal.operation.path,
-      errors: [],
-    };
-  } catch (error) {
-    return {
-      sessionStatus: "failed",
-      patchStatus: "failed",
-      appliedPath: null,
-      errors: [{
-        code: error instanceof PatchWorkflowError ? error.code : "patch_apply_failed",
-        message: error instanceof Error ? error.message : "Patch workflow failed.",
-      }],
-    };
-  }
-}
-
-function createHelarcPatchProposal(
-  input: RunHelarcSessionInput,
-  output: Extract<HelarcAgentOutput, { kind: "propose" }>,
-): Promise<ProposedPatchStatus> {
-  return createPatchProposal({
-    workspaceScope: input.task.workspaceScope,
-    change: toPatchProposalChange(output.change),
-    summary: output.summary,
-    rationale: output.summary,
-    metadata: { product: "helarc" },
-  }, {
-    now: input.now,
-  });
-}
-
-function toPatchProposalChange(change: HelarcChangeIntent): PatchProposalChange {
-  if (change.operation === "delete") {
-    return { kind: "delete", path: change.path };
-  }
-
-  return {
-    kind: change.operation,
-    path: change.path,
-    proposedContent: change.content ?? "",
-  };
-}
-
-function toHelarcPatchReviewViewModel(
-  review: MaterializedPatchReview,
-): HelarcPatchReviewViewModel {
-  return {
-    patchId: review.patchId,
-    rootName: review.rootName,
-    workspaceId: review.workspaceId,
-    path: review.path,
-    operation: review.operation,
-    summary: review.summary,
-    rationale: review.rationale,
-    originalContent: review.originalContent,
-    proposedContent: review.proposedContent,
-    originalContentBytes: review.originalContentBytes,
-    proposedContentBytes: review.proposedContentBytes,
-    decisionState: "pending",
-  };
-}
-
 function createSessionOutput(
   task: AgentTask,
   runResult: RunResult<HelarcAgentOutput>,
-  patchOutcome: HelarcPatchOutcome | null,
+  patchOutcome: ReturnType<HelarcPatchActionController["getPatchOutcome"]>,
+  selectedEnforcement: SandboxEnforcement,
 ): HelarcSessionOutput {
   const agentOutput = runResult.status === "succeeded" ? runResult.finalOutput : null;
   const safeErrors = collectSafeRunErrors(runResult);
+  for (const error of patchOutcome?.errors ?? []) {
+    appendSafeError(safeErrors, error.code, error.message);
+  }
   return {
     taskId: task.id,
     workspaceId: task.workspaceScope?.roots[task.workspaceScope.defaultRootName ?? ""]?.id ?? null,
@@ -653,7 +551,33 @@ function createSessionOutput(
     runtimeStatus: runResult.status,
     patchStatus: patchOutcome?.patchStatus ?? null,
     appliedPath: patchOutcome?.appliedPath ?? null,
-    safeErrors: safeErrors.concat(patchOutcome?.errors ?? []),
+    enforcement: createEnforcementSummary(runResult, selectedEnforcement),
+    safeErrors,
+  };
+}
+
+function createEnforcementSummary(
+  runResult: RunResult<HelarcAgentOutput>,
+  selected: SandboxEnforcement,
+): HelarcEnforcementSummary {
+  const item = [...runResult.items].reverse().find(
+    (candidate) => candidate.kind === "sandbox_attempt_resolved",
+  );
+  if (item?.kind !== "sandbox_attempt_resolved") {
+    return { selected, status: "not_exercised", code: null };
+  }
+  const resolution = item.resolution;
+  const status: HelarcEnforcementSummary["status"] = resolution.outcome === "executed"
+    ? resolution.enforcement === "disabled" ? "unisolated" : "enforced"
+    : resolution.outcome === "sandbox_unavailable"
+      ? "unavailable"
+      : resolution.outcome === "sandbox_denied"
+        ? "denied"
+        : resolution.outcome;
+  return {
+    selected,
+    status,
+    code: status === "unisolated" || status === "enforced" ? null : resolution.code,
   };
 }
 
@@ -722,6 +646,22 @@ function titleForEvent(name: string, payload: Metadata): string {
       return `Tool started: ${payload.toolName ?? "unknown"}`;
     case "tool.finished":
       return `Tool ${payload.status ?? "finished"}: ${payload.toolName ?? "unknown"}`;
+    case "action.prepared":
+      return "Action prepared";
+    case "action.assessed":
+      return `Action ${payload.status ?? "assessed"}`;
+    case "action.invalidated":
+      return "Action invalidated";
+    case "sandbox.attempt.started":
+      return payload.enforcement === "disabled"
+        ? "Unisolated execution started"
+        : `${payload.enforcement ?? "Sandbox"} enforcement started`;
+    case "sandbox.attempt.resolved":
+      return payload.enforcement === "disabled" && payload.outcome === "executed"
+        ? "Unisolated execution completed"
+        : `${payload.enforcement ?? "Sandbox"} enforcement ${payload.outcome ?? "resolved"}`;
+    case "sandbox.escalation.proposed":
+      return "Sandbox escalation proposed";
     case "retry.attempt.started":
       return `Retry attempt ${payload.attemptNumber ?? ""} started`.trim();
     case "retry.attempt.finished":
@@ -742,7 +682,7 @@ function titleForEvent(name: string, payload: Metadata): string {
 function detailForEvent(name: string, payload: Metadata): string | null {
   if (
     (name === "tool.started" || name === "tool.finished")
-    && payload.toolName === CODE_AGENT_RUN_COMMAND_TOOL
+    && payload.toolName === CODE_AGENT_RUN_COMMAND_ACTION
     && typeof payload.command === "string"
   ) {
     return payload.command;
@@ -750,6 +690,12 @@ function detailForEvent(name: string, payload: Metadata): string | null {
 
   if (name === "tool.started" || name === "tool.finished") {
     return typeof payload.actionId === "string" ? payload.actionId : null;
+  }
+
+  if (name.startsWith("action.") || name.startsWith("sandbox.")) {
+    return typeof payload.actionId === "string"
+      ? payload.actionId
+      : typeof payload.attemptId === "string" ? payload.attemptId : null;
   }
 
   if (name === "controller.finished") {

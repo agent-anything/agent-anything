@@ -579,6 +579,12 @@ export function RunTerminalPanel({
           <dt>Runtime</dt>
           <dd>{terminal.runtimeStatus ?? "unknown"}</dd>
         </div>
+        {safeOutput ? (
+          <div>
+            <dt>Execution</dt>
+            <dd>{enforcementLabel(safeOutput.enforcement)}</dd>
+          </div>
+        ) : null}
         {terminal.runtimeCode ? (
           <div>
             <dt>Code</dt>
@@ -1069,6 +1075,20 @@ function isSessionOutput(value: unknown): value is NonNullable<HelarcMainSnapsho
   return typeof output.taskId === "string" &&
     typeof output.runtimeStatus === "string" &&
     Array.isArray(output.safeErrors);
+}
+
+function enforcementLabel(
+  enforcement: NonNullable<HelarcMainSnapshot["output"]>["enforcement"],
+): string {
+  switch (enforcement.status) {
+    case "not_exercised": return "Not exercised";
+    case "unisolated": return "Unisolated";
+    case "enforced": return `${enforcement.selected} enforced`;
+    case "unavailable": return `${enforcement.selected} unavailable`;
+    case "denied": return `${enforcement.selected} denied`;
+    case "interrupted": return "Interrupted";
+    case "failed": return "Failed";
+  }
 }
 
 function getHelarcApi() {

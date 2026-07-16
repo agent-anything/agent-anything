@@ -151,14 +151,15 @@ function createProtocolEvalControllerInput(
           environmentId: "eval-local",
           enforcement: "managed",
           workspaceRootCount: 1,
-          fileSystem: {
+        fileSystem: {
             unrestricted: false,
             allowsRead: true,
             allowsWrite: fixture.mode !== "read-only",
             hasDenials: false,
-            managed: false,
-          },
-          network: {
+          managed: false,
+        },
+        process: { unrestricted: false },
+        network: {
             enabled: false,
             profileRestricted: false,
             managedRestricted: false,
@@ -203,7 +204,14 @@ function createProtocolEvalControllerInput(
     metadata: {
       [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
         mode: fixture.mode,
-        tools,
+        tools: tools.map((definition) => ({
+          name: definition.name,
+          description: definition.description,
+          annotations: {
+            readOnlyHint: definition.risk === "safe",
+            destructiveHint: definition.risk === "risky",
+          },
+        })),
       }),
     },
   };

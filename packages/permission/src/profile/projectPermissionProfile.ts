@@ -27,6 +27,9 @@ export function projectPermissionProfile(
         ),
       managed: profile.fileSystem.managedCeilings.length > 0,
     }),
+    process: Object.freeze({
+      unrestricted: profile.process.unrestricted,
+    }),
     network: Object.freeze({
       enabled: profile.network.enabled,
       profileRestricted: profile.network.profileAllowedDomains.length > 0,

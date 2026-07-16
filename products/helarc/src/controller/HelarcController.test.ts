@@ -103,7 +103,9 @@ describe("Helarc controller", () => {
 
     expect(request.metadata.exposedToolNames).toContain("codeAgent.runCommand");
     expect(request.messages[0]?.content).toContain("Active tool catalog (shell-enabled):");
-    expect(request.messages[0]?.content).toContain("Risk: risky");
+    expect(request.messages[0]?.content).toContain(
+      "Assessed from the exact process action and current run authority",
+    );
   });
 
   it("builds bounded correction diagnostics without copying rejected output", () => {
@@ -400,7 +402,14 @@ function createControllerInput(input: {
     metadata: {
       [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
         mode: input.mode ?? "read-only",
-        tools,
+        tools: tools.map((definition) => ({
+          name: definition.name,
+          description: definition.description,
+          annotations: {
+            readOnlyHint: definition.risk === "safe",
+            destructiveHint: definition.risk === "risky",
+          },
+        })),
       }),
     },
   };

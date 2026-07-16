@@ -212,6 +212,18 @@ export interface HelarcSessionOutput {
   runtimeStatus: string;
   patchStatus: "proposed" | "applied" | "rejected" | "failed" | null;
   appliedPath: string | null;
+  enforcement: {
+    selected: "managed" | "external" | "disabled";
+    status:
+      | "not_exercised"
+      | "unisolated"
+      | "enforced"
+      | "unavailable"
+      | "denied"
+      | "interrupted"
+      | "failed";
+    code: string | null;
+  };
   safeErrors: Array<{ code: string; message: string }>;
 }
 

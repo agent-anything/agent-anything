@@ -1736,6 +1736,15 @@ export class RunExecution<TOutput> {
   private async processToolAction(
     action: Action & { readonly kind: "tool" },
   ): Promise<ProcessActionResult> {
+    if (this.dependencies.actionEnforcementPipeline !== undefined) {
+      this.emit("tool.started", {
+        runId: this.state.runId,
+        actionId: action.id,
+        toolName: action.name,
+      });
+      return this.processExternalToolAction(action);
+    }
+
     const tool = this.agent.tools.find((candidate) => candidate.name === action.name);
     if (tool === undefined) {
       const observation: ActionRejectedObservation = Object.freeze({
@@ -1745,15 +1754,6 @@ export class RunExecution<TOutput> {
         message: `Tool ${action.name} is not available to Agent ${this.agent.id}.`,
       });
       return this.commitActionObservation(observation, true, true);
-    }
-
-    if (this.dependencies.actionEnforcementPipeline !== undefined) {
-      this.emit("tool.started", {
-        runId: this.state.runId,
-        actionId: action.id,
-        toolName: action.name,
-      });
-      return this.processExternalToolAction(action);
     }
 
     const bridge = this.dependencies.toolActionBridge;

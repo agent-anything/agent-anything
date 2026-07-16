@@ -175,7 +175,7 @@ export function deriveActionAuthority(input: {
       } else if (effect.kind === "process") {
         const persistentAllow = hasApplicableExecAmendment(prepared, authority);
         const ruleAllows = input.ruleOutcome.decision === "allow";
-        if (hasCategoryAuthority || persistentAllow || ruleAllows || authority.profile.enforcement === "disabled") {
+        if (hasCategoryAuthority || persistentAllow || ruleAllows || authority.profile.process.unrestricted) {
           processes.push(effect.executable);
           if (persistentAllow) collectExecAmendmentSources(sources, authority, prepared);
           if (ruleAllows) sources.push(...input.ruleOutcome.matchedRuleIds.map((id) => ({ kind: "rule" as const, id })));

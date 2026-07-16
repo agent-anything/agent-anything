@@ -351,7 +351,10 @@ async function runConfig(fixture: Fixture, runId: string): Promise<RunConfig> {
         environment: {
           environmentId: "test-local",
           platform: fixture.platform,
-          workspaceRoots: [{ rootId: fixture.workspace.id, path: fixture.root }],
+          workspaceRoots: actionContext.workspace.roots.map((root) => ({
+            rootId: root.rootId,
+            path: root.resolvedPath ?? root.canonicalPath,
+          })),
         },
         managedConstraints,
       }),

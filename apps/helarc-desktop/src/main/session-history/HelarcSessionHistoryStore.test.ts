@@ -85,6 +85,11 @@ function record(id: string, endedAt: string) {
       runtimeStatus: "succeeded" as const,
       patchStatus: null,
       appliedPath: null,
+      enforcement: {
+        selected: "disabled" as const,
+        status: "not_exercised" as const,
+        code: null,
+      },
       safeErrors: [],
     },
     patch: {

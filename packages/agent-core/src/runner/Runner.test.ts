@@ -2962,6 +2962,7 @@ function createDisabledReviewPermissionConfig(
         enforcement: "disabled",
         unrestrictedFileSystem: false,
         fileSystem: [],
+        process: { unrestricted: false },
         network: { enabled: false, allowedDomains: [], deniedDomains: [] },
         metadata: {},
       }],
@@ -3072,7 +3073,7 @@ function decidedSessionReview(
 }
 
 describe("Runner external Action result settlement", () => {
-  it("retains Evidence and publishes safe lifecycle notifications after settlement", async () => {
+  it("uses trusted registrations as the canonical allowlist and publishes settlement", async () => {
     const fixture = createExternalActionPipeline("allowed");
     const events: RuntimeEvent[] = [];
     const eventEmitter = new RuntimeEventEmitter();
@@ -3090,7 +3091,7 @@ describe("Runner external Action result settlement", () => {
       sandboxExecutionGateway: fixture.gateway,
       eventEmitter,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent([]),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),

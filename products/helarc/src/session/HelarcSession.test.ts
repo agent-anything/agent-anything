@@ -1,4 +1,5 @@
 import type { ContextProjection } from "@agent-anything/agent-core";
+import type { ApprovalReviewInput } from "@agent-anything/permission";
 import type {
   InvocationInterruptionContext,
   Provider,
@@ -12,31 +13,39 @@ import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "../task/index.js";
 import {
-  createHelarcReadOnlyToolRegistry,
-  createHelarcToolRegistry,
+  createHelarcActionComposition,
   runHelarcReadOnlySession,
   runHelarcSession,
 } from "./index.js";
 
 describe("Helarc read-only session", () => {
-  it("registers only read-only code-agent tools", () => {
+  it("exposes only read-only Actions while retaining trusted mutation registrations", async () => {
     const task = createTask("D:/workspace");
-    const registry = createHelarcReadOnlyToolRegistry(task);
+    const composition = await createHelarcActionComposition(task, { enableShell: false });
 
-    expect(registry.list().map((tool) => tool.name)).toEqual([
+    expect(composition.exposedCatalog.tools.map((tool) => tool.name)).toEqual([
       "codeAgent.listFiles",
       "codeAgent.readFile",
       "codeAgent.searchFiles",
     ]);
-    expect(registry.has("codeAgent.writeFile")).toBe(false);
+    expect(composition.registrations.registrations.map(({ actionName }) => actionName))
+      .toEqual(expect.arrayContaining([
+        "codeAgent.createFile",
+        "codeAgent.updateFile",
+        "codeAgent.deleteFile",
+      ]));
+    expect(composition.exposedCatalog.tools.some(({ name }) => name === "codeAgent.createFile"))
+      .toBe(false);
   });
 
-  it("adds governed shell only when shell execution is enabled", () => {
+  it("adds the canonical command Action only when shell execution is enabled", async () => {
     const task = createTask("D:/workspace");
-    const registryResult = createHelarcToolRegistry(task, { enableShell: true });
+    const composition = await createHelarcActionComposition(task, { enableShell: true });
 
-    expect(registryResult.registry.has("codeAgent.runCommand")).toBe(true);
-    expect(registryResult.toolExecutionContextResolver).toBeDefined();
+    expect(composition.exposedCatalog.tools.map(({ name }) => name))
+      .toContain("codeAgent.runCommand");
+    expect(composition.registrations.registrations.map(({ actionName }) => actionName))
+      .toContain("codeAgent.runCommand");
   });
 
   it("runs one read-only tool call and completes with ordered activity", async () => {
@@ -87,11 +96,19 @@ describe("Helarc read-only session", () => {
       "controller.finished",
       "run.item.appended",
       "tool.started",
-      "tool.finished",
+      "run.item.appended",
+      "action.prepared",
+      "run.item.appended",
+      "action.assessed",
+      "run.item.appended",
+      "sandbox.attempt.started",
+      "run.item.appended",
+      "sandbox.attempt.resolved",
       "run.item.appended",
       "observation.created",
       "context.updated",
       "evidence.created",
+      "tool.finished",
       "controller.started",
       "run.item.appended",
       "retry.attempt.started",
@@ -238,6 +255,18 @@ describe("Helarc read-only session", () => {
     await expect(access(markerPath)).rejects.toThrow();
   });
 
+  it("rejects selected managed enforcement without a matching provider", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-managed-unavailable-"));
+    const provider = new ScriptedProvider([{ action: "complete", summary: "Must not run." }]);
+
+    await expect(runHelarcReadOnlySession({
+      task: createTask(workspaceRoot),
+      provider,
+      enforcement: "managed",
+    })).rejects.toThrow("requires a matching SandboxProvider");
+    expect(provider.requests).toHaveLength(0);
+  });
+
   it("exhausts repeated malformed output without materializing model items or Actions", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-output-exhausted-"));
     const firstInvalidOutput = "PRIVATE_INVALID_OUTPUT_1";
@@ -267,7 +296,7 @@ describe("Helarc read-only session", () => {
     expect(JSON.stringify(provider.requests[1])).not.toContain(firstInvalidOutput);
   });
 
-  it("fails closed before shell process start without Phase16 enforcement", async () => {
+  it("keeps command execution behind approval even when enforcement is disabled", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-shell-denied-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const provider = new ScriptedProvider([
@@ -286,19 +315,18 @@ describe("Helarc read-only session", () => {
       task: createTask(workspaceRoot),
       provider,
       enableShell: true,
+      permissionPreset: "approve_for_me",
+      automaticApprovalReviewer: automaticReviewer("decline"),
     });
 
     expect(result.status).toBe("blocked");
-    expect(result.output.safeErrors).toEqual([
-      {
-        code: "permission_approval_required",
-        message: "Create a governed marker file.",
-      },
-    ]);
+    expect(result.runResult.items.some((item) => item.kind === "approval_requested")).toBe(true);
+    expect(result.runResult.items.some((item) => item.kind === "sandbox_attempt_started"))
+      .toBe(false);
     await expect(access(markerPath)).rejects.toThrow();
   });
 
-  it("does not let a Host approval composition bypass the temporary shell path", async () => {
+  it("executes Full access commands through the explicit unisolated gateway", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-shell-granted-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const provider = new ScriptedProvider([
@@ -310,7 +338,7 @@ describe("Helarc read-only session", () => {
       },
       {
         action: "complete",
-        summary: "Shell command was not executed.",
+        summary: "Shell command completed.",
       },
     ]);
 
@@ -318,11 +346,21 @@ describe("Helarc read-only session", () => {
       task: createTask(workspaceRoot),
       provider,
       enableShell: true,
+      permissionPreset: "full_access",
     });
 
     expect(result.status).toBe("completed");
-    expect(result.output.agentSummary).toBe("Shell command was not executed.");
-    await expect(access(markerPath)).rejects.toThrow();
+    expect(result.output.agentSummary).toBe("Shell command completed.");
+    await expect(access(markerPath)).resolves.toBeUndefined();
+    expect(result.output.enforcement).toEqual({
+      selected: "disabled",
+      status: "unisolated",
+      code: null,
+    });
+    expect(result.runResult.items).toContainEqual(expect.objectContaining({
+      kind: "sandbox_attempt_resolved",
+      resolution: expect.objectContaining({ enforcement: "disabled", outcome: "executed" }),
+    }));
     expect(provider.lastControllerInputContexts).toEqual([0, 1]);
   });
 
@@ -397,7 +435,7 @@ describe("Helarc read-only session", () => {
     expect(result.runResult).toMatchObject({
       status: "succeeded",
       finalOutput: {
-        kind: "propose",
+        kind: "complete",
         summary: "Create a new file.",
       },
       errors: [],
@@ -407,6 +445,18 @@ describe("Helarc read-only session", () => {
       appliedPath: "src/created.txt",
       safeErrors: [],
     });
+    expect(provider.requests).toHaveLength(1);
+    expect(result.runResult.items).toContainEqual(expect.objectContaining({
+      kind: "action",
+      action: expect.objectContaining({ name: "codeAgent.createFile" }),
+    }));
+    expect(result.runResult.metadata.helarcToolCatalog).not.toEqual(
+      expect.objectContaining({
+        tools: expect.arrayContaining([
+          expect.objectContaining({ name: "codeAgent.createFile" }),
+        ]),
+      }),
+    );
     await expect(readFile(join(workspaceRoot, "src", "created.txt"), "utf8"))
       .resolves.toBe("created\n");
   });
@@ -444,7 +494,7 @@ describe("Helarc read-only session", () => {
     expect(result.runResult).toMatchObject({
       status: "succeeded",
       finalOutput: {
-        kind: "propose",
+        kind: "complete",
         summary: "Update the file.",
       },
       errors: [],
@@ -488,7 +538,7 @@ describe("Helarc read-only session", () => {
     expect(result.runResult).toMatchObject({
       status: "succeeded",
       finalOutput: {
-        kind: "propose",
+        kind: "complete",
         summary: "Update the file.",
       },
       errors: [],
@@ -496,11 +546,48 @@ describe("Helarc read-only session", () => {
     expect(result.output).toMatchObject({
       patchStatus: "failed",
       appliedPath: null,
-      safeErrors: [{ code: "patch_stale" }],
+      safeErrors: [{
+        code: "action_invalid",
+        message: "The file target no longer matches the supplied content baseline.",
+      }],
     });
     await expect(readFile(targetPath, "utf8")).resolves.toBe("changed\n");
   });
 });
+
+function automaticReviewer(decisionKind: "accept" | "decline") {
+  return {
+    bindingId: `test-auto-${decisionKind}`,
+    kind: "auto_review" as const,
+    descriptor: {
+      id: `test-auto-${decisionKind}`,
+      kind: "auto_review" as const,
+      displayName: "Test automatic reviewer",
+      source: "helarc-session-test",
+      metadata: {},
+    },
+    reviewer: {
+      async review(input: ApprovalReviewInput) {
+        const option = input.request.decisionOptions.find(({ kind }) => kind === decisionKind);
+        if (option === undefined) throw new Error(`Missing '${decisionKind}' decision option.`);
+        return {
+          status: "decided" as const,
+          submission: {
+            submissionId: `test-submission-${decisionKind}`,
+            runId: input.request.runId,
+            requestId: input.request.id,
+            pendingVersion: input.pendingVersion,
+            optionId: option.id,
+            grantedPermissions: null,
+            reason: decisionKind === "decline" ? "Denied by test reviewer." : null,
+          },
+          rationale: null,
+        };
+      },
+    },
+    reviewTimeoutMs: 1_000,
+  };
+}
 
 class ScriptedProvider implements Provider {
   readonly descriptor = {

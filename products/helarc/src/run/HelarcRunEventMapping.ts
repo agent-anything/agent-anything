@@ -53,6 +53,18 @@ function kindForEvent(
       return "tool.started";
     case "tool.finished":
       return "tool.completed";
+    case "action.prepared":
+      return "action.prepared";
+    case "action.assessed":
+      return "action.assessed";
+    case "action.invalidated":
+      return "action.invalidated";
+    case "sandbox.attempt.started":
+      return "sandbox.started";
+    case "sandbox.attempt.resolved":
+      return "sandbox.resolved";
+    case "sandbox.escalation.proposed":
+      return "sandbox.escalation";
     case "retry.attempt.started":
     case "retry.attempt.finished":
     case "retry.scheduled":
@@ -91,6 +103,25 @@ function titleForEvent(name: RuntimeEventName, payload: Metadata): string {
       return `Tool started: ${readString(payload, "toolName") ?? "unknown"}`;
     case "tool.finished":
       return `Tool ${readString(payload, "status") ?? "finished"}: ${readString(payload, "toolName") ?? "unknown"}`;
+    case "action.prepared":
+      return "Action prepared";
+    case "action.assessed":
+      return `Action ${readString(payload, "status") ?? "assessed"}`;
+    case "action.invalidated":
+      return "Action invalidated";
+    case "sandbox.attempt.started":
+      return readString(payload, "enforcement") === "disabled"
+        ? "Unisolated execution started"
+        : `${readString(payload, "enforcement") ?? "Sandbox"} enforcement started`;
+    case "sandbox.attempt.resolved": {
+      const enforcement = readString(payload, "enforcement");
+      const outcome = readString(payload, "outcome") ?? "resolved";
+      return enforcement === "disabled" && outcome === "executed"
+        ? "Unisolated execution completed"
+        : `${enforcement ?? "Sandbox"} enforcement ${outcome}`;
+    }
+    case "sandbox.escalation.proposed":
+      return "Sandbox escalation proposed";
     case "retry.attempt.started":
       return `Retry attempt ${readNumber(payload, "attemptNumber") ?? ""} started`.trim();
     case "retry.attempt.finished":
@@ -111,6 +142,10 @@ function titleForEvent(name: RuntimeEventName, payload: Metadata): string {
 function detailForEvent(name: RuntimeEventName, payload: Metadata): string | null {
   if (name === "tool.started" || name === "tool.finished") {
     return readString(payload, "actionId");
+  }
+
+  if (name.startsWith("action.") || name.startsWith("sandbox.")) {
+    return readString(payload, "actionId") ?? readString(payload, "attemptId");
   }
 
   if (name === "controller.finished") {
@@ -167,6 +202,12 @@ function severityForEvent(
     status === "failed" ||
     status === "blocked" ||
     decision === "denied"
+    || name === "action.invalidated"
+    || name === "sandbox.attempt.resolved" && [
+      "sandbox_denied",
+      "sandbox_unavailable",
+      "failed",
+    ].includes(readString(payload, "outcome") ?? "")
     || name === "approval.resolved" && readString(payload, "code") !== null
   ) {
     return "error";
@@ -178,6 +219,7 @@ function severityForEvent(
     name === "retry.cancelled" ||
     status === "stopped" ||
     decision === "review"
+    || name === "sandbox.attempt.started" && readString(payload, "enforcement") === "disabled"
   ) {
     return "warning";
   }
@@ -252,6 +294,11 @@ function metadataForEvent(event: RuntimeEvent, payload: Metadata): Metadata {
   copyString(metadata, payload, "lastFailureCategory");
   copyString(metadata, payload, "lastFailureCode");
   copyString(metadata, payload, "phase");
+  copyString(metadata, payload, "enforcement");
+  copyString(metadata, payload, "effectState");
+  copyNumber(metadata, payload, "ordinal");
+  copyNumber(metadata, payload, "effectCount");
+  copyNumber(metadata, payload, "targetAssertionCount");
   copyAttribution(metadata, payload);
 
   return metadata;

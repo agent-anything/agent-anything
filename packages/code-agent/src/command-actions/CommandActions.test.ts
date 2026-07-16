@@ -262,6 +262,7 @@ async function runConfig(
   fixture: Fixture,
   cancellation: ReturnType<typeof createRunCancellationController>,
 ): Promise<RunConfig> {
+  const actionContext = await preparationContext(fixture);
   const managedConstraints: ManagedPermissionConstraints = {
     constraintSetId: "test-disabled",
     selectableProfiles: { allowedProfileIds: null, deniedProfileIds: [] },
@@ -272,7 +273,7 @@ async function runConfig(
   return {
     workspace: fixture.workspace,
     identity: { id: "user_command", kind: "user", displayName: "Test User", metadata: {} },
-    actionContext: await preparationContext(fixture),
+    actionContext,
     permissions: {
       permissionProfile: resolvePermissionProfile({
         profileId: ":danger-full-access",
@@ -280,7 +281,10 @@ async function runConfig(
         environment: {
           environmentId: "test-local",
           platform: fixture.platform,
-          workspaceRoots: [{ rootId: fixture.workspace.id, path: fixture.root }],
+          workspaceRoots: actionContext.workspace.roots.map((root) => ({
+            rootId: root.rootId,
+            path: root.resolvedPath ?? root.canonicalPath,
+          })),
         },
         managedConstraints,
       }),

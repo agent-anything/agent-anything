@@ -23,7 +23,11 @@ describe("Helarc permission composition", () => {
     });
 
     expect(composition.permissions).toMatchObject({
-      permissionProfile: { id: ":workspace" },
+      permissionProfile: {
+        id: "helarc-workspace-disabled",
+        enforcement: "disabled",
+        process: { unrestricted: false },
+      },
       approvalPolicy: "on-request",
       reviewer: { kind: "user", reviewer: bridge },
     });
@@ -78,7 +82,11 @@ describe("Helarc permission composition", () => {
     });
 
     expect(composition.permissions).toMatchObject({
-      permissionProfile: { id: ":danger-full-access" },
+      permissionProfile: {
+        id: "helarc-full-access-disabled",
+        enforcement: "disabled",
+        process: { unrestricted: true },
+      },
       approvalPolicy: "never",
       reviewer: null,
     });
@@ -97,6 +105,7 @@ function baseInput() {
     },
     workspaceRoots: [{ rootId: "workspace.1", path: "D:\\workspace" }],
     platform: "win32" as const,
+    enforcement: "disabled" as const,
     cancellation: createRunCancellationController({ runId: "run.1" }),
   };
 }

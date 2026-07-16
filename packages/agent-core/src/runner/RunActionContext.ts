@@ -66,7 +66,8 @@ export function snapshotRunActionContext(input: {
   }
   for (const profileRoot of input.profile.workspaceRoots) {
     const actionRoot = workspace.roots.find((candidate) => candidate.rootId === profileRoot.rootId);
-    if (actionRoot === undefined || actionRoot.canonicalPath !== profileRoot.canonicalPath ||
+    if (actionRoot === undefined ||
+      (actionRoot.resolvedPath ?? actionRoot.canonicalPath) !== profileRoot.canonicalPath ||
       actionRoot.platform !== input.profile.platform) {
       throw new TypeError(
         `Action context root '${profileRoot.rootId}' does not match the Permission Profile.`,

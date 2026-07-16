@@ -268,6 +268,11 @@ describe("Helarc workbench shell", () => {
             runtimeStatus,
             patchStatus: null,
             appliedPath: null,
+            enforcement: {
+              selected: "disabled",
+              status: "unisolated",
+              code: null,
+            },
             safeErrors: status === "completed" ? [] : [{ code: `${status}_code`, message: "Terminal error" }],
           },
           errorSummary: status === "completed" ? [] : [{ code: `${status}_code`, message: "Terminal error" }],
@@ -283,6 +288,7 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain(status);
     expect(html).toContain(runtimeStatus);
     expect(html).toContain("Terminal summary");
+    expect(html).toContain("Unisolated");
     expect(html).toContain("Event summary");
   });
 });

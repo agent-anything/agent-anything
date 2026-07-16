@@ -253,6 +253,45 @@ describe("mapRuntimeEventToHelarcRunEvent", () => {
     expect(event.metadata).not.toHaveProperty("rawProviderResponse");
     expect(event.metadata).not.toHaveProperty("apiKey");
   });
+
+  it("labels disabled enforcement as unisolated and excludes provider internals", () => {
+    const started = mapRuntimeEventToHelarcRunEvent(runtimeEvent({
+      name: "sandbox.attempt.started",
+      payload: {
+        actionId: "action-1",
+        attemptId: "attempt-1",
+        ordinal: 1,
+        enforcement: "disabled",
+        policyId: "private-policy",
+      },
+    }));
+    const resolved = mapRuntimeEventToHelarcRunEvent(runtimeEvent({
+      name: "sandbox.attempt.resolved",
+      payload: {
+        actionId: "action-1",
+        attemptId: "attempt-1",
+        ordinal: 1,
+        enforcement: "disabled",
+        outcome: "executed",
+        code: "succeeded",
+        enforcementEvidence: { private: true },
+      },
+    }));
+
+    expect(started).toMatchObject({
+      kind: "sandbox.started",
+      title: "Unisolated execution started",
+      severity: "warning",
+      metadata: { enforcement: "disabled", ordinal: 1 },
+    });
+    expect(resolved).toMatchObject({
+      kind: "sandbox.resolved",
+      title: "Unisolated execution completed",
+      metadata: { enforcement: "disabled", outcome: "executed" },
+    });
+    expect(JSON.stringify([started, resolved])).not.toContain("private-policy");
+    expect(resolved.metadata).not.toHaveProperty("enforcementEvidence");
+  });
 });
 
 function runtimeEvent(input: {

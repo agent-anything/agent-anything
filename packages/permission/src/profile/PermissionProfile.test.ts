@@ -36,6 +36,7 @@ describe("resolvePermissionProfile", () => {
       "read",
     ]);
     expect(profile.network.enabled).toBe(false);
+    expect(profile.process.unrestricted).toBe(false);
     expect(Object.isFrozen(profile)).toBe(true);
     expect(Object.isFrozen(profile.fileSystem.entries)).toBe(true);
     expect(Object.isFrozen(profile.workspaceRoots[0])).toBe(true);
@@ -409,6 +410,7 @@ function profileDefinition(
     enforcement: input.enforcement ?? "managed",
     unrestrictedFileSystem: input.unrestrictedFileSystem ?? false,
     fileSystem: input.fileSystem ?? [],
+    process: input.process ?? { unrestricted: false },
     network: input.network ?? {
       enabled: false,
       allowedDomains: [],

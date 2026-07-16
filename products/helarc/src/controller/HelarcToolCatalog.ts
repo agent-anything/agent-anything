@@ -1,26 +1,26 @@
 import type { ControllerInput } from "@agent-anything/agent-core";
 import {
-  CODE_AGENT_LIST_FILES_TOOL,
-  CODE_AGENT_READ_FILE_TOOL,
-  CODE_AGENT_RUN_COMMAND_TOOL,
-  CODE_AGENT_SEARCH_FILES_TOOL,
+  CODE_AGENT_LIST_FILES_ACTION,
+  CODE_AGENT_READ_FILE_ACTION,
+  CODE_AGENT_RUN_COMMAND_ACTION,
+  CODE_AGENT_SEARCH_FILES_ACTION,
 } from "@agent-anything/code-agent";
 import type { Metadata } from "@agent-anything/shared";
-import type { ToolDefinition, ToolRisk } from "@agent-anything/tools";
+import type { ToolAnnotations, ToolDescriptor } from "@agent-anything/tools";
 
 export type HelarcToolCatalogMode = "read-only" | "shell-enabled";
 
 export interface HelarcToolCatalogItem {
   name: string;
   purpose: string;
-  risk: ToolRisk;
+  annotations: ToolAnnotations;
   permission: string;
 }
 
 export interface HelarcToolDefinitionSummary {
   name: string;
   description?: string | null;
-  risk: ToolRisk;
+  annotations: ToolAnnotations;
 }
 
 export interface HelarcToolCatalog {
@@ -33,24 +33,24 @@ export interface HelarcToolCatalogMetadata {
   tools: Array<{
     name: string;
     description: string | null;
-    risk: ToolRisk;
+    annotations: ToolAnnotations;
   }>;
 }
 
 export const HELARC_TOOL_CATALOG_METADATA_KEY = "helarcToolCatalog";
 
 const HELARC_TOOL_ORDER = [
-  CODE_AGENT_LIST_FILES_TOOL,
-  CODE_AGENT_READ_FILE_TOOL,
-  CODE_AGENT_SEARCH_FILES_TOOL,
-  CODE_AGENT_RUN_COMMAND_TOOL,
+  CODE_AGENT_LIST_FILES_ACTION,
+  CODE_AGENT_READ_FILE_ACTION,
+  CODE_AGENT_SEARCH_FILES_ACTION,
+  CODE_AGENT_RUN_COMMAND_ACTION,
 ] as const;
 
 const HELARC_TOOL_PURPOSES: Record<string, string> = {
-  [CODE_AGENT_LIST_FILES_TOOL]: "List files inside a declared task workspace root.",
-  [CODE_AGENT_READ_FILE_TOOL]: "Read one file inside a declared task workspace root.",
-  [CODE_AGENT_SEARCH_FILES_TOOL]: "Search text across files inside a declared task workspace root.",
-  [CODE_AGENT_RUN_COMMAND_TOOL]: "Run a process inside a declared task workspace root.",
+  [CODE_AGENT_LIST_FILES_ACTION]: "List files inside a declared task workspace root.",
+  [CODE_AGENT_READ_FILE_ACTION]: "Read one file inside a declared task workspace root.",
+  [CODE_AGENT_SEARCH_FILES_ACTION]: "Search text across files inside a declared task workspace root.",
+  [CODE_AGENT_RUN_COMMAND_ACTION]: "Run a process inside a declared task workspace root.",
 };
 
 export function createHelarcToolCatalogFromDefinitions(input: {
@@ -74,19 +74,19 @@ export function createDefaultHelarcToolCatalog(): HelarcToolCatalog {
     mode: "read-only",
     tools: [
       {
-        name: CODE_AGENT_LIST_FILES_TOOL,
-        description: HELARC_TOOL_PURPOSES[CODE_AGENT_LIST_FILES_TOOL],
-        risk: "safe",
+        name: CODE_AGENT_LIST_FILES_ACTION,
+        description: HELARC_TOOL_PURPOSES[CODE_AGENT_LIST_FILES_ACTION],
+        annotations: { readOnlyHint: true },
       },
       {
-        name: CODE_AGENT_READ_FILE_TOOL,
-        description: HELARC_TOOL_PURPOSES[CODE_AGENT_READ_FILE_TOOL],
-        risk: "safe",
+        name: CODE_AGENT_READ_FILE_ACTION,
+        description: HELARC_TOOL_PURPOSES[CODE_AGENT_READ_FILE_ACTION],
+        annotations: { readOnlyHint: true },
       },
       {
-        name: CODE_AGENT_SEARCH_FILES_TOOL,
-        description: HELARC_TOOL_PURPOSES[CODE_AGENT_SEARCH_FILES_TOOL],
-        risk: "safe",
+        name: CODE_AGENT_SEARCH_FILES_ACTION,
+        description: HELARC_TOOL_PURPOSES[CODE_AGENT_SEARCH_FILES_ACTION],
+        annotations: { readOnlyHint: true },
       },
     ],
   });
@@ -94,14 +94,14 @@ export function createDefaultHelarcToolCatalog(): HelarcToolCatalog {
 
 export function createHelarcToolCatalogMetadata(input: {
   mode: HelarcToolCatalogMode;
-  tools: readonly Pick<ToolDefinition, "name" | "description" | "risk">[];
+  tools: readonly Pick<ToolDescriptor, "name" | "description" | "annotations">[];
 }): HelarcToolCatalogMetadata {
   return {
     mode: input.mode,
     tools: input.tools.map((tool) => ({
       name: tool.name,
       description: tool.description ?? null,
-      risk: tool.risk,
+      annotations: tool.annotations,
     })),
   };
 }
@@ -123,7 +123,7 @@ export function buildHelarcToolCatalogText(catalog: HelarcToolCatalog): string {
   const lines = [
     `Active tool catalog (${catalog.mode}):`,
     ...catalog.tools.map((tool) => (
-      `- ${tool.name}: ${tool.purpose} Risk: ${tool.risk}. Permission: ${tool.permission}.`
+      `- ${tool.name}: ${tool.purpose} Permission: ${tool.permission}.`
     )),
   ];
 
@@ -144,10 +144,10 @@ function createCatalogItem(
   return {
     name: tool.name,
     purpose: tool.description ?? HELARC_TOOL_PURPOSES[tool.name] ?? "Execute the registered tool.",
-    risk: tool.risk,
-    permission: tool.risk === "risky"
-      ? "Requires policy and permission approval when the host is in ask mode"
-      : "Available without additional approval in the current trusted workspace mode",
+    annotations: tool.annotations,
+    permission: tool.name === CODE_AGENT_RUN_COMMAND_ACTION
+      ? "Assessed from the exact process action and current run authority"
+      : "Assessed from canonical filesystem effects and current run authority",
   };
 }
 
@@ -172,20 +172,19 @@ function parseHelarcToolCatalogMetadata(value: unknown): HelarcToolCatalogMetada
 
     const name = tool.name;
     const description = tool.description;
-    const risk = tool.risk;
+    const annotations = tool.annotations;
     if (
       typeof name !== "string" ||
       (description !== null && typeof description !== "string") ||
-      (risk !== "safe" && risk !== "risky")
+      !isToolAnnotations(annotations)
     ) {
       return [];
     }
 
-    const parsedRisk: ToolRisk = risk;
     return [{
       name,
       description,
-      risk: parsedRisk,
+      annotations,
     }];
   });
 
@@ -193,6 +192,20 @@ function parseHelarcToolCatalogMetadata(value: unknown): HelarcToolCatalogMetada
     mode,
     tools,
   };
+}
+
+function isToolAnnotations(value: unknown): value is ToolAnnotations {
+  if (!isRecord(value)) return false;
+  const keys = new Set([
+    "title",
+    "readOnlyHint",
+    "destructiveHint",
+    "idempotentHint",
+    "openWorldHint",
+  ]);
+  return Object.entries(value).every(([key, entry]) =>
+    keys.has(key) && (key === "title" ? typeof entry === "string" : typeof entry === "boolean"),
+  );
 }
 
 function isRecord(value: unknown): value is Metadata {

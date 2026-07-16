@@ -57,6 +57,31 @@ describe("RunActionContext", () => {
       profile: profile(),
     })).toThrow("environment does not match");
   });
+
+  it("matches Permission authority to the resolved root rather than a lexical alias", () => {
+    const context = actionContext();
+    const snapshot = snapshotRunActionContext({
+      context: {
+        ...context,
+        workspace: {
+          ...context.workspace,
+          roots: [{
+            ...context.workspace.roots[0]!,
+            path: "C:/WORKSP~1",
+            resolvedPath: "C:/workspace",
+          }],
+        },
+      },
+      workspace: workspace(),
+      identity: identity(),
+      profile: profile(),
+    });
+
+    expect(snapshot.workspace.roots[0]).toMatchObject({
+      canonicalPath: "C:/WORKSP~1",
+      resolvedPath: "C:/workspace",
+    });
+  });
 });
 
 function actionContext(): RunActionContextInput {

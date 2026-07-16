@@ -1,5 +1,6 @@
 export type {
   HelarcActivityItem,
+  HelarcEnforcementSummary,
   HelarcPatchReviewBridge,
   HelarcPatchReviewDecision,
   HelarcPatchReviewViewModel,
@@ -11,9 +12,12 @@ export type {
   RunHelarcSessionInput,
 } from "./HelarcSession.js";
 export {
-  createHelarcToolRegistry,
-  createHelarcReadOnlyToolRegistry,
   mapRuntimeEventToHelarcActivity,
   runHelarcReadOnlySession,
   runHelarcSession,
 } from "./HelarcSession.js";
+export { createHelarcActionComposition } from "./HelarcActionComposition.js";
+export type {
+  CreateHelarcActionCompositionInput,
+  HelarcActionComposition,
+} from "./HelarcActionComposition.js";

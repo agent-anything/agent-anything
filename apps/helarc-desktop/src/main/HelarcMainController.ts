@@ -687,6 +687,11 @@ export class HelarcMainController {
         runtimeStatus: "failed",
         patchStatus: null,
         appliedPath: null,
+        enforcement: {
+          selected: "disabled",
+          status: "not_exercised",
+          code: null,
+        },
         safeErrors: [{
           code: "session_execution_failed",
           message: error instanceof Error ? error.message : "Helarc session failed.",
@@ -1209,6 +1214,7 @@ function createTerminalArtifacts(
             runtimeStatus: safeOutput.runtimeStatus,
             patchStatus: safeOutput.patchStatus,
             appliedPath: safeOutput.appliedPath,
+            enforcement: safeOutput.enforcement,
           }
         : { summary },
     });

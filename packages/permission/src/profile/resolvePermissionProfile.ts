@@ -99,6 +99,9 @@ export function resolvePermissionProfile(
   const unrestricted = chain.some(
     (definition) => definition.unrestrictedFileSystem,
   );
+  const unrestrictedProcess = chain.some(
+    (definition) => definition.process.unrestricted,
+  );
 
   const profile: ResolvedPermissionProfile = {
     id: selected.id,
@@ -114,6 +117,9 @@ export function resolvePermissionProfile(
       unrestricted,
       entries: resolvedEntries,
       managedCeilings,
+    },
+    process: {
+      unrestricted: unrestrictedProcess,
     },
     network: {
       enabled:
@@ -179,6 +185,7 @@ function createBuiltInProfiles(
       enforcement: "managed",
       unrestrictedFileSystem: false,
       fileSystem: readEntries,
+      process: { unrestricted: false },
       network: { enabled: false, allowedDomains: [], deniedDomains: [] },
       metadata: {},
     },
@@ -188,6 +195,7 @@ function createBuiltInProfiles(
       enforcement: "managed",
       unrestrictedFileSystem: false,
       fileSystem: writeEntries,
+      process: { unrestricted: false },
       network: { enabled: false, allowedDomains: [], deniedDomains: [] },
       metadata: {},
     },
@@ -197,6 +205,7 @@ function createBuiltInProfiles(
       enforcement: "disabled",
       unrestrictedFileSystem: true,
       fileSystem: [],
+      process: { unrestricted: true },
       network: { enabled: true, allowedDomains: [], deniedDomains: [] },
       metadata: {},
     },
@@ -248,6 +257,12 @@ function validateCustomProfileDefinition(
       `Permission profile '${definition.id}' has invalid network enablement.`,
     );
   }
+  if (typeof definition.process?.unrestricted !== "boolean") {
+    throw new PermissionProfileResolutionError(
+      "invalid_profile_definition",
+      `Permission profile '${definition.id}' has invalid process authority.`,
+    );
+  }
 }
 
 function cloneProfileDefinition(
@@ -262,6 +277,9 @@ function cloneProfileDefinition(
       target: { ...entry.target },
       access: entry.access,
     })),
+    process: {
+      unrestricted: definition.process.unrestricted,
+    },
     network: {
       enabled: definition.network.enabled,
       allowedDomains: [...definition.network.allowedDomains],
