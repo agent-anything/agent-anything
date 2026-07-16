@@ -1,15 +1,11 @@
-export type { McpServerDefinition } from "./McpServerDefinition.js";
-export type { McpToolDefinition } from "./McpToolDefinition.js";
+export type { McpServerRegistration } from "./McpServerRegistration.js";
+export type { McpToolRegistration } from "./McpToolRegistration.js";
 export type {
   McpConnectionPort,
   McpToolCallInput,
   McpToolCallResult,
 } from "./McpConnectionPort.js";
 export { McpRegistry } from "./McpRegistry.js";
-export {
-  McpToolAdapter,
-  type McpToolAdapterInput,
-} from "./McpToolAdapter.js";
 export {
   createMcpActionCapability,
   type CreateMcpActionCapabilityInput,

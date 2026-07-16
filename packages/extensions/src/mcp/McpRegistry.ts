@@ -1,14 +1,11 @@
-import type { ToolDefinition } from "@agent-anything/tools";
-import type { McpConnectionPort } from "./McpConnectionPort.js";
-import type { McpServerDefinition } from "./McpServerDefinition.js";
-import type { McpToolDefinition } from "./McpToolDefinition.js";
-import { McpToolAdapter } from "./McpToolAdapter.js";
+import type { McpServerRegistration } from "./McpServerRegistration.js";
+import type { McpToolRegistration } from "./McpToolRegistration.js";
 
 export class McpRegistry {
-  private readonly servers = new Map<string, McpServerDefinition>();
+  private readonly servers = new Map<string, McpServerRegistration>();
   private readonly toolNames = new Set<string>();
 
-  register(server: McpServerDefinition): void {
+  register(server: McpServerRegistration): void {
     validateServer(server);
 
     if (this.servers.has(server.id)) {
@@ -33,11 +30,11 @@ export class McpRegistry {
     }
   }
 
-  listServers(): McpServerDefinition[] {
+  listServers(): McpServerRegistration[] {
     return [...this.servers.values()];
   }
 
-  listTools(): Array<{ server: McpServerDefinition; tool: McpToolDefinition }> {
+  listTools(): Array<{ server: McpServerRegistration; tool: McpToolRegistration }> {
     return this.listServers().flatMap((server) =>
       server.tools.map((tool) => ({
         server,
@@ -45,22 +42,12 @@ export class McpRegistry {
       })),
     );
   }
-
-  toToolDefinitions(connectionPort: McpConnectionPort): ToolDefinition[] {
-    return this.listTools().map(({ server, tool }) =>
-      new McpToolAdapter({
-        server,
-        tool,
-        connectionPort,
-      }).toToolDefinition(),
-    );
-  }
 }
 
-function validateServer(server: McpServerDefinition): void {
+function validateServer(server: McpServerRegistration): void {
   if (server.id.trim() === "" || server.name.trim() === "" || server.transport.trim() === "") {
     throw createMcpRegistryError(
-      "mcp_invalid_definition",
+      "mcp_invalid_registration",
       "MCP server id, name, and transport must not be empty.",
     );
   }
@@ -68,7 +55,7 @@ function validateServer(server: McpServerDefinition): void {
   for (const tool of server.tools) {
     if (tool.name.trim() === "") {
       throw createMcpRegistryError(
-        "mcp_invalid_definition",
+        "mcp_invalid_registration",
         "MCP tool name must not be empty.",
       );
     }

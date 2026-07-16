@@ -21,7 +21,7 @@ import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } fro
 import type { ApprovalReviewerPort } from "@agent-anything/permission";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
 import { InMemoryStorage } from "@agent-anything/storage";
-import type { ToolDefinition } from "@agent-anything/tools";
+import type { ToolDescriptor } from "@agent-anything/tools";
 import { describe, expect, it, vi } from "vitest";
 import { createMcpActionCapability } from "../mcp/index.js";
 import { createRemoteToolActionCapability } from "../remote-tools/index.js";
@@ -288,16 +288,17 @@ class ScriptedController implements Controller<unknown> {
 }
 
 function agent(actionName: string): Agent<{ summary: string }> {
-  const placeholder: ToolDefinition = {
+  const descriptor: ToolDescriptor = {
     name: actionName,
-    risk: "safe",
-    async execute() { throw new Error("Canonical Actions do not execute through ToolDefinition."); },
+    inputSchema: {},
+    annotations: {},
+    metadata: {},
   };
   return {
     id: "remote_test_agent",
     name: "Remote Test Agent",
     instructions: "Execute one remote Action.",
-    tools: [placeholder],
+    tools: [descriptor],
     output: {
       validate(candidate) {
         return typeof candidate === "object" && candidate !== null &&

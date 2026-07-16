@@ -14,7 +14,7 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/providers";
-import type { ToolDefinition } from "@agent-anything/tools";
+import type { ToolDescriptor } from "@agent-anything/tools";
 import { describe, expect, it } from "vitest";
 import {
   buildHelarcActionDecisionRulesText,
@@ -350,7 +350,7 @@ function controllerCallContext(): ControllerCallContext {
 }
 
 function createControllerInput(input: {
-  tools?: ToolDefinition[];
+  tools?: ToolDescriptor[];
   mode?: "read-only" | "shell-enabled";
 } = {}): ControllerInput<HelarcAgentOutput> {
   const tools = input.tools ?? READ_ONLY_TOOLS;
@@ -402,14 +402,7 @@ function createControllerInput(input: {
     metadata: {
       [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
         mode: input.mode ?? "read-only",
-        tools: tools.map((definition) => ({
-          name: definition.name,
-          description: definition.description,
-          annotations: {
-            readOnlyHint: definition.risk === "safe",
-            destructiveHint: definition.risk === "risky",
-          },
-        })),
+        tools,
       }),
     },
   };
@@ -418,15 +411,17 @@ function createControllerInput(input: {
 function tool(
   name: string,
   description: string,
-  risk: ToolDefinition["risk"],
-): ToolDefinition {
+  risk: "safe" | "risky",
+): ToolDescriptor {
   return {
     name,
     description,
-    risk,
-    async execute() {
-      throw new Error("Test tool is not executable.");
+    inputSchema: {},
+    annotations: {
+      readOnlyHint: risk === "safe",
+      destructiveHint: risk === "risky",
     },
+    metadata: {},
   };
 }
 

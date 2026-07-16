@@ -23,9 +23,9 @@ import {
   executeProcess,
   type CapturedProcessOutput,
   type ProcessExecutionOutcome,
-} from "../shell-tool/ProcessExecutor.js";
-import { parseRunCommandInput } from "../shell-tool/shellInput.js";
-import { resolveShellLimits } from "../shell-tool/shellLimits.js";
+} from "../process/ProcessExecutor.js";
+import { parseCommandInput } from "../process/CommandInput.js";
+import { resolveCommandLimits } from "../process/CommandLimits.js";
 import {
   inspectPreparedFileSystemTarget,
   prepareFileSystemTarget,
@@ -64,7 +64,7 @@ const DEFAULT_TERMINATION = Object.freeze({
 export async function createCodeAgentCommandActionCapability(
   input: CreateCodeAgentCommandActionCapabilityInput,
 ): Promise<CodeAgentCommandActionCapability> {
-  const limits = resolveShellLimits(input.limits);
+  const limits = resolveCommandLimits(input.limits);
   const termination = resolveTermination(input.termination);
   const environment = await createCommandEnvironmentPolicy({
     id: input.environmentPolicyId ?? "code-agent.command.environment.default",
@@ -123,7 +123,7 @@ function createCommandCatalog() {
 
 function createCommandActionAdapter(
   input: CreateCodeAgentCommandActionCapabilityInput,
-  limits: ReturnType<typeof resolveShellLimits>,
+  limits: ReturnType<typeof resolveCommandLimits>,
   termination: PreparedCommandInvocationPayload["termination"],
   environment: CommandEnvironmentPolicySnapshot,
 ): ActionAdapter {
@@ -134,7 +134,7 @@ function createCommandActionAdapter(
       if (interruption !== null) return interruption;
       try {
         assertStrictCommandInput(action.input);
-        const parsed = parseRunCommandInput(action.input, limits);
+        const parsed = parseCommandInput(action.input, limits);
         const cwd = await prepareFileSystemTarget({
           workspaceScope: input.workspaceScope,
           workspaceRoots: context.workspace.roots,
@@ -244,13 +244,13 @@ function createCommandActionAdapter(
 }
 
 async function preparedData(input: {
-  readonly parsed: ReturnType<typeof parseRunCommandInput>;
+  readonly parsed: ReturnType<typeof parseCommandInput>;
   readonly cwd: Awaited<ReturnType<typeof prepareFileSystemTarget>>;
   readonly executable: Awaited<ReturnType<typeof resolveCommandExecutable>>;
   readonly environment: CommandEnvironmentPolicySnapshot;
   readonly termination: PreparedCommandInvocationPayload["termination"];
   readonly runtimeEnvironment: CanonicalEnvironmentIdentity;
-  readonly limits: ReturnType<typeof resolveShellLimits>;
+  readonly limits: ReturnType<typeof resolveCommandLimits>;
 }): Promise<ActionAdapterPreparedData> {
   const executable = createCanonicalExecutableIdentity(input.executable.identity);
   const cwd = createCanonicalPathIdentity(input.cwd.pathIdentity);
@@ -385,7 +385,7 @@ function createCommandActionExecutor(
           now(),
           "failed",
           null,
-          { code: "shell_execution_failed", message: safeMessage(error, "Command execution failed.") },
+          { code: "command_execution_failed", message: safeMessage(error, "Command execution failed.") },
         );
       }
     },
@@ -408,13 +408,13 @@ function processResult(
   }
   if (outcome.kind === "failed") {
     return result(payload, context, startedAt, finishedAt, "failed", null, {
-      code: "shell_process_start_failed",
+      code: "command_process_start_failed",
       message: "Failed to start or monitor the command process.",
     });
   }
   if (outcome.kind === "timeout") {
     return result(payload, context, startedAt, finishedAt, "timeout", null, {
-      code: outcome.terminationConfirmed ? "shell_timeout" : "shell_timeout_termination_unconfirmed",
+      code: outcome.terminationConfirmed ? "command_timeout" : "command_timeout_termination_unconfirmed",
       message: outcome.terminationConfirmed
         ? "Command exceeded the configured timeout."
         : "Command timed out and process termination could not be confirmed.",
@@ -433,7 +433,7 @@ function processResult(
       payload, outcome, outcome.exitCode, outcome.signal, true, attributed, outcome.termination, true,
     ), attributed
       ? {
-          code: "shell_cancelled",
+          code: "command_cancelled",
           message: "Command process was terminated after Run cancellation.",
           metadata: {
             runId: interruption.cancellation.runId,
@@ -781,7 +781,7 @@ function capturedMetadata(outcome: Extract<ProcessExecutionOutcome, { kind: "tim
 
 function safeMessage(error: unknown, fallback: string): string {
   return error instanceof TypeError ||
-    (error instanceof Error && error.name === "ShellInputError")
+    (error instanceof Error && error.name === "CommandInputError")
     ? error.message
     : fallback;
 }

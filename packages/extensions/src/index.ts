@@ -5,25 +5,21 @@ export type {
   RemoteToolResult,
 } from "./remote-tools/index.js";
 export {
-  RemoteToolAdapter,
   createRemoteToolActionCapability,
   type CreateRemoteToolActionCapabilityInput,
-  type RemoteToolAdapterInput,
 } from "./remote-tools/index.js";
 
 export type {
   McpConnectionPort,
-  McpServerDefinition,
+  McpServerRegistration,
   McpToolCallInput,
   McpToolCallResult,
-  McpToolDefinition,
+  McpToolRegistration,
 } from "./mcp/index.js";
 export {
   McpRegistry,
-  McpToolAdapter,
   createMcpActionCapability,
   type CreateMcpActionCapabilityInput,
-  type McpToolAdapterInput,
 } from "./mcp/index.js";
 
 export type {

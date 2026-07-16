@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/code-agent",
   "version": "0.0.0",
-  "description": "Code-agent workspace, file, shell, and patch capability for AgentAnything platform packages.",
+  "description": "Code-agent workspace, filesystem, command, and patch capabilities for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",

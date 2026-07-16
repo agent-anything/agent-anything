@@ -23,7 +23,7 @@ import { EvidenceBuilder } from "@agent-anything/evidence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
 import { InMemoryStorage } from "@agent-anything/storage";
-import type { ToolDefinition } from "@agent-anything/tools";
+import type { ToolDescriptor } from "@agent-anything/tools";
 import { describe, expect, it } from "vitest";
 import { createCodeAgentCanonicalWorkspaceRoots } from "../file-actions/index.js";
 import {
@@ -225,16 +225,17 @@ class ScriptedController implements Controller<unknown> {
 }
 
 function agent(): Agent<{ summary: string }> {
-  const placeholder: ToolDefinition = {
+  const descriptor: ToolDescriptor = {
     name: CODE_AGENT_RUN_COMMAND_ACTION,
-    risk: "safe",
-    async execute() { throw new Error("Canonical Actions do not execute through ToolDefinition."); },
+    inputSchema: {},
+    annotations: {},
+    metadata: {},
   };
   return {
     id: "command_test_agent",
     name: "Command Test Agent",
     instructions: "Execute one command Action.",
-    tools: [placeholder],
+    tools: [descriptor],
     output: {
       validate(candidate) {
         return typeof candidate === "object" && candidate !== null &&

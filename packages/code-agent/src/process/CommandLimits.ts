@@ -1,6 +1,6 @@
-import type { CodeAgentShellLimits } from "./ShellToolContracts.js";
+import type { CodeAgentCommandLimits } from "./ProcessContracts.js";
 
-export const defaultCodeAgentShellLimits: CodeAgentShellLimits = {
+export const defaultCodeAgentCommandLimits: CodeAgentCommandLimits = {
   defaultTimeoutMs: 30_000,
   maxTimeoutMs: 120_000,
   maxStdoutBytes: 100_000,
@@ -10,25 +10,25 @@ export const defaultCodeAgentShellLimits: CodeAgentShellLimits = {
   maxReasonChars: 1_000,
 };
 
-export function resolveShellLimits(
-  input: Partial<CodeAgentShellLimits> | undefined,
-): CodeAgentShellLimits {
+export function resolveCommandLimits(
+  input: Partial<CodeAgentCommandLimits> | undefined,
+): CodeAgentCommandLimits {
   const limits = {
-    ...defaultCodeAgentShellLimits,
+    ...defaultCodeAgentCommandLimits,
     ...input,
   };
 
   for (const [name, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value <= 0) {
       throw new Error(
-        "Shell tool limits must be positive safe integers: " + name + ".",
+        "Command limits must be positive safe integers: " + name + ".",
       );
     }
   }
 
   if (limits.defaultTimeoutMs > limits.maxTimeoutMs) {
     throw new Error(
-      "Shell default timeout must not exceed the maximum timeout.",
+      "Command default timeout must not exceed the maximum timeout.",
     );
   }
 

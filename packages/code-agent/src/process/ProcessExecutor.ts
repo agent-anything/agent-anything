@@ -4,8 +4,8 @@ import {
   type SpawnOptions,
 } from "node:child_process";
 import type { InvocationInterruptionContext } from "@agent-anything/shared";
-import type { ToolProcessTerminationLimits } from "@agent-anything/tools";
 import { BoundedOutput } from "./BoundedOutput.js";
+import type { ProcessTerminationLimits } from "./ProcessContracts.js";
 
 export interface ProcessExecutionInput {
   readonly command: string;
@@ -17,7 +17,7 @@ export interface ProcessExecutionInput {
   readonly maxStdoutBytes: number;
   readonly maxStderrBytes: number;
   readonly interruption: InvocationInterruptionContext;
-  readonly termination: ToolProcessTerminationLimits;
+  readonly termination: ProcessTerminationLimits;
   readonly startedMs: number;
   readonly nowMs: () => number;
 }

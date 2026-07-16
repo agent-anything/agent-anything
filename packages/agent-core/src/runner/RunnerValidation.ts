@@ -4,7 +4,7 @@ import type { WorkspaceContext } from "@agent-anything/governance";
 import { assertValidPlanLimits } from "../plan/index.js";
 import { snapshotRetryPolicy } from "../retry/index.js";
 import type { Metadata } from "@agent-anything/shared";
-import type { ToolDefinition } from "@agent-anything/tools";
+import { createToolCatalogSnapshot } from "@agent-anything/tools";
 import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
 import { snapshotRunActionContext } from "./RunActionContext.js";
 import type { RunInput, RunInputItem } from "./RunInput.js";
@@ -35,8 +35,7 @@ export function snapshotAgent<TOutput>(agent: Agent<TOutput>): Agent<TOutput> {
   if (!Array.isArray(agent.tools)) {
     throw new TypeError("Agent.tools must be an array.");
   }
-  const toolNames = new Set<string>();
-  const tools = agent.tools.map((tool, index) => snapshotToolDefinition(tool, index, toolNames));
+  const tools = createToolCatalogSnapshot(agent.tools).tools;
   if (!agent.output || typeof agent.output.validate !== "function") {
     throw new TypeError("Agent.output must provide validate().");
   }
@@ -46,40 +45,6 @@ export function snapshotAgent<TOutput>(agent: Agent<TOutput>): Agent<TOutput> {
     ...agent,
     tools: Object.freeze(tools),
     metadata: Object.freeze({ ...agent.metadata }),
-  });
-}
-
-function snapshotToolDefinition(
-  tool: ToolDefinition,
-  index: number,
-  names: Set<string>,
-): ToolDefinition {
-  if (!isRecord(tool)) {
-    throw new TypeError(`Agent.tools[${index}] must be a ToolDefinition.`);
-  }
-  assertNonEmpty(tool.name, `Agent.tools[${index}].name`);
-  if (names.has(tool.name)) {
-    throw new TypeError(`Agent tool name ${tool.name} is duplicated.`);
-  }
-  names.add(tool.name);
-  if (tool.risk !== "safe" && tool.risk !== "risky") {
-    throw new TypeError(`Agent tool ${tool.name} has an unsupported risk.`);
-  }
-  if (typeof tool.execute !== "function") {
-    throw new TypeError(`Agent tool ${tool.name} must provide execute().`);
-  }
-  if (tool.description !== undefined && typeof tool.description !== "string") {
-    throw new TypeError(`Agent tool ${tool.name} description must be text.`);
-  }
-  if (tool.metadata !== undefined) {
-    assertMetadata(tool.metadata, `Agent tool ${tool.name} metadata`);
-  }
-
-  return Object.freeze({
-    ...tool,
-    ...(tool.metadata === undefined
-      ? {}
-      : { metadata: Object.freeze({ ...tool.metadata }) }),
   });
 }
 

@@ -6,7 +6,7 @@ import type {
 } from "@agent-anything/agent-core/action-execution";
 import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
 import type { ToolCatalogSnapshot } from "@agent-anything/tools";
-import type { CodeAgentFileToolLimits } from "../file-tools/FileToolContracts.js";
+import type { CodeAgentFileLimits } from "../filesystem/FileSystemContracts.js";
 
 export const CODE_AGENT_LIST_FILES_ACTION = "codeAgent.listFiles";
 export const CODE_AGENT_READ_FILE_ACTION = "codeAgent.readFile";
@@ -25,7 +25,7 @@ export type CodeAgentFileActionName =
 
 export interface CreateCodeAgentFileActionCapabilityInput {
   readonly workspaceScope: TaskWorkspaceScope | undefined;
-  readonly limits?: Partial<CodeAgentFileToolLimits>;
+  readonly limits?: Partial<CodeAgentFileLimits>;
   readonly now?: () => string;
 }
 

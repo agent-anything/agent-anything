@@ -116,7 +116,6 @@ import {
   deriveAuthorityCommitDeadline,
   deriveRunDeadline,
 } from "./RunPermissionConfig.js";
-import type { ToolActionObservationPayload } from "./ToolActionBridge.js";
 import {
   snapshotRetryEvent,
   type RetryEvent,
@@ -1736,33 +1735,12 @@ export class RunExecution<TOutput> {
   private async processToolAction(
     action: Action & { readonly kind: "tool" },
   ): Promise<ProcessActionResult> {
-    if (this.dependencies.actionEnforcementPipeline !== undefined) {
-      this.emit("tool.started", {
-        runId: this.state.runId,
-        actionId: action.id,
-        toolName: action.name,
-      });
-      return this.processExternalToolAction(action);
-    }
-
-    const tool = this.agent.tools.find((candidate) => candidate.name === action.name);
-    if (tool === undefined) {
-      const observation: ActionRejectedObservation = Object.freeze({
-        ...this.createObservationBase(action),
-        kind: "action_rejected",
-        code: "tool_not_found",
-        message: `Tool ${action.name} is not available to Agent ${this.agent.id}.`,
-      });
-      return this.commitActionObservation(observation, true, true);
-    }
-
-    const bridge = this.dependencies.toolActionBridge;
-    if (bridge === undefined) {
+    if (this.dependencies.actionEnforcementPipeline === undefined) {
       const observation: ActionRejectedObservation = Object.freeze({
         ...this.createObservationBase(action),
         kind: "action_rejected",
         code: "action_unsupported",
-        message: "This Runner has no ToolActionBridge.",
+        message: "This Runner has no canonical Action pipeline.",
       });
       return this.commitActionObservation(observation, true, true);
     }
@@ -1773,120 +1751,7 @@ export class RunExecution<TOutput> {
       toolName: action.name,
     });
 
-    let result;
-    try {
-      result = await this.awaitInterruptibleOperation(
-        "tool",
-        () => bridge.execute({
-          action,
-          task: this.input.task,
-          workspace: this.config.workspace,
-          identity: this.config.identity,
-          cancellation: this.config.cancellation.context,
-          cancellationLimits: this.config.cancellationLimits,
-          audit: this.config.audit,
-          telemetry: this.config.telemetry,
-          toolRisk: tool.risk,
-          metadata: Object.freeze({
-            runId: this.state.runId,
-            taskId: this.state.taskId,
-            agentId: this.state.activeAgentId,
-          }),
-        }),
-      );
-    } catch (error) {
-      if (error instanceof OperationSettlementTimeoutError) {
-        this.emit("tool.finished", {
-          runId: this.state.runId,
-          actionId: action.id,
-          toolName: action.name,
-          status: "failed",
-          code: "runtime_cancellation_settlement_timeout",
-        });
-        return {
-          invalidatesBatch: true,
-          terminalResult: await this.fail(
-            cancellationSettlementRuntimeError(error),
-            "runtime_cancellation_settlement_timeout",
-          ),
-        };
-      }
-      if (this.cancellationRequest() !== null) {
-        this.emit("tool.finished", {
-          runId: this.state.runId,
-          actionId: action.id,
-          toolName: action.name,
-          status: "cancelled",
-        });
-        return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
-      }
-
-      const bridgeError = runtimeError(
-        "tool",
-        "tool_action_bridge_failed",
-        error instanceof Error ? error.message : "ToolActionBridge failed.",
-        false,
-        { actionId: action.id, toolName: action.name },
-      );
-      this.emit("tool.finished", {
-        runId: this.state.runId,
-        actionId: action.id,
-        toolName: action.name,
-        status: "failed",
-        code: bridgeError.code,
-      });
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(bridgeError, "tool_execution_failed"),
-      };
-    }
-
-    this.emit("tool.finished", {
-      runId: this.state.runId,
-      actionId: action.id,
-      toolName: action.name,
-      status: result.status === "observed" ? result.outcome : "failed",
-      ...(result.status === "terminal_failure" ? { code: result.code } : {}),
-    });
-
-    if (result.status === "terminal_failure") {
-      this.commitSettledToolState([], {
-        evidenceRefs: result.evidenceRefs,
-        artifactRefs: result.artifactRefs,
-      });
-      const cancellationRequest = this.cancellationRequest();
-      if (cancellationRequest !== null) {
-        this.enterCancelling(cancellationRequest);
-      }
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.terminalize({
-          status: "failed",
-          code: result.code,
-          errors: result.errors,
-          cancellationRequest,
-        }, new Set(result.errors.map((error) => error.owner))),
-      };
-    }
-
-    const observation = result.observation === null
-      ? null
-      : this.materializeToolObservation(action, result.observation);
-    const processed = await this.commitToolOutcome(
-      action,
-      observation,
-      result.outcome !== "succeeded",
-      result.evidenceRefs,
-      result.artifactRefs,
-    );
-
-    if (processed.terminalResult !== null) {
-      return processed;
-    }
-    if (this.cancellationRequest() !== null) {
-      return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
-    }
-    return processed;
+    return this.processExternalToolAction(action);
   }
 
   private async processExternalToolAction(
@@ -3019,83 +2884,6 @@ export class RunExecution<TOutput> {
       false,
       { actionId: action.id },
     ));
-  }
-
-  private materializeToolObservation(
-    action: Action,
-    payload: ToolActionObservationPayload,
-  ): ToolResultObservation | ActionDeniedObservation | ActionFailureObservation |
-    ActionRejectedObservation {
-    const base = this.createObservationBase(action);
-    const metadata = Object.freeze({ ...base.metadata, ...payload.metadata });
-    switch (payload.kind) {
-      case "tool_result":
-        return Object.freeze({ ...base, metadata, kind: payload.kind, result: payload.result });
-      case "action_denied":
-        return Object.freeze({
-          ...base,
-          metadata,
-          kind: payload.kind,
-          owner: payload.owner,
-          code: payload.code,
-          message: payload.message,
-        });
-      case "action_failure":
-        return Object.freeze({ ...base, metadata, kind: payload.kind, error: payload.error });
-      case "action_rejected":
-        return Object.freeze({
-          ...base,
-          metadata,
-          kind: payload.kind,
-          code: payload.code,
-          message: payload.message,
-        });
-    }
-  }
-
-  private async commitToolOutcome(
-    action: Action,
-    observation: Observation | null,
-    failed: boolean,
-    evidenceRefs: readonly EvidenceRef[],
-    artifactRefs: readonly ArtifactRef[],
-  ): Promise<ProcessActionResult> {
-    const context = applyContextUpdate(this.state.context, {
-      observations: observation === null ? [] : [observation],
-      evidenceRefs,
-      metadata: {
-        lastActionId: action.id,
-        lastControllerIteration: action.provenance.controllerIteration,
-      },
-    });
-    const counters = nextActionCounters(this.state.counters, failed);
-    this.commitSettledToolState(
-      observation === null ? [] : [observationDraft<TOutput>(observation)],
-      { context, counters, evidenceRefs, artifactRefs },
-    );
-    if (observation !== null) {
-      this.publishObservationNotifications(observation, evidenceRefs);
-    }
-
-    if (this.state.status === "cancelling") {
-      return { invalidatesBatch: true, terminalResult: null };
-    }
-
-    if (counters.consecutiveActionFailures > this.config.limits.maxConsecutiveActionFailures) {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(limitRuntimeError(
-          "Run exceeded maxConsecutiveActionFailures.",
-          {
-            maxConsecutiveActionFailures:
-              this.config.limits.maxConsecutiveActionFailures,
-            actualConsecutiveActionFailures: counters.consecutiveActionFailures,
-          },
-        )),
-      };
-    }
-
-    return { invalidatesBatch: true, terminalResult: null };
   }
 
   private async processPlanUpdate(action: Action): Promise<ProcessActionResult> {

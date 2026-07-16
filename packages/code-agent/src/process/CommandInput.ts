@@ -1,30 +1,30 @@
 import { Buffer } from "node:buffer";
 import type {
-  CodeAgentShellLimits,
+  CodeAgentCommandLimits,
   RunCommandInput,
-} from "./ShellToolContracts.js";
+} from "./ProcessContracts.js";
 
-export interface ParsedRunCommandInput extends RunCommandInput {
+export interface ParsedCommandInput extends RunCommandInput {
   cwd: string;
   timeoutMs: number;
 }
 
-export class ShellInputError extends Error {
+export class CommandInputError extends Error {
   constructor(
     readonly code: string,
     message: string,
   ) {
     super(message);
-    this.name = "ShellInputError";
+    this.name = "CommandInputError";
   }
 }
 
-export function parseRunCommandInput(
+export function parseCommandInput(
   input: unknown,
-  limits: CodeAgentShellLimits,
-): ParsedRunCommandInput {
+  limits: CodeAgentCommandLimits,
+): ParsedCommandInput {
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
-    throw invalidInput("Shell tool input must be an object.");
+    throw invalidInput("Command Action input must be an object.");
   }
 
   const value = input as Record<string, unknown>;
@@ -40,8 +40,8 @@ export function parseRunCommandInput(
   }
   const args = value.args as string[];
   if (args.length > limits.maxArgs) {
-    throw new ShellInputError(
-      "shell_argument_limit_exceeded",
+    throw new CommandInputError(
+      "command_argument_limit_exceeded",
       "Command exceeds the configured argument count limit.",
     );
   }
@@ -52,8 +52,8 @@ export function parseRunCommandInput(
       0,
     );
   if (commandBytes > limits.maxCommandBytes) {
-    throw new ShellInputError(
-      "shell_command_limit_exceeded",
+    throw new CommandInputError(
+      "command_size_limit_exceeded",
       "Command and args exceed the configured byte limit.",
     );
   }
@@ -63,8 +63,8 @@ export function parseRunCommandInput(
     throw invalidInput("Reason must not be empty.");
   }
   if (reason.length > limits.maxReasonChars) {
-    throw new ShellInputError(
-      "shell_reason_limit_exceeded",
+    throw new CommandInputError(
+      "command_reason_limit_exceeded",
       "Reason exceeds the configured character limit.",
     );
   }
@@ -85,7 +85,7 @@ export function parseRunCommandInput(
 
 function readTimeout(
   value: unknown,
-  limits: CodeAgentShellLimits,
+  limits: CodeAgentCommandLimits,
 ): number {
   if (value === undefined) {
     return limits.defaultTimeoutMs;
@@ -94,8 +94,8 @@ function readTimeout(
     throw invalidInput("Timeout must be a positive safe integer.");
   }
   if ((value as number) > limits.maxTimeoutMs) {
-    throw new ShellInputError(
-      "shell_timeout_limit_exceeded",
+    throw new CommandInputError(
+      "command_timeout_limit_exceeded",
       "Timeout exceeds the configured maximum.",
     );
   }
@@ -105,7 +105,7 @@ function readTimeout(
 function requireString(value: unknown, field: string): string {
   if (typeof value !== "string") {
     throw invalidInput(
-      "Shell tool input field '" + field + "' must be a string.",
+      "Command Action input field '" + field + "' must be a string.",
     );
   }
   return value;
@@ -121,6 +121,6 @@ function optionalString(
   return requireString(value, field);
 }
 
-function invalidInput(message: string): ShellInputError {
-  return new ShellInputError("shell_invalid_input", message);
+function invalidInput(message: string): CommandInputError {
+  return new CommandInputError("command_invalid_input", message);
 }

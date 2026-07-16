@@ -17,7 +17,7 @@ export interface HelarcToolCatalogItem {
   permission: string;
 }
 
-export interface HelarcToolDefinitionSummary {
+export interface HelarcToolDescriptorSummary {
   name: string;
   description?: string | null;
   annotations: ToolAnnotations;
@@ -53,14 +53,14 @@ const HELARC_TOOL_PURPOSES: Record<string, string> = {
   [CODE_AGENT_RUN_COMMAND_ACTION]: "Run a process inside a declared task workspace root.",
 };
 
-export function createHelarcToolCatalogFromDefinitions(input: {
+export function createHelarcToolCatalogFromDescriptors(input: {
   mode: HelarcToolCatalogMode;
-  tools: readonly HelarcToolDefinitionSummary[];
+  tools: readonly HelarcToolDescriptorSummary[];
 }): HelarcToolCatalog {
   const byName = new Map(input.tools.map((tool) => [tool.name, tool]));
   const tools = HELARC_TOOL_ORDER
     .map((name) => byName.get(name))
-    .filter((tool): tool is HelarcToolDefinitionSummary => tool !== undefined)
+    .filter((tool): tool is HelarcToolDescriptorSummary => tool !== undefined)
     .map((tool) => createCatalogItem(tool));
 
   return {
@@ -70,7 +70,7 @@ export function createHelarcToolCatalogFromDefinitions(input: {
 }
 
 export function createDefaultHelarcToolCatalog(): HelarcToolCatalog {
-  return createHelarcToolCatalogFromDefinitions({
+  return createHelarcToolCatalogFromDescriptors({
     mode: "read-only",
     tools: [
       {
@@ -113,7 +113,7 @@ export function readHelarcToolCatalog(input: ControllerInput): HelarcToolCatalog
     return createDefaultHelarcToolCatalog();
   }
 
-  return createHelarcToolCatalogFromDefinitions({
+  return createHelarcToolCatalogFromDescriptors({
     mode: catalogMetadata.mode,
     tools: catalogMetadata.tools,
   });
@@ -139,7 +139,7 @@ export function buildHelarcToolCatalogText(catalog: HelarcToolCatalog): string {
 }
 
 function createCatalogItem(
-  tool: HelarcToolDefinitionSummary,
+  tool: HelarcToolDescriptorSummary,
 ): HelarcToolCatalogItem {
   return {
     name: tool.name,

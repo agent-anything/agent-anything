@@ -1,5 +1,5 @@
 import type { Metadata } from "@agent-anything/shared";
-import type { ToolDefinition } from "@agent-anything/tools";
+import type { ToolDescriptor } from "@agent-anything/tools";
 
 export type AgentInstructions = string;
 
@@ -21,7 +21,7 @@ export interface Agent<TOutput = unknown> {
   readonly id: string;
   readonly name: string;
   readonly instructions: AgentInstructions;
-  readonly tools: readonly ToolDefinition[];
+  readonly tools: readonly ToolDescriptor[];
   readonly output: AgentOutputContract<TOutput>;
   readonly metadata: Metadata;
 }

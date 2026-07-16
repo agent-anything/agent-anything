@@ -13,7 +13,7 @@ import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
 import {
   resolveExistingTarget,
   resolveWritableTarget,
-} from "../file-tools/filesystemBoundary.js";
+} from "../filesystem/FileSystemBoundary.js";
 import type { CodeAgentPreparedFileOperation } from "./FileActionContracts.js";
 
 type FileSystemPlatform = "win32" | "posix";

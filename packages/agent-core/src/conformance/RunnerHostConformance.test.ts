@@ -4,7 +4,6 @@ import type {
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/providers";
-import type { ToolDefinition, ToolResult } from "@agent-anything/tools";
 import { resolvePermissionProfile } from "@agent-anything/permission";
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
 import type { Agent } from "../agent/index.js";
@@ -29,13 +28,9 @@ import { createSystemRetryExecutor, type RetryClock } from "../retry/index.js";
 import {
   Runner,
   createRunCancellationController,
-  toRunCancellationSummary,
   type ActionCandidate,
   type RunConfig,
   type ResolvedRunPermissionConfig,
-  type ToolActionBridge,
-  type ToolActionBridgeInput,
-  type ToolActionBridgeResult,
 } from "../runner/index.js";
 
 interface ConformanceOutput {
@@ -150,7 +145,7 @@ describe("Runner and generic Host conformance", () => {
         runtimeEvent,
       }));
     });
-    const harness = createHostHarness(controller, undefined, eventEmitter);
+    const harness = createHostHarness(controller, eventEmitter);
     const input = createHostInput({
       retry: {
         providerRequest: {
@@ -212,58 +207,6 @@ describe("Runner and generic Host conformance", () => {
       && Object.isFrozen(event.payload.runtimeEvent)
       && Object.isFrozen(event.payload.runtimeEvent.payload)
     )).toBe(true);
-  });
-
-  it("supports optional Plan and multi-iteration Tool execution in one Runner loop", async () => {
-    const controller = new FakeController([
-      (input) => actionsDecision(input, [{
-        kind: "internal",
-        name: "update_plan",
-        input: {
-          explanation: "Track the work.",
-          plan: [{ step: "Inspect resource", status: "in_progress" }],
-        },
-      }]),
-      (input) => actionsDecision(input, [{
-        kind: "tool",
-        name: "conformance.inspect",
-        input: { resource: "workspace://fixture" },
-      }]),
-      (input) => finalDecision(input, "Inspection complete"),
-    ]);
-    const bridge = new FakeToolActionBridge(() => succeededToolResult());
-    const harness = createHostHarness(controller, bridge);
-
-    const result = await harness.run(createHostInput({
-      tools: [conformanceTool()],
-    }));
-
-    expect(result.runResult.status).toBe("succeeded");
-    expect(controller.calls).toHaveLength(3);
-    expect(controller.calls[1]?.context.plan).toMatchObject({
-      version: 1,
-      status: "active",
-      steps: [{ step: "Inspect resource", status: "in_progress" }],
-    });
-    expect(controller.calls[2]?.context.observations).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ kind: "plan_update" }),
-        expect.objectContaining({ kind: "tool_result" }),
-      ]),
-    );
-    expect(bridge.calls).toHaveLength(1);
-    expect(result.runResult.items.map((item) => item.kind)).toEqual([
-      "model_output",
-      "action",
-      "plan_created",
-      "observation",
-      "model_output",
-      "action",
-      "observation",
-      "model_output",
-      "plan_abandoned",
-      "final_output",
-    ]);
   });
 
   it("carries one Plan through creation, completion, reactivation, and terminal abandonment", async () => {
@@ -376,93 +319,6 @@ describe("Runner and generic Host conformance", () => {
     ]);
   });
 
-  it("returns a recoverable Tool failure to Controller as an Observation", async () => {
-    const controller = new FakeController([
-      (input) => actionsDecision(input, [{
-        kind: "tool",
-        name: "conformance.inspect",
-        input: {},
-      }]),
-      (input) => {
-        expect(input.context.observations.at(-1)).toMatchObject({
-          kind: "action_failure",
-          error: { owner: "tool", code: "fixture_unavailable" },
-        });
-        return finalDecision(input, "Recovered after observation");
-      },
-    ]);
-    const bridge = new FakeToolActionBridge(() => ({
-      status: "observed",
-      outcome: "failed",
-      observation: {
-        kind: "action_failure",
-        error: {
-          owner: "tool",
-          code: "fixture_unavailable",
-          message: "Fixture is temporarily unavailable.",
-          retryable: true,
-          metadata: {},
-        },
-        metadata: {},
-      },
-      evidenceRefs: [],
-      artifactRefs: [],
-    }));
-
-    const result = await createHostHarness(controller, bridge).run(
-      createHostInput({ tools: [conformanceTool()] }),
-    );
-
-    expect(result.runResult).toMatchObject({
-      status: "succeeded",
-      finalOutput: { summary: "Recovered after observation" },
-    });
-  });
-
-  it("returns a recoverable permission denial to the same Controller loop", async () => {
-    const controller = new FakeController([
-      (input) => actionsDecision(input, [{
-        kind: "tool",
-        name: "conformance.inspect",
-        input: {},
-      }]),
-      (input) => {
-        expect(input.context.observations.at(-1)).toMatchObject({
-          kind: "action_denied",
-          owner: "permission",
-          code: "permission_denied",
-        });
-        return finalDecision(input, "Recovered after denial");
-      },
-    ]);
-    const bridge = new FakeToolActionBridge(() => ({
-      status: "observed",
-      outcome: "denied",
-      observation: {
-        kind: "action_denied",
-        owner: "permission",
-        code: "permission_denied",
-        message: "Permission denied by conformance fixture.",
-        metadata: {},
-      },
-      evidenceRefs: [],
-      artifactRefs: [],
-    }));
-
-    const result = await createHostHarness(controller, bridge).run(
-      createHostInput({ tools: [conformanceTool()] }),
-    );
-
-    expect(result).toMatchObject({
-      state: { status: "completed" },
-      runResult: {
-        status: "succeeded",
-        finalOutput: { summary: "Recovered after denial" },
-      },
-    });
-    expect(result.state.runResult).toBe(result.runResult);
-  });
-
   it("projects Controller stop as blocked while preserving the exact RunResult", async () => {
     const controller = new FakeController([
       (input) => ({
@@ -489,117 +345,6 @@ describe("Runner and generic Host conformance", () => {
     ]);
   });
 
-  it("projects a Runner iteration limit as failed without reconstructing it in Host", async () => {
-    const controller = new FakeController([
-      (input) => actionsDecision(input, [{
-        kind: "tool",
-        name: "conformance.inspect",
-        input: {},
-      }]),
-    ]);
-    const bridge = new FakeToolActionBridge(() => succeededToolResult());
-
-    const result = await createHostHarness(controller, bridge).run(createHostInput({
-      tools: [conformanceTool()],
-      limits: { maxIterations: 1 },
-    }));
-
-    expect(result).toMatchObject({
-      state: { status: "failed" },
-      runResult: {
-        status: "failed",
-        code: "runtime_limit_exceeded",
-        errors: [{ owner: "runtime", code: "runtime_limit_exceeded" }],
-      },
-    });
-    expect(result.state.runResult).toBe(result.runResult);
-  });
-
-  it("preserves a terminal Tool boundary failure through the generic Host", async () => {
-    const controller = new FakeController([
-      (input) => actionsDecision(input, [{
-        kind: "tool",
-        name: "conformance.inspect",
-        input: {},
-      }]),
-    ]);
-    const bridge = new FakeToolActionBridge(() => ({
-      status: "terminal_failure",
-      code: "storage_write_failed",
-      errors: [{
-        owner: "storage",
-        code: "storage_write_failed",
-        message: "Conformance storage failed.",
-        retryable: false,
-        metadata: {},
-      }],
-      evidenceRefs: [],
-      artifactRefs: [],
-    }));
-
-    const result = await createHostHarness(controller, bridge).run(
-      createHostInput({ tools: [conformanceTool()] }),
-    );
-
-    expect(result).toMatchObject({
-      state: {
-        status: "failed",
-        errors: [{ owner: "storage", code: "storage_write_failed" }],
-      },
-      runResult: {
-        status: "failed",
-        code: "storage_write_failed",
-      },
-    });
-    expect(result.state.runResult).toBe(result.runResult);
-    expect(result.state.status === "failed" && result.state.errors).toBe(result.runResult.errors);
-  });
-
-  it("keeps Host cancelling non-terminal until Runner settles the active boundary", async () => {
-    const controller = new FakeController([
-      (input) => actionsDecision(input, [{
-        kind: "tool",
-        name: "conformance.inspect",
-        input: {},
-      }]),
-    ]);
-    const bridge = new DeferredToolActionBridge();
-    const harness = createHostHarness(controller, bridge);
-    const input = createHostInput({ tools: [conformanceTool()] });
-
-    const pendingResult = harness.run(input);
-    await bridge.started;
-    const receipt = harness.cancel(input);
-
-    expect(receipt.accepted).toBe(true);
-    expect(harness.states.at(-1)).toMatchObject({
-      status: "cancelling",
-      cancellation: {
-        requestId: "run-conformance:cancellation",
-        reasonCode: "host_requested",
-      },
-    });
-
-    bridge.release();
-    const result = await pendingResult;
-
-    expect(result.state.status).toBe("cancelled");
-    expect(result.runResult).toMatchObject({
-      status: "cancelled",
-      code: "runtime_cancelled",
-      cancellation: {
-        requestId: "run-conformance:cancellation",
-        origin: "host",
-        reasonCode: "host_requested",
-      },
-    });
-    expect(result.state.runResult).toBe(result.runResult);
-    expect(harness.states.map((state) => state.status)).toEqual([
-      "running",
-      "cancelling",
-      "cancelled",
-    ]);
-  });
 });
 
 class FakeController implements Controller {
@@ -617,47 +362,6 @@ class FakeController implements Controller {
       throw new Error("FakeController has no remaining decision.");
     }
     return step(input, context);
-  }
-}
-
-class FakeToolActionBridge implements ToolActionBridge {
-  readonly calls: ToolActionBridgeInput[] = [];
-
-  constructor(
-    private readonly resolve: (
-      input: ToolActionBridgeInput,
-    ) => ToolActionBridgeResult | Promise<ToolActionBridgeResult>,
-  ) {}
-
-  async execute(input: ToolActionBridgeInput): Promise<ToolActionBridgeResult> {
-    this.calls.push(input);
-    return this.resolve(input);
-  }
-}
-
-class DeferredToolActionBridge implements ToolActionBridge {
-  readonly started: Promise<void>;
-  private markStarted!: () => void;
-  private settle!: () => void;
-  private readonly settled: Promise<void>;
-
-  constructor() {
-    this.started = new Promise((resolve) => {
-      this.markStarted = resolve;
-    });
-    this.settled = new Promise((resolve) => {
-      this.settle = resolve;
-    });
-  }
-
-  release(): void {
-    this.settle();
-  }
-
-  async execute(): Promise<ToolActionBridgeResult> {
-    this.markStarted();
-    await this.settled;
-    return succeededToolResult();
   }
 }
 
@@ -682,35 +386,14 @@ class InMemoryHostHarness {
     return result;
   }
 
-  cancel(input: HostRunInput<ConformanceOutput>) {
-    const receipt = input.runConfig.cancellation.requestCancellation({
-      origin: "host",
-      reasonCode: "host_requested",
-      reason: "Cancelled by conformance Host.",
-    });
-    if (receipt.accepted) {
-      this.states.push({
-        sessionId: input.sessionId,
-        status: "cancelling",
-        taskId: input.runInput.task.id,
-        runId: input.runInput.runId,
-        timestamp: receipt.request.requestedAt,
-        cancellation: toRunCancellationSummary(receipt.request),
-        metadata: {},
-      });
-    }
-    return receipt;
-  }
 }
 
 function createHostHarness(
   controller: Controller,
-  toolActionBridge?: ToolActionBridge,
   eventEmitter?: RuntimeEventEmitter,
 ): InMemoryHostHarness {
   const runner = new Runner({
     controller,
-    ...(toolActionBridge ? { toolActionBridge } : {}),
     ...(eventEmitter ? { eventEmitter } : {}),
     now: () => "2026-07-14T00:00:00.000Z",
   });
@@ -721,7 +404,6 @@ function createHostHarness(
 }
 
 function createHostInput(input: {
-  tools?: readonly ToolDefinition[];
   limits?: Partial<Omit<RunConfig["limits"], "plan">>;
   retry?: RunConfig["retry"];
 } = {}): HostRunInput<ConformanceOutput> {
@@ -731,7 +413,7 @@ function createHostInput(input: {
   });
   return {
     sessionId: "session-conformance",
-    agent: createAgent(input.tools ?? []),
+    agent: createAgent(),
     runInput: {
       runId: "run-conformance",
       task: {
@@ -855,12 +537,12 @@ function createTestPermissionConfig(): ResolvedRunPermissionConfig {
   };
 }
 
-function createAgent(tools: readonly ToolDefinition[]): Agent<ConformanceOutput> {
+function createAgent(): Agent<ConformanceOutput> {
   return {
     id: "agent-conformance",
     name: "Conformance Agent",
     instructions: "Complete the conformance task.",
-    tools,
+    tools: [],
     output: {
       validate(candidate) {
         if (
@@ -875,17 +557,6 @@ function createAgent(tools: readonly ToolDefinition[]): Agent<ConformanceOutput>
       },
     },
     metadata: {},
-  };
-}
-
-function conformanceTool(): ToolDefinition {
-  return {
-    name: "conformance.inspect",
-    description: "Inspect a conformance resource.",
-    risk: "safe",
-    async execute() {
-      throw new Error("Conformance ToolDefinition is executed only through the bridge.");
-    },
   };
 }
 
@@ -922,30 +593,6 @@ function modelItem(input: ControllerInput, content: unknown) {
     kind: "assistant_action",
     content,
     metadata: {},
-  };
-}
-
-function succeededToolResult(): ToolActionBridgeResult {
-  const result: ToolResult = {
-    toolCallId: "bridge-tool-call",
-    toolName: "conformance.inspect",
-    status: "succeeded",
-    output: { inspected: true },
-    error: null,
-    startedAt: "2026-07-14T00:00:00.000Z",
-    finishedAt: "2026-07-14T00:00:00.000Z",
-    metadata: {},
-  };
-  return {
-    status: "observed",
-    outcome: "succeeded",
-    observation: {
-      kind: "tool_result",
-      result,
-      metadata: {},
-    },
-    evidenceRefs: [],
-    artifactRefs: [],
   };
 }
 

@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/tools",
   "version": "0.0.0",
-  "description": "Tool contracts, registries, and adapters for AgentAnything platform packages.",
+  "description": "Declarative Tool catalog and result contracts for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -9,10 +9,6 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"
-    },
-    "./adapters": {
-      "types": "./src/adapters/index.ts",
-      "import": "./dist/adapters/index.js"
     },
     "./catalog": {
       "types": "./src/catalog/index.ts",

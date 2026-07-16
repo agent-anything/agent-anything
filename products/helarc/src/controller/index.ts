@@ -11,7 +11,7 @@ export {
   HELARC_CONTROLLER_ACTIONS,
 } from "./HelarcActionContract.js";
 export type {
-  HelarcToolDefinitionSummary,
+  HelarcToolDescriptorSummary,
   HelarcToolCatalog,
   HelarcToolCatalogItem,
   HelarcToolCatalogMetadata,
@@ -20,7 +20,7 @@ export type {
 export {
   buildHelarcToolCatalogText,
   createDefaultHelarcToolCatalog,
-  createHelarcToolCatalogFromDefinitions,
+  createHelarcToolCatalogFromDescriptors,
   createHelarcToolCatalogMetadata,
   HELARC_TOOL_CATALOG_METADATA_KEY,
   readHelarcToolCatalog,

@@ -1,17 +1,11 @@
 export type {
-  PolicyCheckInput,
   PolicyDecision,
   PolicyDecisionCode,
   PolicyDecisionStatus,
   ExecPolicyRule,
   ExecPolicyRuleDecision,
-  PolicyPort,
-  PolicyRisk,
-  PolicySubject,
-  PolicyTarget,
-  PolicyWorkspace,
 } from "./policy/index.js";
-export { createAllowAllPolicyPort, snapshotExecPolicyRule } from "./policy/index.js";
+export { snapshotExecPolicyRule } from "./policy/index.js";
 export {
   createAllowAllActionPolicyPort,
   evaluateExecPolicyRules,

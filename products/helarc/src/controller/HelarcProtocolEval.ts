@@ -3,7 +3,7 @@ import type {
   ControllerInput,
 } from "@agent-anything/agent-core";
 import type { ProviderResponse } from "@agent-anything/providers";
-import type { ToolDefinition } from "@agent-anything/tools";
+import type { ToolDescriptor } from "@agent-anything/tools";
 import {
   buildHelarcProviderRequest,
   HelarcControllerParseError,
@@ -204,20 +204,13 @@ function createProtocolEvalControllerInput(
     metadata: {
       [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
         mode: fixture.mode,
-        tools: tools.map((definition) => ({
-          name: definition.name,
-          description: definition.description,
-          annotations: {
-            readOnlyHint: definition.risk === "safe",
-            destructiveHint: definition.risk === "risky",
-          },
-        })),
+        tools,
       }),
     },
   };
 }
 
-function toolDefinitionsForMode(mode: HelarcToolCatalogMode): ToolDefinition[] {
+function toolDefinitionsForMode(mode: HelarcToolCatalogMode): ToolDescriptor[] {
   const readOnlyTools = [
     tool("codeAgent.listFiles", "List files inside a declared task workspace root.", "safe"),
     tool("codeAgent.readFile", "Read one file inside a declared task workspace root.", "safe"),
@@ -235,15 +228,17 @@ function toolDefinitionsForMode(mode: HelarcToolCatalogMode): ToolDefinition[] {
 function tool(
   name: string,
   description: string,
-  risk: ToolDefinition["risk"],
-): ToolDefinition {
+  risk: "safe" | "risky",
+): ToolDescriptor {
   return {
     name,
     description,
-    risk,
-    async execute() {
-      throw new Error("Protocol eval tools are not executable.");
+    inputSchema: {},
+    annotations: {
+      readOnlyHint: risk === "safe",
+      destructiveHint: risk === "risky",
     },
+    metadata: {},
   };
 }
 

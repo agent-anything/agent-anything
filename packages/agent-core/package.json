@@ -34,10 +34,6 @@
       "types": "./src/plan/index.ts",
       "import": "./dist/plan/index.js"
     },
-    "./runtime": {
-      "types": "./src/runtime/index.ts",
-      "import": "./dist/runtime/index.js"
-    },
     "./context": {
       "types": "./src/context/index.ts",
       "import": "./dist/context/index.js"

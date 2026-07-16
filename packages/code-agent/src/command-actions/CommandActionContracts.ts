@@ -5,17 +5,21 @@ import type {
   FileBaseline,
 } from "@agent-anything/agent-core/action-execution";
 import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
-import type { ToolCatalogSnapshot, ToolProcessTerminationLimits } from "@agent-anything/tools";
-import type { CodeAgentShellLimits, RunCommandOutput } from "../shell-tool/ShellToolContracts.js";
+import type { ToolCatalogSnapshot } from "@agent-anything/tools";
+import type {
+  CodeAgentCommandLimits,
+  ProcessTerminationLimits,
+  RunCommandOutput,
+} from "../process/ProcessContracts.js";
 
 export const CODE_AGENT_RUN_COMMAND_ACTION = "codeAgent.runCommand";
 
 export interface CreateCodeAgentCommandActionCapabilityInput {
   readonly workspaceScope: TaskWorkspaceScope | undefined;
-  readonly limits?: Partial<CodeAgentShellLimits>;
+  readonly limits?: Partial<CodeAgentCommandLimits>;
   readonly environment?: Readonly<Record<string, string>>;
   readonly environmentPolicyId?: string;
-  readonly termination?: Partial<ToolProcessTerminationLimits>;
+  readonly termination?: Partial<ProcessTerminationLimits>;
   readonly now?: () => string;
   readonly nowMs?: () => number;
 }
@@ -49,7 +53,7 @@ export interface PreparedCommandInvocationPayload {
   readonly runtimeEnvironmentId: string;
   readonly runtimeEnvironmentPlatform: "win32" | "posix";
   readonly runtimeEnvironmentFingerprint: string;
-  readonly termination: ToolProcessTerminationLimits;
+  readonly termination: ProcessTerminationLimits;
 }
 
 export type { RunCommandOutput };

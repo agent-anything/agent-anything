@@ -6,7 +6,7 @@ import {
   resolveWorkspacePath,
   type ResolvedWorkspacePath,
 } from "../workspace/index.js";
-import { FileToolError } from "./FileToolError.js";
+import { FileSystemError } from "./FileSystemError.js";
 
 export interface ExistingWorkspaceTarget {
   resolved: ResolvedWorkspacePath;
@@ -32,7 +32,7 @@ export async function resolveExistingTarget(input: {
   const targetStats = await stat(canonicalTarget);
 
   if (input.expectedKind === "file" && !targetStats.isFile()) {
-    throw new FileToolError(
+    throw new FileSystemError(
       "file_not_file",
       "Workspace path does not identify a file.",
       pathMetadata(resolved),
@@ -40,7 +40,7 @@ export async function resolveExistingTarget(input: {
   }
 
   if (input.expectedKind === "directory" && !targetStats.isDirectory()) {
-    throw new FileToolError(
+    throw new FileSystemError(
       "file_not_directory",
       "Workspace path does not identify a directory.",
       pathMetadata(resolved),
@@ -77,7 +77,7 @@ export async function resolveWritableTarget(input: {
       canonicalParent = await realpath(parentPath);
     } catch (parentError) {
       if (isNodeError(parentError, "ENOENT")) {
-        throw new FileToolError(
+        throw new FileSystemError(
           "file_parent_not_found",
           "Parent directory does not exist.",
           pathMetadata(resolved),
@@ -89,7 +89,7 @@ export async function resolveWritableTarget(input: {
     assertCanonicalContainment(canonicalRoot, canonicalParent, resolved);
     const parentStats = await stat(canonicalParent);
     if (!parentStats.isDirectory()) {
-      throw new FileToolError(
+      throw new FileSystemError(
         "file_parent_not_directory",
         "Parent path is not a directory.",
         pathMetadata(resolved),
@@ -110,7 +110,7 @@ export async function resolveWritableTarget(input: {
   const targetStats = await stat(canonicalTarget);
 
   if (!targetStats.isFile()) {
-    throw new FileToolError(
+    throw new FileSystemError(
       "file_not_file",
       "Workspace path does not identify a file.",
       pathMetadata(resolved),
@@ -118,7 +118,7 @@ export async function resolveWritableTarget(input: {
   }
 
   if (!input.overwrite) {
-    throw new FileToolError(
+    throw new FileSystemError(
       "file_already_exists",
       "File already exists and overwrite is not enabled.",
       pathMetadata(resolved),
@@ -154,7 +154,7 @@ function resolveLexicalPath(input: {
   });
 
   if (resolution.status === "rejected") {
-    throw new FileToolError(
+    throw new FileSystemError(
       resolution.error.code,
       resolution.error.message,
       {
@@ -176,7 +176,7 @@ async function resolveCanonicalRoot(
     canonicalRoot = await realpath(resolved.workspaceRoot);
   } catch (error) {
     if (isNodeError(error, "ENOENT")) {
-      throw new FileToolError(
+      throw new FileSystemError(
         "workspace_root_not_found",
         "Selected workspace root does not exist.",
         pathMetadata(resolved),
@@ -187,7 +187,7 @@ async function resolveCanonicalRoot(
 
   const rootStats = await stat(canonicalRoot);
   if (!rootStats.isDirectory()) {
-    throw new FileToolError(
+    throw new FileSystemError(
       "workspace_root_not_directory",
       "Selected workspace root is not a directory.",
       pathMetadata(resolved),
@@ -204,7 +204,7 @@ async function resolveCanonicalTarget(
     return await realpath(resolved.absolutePath);
   } catch (error) {
     if (isNodeError(error, "ENOENT")) {
-      throw new FileToolError(
+      throw new FileSystemError(
         "file_not_found",
         "Workspace path does not exist.",
         pathMetadata(resolved),
@@ -225,7 +225,7 @@ function assertCanonicalContainment(
     relativeTarget.startsWith(".." + sep) ||
     isAbsolute(relativeTarget)
   ) {
-    throw new FileToolError(
+    throw new FileSystemError(
       "workspace_symlink_escape",
       "Workspace path resolves outside the selected root.",
       pathMetadata(resolved),
@@ -244,8 +244,8 @@ function pathMetadata(resolved: ResolvedWorkspacePath) {
 function toFilesystemError(
   error: unknown,
   resolved: ResolvedWorkspacePath,
-): FileToolError {
-  return new FileToolError(
+): FileSystemError {
+  return new FileSystemError(
     "file_operation_failed",
     "Filesystem operation failed.",
     pathMetadata(resolved),

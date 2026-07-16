@@ -36,46 +36,26 @@ export type {
   CreateCodeAgentCommandActionCapabilityInput,
   PreparedCommandInvocationPayload,
 } from "./command-actions/index.js";
-export {
-  CODE_AGENT_LIST_FILES_TOOL,
-  CODE_AGENT_READ_FILE_TOOL,
-  CODE_AGENT_SEARCH_FILES_TOOL,
-  CODE_AGENT_WRITE_FILE_TOOL,
-  createCodeAgentFileTools,
-  defaultCodeAgentFileToolLimits,
-  registerCodeAgentFileTools,
-} from "./file-tools/index.js";
+export { defaultCodeAgentFileLimits } from "./filesystem/FileSystemLimits.js";
 export type {
-  CodeAgentFileToolLimits,
-  CreateCodeAgentFileToolsInput,
+  CodeAgentFileLimits,
   FileSearchMatch,
-  ListFilesInput,
   ListFilesOutput,
-  ReadFileInput,
   ReadFileOutput,
-  SearchFilesInput,
   SearchFilesOutput,
   WorkspaceFileEntry,
   WorkspaceFileEntryKind,
-  WorkspaceFileInput,
-  WriteFileInput,
-  WriteFileOutput,
-} from "./file-tools/index.js";
-export {
-  CODE_AGENT_RUN_COMMAND_TOOL,
-  createCodeAgentShellCapability,
-  defaultCodeAgentShellLimits,
-  registerCodeAgentShellTool,
-} from "./shell-tool/index.js";
+  FileWriteOutput,
+} from "./filesystem/FileSystemContracts.js";
+export { defaultCodeAgentCommandLimits } from "./process/CommandLimits.js";
 export type {
-  CodeAgentShellCapability,
-  CodeAgentShellLimits,
-  CreateCodeAgentShellCapabilityInput,
+  CodeAgentCommandLimits,
+  ProcessTerminationLimits,
   RunCommandInput,
   RunCommandOutput,
   RunCommandCompletedOutput,
   RunCommandInterruptedOutput,
-} from "./shell-tool/index.js";
+} from "./process/ProcessContracts.js";
 export type {
   AcceptedPatchDecision,
   AcceptedPatchStatus,

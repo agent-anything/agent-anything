@@ -3,14 +3,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, readFile, unlink, writeFile } from "node:fs/promises";
 import type { TaskWorkspaceScope } from "@agent-anything/agent-core";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
-import { FileToolError } from "../file-tools/FileToolError.js";
+import { FileSystemError } from "../filesystem/FileSystemError.js";
 import {
   resolveExistingTarget,
   resolveWritableTarget,
   type ExistingWorkspaceTarget,
   type WritableWorkspaceTarget,
-} from "../file-tools/filesystemBoundary.js";
-import { decodeUtf8 } from "../file-tools/utf8.js";
+} from "../filesystem/FileSystemBoundary.js";
+import { decodeUtf8 } from "../filesystem/Utf8.js";
 import type {
   AcceptedPatchDecision,
   AcceptedPatchStatus,
@@ -589,7 +589,7 @@ function toPatchWorkflowError(
     return error;
   }
 
-  if (error instanceof FileToolError) {
+  if (error instanceof FileSystemError) {
     if (isUnsafePathCode(error.code)) {
       return new PatchWorkflowError(
         "patch_path_unsafe",

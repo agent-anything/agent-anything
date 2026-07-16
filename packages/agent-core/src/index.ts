@@ -208,12 +208,6 @@ export type {
   ToolResultObservation,
   ToolResultClassification,
   ValidToolResultClassification,
-  ToolActionBridge,
-  ToolActionBridgeInput,
-  ToolActionBridgeResult,
-  ToolActionObservationPayload,
-  ToolActionObservedResult,
-  ToolActionTerminalFailureResult,
 } from "./runner/index.js";
 export {
   createBlockedRunResult,
@@ -253,19 +247,3 @@ export {
   RuntimeEventEmitter,
   RuntimeEventRecorder,
 } from "./events/index.js";
-export type {
-  ExecuteToolInput,
-  ResolveToolExecutionContextInput,
-  ToolExecutionConfig,
-  ToolExecutionBoundaryDependencies,
-  ToolExecutionContext,
-  ToolExecutionContextResolver,
-  ToolExecutionBlocked,
-  ToolExecutionFailed,
-  ToolExecutionOutcome,
-  ToolExecutionSucceeded,
-} from "./runtime/index.js";
-export {
-  ToolExecutionBoundary,
-  ToolExecutionContextError,
-} from "./runtime/index.js";

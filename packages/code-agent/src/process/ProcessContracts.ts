@@ -1,12 +1,4 @@
-import type {
-  TaskWorkspaceScope,
-  ToolExecutionContextResolver,
-} from "@agent-anything/agent-core";
-import type { ToolDefinition } from "@agent-anything/tools";
-
-export const CODE_AGENT_RUN_COMMAND_TOOL = "codeAgent.runCommand";
-
-export interface CodeAgentShellLimits {
+export interface CodeAgentCommandLimits {
   defaultTimeoutMs: number;
   maxTimeoutMs: number;
   maxStdoutBytes: number;
@@ -16,12 +8,9 @@ export interface CodeAgentShellLimits {
   maxReasonChars: number;
 }
 
-export interface CreateCodeAgentShellCapabilityInput {
-  workspaceScope: TaskWorkspaceScope | undefined;
-  limits?: Partial<CodeAgentShellLimits>;
-  environment?: Readonly<Record<string, string>>;
-  now?: () => string;
-  nowMs?: () => number;
+export interface ProcessTerminationLimits {
+  readonly gracePeriodMs: number;
+  readonly forceKillTimeoutMs: number;
 }
 
 export interface RunCommandInput {
@@ -66,8 +55,3 @@ export interface RunCommandInterruptedOutput extends RunCommandOutputBase {
 export type RunCommandOutput =
   | RunCommandCompletedOutput
   | RunCommandInterruptedOutput;
-
-export interface CodeAgentShellCapability {
-  tool: ToolDefinition<unknown, RunCommandOutput>;
-  executionContextResolver: ToolExecutionContextResolver;
-}

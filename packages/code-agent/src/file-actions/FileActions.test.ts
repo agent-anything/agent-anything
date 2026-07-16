@@ -24,7 +24,7 @@ import { EvidenceBuilder } from "@agent-anything/evidence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
 import { InMemoryStorage } from "@agent-anything/storage";
-import type { ToolDefinition } from "@agent-anything/tools";
+import type { ToolDescriptor } from "@agent-anything/tools";
 import { describe, expect, it } from "vitest";
 import { acceptPatch, createPatchProposal } from "../patch/index.js";
 import {
@@ -298,16 +298,17 @@ class ScriptedController implements Controller<unknown> {
 }
 
 function agent(actionName: string): Agent<{ summary: string }> {
-  const placeholder: ToolDefinition = {
+  const descriptor: ToolDescriptor = {
     name: actionName,
-    risk: "safe",
-    async execute() { throw new Error("Phase16 Actions never execute through ToolDefinition."); },
+    inputSchema: {},
+    annotations: {},
+    metadata: {},
   };
   return {
     id: "code_agent_test",
     name: "Code Agent Test",
     instructions: "Execute one test Action.",
-    tools: [placeholder],
+    tools: [descriptor],
     output: {
       validate(candidate) {
         return typeof candidate === "object" && candidate !== null &&

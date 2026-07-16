@@ -12,12 +12,11 @@ import {
   CODE_AGENT_SEARCH_FILES_ACTION,
   createCodeAgentCommandActionCapability,
   createCodeAgentFileActionCapability,
-  type CodeAgentShellLimits,
+  type CodeAgentCommandLimits,
 } from "@agent-anything/code-agent";
 import {
   createToolCatalogSnapshot,
   type ToolCatalogSnapshot,
-  type ToolDefinition,
   type ToolDescriptor,
 } from "@agent-anything/tools";
 
@@ -29,7 +28,7 @@ const READ_ONLY_ACTIONS = new Set([
 
 export interface CreateHelarcActionCompositionInput {
   readonly enableShell: boolean;
-  readonly shellLimits?: Partial<CodeAgentShellLimits>;
+  readonly commandLimits?: Partial<CodeAgentCommandLimits>;
 }
 
 export interface HelarcActionComposition {
@@ -37,7 +36,7 @@ export interface HelarcActionComposition {
   readonly registrations: ActionRegistrationSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
   readonly executors: readonly ActionExecutor[];
-  readonly agentTools: readonly ToolDefinition[];
+  readonly agentTools: readonly ToolDescriptor[];
 }
 
 export async function createHelarcActionComposition(
@@ -50,7 +49,7 @@ export async function createHelarcActionComposition(
   const command = input.enableShell
     ? await createCodeAgentCommandActionCapability({
         workspaceScope: task.workspaceScope,
-        limits: input.shellLimits,
+        limits: input.commandLimits,
       })
     : null;
   const capabilities = command === null ? [file] : [file, command];
@@ -73,7 +72,7 @@ export async function createHelarcActionComposition(
     registrations,
     adapters: Object.freeze(capabilities.flatMap((capability) => capability.adapters)),
     executors: Object.freeze(capabilities.flatMap((capability) => capability.executors)),
-    agentTools: Object.freeze(exposedCatalog.tools.map(createInertAgentTool)),
+    agentTools: exposedCatalog.tools,
   });
 }
 
@@ -87,22 +86,4 @@ function assertExposedRegistrations(
       throw new TypeError(`Helarc exposed Tool '${tool.name}' has no trusted Action registration.`);
     }
   }
-}
-
-function createInertAgentTool(descriptor: ToolDescriptor): ToolDefinition {
-  return Object.freeze({
-    name: descriptor.name,
-    description: descriptor.description,
-    risk: descriptor.name === CODE_AGENT_RUN_COMMAND_ACTION ? "risky" : "safe",
-    metadata: Object.freeze({
-      inputSchema: descriptor.inputSchema,
-      annotations: descriptor.annotations,
-      declarativeOnly: true,
-    }),
-    async execute() {
-      throw new TypeError(
-        "Helarc declarative Tools execute only through the canonical Action pipeline.",
-      );
-    },
-  });
 }

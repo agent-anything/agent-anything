@@ -1,29 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { FakeAuditPort } from "./FakeAuditPort.js";
 import { FakeIdentityProvider } from "./FakeIdentityProvider.js";
-import { FakePolicyPort } from "./FakePolicyPort.js";
 import { FakeTelemetryPort } from "./FakeTelemetryPort.js";
 import { FakeWorkspaceResolver } from "./FakeWorkspaceResolver.js";
 
 describe("testing fake ports", () => {
-  it("records policy checks", async () => {
-    const policyPort = new FakePolicyPort();
-
-    await expect(policyPort.evaluate({
-      id: "policy_check_001",
-      subject: { kind: "user", id: "user_001", metadata: {} },
-      target: { kind: "tool", id: "tool_001", metadata: {} },
-      action: "execute",
-      risk: "safe",
-      workspace: null,
-      metadata: {},
-    })).resolves.toMatchObject({
-      status: "allowed",
-    });
-
-    expect(policyPort.checks).toHaveLength(1);
-  });
-
   it("records audit and telemetry records", async () => {
     const auditPort = new FakeAuditPort();
     const telemetryPort = new FakeTelemetryPort();

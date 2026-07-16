@@ -29,7 +29,7 @@ import type { SessionAuthorityPort } from "@agent-anything/permission";
 import {
   CODE_AGENT_RUN_COMMAND_ACTION,
   createCodeAgentCanonicalWorkspaceRoots,
-  type CodeAgentShellLimits,
+  type CodeAgentCommandLimits,
   type MaterializedPatchReview,
 } from "@agent-anything/code-agent";
 import {
@@ -41,7 +41,7 @@ import { EvidenceBuilder, type Evidence } from "@agent-anything/evidence";
 import type { Provider } from "@agent-anything/providers";
 import type { ArtifactRef, ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { StoragePort, StoredArtifact } from "@agent-anything/storage";
-import type { ToolDefinition } from "@agent-anything/tools";
+import type { ToolDescriptor } from "@agent-anything/tools";
 import {
   buildHelarcProviderRequest,
   createHelarcToolCatalogMetadata,
@@ -136,7 +136,7 @@ export interface RunHelarcReadOnlySessionInput {
 export interface RunHelarcSessionInput extends RunHelarcReadOnlySessionInput {
   sessionId?: HostSessionId;
   enableShell?: boolean;
-  shellLimits?: Partial<CodeAgentShellLimits>;
+  commandLimits?: Partial<CodeAgentCommandLimits>;
   patchReviewBridge?: HelarcPatchReviewBridge;
   onActivity?: (item: HelarcActivityItem, event: RuntimeEvent) => void;
 }
@@ -229,7 +229,7 @@ export async function runHelarcSession(
 
   const actionComposition = await createHelarcActionComposition(input.task, {
     enableShell: input.enableShell ?? false,
-    shellLimits: input.shellLimits,
+    commandLimits: input.commandLimits,
   });
   const evidenceBuilder = new EvidenceBuilder();
   const actionEnforcementPipeline = new ActionEnforcementPipeline({
@@ -415,7 +415,7 @@ function createHelarcRetryClock(
 }
 
 function createHelarcAgent(
-  tools: readonly ToolDefinition[],
+  tools: readonly ToolDescriptor[],
 ): Agent<HelarcAgentOutput> {
   return Object.freeze({
     id: "helarc-code-agent",

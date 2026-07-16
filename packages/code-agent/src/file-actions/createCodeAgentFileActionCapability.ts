@@ -26,12 +26,12 @@ import type {
   ReadFileOutput,
   WorkspaceFileEntry,
   WorkspaceFileEntryKind,
-  WriteFileOutput,
-} from "../file-tools/FileToolContracts.js";
-import { FileToolError } from "../file-tools/FileToolError.js";
-import { resolveFileToolLimits } from "../file-tools/fileToolLimits.js";
-import { workspaceRelativePath } from "../file-tools/filesystemBoundary.js";
-import { decodeUtf8 } from "../file-tools/utf8.js";
+  FileWriteOutput,
+} from "../filesystem/FileSystemContracts.js";
+import { FileSystemError } from "../filesystem/FileSystemError.js";
+import { resolveFileSystemLimits } from "../filesystem/FileSystemLimits.js";
+import { workspaceRelativePath } from "../filesystem/FileSystemBoundary.js";
+import { decodeUtf8 } from "../filesystem/Utf8.js";
 import {
   CODE_AGENT_CREATE_FILE_ACTION,
   CODE_AGENT_DELETE_FILE_ACTION,
@@ -76,7 +76,7 @@ const ACTION_NAMES: readonly CodeAgentFileActionName[] = Object.freeze([
 export function createCodeAgentFileActionCapability(
   input: CreateCodeAgentFileActionCapabilityInput,
 ): CodeAgentFileActionCapability {
-  const limits = resolveFileToolLimits(input.limits);
+  const limits = resolveFileSystemLimits(input.limits);
   const now = input.now ?? (() => new Date().toISOString());
   const registrations = createActionRegistrationSnapshot(ACTION_NAMES.map((actionName) => ({
     actionName,
@@ -174,7 +174,7 @@ function descriptor(
 
 function createFileActionAdapter(
   input: CreateCodeAgentFileActionCapabilityInput,
-  limits: ReturnType<typeof resolveFileToolLimits>,
+  limits: ReturnType<typeof resolveFileSystemLimits>,
 ): ActionAdapter {
   const adapter: ActionAdapter = {
     descriptor: ADAPTER_DESCRIPTOR,
@@ -360,7 +360,7 @@ async function preparedData(
 }
 
 function createFileActionExecutor(
-  limits: ReturnType<typeof resolveFileToolLimits>,
+  limits: ReturnType<typeof resolveFileSystemLimits>,
   now: () => string,
 ): ActionExecutor {
   const executor: ActionExecutor = {
@@ -395,7 +395,7 @@ function createFileActionExecutor(
 
 async function executePreparedFileAction(
   payload: CodeAgentPreparedFileInvocationPayload,
-  limits: ReturnType<typeof resolveFileToolLimits>,
+  limits: ReturnType<typeof resolveFileSystemLimits>,
   context: ActionExecutorContext,
 ): Promise<unknown> {
   switch (payload.operation) {
@@ -477,7 +477,7 @@ async function executeRead(
   throwIfInterrupted(context);
   if (bytes.byteLength > maxReadBytes) throw limitError("file_read_limit_exceeded");
   const content = decodeUtf8(bytes);
-  if (content === null) throw new FileToolError("file_not_utf8", "File is not valid UTF-8 text.");
+  if (content === null) throw new FileSystemError("file_not_utf8", "File is not valid UTF-8 text.");
   return {
     rootName: payload.rootName,
     workspaceId: payload.workspaceId,
@@ -489,7 +489,7 @@ async function executeRead(
 
 async function executeSearch(
   payload: CodeAgentPreparedFileInvocationPayload,
-  limits: ReturnType<typeof resolveFileToolLimits>,
+  limits: ReturnType<typeof resolveFileSystemLimits>,
   context: ActionExecutorContext,
 ) {
   if (payload.query === null) throw new TypeError("Prepared search query is missing.");
@@ -521,7 +521,7 @@ async function searchDirectory(
   directory: string,
   root: string,
   query: string,
-  limits: ReturnType<typeof resolveFileToolLimits>,
+  limits: ReturnType<typeof resolveFileSystemLimits>,
   state: SearchState,
   context: ActionExecutorContext,
 ): Promise<void> {
@@ -544,7 +544,7 @@ async function searchFile(
   path: string,
   root: string,
   query: string,
-  limits: ReturnType<typeof resolveFileToolLimits>,
+  limits: ReturnType<typeof resolveFileSystemLimits>,
   state: SearchState,
   context: ActionExecutorContext,
 ): Promise<void> {
@@ -591,7 +591,7 @@ async function executeCreate(
   payload: CodeAgentPreparedFileInvocationPayload,
   maxWriteBytes: number,
   context: ActionExecutorContext,
-): Promise<WriteFileOutput> {
+): Promise<FileWriteOutput> {
   const content = requirePreparedContent(payload, maxWriteBytes);
   throwIfInterrupted(context);
   await writeFile(payload.canonicalTarget, content, { encoding: "utf8", flag: "wx" });
@@ -609,7 +609,7 @@ async function executeUpdate(
   payload: CodeAgentPreparedFileInvocationPayload,
   maxWriteBytes: number,
   context: ActionExecutorContext,
-): Promise<WriteFileOutput> {
+): Promise<FileWriteOutput> {
   const content = requirePreparedContent(payload, maxWriteBytes);
   await assertExecutorBaseline(payload);
   throwIfInterrupted(context);
@@ -641,7 +641,7 @@ async function executeDelete(
 
 async function assertExecutorBaseline(payload: CodeAgentPreparedFileInvocationPayload): Promise<void> {
   if (payload.expectedBaseline.kind !== "present") {
-    throw new FileToolError("file_target_changed", "File target baseline is not present.");
+    throw new FileSystemError("file_target_changed", "File target baseline is not present.");
   }
   const stats = await stat(payload.canonicalTarget);
   const current: FileBaseline = {
@@ -655,7 +655,7 @@ async function assertExecutorBaseline(payload: CodeAgentPreparedFileInvocationPa
       : null,
   };
   if (!sameBaseline(current, payload.expectedBaseline)) {
-    throw new FileToolError("file_target_changed", "File target changed before execution.");
+    throw new FileSystemError("file_target_changed", "File target changed before execution.");
   }
 }
 
@@ -950,19 +950,19 @@ function entryKind(entry: { isFile(): boolean; isDirectory(): boolean; isSymboli
   return "other";
 }
 
-function limitError(code: string): FileToolError {
-  return new FileToolError(code, "File operation exceeds its configured limit.");
+function limitError(code: string): FileSystemError {
+  return new FileSystemError(code, "File operation exceeds its configured limit.");
 }
 
 function toToolError(error: unknown) {
-  if (error instanceof FileToolError) return { code: error.code, message: error.message };
+  if (error instanceof FileSystemError) return { code: error.code, message: error.message };
   if (isNodeError(error, "EEXIST")) return { code: "file_already_exists", message: "File already exists." };
   if (isNodeError(error, "ENOENT")) return { code: "file_not_found", message: "File target does not exist." };
   return { code: "file_operation_failed", message: "File operation failed." };
 }
 
 function safeMessage(error: unknown, fallback: string): string {
-  return error instanceof FileToolError || error instanceof TypeError ? error.message : fallback;
+  return error instanceof FileSystemError || error instanceof TypeError ? error.message : fallback;
 }
 
 function isNodeError(error: unknown, code: string): boolean {
