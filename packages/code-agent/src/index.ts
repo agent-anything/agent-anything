@@ -59,19 +59,14 @@ export type {
 export type {
   AcceptedPatchDecision,
   AcceptedPatchStatus,
-  AppliedPatchResult,
-  AppliedPatchStatus,
   CreatePatchOperation,
   DeletePatchOperation,
-  FailedPatchResult,
-  FailedPatchStatus,
   PatchContentReference,
   PatchDecision,
   PatchFailureCode,
   PatchId,
   PatchOperation,
   PatchProposal,
-  PatchResult,
   PatchStatus,
   ProposedPatchStatus,
   RejectedPatchDecision,
@@ -80,7 +75,6 @@ export type {
 } from "./patch/index.js";
 export {
   acceptPatch,
-  applyAcceptedPatch,
   createPatchProposal,
   defaultPatchWorkflowLimits,
   materializePatchReview,
@@ -89,7 +83,6 @@ export {
 } from "./patch/index.js";
 export type {
   AcceptPatchOptions,
-  ApplyAcceptedPatchInput,
   CreatePatchProposalInput,
   CreatePatchProposalOptions,
   MaterializedPatchReview,

@@ -1572,32 +1572,42 @@ describe("Runner sandbox denial escalation", () => {
     }));
   });
 
-  it("does not treat an ordinary failed ToolResult as sandbox escalation", async () => {
-    const fixture = createEscalatingExternalActionFixture({ ordinaryToolFailure: true });
-    const result = await createRunner(new ScriptedController([
-      actionsDecision([{ kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" }]),
-      finalDecision("Observed failure"),
-    ]), {
-      actionEnforcementPipeline: fixture.pipeline,
-      sandboxExecutionGateway: fixture.gateway,
-    }).run(
-      createAgent([createAgentTool("test.external")]),
-      createRunInput(),
-      createRunConfig({ actionContext: externalActionContext() }),
-    );
+  it.each(["failed", "timeout", "partial", "interrupted"] as const)(
+    "does not treat an ordinary %s ToolResult as sandbox escalation",
+    async (toolResultStatus) => {
+      const fixture = createEscalatingExternalActionFixture({
+        ordinaryToolResultStatus: toolResultStatus,
+      });
+      const result = await createRunner(new ScriptedController([
+        actionsDecision([{
+          kind: "tool",
+          name: "test.external",
+          input: {},
+          modelItemId: "model_1",
+        }]),
+        finalDecision("Observed failure"),
+      ]), {
+        actionEnforcementPipeline: fixture.pipeline,
+        sandboxExecutionGateway: fixture.gateway,
+      }).run(
+        createAgent([createAgentTool("test.external")]),
+        createRunInput(),
+        createRunConfig({ actionContext: externalActionContext() }),
+      );
 
-    expect(result.status).toBe("succeeded");
-    expect(fixture.providerCalls()).toBe(1);
-    expect(fixture.reconciliationCalls()).toBe(0);
-    expect(result.items.some(({ kind }) => kind === "sandbox_escalation_proposed")).toBe(false);
-    expect(result.items).toContainEqual(expect.objectContaining({
-      kind: "observation",
-      observation: expect.objectContaining({
-        kind: "tool_result",
-        result: expect.objectContaining({ status: "failed" }),
-      }),
-    }));
-  });
+      expect(result.status).toBe("succeeded");
+      expect(fixture.providerCalls()).toBe(1);
+      expect(fixture.reconciliationCalls()).toBe(0);
+      expect(result.items.some(({ kind }) => kind === "sandbox_escalation_proposed")).toBe(false);
+      expect(result.items).toContainEqual(expect.objectContaining({
+        kind: "observation",
+        observation: expect.objectContaining({
+          kind: "tool_result",
+          result: expect.objectContaining({ status: toolResultStatus }),
+        }),
+      }));
+    },
+  );
 
   it("invalidates escalation when target state changes after attempt one", async () => {
     const fixture = createEscalatingExternalActionFixture({
@@ -1753,7 +1763,7 @@ describe("Runner sandbox denial escalation", () => {
   });
 
   it("retains settled attempt history when required result Audit fails", async () => {
-    const fixture = createEscalatingExternalActionFixture({ ordinaryToolFailure: true });
+    const fixture = createEscalatingExternalActionFixture({ ordinaryToolResultStatus: "failed" });
     const auditPort: AuditPort = {
       async record(record) {
         if (record.eventName === "sandbox.attempt.resolved") {
@@ -3218,7 +3228,7 @@ function createEscalatingExternalActionFixture(
   options: {
     readonly effectState?: "none" | "unknown";
     readonly secondDenial?: boolean;
-    readonly ordinaryToolFailure?: boolean;
+    readonly ordinaryToolResultStatus?: "failed" | "timeout" | "partial" | "interrupted";
     readonly targetChangesBeforeEscalation?: boolean;
     readonly denyEscalatedPolicy?: boolean;
     readonly onReconcile?: () => void;
@@ -3340,15 +3350,18 @@ function createEscalatingExternalActionFixture(
     },
     async execute(request) {
       providerCallCount += 1;
-      if (options.ordinaryToolFailure) {
+      if (options.ordinaryToolResultStatus !== undefined) {
+        const status = options.ordinaryToolResultStatus;
         return {
           status: "executed",
           toolResult: {
             toolCallId: request.attempt.actionId,
             toolName: "test.external",
-            status: "failed",
-            output: null,
-            error: { code: "tool_test_failed", message: "Expected test failure." },
+            status,
+            output: status === "partial" || status === "interrupted"
+              ? { usable: true }
+              : null,
+            error: { code: `tool_test_${status}`, message: `Expected test ${status}.` },
             startedAt: "2026-07-13T00:00:00.000Z",
             finishedAt: "2026-07-13T00:00:01.000Z",
             metadata: {},

@@ -64,26 +64,7 @@ export type PatchDecision = AcceptedPatchDecision | RejectedPatchDecision;
 export type PatchFailureCode =
   | "patch_stale"
   | "patch_path_unsafe"
-  | "patch_state_invalid"
-  | "patch_apply_failed";
-
-export interface AppliedPatchResult {
-  status: "applied";
-  patchId: PatchId;
-  appliedAt: ISODateTimeString;
-  metadata: Metadata;
-}
-
-export interface FailedPatchResult {
-  status: "failed";
-  patchId: PatchId;
-  failedAt: ISODateTimeString;
-  code: PatchFailureCode;
-  message: string;
-  metadata: Metadata;
-}
-
-export type PatchResult = AppliedPatchResult | FailedPatchResult;
+  | "patch_state_invalid";
 
 export interface ProposedPatchStatus {
   status: "proposed";
@@ -102,23 +83,7 @@ export interface RejectedPatchStatus {
   decision: RejectedPatchDecision;
 }
 
-export interface AppliedPatchStatus {
-  status: "applied";
-  proposal: PatchProposal;
-  decision: AcceptedPatchDecision;
-  result: AppliedPatchResult;
-}
-
-export interface FailedPatchStatus {
-  status: "failed";
-  proposal: PatchProposal;
-  decision: AcceptedPatchDecision;
-  result: FailedPatchResult;
-}
-
 export type PatchStatus =
   | ProposedPatchStatus
   | AcceptedPatchStatus
-  | RejectedPatchStatus
-  | AppliedPatchStatus
-  | FailedPatchStatus;
+  | RejectedPatchStatus;

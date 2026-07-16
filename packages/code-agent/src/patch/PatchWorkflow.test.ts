@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -6,12 +6,10 @@ import type { TaskWorkspaceScope } from "@agent-anything/agent-core";
 import type { WorkspaceContext } from "@agent-anything/governance";
 import {
   acceptPatch,
-  applyAcceptedPatch,
   createPatchProposal,
   materializePatchReview,
   PatchWorkflowError,
   rejectPatch,
-  type AcceptedPatchStatus,
   type PatchProposalChange,
   type ProposedPatchStatus,
 } from "./index.js";
@@ -38,7 +36,7 @@ describe("PatchWorkflow", () => {
     await rm(testRoot, { recursive: true, force: true });
   });
 
-  it("creates and applies an accepted create patch", async () => {
+  it("creates and accepts a create proposal without mutating the workspace", async () => {
     const proposed = await propose({
       kind: "create",
       path: join("src", "created.txt"),
@@ -54,17 +52,13 @@ describe("PatchWorkflow", () => {
         path: "src/created.txt",
       },
     });
-    const result = await apply(acceptPatch(proposed, { now: clock }));
+    const accepted = acceptPatch(proposed, { now: clock });
 
-    expect(result).toMatchObject({
-      status: "applied",
-      result: { status: "applied", patchId: "patch-1" },
-    });
-    await expect(readFile(join(codeRoot, "src", "created.txt"), "utf8"))
-      .resolves.toBe("created\n");
+    expect(accepted).toMatchObject({ status: "accepted", decision: { patchId: "patch-1" } });
+    await expect(readFile(join(codeRoot, "src", "created.txt"), "utf8")).rejects.toThrow();
   });
 
-  it("captures a trusted update baseline and applies the replacement", async () => {
+  it("captures a trusted update baseline without mutating the workspace", async () => {
     const proposed = await propose({
       kind: "update",
       path: join("src", "existing.txt"),
@@ -83,11 +77,9 @@ describe("PatchWorkflow", () => {
     }
     expect(proposed.proposal.operation.originalContent.digest).toHaveLength(64);
 
-    const result = await apply(acceptPatch(proposed, { now: clock }));
-
-    expect(result.status).toBe("applied");
+    expect(acceptPatch(proposed, { now: clock }).status).toBe("accepted");
     await expect(readFile(join(codeRoot, "src", "existing.txt"), "utf8"))
-      .resolves.toBe("after\n");
+      .resolves.toBe("before\n");
   });
 
   it("materializes verified update review content", async () => {
@@ -134,7 +126,7 @@ describe("PatchWorkflow", () => {
     });
   });
 
-  it("applies an accepted delete patch", async () => {
+  it("accepts a delete proposal without mutating the workspace", async () => {
     const proposed = await propose({
       kind: "delete",
       path: join("src", "delete.txt"),
@@ -144,10 +136,9 @@ describe("PatchWorkflow", () => {
       kind: "delete",
       originalContent: { algorithm: "sha256", byteLength: 10 },
     });
-    const result = await apply(acceptPatch(proposed, { now: clock }));
-
-    expect(result.status).toBe("applied");
-    await expect(access(join(codeRoot, "src", "delete.txt"))).rejects.toThrow();
+    expect(acceptPatch(proposed, { now: clock }).status).toBe("accepted");
+    await expect(readFile(join(codeRoot, "src", "delete.txt"), "utf8"))
+      .resolves.toBe("remove me\n");
   });
 
   it("rejects a proposal without touching the target file", async () => {
@@ -167,42 +158,6 @@ describe("PatchWorkflow", () => {
     });
     await expect(readFile(join(codeRoot, "src", "existing.txt"), "utf8"))
       .resolves.toBe("before\n");
-  });
-
-  it("returns a stale failure when target content changes", async () => {
-    const proposed = await propose({
-      kind: "update",
-      path: join("src", "existing.txt"),
-      proposedContent: "after\n",
-    });
-    await writeFile(join(codeRoot, "src", "existing.txt"), "changed\n");
-
-    const result = await apply(acceptPatch(proposed, { now: clock }));
-
-    expect(result).toMatchObject({
-      status: "failed",
-      result: { status: "failed", code: "patch_stale" },
-    });
-    await expect(readFile(join(codeRoot, "src", "existing.txt"), "utf8"))
-      .resolves.toBe("changed\n");
-  });
-
-  it("returns a stale failure when a create target appears", async () => {
-    const proposed = await propose({
-      kind: "create",
-      path: join("src", "race.txt"),
-      proposedContent: "ours\n",
-    });
-    await writeFile(join(codeRoot, "src", "race.txt"), "theirs\n");
-
-    const result = await apply(acceptPatch(proposed, { now: clock }));
-
-    expect(result).toMatchObject({
-      status: "failed",
-      result: { code: "patch_stale" },
-    });
-    await expect(readFile(join(codeRoot, "src", "race.txt"), "utf8"))
-      .resolves.toBe("theirs\n");
   });
 
   it("rejects lexical escapes and final-target symbolic links", async () => {
@@ -234,59 +189,6 @@ describe("PatchWorkflow", () => {
     }
   });
 
-  it("returns invalid-state failures for workspace and decision mismatches", async () => {
-    const proposed = await propose({
-      kind: "update",
-      path: join("src", "existing.txt"),
-      proposedContent: "after\n",
-    });
-    const accepted = acceptPatch(proposed, { now: clock });
-    const wrongWorkspace = createScope("workspace-other");
-
-    const workspaceResult = await applyAcceptedPatch({
-      patch: accepted,
-      workspaceScope: wrongWorkspace,
-      now: clock,
-    });
-    const mismatchedDecision: AcceptedPatchStatus = {
-      ...accepted,
-      decision: { ...accepted.decision, patchId: "patch-other" },
-    };
-    const decisionResult = await apply(mismatchedDecision);
-
-    expect(workspaceResult).toMatchObject({
-      status: "failed",
-      result: { code: "patch_state_invalid" },
-    });
-    expect(decisionResult).toMatchObject({
-      status: "failed",
-      result: { code: "patch_state_invalid" },
-    });
-    await expect(readFile(join(codeRoot, "src", "existing.txt"), "utf8"))
-      .resolves.toBe("before\n");
-  });
-
-  it("returns a structured application failure when the parent disappears", async () => {
-    await mkdir(join(codeRoot, "temporary"));
-    const proposed = await propose({
-      kind: "create",
-      path: join("temporary", "new.txt"),
-      proposedContent: "content\n",
-    });
-    await rm(join(codeRoot, "temporary"), { recursive: true });
-
-    const result = await apply(acceptPatch(proposed, { now: clock }));
-
-    expect(result).toMatchObject({
-      status: "failed",
-      result: {
-        status: "failed",
-        code: "patch_apply_failed",
-        message: "Patch application failed.",
-      },
-    });
-  });
-
   it("rejects a malformed persisted content reference without file I/O", async () => {
     const proposed = await propose({
       kind: "update",
@@ -310,17 +212,15 @@ describe("PatchWorkflow", () => {
       },
     };
 
-    const result = await apply(acceptPatch(malformed, { now: clock }));
-
-    expect(result).toMatchObject({
-      status: "failed",
-      result: { code: "patch_state_invalid" },
-    });
+    await expect(materializePatchReview({
+      patch: malformed,
+      workspaceScope: createScope(),
+    })).rejects.toMatchObject({ code: "patch_state_invalid" });
     await expect(readFile(join(codeRoot, "src", "existing.txt"), "utf8"))
       .resolves.toBe("before\n");
   });
 
-  it("enforces trusted content limits during proposal and application", async () => {
+  it("enforces trusted content limits during proposal and review", async () => {
     await expect(createPatchProposal(
       proposalInput({
         kind: "create",
@@ -335,17 +235,11 @@ describe("PatchWorkflow", () => {
       path: join("src", "bounded.txt"),
       proposedContent: "12345",
     });
-    const result = await applyAcceptedPatch({
-      patch: acceptPatch(proposed, { now: clock }),
+    await expect(materializePatchReview({
+      patch: proposed,
       workspaceScope: createScope(),
       limits: { maxContentBytes: 4 },
-      now: clock,
-    });
-
-    expect(result).toMatchObject({
-      status: "failed",
-      result: { code: "patch_state_invalid" },
-    });
+    })).rejects.toMatchObject({ code: "patch_state_invalid" });
   });
 
   function propose(change: PatchProposalChange): Promise<ProposedPatchStatus> {
@@ -367,14 +261,6 @@ describe("PatchWorkflow", () => {
       now: clock,
       createPatchId: () => "patch-1",
     };
-  }
-
-  function apply(patch: AcceptedPatchStatus) {
-    return applyAcceptedPatch({
-      patch,
-      workspaceScope: createScope(),
-      now: clock,
-    });
   }
 
   function createScope(workspaceId = "workspace-code"): TaskWorkspaceScope {

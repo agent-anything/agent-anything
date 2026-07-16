@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, readFile, unlink, writeFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import type { TaskWorkspaceScope } from "@agent-anything/agent-core";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import { FileSystemError } from "../filesystem/FileSystemError.js";
@@ -14,12 +14,9 @@ import { decodeUtf8 } from "../filesystem/Utf8.js";
 import type {
   AcceptedPatchDecision,
   AcceptedPatchStatus,
-  AppliedPatchStatus,
   CreatePatchOperation,
   DeletePatchOperation,
-  FailedPatchStatus,
   PatchContentReference,
-  PatchFailureCode,
   PatchId,
   PatchOperation,
   PatchProposal,
@@ -66,13 +63,6 @@ export interface AcceptPatchOptions {
 export interface RejectPatchInput {
   reason: string;
   metadata?: Metadata;
-  now?: () => ISODateTimeString;
-}
-
-export interface ApplyAcceptedPatchInput {
-  patch: AcceptedPatchStatus;
-  workspaceScope: TaskWorkspaceScope | undefined;
-  limits?: Partial<PatchWorkflowLimits>;
   now?: () => ISODateTimeString;
 }
 
@@ -124,7 +114,7 @@ export async function createPatchProposal(
 
     return { status: "proposed", proposal };
   } catch (error) {
-    throw toPatchWorkflowError(error, input.change.kind, "proposal");
+    throw toPatchWorkflowError(error, input.change.kind);
   }
 }
 
@@ -168,49 +158,6 @@ export function rejectPatch(
   };
 }
 
-export async function applyAcceptedPatch(
-  input: ApplyAcceptedPatchInput,
-): Promise<AppliedPatchStatus | FailedPatchStatus> {
-  const now = input.now ?? defaultNow;
-
-  try {
-    const limits = resolveLimits(input.limits);
-    assertAcceptedPatch(input.patch);
-    await applyOperation(input.patch.proposal, input.workspaceScope, limits);
-
-    return {
-      status: "applied",
-      proposal: input.patch.proposal,
-      decision: input.patch.decision,
-      result: {
-        status: "applied",
-        patchId: input.patch.proposal.id,
-        appliedAt: now(),
-        metadata: resultMetadata(input.patch.proposal),
-      },
-    };
-  } catch (error) {
-    const operationKind = input.patch?.proposal?.operation?.kind ?? "update";
-    const workflowError = toPatchWorkflowError(error, operationKind, "apply");
-    return {
-      status: "failed",
-      proposal: input.patch.proposal,
-      decision: input.patch.decision,
-      result: {
-        status: "failed",
-        patchId: input.patch.proposal.id,
-        failedAt: now(),
-        code: workflowError.code,
-        message: workflowError.message,
-        metadata: {
-          ...resultMetadata(input.patch.proposal),
-          ...workflowError.metadata,
-        },
-      },
-    };
-  }
-}
-
 export async function materializePatchReview(
   input: MaterializePatchReviewInput,
 ): Promise<MaterializedPatchReview> {
@@ -227,7 +174,7 @@ export async function materializePatchReview(
       proposal.rootName,
       operation.path,
       limits,
-      "apply",
+      "review",
     );
     assertWorkspaceIdentity(proposal, current.target.resolved.workspaceId);
     assertContentReference(operation.originalContent, current.reference);
@@ -322,70 +269,12 @@ async function createOperation(
   };
 }
 
-async function applyOperation(
-  proposal: PatchProposal,
-  workspaceScope: TaskWorkspaceScope | undefined,
-  limits: PatchWorkflowLimits,
-): Promise<void> {
-  const { operation } = proposal;
-
-  if (operation.kind === "create") {
-    assertContentLimit(operation.proposedContent, limits);
-    const target = await resolveWritableTarget({
-      workspaceScope,
-      rootName: proposal.rootName,
-      path: operation.path,
-      overwrite: false,
-    });
-    assertWorkspaceIdentity(proposal, target.resolved.workspaceId);
-    try {
-      await writeFile(target.canonicalTarget, operation.proposedContent, {
-        encoding: "utf8",
-        flag: "wx",
-      });
-    } catch (error) {
-      if (isNodeError(error, "EEXIST")) {
-        throw new PatchWorkflowError(
-          "patch_stale",
-          "The create target appeared after this patch was proposed.",
-        );
-      }
-      throw error;
-    }
-    return;
-  }
-
-  if (operation.kind === "update") {
-    assertContentLimit(operation.proposedContent, limits);
-  }
-
-  const current = await readExistingPatchTarget(
-    workspaceScope,
-    proposal.rootName,
-    operation.path,
-    limits,
-    "apply",
-  );
-  assertWorkspaceIdentity(proposal, current.target.resolved.workspaceId);
-  assertContentReference(operation.originalContent, current.reference);
-
-  if (operation.kind === "update") {
-    await writeFile(current.target.canonicalTarget, operation.proposedContent, {
-      encoding: "utf8",
-      flag: "w",
-    });
-    return;
-  }
-
-  await unlink(current.target.canonicalTarget);
-}
-
 async function readExistingPatchTarget(
   workspaceScope: TaskWorkspaceScope | undefined,
   rootName: string | undefined,
   path: string,
   limits: PatchWorkflowLimits,
-  stage: "proposal" | "apply",
+  stage: "proposal" | "review",
 ): Promise<{
   target: ExistingWorkspaceTarget;
   reference: PatchContentReference;
@@ -416,8 +305,8 @@ async function readExistingPatchTarget(
   const content = decodeUtf8(bytes);
   if (content === null) {
     throw new PatchWorkflowError(
-      stage === "apply" ? "patch_stale" : "patch_state_invalid",
-      stage === "apply"
+      stage === "review" ? "patch_stale" : "patch_state_invalid",
+      stage === "review"
         ? "The target content changed after this patch was proposed."
         : "Patch targets must contain valid UTF-8 text.",
       pathMetadata(target),
@@ -474,23 +363,7 @@ function assertProposedPatch(patch: ProposedPatchStatus): void {
       "Only a proposed patch can be accepted or rejected.",
     );
   }
-  requireNonEmpty(patch.proposal.id, "Patch id is required.");
-}
-
-function assertAcceptedPatch(patch: AcceptedPatchStatus): void {
-  if (patch?.status !== "accepted" || patch.decision?.status !== "accepted") {
-    throw new PatchWorkflowError(
-      "patch_state_invalid",
-      "Only an accepted patch can be applied.",
-    );
-  }
   assertPatchProposal(patch.proposal);
-  if (patch.decision.patchId !== patch.proposal.id) {
-    throw new PatchWorkflowError(
-      "patch_state_invalid",
-      "Patch decision identity does not match the proposal.",
-    );
-  }
 }
 
 function assertPatchProposal(proposal: PatchProposal): void {
@@ -583,7 +456,6 @@ function requireNonEmpty(value: string, message: string): void {
 function toPatchWorkflowError(
   error: unknown,
   operation: PatchOperation["kind"],
-  stage: "proposal" | "apply",
 ): PatchWorkflowError {
   if (error instanceof PatchWorkflowError) {
     return error;
@@ -607,13 +479,11 @@ function toPatchWorkflowError(
         error.metadata,
       );
     }
-    if (stage === "proposal") {
-      return new PatchWorkflowError(
-        "patch_path_unsafe",
-        "Patch target could not be resolved safely.",
-        error.metadata,
-      );
-    }
+    return new PatchWorkflowError(
+      "patch_path_unsafe",
+      "Patch target could not be resolved safely.",
+      error.metadata,
+    );
   }
 
   if (isNodeError(error, "ENOENT") && operation !== "create") {
@@ -624,10 +494,8 @@ function toPatchWorkflowError(
   }
 
   return new PatchWorkflowError(
-    stage === "apply" ? "patch_apply_failed" : "patch_path_unsafe",
-    stage === "apply"
-      ? "Patch application failed."
-      : "Patch target could not be inspected safely.",
+    "patch_path_unsafe",
+    "Patch target could not be inspected safely.",
   );
 }
 
@@ -647,15 +515,6 @@ function pathMetadata(target: ExistingWorkspaceTarget): Metadata {
     rootName: target.resolved.rootName,
     workspaceId: target.resolved.workspaceId,
     path: target.resolved.relativePath,
-  };
-}
-
-function resultMetadata(proposal: PatchProposal): Metadata {
-  return {
-    rootName: proposal.rootName,
-    workspaceId: proposal.workspaceId,
-    path: proposal.operation.path,
-    operation: proposal.operation.kind,
   };
 }
 

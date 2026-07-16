@@ -44,6 +44,7 @@ for (const root of packageRoots) {
   }
 }
 checkPackageExports();
+checkPackageCycles();
 
 if (violations.length > 0) {
   console.error("Boundary check failed:");
@@ -64,6 +65,7 @@ function checkFile(file) {
   const text = readFileSync(file, "utf8");
   const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   const isTestOnly = isTestFile(file) || normalized(file).includes("/src/testing/");
+  checkArchitectureSource(file, text, isTestOnly);
 
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) {
@@ -86,6 +88,45 @@ function checkFile(file) {
     } else if (specifier.startsWith(".")) {
       checkRelativeImport(file, owner, specifier);
     }
+  }
+}
+
+function checkArchitectureSource(file, text, isTestOnly) {
+  const rel = display(file);
+  const legacySymbols = [
+    "TemporaryToolActionBridge",
+    "ToolExecutionBoundary",
+    "ToolExecutionContextResolver",
+    "ToolActionBridge",
+    "ToolDefinition",
+    "ToolInvocationContext",
+    "ToolRegistry",
+    "ToolRisk",
+    "applyAcceptedPatch",
+    "McpToolAdapter",
+    "RemoteToolAdapter",
+  ];
+
+  for (const symbol of legacySymbols) {
+    if (new RegExp(`\\b${symbol}\\b`).test(text)) {
+      violations.push(`${rel} retains removed execution symbol '${symbol}'.`);
+    }
+  }
+  if (/\bCODE_AGENT_[A-Z0-9_]+_TOOL\b/.test(text)) {
+    violations.push(`${rel} retains a removed code-agent Tool constant.`);
+  }
+
+  if (isTestOnly) {
+    return;
+  }
+  const isGateway = normalized(file).endsWith(
+    "/packages/agent-core/src/action-execution/SandboxExecutionGateway.ts",
+  );
+  if (!isGateway && /\b(?:actionExecutor|executor|registered\.executor)\.execute\s*\(/i.test(text)) {
+    violations.push(`${rel} invokes an ActionExecutor outside SandboxExecutionGateway.`);
+  }
+  if (/\b(?:ConformanceSandboxProvider|createConformanceSandboxProvider)\b/.test(text)) {
+    violations.push(`${rel} retains a production conformance sandbox provider.`);
   }
 }
 
@@ -247,6 +288,40 @@ function checkPackageExports() {
         violations.push(`${display(join(info.root, "package.json"))} export '${exportKey}' points to missing types file '${exportValue.types}'.`);
       }
     }
+  }
+}
+
+function checkPackageCycles() {
+  const visiting = new Set();
+  const visited = new Set();
+  const stack = [];
+
+  for (const info of packageInfo.values()) {
+    visit(info);
+  }
+
+  function visit(info) {
+    if (visited.has(info.name)) {
+      return;
+    }
+    if (visiting.has(info.name)) {
+      const cycleStart = stack.indexOf(info.name);
+      const cycle = [...stack.slice(cycleStart), info.name].join(" -> ");
+      violations.push(`Workspace dependency cycle detected: ${cycle}.`);
+      return;
+    }
+
+    visiting.add(info.name);
+    stack.push(info.name);
+    for (const dependencyName of info.dependencies) {
+      const dependency = packageByName.get(dependencyName);
+      if (dependency) {
+        visit(dependency);
+      }
+    }
+    stack.pop();
+    visiting.delete(info.name);
+    visited.add(info.name);
   }
 }
 

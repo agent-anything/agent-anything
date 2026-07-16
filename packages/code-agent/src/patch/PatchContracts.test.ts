@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type {
   AcceptedPatchDecision,
-  AppliedPatchResult,
   CreatePatchOperation,
   DeletePatchOperation,
-  FailedPatchResult,
   PatchContentReference,
   PatchOperation,
   PatchProposal,
@@ -60,7 +58,7 @@ describe("PatchContracts", () => {
     expect(remove.originalContent.digest).toHaveLength(64);
   });
 
-  it("represents every valid patch lifecycle state", () => {
+  it("represents proposal and review-decision lifecycle states", () => {
     const proposal = createProposal({
       kind: "update",
       path: "src/existing.ts",
@@ -80,40 +78,19 @@ describe("PatchContracts", () => {
       reason: "The change is no longer needed.",
       metadata: {},
     };
-    const applied: AppliedPatchResult = {
-      status: "applied",
-      patchId: proposal.id,
-      appliedAt: "2026-06-20T10:02:00.000Z",
-      metadata: {},
-    };
-    const failed: FailedPatchResult = {
-      status: "failed",
-      patchId: proposal.id,
-      failedAt: "2026-06-20T10:02:00.000Z",
-      code: "patch_stale",
-      message: "The target content changed after this patch was proposed.",
-      metadata: {},
-    };
     const states: PatchStatus[] = [
       { status: "proposed", proposal },
       { status: "accepted", proposal, decision: accepted },
       { status: "rejected", proposal, decision: rejected },
-      { status: "applied", proposal, decision: accepted, result: applied },
-      { status: "failed", proposal, decision: accepted, result: failed },
     ];
 
     expect(states.map((state) => state.status)).toEqual([
       "proposed",
       "accepted",
       "rejected",
-      "applied",
-      "failed",
     ]);
     expect(states[2]?.status === "rejected" && states[2].decision.reason).toBe(
       "The change is no longer needed.",
-    );
-    expect(states[4]?.status === "failed" && states[4].result.code).toBe(
-      "patch_stale",
     );
   });
 });
