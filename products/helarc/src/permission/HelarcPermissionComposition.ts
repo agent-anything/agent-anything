@@ -103,6 +103,7 @@ export async function createHelarcPermissionComposition(
     approvalPolicy: input.preset === "full_access" ? "never" : "on-request",
     reviewer,
     rules: [],
+    networkRules: [],
     managedConstraints,
     sessionAuthority: {
       context: {

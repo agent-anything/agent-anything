@@ -316,6 +316,7 @@ function createConfig(
     approvalPolicy: "on-request",
     reviewer: null,
     rules: [],
+    networkRules: [],
     managedConstraints,
     sessionAuthority: null,
     persistentPolicyAmendments: { commit },

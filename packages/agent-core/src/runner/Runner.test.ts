@@ -29,7 +29,13 @@ import {
   type SessionAuthorityPort,
   type SessionAuthorityRecord,
 } from "@agent-anything/permission";
-import type { ManagedPermissionConstraints } from "@agent-anything/governance";
+import type {
+  ActionPolicyPort,
+  ManagedPermissionConstraints,
+} from "@agent-anything/governance";
+import type { ActionAdapterPreparedData } from "../action-execution/ActionAdapter.js";
+import { ActionEnforcementPipeline } from "../action-execution/ActionEnforcementPipeline.js";
+import { createActionRegistrationSnapshot } from "../action-execution/ActionRegistration.js";
 import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
 import { FakeApprovalReviewer } from "@agent-anything/testing";
 import type {
@@ -41,6 +47,9 @@ import type {
 interface TestOutput {
   readonly summary: string;
 }
+
+const TEST_SHA_A = `sha256:${"a".repeat(64)}`;
+const TEST_SHA_B = `sha256:${"b".repeat(64)}`;
 
 type ControllerStep =
   | ControllerDecision<unknown>
@@ -1469,6 +1478,140 @@ describe("Runner", () => {
   });
 });
 
+describe("Runner external Action approval attachment", () => {
+  it("reassesses the exact prepared Action after applied authority without preparing it twice", async () => {
+    const reviewer = createApprovalReviewer((input) => {
+      expect(input.context).toMatchObject({
+        workspaceTrustState: "trusted",
+        ruleOutcome: "none",
+        currentAuthority: {
+          fileSystemRead: false,
+          fileSystemWrite: false,
+          network: false,
+        },
+        annotations: { source: "external_action" },
+      });
+      const option = input.request.decisionOptions.find(({ kind }) => kind === "accept");
+      if (option === undefined) throw new Error("Action approval option was not offered.");
+      return {
+        status: "decided",
+        submission: {
+          submissionId: "submission_action_accept",
+          runId: input.request.runId,
+          requestId: input.request.id,
+          pendingVersion: input.pendingVersion,
+          optionId: option.id,
+          grantedPermissions: null,
+          reason: null,
+        },
+        rationale: null,
+      };
+    });
+    const fixture = createExternalActionPipeline("requires_review");
+    const controller = new ScriptedController([
+      actionsDecision([{
+        kind: "tool",
+        name: "test.external",
+        input: {},
+        modelItemId: "model_1",
+      }]),
+      finalDecision("Done"),
+    ]);
+    const result = await createRunner(controller, {
+      actionEnforcementPipeline: fixture.pipeline,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        permissions: createReviewPermissionConfig(reviewer),
+      }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(fixture.prepareCalls()).toBe(1);
+    expect(fixture.policyCalls()).toBe(2);
+    expect(result.items.filter(({ kind }) => kind === "approval_requested")).toHaveLength(1);
+    expect(result.items.filter(({ kind }) => kind === "approval_resolved")).toHaveLength(1);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "observation",
+      observation: expect.objectContaining({
+        kind: "action_failure",
+        error: expect.objectContaining({ code: "runtime_action_dispatch_unavailable" }),
+      }),
+    }));
+  });
+
+  it("settles an external Action decline without reassessment", async () => {
+    const reviewer = createApprovalReviewer((input) => {
+      const option = input.request.decisionOptions.find(({ kind }) => kind === "decline");
+      if (option === undefined) throw new Error("Decline option was not offered.");
+      return {
+        status: "decided",
+        submission: {
+          submissionId: "submission_action_decline",
+          runId: input.request.runId,
+          requestId: input.request.id,
+          pendingVersion: input.pendingVersion,
+          optionId: option.id,
+          grantedPermissions: null,
+          reason: "Not now",
+        },
+        rationale: null,
+      };
+    });
+    const fixture = createExternalActionPipeline("requires_review");
+    const controller = new ScriptedController([
+      actionsDecision([{
+        kind: "tool",
+        name: "test.external",
+        input: {},
+        modelItemId: "model_1",
+      }]),
+      finalDecision("Continued"),
+    ]);
+    const result = await createRunner(controller, {
+      actionEnforcementPipeline: fixture.pipeline,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        permissions: createReviewPermissionConfig(reviewer),
+      }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(fixture.prepareCalls()).toBe(1);
+    expect(fixture.policyCalls()).toBe(1);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "observation",
+      observation: expect.objectContaining({
+        kind: "approval_declined",
+        reason: "Not now",
+        metadata: expect.objectContaining({
+          actionKind: "tool",
+          actionName: "test.external",
+        }),
+      }),
+    }));
+  });
+
+  it("rejects a partial external Action composition before starting the Run", async () => {
+    const fixture = createExternalActionPipeline("allowed");
+    const result = await createRunner(new ScriptedController([finalDecision("unused")]), {
+      actionEnforcementPipeline: fixture.pipeline,
+    }).run(createAgent(), createRunInput(), createRunConfig());
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_invalid_options",
+      errors: [{ code: "runtime_invalid_options" }],
+    });
+    expect(fixture.prepareCalls()).toBe(0);
+  });
+});
+
 describe("Runner approval lifecycle", () => {
   it("publishes approval history only after required audit and telemetry gates", async () => {
     const order: string[] = [];
@@ -2469,6 +2612,7 @@ function createRunConfig(
     readonly retry?: RunConfig["retry"];
     readonly limits?: Partial<Omit<RunConfig["limits"], "plan">>;
     readonly permissions?: ResolvedRunPermissionConfig;
+    readonly actionContext?: RunConfig["actionContext"];
   } = {},
 ): RunConfig {
   const runId = overrides.runId ?? "run_001";
@@ -2488,6 +2632,7 @@ function createRunConfig(
       displayName: "Test User",
       metadata: {},
     },
+    actionContext: overrides.actionContext ?? null,
     permissions: overrides.permissions ?? createTestPermissionConfig(),
     limits: {
       maxIterations: 4,
@@ -2559,6 +2704,7 @@ function createTestPermissionConfig(): ResolvedRunPermissionConfig {
     approvalPolicy: "never",
     reviewer: null,
     rules: [],
+    networkRules: [],
     managedConstraints,
     sessionAuthority: null,
     persistentPolicyAmendments: null,
@@ -2569,6 +2715,109 @@ function createTestPermissionConfig(): ResolvedRunPermissionConfig {
       maxConsecutiveReviewFailures: 3,
     },
     authorityApplicationLimits: { commitTimeoutMs: 1_000 },
+  };
+}
+
+function createExternalActionPipeline(
+  policyStatus: "allowed" | "requires_review",
+) {
+  let prepareCallCount = 0;
+  let policyCallCount = 0;
+  const adapterDescriptor = {
+    id: "test.external.adapter",
+    version: "1",
+    inputSchemaVersion: "1",
+  };
+  const executorDescriptor = {
+    id: "test.external.executor",
+    version: "1",
+    invocationContractVersion: "1",
+  };
+  const data: ActionAdapterPreparedData = {
+    operation: {
+      kind: "skill",
+      operation: "invoke",
+      skillId: "test.external.skill",
+      skillVersion: "1",
+      sourceFingerprint: TEST_SHA_A,
+      action: "review workspace",
+      argumentsDigest: TEST_SHA_B,
+    },
+    effectSet: { kind: "effect_free" },
+    requestedPermissions: null,
+    targetAssertions: [],
+    approvalCategory: "skill",
+    approvalPayload: {
+      skillId: "test.external.skill",
+      skillDisplayName: "External test Skill",
+      action: "review workspace",
+      requiredPermissions: null,
+    },
+    applicabilityKeys: [{ category: "skill", value: "test.external.skill:1" }],
+    safeSummary: { kind: "computation", headline: "Review workspace" },
+    preparedInvocation: {
+      contractVersion: "1",
+      executorId: executorDescriptor.id,
+      executorVersion: executorDescriptor.version,
+      payload: {},
+    },
+  };
+  const policyPort: ActionPolicyPort = {
+    async evaluate(input) {
+      policyCallCount += 1;
+      return {
+        checkId: input.checkId,
+        status: policyStatus,
+        decidedAt: "2026-07-13T00:00:00.000Z",
+      };
+    },
+  };
+  const pipeline = new ActionEnforcementPipeline({
+    registrations: createActionRegistrationSnapshot([{
+      actionName: "test.external",
+      adapter: adapterDescriptor,
+      executor: executorDescriptor,
+    }]),
+    adapters: [{
+      actionName: "test.external",
+      adapter: {
+        descriptor: adapterDescriptor,
+        async prepare() {
+          prepareCallCount += 1;
+          return { status: "prepared" as const, data };
+        },
+        async revalidate() { return { status: "valid" as const }; },
+      },
+    }],
+    policyPort,
+    now: () => "2026-07-13T00:00:00.000Z",
+  });
+  return {
+    pipeline,
+    prepareCalls: () => prepareCallCount,
+    policyCalls: () => policyCallCount,
+  };
+}
+
+function externalActionContext(): NonNullable<RunConfig["actionContext"]> {
+  return {
+    workspace: {
+      workspaceId: "workspace_001",
+      trustState: "trusted",
+      roots: [{
+        rootId: "workspace_001",
+        platform: "win32",
+        path: "C:/workspace",
+        resolvedPath: "C:/workspace",
+        resolutionFingerprint: TEST_SHA_A,
+      }],
+    },
+    actor: { identityId: "user_001", kind: "user" },
+    environment: {
+      environmentId: "test-local",
+      platform: "win32",
+      configurationFingerprint: TEST_SHA_B,
+    },
   };
 }
 

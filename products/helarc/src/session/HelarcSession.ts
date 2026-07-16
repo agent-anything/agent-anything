@@ -256,6 +256,7 @@ export async function runHelarcSession(
     {
       workspace,
       identity,
+      actionContext: null,
       permissions: permissionComposition.permissions,
       limits: {
         maxIterations: 5,

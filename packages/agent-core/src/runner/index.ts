@@ -80,11 +80,17 @@ export {
 export type { RunFinalizationScope } from "./RunFinalization.js";
 export { createRunFinalizationContext } from "./RunFinalization.js";
 export type {
+  ResolvedRunConfig,
   ResolvedRunRetryConfiguration,
   RunConfig,
   RunInfrastructureRequirement,
   RunLimits,
 } from "./RunConfig.js";
+export {
+  snapshotRunActionContext,
+  type RunActionContext,
+  type RunActionContextInput,
+} from "./RunActionContext.js";
 export type {
   ApprovalLimits,
   ApprovalReviewerBinding,

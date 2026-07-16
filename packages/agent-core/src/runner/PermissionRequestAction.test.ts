@@ -81,6 +81,7 @@ function permissionConfig(
     approvalPolicy: "never",
     reviewer: null,
     rules: [],
+    networkRules: [],
     managedConstraints: constraints,
     sessionAuthority: null,
     persistentPolicyAmendments: null,

@@ -760,6 +760,7 @@ function createHostInput(input: {
         displayName: "Conformance identity",
         metadata: {},
       },
+      actionContext: null,
       permissions: createTestPermissionConfig(),
       limits: {
         maxIterations: 5,
@@ -840,6 +841,7 @@ function createTestPermissionConfig(): ResolvedRunPermissionConfig {
     approvalPolicy: "never",
     reviewer: null,
     rules: [],
+    networkRules: [],
     managedConstraints,
     sessionAuthority: null,
     persistentPolicyAmendments: null,

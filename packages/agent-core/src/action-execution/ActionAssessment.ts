@@ -73,9 +73,22 @@ export interface AssessPreparedActionInput {
   readonly interruption: InvocationInterruptionContext;
 }
 
+export interface ActionAssessmentReviewContext {
+  readonly ruleOutcome: "allow" | "prompt" | "none";
+  readonly currentAuthority: {
+    readonly fileSystemRead: boolean;
+    readonly fileSystemWrite: boolean;
+    readonly network: boolean;
+  };
+}
+
 export type ActionAssessment =
   | { readonly status: "authorized"; readonly authorization: ActionDispatchAuthorization }
-  | { readonly status: "approval_required"; readonly requirement: ApprovalRequirement }
+  | {
+      readonly status: "approval_required";
+      readonly requirement: ApprovalRequirement;
+      readonly reviewContext: ActionAssessmentReviewContext;
+    }
   | {
       readonly status: "denied";
       readonly owner: "policy" | "permission" | "tool";

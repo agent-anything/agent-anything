@@ -11,13 +11,20 @@ import {
   projectApprovalReviewRequest,
   validateApprovalDecision,
   type ApprovalRecord,
+  type ApprovalRequest,
+  type ApprovalReviewContext,
   type ApprovalReviewFailure,
   type ApprovalReviewInput,
   type ApprovalScope,
+  type PermissionResolutionEnvironmentInput,
   type SessionAuthorityRecord,
   type ValidatedApprovalDecision,
 } from "@agent-anything/permission";
 import type { Agent } from "../agent/index.js";
+import type {
+  ActionAssessment,
+  PreparedExternalAction,
+} from "../action-execution/index.js";
 import {
   ControllerError,
   type ControllerDecision,
@@ -58,7 +65,7 @@ import type {
 } from "./RunCancellation.js";
 import { toRunCancellationSummary } from "./RunCancellation.js";
 import { createRunFinalizationContext } from "./RunFinalization.js";
-import type { RunConfig } from "./RunConfig.js";
+import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
 import type { RunInput } from "./RunInput.js";
 import type {
   ApprovalRequestedRunItem,
@@ -87,6 +94,7 @@ import type { RuntimeError } from "./RuntimeError.js";
 import {
   assertRunPermissionStateInvariant,
   createInitialRunPermissionState,
+  deriveEffectivePermissionContext,
   projectPermissionContext,
   type PendingApproval,
   type RunPermissionState,
@@ -110,7 +118,6 @@ import {
   allowsExplicitPermissionRequest,
   createPermissionRequestDecisionContract,
   preparePermissionRequestAction,
-  type PreparedPermissionRequestAction,
 } from "./PermissionRequestAction.js";
 import {
   applyCommittedPolicyAmendment,
@@ -174,6 +181,14 @@ interface ProcessActionResult {
   readonly terminalResult: RunResult<unknown> | null;
 }
 
+interface ApprovalOperationInput {
+  readonly action: Action;
+  readonly request: ApprovalRequest;
+  readonly cwd: string;
+  readonly environment: PermissionResolutionEnvironmentInput;
+  readonly reviewContext: ApprovalReviewContext;
+}
+
 type RetryEventAcceptance =
   | { readonly kind: "controller" }
   | {
@@ -213,7 +228,7 @@ class OperationSettlementTimeoutError extends Error {
 export class RunExecution<TOutput> {
   private agent!: Agent<TOutput>;
   private input!: RunInput;
-  private config!: RunConfig;
+  private config!: ResolvedRunConfig;
   private state!: RunState<TOutput>;
   private startedAtMs = 0;
   private terminalResult: RunResult<TOutput> | null = null;
@@ -245,6 +260,16 @@ export class RunExecution<TOutput> {
       return this.createInvalidConfigResult(config.error);
     }
     this.config = config.config;
+    if ((this.dependencies.actionEnforcementPipeline === undefined) !==
+      (this.config.actionContext === null)) {
+      return this.createInvalidConfigResult(runtimeError(
+        "runtime",
+        "runtime_invalid_options",
+        "ActionEnforcementPipeline and RunConfig.actionContext must be configured together.",
+        false,
+        {},
+      ));
+    }
 
     const startedAt = this.now();
     this.startedAtMs = Date.parse(startedAt);
@@ -624,7 +649,10 @@ export class RunExecution<TOutput> {
     }
 
     const createdAt = this.now();
-    const requestId = this.createId("approval_request", action.sequence);
+    const requestId = this.createId(
+      "approval_request",
+      this.state.permission.counters.lastPendingVersion + 1,
+    );
     const deadlineAt = deriveApprovalReviewDeadline({
       runDeadlineAt: this.runDeadlineAt(),
       reviewStartedAt: createdAt,
@@ -693,6 +721,32 @@ export class RunExecution<TOutput> {
       return this.commitActionObservation(observation, true, true);
     }
 
+    return this.processApprovalOperation({
+      action,
+      request,
+      cwd: prepared.request.cwd,
+      environment: prepared.request.environment,
+      reviewContext: this.createApprovalReviewContext({
+        ruleOutcome: "none",
+        annotations: Object.freeze({ rootId: prepared.request.rootId }),
+      }),
+    });
+  }
+
+  private async processApprovalOperation(
+    input: ApprovalOperationInput,
+  ): Promise<ProcessActionResult> {
+    const { action, request } = input;
+    const createdAt = request.createdAt;
+    if (Date.parse(request.deadlineAt) <= Date.parse(this.now())) {
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(limitRuntimeError(
+          "Run deadline elapsed before approval review could start.",
+          { requestId: request.id, deadlineAt: request.deadlineAt },
+        )),
+      };
+    }
     const limit = this.approvalRequestLimit(request.actionFingerprint);
     if (limit !== null) {
       const observation: ApprovalLimitReachedObservation = Object.freeze({
@@ -740,7 +794,7 @@ export class RunExecution<TOutput> {
       request,
       reviewerBindingId: reviewer.bindingId,
       reviewer: reviewer.kind,
-      reviewOperationId: this.createId("approval_review_operation", action.sequence),
+      reviewOperationId: this.createId("approval_review_operation", pendingVersion),
       version: pendingVersion,
       createdAt,
     });
@@ -792,7 +846,7 @@ export class RunExecution<TOutput> {
     try {
       review = await this.awaitInterruptibleOperation(
         "approval_reviewer",
-        () => this.executeApprovalReview(prepared.request),
+        () => this.executeApprovalReview(input.reviewContext),
         pending.request.deadlineAt,
       );
     } catch (error) {
@@ -855,8 +909,8 @@ export class RunExecution<TOutput> {
       request,
       pendingVersion,
       submission: review.outcome.submission,
-      cwd: prepared.request.cwd,
-      environment: prepared.request.environment,
+      cwd: input.cwd,
+      environment: input.environment,
       managedConstraints: this.config.permissions.managedConstraints,
       identities: {
         actionAuthorityId: this.createId("action_authority", pendingVersion),
@@ -968,7 +1022,7 @@ export class RunExecution<TOutput> {
   }
 
   private async executeApprovalReview(
-    prepared: PreparedPermissionRequestAction,
+    reviewContext: ApprovalReviewContext,
   ): Promise<ApprovalReviewerExecutionResult> {
     const pending = this.requirePendingApproval();
     const reviewer = this.config.permissions.reviewer;
@@ -979,23 +1033,10 @@ export class RunExecution<TOutput> {
         false,
       ) };
     }
-    const permissionProjection = projectPermissionContext(
-      this.config.permissions,
-      this.state.permission,
-    );
     const reviewInput: ApprovalReviewInput = Object.freeze({
       request: projectApprovalReviewRequest(pending.request),
       pendingVersion: pending.version,
-      context: Object.freeze({
-        workspaceTrustState: this.config.workspace.trustState,
-        ruleOutcome: "none" as const,
-        currentAuthority: Object.freeze({
-          fileSystemRead: permissionProjection.authority.hasAdditionalFileSystemRead,
-          fileSystemWrite: permissionProjection.authority.hasAdditionalFileSystemWrite,
-          network: permissionProjection.authority.hasAdditionalNetwork,
-        }),
-        annotations: Object.freeze({ rootId: prepared.rootId }),
-      }),
+      context: reviewContext,
     });
     return executeApprovalReviewer({
       reviewer,
@@ -1013,6 +1054,27 @@ export class RunExecution<TOutput> {
         operationId: pending.reviewOperationId,
       }),
       now: () => this.now(),
+    });
+  }
+
+  private createApprovalReviewContext(input: {
+    readonly ruleOutcome: ApprovalReviewContext["ruleOutcome"];
+    readonly currentAuthority?: ApprovalReviewContext["currentAuthority"];
+    readonly annotations: ApprovalReviewContext["annotations"];
+  }): ApprovalReviewContext {
+    const permissionProjection = projectPermissionContext(
+      this.config.permissions,
+      this.state.permission,
+    );
+    return Object.freeze({
+      workspaceTrustState: this.config.workspace.trustState,
+      ruleOutcome: input.ruleOutcome,
+      currentAuthority: input.currentAuthority ?? Object.freeze({
+        fileSystemRead: permissionProjection.authority.hasAdditionalFileSystemRead,
+        fileSystemWrite: permissionProjection.authority.hasAdditionalFileSystemWrite,
+        network: permissionProjection.authority.hasAdditionalNetwork,
+      }),
+      annotations: Object.freeze({ ...input.annotations }),
     });
   }
 
@@ -1628,8 +1690,8 @@ export class RunExecution<TOutput> {
       actionId: pending.request.actionId,
       createdAt: this.now(),
       metadata: Object.freeze({
-        actionKind: "permission_request",
-        actionName: "request_permissions",
+        actionKind: actionItem.action.kind,
+        actionName: actionItem.action.name,
       }),
     };
   }
@@ -1646,6 +1708,10 @@ export class RunExecution<TOutput> {
         message: `Tool ${action.name} is not available to Agent ${this.agent.id}.`,
       });
       return this.commitActionObservation(observation, true, true);
+    }
+
+    if (this.dependencies.actionEnforcementPipeline !== undefined) {
+      return this.processExternalToolAction(action);
     }
 
     const bridge = this.dependencies.toolActionBridge;
@@ -1779,6 +1845,274 @@ export class RunExecution<TOutput> {
       return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
     }
     return processed;
+  }
+
+  private async processExternalToolAction(
+    action: Action & { readonly kind: "tool" },
+  ): Promise<ProcessActionResult> {
+    const pipeline = this.dependencies.actionEnforcementPipeline;
+    const context = this.config.actionContext;
+    if (pipeline === undefined || context === null) {
+      throw new Error("External Action processing requires a complete pipeline composition.");
+    }
+
+    let preparation;
+    try {
+      preparation = await this.awaitInterruptibleOperation(
+        "tool",
+        () => pipeline.prepare({
+          action,
+          workspace: {
+            workspaceId: context.workspace.workspaceId,
+            trustState: context.workspace.trustState,
+            roots: context.workspace.roots.map((root) => ({
+              rootId: root.rootId,
+              platform: root.platform,
+              path: root.canonicalPath,
+              resolvedPath: root.resolvedPath ?? root.canonicalPath,
+              resolutionFingerprint: root.resolutionFingerprint,
+            })),
+          },
+          actor: context.actor,
+          environment: context.environment,
+          interruption: this.createActionInterruptionContext(),
+        }),
+        this.runDeadlineAt(),
+      );
+    } catch (error) {
+      return this.handleActionPipelineOperationError(action, error, "preparation");
+    }
+
+    if (preparation.status === "rejected") {
+      const observation: ActionRejectedObservation = Object.freeze({
+        ...this.createObservationBase(action),
+        kind: "action_rejected",
+        code: preparation.code,
+        message: preparation.message,
+      });
+      return this.commitActionObservation(observation, true, true);
+    }
+    if (preparation.status === "failed") {
+      return this.commitActionFailure(action, preparation.error);
+    }
+    if (preparation.status === "interrupted") {
+      return this.handleActionInterruption(action);
+    }
+
+    return this.assessPreparedExternalAction(action, preparation.prepared);
+  }
+
+  private async assessPreparedExternalAction(
+    action: Action & { readonly kind: "tool" },
+    prepared: PreparedExternalAction,
+  ): Promise<ProcessActionResult> {
+    const pipeline = this.dependencies.actionEnforcementPipeline;
+    if (pipeline === undefined) {
+      throw new Error("Prepared Action assessment requires ActionEnforcementPipeline.");
+    }
+
+    while (this.isRunning()) {
+      const assessmentStartedAt = this.now();
+      const approvalDeadlineAt = deriveApprovalReviewDeadline({
+        runDeadlineAt: this.runDeadlineAt(),
+        reviewStartedAt: assessmentStartedAt,
+        reviewTimeoutMs: this.config.permissions.reviewer?.reviewTimeoutMs ?? null,
+      });
+      let assessment: ActionAssessment;
+      try {
+        assessment = await this.awaitInterruptibleOperation(
+          "tool",
+          () => pipeline.assess({
+            prepared,
+            authority: this.createActionAssessmentAuthority(approvalDeadlineAt),
+            interruption: this.createActionInterruptionContext(),
+          }),
+          this.runDeadlineAt(),
+        );
+      } catch (error) {
+        return this.handleActionPipelineOperationError(action, error, "assessment");
+      }
+
+      if (assessment.status === "approval_required") {
+        const requestOrdinal = this.state.permission.counters.lastPendingVersion + 1;
+        const request = createApprovalRequest({
+          id: this.createId("approval_request", requestOrdinal),
+          createdAt: assessmentStartedAt,
+          requirement: assessment.requirement,
+        }) as ApprovalRequest;
+        const result = await this.processApprovalOperation({
+          action,
+          request,
+          cwd: this.actionDecisionCwd(),
+          environment: this.actionDecisionEnvironment(),
+          reviewContext: this.createApprovalReviewContext({
+            ruleOutcome: assessment.reviewContext.ruleOutcome,
+            currentAuthority: assessment.reviewContext.currentAuthority,
+            annotations: Object.freeze({ source: "external_action" }),
+          }),
+        });
+        if (result.terminalResult !== null) return result;
+        const record = this.state.permission.approvalRecords.find(
+          (candidate) => candidate.requestId === request.id,
+        );
+        if (record?.application.kind !== "applied") return result;
+        continue;
+      }
+      return this.commitActionAssessment(action, assessment);
+    }
+
+    if (this.cancellationRequest() !== null) {
+      return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
+    }
+    throw new Error("Prepared Action assessment left the running lifecycle unexpectedly.");
+  }
+
+  private createActionAssessmentAuthority(approvalDeadlineAt: ISODateTimeString) {
+    const effective = deriveEffectivePermissionContext(
+      this.config.permissions,
+      this.state.permission,
+    );
+    return Object.freeze({
+      profile: effective.profile,
+      approvalPolicy: this.config.permissions.approvalPolicy,
+      managedConstraints: this.config.permissions.managedConstraints,
+      execRules: this.config.permissions.rules,
+      networkRules: this.config.permissions.networkRules,
+      runPermissionGrants: effective.runPermissionGrants,
+      sessionAuthorityContext: this.config.permissions.sessionAuthority?.context ?? null,
+      sessionAuthorityRecords: effective.sessionAuthorityRecords,
+      appliedPolicyAmendments: effective.appliedPolicyAmendments,
+      actionCoverage: this.state.permission.actionCoverage,
+      approvalDeadlineAt,
+    });
+  }
+
+  private createActionInterruptionContext() {
+    const cancellation = this.cancellationRequest();
+    return Object.freeze({
+      signal: this.config.cancellation.context.signal,
+      interruption: cancellation === null
+        ? null
+        : Object.freeze({
+            kind: "run_cancellation" as const,
+            cancellation: Object.freeze({
+              runId: cancellation.runId,
+              requestId: cancellation.id,
+            }),
+          }),
+    });
+  }
+
+  private actionDecisionEnvironment(): PermissionResolutionEnvironmentInput {
+    const profile = this.config.permissions.permissionProfile;
+    return Object.freeze({
+      environmentId: profile.environmentId,
+      platform: profile.platform,
+      workspaceRoots: Object.freeze(profile.workspaceRoots.map((root) => Object.freeze({
+        rootId: root.rootId,
+        path: root.canonicalPath,
+      }))),
+    });
+  }
+
+  private actionDecisionCwd(): string {
+    const root = this.config.permissions.permissionProfile.workspaceRoots[0];
+    if (root === undefined) throw new Error("Action approval requires a resolved workspace root.");
+    return root.canonicalPath;
+  }
+
+  private commitActionAssessment(
+    action: Action,
+    assessment: Exclude<ActionAssessment, { readonly status: "approval_required" }>,
+  ): Promise<ProcessActionResult> {
+    if (assessment.status === "denied") {
+      const observation: ActionDeniedObservation = Object.freeze({
+        ...this.createObservationBase(action),
+        kind: "action_denied",
+        owner: assessment.owner,
+        code: assessment.code,
+        message: assessment.message,
+      });
+      return this.commitActionObservation(observation, true, true);
+    }
+    if (assessment.status === "invalidated") {
+      const observation: ActionDeniedObservation = Object.freeze({
+        ...this.createObservationBase(action),
+        kind: "action_denied",
+        owner: "tool",
+        code: assessment.code,
+        message: assessment.message,
+      });
+      return this.commitActionObservation(observation, true, true);
+    }
+    if (assessment.status === "failed") {
+      return this.commitActionFailure(action, assessment.error);
+    }
+    if (assessment.status === "interrupted") {
+      return this.handleActionInterruption(action);
+    }
+
+    return this.commitActionFailure(action, runtimeError(
+      "runtime",
+      "runtime_action_dispatch_unavailable",
+      "The Action is authorized, but final revalidation and dispatch are not attached yet.",
+      false,
+      { actionId: action.id, actionFingerprint: assessment.authorization.actionFingerprint },
+    ));
+  }
+
+  private commitActionFailure(
+    action: Action,
+    error: RuntimeError,
+  ): Promise<ProcessActionResult> {
+    const observation: ActionFailureObservation = Object.freeze({
+      ...this.createObservationBase(action),
+      kind: "action_failure",
+      error,
+    });
+    return this.commitActionObservation(observation, true, true);
+  }
+
+  private handleActionInterruption(action: Action): Promise<ProcessActionResult> {
+    if (this.cancellationRequest() !== null) {
+      return this.cancelRun().then((terminalResult) => ({
+        invalidatesBatch: true,
+        terminalResult,
+      }));
+    }
+    return this.commitActionFailure(action, runtimeError(
+      "runtime",
+      "runtime_action_interrupted",
+      "Action processing was interrupted before execution.",
+      false,
+      { actionId: action.id },
+    ));
+  }
+
+  private async handleActionPipelineOperationError(
+    action: Action,
+    error: unknown,
+    phase: "preparation" | "assessment",
+  ): Promise<ProcessActionResult> {
+    if (error instanceof OperationSettlementTimeoutError) {
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(
+          cancellationSettlementRuntimeError(error),
+          "runtime_cancellation_settlement_timeout",
+        ),
+      };
+    }
+    if (this.cancellationRequest() !== null) {
+      return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
+    }
+    return this.commitActionFailure(action, runtimeError(
+      "runtime",
+      `runtime_action_${phase}_failed`,
+      `Action ${phase} failed unexpectedly.`,
+      false,
+      { actionId: action.id },
+    ));
   }
 
   private materializeToolObservation(

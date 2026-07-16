@@ -5,7 +5,8 @@ import { assertValidPlanLimits } from "../plan/index.js";
 import { snapshotRetryPolicy } from "../retry/index.js";
 import type { Metadata } from "@agent-anything/shared";
 import type { ToolDefinition } from "@agent-anything/tools";
-import type { RunConfig } from "./RunConfig.js";
+import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
+import { snapshotRunActionContext } from "./RunActionContext.js";
 import type { RunInput, RunInputItem } from "./RunInput.js";
 import type { RuntimeError } from "./RuntimeError.js";
 import { snapshotResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
@@ -17,7 +18,7 @@ export interface ConfigValidationFailure {
 
 export interface ConfigValidationSuccess {
   readonly valid: true;
-  readonly config: RunConfig;
+  readonly config: ResolvedRunConfig;
 }
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -151,6 +152,14 @@ export function snapshotRunConfig(
       workspace,
       identity,
     });
+    const actionContext = config.actionContext === null
+      ? null
+      : snapshotRunActionContext({
+          context: config.actionContext,
+          workspace,
+          identity,
+          profile: permissions.permissionProfile,
+        });
 
     if (!isRecord(config.limits)) {
       throw new TypeError("RunConfig.limits must be a RunLimits object.");
@@ -218,6 +227,7 @@ export function snapshotRunConfig(
       config: Object.freeze({
         workspace,
         identity,
+        actionContext,
         permissions,
         limits: Object.freeze({
           ...config.limits,

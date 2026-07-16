@@ -442,6 +442,14 @@ export class ActionEnforcementPipeline {
             derivedAuthority,
             causes,
           }),
+          reviewContext: Object.freeze({
+            ruleOutcome: ruleOutcome.decision,
+            currentAuthority: Object.freeze({
+              fileSystemRead: derivedAuthority.effectivePermissions.fileSystem.read.kind !== "none",
+              fileSystemWrite: derivedAuthority.effectivePermissions.fileSystem.write.kind !== "none",
+              network: derivedAuthority.effectivePermissions.network.connect.kind !== "none",
+            }),
+          }),
         });
       } catch {
         return assessmentFailed(

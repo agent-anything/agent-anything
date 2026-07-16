@@ -2,7 +2,9 @@ import {
   snapshotExecPolicyRule,
   type ExecPolicyRule,
   type ManagedPermissionConstraints,
+  type NetworkPolicyRule,
   type PersistentPolicyAmendmentPort,
+  snapshotNetworkPolicyRule,
 } from "@agent-anything/governance";
 import {
   canonicalizePermissionAbsolutePath,
@@ -53,6 +55,7 @@ export interface ResolvedRunPermissionConfig {
   readonly approvalPolicy: ApprovalPolicy;
   readonly reviewer: ApprovalReviewerBinding | null;
   readonly rules: readonly ExecPolicyRule[];
+  readonly networkRules: readonly NetworkPolicyRule[];
   readonly managedConstraints: ManagedPermissionConstraints;
   readonly sessionAuthority: ResolvedSessionAuthorityConfig | null;
   readonly persistentPolicyAmendments: PersistentPolicyAmendmentPort | null;
@@ -111,6 +114,7 @@ export function snapshotResolvedRunPermissionConfig(
       );
     }
   }
+  const networkRules = snapshotNetworkRules(input.permissions.networkRules);
   const approvalLimits = snapshotApprovalLimits(input.permissions.approvalLimits);
   const authorityApplicationLimits = snapshotAuthorityApplicationLimits(
     input.permissions.authorityApplicationLimits,
@@ -139,6 +143,7 @@ export function snapshotResolvedRunPermissionConfig(
     approvalPolicy,
     reviewer,
     rules,
+    networkRules,
     managedConstraints,
     sessionAuthority,
     persistentPolicyAmendments,
@@ -268,6 +273,21 @@ function snapshotRules(rules: readonly ExecPolicyRule[]): readonly ExecPolicyRul
     const snapshot = snapshotExecPolicyRule(rule);
     if (ids.has(snapshot.id)) {
       throw new TypeError(`ExecPolicyRule id '${snapshot.id}' is duplicated.`);
+    }
+    ids.add(snapshot.id);
+    return snapshot;
+  }));
+}
+
+function snapshotNetworkRules(
+  rules: readonly NetworkPolicyRule[],
+): readonly NetworkPolicyRule[] {
+  if (!Array.isArray(rules)) throw new TypeError("Network Rules must be an array.");
+  const ids = new Set<string>();
+  return Object.freeze(rules.map((rule) => {
+    const snapshot = snapshotNetworkPolicyRule(rule);
+    if (ids.has(snapshot.id)) {
+      throw new TypeError(`NetworkPolicyRule id '${snapshot.id}' is duplicated.`);
     }
     ids.add(snapshot.id);
     return snapshot;

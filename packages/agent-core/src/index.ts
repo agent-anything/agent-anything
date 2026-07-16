@@ -156,6 +156,8 @@ export type {
   RunCancellationRequestInput,
   RunCancellationSummary,
   RunCancelledCode,
+  RunActionContext,
+  RunActionContextInput,
   RunConfig,
   RunCounters,
   RunFailureCode,
@@ -166,6 +168,7 @@ export type {
   RunInputMessageRole,
   RunItem,
   RunItemBase,
+  ResolvedRunConfig,
   ResolvedRunRetryConfiguration,
   ResolvedRunPermissionConfig,
   ResolvedSessionAuthorityConfig,
@@ -223,6 +226,7 @@ export {
   preparePermissionRequestAction,
   Runner,
   snapshotResolvedRunPermissionConfig,
+  snapshotRunActionContext,
   toRunCancellationSummary,
 } from "./runner/index.js";
 export type {

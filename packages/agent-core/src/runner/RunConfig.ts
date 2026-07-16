@@ -7,6 +7,7 @@ import type {
   RunCancellationController,
 } from "./RunCancellation.js";
 import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
+import type { RunActionContext, RunActionContextInput } from "./RunActionContext.js";
 
 export type RunInfrastructureRequirement = "optional" | "required";
 
@@ -27,6 +28,7 @@ export interface ResolvedRunRetryConfiguration {
 export interface RunConfig {
   readonly workspace: WorkspaceContext;
   readonly identity: IdentityRef;
+  readonly actionContext: RunActionContextInput | null;
   readonly permissions: ResolvedRunPermissionConfig;
   readonly limits: RunLimits;
   readonly audit: RunInfrastructureRequirement;
@@ -35,4 +37,8 @@ export interface RunConfig {
   readonly cancellationLimits: CancellationLimits;
   readonly retry: ResolvedRunRetryConfiguration;
   readonly metadata: Metadata;
+}
+
+export interface ResolvedRunConfig extends Omit<RunConfig, "actionContext"> {
+  readonly actionContext: RunActionContext | null;
 }

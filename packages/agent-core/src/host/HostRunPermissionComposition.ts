@@ -1,9 +1,13 @@
 import type {
   ExecPolicyRule,
   ManagedPermissionConstraints,
+  NetworkPolicyRule,
   PersistentPolicyAmendmentPort,
 } from "@agent-anything/governance";
-import { snapshotExecPolicyRule } from "@agent-anything/governance";
+import {
+  snapshotExecPolicyRule,
+  snapshotNetworkPolicyRule,
+} from "@agent-anything/governance";
 import {
   resolvePermissionProfile,
   type ApprovalPolicy,
@@ -38,6 +42,7 @@ export interface HostRunPermissionCompositionInput {
   readonly approvalPolicy: ApprovalPolicy;
   readonly reviewer: ApprovalReviewerBinding | null;
   readonly rules: readonly ExecPolicyRule[];
+  readonly networkRules: readonly NetworkPolicyRule[];
   readonly managedConstraints: ManagedPermissionConstraints;
   readonly sessionAuthority: HostSessionAuthorityComposition | null;
   readonly persistentPolicyAmendments: PersistentPolicyAmendmentPort | null;
@@ -67,6 +72,7 @@ export async function resolveHostRunPermissionConfig(
     approvalPolicy: snapshotApprovalPolicy(input.approvalPolicy),
     reviewer: snapshotReviewer(input.reviewer),
     rules: Object.freeze(input.rules.map(snapshotExecPolicyRule)),
+    networkRules: Object.freeze(input.networkRules.map(snapshotNetworkPolicyRule)),
     managedConstraints,
     sessionAuthority,
     persistentPolicyAmendments: input.persistentPolicyAmendments,

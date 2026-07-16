@@ -68,6 +68,7 @@ describe("HostSession contracts", () => {
           displayName: "Example User",
           metadata: {},
         },
+        actionContext: null,
         permissions: createTestPermissionConfig(),
         limits: {
           maxIterations: 1,
@@ -190,6 +191,7 @@ function createTestPermissionConfig(): ResolvedRunPermissionConfig {
     approvalPolicy: "never",
     reviewer: null,
     rules: [],
+    networkRules: [],
     managedConstraints,
     sessionAuthority: null,
     persistentPolicyAmendments: null,

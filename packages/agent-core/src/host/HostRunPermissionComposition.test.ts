@@ -108,6 +108,7 @@ function baseInput() {
       reviewTimeoutMs: null,
     },
     rules: [],
+    networkRules: [],
     managedConstraints: managedConstraints(),
     sessionAuthority: null,
     persistentPolicyAmendments: null,

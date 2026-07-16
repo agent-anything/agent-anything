@@ -42,6 +42,7 @@ describe("Run permission configuration", () => {
         source: "test",
         justification: null,
       }],
+      networkRules: [],
     });
 
     const snapshot = snapshotResolvedRunPermissionConfig({
@@ -139,6 +140,7 @@ describe("Run permission configuration", () => {
           source: "test",
           justification: null,
         }],
+        networkRules: [],
       }),
       workspace: workspace(),
       identity: identity(),
@@ -321,6 +323,7 @@ function createPermissionConfig(
     approvalPolicy: "never",
     reviewer: null,
     rules: [],
+    networkRules: [],
     managedConstraints: constraints,
     sessionAuthority: null,
     persistentPolicyAmendments: null,
