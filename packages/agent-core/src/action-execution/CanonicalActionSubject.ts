@@ -1,4 +1,8 @@
-import type { CanonicalAdditionalPermissions } from "@agent-anything/permission/approval";
+import type {
+  ApprovalApplicabilityKey,
+  ApprovalCategory,
+  CanonicalAdditionalPermissions,
+} from "@agent-anything/permission";
 import type { ActionEffectSet } from "./CapabilityEffect.js";
 import type { CanonicalActionOperation } from "./CanonicalActionOperation.js";
 import type {
@@ -22,6 +26,11 @@ export interface CanonicalExecutorRegistrationIdentity {
   readonly registrationFingerprint: string;
 }
 
+export interface CanonicalActionApprovalContext {
+  readonly category: ApprovalCategory;
+  readonly applicabilityKeys: readonly ApprovalApplicabilityKey[];
+}
+
 export interface CanonicalActionSubject {
   readonly schemaVersion: 1;
   readonly action: {
@@ -37,6 +46,7 @@ export interface CanonicalActionSubject {
   readonly operation: CanonicalActionOperation;
   readonly effectSet: ActionEffectSet;
   readonly requestedPermissions: CanonicalAdditionalPermissions | null;
+  readonly approvalContext: CanonicalActionApprovalContext | null;
   readonly preparedInvocationDigest: string;
   readonly targetAssertions: readonly TargetStateAssertion[];
 }

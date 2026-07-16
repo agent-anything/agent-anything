@@ -399,7 +399,7 @@ export function createCanonicalRemoteToolIdentity(
 }
 
 export function canonicalPathIdentityKey(identity: CanonicalPathIdentity): string {
-  return `${identity.platform}:${identity.comparisonKey}:${identity.resolvedComparisonKey ?? ""}:${identity.resolutionFingerprint}`;
+  return `${identity.platform}:${identity.comparisonKey}:${identity.resolvedComparisonKey ?? ""}:${identity.workspaceRootId ?? ""}:${identity.resolutionFingerprint}`;
 }
 
 export function canonicalPathTargetKey(identity: CanonicalPathIdentity): string {

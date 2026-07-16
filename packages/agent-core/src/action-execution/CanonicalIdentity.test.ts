@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ActionContractValidationError,
+  canonicalPathIdentityKey,
   createCanonicalExecutableIdentity,
   createCanonicalNetworkEndpoint,
   createCanonicalPathIdentity,
@@ -59,6 +60,17 @@ describe("canonical Action identities", () => {
     });
 
     expect(first.resolvedComparisonKey).toBe(second.resolvedComparisonKey);
+  });
+
+  it("binds workspace-root membership into full path identity", () => {
+    const inWorkspace = createCanonicalPathIdentity(path("D:/workspace/file.ts"));
+    const outsideWorkspace = createCanonicalPathIdentity({
+      ...path("D:/workspace/file.ts"),
+      workspaceRootId: null,
+    });
+
+    expect(canonicalPathIdentityKey(inWorkspace))
+      .not.toBe(canonicalPathIdentityKey(outsideWorkspace));
   });
 
   it("sorts workspace roots and rejects duplicate Windows paths case-insensitively", () => {
