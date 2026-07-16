@@ -12,6 +12,7 @@ export interface ProcessExecutionInput {
   readonly args: readonly string[];
   readonly cwd: string;
   readonly environment?: Readonly<Record<string, string>>;
+  readonly replaceEnvironment?: boolean;
   readonly timeoutMs: number;
   readonly maxStdoutBytes: number;
   readonly maxStderrBytes: number;
@@ -85,7 +86,9 @@ export function executeProcess(
         cwd: input.cwd,
         env: input.environment === undefined
           ? undefined
-          : { ...process.env, ...input.environment },
+          : input.replaceEnvironment === true
+            ? { ...input.environment }
+            : { ...process.env, ...input.environment },
         detached: process.platform !== "win32",
         shell: false,
         windowsHide: true,

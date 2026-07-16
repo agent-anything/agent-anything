@@ -5,6 +5,7 @@ export interface McpToolCallInput<TInput = unknown> {
   toolName: string;
   toolCallId: string;
   input: TInput;
+  timeoutMs: number | null;
   metadata: Metadata;
 }
 

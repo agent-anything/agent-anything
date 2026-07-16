@@ -128,6 +128,9 @@ importers:
 
   packages/extensions:
     dependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
       '@agent-anything/shared':
         specifier: workspace:*
         version: link:../shared
@@ -135,12 +138,18 @@ importers:
         specifier: workspace:*
         version: link:../tools
     devDependencies:
-      '@agent-anything/agent-core':
-        specifier: workspace:*
-        version: link:../agent-core
       '@agent-anything/evidence':
         specifier: workspace:*
         version: link:../evidence
+      '@agent-anything/governance':
+        specifier: workspace:*
+        version: link:../governance
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../permission
+      '@agent-anything/storage':
+        specifier: workspace:*
+        version: link:../storage
       '@agent-anything/testing':
         specifier: workspace:*
         version: link:../testing

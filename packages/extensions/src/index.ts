@@ -6,6 +6,8 @@ export type {
 } from "./remote-tools/index.js";
 export {
   RemoteToolAdapter,
+  createRemoteToolActionCapability,
+  type CreateRemoteToolActionCapabilityInput,
   type RemoteToolAdapterInput,
 } from "./remote-tools/index.js";
 
@@ -19,8 +21,21 @@ export type {
 export {
   McpRegistry,
   McpToolAdapter,
+  createMcpActionCapability,
+  type CreateMcpActionCapabilityInput,
   type McpToolAdapterInput,
 } from "./mcp/index.js";
+
+export type {
+  CreateRemoteActionCapabilityInput,
+  PreparedRemoteActionInvocationPayload,
+  RemoteActionCapability,
+  RemoteActionInvokeInput,
+  RemoteActionInvokePort,
+  RemoteActionRegistrationResolver,
+  TrustedRemoteActionRegistration,
+} from "./action-registrations/index.js";
+export { createRemoteActionCapability } from "./action-registrations/index.js";
 
 export type {
   PluginContribution,

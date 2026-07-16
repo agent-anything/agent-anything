@@ -6,3 +6,7 @@ export {
   RemoteToolAdapter,
   type RemoteToolAdapterInput,
 } from "./RemoteToolAdapter.js";
+export {
+  createRemoteToolActionCapability,
+  type CreateRemoteToolActionCapabilityInput,
+} from "./createRemoteToolActionCapability.js";

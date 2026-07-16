@@ -28,6 +28,15 @@ export type {
   DeleteFileOutput,
 } from "./file-actions/index.js";
 export {
+  CODE_AGENT_RUN_COMMAND_ACTION,
+  createCodeAgentCommandActionCapability,
+} from "./command-actions/index.js";
+export type {
+  CodeAgentCommandActionCapability,
+  CreateCodeAgentCommandActionCapabilityInput,
+  PreparedCommandInvocationPayload,
+} from "./command-actions/index.js";
+export {
   CODE_AGENT_LIST_FILES_TOOL,
   CODE_AGENT_READ_FILE_TOOL,
   CODE_AGENT_SEARCH_FILES_TOOL,

@@ -62,6 +62,7 @@ implements ToolAdapter {
         toolName: this.tool.name,
         toolCallId: call.id,
         input: call.input,
+        timeoutMs: null,
         metadata: {
           ...this.metadata,
           ...call.metadata,

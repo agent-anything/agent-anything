@@ -10,3 +10,7 @@ export {
   McpToolAdapter,
   type McpToolAdapterInput,
 } from "./McpToolAdapter.js";
+export {
+  createMcpActionCapability,
+  type CreateMcpActionCapabilityInput,
+} from "./createMcpActionCapability.js";

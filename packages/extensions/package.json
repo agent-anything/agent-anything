@@ -36,12 +36,15 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/shared": "workspace:*",
     "@agent-anything/tools": "workspace:*"
   },
   "devDependencies": {
-    "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/evidence": "workspace:*",
+    "@agent-anything/governance": "workspace:*",
+    "@agent-anything/permission": "workspace:*",
+    "@agent-anything/storage": "workspace:*",
     "@agent-anything/testing": "workspace:*"
   },
   "license": "Apache-2.0",
