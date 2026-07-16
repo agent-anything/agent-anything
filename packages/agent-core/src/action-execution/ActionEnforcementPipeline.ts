@@ -15,6 +15,7 @@ import type { RuntimeError } from "../runner/RuntimeError.js";
 import {
   type ActionAdapterImplementation,
   type ActionAdapterPreparationResult,
+  type ActionAdapterRevalidationResult,
   createActionAdapterImplementationSnapshot,
 } from "./ActionAdapter.js";
 import {
@@ -25,6 +26,7 @@ import {
 } from "./ActionContractValidation.js";
 import {
   findActionRegistration,
+  type ActionRegistration,
   type ActionRegistrationSnapshot,
 } from "./ActionRegistration.js";
 import { createCanonicalActionOperation } from "./CanonicalActionOperation.js";
@@ -63,9 +65,15 @@ import {
   type ActionAssessment,
   type ActionAssessmentAuthoritySnapshot,
   type AssessPreparedActionInput,
+  assertActionDispatchAuthorization,
   createActionDispatchAuthorization,
   snapshotActionAssessmentAuthority,
 } from "./ActionAssessment.js";
+import {
+  type ActionRevalidationResult,
+  type RevalidatePreparedActionInput,
+  createActionDispatchPlan,
+} from "./ActionRevalidation.js";
 import {
   checkManagedActionConstraints,
   deriveActionAuthority,
@@ -497,6 +505,270 @@ export class ActionEnforcementPipeline {
       );
     }
   }
+
+  async revalidate(
+    input: RevalidatePreparedActionInput,
+  ): Promise<ActionRevalidationResult> {
+    const before = observeRevalidationInterruption(input.interruption);
+    if (before !== null) return before;
+
+    try {
+      assertPreparedExternalAction(input.prepared);
+      assertActionDispatchAuthorization(input.authorization);
+    } catch {
+      return revalidationInvalidated(
+        "action_revalidation_authorization_invalid",
+        "Final revalidation requires the original trusted prepared Action and authorization.",
+      );
+    }
+    if (
+      input.attemptOrdinal !== 1 && input.attemptOrdinal !== 2
+    ) {
+      return revalidationInvalidated(
+        "action_attempt_ordinal_invalid",
+        "The Action attempt ordinal is invalid.",
+      );
+    }
+    if (
+      input.authorization.runId !== input.prepared.action.runId ||
+      input.authorization.actionId !== input.prepared.action.id ||
+      input.authorization.actionFingerprint !== input.prepared.actionFingerprint
+    ) {
+      return revalidationInvalidated(
+        "action_revalidation_authorization_mismatch",
+        "The prior authorization does not belong to this prepared Action.",
+      );
+    }
+
+    const registration = findActionRegistration(
+      this.dependencies.registrations,
+      input.prepared.action.name,
+    );
+    if (registration === undefined || !registrationMatchesPrepared(registration, input.prepared)) {
+      return revalidationInvalidated(
+        "action_registration_changed",
+        "The Action registration no longer matches the prepared subject.",
+      );
+    }
+    try {
+      assertPreparedInvocationMatchesExecutor(
+        input.prepared.preparedInvocation,
+        registration.executor,
+      );
+    } catch {
+      return revalidationInvalidated(
+        "action_executor_invocation_changed",
+        "The prepared invocation no longer matches the registered executor.",
+      );
+    }
+    const adapter = this.adapters.find(input.prepared.action.name);
+    if (adapter === undefined || !sameAdapterDescriptor(adapter.descriptor, registration.adapter)) {
+      return revalidationInvalidated(
+        "action_adapter_registration_changed",
+        "The Action adapter registration no longer matches the prepared subject.",
+      );
+    }
+
+    const reassessment = await this.assess({
+      prepared: input.prepared,
+      authority: input.authority,
+      interruption: input.interruption,
+    });
+    if (reassessment.status !== "authorized") return reassessment;
+
+    const beforeTarget = observeRevalidationInterruption(input.interruption);
+    if (beforeTarget !== null) return beforeTarget;
+
+    let adapterResult: ActionAdapterRevalidationResult;
+    try {
+      adapterResult = await adapter.revalidate(
+        input.prepared.preparedInvocation,
+        input.prepared.subject.targetAssertions,
+        Object.freeze({
+          workspace: input.prepared.subject.workspace,
+          actor: input.prepared.subject.identity,
+          environment: input.prepared.subject.environment,
+          interruption: input.interruption,
+        }),
+      );
+    } catch {
+      const interrupted = observeRevalidationInterruption(input.interruption);
+      if (interrupted !== null) return interrupted;
+      return revalidationFailed(
+        "tool",
+        "tool_action_revalidation_failed",
+        "The Action adapter failed during final target-state revalidation.",
+        false,
+      );
+    }
+
+    const afterTarget = observeRevalidationInterruption(input.interruption);
+    if (afterTarget !== null) return afterTarget;
+
+    try {
+      assertAdapterRevalidationResult(adapterResult);
+      if (adapterResult.status === "invalidated") {
+        return revalidationInvalidated(
+          validateToken(adapterResult.code, "adapterRevalidation.code"),
+          validateBoundedText(
+            adapterResult.message,
+            "adapterRevalidation.message",
+            "canonical_contract_invalid",
+          ),
+        );
+      }
+      if (adapterResult.status === "failed") {
+        return revalidationFailed(
+          "tool",
+          validateToolFailureCode(adapterResult.code),
+          validateBoundedText(
+            adapterResult.message,
+            "adapterRevalidation.message",
+            "canonical_contract_invalid",
+          ),
+          assertBoolean(adapterResult.retryable, "adapterRevalidation.retryable"),
+        );
+      }
+      if (adapterResult.status === "interrupted") {
+        return Object.freeze({
+          status: "interrupted" as const,
+          interruption: snapshotInterruption(adapterResult.interruption),
+        });
+      }
+
+      const revalidatedAt = validatePreparedAt(this.now());
+      return Object.freeze({
+        status: "ready" as const,
+        plan: await createActionDispatchPlan({
+          prepared: input.prepared,
+          authorization: reassessment.authorization,
+          registration,
+          attemptOrdinal: input.attemptOrdinal,
+          revalidatedAt,
+        }),
+      });
+    } catch {
+      const interrupted = observeRevalidationInterruption(input.interruption);
+      if (interrupted !== null) return interrupted;
+      return revalidationFailed(
+        "tool",
+        "tool_action_revalidation_contract_invalid",
+        "The Action adapter returned invalid final revalidation data.",
+        false,
+      );
+    }
+  }
+}
+
+function registrationMatchesPrepared(
+  registration: ActionRegistration,
+  prepared: PreparedExternalAction,
+): boolean {
+  const subject = prepared.subject;
+  return registration.actionName === prepared.action.name &&
+    registration.registrationFingerprint === subject.adapter.registrationFingerprint &&
+    registration.registrationFingerprint === subject.executor.registrationFingerprint &&
+    sameAdapterDescriptor(registration.adapter, subject.adapter) &&
+    registration.executor.id === subject.executor.id &&
+    registration.executor.version === subject.executor.version &&
+    registration.executor.invocationContractVersion ===
+      subject.executor.invocationContractVersion;
+}
+
+function sameAdapterDescriptor(
+  left: { readonly id: string; readonly version: string; readonly inputSchemaVersion: string },
+  right: { readonly id: string; readonly version: string; readonly inputSchemaVersion: string },
+): boolean {
+  return left.id === right.id && left.version === right.version &&
+    left.inputSchemaVersion === right.inputSchemaVersion;
+}
+
+function assertAdapterRevalidationResult(
+  input: ActionAdapterRevalidationResult,
+): void {
+  if (input?.status === "valid") {
+    assertStrictRecord(
+      input,
+      "adapterRevalidation",
+      new Set(["status"]),
+      "canonical_contract_invalid",
+    );
+    return;
+  }
+  if (input?.status === "invalidated") {
+    assertStrictRecord(
+      input,
+      "adapterRevalidation",
+      new Set(["status", "code", "message"]),
+      "canonical_contract_invalid",
+    );
+    return;
+  }
+  if (input?.status === "failed") {
+    assertStrictRecord(
+      input,
+      "adapterRevalidation",
+      new Set(["status", "code", "message", "retryable"]),
+      "canonical_contract_invalid",
+    );
+    return;
+  }
+  if (input?.status === "interrupted") {
+    assertStrictRecord(
+      input,
+      "adapterRevalidation",
+      new Set(["status", "interruption"]),
+      "canonical_contract_invalid",
+    );
+    return;
+  }
+  throw new TypeError("Unknown Action adapter revalidation result.");
+}
+
+function observeRevalidationInterruption(
+  context: InvocationInterruptionContext,
+): ActionRevalidationResult | null {
+  if (!context.signal.aborted) return null;
+  if (context.interruption === null) {
+    return revalidationFailed(
+      "runtime",
+      "runtime_action_revalidation_interruption_unattributed",
+      "Action revalidation was aborted without interruption attribution.",
+      false,
+    );
+  }
+  try {
+    return Object.freeze({
+      status: "interrupted" as const,
+      interruption: snapshotInterruption(context.interruption),
+    });
+  } catch {
+    return revalidationFailed(
+      "runtime",
+      "runtime_action_revalidation_interruption_invalid",
+      "Action revalidation interruption attribution is invalid.",
+      false,
+    );
+  }
+}
+
+function revalidationInvalidated(
+  code: string,
+  message: string,
+): ActionRevalidationResult {
+  return Object.freeze({ status: "invalidated" as const, code, message });
+}
+
+function revalidationFailed(
+  owner: RuntimeError["owner"],
+  code: string,
+  message: string,
+  retryable: boolean,
+): ActionRevalidationResult {
+  return Object.freeze({
+    status: "failed" as const,
+    error: Object.freeze({ owner, code, message, retryable, metadata: Object.freeze({}) }),
+  });
 }
 
 function assertPolicyDecision(input: PolicyDecision, expectedCheckId: string): void {

@@ -31,6 +31,7 @@ import type { SafeActionSummary } from "./SafeActionSummary.js";
 import type { TargetStateAssertion } from "./TargetStateAssertion.js";
 
 const preparedExternalActionBrand: unique symbol = Symbol("PreparedExternalAction");
+const preparedExternalActionInstances = new WeakSet<object>();
 
 export interface PreparedActionReference {
   readonly id: string;
@@ -73,7 +74,7 @@ export function createPreparedExternalAction<
 >(
   input: CreatePreparedExternalActionInput<TInvocation>,
 ): PreparedExternalAction<TInvocation> {
-  return Object.freeze({
+  const prepared = Object.freeze({
     [preparedExternalActionBrand]: true as const,
     action: input.action,
     subject: input.subject,
@@ -85,13 +86,16 @@ export function createPreparedExternalAction<
     preparedInvocation: input.preparedInvocation,
     preparedAt: input.preparedAt,
   });
+  preparedExternalActionInstances.add(prepared);
+  return prepared;
 }
 
 export function assertPreparedExternalAction(
   input: PreparedExternalAction,
 ): void {
   if (input === null || typeof input !== "object" ||
-    input[preparedExternalActionBrand] !== true || !isDeeplyFrozen(input)) {
+    input[preparedExternalActionBrand] !== true ||
+    !preparedExternalActionInstances.has(input) || !isDeeplyFrozen(input)) {
     throw contractError(
       "canonical_contract_invalid",
       "Action assessment requires a factory-created immutable PreparedExternalAction.",

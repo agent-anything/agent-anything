@@ -6,7 +6,7 @@ import {
   type ActionApprovalCoverage,
 } from "@agent-anything/permission";
 import type { Action } from "../runner/Action.js";
-import type { ActionAdapterPreparedData } from "./ActionAdapter.js";
+import type { ActionAdapter, ActionAdapterPreparedData } from "./ActionAdapter.js";
 import type { ActionAssessmentAuthoritySnapshot } from "./ActionAssessment.js";
 import { ActionEnforcementPipeline } from "./ActionEnforcementPipeline.js";
 import { createActionRegistrationSnapshot } from "./ActionRegistration.js";
@@ -223,10 +223,184 @@ describe("fixed-order Action assessment", () => {
       },
     });
   });
+
+  it("repeats Policy assessment before target revalidation and creates an immutable dispatch plan", async () => {
+    let policyCalls = 0;
+    let targetCalls = 0;
+    const pipeline = createPipeline(skillData(), {
+      async evaluate(input) {
+        policyCalls += 1;
+        return { checkId: input.checkId, status: "allowed", decidedAt: NOW };
+      },
+    }, async () => {
+      targetCalls += 1;
+      return { status: "valid" };
+    });
+    const prepared = await prepare(pipeline);
+    const input = assessmentInput(prepared);
+    const assessment = await pipeline.assess(input);
+    expect(assessment.status).toBe("authorized");
+    if (assessment.status !== "authorized") return;
+
+    const revalidation = await pipeline.revalidate({
+      prepared,
+      authorization: assessment.authorization,
+      authority: input.authority,
+      interruption: interruption(),
+      attemptOrdinal: 1,
+    });
+
+    expect(revalidation.status).toBe("ready");
+    if (revalidation.status !== "ready") return;
+    expect(policyCalls).toBe(2);
+    expect(targetCalls).toBe(1);
+    expect(revalidation.plan).toMatchObject({
+      runId: prepared.action.runId,
+      actionId: prepared.action.id,
+      actionFingerprint: prepared.actionFingerprint,
+      preparedInvocationDigest: prepared.subject.preparedInvocationDigest,
+      enforcement: "managed",
+      attemptOrdinal: 1,
+    });
+    expect(revalidation.plan.dispatchPlanFingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(Object.isFrozen(revalidation.plan)).toBe(true);
+
+    const copiedAuthorization = Object.freeze({
+      ...assessment.authorization,
+      actionId: "substituted-action",
+    });
+    expect(await pipeline.revalidate({
+      prepared,
+      authorization: copiedAuthorization,
+      authority: input.authority,
+      interruption: interruption(),
+      attemptOrdinal: 1,
+    })).toEqual(expect.objectContaining({
+      status: "invalidated",
+      code: "action_revalidation_authorization_invalid",
+    }));
+  });
+
+  it("returns changed Policy and stale target results without creating a dispatch plan", async () => {
+    let policyCalls = 0;
+    let targetCalls = 0;
+    const changedPolicyPipeline = createPipeline(skillData(), {
+      async evaluate(input) {
+        policyCalls += 1;
+        return {
+          checkId: input.checkId,
+          status: policyCalls === 1 ? "allowed" : "denied",
+          ...(policyCalls === 1 ? {} : { code: "policy_changed" }),
+          decidedAt: NOW,
+        };
+      },
+    }, async () => {
+      targetCalls += 1;
+      return { status: "valid" };
+    });
+    const changedPrepared = await prepare(changedPolicyPipeline);
+    const changedInput = assessmentInput(changedPrepared);
+    const changedAssessment = await changedPolicyPipeline.assess(changedInput);
+    if (changedAssessment.status !== "authorized") throw new Error("Expected authorization.");
+    expect(await changedPolicyPipeline.revalidate({
+      prepared: changedPrepared,
+      authorization: changedAssessment.authorization,
+      authority: changedInput.authority,
+      interruption: interruption(),
+      attemptOrdinal: 1,
+    })).toEqual(expect.objectContaining({
+      status: "denied",
+      owner: "policy",
+      code: "policy_changed",
+    }));
+    expect(targetCalls).toBe(0);
+
+    const stalePipeline = createPipeline(skillData(), policy("allowed"), async () => {
+      return {
+        status: "invalidated",
+        code: "tool_target_baseline_changed",
+        message: "The target baseline changed.",
+      };
+    });
+    const stalePrepared = await prepare(stalePipeline);
+    const staleInput = assessmentInput(stalePrepared);
+    const staleAssessment = await stalePipeline.assess(staleInput);
+    if (staleAssessment.status !== "authorized") throw new Error("Expected authorization.");
+    expect(await stalePipeline.revalidate({
+      prepared: stalePrepared,
+      authorization: staleAssessment.authorization,
+      authority: staleInput.authority,
+      interruption: interruption(),
+      attemptOrdinal: 1,
+    })).toEqual({
+      status: "invalidated",
+      code: "tool_target_baseline_changed",
+      message: "The target baseline changed.",
+    });
+
+    const replacementPipeline = createPipeline(
+      skillData(),
+      policy("allowed"),
+      async () => ({ status: "valid" }),
+      "2",
+    );
+    expect(await replacementPipeline.revalidate({
+      prepared: stalePrepared,
+      authorization: staleAssessment.authorization,
+      authority: staleInput.authority,
+      interruption: interruption(),
+      attemptOrdinal: 1,
+    })).toEqual({
+      status: "invalidated",
+      code: "action_registration_changed",
+      message: "The Action registration no longer matches the prepared subject.",
+    });
+  });
+
+  it("requires approval again when exact Action coverage disappears before final revalidation", async () => {
+    let targetCalls = 0;
+    const pipeline = createPipeline(processData(), policy("allowed"), async () => {
+      targetCalls += 1;
+      return { status: "valid" };
+    });
+    const prepared = await prepare(pipeline);
+    const coverage: ActionApprovalCoverage = {
+      id: "coverage-final",
+      runId: prepared.action.runId,
+      actionId: prepared.action.id,
+      actionFingerprint: prepared.actionFingerprint,
+      sourceRequestId: "approval-final",
+      grantedPermissions: null,
+      status: "available",
+      createdAt: NOW,
+    };
+    const initialInput = assessmentInput(prepared, { actionCoverage: [coverage] });
+    const initial = await pipeline.assess(initialInput);
+    if (initial.status !== "authorized") throw new Error("Expected authorization.");
+
+    const result = await pipeline.revalidate({
+      prepared,
+      authorization: initial.authorization,
+      authority: { ...initialInput.authority, actionCoverage: [] },
+      interruption: interruption(),
+      attemptOrdinal: 1,
+    });
+
+    expect(result.status).toBe("approval_required");
+    if (result.status === "approval_required") {
+      expect(result.requirement.metadata).toEqual({ causes: ["missing_authority"] });
+    }
+    expect(targetCalls).toBe(0);
+  });
 });
 
-function createPipeline(data: ActionAdapterPreparedData, actionPolicy: ActionPolicyPort) {
-  const descriptor = { id: "test.adapter", version: "1", inputSchemaVersion: "1" };
+function createPipeline(
+  data: ActionAdapterPreparedData,
+  actionPolicy: ActionPolicyPort,
+  revalidate: ActionAdapter["revalidate"] = async () => ({ status: "valid" }),
+  adapterVersion = "1",
+) {
+  const descriptor = { id: "test.adapter", version: adapterVersion, inputSchemaVersion: "1" };
   const executor = { id: "test.executor", version: "1", invocationContractVersion: "1" };
   return new ActionEnforcementPipeline({
     registrations: createActionRegistrationSnapshot([{
@@ -239,7 +413,7 @@ function createPipeline(data: ActionAdapterPreparedData, actionPolicy: ActionPol
       adapter: {
         descriptor,
         async prepare() { return { status: "prepared" as const, data }; },
-        async revalidate() { return { status: "valid" as const }; },
+        revalidate,
       },
     }],
     policyPort: actionPolicy,

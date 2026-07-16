@@ -1508,6 +1508,12 @@ describe("Runner external Action approval attachment", () => {
       };
     });
     const fixture = createExternalActionPipeline("requires_review");
+    const auditRecords: { readonly eventName: string; readonly payload: Record<string, unknown> }[] = [];
+    const auditPort: AuditPort = {
+      async record(record) {
+        auditRecords.push(record);
+      },
+    };
     const controller = new ScriptedController([
       actionsDecision([{
         kind: "tool",
@@ -1519,18 +1525,21 @@ describe("Runner external Action approval attachment", () => {
     ]);
     const result = await createRunner(controller, {
       actionEnforcementPipeline: fixture.pipeline,
+      auditPort,
     }).run(
       createAgent([createAgentTool("test.external")]),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
         permissions: createReviewPermissionConfig(reviewer),
+        audit: "required",
       }),
     );
 
     expect(result.status).toBe("succeeded");
     expect(fixture.prepareCalls()).toBe(1);
-    expect(fixture.policyCalls()).toBe(2);
+    expect(fixture.policyCalls()).toBe(3);
+    expect(fixture.revalidationCalls()).toBe(1);
     expect(result.items.filter(({ kind }) => kind === "approval_requested")).toHaveLength(1);
     expect(result.items.filter(({ kind }) => kind === "approval_resolved")).toHaveLength(1);
     expect(result.items).toContainEqual(expect.objectContaining({
@@ -1540,6 +1549,10 @@ describe("Runner external Action approval attachment", () => {
         error: expect.objectContaining({ code: "runtime_action_dispatch_unavailable" }),
       }),
     }));
+    expect(auditRecords.find(({ eventName }) => eventName === "action.dispatch_authorized"))
+      .toEqual(expect.objectContaining({
+        payload: expect.objectContaining({ actionCoverageId: expect.any(String) }),
+      }));
   });
 
   it("settles an external Action decline without reassessment", async () => {
@@ -1609,6 +1622,91 @@ describe("Runner external Action approval attachment", () => {
       errors: [{ code: "runtime_invalid_options" }],
     });
     expect(fixture.prepareCalls()).toBe(0);
+  });
+
+  it("fails closed when required authorization Audit fails after revalidation", async () => {
+    const fixture = createExternalActionPipeline("allowed");
+    const auditPort: AuditPort = {
+      async record(record) {
+        if (record.eventName === "action.dispatch_authorized") {
+          throw new Error("Authorization Audit unavailable.");
+        }
+      },
+    };
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{
+        kind: "tool",
+        name: "test.external",
+        input: {},
+        modelItemId: "model_1",
+      }]),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      auditPort,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        audit: "required",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "audit_required_failed",
+      errors: [{ owner: "audit", code: "audit_required_failed" }],
+    });
+    expect(fixture.policyCalls()).toBe(2);
+    expect(fixture.revalidationCalls()).toBe(1);
+    expect(result.items).not.toContainEqual(expect.objectContaining({
+      kind: "observation",
+      observation: expect.objectContaining({ kind: "action_failure" }),
+    }));
+  });
+
+  it("honors cancellation accepted after authorization Audit and before dispatch", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const fixture = createExternalActionPipeline("allowed");
+    const auditPort: AuditPort = {
+      async record(record) {
+        if (record.eventName === "action.dispatch_authorized") {
+          cancellation.requestCancellation({
+            origin: "user",
+            reasonCode: "user_requested",
+          });
+        }
+      },
+    };
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{
+        kind: "tool",
+        name: "test.external",
+        input: {},
+        modelItemId: "model_1",
+      }]),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      auditPort,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        audit: "required",
+        cancellation,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "cancelled",
+      code: "runtime_cancelled",
+      cancellation: { reasonCode: "user_requested" },
+    });
+    expect(result.items).not.toContainEqual(expect.objectContaining({
+      kind: "observation",
+      observation: expect.objectContaining({ kind: "action_failure" }),
+    }));
   });
 });
 
@@ -2723,6 +2821,7 @@ function createExternalActionPipeline(
 ) {
   let prepareCallCount = 0;
   let policyCallCount = 0;
+  let revalidationCallCount = 0;
   const adapterDescriptor = {
     id: "test.external.adapter",
     version: "1",
@@ -2786,7 +2885,10 @@ function createExternalActionPipeline(
           prepareCallCount += 1;
           return { status: "prepared" as const, data };
         },
-        async revalidate() { return { status: "valid" as const }; },
+        async revalidate() {
+          revalidationCallCount += 1;
+          return { status: "valid" as const };
+        },
       },
     }],
     policyPort,
@@ -2796,6 +2898,7 @@ function createExternalActionPipeline(
     pipeline,
     prepareCalls: () => prepareCallCount,
     policyCalls: () => policyCallCount,
+    revalidationCalls: () => revalidationCallCount,
   };
 }
 

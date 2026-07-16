@@ -8,12 +8,18 @@ export * from "./ActionAdapter.js";
 export * from "./ActionEnforcementPipeline.js";
 export type {
   ActionAssessment,
+  ActionAssessmentReviewContext,
   ActionAssessmentAuthoritySnapshot,
   ActionAuthoritySource,
   ActionAuthoritySourceKind,
   ActionDispatchAuthorization,
   AssessPreparedActionInput,
 } from "./ActionAssessment.js";
+export type {
+  ActionDispatchPlan,
+  ActionRevalidationResult,
+  RevalidatePreparedActionInput,
+} from "./ActionRevalidation.js";
 export * from "./ActionFingerprint.js";
 export * from "./ActionRegistration.js";
 export * from "./CanonicalEncoding.js";

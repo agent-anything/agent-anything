@@ -75,24 +75,55 @@ export function applyImmediateApprovalAuthority(input: {
 
 export type ConsumeActionApprovalCoverageResult =
   | { readonly status: "consumed"; readonly permission: RunPermissionState }
-  | { readonly status: "not_found"; readonly permission: RunPermissionState };
+  | {
+      readonly status: "rejected";
+      readonly code:
+        | "permission_action_coverage_not_found"
+        | "permission_action_coverage_duplicated"
+        | "permission_action_coverage_unavailable"
+        | "permission_action_coverage_subject_mismatch";
+      readonly permission: RunPermissionState;
+    };
 
 export function consumeActionApprovalCoverage(input: {
   readonly permission: RunPermissionState;
+  readonly coverageId: string;
   readonly runId: string;
   readonly actionId: string;
   readonly actionFingerprint: string;
 }): ConsumeActionApprovalCoverageResult {
-  const index = input.permission.actionCoverage.findIndex((coverage) =>
-    coverage.status === "available" &&
-    coverage.runId === input.runId &&
-    coverage.actionId === input.actionId &&
-    coverage.actionFingerprint === input.actionFingerprint
-  );
-  if (index < 0) {
-    return Object.freeze({ status: "not_found" as const, permission: input.permission });
+  const matches = input.permission.actionCoverage
+    .map((coverage, index) => ({ coverage, index }))
+    .filter(({ coverage }) => coverage.id === input.coverageId);
+  if (matches.length === 0) {
+    return rejectedCoverage(
+      "permission_action_coverage_not_found",
+      input.permission,
+    );
   }
-  const coverage = input.permission.actionCoverage[index]!;
+  if (matches.length > 1) {
+    return rejectedCoverage(
+      "permission_action_coverage_duplicated",
+      input.permission,
+    );
+  }
+  const { coverage, index } = matches[0]!;
+  if (coverage.status !== "available") {
+    return rejectedCoverage(
+      "permission_action_coverage_unavailable",
+      input.permission,
+    );
+  }
+  if (
+    coverage.runId !== input.runId ||
+    coverage.actionId !== input.actionId ||
+    coverage.actionFingerprint !== input.actionFingerprint
+  ) {
+    return rejectedCoverage(
+      "permission_action_coverage_subject_mismatch",
+      input.permission,
+    );
+  }
   const next = input.permission.actionCoverage.map((candidate, candidateIndex) =>
     candidateIndex === index
       ? Object.freeze({ ...coverage, status: "consumed" as const })
@@ -105,6 +136,13 @@ export function consumeActionApprovalCoverage(input: {
       actionCoverage: Object.freeze(next),
     }),
   });
+}
+
+function rejectedCoverage(
+  code: Extract<ConsumeActionApprovalCoverageResult, { readonly status: "rejected" }>["code"],
+  permission: RunPermissionState,
+): ConsumeActionApprovalCoverageResult {
+  return Object.freeze({ status: "rejected" as const, code, permission });
 }
 
 export function applyCommittedSessionAuthority(input: {

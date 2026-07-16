@@ -24,7 +24,8 @@ import type { ActionRuleOutcome } from "@agent-anything/governance/policy";
 import type { CanonicalEffectivePermissions } from "./CanonicalEffectivePermissions.js";
 import type { PreparedExternalAction } from "./PreparedExternalAction.js";
 
-declare const actionDispatchAuthorizationBrand: unique symbol;
+const actionDispatchAuthorizationBrand: unique symbol = Symbol("ActionDispatchAuthorization");
+const actionDispatchAuthorizationInstances = new WeakSet<object>();
 
 export type ActionAuthoritySourceKind =
   | "profile"
@@ -113,8 +114,6 @@ export function snapshotActionAssessmentAuthority(
   return cloneFrozen(input, new WeakSet<object>());
 }
 
-const authorizationBrand: unique symbol = Symbol("ActionDispatchAuthorization");
-
 export function createActionDispatchAuthorization(input: {
   readonly prepared: PreparedExternalAction;
   readonly authoritySnapshotId: string;
@@ -125,8 +124,8 @@ export function createActionDispatchAuthorization(input: {
   readonly effectivePermissions: CanonicalEffectivePermissions;
   readonly authorizedAt: ISODateTimeString;
 }): ActionDispatchAuthorization {
-  return deepFreeze({
-    [authorizationBrand]: true as const,
+  const authorization = deepFreeze({
+    [actionDispatchAuthorizationBrand]: true as const,
     runId: input.prepared.action.runId,
     actionId: input.prepared.action.id,
     actionFingerprint: input.prepared.actionFingerprint,
@@ -137,13 +136,43 @@ export function createActionDispatchAuthorization(input: {
     actionCoverageIdToConsume: input.actionCoverageIdToConsume,
     effectivePermissions: input.effectivePermissions,
     authorizedAt: input.authorizedAt,
-  }) as unknown as ActionDispatchAuthorization;
+  });
+  actionDispatchAuthorizationInstances.add(authorization);
+  return authorization;
+}
+
+export function assertActionDispatchAuthorization(
+  input: ActionDispatchAuthorization,
+): void {
+  if (
+    input === null ||
+    typeof input !== "object" ||
+    input[actionDispatchAuthorizationBrand] !== true ||
+    !actionDispatchAuthorizationInstances.has(input) ||
+    !isDeeplyFrozen(input)
+  ) {
+    throw new TypeError(
+      "Final Action revalidation requires a factory-created immutable authorization.",
+    );
+  }
 }
 
 function deepFreeze<T>(value: T): T {
   if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
   for (const child of Object.values(value)) deepFreeze(child);
   return Object.freeze(value);
+}
+
+function isDeeplyFrozen(input: unknown, seen = new WeakSet<object>()): boolean {
+  if (typeof input !== "object" || input === null) return true;
+  if (seen.has(input)) return true;
+  seen.add(input);
+  if (!Object.isFrozen(input)) return false;
+  return Reflect.ownKeys(input).every((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    return descriptor !== undefined && descriptor.get === undefined &&
+      descriptor.set === undefined && isDeeplyFrozen(descriptor.value, seen);
+  });
 }
 
 function cloneFrozen<T>(value: T, seen: WeakSet<object>): T {

@@ -33,15 +33,20 @@ describe("Run approval authority", () => {
 
     const wrongFingerprint = consumeActionApprovalCoverage({
       permission: applied.permission,
+      coverageId: "coverage_001",
       runId: "run_001",
       actionId: "action_001",
       actionFingerprint: "fingerprint_other",
     });
-    expect(wrongFingerprint.status).toBe("not_found");
+    expect(wrongFingerprint).toMatchObject({
+      status: "rejected",
+      code: "permission_action_coverage_subject_mismatch",
+    });
     expect(wrongFingerprint.permission).toBe(applied.permission);
 
     const consumed = consumeActionApprovalCoverage({
       permission: applied.permission,
+      coverageId: "coverage_001",
       runId: "run_001",
       actionId: "action_001",
       actionFingerprint: "fingerprint_001",
@@ -51,10 +56,42 @@ describe("Run approval authority", () => {
 
     expect(consumeActionApprovalCoverage({
       permission: consumed.permission,
+      coverageId: "coverage_001",
       runId: "run_001",
       actionId: "action_001",
       actionFingerprint: "fingerprint_001",
-    }).status).toBe("not_found");
+    })).toMatchObject({
+      status: "rejected",
+      code: "permission_action_coverage_unavailable",
+    });
+
+    expect(consumeActionApprovalCoverage({
+      permission: applied.permission,
+      coverageId: "coverage_missing",
+      runId: "run_001",
+      actionId: "action_001",
+      actionFingerprint: "fingerprint_001",
+    })).toMatchObject({
+      status: "rejected",
+      code: "permission_action_coverage_not_found",
+    });
+
+    expect(consumeActionApprovalCoverage({
+      permission: {
+        ...applied.permission,
+        actionCoverage: [
+          applied.permission.actionCoverage[0]!,
+          applied.permission.actionCoverage[0]!,
+        ],
+      },
+      coverageId: "coverage_001",
+      runId: "run_001",
+      actionId: "action_001",
+      actionFingerprint: "fingerprint_001",
+    })).toMatchObject({
+      status: "rejected",
+      code: "permission_action_coverage_duplicated",
+    });
   });
 
   it("keeps Run permission grants inside the Run that received them", () => {
