@@ -5,6 +5,11 @@ export type {
   ActionProvenance,
 } from "./Action.js";
 export type {
+  EvidenceSettlementResult,
+  ToolResultClassification,
+  ValidToolResultClassification,
+} from "./ActionResultSettlement.js";
+export type {
   ActionDeniedObservation,
   ActionDeniedOwner,
   ActionFailureObservation,
@@ -111,6 +116,12 @@ export type {
   RunInputMessageRole,
 } from "./RunInput.js";
 export type {
+  ActionAssessedRunItem,
+  ActionAssessedSummary,
+  ActionInvalidatedRunItem,
+  ActionInvalidatedSummary,
+  ActionPreparedRunItem,
+  ActionPreparedSummary,
   ActionRunItem,
   ApprovalRequestedRunItem,
   ApprovalResolvedRunItem,

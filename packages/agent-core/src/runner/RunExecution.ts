@@ -75,6 +75,9 @@ import { createRunFinalizationContext } from "./RunFinalization.js";
 import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
 import type { RunInput } from "./RunInput.js";
 import type {
+  ActionAssessedSummary,
+  ActionInvalidatedSummary,
+  ActionPreparedSummary,
   ApprovalRequestedRunItem,
   RunItem,
   RunItemBase,
@@ -161,6 +164,11 @@ import {
   recordSandboxAttemptResolved,
   recordSandboxAttemptStarted,
 } from "./RunnerSandboxAttemptObservability.js";
+import {
+  classifyToolResult,
+  settleToolResultEvidence,
+  type ValidToolResultClassification,
+} from "./ActionResultSettlement.js";
 
 type ResolvedRunnerDependencies = RunnerDependencies & {
   readonly now: NonNullable<RunnerDependencies["now"]>;
@@ -286,13 +294,15 @@ export class RunExecution<TOutput> {
     const actionPipelineParts = [
       this.dependencies.actionEnforcementPipeline !== undefined,
       this.dependencies.sandboxExecutionGateway !== undefined,
+      this.dependencies.evidenceBuilder !== undefined,
+      this.dependencies.evidenceStorage !== undefined,
       this.config.actionContext !== null,
     ];
     if (actionPipelineParts.some(Boolean) && !actionPipelineParts.every(Boolean)) {
       return this.createInvalidConfigResult(runtimeError(
         "runtime",
         "runtime_invalid_options",
-        "ActionEnforcementPipeline, SandboxExecutionGateway, and RunConfig.actionContext must be configured together.",
+        "ActionEnforcementPipeline, SandboxExecutionGateway, EvidenceBuilderPort, StoragePort, and RunConfig.actionContext must be configured together.",
         false,
         {},
       ));
@@ -1738,6 +1748,11 @@ export class RunExecution<TOutput> {
     }
 
     if (this.dependencies.actionEnforcementPipeline !== undefined) {
+      this.emit("tool.started", {
+        runId: this.state.runId,
+        actionId: action.id,
+        toolName: action.name,
+      });
       return this.processExternalToolAction(action);
     }
 
@@ -1926,6 +1941,7 @@ export class RunExecution<TOutput> {
       return this.handleActionInterruption(action);
     }
 
+    this.recordActionPrepared(preparation.prepared);
     return this.assessPreparedExternalAction(action, preparation.prepared, 1);
   }
 
@@ -1961,6 +1977,8 @@ export class RunExecution<TOutput> {
         return this.handleActionPipelineOperationError(action, error, "assessment");
       }
 
+      this.recordActionAssessed(prepared, assessment);
+
       if (assessment.status === "approval_required") {
         const result = await this.processExternalActionApproval(
           action,
@@ -1972,7 +1990,7 @@ export class RunExecution<TOutput> {
         continue;
       }
       if (assessment.status !== "authorized") {
-        return this.commitActionAssessment(action, assessment);
+        return this.commitActionAssessment(action, prepared, assessment);
       }
 
       const revalidationOutcome = await this.revalidatePreparedExternalAction(
@@ -1994,7 +2012,7 @@ export class RunExecution<TOutput> {
         continue;
       }
       if (revalidation.status !== "ready") {
-        return this.commitActionRevalidation(action, revalidation);
+        return this.commitActionRevalidation(action, prepared, revalidation);
       }
       return this.commitActionDispatchPlan(action, prepared, revalidation.plan);
     }
@@ -2137,8 +2155,84 @@ export class RunExecution<TOutput> {
     return root.canonicalPath;
   }
 
+  private recordActionPrepared(prepared: PreparedExternalAction): void {
+    if (this.state.status !== "running") return;
+    const summary: ActionPreparedSummary = Object.freeze({
+      actionId: prepared.action.id,
+      actionFingerprint: prepared.actionFingerprint,
+      category: prepared.safeSummary.kind,
+      effectCount: prepared.subject.effectSet.kind === "effects"
+        ? prepared.subject.effectSet.values.length
+        : 0,
+      targetAssertionCount: prepared.subject.targetAssertions.length,
+    });
+    this.commitRunning([(base) => Object.freeze({
+      ...base,
+      kind: "action_prepared" as const,
+      prepared: summary,
+    })]);
+    this.emit("action.prepared", { runId: this.state.runId, ...summary });
+  }
+
+  private recordActionAssessed(
+    prepared: PreparedExternalAction,
+    assessment: ActionAssessment,
+  ): void {
+    if (this.state.status !== "running") return;
+    const summary: ActionAssessedSummary = Object.freeze({
+      actionId: prepared.action.id,
+      actionFingerprint: prepared.actionFingerprint,
+      status: assessment.status,
+      owner: assessment.status === "denied"
+        ? assessment.owner
+        : assessment.status === "invalidated"
+        ? "tool"
+        : assessment.status === "failed"
+        ? assessment.error.owner === "policy" ||
+            assessment.error.owner === "permission" ||
+            assessment.error.owner === "tool"
+          ? assessment.error.owner
+          : null
+        : null,
+      code: assessment.status === "denied" || assessment.status === "invalidated"
+        ? assessment.code
+        : assessment.status === "failed"
+        ? assessment.error.code
+        : null,
+    });
+    this.commitRunning([(base) => Object.freeze({
+      ...base,
+      kind: "action_assessed" as const,
+      assessment: summary,
+    })]);
+    this.emit("action.assessed", { runId: this.state.runId, ...summary });
+  }
+
+  private recordActionInvalidated(
+    prepared: PreparedExternalAction,
+    phase: ActionInvalidatedSummary["phase"],
+    owner: ActionInvalidatedSummary["owner"],
+    code: string,
+  ): void {
+    if (this.state.status !== "running") return;
+    const summary: ActionInvalidatedSummary = Object.freeze({
+      actionId: prepared.action.id,
+      actionFingerprint: prepared.actionFingerprint,
+      phase,
+      owner,
+      code,
+    });
+    this.commitRunning([(base) => Object.freeze({
+      ...base,
+      kind: "action_invalidated" as const,
+      invalidation: summary,
+    })]);
+    this.emit("action.invalidated", { runId: this.state.runId, ...summary });
+  }
+
   private commitActionAssessment(
     action: Action,
+    prepared: PreparedExternalAction,
     assessment: Exclude<
       ActionAssessment,
       { readonly status: "approval_required" | "authorized" }
@@ -2155,6 +2249,7 @@ export class RunExecution<TOutput> {
       return this.commitActionObservation(observation, true, true);
     }
     if (assessment.status === "invalidated") {
+      this.recordActionInvalidated(prepared, "assessment", "tool", assessment.code);
       const observation: ActionDeniedObservation = Object.freeze({
         ...this.createObservationBase(action),
         kind: "action_denied",
@@ -2176,6 +2271,7 @@ export class RunExecution<TOutput> {
 
   private commitActionRevalidation(
     action: Action,
+    prepared: PreparedExternalAction,
     revalidation: Exclude<
       ActionRevalidationResult,
       { readonly status: "approval_required" | "ready" }
@@ -2192,6 +2288,7 @@ export class RunExecution<TOutput> {
       return this.commitActionObservation(observation, true, true);
     }
     if (revalidation.status === "invalidated") {
+      this.recordActionInvalidated(prepared, "revalidation", "tool", revalidation.code);
       const observation: ActionDeniedObservation = Object.freeze({
         ...this.createObservationBase(action),
         kind: "action_denied",
@@ -2225,6 +2322,7 @@ export class RunExecution<TOutput> {
         actionFingerprint: plan.actionFingerprint,
       });
       if (consumed.status === "rejected") {
+        this.recordActionInvalidated(prepared, "dispatch", "permission", consumed.code);
         const observation: ActionDeniedObservation = Object.freeze({
           ...this.createObservationBase(action),
           kind: "action_denied",
@@ -2391,6 +2489,32 @@ export class RunExecution<TOutput> {
       return this.handleActionPipelineOperationError(action, error, "dispatch");
     }
 
+    let toolResultClassification: ValidToolResultClassification | null = null;
+    let retainedToolOutcome: {
+      readonly observation: ToolResultObservation | null;
+      readonly items: readonly RunItem<TOutput>[];
+      readonly counters: RunCounters;
+    } | null = null;
+    if (execution.status === "executed") {
+      const classification = classifyToolResult(execution.toolResult);
+      if (classification.status === "invalid") {
+        execution = Object.freeze({
+          status: "failed" as const,
+          attempt: execution.attempt,
+          error: classification.error,
+        });
+      } else {
+        toolResultClassification = classification;
+        const observation = classification.createObservation
+          ? this.createExternalToolResultObservation(action, execution)
+          : null;
+        retainedToolOutcome = Object.freeze({
+          observation,
+          ...this.retainExternalToolOutcome(action, observation, classification.failed),
+        });
+      }
+    }
+
     const resolution = sandboxAttemptResolution(sandboxAttempt, execution, this.now());
     this.commitSettledToolState([
       (base) => Object.freeze({
@@ -2435,6 +2559,16 @@ export class RunExecution<TOutput> {
       );
     } catch (error) {
       if (error instanceof OperationSettlementTimeoutError) {
+        if (execution.status === "executed" && retainedToolOutcome !== null) {
+          this.publishExternalToolOutcome(
+            action,
+            execution,
+            retainedToolOutcome.items,
+            retainedToolOutcome.observation,
+            [],
+            { status: "failed", code: "runtime_cancellation_settlement_timeout" },
+          );
+        }
         return {
           invalidatesBatch: true,
           terminalResult: await this.fail(
@@ -2453,6 +2587,16 @@ export class RunExecution<TOutput> {
     }
     if (resolutionErrors.length > 0) {
       const error = resolutionErrors[0]!;
+      if (execution.status === "executed" && retainedToolOutcome !== null) {
+        this.publishExternalToolOutcome(
+          action,
+          execution,
+          retainedToolOutcome.items,
+          retainedToolOutcome.observation,
+          [],
+          { status: "failed", code: error.code },
+        );
+      }
       return {
         invalidatesBatch: true,
         terminalResult: await this.fail(error, infrastructureFailureCode(error)),
@@ -2460,30 +2604,17 @@ export class RunExecution<TOutput> {
     }
 
     if (execution.status === "executed") {
-      let observation: ToolResultObservation | null = null;
-      if (execution.toolResult.status !== "skipped") {
-        const base = this.createObservationBase(action);
-        observation = Object.freeze({
-            ...base,
-            kind: "tool_result" as const,
-            result: execution.toolResult,
-            metadata: Object.freeze({
-              ...base.metadata,
-              toolName: execution.toolResult.toolName,
-              toolResultStatus: execution.toolResult.status,
-              sandboxAttemptId: execution.attempt.id,
-              sandboxEnforcement: execution.attempt.enforcement,
-              sandboxIsolation: execution.isolation,
-            }),
-          });
+      if (toolResultClassification === null) {
+        throw new Error("Executed Action lost its validated ToolResult classification.");
       }
-      return this.commitToolOutcome(
+      if (retainedToolOutcome === null) {
+        throw new Error("Executed Action lost its retained ToolResult state.");
+      }
+      return this.settleExecutedActionResult(
         action,
-        observation,
-        execution.toolResult.status !== "succeeded" &&
-          execution.toolResult.status !== "skipped",
-        [],
-        [],
+        execution,
+        toolResultClassification,
+        retainedToolOutcome,
       );
     }
     if (execution.status === "sandbox_denied") {
@@ -2508,7 +2639,13 @@ export class RunExecution<TOutput> {
       };
     }
     if (execution.status === "interrupted") {
-      return this.handleActionInterruption(action);
+      return this.handleActionInterruption(action, execution.interruption);
+    }
+    if (execution.error.code === "tool_result_invalid") {
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(execution.error, "tool_execution_failed"),
+      };
     }
     if (execution.error.owner === "tool") {
       return this.commitActionFailure(action, execution.error);
@@ -2517,6 +2654,193 @@ export class RunExecution<TOutput> {
       invalidatesBatch: true,
       terminalResult: await this.fail(execution.error, "sandbox_enforcement_failed"),
     };
+  }
+
+  private async settleExecutedActionResult(
+    action: Action & { readonly kind: "tool" },
+    execution: Extract<ActionExecutionResult, { readonly status: "executed" }>,
+    classification: ValidToolResultClassification,
+    retained: {
+      readonly observation: ToolResultObservation | null;
+      readonly items: readonly RunItem<TOutput>[];
+      readonly counters: RunCounters;
+    },
+  ): Promise<ProcessActionResult> {
+    const evidenceBuilder = this.dependencies.evidenceBuilder;
+    const evidenceStorage = this.dependencies.evidenceStorage;
+    if (evidenceBuilder === undefined || evidenceStorage === undefined) {
+      throw new Error("Complete Action result settlement dependencies are unavailable.");
+    }
+
+    let settlement;
+    try {
+      settlement = await this.awaitInterruptibleOperation(
+        "tool",
+        () => settleToolResultEvidence({
+          actionId: action.id,
+          toolResult: execution.toolResult,
+          classification,
+          evidenceBuilder,
+          storage: evidenceStorage,
+          isInterrupted: () => this.cancellationRequest() !== null,
+        }),
+        this.runDeadlineAt(),
+        true,
+      );
+    } catch (error) {
+      if (error instanceof OperationSettlementTimeoutError) {
+        this.publishExternalToolOutcome(action, execution, retained.items, retained.observation, [], {
+          status: "failed",
+          code: "runtime_cancellation_settlement_timeout",
+        });
+        return {
+          invalidatesBatch: true,
+          terminalResult: await this.fail(
+            cancellationSettlementRuntimeError(error),
+            "runtime_cancellation_settlement_timeout",
+          ),
+        };
+      }
+      settlement = Object.freeze({
+        status: "failed" as const,
+        evidenceRefs: Object.freeze([]),
+        artifactRefs: Object.freeze([]),
+        error: runtimeError(
+          "tool",
+          "tool_evidence_creation_failed",
+          "Action result settlement failed unexpectedly.",
+          false,
+          { actionId: action.id },
+        ),
+      });
+    }
+
+    const contextWithEvidence = applyContextUpdate(this.state.context, {
+      observations: [],
+      evidenceRefs: settlement.evidenceRefs,
+      metadata: {
+        lastActionId: action.id,
+        lastControllerIteration: action.provenance.controllerIteration,
+      },
+    });
+    this.commitSettledToolState([], {
+      context: contextWithEvidence,
+      evidenceRefs: settlement.evidenceRefs,
+      artifactRefs: settlement.artifactRefs,
+    });
+    this.publishExternalToolOutcome(
+      action,
+      execution,
+      retained.items,
+      retained.observation,
+      settlement.evidenceRefs,
+      settlement.status === "failed"
+        ? { status: "failed", code: settlement.error.code }
+        : { status: classification.failed ? "failed" : "succeeded", code: execution.toolResult.error?.code ?? null },
+    );
+
+    if (settlement.status === "failed") {
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(
+          settlement.error,
+          settlement.error.owner === "storage" ? "storage_write_failed" : "tool_execution_failed",
+        ),
+      };
+    }
+    if (settlement.status === "interrupted" || this.cancellationRequest() !== null) {
+      return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
+    }
+    if (
+      retained.counters.consecutiveActionFailures >
+        this.config.limits.maxConsecutiveActionFailures
+    ) {
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(limitRuntimeError(
+          "Run exceeded maxConsecutiveActionFailures.",
+          {
+            maxConsecutiveActionFailures:
+              this.config.limits.maxConsecutiveActionFailures,
+            actualConsecutiveActionFailures:
+              retained.counters.consecutiveActionFailures,
+          },
+        )),
+      };
+    }
+    return { invalidatesBatch: true, terminalResult: null };
+  }
+
+  private createExternalToolResultObservation(
+    action: Action,
+    execution: Extract<ActionExecutionResult, { readonly status: "executed" }>,
+  ): ToolResultObservation {
+    const base = this.createObservationBase(action);
+    return Object.freeze({
+      ...base,
+      kind: "tool_result" as const,
+      result: execution.toolResult,
+      metadata: Object.freeze({
+        ...base.metadata,
+        toolName: execution.toolResult.toolName,
+        toolResultStatus: execution.toolResult.status,
+        sandboxAttemptId: execution.attempt.id,
+        sandboxEnforcement: execution.attempt.enforcement,
+        sandboxIsolation: execution.isolation,
+      }),
+    });
+  }
+
+  private retainExternalToolOutcome(
+    action: Action,
+    observation: Observation | null,
+    failed: boolean,
+  ): { readonly items: readonly RunItem<TOutput>[]; readonly counters: RunCounters } {
+    const context = applyContextUpdate(this.state.context, {
+      observations: observation === null ? [] : [observation],
+      evidenceRefs: [],
+      metadata: {
+        lastActionId: action.id,
+        lastControllerIteration: action.provenance.controllerIteration,
+      },
+    });
+    const counters = nextActionCounters(this.state.counters, failed);
+    const items = observation === null
+      ? Object.freeze([])
+      : this.materializeItems([observationDraft<TOutput>(observation)]);
+    this.replaceState(freezeState({
+      ...this.state,
+      context,
+      counters,
+      items: Object.freeze([...this.state.items, ...items]),
+    }));
+    return Object.freeze({ items, counters });
+  }
+
+  private publishExternalToolOutcome(
+    action: Action,
+    execution: Extract<ActionExecutionResult, { readonly status: "executed" }>,
+    items: readonly RunItem<TOutput>[],
+    observation: Observation | null,
+    evidenceRefs: readonly EvidenceRef[],
+    outcome: { readonly status: "succeeded" | "failed"; readonly code: string | null },
+  ): void {
+    this.publishItems(items);
+    if (observation !== null) {
+      this.publishObservationNotifications(observation, evidenceRefs);
+    }
+    this.emit("tool.finished", {
+      runId: this.state.runId,
+      actionId: action.id,
+      toolName: execution.toolResult.toolName,
+      status: outcome.status,
+      code: outcome.code,
+      toolResultStatus: execution.toolResult.status,
+      durationMs: Math.max(
+        0,
+        Date.parse(execution.toolResult.finishedAt) - Date.parse(execution.toolResult.startedAt),
+      ),
+    });
   }
 
   private async processSandboxDenial(
@@ -2575,6 +2899,9 @@ export class RunExecution<TOutput> {
       return this.assessPreparedExternalAction(action, proposal.prepared, 2);
     }
     if (escalation.status === "ineligible" || escalation.status === "invalidated") {
+      if (escalation.status === "invalidated") {
+        this.recordActionInvalidated(prepared, "revalidation", "tool", escalation.code);
+      }
       return this.commitSandboxDenialObservation(
         action,
         escalation.code,
@@ -2620,9 +2947,41 @@ export class RunExecution<TOutput> {
     return this.commitActionObservation(observation, true, true);
   }
 
-  private handleActionInterruption(action: Action): Promise<ProcessActionResult> {
+  private handleActionInterruption(
+    action: Action,
+    interruption?: Extract<ActionExecutionResult, { readonly status: "interrupted" }>["interruption"],
+  ): Promise<ProcessActionResult> {
     if (this.cancellationRequest() !== null) {
       return this.cancelRun().then((terminalResult) => ({
+        invalidatesBatch: true,
+        terminalResult,
+      }));
+    }
+    if (interruption?.kind === "operation_deadline") {
+      return this.commitActionFailure(action, runtimeError(
+        "tool",
+        "tool_timeout",
+        "Action execution exceeded its operation deadline.",
+        false,
+        {
+          actionId: action.id,
+          operationId: interruption.deadline.operationId,
+          deadlineAt: interruption.deadline.deadlineAt,
+        },
+      ));
+    }
+    if (interruption?.kind === "run_cancellation") {
+      return this.fail(runtimeError(
+        "tool",
+        "tool_cancellation_unconfirmed",
+        "Action reported Run cancellation without a matching active request.",
+        false,
+        {
+          actionId: action.id,
+          reportedRunId: interruption.cancellation.runId,
+          reportedRequestId: interruption.cancellation.requestId,
+        },
+      ), "tool_cancellation_unconfirmed").then((terminalResult) => ({
         invalidatesBatch: true,
         terminalResult,
       }));
@@ -2714,6 +3073,9 @@ export class RunExecution<TOutput> {
       observation === null ? [] : [observationDraft<TOutput>(observation)],
       { context, counters, evidenceRefs, artifactRefs },
     );
+    if (observation !== null) {
+      this.publishObservationNotifications(observation, evidenceRefs);
+    }
 
     if (this.state.status === "cancelling") {
       return { invalidatesBatch: true, terminalResult: null };
@@ -2808,6 +3170,7 @@ export class RunExecution<TOutput> {
       context,
       counters,
     });
+    this.publishObservationNotifications(observation, []);
 
     if (counters.consecutiveActionFailures > this.config.limits.maxConsecutiveActionFailures) {
       return {
@@ -2824,6 +3187,32 @@ export class RunExecution<TOutput> {
     }
 
     return { invalidatesBatch, terminalResult: null };
+  }
+
+  private publishObservationNotifications(
+    observation: Observation,
+    evidenceRefs: readonly EvidenceRef[],
+  ): void {
+    const outcome = observationNotificationOutcome(observation);
+    this.emit("observation.created", {
+      runId: this.state.runId,
+      actionId: observation.actionId,
+      observationId: observation.id,
+      status: outcome.status,
+      code: outcome.code,
+    });
+    this.emit("context.updated", {
+      runId: this.state.runId,
+      observationId: observation.id,
+    });
+    for (const evidenceId of evidenceRefs) {
+      this.emit("evidence.created", {
+        runId: this.state.runId,
+        actionId: observation.actionId,
+        evidenceId,
+        evidenceRefs,
+      });
+    }
   }
 
   private createObservationBase(action: Action) {
@@ -3685,6 +4074,36 @@ function observationDraft<TOutput>(observation: Observation): RunItemDraft<TOutp
     kind: "observation",
     observation,
   });
+}
+
+function observationNotificationOutcome(
+  observation: Observation,
+): { readonly status: string; readonly code: string | null } {
+  switch (observation.kind) {
+    case "tool_result":
+      return {
+        status: observation.result.status,
+        code: observation.result.error?.code ?? null,
+      };
+    case "action_denied":
+      return { status: "denied", code: observation.code };
+    case "action_failure":
+      return { status: "failed", code: observation.error.code };
+    case "action_rejected":
+      return { status: "rejected", code: observation.code };
+    case "approval_declined":
+      return { status: "declined", code: null };
+    case "approval_policy_rejected":
+    case "approval_review_failed":
+    case "approval_application_failed":
+      return { status: "failed", code: observation.code };
+    case "approval_limit_reached":
+      return { status: "limit_reached", code: observation.limit };
+    case "permissions_granted":
+      return { status: "granted", code: null };
+    case "plan_update":
+      return { status: "updated", code: null };
+  }
 }
 
 function nextActionCounters(current: RunCounters, failed: boolean): RunCounters {

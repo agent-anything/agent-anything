@@ -5,7 +5,9 @@ import type {
   TelemetryPort,
   TelemetryRecord,
 } from "@agent-anything/observability";
-import type { ToolDefinition } from "@agent-anything/tools";
+import type { ToolDefinition, ToolResult } from "@agent-anything/tools";
+import { EvidenceBuilder } from "@agent-anything/evidence";
+import { InMemoryStorage } from "@agent-anything/storage";
 import type { Agent } from "../agent/index.js";
 import {
   ControllerError,
@@ -1956,6 +1958,14 @@ describe("Runner sandbox denial escalation", () => {
         code: "tool_target_changed",
       }),
     }));
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "action_invalidated",
+      invalidation: expect.objectContaining({
+        phase: "revalidation",
+        owner: "tool",
+        code: "tool_target_changed",
+      }),
+    }));
   });
 
   it("runs the changed subject through Governance again and honors a deny", async () => {
@@ -2112,6 +2122,13 @@ describe("Runner sandbox denial escalation", () => {
     expect(result.items).toContainEqual(expect.objectContaining({
       kind: "sandbox_attempt_resolved",
       resolution: expect.objectContaining({ outcome: "executed" }),
+    }));
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "observation",
+      observation: expect.objectContaining({
+        kind: "tool_result",
+        result: expect.objectContaining({ status: "failed" }),
+      }),
     }));
   });
 });
@@ -3054,13 +3071,185 @@ function decidedSessionReview(
   };
 }
 
+describe("Runner external Action result settlement", () => {
+  it("retains Evidence and publishes safe lifecycle notifications after settlement", async () => {
+    const fixture = createExternalActionPipeline("allowed");
+    const events: RuntimeEvent[] = [];
+    const eventEmitter = new RuntimeEventEmitter();
+    eventEmitter.subscribe((event) => events.push(event));
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{
+        kind: "tool",
+        name: "test.external",
+        input: {},
+        modelItemId: "model_1",
+      }]),
+      finalDecision("Settled"),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+      eventEmitter,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        permissions: createDisabledReviewPermissionConfig(createApprovalReviewer(() => {
+          throw new Error("Allowed Action must not request review.");
+        })),
+      }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(result.evidenceRefs).toHaveLength(1);
+    expect(result.artifactRefs).toHaveLength(1);
+    expect(result.items.map(({ kind }) => kind)).toEqual(expect.arrayContaining([
+      "action_prepared",
+      "action_assessed",
+      "sandbox_attempt_started",
+      "sandbox_attempt_resolved",
+      "observation",
+    ]));
+    expect(events.map(({ name }) => name)).toEqual(expect.arrayContaining([
+      "action.prepared",
+      "action.assessed",
+      "sandbox.attempt.started",
+      "sandbox.attempt.resolved",
+      "observation.created",
+      "context.updated",
+      "evidence.created",
+      "tool.finished",
+    ]));
+  });
+
+  it("preserves the settled ToolResult and Evidence refs when Storage fails", async () => {
+    const fixture = createExternalActionPipeline("allowed");
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{
+        kind: "tool",
+        name: "test.external",
+        input: {},
+        modelItemId: "model_1",
+      }]),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+      evidenceStorage: {
+        async storeEvidence() {
+          throw new Error("Storage unavailable.");
+        },
+      },
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        permissions: createDisabledReviewPermissionConfig(createApprovalReviewer(() => {
+          throw new Error("Allowed Action must not request review.");
+        })),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "storage_write_failed",
+      errors: [{ owner: "storage", code: "storage_write_failed" }],
+    });
+    expect(result.evidenceRefs).toHaveLength(1);
+    expect(result.artifactRefs).toEqual([]);
+    expect(result.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "sandbox_attempt_resolved" }),
+      expect.objectContaining({
+        kind: "observation",
+        observation: expect.objectContaining({
+          kind: "tool_result",
+          result: expect.objectContaining({ status: "succeeded", output: { ok: true } }),
+        }),
+      }),
+    ]));
+  });
+
+  it("rejects incomplete result-settlement composition before execution", async () => {
+    const fixture = createExternalActionPipeline("allowed");
+    const runner = new Runner({
+      controller: new ScriptedController([finalDecision("unused")]),
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+      evidenceStorage: new InMemoryStorage(),
+      now: () => "2026-07-13T00:00:00.000Z",
+    });
+    const result = await runner.run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        permissions: createDisabledReviewPermissionConfig(createApprovalReviewer(() => {
+          throw new Error("Review must not start.");
+        })),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_invalid_options",
+    });
+    expect(fixture.executionCalls()).toBe(0);
+  });
+
+  it("terminalizes a contradictory ToolResult while retaining attempt history", async () => {
+    const fixture = createExternalActionPipeline("allowed", {
+      status: "succeeded",
+      output: null,
+      error: null,
+    });
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{
+        kind: "tool",
+        name: "test.external",
+        input: {},
+        modelItemId: "model_1",
+      }]),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        permissions: createDisabledReviewPermissionConfig(createApprovalReviewer(() => {
+          throw new Error("Allowed Action must not request review.");
+        })),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "tool_execution_failed",
+      errors: [{ owner: "tool", code: "tool_result_invalid" }],
+    });
+    expect(result.evidenceRefs).toEqual([]);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "sandbox_attempt_resolved",
+      resolution: expect.objectContaining({ outcome: "failed", code: "tool_result_invalid" }),
+    }));
+  });
+});
+
 function createRunner(
   controller: Controller<unknown>,
   dependencies: Partial<ConstructorParameters<typeof Runner>[0]> = {},
 ): Runner {
+  const actionSettlement = dependencies.actionEnforcementPipeline === undefined
+    ? {}
+    : {
+        evidenceBuilder: new EvidenceBuilder(),
+        evidenceStorage: new InMemoryStorage(),
+      };
   return new Runner({
     controller,
     now: () => "2026-07-13T00:00:00.000Z",
+    ...actionSettlement,
     ...dependencies,
   });
 }
@@ -3256,6 +3445,7 @@ function createTestPermissionConfig(): ResolvedRunPermissionConfig {
 
 function createExternalActionPipeline(
   policyStatus: "allowed" | "requires_review",
+  toolResultOverride: Partial<Pick<ToolResult, "status" | "output" | "error">> = {},
 ) {
   let prepareCallCount = 0;
   let policyCallCount = 0;
@@ -3350,6 +3540,7 @@ function createExternalActionPipeline(
           startedAt: "2026-07-13T00:00:00.000Z",
           finishedAt: "2026-07-13T00:00:01.000Z",
           metadata: { invocationContractVersion: invocation.contractVersion },
+          ...toolResultOverride,
         };
       },
     }],

@@ -104,6 +104,41 @@ describe("HostEvent", () => {
     expect(JSON.stringify(event)).not.toContain("private");
   });
 
+  it("projects Action lifecycle notifications without canonical or prepared data", () => {
+    const event = mapRuntimeEventToHostEvent({
+      sessionId: "session-1",
+      runtimeEvent: {
+        id: "runtime-event-action-prepared",
+        name: "action.prepared",
+        taskId: "task-1",
+        sequence: 5,
+        timestamp: "2026-07-16T00:00:00.000Z",
+        payload: {
+          runId: "run-1",
+          actionId: "action-1",
+          actionFingerprint: "sha256:safe-fingerprint",
+          category: "file_system",
+          effectCount: 1,
+          targetAssertionCount: 2,
+          canonicalSubject: { path: "D:/secret/workspace" },
+          preparedInvocation: { token: "private-token" },
+          effectivePermissions: { network: "all" },
+        },
+      },
+    });
+
+    expect(event.payload.runtimeEvent.payload).toEqual({
+      runId: "run-1",
+      actionId: "action-1",
+      actionFingerprint: "sha256:safe-fingerprint",
+      category: "file_system",
+      effectCount: 1,
+      targetAssertionCount: 2,
+    });
+    expect(JSON.stringify(event)).not.toContain("secret");
+    expect(JSON.stringify(event)).not.toContain("private-token");
+  });
+
   it("projects approval notifications through a fixed safe allowlist", () => {
     const event = mapRuntimeEventToHostEvent({
       sessionId: "session-1",

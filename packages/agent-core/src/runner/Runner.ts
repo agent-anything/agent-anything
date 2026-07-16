@@ -1,5 +1,7 @@
 import type { AuditPort, TelemetryPort } from "@agent-anything/observability";
+import type { EvidenceBuilderPort } from "@agent-anything/evidence";
 import type { ISODateTimeString } from "@agent-anything/shared";
+import type { StoragePort } from "@agent-anything/storage";
 import type { Agent } from "../agent/index.js";
 import type {
   ActionEnforcementPipeline,
@@ -47,6 +49,8 @@ export interface RunnerDependencies {
   readonly toolActionBridge?: ToolActionBridge;
   readonly actionEnforcementPipeline?: ActionEnforcementPipeline;
   readonly sandboxExecutionGateway?: SandboxExecutionGateway;
+  readonly evidenceBuilder?: EvidenceBuilderPort;
+  readonly evidenceStorage?: StoragePort;
   readonly retryExecutor?: RetryExecutor;
   readonly now?: () => ISODateTimeString;
   readonly createId?: CreateRunnerIdentity;

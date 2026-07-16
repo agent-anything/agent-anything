@@ -114,6 +114,51 @@ export interface ApprovalResolvedRunItem extends RunItemBase {
   readonly record: ApprovalRecordSummary;
 }
 
+export interface ActionPreparedSummary {
+  readonly actionId: string;
+  readonly actionFingerprint: string;
+  readonly category: "file_system" | "process" | "network" | "remote_tool" | "computation";
+  readonly effectCount: number;
+  readonly targetAssertionCount: number;
+}
+
+export interface ActionPreparedRunItem extends RunItemBase {
+  readonly kind: "action_prepared";
+  readonly prepared: ActionPreparedSummary;
+}
+
+export interface ActionAssessedSummary {
+  readonly actionId: string;
+  readonly actionFingerprint: string;
+  readonly status:
+    | "authorized"
+    | "approval_required"
+    | "denied"
+    | "invalidated"
+    | "failed"
+    | "interrupted";
+  readonly owner: "policy" | "permission" | "tool" | null;
+  readonly code: string | null;
+}
+
+export interface ActionAssessedRunItem extends RunItemBase {
+  readonly kind: "action_assessed";
+  readonly assessment: ActionAssessedSummary;
+}
+
+export interface ActionInvalidatedSummary {
+  readonly actionId: string;
+  readonly actionFingerprint: string;
+  readonly phase: "assessment" | "revalidation" | "dispatch";
+  readonly owner: "permission" | "tool";
+  readonly code: string;
+}
+
+export interface ActionInvalidatedRunItem extends RunItemBase {
+  readonly kind: "action_invalidated";
+  readonly invalidation: ActionInvalidatedSummary;
+}
+
 export interface SandboxAttemptSummary {
   readonly attemptId: string;
   readonly actionId: string;
@@ -197,6 +242,9 @@ export type RunItem<TOutput = unknown> =
   | RunCancelledRunItem
   | ApprovalRequestedRunItem
   | ApprovalResolvedRunItem
+  | ActionPreparedRunItem
+  | ActionAssessedRunItem
+  | ActionInvalidatedRunItem
   | SandboxAttemptStartedRunItem
   | SandboxAttemptResolvedRunItem
   | SandboxEscalationProposedRunItem
