@@ -1,6 +1,7 @@
 import type {
   ApprovalApplicabilityKey,
   ApprovalCategory,
+  ApprovalPayloadByCategory,
   CanonicalAdditionalPermissions,
 } from "@agent-anything/permission";
 import type {
@@ -46,6 +47,7 @@ export interface ActionAdapterPreparedData {
   readonly requestedPermissions: CanonicalAdditionalPermissions | null;
   readonly targetAssertions: readonly TargetStateAssertionInput[];
   readonly approvalCategory: ApprovalCategory | null;
+  readonly approvalPayload: ApprovalPayloadByCategory[ApprovalCategory] | null;
   readonly applicabilityKeys: readonly ApprovalApplicabilityKey[];
   readonly safeSummary: SafeActionSummaryInput;
   readonly preparedInvocation: PreparedActionInvocationInput;

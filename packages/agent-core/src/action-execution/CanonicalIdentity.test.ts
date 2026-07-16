@@ -76,12 +76,14 @@ describe("canonical Action identities", () => {
   it("sorts workspace roots and rejects duplicate Windows paths case-insensitively", () => {
     const workspace = createCanonicalWorkspaceIdentity({
       workspaceId: "workspace.main",
+      trustState: "trusted",
       roots: [root("z", "D:/z"), root("a", "C:/a")],
     });
     expect(workspace.roots.map(({ rootId }) => rootId)).toEqual(["a", "z"]);
 
     expect(() => createCanonicalWorkspaceIdentity({
       workspaceId: "workspace.main",
+      trustState: "trusted",
       roots: [root("one", "D:/Repo"), root("two", "d:/repo")],
     })).toThrowError(expect.objectContaining({ code: "canonical_duplicate" }));
   });

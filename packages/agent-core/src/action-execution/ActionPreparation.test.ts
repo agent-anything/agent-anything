@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createAllowAllActionPolicyPort } from "@agent-anything/governance";
 import type { InvocationInterruptionContext } from "@agent-anything/shared";
 import type { Action } from "../runner/Action.js";
 import {
@@ -133,11 +134,14 @@ describe("Action preparation", () => {
     const identity = await prepared(createPipeline(), createInput({
       actor: { identityId: "user-2", kind: "user" },
     }));
+    const workspaceTrust = await prepared(createPipeline(), createInput({
+      workspaceTrustState: "restricted",
+    }));
     const registration = await prepared(createPipeline({
       adapter: { ...adapterDescriptor, version: "2.0.0" },
     }), createInput());
 
-    for (const changed of [operation, authority, identity, registration]) {
+    for (const changed of [operation, authority, identity, workspaceTrust, registration]) {
       expect(changed.actionFingerprint).not.toBe(baseline.actionFingerprint);
     }
   });
@@ -167,12 +171,14 @@ describe("Action preparation", () => {
     const first = await prepared(createPipeline({
       data: createPreparedData({
         approvalCategory: "permissions",
+        approvalPayload: permissionPayload(),
         applicabilityKeys: [{ category: "permissions", value: "path:workspace/README.md" }],
       }),
     }), createInput());
     const second = await prepared(createPipeline({
       data: createPreparedData({
         approvalCategory: "permissions",
+        approvalPayload: permissionPayload(),
         applicabilityKeys: [{ category: "permissions", value: "path:workspace" }],
       }),
     }), createInput());
@@ -247,12 +253,18 @@ describe("Action preparation", () => {
         },
       }),
     }).prepare(createInput());
+    const missingApprovalPayload = await createPipeline({
+      data: createPreparedData({
+        approvalCategory: "permissions",
+        approvalPayload: null,
+      }),
+    }).prepare(createInput());
 
     expect(thrown).toEqual(expect.objectContaining({
       status: "failed",
       error: expect.objectContaining({ code: "tool_action_adapter_failed" }),
     }));
-    for (const result of [malformed, mismatch]) {
+    for (const result of [malformed, mismatch, missingApprovalPayload]) {
       expect(result).toEqual(expect.objectContaining({
         status: "failed",
         error: expect.objectContaining({ code: "tool_action_adapter_contract_invalid" }),
@@ -336,6 +348,7 @@ function createPipeline(overrides: PipelineOverrides = {}): ActionEnforcementPip
         overrides.prepare ?? (async () => overrides.result ?? preparedResult(overrides.data)),
       ),
     }],
+    policyPort: createAllowAllActionPolicyPort(),
     now: overrides.now ?? (() => NOW),
   });
 }
@@ -394,6 +407,7 @@ function createPreparedData(
       },
     }],
     approvalCategory: null,
+    approvalPayload: null,
     applicabilityKeys: [],
     safeSummary: {
       kind: "file_system",
@@ -420,10 +434,20 @@ function target(resolutionFingerprint = SHA_A): CanonicalPathIdentityInput {
   };
 }
 
+function permissionPayload() {
+  return {
+    permissions: { fileSystem: { read: ["D:/workspace/README.md"] } },
+    cwd: "D:/workspace",
+    cwdDisplay: "workspace",
+    environmentId: "local",
+  } as const;
+}
+
 interface InputOverrides {
   readonly input?: unknown;
   readonly action?: Action;
   readonly actor?: { readonly identityId: string; readonly kind: "user" | "service" | "anonymous" };
+  readonly workspaceTrustState?: "trusted" | "restricted" | "unknown";
   readonly interruption?: InvocationInterruptionContext;
 }
 
@@ -433,6 +457,7 @@ function createInput(overrides: InputOverrides = {}) {
     action: overrides.action ?? action({ input: overrides.input ?? { path: "README.md" } }),
     workspace: {
       workspaceId: "workspace-1",
+      trustState: overrides.workspaceTrustState ?? "trusted" as const,
       roots: [{
         rootId: "root-1",
         platform: "win32" as const,

@@ -85,11 +85,23 @@ export interface CanonicalRemoteToolOperation {
   readonly argumentsDigest: string;
 }
 
+export interface CanonicalSkillOperation {
+  readonly schemaVersion: 1;
+  readonly kind: "skill";
+  readonly operation: "invoke";
+  readonly skillId: string;
+  readonly skillVersion: string;
+  readonly sourceFingerprint: string;
+  readonly action: string;
+  readonly argumentsDigest: string;
+}
+
 export type CanonicalActionOperation =
   | CanonicalFileSystemOperation
   | CanonicalProcessOperation
   | CanonicalNetworkOperation
-  | CanonicalRemoteToolOperation;
+  | CanonicalRemoteToolOperation
+  | CanonicalSkillOperation;
 
 export type CanonicalFileOperationInput =
   | {
@@ -130,6 +142,15 @@ export type CanonicalActionOperationInput =
       readonly operation: "invoke";
       readonly target: CanonicalRemoteToolIdentity;
       readonly argumentsDigest: string;
+    }
+  | {
+      readonly kind: "skill";
+      readonly operation: "invoke";
+      readonly skillId: string;
+      readonly skillVersion: string;
+      readonly sourceFingerprint: string;
+      readonly action: string;
+      readonly argumentsDigest: string;
     };
 
 export function createCanonicalActionOperation(
@@ -139,6 +160,7 @@ export function createCanonicalActionOperation(
   if (input?.kind === "process") return createProcessOperation(input);
   if (input?.kind === "network") return createNetworkOperation(input);
   if (input?.kind === "remote_tool") return createRemoteToolOperation(input);
+  if (input?.kind === "skill") return createSkillOperation(input);
   throw contractError(
     "canonical_operation_invalid",
     "Unknown canonical Action operation kind.",
@@ -295,6 +317,30 @@ function createRemoteToolOperation(
     kind: "remote_tool",
     operation: "invoke",
     target: createCanonicalRemoteToolIdentity(input.target),
+    argumentsDigest: validateDigest(input.argumentsDigest, "operation.argumentsDigest"),
+  });
+}
+
+function createSkillOperation(
+  input: Extract<CanonicalActionOperationInput, { readonly kind: "skill" }>,
+): CanonicalSkillOperation {
+  assertStrictRecord(
+    input,
+    "operation",
+    new Set(["kind", "operation", "skillId", "skillVersion", "sourceFingerprint", "action", "argumentsDigest"]),
+    "canonical_operation_invalid",
+  );
+  if (input.operation !== "invoke") {
+    throw contractError("canonical_operation_invalid", "Invalid Skill operation.", "operation.operation");
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    kind: "skill",
+    operation: "invoke",
+    skillId: validateToken(input.skillId, "operation.skillId"),
+    skillVersion: validateToken(input.skillVersion, "operation.skillVersion"),
+    sourceFingerprint: validateDigest(input.sourceFingerprint, "operation.sourceFingerprint"),
+    action: validateBoundedString(input.action, "operation.action", "canonical_operation_invalid"),
     argumentsDigest: validateDigest(input.argumentsDigest, "operation.argumentsDigest"),
   });
 }

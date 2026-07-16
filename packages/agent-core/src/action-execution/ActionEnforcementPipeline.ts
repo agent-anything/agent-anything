@@ -3,6 +3,12 @@ import type {
   InvocationInterruptionRef,
   ISODateTimeString,
 } from "@agent-anything/shared";
+import { snapshotApprovalPayload } from "@agent-anything/permission/approval";
+import {
+  allowsActionApproval,
+  type ActionApprovalCause,
+} from "@agent-anything/permission";
+import type { ActionPolicyPort, PolicyDecision } from "@agent-anything/governance";
 import type { Action } from "../runner/Action.js";
 import type { ActionRejectedCode } from "../runner/Observation.js";
 import type { RuntimeError } from "../runner/RuntimeError.js";
@@ -38,6 +44,7 @@ import {
 } from "./ActionFingerprint.js";
 import {
   createApprovalApplicabilityKeys,
+  assertPreparedExternalAction,
   createCanonicalActionSubject,
   createPreparedExternalAction,
   createPreparedActionReference,
@@ -52,6 +59,27 @@ import {
 } from "./PreparedActionInvocation.js";
 import { createSafeActionSummary } from "./SafeActionSummary.js";
 import { createTargetStateAssertions } from "./TargetStateAssertion.js";
+import {
+  type ActionAssessment,
+  type ActionAssessmentAuthoritySnapshot,
+  type AssessPreparedActionInput,
+  createActionDispatchAuthorization,
+  snapshotActionAssessmentAuthority,
+} from "./ActionAssessment.js";
+import {
+  checkManagedActionConstraints,
+  deriveActionAuthority,
+} from "./ActionAuthorityAssessment.js";
+import {
+  assertApprovalMapping,
+  createActionApprovalRequirement,
+  requiredApprovalCategory,
+} from "./ActionApprovalAssessment.js";
+import {
+  createActionPolicyInput,
+  evaluatePreparedActionRules,
+} from "./ActionGovernanceAssessment.js";
+import { createCanonicalSha256Digest } from "./CanonicalEncoding.js";
 
 export interface PrepareExternalActionInput {
   readonly action: Action;
@@ -70,6 +98,7 @@ export type ActionPreparationResult =
 export interface ActionEnforcementPipelineDependencies {
   readonly registrations: ActionRegistrationSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
+  readonly policyPort: ActionPolicyPort;
   readonly now?: () => ISODateTimeString;
 }
 
@@ -210,6 +239,16 @@ export class ActionEnforcementPipeline {
         },
       ]);
       const approvalCategory = validateApprovalCategory(data.approvalCategory);
+      if ((approvalCategory === null) !== (data.approvalPayload === null)) {
+        throw contractError(
+          "canonical_contract_invalid",
+          "Approval category and category-specific payload must either both be present or both be null.",
+          "adapterResult.data.approvalPayload",
+        );
+      }
+      const approvalPayload = approvalCategory === null
+        ? null
+        : snapshotApprovalPayload(approvalCategory, data.approvalPayload!);
       const applicabilityKeys = createApprovalApplicabilityKeys(
         approvalCategory,
         data.applicabilityKeys,
@@ -268,6 +307,7 @@ export class ActionEnforcementPipeline {
           subject,
           actionFingerprint,
           safeSummary,
+          approvalPayload,
           preparedInvocation,
           preparedAt,
         }),
@@ -282,6 +322,222 @@ export class ActionEnforcementPipeline {
       );
     }
   }
+
+  async assess(input: AssessPreparedActionInput): Promise<ActionAssessment> {
+    const before = observeAssessmentInterruption(input.interruption);
+    if (before !== null) return before;
+
+    let authority: ActionAssessmentAuthoritySnapshot;
+    let expectedFingerprint: string;
+    try {
+      assertPreparedExternalAction(input.prepared);
+      authority = snapshotActionAssessmentAuthority(input.authority);
+      expectedFingerprint = await createActionFingerprint(input.prepared.subject);
+    } catch {
+      return assessmentFailed("tool", "tool_action_fingerprint_failed", "Prepared Action fingerprint verification failed.");
+    }
+    if (expectedFingerprint !== input.prepared.actionFingerprint ||
+      input.prepared.subject.action.runId !== input.prepared.action.runId ||
+      input.prepared.subject.action.actionId !== input.prepared.action.id) {
+      return Object.freeze({
+        status: "invalidated" as const,
+        code: "action_prepared_subject_changed",
+        message: "The prepared Action no longer matches its canonical subject.",
+      });
+    }
+
+    const managed = checkManagedActionConstraints(input.prepared, authority);
+    if (managed.status === "invalidated") return managed;
+    if (managed.status === "denied") {
+      return assessmentDenied(
+        managed.code.startsWith("policy_") ? "policy" : "permission",
+        managed.code,
+        managed.message,
+      );
+    }
+
+    const policyInput = createActionPolicyInput(input.prepared);
+    let policyDecision: PolicyDecision;
+    try {
+      policyDecision = await this.dependencies.policyPort.evaluate(policyInput);
+      assertPolicyDecision(policyDecision, policyInput.checkId);
+    } catch {
+      const interrupted = observeAssessmentInterruption(input.interruption);
+      if (interrupted !== null) return interrupted;
+      return assessmentFailed("policy", "policy_evaluation_failed", "Governance Policy evaluation failed.");
+    }
+    const afterPolicy = observeAssessmentInterruption(input.interruption);
+    if (afterPolicy !== null) return afterPolicy;
+    if (policyDecision.status === "denied") {
+      return assessmentDenied(
+        "policy",
+        policyDecision.code ?? "policy_denied",
+        policyDecision.reason ?? "Governance Policy denied the Action.",
+      );
+    }
+
+    let ruleOutcome;
+    try {
+      ruleOutcome = evaluatePreparedActionRules(input.prepared, authority);
+    } catch {
+      return assessmentFailed("policy", "policy_rule_evaluation_failed", "Action Rule evaluation failed.");
+    }
+    if (ruleOutcome.decision === "forbidden") {
+      return assessmentDenied("policy", "policy_rule_forbidden", "An applicable Rule forbids the Action.");
+    }
+
+    let derivedAuthority;
+    try {
+      derivedAuthority = deriveActionAuthority({ prepared: input.prepared, authority, ruleOutcome });
+    } catch {
+      return assessmentFailed(
+        "permission",
+        "permission_authority_derivation_failed",
+        "Effective Action authority could not be derived.",
+      );
+    }
+
+    const causes: ActionApprovalCause[] = [];
+    if (policyDecision.status === "requires_review" && !derivedAuthority.hasCategoryAuthority) {
+      causes.push("governance_review");
+    }
+    if (ruleOutcome.decision === "prompt" && !derivedAuthority.hasCategoryAuthority) {
+      causes.push("rule_prompt");
+    }
+    if (!derivedAuthority.fullyCovered) causes.push("missing_authority");
+
+    try {
+      assertApprovalMapping({
+        prepared: input.prepared,
+        requiredForReview: causes.length > 0 || input.prepared.approvalCategory !== null,
+        missingPermissions: derivedAuthority.missingPermissions,
+      });
+    } catch (error) {
+      return assessmentDenied(
+        "tool",
+        "action_review_category_unsupported",
+        safeValidationMessage(error, "The Action has no valid approval mapping."),
+      );
+    }
+
+    if (causes.length > 0) {
+      const category = input.prepared.approvalCategory ?? requiredApprovalCategory(input.prepared);
+      if (causes.some((cause) => !allowsActionApproval({
+        policy: authority.approvalPolicy,
+        category,
+        cause,
+      }))) {
+        return assessmentDenied(
+          "permission",
+          "permission_approval_not_allowed",
+          "The active Approval Policy does not allow the required authority request.",
+        );
+      }
+      try {
+        return Object.freeze({
+          status: "approval_required" as const,
+          requirement: createActionApprovalRequirement({
+            prepared: input.prepared,
+            authority,
+            derivedAuthority,
+            causes,
+          }),
+        });
+      } catch {
+        return assessmentFailed(
+          "permission",
+          "approval_requirement_creation_failed",
+          "The trusted approval requirement could not be created.",
+        );
+      }
+    }
+
+    try {
+      const authorizedAt = validatePreparedAt(this.now());
+      const authoritySnapshotId = await createCanonicalSha256Digest(
+        "agent-anything.action-authority.v1",
+        {
+          actionFingerprint: input.prepared.actionFingerprint,
+          profileId: authority.profile.id,
+          managedConstraintSetId: authority.managedConstraints.constraintSetId,
+          policyCheckId: policyDecision.checkId,
+          policyStatus: policyDecision.status,
+          ruleOutcome,
+          authoritySources: derivedAuthority.sources,
+          actionCoverageIdToConsume: derivedAuthority.actionCoverageIdToConsume,
+          effectivePermissions: derivedAuthority.effectivePermissions,
+        },
+      );
+      return Object.freeze({
+        status: "authorized" as const,
+        authorization: createActionDispatchAuthorization({
+          prepared: input.prepared,
+          authoritySnapshotId,
+          policyDecision,
+          ruleOutcome,
+          authoritySources: derivedAuthority.sources,
+          actionCoverageIdToConsume: derivedAuthority.actionCoverageIdToConsume,
+          effectivePermissions: derivedAuthority.effectivePermissions,
+          authorizedAt,
+        }),
+      });
+    } catch {
+      return assessmentFailed(
+        "permission",
+        "permission_authorization_creation_failed",
+        "Action dispatch authorization could not be created.",
+      );
+    }
+  }
+}
+
+function assertPolicyDecision(input: PolicyDecision, expectedCheckId: string): void {
+  if (!input || input.checkId !== expectedCheckId ||
+    (input.status !== "allowed" && input.status !== "denied" && input.status !== "requires_review") ||
+    typeof input.decidedAt !== "string" || Number.isNaN(Date.parse(input.decidedAt))) {
+    throw new TypeError("Policy returned an invalid decision.");
+  }
+}
+
+function observeAssessmentInterruption(
+  context: InvocationInterruptionContext,
+): ActionAssessment | null {
+  if (!context.signal.aborted) return null;
+  if (context.interruption === null) {
+    return assessmentFailed(
+      "runtime",
+      "runtime_action_assessment_interruption_unattributed",
+      "Action assessment was aborted without interruption attribution.",
+    );
+  }
+  try {
+    return Object.freeze({ status: "interrupted" as const, interruption: snapshotInterruption(context.interruption) });
+  } catch {
+    return assessmentFailed(
+      "runtime",
+      "runtime_action_assessment_interruption_invalid",
+      "Action assessment interruption attribution is invalid.",
+    );
+  }
+}
+
+function assessmentDenied(
+  owner: "policy" | "permission" | "tool",
+  code: string,
+  message: string,
+): ActionAssessment {
+  return Object.freeze({ status: "denied" as const, owner, code, message });
+}
+
+function assessmentFailed(
+  owner: RuntimeError["owner"],
+  code: string,
+  message: string,
+): ActionAssessment {
+  return Object.freeze({
+    status: "failed" as const,
+    error: Object.freeze({ owner, code, message, retryable: false, metadata: Object.freeze({}) }),
+  });
 }
 
 function assertAdapterResult(input: ActionAdapterPreparationResult): void {
@@ -342,6 +598,7 @@ function assertPreparedData(
       "requestedPermissions",
       "targetAssertions",
       "approvalCategory",
+      "approvalPayload",
       "applicabilityKeys",
       "safeSummary",
       "preparedInvocation",

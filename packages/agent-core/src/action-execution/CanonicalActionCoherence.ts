@@ -77,6 +77,8 @@ function operationEffectKeys(operation: CanonicalActionOperation): ReadonlySet<s
     case "remote_tool":
       keys.add(`remote_tool:invoke:${remoteToolIdentityKey(operation.target)}`);
       break;
+    case "skill":
+      break;
   }
   return keys;
 }
@@ -132,6 +134,8 @@ function collectOperationClaims(
       break;
     case "remote_tool":
       addRemoteServerClaim(servers, operation.target.server);
+      break;
+    case "skill":
       break;
   }
 }

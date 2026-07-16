@@ -45,6 +45,7 @@ export interface CanonicalWorkspaceRootIdentityInput {
 
 export interface CanonicalWorkspaceIdentity {
   readonly workspaceId: string;
+  readonly trustState: "trusted" | "restricted" | "unknown";
   readonly roots: readonly [
     CanonicalWorkspaceRootIdentity,
     ...CanonicalWorkspaceRootIdentity[],
@@ -53,6 +54,7 @@ export interface CanonicalWorkspaceIdentity {
 
 export interface CanonicalWorkspaceIdentityInput {
   readonly workspaceId: string;
+  readonly trustState: "trusted" | "restricted" | "unknown";
   readonly roots: readonly CanonicalWorkspaceRootIdentityInput[];
 }
 
@@ -172,10 +174,17 @@ export function createCanonicalWorkspaceIdentity(
   assertStrictRecord(
     input,
     "workspace",
-    new Set(["workspaceId", "roots"]),
+    new Set(["workspaceId", "trustState", "roots"]),
     "canonical_contract_invalid",
   );
   const workspaceId = validateToken(input.workspaceId, "workspace.workspaceId");
+  if (input.trustState !== "trusted" && input.trustState !== "restricted" && input.trustState !== "unknown") {
+    throw contractError(
+      "canonical_contract_invalid",
+      "Canonical workspace trust state is invalid.",
+      "workspace.trustState",
+    );
+  }
   assertCanonicalArray(input.roots, "workspace.roots", "canonical_contract_invalid", 256);
   if (input.roots.length === 0) {
     throw contractError(
@@ -195,6 +204,7 @@ export function createCanonicalWorkspaceIdentity(
   );
   return Object.freeze({
     workspaceId,
+    trustState: input.trustState,
     roots: Object.freeze(roots) as unknown as CanonicalWorkspaceIdentity["roots"],
   });
 }

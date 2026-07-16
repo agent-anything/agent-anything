@@ -6,6 +6,14 @@ export {
 } from "./ActionContractValidation.js";
 export * from "./ActionAdapter.js";
 export * from "./ActionEnforcementPipeline.js";
+export type {
+  ActionAssessment,
+  ActionAssessmentAuthoritySnapshot,
+  ActionAuthoritySource,
+  ActionAuthoritySourceKind,
+  ActionDispatchAuthorization,
+  AssessPreparedActionInput,
+} from "./ActionAssessment.js";
 export * from "./ActionFingerprint.js";
 export * from "./ActionRegistration.js";
 export * from "./CanonicalEncoding.js";

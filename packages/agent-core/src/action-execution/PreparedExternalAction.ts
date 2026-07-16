@@ -1,6 +1,7 @@
 import type {
   ApprovalApplicabilityKey,
   ApprovalCategory,
+  ApprovalPayloadByCategory,
   CanonicalAdditionalPermissions,
 } from "@agent-anything/permission";
 import { canonicalizePermissionDomain } from "@agent-anything/permission/profile";
@@ -48,6 +49,7 @@ export interface PreparedExternalAction<
   readonly subject: CanonicalActionSubject;
   readonly actionFingerprint: string;
   readonly approvalCategory: ApprovalCategory | null;
+  readonly approvalPayload: ApprovalPayloadByCategory[ApprovalCategory] | null;
   readonly applicabilityKeys: readonly ApprovalApplicabilityKey[];
   readonly safeSummary: SafeActionSummary;
   readonly preparedInvocation: TInvocation;
@@ -61,6 +63,7 @@ export interface CreatePreparedExternalActionInput<
   readonly subject: CanonicalActionSubject;
   readonly actionFingerprint: string;
   readonly safeSummary: SafeActionSummary;
+  readonly approvalPayload: ApprovalPayloadByCategory[ApprovalCategory] | null;
   readonly preparedInvocation: TInvocation;
   readonly preparedAt: ISODateTimeString;
 }
@@ -76,10 +79,36 @@ export function createPreparedExternalAction<
     subject: input.subject,
     actionFingerprint: input.actionFingerprint,
     approvalCategory: input.subject.approvalContext?.category ?? null,
+    approvalPayload: input.approvalPayload,
     applicabilityKeys: input.subject.approvalContext?.applicabilityKeys ?? Object.freeze([]),
     safeSummary: input.safeSummary,
     preparedInvocation: input.preparedInvocation,
     preparedAt: input.preparedAt,
+  });
+}
+
+export function assertPreparedExternalAction(
+  input: PreparedExternalAction,
+): void {
+  if (input === null || typeof input !== "object" ||
+    input[preparedExternalActionBrand] !== true || !isDeeplyFrozen(input)) {
+    throw contractError(
+      "canonical_contract_invalid",
+      "Action assessment requires a factory-created immutable PreparedExternalAction.",
+      "prepared",
+    );
+  }
+}
+
+function isDeeplyFrozen(input: unknown, seen = new WeakSet<object>()): boolean {
+  if (typeof input !== "object" || input === null) return true;
+  if (seen.has(input)) return true;
+  seen.add(input);
+  if (!Object.isFrozen(input)) return false;
+  return Reflect.ownKeys(input).every((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    return descriptor !== undefined && descriptor.get === undefined &&
+      descriptor.set === undefined && isDeeplyFrozen(descriptor.value, seen);
   });
 }
 

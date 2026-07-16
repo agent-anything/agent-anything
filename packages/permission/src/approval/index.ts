@@ -71,3 +71,8 @@ export {
   type ValidateApprovalDecisionInput,
   type ValidateApprovalDecisionResult,
 } from "./validateApprovalDecision.js";
+export { snapshotApprovalPayload } from "./snapshotApprovalPayload.js";
+export {
+  allowsActionApproval,
+  type ActionApprovalCause,
+} from "./evaluateApprovalPolicy.js";
