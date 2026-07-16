@@ -28,6 +28,9 @@
     "@agent-anything/tools": "workspace:*"
   },
   "devDependencies": {
+    "@agent-anything/evidence": "workspace:*",
+    "@agent-anything/permission": "workspace:*",
+    "@agent-anything/storage": "workspace:*",
     "@types/node": "^25.9.1"
   }
 }

@@ -104,6 +104,15 @@ importers:
         specifier: workspace:*
         version: link:../tools
     devDependencies:
+      '@agent-anything/evidence':
+        specifier: workspace:*
+        version: link:../evidence
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../permission
+      '@agent-anything/storage':
+        specifier: workspace:*
+        version: link:../storage
       '@types/node':
         specifier: ^25.9.1
         version: 25.9.1

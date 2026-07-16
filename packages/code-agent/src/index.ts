@@ -8,6 +8,26 @@ export type {
 } from "./workspace/index.js";
 export { resolveWorkspacePath } from "./workspace/index.js";
 export {
+  CODE_AGENT_CREATE_FILE_ACTION,
+  CODE_AGENT_DELETE_FILE_ACTION,
+  CODE_AGENT_LIST_FILES_ACTION,
+  CODE_AGENT_READ_FILE_ACTION,
+  CODE_AGENT_SEARCH_FILES_ACTION,
+  CODE_AGENT_UPDATE_FILE_ACTION,
+  createAcceptedPatchFileAction,
+  createCodeAgentCanonicalWorkspaceRoots,
+  createCodeAgentFileActionCapability,
+} from "./file-actions/index.js";
+export type {
+  CodeAgentFileActionCapability,
+  CodeAgentFileActionName,
+  CodeAgentFileActionRequest,
+  CodeAgentPreparedFileInvocationPayload,
+  CodeAgentPreparedFileOperation,
+  CreateCodeAgentFileActionCapabilityInput,
+  DeleteFileOutput,
+} from "./file-actions/index.js";
+export {
   CODE_AGENT_LIST_FILES_TOOL,
   CODE_AGENT_READ_FILE_TOOL,
   CODE_AGENT_SEARCH_FILES_TOOL,
