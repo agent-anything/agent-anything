@@ -114,6 +114,53 @@ export interface ApprovalResolvedRunItem extends RunItemBase {
   readonly record: ApprovalRecordSummary;
 }
 
+export interface SandboxAttemptSummary {
+  readonly attemptId: string;
+  readonly actionId: string;
+  readonly actionFingerprint: string;
+  readonly ordinal: 1 | 2;
+  readonly enforcement: "managed" | "external" | "disabled";
+  readonly policyId: string;
+  readonly authoritySnapshotId: string;
+  readonly dispatchPlanFingerprint: string;
+  readonly startedAt: ISODateTimeString;
+}
+
+export interface SandboxAttemptStartedRunItem extends RunItemBase {
+  readonly kind: "sandbox_attempt_started";
+  readonly attempt: SandboxAttemptSummary;
+}
+
+export interface SandboxAttemptResolutionSummary {
+  readonly attemptId: string;
+  readonly actionId: string;
+  readonly ordinal: 1 | 2;
+  readonly enforcement: "managed" | "external" | "disabled";
+  readonly outcome:
+    | "executed"
+    | "sandbox_denied"
+    | "sandbox_unavailable"
+    | "interrupted"
+    | "failed";
+  readonly code: string | null;
+  readonly effectState: "none" | "unknown" | null;
+  readonly settledAt: ISODateTimeString;
+}
+
+export interface SandboxAttemptResolvedRunItem extends RunItemBase {
+  readonly kind: "sandbox_attempt_resolved";
+  readonly resolution: SandboxAttemptResolutionSummary;
+}
+
+export interface SandboxEscalationProposedRunItem extends RunItemBase {
+  readonly kind: "sandbox_escalation_proposed";
+  readonly previousAttemptId: string;
+  readonly actionId: string;
+  readonly previousActionFingerprint: string;
+  readonly nextActionFingerprint: string;
+  readonly deniedEffectKind: "file_system" | "network";
+}
+
 type RetryEventRunItem<TEvent extends { readonly type: string }> = RunItemBase & {
   readonly kind: TEvent["type"];
   readonly retry: TEvent;
@@ -150,4 +197,7 @@ export type RunItem<TOutput = unknown> =
   | RunCancelledRunItem
   | ApprovalRequestedRunItem
   | ApprovalResolvedRunItem
+  | SandboxAttemptStartedRunItem
+  | SandboxAttemptResolvedRunItem
+  | SandboxEscalationProposedRunItem
   | RetryRunItem;

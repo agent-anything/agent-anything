@@ -12,6 +12,7 @@ import {
   type CanonicalExecutableIdentityInput,
   type CanonicalFileSystemTarget,
   type CanonicalNetworkEndpoint,
+  type CanonicalPathIdentity,
   type CanonicalPathIdentityInput,
   type CanonicalRemoteToolIdentity,
 } from "./CanonicalIdentity.js";
@@ -134,6 +135,72 @@ export function createActionEffectSet(input: ActionEffectSetInput): ActionEffect
       ...CapabilityEffect[],
     ],
   });
+}
+
+export function snapshotCapabilityEffect(input: CapabilityEffect): CapabilityEffect {
+  const snapshot = createActionEffectSet({
+    kind: "effects",
+    values: [capabilityEffectInput(input)],
+  });
+  if (snapshot.kind !== "effects") {
+    throw new TypeError("CapabilityEffect snapshot unexpectedly became effect-free.");
+  }
+  return snapshot.values[0];
+}
+
+export function addCapabilityEffect(
+  current: ActionEffectSet,
+  effect: CapabilityEffect,
+): ActionEffectSet {
+  const values = current.kind === "effect_free"
+    ? []
+    : current.values.map(capabilityEffectInput);
+  return createActionEffectSet({
+    kind: "effects",
+    values: [...values, capabilityEffectInput(effect)],
+  });
+}
+
+function capabilityEffectInput(effect: CapabilityEffect): CapabilityEffectInput {
+  switch (effect.kind) {
+    case "file_system":
+      return {
+        kind: effect.kind,
+        operation: effect.operation,
+        targets: effect.targets.map((target) => pathInput(target.path)),
+      };
+    case "process":
+      return {
+        kind: effect.kind,
+        operation: effect.operation,
+        executable: {
+          path: pathInput(effect.executable.path),
+          baseline: effect.executable.baseline,
+        },
+      };
+    case "network":
+      return {
+        kind: effect.kind,
+        operation: effect.operation,
+        endpoints: effect.endpoints,
+      };
+    case "remote_tool":
+      return {
+        kind: effect.kind,
+        operation: effect.operation,
+        target: effect.target,
+      };
+  }
+}
+
+function pathInput(path: CanonicalPathIdentity): CanonicalPathIdentityInput {
+  return {
+    platform: path.platform,
+    path: path.canonicalPath,
+    resolvedPath: path.resolvedPath,
+    workspaceRootId: path.workspaceRootId,
+    resolutionFingerprint: path.resolutionFingerprint,
+  };
 }
 
 export function capabilityEffectKey(effect: CapabilityEffect): string {

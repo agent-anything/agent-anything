@@ -14,7 +14,10 @@ import type {
   CanonicalEnvironmentIdentity,
   CanonicalWorkspaceIdentity,
 } from "./CanonicalIdentity.js";
-import type { ActionEffectSetInput } from "./CapabilityEffect.js";
+import type {
+  ActionEffectSetInput,
+  CapabilityEffect,
+} from "./CapabilityEffect.js";
 import type {
   PreparedActionInvocation,
   PreparedActionInvocationInput,
@@ -84,6 +87,21 @@ export type ActionAdapterRevalidationResult =
     }
   | { readonly status: "interrupted"; readonly interruption: InvocationInterruptionRef };
 
+export type ActionAdapterSandboxReconciliationResult =
+  | {
+      readonly status: "supported";
+      readonly targetAssertions: readonly TargetStateAssertionInput[];
+    }
+  | { readonly status: "unsupported"; readonly code: string; readonly message: string }
+  | { readonly status: "invalidated"; readonly code: string; readonly message: string }
+  | {
+      readonly status: "failed";
+      readonly code: string;
+      readonly message: string;
+      readonly retryable: boolean;
+    }
+  | { readonly status: "interrupted"; readonly interruption: InvocationInterruptionRef };
+
 export interface ActionAdapter {
   readonly descriptor: ActionAdapterDescriptor;
   prepare(
@@ -95,6 +113,12 @@ export interface ActionAdapter {
     assertions: readonly TargetStateAssertion[],
     context: ActionRevalidationContext,
   ): Promise<ActionAdapterRevalidationResult>;
+  reconcileSandboxDenial?(
+    preparedInvocation: PreparedActionInvocation,
+    deniedEffect: CapabilityEffect,
+    assertions: readonly TargetStateAssertion[],
+    context: ActionRevalidationContext,
+  ): Promise<ActionAdapterSandboxReconciliationResult>;
 }
 
 export interface ActionAdapterImplementation {
@@ -106,6 +130,7 @@ interface CapturedActionAdapter {
   readonly descriptor: ActionAdapterDescriptor;
   readonly prepare: ActionAdapter["prepare"];
   readonly revalidate: ActionAdapter["revalidate"];
+  readonly reconcileSandboxDenial: ActionAdapter["reconcileSandboxDenial"];
 }
 
 export interface ActionAdapterImplementationSnapshot {
@@ -144,6 +169,9 @@ export function createActionAdapterImplementationSnapshot(
       descriptor: registration.adapter,
       prepare: implementation.adapter.prepare.bind(implementation.adapter),
       revalidate: implementation.adapter.revalidate.bind(implementation.adapter),
+      reconcileSandboxDenial: implementation.adapter.reconcileSandboxDenial?.bind(
+        implementation.adapter,
+      ),
     }));
   }
 

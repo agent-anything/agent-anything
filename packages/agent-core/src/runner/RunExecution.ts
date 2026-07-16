@@ -28,7 +28,9 @@ import type {
   ActionDispatchAuthorization,
   ActionDispatchPlan,
   ActionRevalidationResult,
+  ActionExecutionResult,
   PreparedExternalAction,
+  SandboxAttempt,
 } from "../action-execution/index.js";
 import {
   ControllerError,
@@ -76,6 +78,8 @@ import type {
   ApprovalRequestedRunItem,
   RunItem,
   RunItemBase,
+  SandboxAttemptResolutionSummary,
+  SandboxAttemptSummary,
 } from "./RunItem.js";
 import {
   createBlockedRunResult,
@@ -153,6 +157,10 @@ import {
   type AuthorityCommitOwner,
 } from "./AuthorityCommitExecution.js";
 import { recordActionDispatchAuthorizationAudit } from "./RunnerActionDispatchAudit.js";
+import {
+  recordSandboxAttemptResolved,
+  recordSandboxAttemptStarted,
+} from "./RunnerSandboxAttemptObservability.js";
 
 type ResolvedRunnerDependencies = RunnerDependencies & {
   readonly now: NonNullable<RunnerDependencies["now"]>;
@@ -1918,12 +1926,13 @@ export class RunExecution<TOutput> {
       return this.handleActionInterruption(action);
     }
 
-    return this.assessPreparedExternalAction(action, preparation.prepared);
+    return this.assessPreparedExternalAction(action, preparation.prepared, 1);
   }
 
   private async assessPreparedExternalAction(
     action: Action & { readonly kind: "tool" },
     prepared: PreparedExternalAction,
+    attemptOrdinal: 1 | 2,
   ): Promise<ProcessActionResult> {
     const pipeline = this.dependencies.actionEnforcementPipeline;
     if (pipeline === undefined) {
@@ -1970,6 +1979,7 @@ export class RunExecution<TOutput> {
         action,
         prepared,
         assessment.authorization,
+        attemptOrdinal,
       );
       if (revalidationOutcome.kind === "processed") return revalidationOutcome.processed;
       const revalidation = revalidationOutcome.result;
@@ -2035,6 +2045,7 @@ export class RunExecution<TOutput> {
     action: Action & { readonly kind: "tool" },
     prepared: PreparedExternalAction,
     authorization: ActionDispatchAuthorization,
+    attemptOrdinal: 1 | 2,
   ): Promise<ExternalActionRevalidationOutcome> {
     const pipeline = this.dependencies.actionEnforcementPipeline;
     if (pipeline === undefined) {
@@ -2054,7 +2065,7 @@ export class RunExecution<TOutput> {
           authorization,
           authority: this.createActionAssessmentAuthority(approvalDeadlineAt),
           interruption: this.createActionInterruptionContext(),
-          attemptOrdinal: 1,
+          attemptOrdinal,
         }),
         this.runDeadlineAt(),
       );
@@ -2090,18 +2101,21 @@ export class RunExecution<TOutput> {
   }
 
   private createActionInterruptionContext() {
-    const cancellation = this.cancellationRequest();
+    const cancellation = this.config.cancellation.context;
     return Object.freeze({
-      signal: this.config.cancellation.context.signal,
-      interruption: cancellation === null
-        ? null
-        : Object.freeze({
-            kind: "run_cancellation" as const,
-            cancellation: Object.freeze({
-              runId: cancellation.runId,
-              requestId: cancellation.id,
-            }),
-          }),
+      signal: cancellation.signal,
+      get interruption() {
+        const request = cancellation.request;
+        return request === null
+          ? null
+          : Object.freeze({
+              kind: "run_cancellation" as const,
+              cancellation: Object.freeze({
+                runId: request.runId,
+                requestId: request.id,
+              }),
+            });
+      },
     });
   }
 
@@ -2194,7 +2208,7 @@ export class RunExecution<TOutput> {
   }
 
   private async commitActionDispatchPlan(
-    action: Action,
+    action: Action & { readonly kind: "tool" },
     prepared: PreparedExternalAction,
     plan: ActionDispatchPlan,
   ): Promise<ProcessActionResult> {
@@ -2289,11 +2303,11 @@ export class RunExecution<TOutput> {
     if (gateway === undefined) {
       throw new Error("Authorized Action dispatch requires SandboxExecutionGateway.");
     }
-    let execution;
+    let sandboxPreparation;
     try {
-      execution = await this.awaitInterruptibleOperation(
+      sandboxPreparation = await this.awaitInterruptibleOperation(
         "tool",
-        () => gateway.dispatch({
+        () => gateway.prepare({
           plan,
           preparedInvocation: prepared.preparedInvocation,
           deadlineAt: this.runDeadlineAt(),
@@ -2303,6 +2317,146 @@ export class RunExecution<TOutput> {
       );
     } catch (error) {
       return this.handleActionPipelineOperationError(action, error, "dispatch");
+    }
+    if (sandboxPreparation.status === "failed") {
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(
+          sandboxPreparation.error,
+          "sandbox_enforcement_failed",
+        ),
+      };
+    }
+    if (sandboxPreparation.status === "interrupted") {
+      return this.handleActionInterruption(action);
+    }
+
+    const sandboxAttempt = sandboxPreparation.prepared.attempt;
+    let startErrors: readonly RuntimeError[];
+    try {
+      startErrors = await this.awaitInterruptibleOperation(
+        "tool",
+        () => recordSandboxAttemptStarted({
+          attempt: sandboxAttempt,
+          taskId: this.state.taskId,
+          workspace: this.config.workspace,
+          identity: this.config.identity,
+          timestamp: this.now(),
+          auditRequirement: this.config.audit,
+          telemetryRequirement: this.config.telemetry,
+          signal: this.config.cancellation.context.signal,
+          ...(this.dependencies.auditPort === undefined
+            ? {}
+            : { auditPort: this.dependencies.auditPort }),
+          ...(this.dependencies.telemetryPort === undefined
+            ? {}
+            : { telemetryPort: this.dependencies.telemetryPort }),
+        }),
+        this.runDeadlineAt(),
+      );
+    } catch (error) {
+      return this.handleActionPipelineOperationError(action, error, "dispatch");
+    }
+    if (startErrors.length > 0) {
+      const error = startErrors[0]!;
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(error, infrastructureFailureCode(error)),
+      };
+    }
+    this.commitSettledToolState([
+      (base) => Object.freeze({
+        ...base,
+        kind: "sandbox_attempt_started" as const,
+        attempt: sandboxAttemptSummary(sandboxAttempt),
+      }),
+    ], {});
+    this.emit("sandbox.attempt.started", {
+      runId: sandboxAttempt.runId,
+      actionId: sandboxAttempt.actionId,
+      attemptId: sandboxAttempt.id,
+      ordinal: sandboxAttempt.ordinal,
+      enforcement: sandboxAttempt.enforcement,
+    });
+
+    let execution: ActionExecutionResult;
+    try {
+      execution = await this.awaitInterruptibleOperation(
+        "tool",
+        () => gateway.execute(sandboxPreparation.prepared),
+        this.runDeadlineAt(),
+        true,
+      );
+    } catch (error) {
+      return this.handleActionPipelineOperationError(action, error, "dispatch");
+    }
+
+    const resolution = sandboxAttemptResolution(sandboxAttempt, execution, this.now());
+    this.commitSettledToolState([
+      (base) => Object.freeze({
+        ...base,
+        kind: "sandbox_attempt_resolved" as const,
+        resolution,
+      }),
+    ], {});
+    this.emit("sandbox.attempt.resolved", {
+      runId: sandboxAttempt.runId,
+      actionId: sandboxAttempt.actionId,
+      attemptId: sandboxAttempt.id,
+      ordinal: sandboxAttempt.ordinal,
+      enforcement: sandboxAttempt.enforcement,
+      outcome: resolution.outcome,
+      code: resolution.code,
+    });
+
+    let resolutionErrors: readonly RuntimeError[];
+    try {
+      resolutionErrors = await this.awaitInterruptibleOperation(
+        "tool",
+        () => recordSandboxAttemptResolved({
+          attempt: sandboxAttempt,
+          resolution,
+          taskId: this.state.taskId,
+          workspace: this.config.workspace,
+          identity: this.config.identity,
+          timestamp: resolution.settledAt,
+          auditRequirement: this.config.audit,
+          telemetryRequirement: this.config.telemetry,
+          signal: new AbortController().signal,
+          ...(this.dependencies.auditPort === undefined
+            ? {}
+            : { auditPort: this.dependencies.auditPort }),
+          ...(this.dependencies.telemetryPort === undefined
+            ? {}
+            : { telemetryPort: this.dependencies.telemetryPort }),
+        }),
+        this.runDeadlineAt(),
+        true,
+      );
+    } catch (error) {
+      if (error instanceof OperationSettlementTimeoutError) {
+        return {
+          invalidatesBatch: true,
+          terminalResult: await this.fail(
+            cancellationSettlementRuntimeError(error),
+            "runtime_cancellation_settlement_timeout",
+          ),
+        };
+      }
+      resolutionErrors = Object.freeze([runtimeError(
+        "runtime",
+        "runtime_action_dispatch_failed",
+        "Sandbox attempt settlement failed unexpectedly.",
+        false,
+        { actionId: action.id, attemptId: sandboxAttempt.id },
+      )]);
+    }
+    if (resolutionErrors.length > 0) {
+      const error = resolutionErrors[0]!;
+      return {
+        invalidatesBatch: true,
+        terminalResult: await this.fail(error, infrastructureFailureCode(error)),
+      };
     }
 
     if (execution.status === "executed") {
@@ -2333,14 +2487,7 @@ export class RunExecution<TOutput> {
       );
     }
     if (execution.status === "sandbox_denied") {
-      const observation: ActionDeniedObservation = Object.freeze({
-        ...this.createObservationBase(action),
-        kind: "action_denied",
-        owner: "sandbox",
-        code: execution.denial.code,
-        message: execution.denial.message,
-      });
-      return this.commitActionObservation(observation, true, true);
+      return this.processSandboxDenial(action, prepared, plan, execution);
     }
     if (execution.status === "sandbox_unavailable") {
       const error = runtimeError(
@@ -2370,6 +2517,95 @@ export class RunExecution<TOutput> {
       invalidatesBatch: true,
       terminalResult: await this.fail(execution.error, "sandbox_enforcement_failed"),
     };
+  }
+
+  private async processSandboxDenial(
+    action: Action & { readonly kind: "tool" },
+    prepared: PreparedExternalAction,
+    plan: ActionDispatchPlan,
+    execution: Extract<ActionExecutionResult, { readonly status: "sandbox_denied" }>,
+  ): Promise<ProcessActionResult> {
+    if (plan.attemptOrdinal === 2) {
+      return this.commitSandboxDenialObservation(
+        action,
+        execution.denial.code,
+        execution.denial.message,
+      );
+    }
+    const pipeline = this.dependencies.actionEnforcementPipeline;
+    if (pipeline === undefined) {
+      throw new Error("Sandbox denial processing requires ActionEnforcementPipeline.");
+    }
+    let escalation;
+    try {
+      escalation = await this.awaitInterruptibleOperation(
+        "tool",
+        () => pipeline.deriveEscalation({
+          prepared,
+          plan,
+          denial: execution.denial,
+          interruption: this.createActionInterruptionContext(),
+        }),
+        this.runDeadlineAt(),
+      );
+    } catch (error) {
+      return this.handleActionPipelineOperationError(action, error, "escalation");
+    }
+    if (escalation.status === "eligible") {
+      const proposal = escalation.proposal;
+      this.commitSettledToolState([
+        (base) => Object.freeze({
+          ...base,
+          kind: "sandbox_escalation_proposed" as const,
+          previousAttemptId: proposal.previousAttemptId,
+          actionId: action.id,
+          previousActionFingerprint: proposal.previousActionFingerprint,
+          nextActionFingerprint: proposal.prepared.actionFingerprint,
+          deniedEffectKind: execution.denial.deniedEffect.kind as "file_system" | "network",
+        }),
+      ], {});
+      this.emit("sandbox.escalation.proposed", {
+        runId: this.state.runId,
+        actionId: action.id,
+        previousAttemptId: proposal.previousAttemptId,
+        previousActionFingerprint: proposal.previousActionFingerprint,
+        nextActionFingerprint: proposal.prepared.actionFingerprint,
+        deniedEffectKind: execution.denial.deniedEffect.kind,
+      });
+      return this.assessPreparedExternalAction(action, proposal.prepared, 2);
+    }
+    if (escalation.status === "ineligible" || escalation.status === "invalidated") {
+      return this.commitSandboxDenialObservation(
+        action,
+        escalation.code,
+        escalation.message,
+      );
+    }
+    if (escalation.status === "interrupted") {
+      return this.handleActionInterruption(action);
+    }
+    return {
+      invalidatesBatch: true,
+      terminalResult: await this.fail(
+        escalation.error,
+        "tool_sandbox_escalation_failed",
+      ),
+    };
+  }
+
+  private commitSandboxDenialObservation(
+    action: Action,
+    code: string,
+    message: string,
+  ): Promise<ProcessActionResult> {
+    const observation: ActionDeniedObservation = Object.freeze({
+      ...this.createObservationBase(action),
+      kind: "action_denied",
+      owner: "sandbox",
+      code,
+      message,
+    });
+    return this.commitActionObservation(observation, true, true);
   }
 
   private commitActionFailure(
@@ -2403,7 +2639,7 @@ export class RunExecution<TOutput> {
   private async handleActionPipelineOperationError(
     action: Action,
     error: unknown,
-    phase: "preparation" | "assessment" | "revalidation" | "dispatch",
+    phase: "preparation" | "assessment" | "revalidation" | "dispatch" | "escalation",
   ): Promise<ProcessActionResult> {
     if (error instanceof OperationSettlementTimeoutError) {
       return {
@@ -3181,13 +3417,14 @@ export class RunExecution<TOutput> {
     kind: ActiveOperationKind,
     execute: () => Promise<TValue>,
     interruptionDeadlineAt: ISODateTimeString | null = null,
+    allowInterruptedStart = false,
   ): Promise<TValue> {
     if (this.activeOperation !== null) {
       throw new Error(
         `Cannot start ${kind} while ${this.activeOperation.kind} is still active.`,
       );
     }
-    if (this.cancellationRequest() !== null) {
+    if (!allowInterruptedStart && this.cancellationRequest() !== null) {
       this.observeCancellation();
       throw this.config.cancellation.context.signal.reason;
     }
@@ -3204,6 +3441,9 @@ export class RunExecution<TOutput> {
       settlementTimer: null,
     };
     this.activeOperation = operationState;
+    if (allowInterruptedStart && this.cancellationRequest() !== null) {
+      this.observeCancellation();
+    }
     if (interruptionDeadlineAt !== null) {
       const delayMs = Math.max(0, Date.parse(interruptionDeadlineAt) - Date.parse(this.now()));
       operationState.interruptionTimer = setTimeout(
@@ -3213,7 +3453,7 @@ export class RunExecution<TOutput> {
     }
 
     const operation = Promise.resolve().then(() => {
-      if (this.cancellationRequest() !== null) {
+      if (!allowInterruptedStart && this.cancellationRequest() !== null) {
         this.observeCancellation();
         throw this.config.cancellation.context.signal.reason;
       }
@@ -3523,6 +3763,92 @@ function runtimeError(
 
 function errorMetadata(error: unknown): Metadata {
   return error instanceof Error ? { causeName: error.name } : {};
+}
+
+function sandboxAttemptSummary(attempt: SandboxAttempt): SandboxAttemptSummary {
+  return Object.freeze({
+    attemptId: attempt.id,
+    actionId: attempt.actionId,
+    actionFingerprint: attempt.actionFingerprint,
+    ordinal: attempt.ordinal,
+    enforcement: attempt.enforcement,
+    policyId: attempt.policyId,
+    authoritySnapshotId: attempt.authoritySnapshotId,
+    dispatchPlanFingerprint: attempt.dispatchPlanFingerprint,
+    startedAt: attempt.startedAt,
+  });
+}
+
+function sandboxAttemptResolution(
+  attempt: SandboxAttempt,
+  execution: ActionExecutionResult,
+  settledAt: ISODateTimeString,
+): SandboxAttemptResolutionSummary {
+  switch (execution.status) {
+    case "executed":
+      return Object.freeze({
+        attemptId: attempt.id,
+        actionId: attempt.actionId,
+        ordinal: attempt.ordinal,
+        enforcement: attempt.enforcement,
+        outcome: execution.status,
+        code: execution.toolResult.error?.code ?? execution.toolResult.status,
+        effectState: null,
+        settledAt,
+      });
+    case "sandbox_denied":
+      return Object.freeze({
+        attemptId: attempt.id,
+        actionId: attempt.actionId,
+        ordinal: attempt.ordinal,
+        enforcement: attempt.enforcement,
+        outcome: execution.status,
+        code: execution.denial.code,
+        effectState: execution.denial.effectState,
+        settledAt,
+      });
+    case "sandbox_unavailable":
+      return Object.freeze({
+        attemptId: attempt.id,
+        actionId: attempt.actionId,
+        ordinal: attempt.ordinal,
+        enforcement: attempt.enforcement,
+        outcome: execution.status,
+        code: execution.code,
+        effectState: execution.effectState,
+        settledAt,
+      });
+    case "interrupted":
+      return Object.freeze({
+        attemptId: attempt.id,
+        actionId: attempt.actionId,
+        ordinal: attempt.ordinal,
+        enforcement: attempt.enforcement,
+        outcome: execution.status,
+        code: execution.interruption.kind,
+        effectState: null,
+        settledAt,
+      });
+    case "failed":
+      return Object.freeze({
+        attemptId: attempt.id,
+        actionId: attempt.actionId,
+        ordinal: attempt.ordinal,
+        enforcement: attempt.enforcement,
+        outcome: execution.status,
+        code: execution.error.code,
+        effectState: null,
+        settledAt,
+      });
+  }
+}
+
+function infrastructureFailureCode(error: RuntimeError): RunFailureCode {
+  return error.owner === "audit"
+    ? "audit_required_failed"
+    : error.owner === "telemetry"
+    ? "runtime_telemetry_required_failed"
+    : failureCode(error);
 }
 
 function failureCode(error: RuntimeError): RunFailureCode {

@@ -16,6 +16,7 @@ import {
   type ActionAdapterImplementation,
   type ActionAdapterPreparationResult,
   type ActionAdapterRevalidationResult,
+  type ActionAdapterSandboxReconciliationResult,
   createActionAdapterImplementationSnapshot,
 } from "./ActionAdapter.js";
 import {
@@ -39,7 +40,10 @@ import {
   type CanonicalEnvironmentIdentityInput,
   type CanonicalWorkspaceIdentityInput,
 } from "./CanonicalIdentity.js";
-import { createActionEffectSet } from "./CapabilityEffect.js";
+import {
+  capabilityEffectKey,
+  createActionEffectSet,
+} from "./CapabilityEffect.js";
 import {
   createActionFingerprint,
   createPreparedInvocationDigest,
@@ -72,6 +76,7 @@ import {
 import {
   type ActionRevalidationResult,
   type RevalidatePreparedActionInput,
+  assertActionDispatchPlan,
   createActionDispatchPlan,
 } from "./ActionRevalidation.js";
 import {
@@ -88,6 +93,12 @@ import {
   evaluatePreparedActionRules,
 } from "./ActionGovernanceAssessment.js";
 import { createCanonicalSha256Digest } from "./CanonicalEncoding.js";
+import { assertGatewaySandboxDenial } from "./SandboxExecutionGateway.js";
+import {
+  createSandboxEscalationProposal,
+  type DeriveSandboxEscalationInput,
+  type SandboxEscalationResult,
+} from "./SandboxEscalation.js";
 
 export interface PrepareExternalActionInput {
   readonly action: Action;
@@ -113,6 +124,7 @@ export interface ActionEnforcementPipelineDependencies {
 export class ActionEnforcementPipeline {
   private readonly adapters;
   private readonly now: () => ISODateTimeString;
+  private readonly processedSandboxDenials = new WeakSet<object>();
 
   constructor(
     private readonly dependencies: ActionEnforcementPipelineDependencies,
@@ -658,6 +670,244 @@ export class ActionEnforcementPipeline {
       );
     }
   }
+
+  async deriveEscalation(
+    input: DeriveSandboxEscalationInput,
+  ): Promise<SandboxEscalationResult> {
+    const before = observeEscalationInterruption(input.interruption);
+    if (before !== null) return before;
+    try {
+      assertPreparedExternalAction(input.prepared);
+      assertActionDispatchPlan(input.plan);
+      assertGatewaySandboxDenial(input.denial);
+    } catch {
+      return escalationFailed(
+        "sandbox_escalation_provenance_invalid",
+        "Sandbox escalation requires the original prepared Action, dispatch plan, and gateway denial.",
+      );
+    }
+    if (
+      input.plan.runId !== input.prepared.action.runId ||
+      input.plan.actionId !== input.prepared.action.id ||
+      input.plan.actionFingerprint !== input.prepared.actionFingerprint ||
+      input.plan.preparedInvocationDigest !==
+        input.prepared.subject.preparedInvocationDigest ||
+      input.denial.runId !== input.plan.runId ||
+      input.denial.actionId !== input.plan.actionId ||
+      input.denial.actionFingerprint !== input.plan.actionFingerprint ||
+      input.denial.ordinal !== input.plan.attemptOrdinal ||
+      input.denial.attemptId.length === 0
+    ) {
+      return escalationFailed(
+        "sandbox_escalation_correlation_invalid",
+        "Sandbox denial does not correlate to the exact prepared Action and attempt.",
+      );
+    }
+    if (this.processedSandboxDenials.has(input.denial)) {
+      return escalationIneligible(
+        "sandbox_escalation_already_processed",
+        "The sandbox denial has already completed its escalation decision.",
+      );
+    }
+    this.processedSandboxDenials.add(input.denial);
+    if (
+      input.plan.enforcement === "disabled" ||
+      input.plan.attemptOrdinal !== 1 ||
+      input.denial.ordinal !== 1
+    ) {
+      return escalationIneligible(
+        "sandbox_escalation_attempt_ineligible",
+        "Only the first managed or external sandbox attempt can propose escalation.",
+      );
+    }
+    if (input.denial.effectState !== "none") {
+      return escalationIneligible(
+        "sandbox_escalation_effect_state_unknown",
+        "Sandbox escalation requires proof that the denied attempt produced no effect.",
+      );
+    }
+    if (
+      input.denial.deniedEffect.kind !== "file_system" &&
+      input.denial.deniedEffect.kind !== "network"
+    ) {
+      return escalationIneligible(
+        "sandbox_escalation_effect_unsupported",
+        "The denied effect cannot be represented by bounded additional permissions.",
+      );
+    }
+    if (
+      input.prepared.subject.effectSet.kind === "effects" &&
+      input.prepared.subject.effectSet.values.some(
+        (effect) => capabilityEffectKey(effect) ===
+          capabilityEffectKey(input.denial.deniedEffect),
+      )
+    ) {
+      return escalationIneligible(
+        "sandbox_escalation_effect_already_authorized",
+        "The denied effect was already declared and authorized by the previous Action subject.",
+      );
+    }
+
+    const registration = findActionRegistration(
+      this.dependencies.registrations,
+      input.prepared.action.name,
+    );
+    const adapter = this.adapters.find(input.prepared.action.name);
+    if (
+      registration === undefined ||
+      adapter === undefined ||
+      !registrationMatchesPrepared(registration, input.prepared) ||
+      !sameAdapterDescriptor(adapter.descriptor, registration.adapter)
+    ) {
+      return Object.freeze({
+        status: "invalidated" as const,
+        code: "action_registration_changed",
+        message: "The Action registration changed before sandbox escalation.",
+      });
+    }
+    if (adapter.reconcileSandboxDenial === undefined) {
+      return escalationIneligible(
+        "sandbox_escalation_adapter_unsupported",
+        "The registered Action adapter does not support sandbox-denial reconciliation.",
+      );
+    }
+
+    const context = Object.freeze({
+      workspace: input.prepared.subject.workspace,
+      actor: input.prepared.subject.identity,
+      environment: input.prepared.subject.environment,
+      interruption: input.interruption,
+    });
+    let targetResult: ActionAdapterRevalidationResult;
+    try {
+      targetResult = await adapter.revalidate(
+        input.prepared.preparedInvocation,
+        input.prepared.subject.targetAssertions,
+        context,
+      );
+    } catch {
+      const interrupted = observeEscalationInterruption(input.interruption);
+      return interrupted ?? escalationFailed(
+        "tool_action_revalidation_failed",
+        "The Action adapter failed while validating the first-attempt target state.",
+        "tool",
+      );
+    }
+    const afterTarget = observeEscalationInterruption(input.interruption);
+    if (afterTarget !== null) return afterTarget;
+    try {
+      assertAdapterRevalidationResult(targetResult);
+      if (targetResult.status === "invalidated") {
+        return Object.freeze({
+          status: "invalidated" as const,
+          code: validateToken(targetResult.code, "adapterRevalidation.code"),
+          message: validateBoundedText(
+            targetResult.message,
+            "adapterRevalidation.message",
+            "canonical_contract_invalid",
+          ),
+        });
+      }
+      if (targetResult.status === "failed") {
+        return escalationFailed(
+          validateToolFailureCode(targetResult.code),
+          validateBoundedText(
+            targetResult.message,
+            "adapterRevalidation.message",
+            "canonical_contract_invalid",
+          ),
+          "tool",
+          assertBoolean(targetResult.retryable, "adapterRevalidation.retryable"),
+        );
+      }
+      if (targetResult.status === "interrupted") {
+        return Object.freeze({
+          status: "interrupted" as const,
+          interruption: snapshotInterruption(targetResult.interruption),
+        });
+      }
+    } catch {
+      return escalationFailed(
+        "tool_action_revalidation_contract_invalid",
+        "The Action adapter returned invalid target-state revalidation data.",
+        "tool",
+      );
+    }
+
+    let reconciliation: ActionAdapterSandboxReconciliationResult;
+    try {
+      reconciliation = await adapter.reconcileSandboxDenial(
+        input.prepared.preparedInvocation,
+        input.denial.deniedEffect,
+        input.prepared.subject.targetAssertions,
+        context,
+      );
+    } catch {
+      const interrupted = observeEscalationInterruption(input.interruption);
+      return interrupted ?? escalationFailed(
+        "tool_sandbox_reconciliation_failed",
+        "The Action adapter failed while reconciling the denied effect.",
+        "tool",
+      );
+    }
+    const afterReconciliation = observeEscalationInterruption(input.interruption);
+    if (afterReconciliation !== null) return afterReconciliation;
+    try {
+      assertAdapterSandboxReconciliationResult(reconciliation);
+      if (reconciliation.status === "unsupported") {
+        return escalationIneligible(
+          validateToken(reconciliation.code, "adapterReconciliation.code"),
+          validateBoundedText(
+            reconciliation.message,
+            "adapterReconciliation.message",
+            "canonical_contract_invalid",
+          ),
+        );
+      }
+      if (reconciliation.status === "invalidated") {
+        return Object.freeze({
+          status: "invalidated" as const,
+          code: validateToken(reconciliation.code, "adapterReconciliation.code"),
+          message: validateBoundedText(
+            reconciliation.message,
+            "adapterReconciliation.message",
+            "canonical_contract_invalid",
+          ),
+        });
+      }
+      if (reconciliation.status === "failed") {
+        return escalationFailed(
+          validateToolFailureCode(reconciliation.code),
+          validateBoundedText(
+            reconciliation.message,
+            "adapterReconciliation.message",
+            "canonical_contract_invalid",
+          ),
+          "tool",
+          assertBoolean(reconciliation.retryable, "adapterReconciliation.retryable"),
+        );
+      }
+      if (reconciliation.status === "interrupted") {
+        return Object.freeze({
+          status: "interrupted" as const,
+          interruption: snapshotInterruption(reconciliation.interruption),
+        });
+      }
+      return createSandboxEscalationProposal({
+        prepared: input.prepared,
+        plan: input.plan,
+        denial: input.denial,
+        additionalAssertions: reconciliation.targetAssertions,
+        preparedAt: validatePreparedAt(this.now()),
+      });
+    } catch {
+      return escalationFailed(
+        "tool_sandbox_reconciliation_contract_invalid",
+        "The Action adapter returned invalid sandbox reconciliation data.",
+        "tool",
+      );
+    }
+  }
 }
 
 function registrationMatchesPrepared(
@@ -723,6 +973,84 @@ function assertAdapterRevalidationResult(
     return;
   }
   throw new TypeError("Unknown Action adapter revalidation result.");
+}
+
+function assertAdapterSandboxReconciliationResult(
+  input: ActionAdapterSandboxReconciliationResult,
+): void {
+  if (input?.status === "supported") {
+    assertStrictRecord(
+      input,
+      "adapterReconciliation",
+      new Set(["status", "targetAssertions"]),
+      "canonical_contract_invalid",
+    );
+    if (!Array.isArray(input.targetAssertions)) {
+      throw new TypeError("Adapter reconciliation targetAssertions must be an array.");
+    }
+    return;
+  }
+  if (input?.status === "unsupported" || input?.status === "invalidated") {
+    assertStrictRecord(
+      input,
+      "adapterReconciliation",
+      new Set(["status", "code", "message"]),
+      "canonical_contract_invalid",
+    );
+    return;
+  }
+  if (input?.status === "failed") {
+    assertStrictRecord(
+      input,
+      "adapterReconciliation",
+      new Set(["status", "code", "message", "retryable"]),
+      "canonical_contract_invalid",
+    );
+    return;
+  }
+  if (input?.status === "interrupted") {
+    assertStrictRecord(
+      input,
+      "adapterReconciliation",
+      new Set(["status", "interruption"]),
+      "canonical_contract_invalid",
+    );
+    return;
+  }
+  throw new TypeError("Unknown Action adapter sandbox reconciliation result.");
+}
+
+function observeEscalationInterruption(
+  context: InvocationInterruptionContext,
+): SandboxEscalationResult | null {
+  const observed = observeRevalidationInterruption(context);
+  if (observed === null) return null;
+  if (observed.status === "interrupted" || observed.status === "failed") {
+    return observed;
+  }
+  throw new Error("Unexpected revalidation interruption result.");
+}
+
+function escalationIneligible(code: string, message: string): SandboxEscalationResult {
+  return Object.freeze({ status: "ineligible" as const, code, message });
+}
+
+function escalationFailed(
+  code: string,
+  message: string,
+  owner: RuntimeError["owner"] = "sandbox",
+  retryable = false,
+): SandboxEscalationResult {
+  return Object.freeze({
+    status: "failed" as const,
+    error: Object.freeze({
+      owner,
+      code,
+      message,
+      retryable,
+      metadata: Object.freeze({}),
+    }),
+  });
 }
 
 function observeRevalidationInterruption(

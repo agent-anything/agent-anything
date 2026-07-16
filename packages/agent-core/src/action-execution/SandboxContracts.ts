@@ -62,6 +62,15 @@ export interface DispatchSandboxActionInput {
   readonly interruption: InvocationInterruptionContext;
 }
 
+export interface PreparedSandboxDispatch {
+  readonly attempt: SandboxAttempt;
+}
+
+export type SandboxDispatchPreparationResult =
+  | { readonly status: "ready"; readonly prepared: PreparedSandboxDispatch }
+  | { readonly status: "interrupted"; readonly interruption: InvocationInterruptionRef }
+  | { readonly status: "failed"; readonly error: RuntimeError };
+
 export interface SandboxExecutionRequest {
   readonly attempt: SandboxAttempt;
   readonly policy: SandboxPolicyEnvelope;
@@ -164,5 +173,6 @@ export type ActionExecutionResult =
   | { readonly status: "failed"; readonly attempt: SandboxAttempt | null; readonly error: RuntimeError };
 
 export interface SandboxExecutionGateway {
-  dispatch(input: DispatchSandboxActionInput): Promise<ActionExecutionResult>;
+  prepare(input: DispatchSandboxActionInput): Promise<SandboxDispatchPreparationResult>;
+  execute(prepared: PreparedSandboxDispatch): Promise<ActionExecutionResult>;
 }

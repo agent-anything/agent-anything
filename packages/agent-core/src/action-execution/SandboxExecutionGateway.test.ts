@@ -47,7 +47,7 @@ describe("SandboxExecutionGateway", () => {
     });
     const gateway = createGateway(fixture, { executors: [executor] });
 
-    const result = await gateway.dispatch(dispatchInput(fixture));
+    const result = await prepareAndExecute(gateway, dispatchInput(fixture));
 
     expect(result).toMatchObject({
       status: "executed",
@@ -63,6 +63,35 @@ describe("SandboxExecutionGateway", () => {
     expect(observedPolicyId).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 
+  it("prepares without executing and consumes the prepared dispatch exactly once", async () => {
+    const fixture = await createFixture("disabled");
+    const execute = vi.fn();
+    const gateway = createGateway(fixture, {
+      executors: [createExecutor(execute)],
+    });
+
+    const preparation = await gateway.prepare(dispatchInput(fixture));
+    expect(preparation.status).toBe("ready");
+    expect(execute).not.toHaveBeenCalled();
+    if (preparation.status !== "ready") throw new Error("Sandbox preparation failed.");
+
+    await expect(gateway.execute(Object.freeze({ ...preparation.prepared }))).resolves
+      .toMatchObject({
+        status: "failed",
+        error: { code: "sandbox_prepared_dispatch_invalid" },
+      });
+    expect(execute).not.toHaveBeenCalled();
+
+    await expect(gateway.execute(preparation.prepared)).resolves.toMatchObject({
+      status: "executed",
+    });
+    await expect(gateway.execute(preparation.prepared)).resolves.toMatchObject({
+      status: "failed",
+      error: { code: "sandbox_prepared_dispatch_consumed" },
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a copied dispatch plan and never reaches the executor", async () => {
     const fixture = await createFixture("disabled");
     const execute = vi.fn();
@@ -70,7 +99,7 @@ describe("SandboxExecutionGateway", () => {
       executors: [createExecutor(execute)],
     });
 
-    const result = await gateway.dispatch({
+    const result = await prepareAndExecute(gateway, {
       ...dispatchInput(fixture),
       plan: Object.freeze({ ...fixture.plan }),
     });
@@ -95,7 +124,7 @@ describe("SandboxExecutionGateway", () => {
       payload: { changed: true },
     });
 
-    const result = await gateway.dispatch({
+    const result = await prepareAndExecute(gateway, {
       ...dispatchInput(fixture),
       preparedInvocation: changed,
     });
@@ -114,7 +143,7 @@ describe("SandboxExecutionGateway", () => {
       executors: [createExecutor(execute)],
     });
 
-    const result = await gateway.dispatch(dispatchInput(fixture));
+    const result = await prepareAndExecute(gateway, dispatchInput(fixture));
 
     expect(result).toMatchObject({
       status: "sandbox_unavailable",
@@ -139,7 +168,7 @@ describe("SandboxExecutionGateway", () => {
       providers: [provider],
     });
 
-    const result = await gateway.dispatch(dispatchInput(fixture));
+    const result = await prepareAndExecute(gateway, dispatchInput(fixture));
 
     expect(result).toMatchObject({
       status: "sandbox_unavailable",
@@ -178,7 +207,7 @@ describe("SandboxExecutionGateway", () => {
       providers: [provider],
     });
 
-    const result = await gateway.dispatch(dispatchInput(fixture));
+    const result = await prepareAndExecute(gateway, dispatchInput(fixture));
 
     expect(result).toMatchObject({
       status: "executed",
@@ -231,7 +260,7 @@ describe("SandboxExecutionGateway", () => {
       executors: [],
       providers: [provider],
     });
-    const resultPromise = gateway.dispatch({
+    const resultPromise = prepareAndExecute(gateway, {
       ...dispatchInput(fixture),
       interruption: Object.freeze({ signal: controller.signal, interruption: null }),
     });
@@ -257,7 +286,7 @@ describe("SandboxExecutionGateway", () => {
   it("requires a local executor only when the selected disabled endpoint dispatches", async () => {
     const fixture = await createFixture("disabled");
     const gateway = createGateway(fixture, { executors: [] });
-    await expect(gateway.dispatch(dispatchInput(fixture))).resolves.toMatchObject({
+    await expect(prepareAndExecute(gateway, dispatchInput(fixture))).resolves.toMatchObject({
       status: "sandbox_unavailable",
       code: "sandbox_executor_unavailable",
       stage: "setup",
@@ -449,6 +478,15 @@ function dispatchInput(fixture: Awaited<ReturnType<typeof createFixture>>) {
       interruption: null,
     }),
   };
+}
+
+async function prepareAndExecute(
+  gateway: SandboxExecutionGateway,
+  input: ReturnType<typeof dispatchInput>,
+) {
+  const preparation = await gateway.prepare(input);
+  if (preparation.status !== "ready") return preparation;
+  return gateway.execute(preparation.prepared);
 }
 
 function toolResult(actionId: string) {

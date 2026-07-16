@@ -133,6 +133,74 @@ export function createTargetStateAssertions(
   return Object.freeze(keyed.map(({ value }) => value));
 }
 
+export function mergeTargetStateAssertions(
+  current: readonly TargetStateAssertion[],
+  additions: readonly TargetStateAssertionInput[],
+): readonly TargetStateAssertion[] {
+  return createTargetStateAssertions([
+    ...current.map(targetStateAssertionInput),
+    ...additions,
+  ]);
+}
+
+function targetStateAssertionInput(
+  assertion: TargetStateAssertion,
+): TargetStateAssertionInput {
+  switch (assertion.kind) {
+    case "workspace_root_identity":
+      return {
+        kind: assertion.kind,
+        expected: {
+          ...pathInput(assertion.expected),
+          rootId: assertion.expected.rootId,
+          resolvedPath: assertion.expected.resolvedPath ?? assertion.expected.canonicalPath,
+        },
+      };
+    case "canonical_path_identity":
+      return { kind: assertion.kind, expected: pathInput(assertion.expected) };
+    case "file_baseline":
+      return {
+        kind: assertion.kind,
+        path: pathInput(assertion.path),
+        expected: assertion.expected,
+      };
+    case "executable_identity":
+      return {
+        kind: assertion.kind,
+        expected: {
+          path: pathInput(assertion.expected.path),
+          baseline: assertion.expected.baseline,
+        },
+      };
+    case "environment_identity":
+      return { kind: assertion.kind, expected: assertion.expected };
+    case "adapter_registration":
+      return {
+        kind: assertion.kind,
+        expected: assertion.expected,
+        registrationFingerprint: assertion.registrationFingerprint,
+      };
+    case "executor_registration":
+      return {
+        kind: assertion.kind,
+        expected: assertion.expected,
+        registrationFingerprint: assertion.registrationFingerprint,
+      };
+    case "remote_server_identity":
+      return { kind: assertion.kind, expected: assertion.expected };
+  }
+}
+
+function pathInput(path: CanonicalPathIdentity): CanonicalPathIdentityInput {
+  return {
+    platform: path.platform,
+    path: path.canonicalPath,
+    resolvedPath: path.resolvedPath,
+    workspaceRootId: path.workspaceRootId,
+    resolutionFingerprint: path.resolutionFingerprint,
+  };
+}
+
 export function targetStateAssertionKey(assertion: TargetStateAssertion): string {
   switch (assertion.kind) {
     case "workspace_root_identity":

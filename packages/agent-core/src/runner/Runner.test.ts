@@ -38,7 +38,9 @@ import { ActionEnforcementPipeline } from "../action-execution/ActionEnforcement
 import { createActionRegistrationSnapshot } from "../action-execution/ActionRegistration.js";
 import {
   assertActionExecutorDispatchContext,
+  createActionEffectSet,
   createSandboxExecutionGateway,
+  type SandboxProvider,
 } from "../action-execution/index.js";
 import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
 import { FakeApprovalReviewer } from "@agent-anything/testing";
@@ -1719,6 +1721,401 @@ describe("Runner external Action approval attachment", () => {
   });
 });
 
+describe("Runner sandbox denial escalation", () => {
+  it("rebuilds, approves, revalidates, and executes one changed-fingerprint second attempt", async () => {
+    const reviewer = createApprovalReviewer((input) => {
+      const option = input.request.decisionOptions.find(({ kind }) => kind === "accept");
+      if (option === undefined) throw new Error("Escalated Action accept option was not offered.");
+      return {
+        status: "decided",
+        submission: {
+          submissionId: "submission_escalation_accept",
+          runId: input.request.runId,
+          requestId: input.request.id,
+          pendingVersion: input.pendingVersion,
+          optionId: option.id,
+          grantedPermissions: null,
+          reason: null,
+        },
+        rationale: null,
+      };
+    });
+    const fixture = createEscalatingExternalActionFixture();
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{ kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" }]),
+      finalDecision("Escalated"),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        permissions: createReviewPermissionConfig(reviewer),
+      }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(fixture.providerCalls()).toBe(2);
+    expect(fixture.reconciliationCalls()).toBe(1);
+    expect(result.items.filter(({ kind }) => kind === "sandbox_attempt_started"))
+      .toEqual([
+        expect.objectContaining({ attempt: expect.objectContaining({ ordinal: 1 }) }),
+        expect.objectContaining({ attempt: expect.objectContaining({ ordinal: 2 }) }),
+      ]);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "sandbox_escalation_proposed",
+      previousActionFingerprint: expect.any(String),
+      nextActionFingerprint: expect.any(String),
+    }));
+    const escalation = result.items.find(({ kind }) => kind === "sandbox_escalation_proposed");
+    if (escalation?.kind !== "sandbox_escalation_proposed") {
+      throw new Error("Escalation history is missing.");
+    }
+    expect(escalation.nextActionFingerprint).not.toBe(escalation.previousActionFingerprint);
+    expect(result.items.filter(({ kind }) => kind === "approval_requested")).toHaveLength(1);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "observation",
+      observation: expect.objectContaining({
+        kind: "tool_result",
+        result: expect.objectContaining({ status: "succeeded" }),
+      }),
+    }));
+  });
+
+  it("does not replay when the provider cannot prove the first attempt had no effect", async () => {
+    const fixture = createEscalatingExternalActionFixture({ effectState: "unknown" });
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{ kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" }]),
+      finalDecision("Continued"),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({ actionContext: externalActionContext() }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(fixture.providerCalls()).toBe(1);
+    expect(fixture.reconciliationCalls()).toBe(0);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "observation",
+      observation: expect.objectContaining({
+        kind: "action_denied",
+        code: "sandbox_escalation_effect_state_unknown",
+      }),
+    }));
+  });
+
+  it("stops after an escalation approval decline without creating attempt two", async () => {
+    const reviewer = createApprovalReviewer((input) => {
+      const option = input.request.decisionOptions.find(({ kind }) => kind === "decline");
+      if (option === undefined) throw new Error("Decline option was not offered.");
+      return {
+        status: "decided",
+        submission: {
+          submissionId: "submission_escalation_decline",
+          runId: input.request.runId,
+          requestId: input.request.id,
+          pendingVersion: input.pendingVersion,
+          optionId: option.id,
+          grantedPermissions: null,
+          reason: "Keep network disabled",
+        },
+        rationale: null,
+      };
+    });
+    const fixture = createEscalatingExternalActionFixture();
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{ kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" }]),
+      finalDecision("Declined"),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        permissions: createReviewPermissionConfig(reviewer),
+      }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(fixture.providerCalls()).toBe(1);
+    expect(result.items.filter(({ kind }) => kind === "sandbox_attempt_started")).toHaveLength(1);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "observation",
+      observation: expect.objectContaining({
+        kind: "approval_declined",
+        reason: "Keep network disabled",
+      }),
+    }));
+  });
+
+  it("makes attempt two final when the provider denies again", async () => {
+    const reviewer = createApprovalReviewer((input) => {
+      const option = input.request.decisionOptions.find(({ kind }) => kind === "accept");
+      if (option === undefined) throw new Error("Accept option was not offered.");
+      return {
+        status: "decided",
+        submission: {
+          submissionId: "submission_second_denial_accept",
+          runId: input.request.runId,
+          requestId: input.request.id,
+          pendingVersion: input.pendingVersion,
+          optionId: option.id,
+          grantedPermissions: null,
+          reason: null,
+        },
+        rationale: null,
+      };
+    });
+    const fixture = createEscalatingExternalActionFixture({ secondDenial: true });
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{ kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" }]),
+      finalDecision("Stopped"),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        permissions: createReviewPermissionConfig(reviewer),
+      }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(fixture.providerCalls()).toBe(2);
+    expect(fixture.reconciliationCalls()).toBe(1);
+    expect(result.items.filter(({ kind }) => kind === "sandbox_attempt_started")).toHaveLength(2);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "observation",
+      observation: expect.objectContaining({
+        kind: "action_denied",
+        code: "sandbox_network_denied_again",
+      }),
+    }));
+  });
+
+  it("does not treat an ordinary failed ToolResult as sandbox escalation", async () => {
+    const fixture = createEscalatingExternalActionFixture({ ordinaryToolFailure: true });
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{ kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" }]),
+      finalDecision("Observed failure"),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({ actionContext: externalActionContext() }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(fixture.providerCalls()).toBe(1);
+    expect(fixture.reconciliationCalls()).toBe(0);
+    expect(result.items.some(({ kind }) => kind === "sandbox_escalation_proposed")).toBe(false);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "observation",
+      observation: expect.objectContaining({
+        kind: "tool_result",
+        result: expect.objectContaining({ status: "failed" }),
+      }),
+    }));
+  });
+
+  it("invalidates escalation when target state changes after attempt one", async () => {
+    const fixture = createEscalatingExternalActionFixture({
+      targetChangesBeforeEscalation: true,
+    });
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{ kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" }]),
+      finalDecision("Invalidated"),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({ actionContext: externalActionContext() }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(fixture.providerCalls()).toBe(1);
+    expect(fixture.reconciliationCalls()).toBe(0);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "observation",
+      observation: expect.objectContaining({
+        kind: "action_denied",
+        code: "tool_target_changed",
+      }),
+    }));
+  });
+
+  it("runs the changed subject through Governance again and honors a deny", async () => {
+    const fixture = createEscalatingExternalActionFixture({
+      denyEscalatedPolicy: true,
+    });
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{ kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" }]),
+      finalDecision("Policy denied"),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({ actionContext: externalActionContext() }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(fixture.providerCalls()).toBe(1);
+    expect(result.items.filter(({ kind }) => kind === "sandbox_attempt_started")).toHaveLength(1);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "observation",
+      observation: expect.objectContaining({
+        kind: "action_denied",
+        owner: "policy",
+      }),
+    }));
+  });
+
+  it("honors cancellation during adapter reconciliation and creates no second attempt", async () => {
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const fixture = createEscalatingExternalActionFixture({
+      onReconcile: () => {
+        cancellation.requestCancellation({
+          origin: "user",
+          reasonCode: "user_requested",
+        });
+      },
+    });
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{ kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" }]),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({ actionContext: externalActionContext(), cancellation }),
+    );
+
+    expect(result).toMatchObject({
+      status: "cancelled",
+      code: "runtime_cancelled",
+      cancellation: { reasonCode: "user_requested" },
+    });
+    expect(fixture.providerCalls()).toBe(1);
+    expect(fixture.reconciliationCalls()).toBe(1);
+    expect(result.items.filter(({ kind }) => kind === "sandbox_attempt_started")).toHaveLength(1);
+  });
+
+  it("prevents execution when required attempt-start Audit fails", async () => {
+    const fixture = createEscalatingExternalActionFixture();
+    const auditPort: AuditPort = {
+      async record(record) {
+        if (record.eventName === "sandbox.attempt.started") {
+          throw new Error("Attempt-start Audit unavailable.");
+        }
+      },
+    };
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{ kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" }]),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+      auditPort,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        audit: "required",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "audit_required_failed",
+      errors: [{ owner: "audit", code: "audit_required_failed" }],
+    });
+    expect(fixture.providerCalls()).toBe(0);
+    expect(result.items.some(({ kind }) => kind === "sandbox_attempt_started")).toBe(false);
+  });
+
+  it("prevents execution when required attempt-start Telemetry is unavailable", async () => {
+    const fixture = createEscalatingExternalActionFixture();
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{ kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" }]),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        telemetry: "required",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_telemetry_required_failed",
+      errors: [{ owner: "telemetry", code: "runtime_telemetry_required_failed" }],
+    });
+    expect(fixture.providerCalls()).toBe(0);
+    expect(result.items.some(({ kind }) => kind === "sandbox_attempt_started")).toBe(false);
+  });
+
+  it("retains settled attempt history when required result Audit fails", async () => {
+    const fixture = createEscalatingExternalActionFixture({ ordinaryToolFailure: true });
+    const auditPort: AuditPort = {
+      async record(record) {
+        if (record.eventName === "sandbox.attempt.resolved") {
+          throw new Error("Attempt-result Audit unavailable.");
+        }
+      },
+    };
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([{ kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" }]),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+      auditPort,
+    }).run(
+      createAgent([createAgentTool("test.external")]),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        audit: "required",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "audit_required_failed",
+      errors: [{ owner: "audit", code: "audit_required_failed" }],
+    });
+    expect(fixture.providerCalls()).toBe(1);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "sandbox_attempt_started",
+      attempt: expect.objectContaining({ ordinal: 1 }),
+    }));
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "sandbox_attempt_resolved",
+      resolution: expect.objectContaining({ outcome: "executed" }),
+    }));
+  });
+});
+
 describe("Runner approval lifecycle", () => {
   it("publishes approval history only after required audit and telemetry gates", async () => {
     const order: string[] = [];
@@ -2966,6 +3363,217 @@ function createExternalActionPipeline(
     policyCalls: () => policyCallCount,
     revalidationCalls: () => revalidationCallCount,
     executionCalls: () => executionCallCount,
+  };
+}
+
+function createEscalatingExternalActionFixture(
+  options: {
+    readonly effectState?: "none" | "unknown";
+    readonly secondDenial?: boolean;
+    readonly ordinaryToolFailure?: boolean;
+    readonly targetChangesBeforeEscalation?: boolean;
+    readonly denyEscalatedPolicy?: boolean;
+    readonly onReconcile?: () => void;
+  } = {},
+) {
+  let providerCallCount = 0;
+  let reconciliationCallCount = 0;
+  let revalidationCallCount = 0;
+  const adapterDescriptor = {
+    id: "test.external.adapter",
+    version: "1",
+    inputSchemaVersion: "1",
+  };
+  const executorDescriptor = {
+    id: "test.external.executor",
+    version: "1",
+    invocationContractVersion: "1",
+  };
+  const registrations = createActionRegistrationSnapshot([{
+    actionName: "test.external",
+    adapter: adapterDescriptor,
+    executor: executorDescriptor,
+  }]);
+  const data: ActionAdapterPreparedData = {
+    operation: {
+      kind: "skill",
+      operation: "invoke",
+      skillId: "test.external.skill",
+      skillVersion: "1",
+      sourceFingerprint: TEST_SHA_A,
+      action: "inspect remote metadata",
+      argumentsDigest: TEST_SHA_B,
+    },
+    effectSet: { kind: "effect_free" },
+    requestedPermissions: null,
+    targetAssertions: [],
+    approvalCategory: "skill",
+    approvalPayload: {
+      skillId: "test.external.skill",
+      skillDisplayName: "External test Skill",
+      action: "inspect remote metadata",
+      requiredPermissions: null,
+    },
+    applicabilityKeys: [{ category: "skill", value: "test.external.skill:1" }],
+    safeSummary: { kind: "computation", headline: "Inspect remote metadata" },
+    preparedInvocation: {
+      contractVersion: "1",
+      executorId: executorDescriptor.id,
+      executorVersion: executorDescriptor.version,
+      payload: {},
+    },
+  };
+  const policyPort: ActionPolicyPort = {
+    async evaluate(input) {
+      return {
+        checkId: input.checkId,
+        status: options.denyEscalatedPolicy && input.requestsAdditionalPermissions
+          ? "denied" as const
+          : "allowed" as const,
+        decidedAt: "2026-07-13T00:00:00.000Z",
+      };
+    },
+  };
+  const pipeline = new ActionEnforcementPipeline({
+    registrations,
+    adapters: [{
+      actionName: "test.external",
+      adapter: {
+        descriptor: adapterDescriptor,
+        async prepare() {
+          return { status: "prepared" as const, data };
+        },
+        async revalidate() {
+          revalidationCallCount += 1;
+          if (options.targetChangesBeforeEscalation && revalidationCallCount === 2) {
+            return {
+              status: "invalidated" as const,
+              code: "tool_target_changed",
+              message: "The target changed after attempt one.",
+            };
+          }
+          return { status: "valid" as const };
+        },
+        async reconcileSandboxDenial() {
+          reconciliationCallCount += 1;
+          options.onReconcile?.();
+          return { status: "supported" as const, targetAssertions: [] };
+        },
+      },
+    }],
+    policyPort,
+    now: () => "2026-07-13T00:00:00.000Z",
+  });
+  const networkEffectSet = createActionEffectSet({
+    kind: "effects",
+    values: [{
+      kind: "network",
+      operation: "connect",
+      endpoints: [{
+        transport: "tcp",
+        host: "api.example.com",
+        port: 443,
+        applicationProtocol: "https",
+      }],
+    }],
+  });
+  if (networkEffectSet.kind !== "effects") {
+    throw new Error("Network test effect was not created.");
+  }
+  const deniedEffect = networkEffectSet.values[0];
+  const provider: SandboxProvider = {
+    kind: "managed",
+    descriptor: {
+      id: "test.sandbox.provider",
+      version: "1",
+      kind: "managed",
+      supportedPolicyVersions: [1],
+      supportedEffectKinds: ["network"],
+    },
+    async execute(request) {
+      providerCallCount += 1;
+      if (options.ordinaryToolFailure) {
+        return {
+          status: "executed",
+          toolResult: {
+            toolCallId: request.attempt.actionId,
+            toolName: "test.external",
+            status: "failed",
+            output: null,
+            error: { code: "tool_test_failed", message: "Expected test failure." },
+            startedAt: "2026-07-13T00:00:00.000Z",
+            finishedAt: "2026-07-13T00:00:01.000Z",
+            metadata: {},
+          },
+          enforcementEvidence: {
+            providerId: "test.sandbox.provider",
+            providerVersion: "1",
+            policyId: request.policy.policyId,
+            enforcement: "managed",
+            enforcedEffectKinds: request.policy.authorizedEffects.kind === "effects"
+              ? [...new Set(request.policy.authorizedEffects.values.map((effect) => effect.kind))]
+              : [],
+            settledAt: "2026-07-13T00:00:01.000Z",
+          },
+        };
+      }
+      if (providerCallCount === 1 || options.secondDenial) {
+        return {
+          status: "denied",
+          denial: {
+            attemptId: request.attempt.id,
+            runId: request.attempt.runId,
+            actionId: request.attempt.actionId,
+            actionFingerprint: request.attempt.actionFingerprint,
+            ordinal: request.attempt.ordinal,
+            code: providerCallCount === 1
+              ? "sandbox_network_denied"
+              : "sandbox_network_denied_again",
+            deniedEffect,
+            effectState: options.effectState ?? "none",
+            message: "The managed sandbox prevented network access.",
+          },
+        };
+      }
+      return {
+        status: "executed",
+        toolResult: {
+          toolCallId: request.attempt.actionId,
+          toolName: "test.external",
+          status: "succeeded",
+          output: { connected: true },
+          error: null,
+          startedAt: "2026-07-13T00:00:00.000Z",
+          finishedAt: "2026-07-13T00:00:01.000Z",
+          metadata: {},
+        },
+        enforcementEvidence: {
+          providerId: "test.sandbox.provider",
+          providerVersion: "1",
+          policyId: request.policy.policyId,
+          enforcement: "managed",
+          enforcedEffectKinds: ["network"],
+          settledAt: "2026-07-13T00:00:01.000Z",
+        },
+      };
+    },
+    async cancel() {
+      return { status: "already_settled" };
+    },
+  };
+  const gateway = createSandboxExecutionGateway({
+    registrations,
+    executors: [],
+    providers: [provider],
+    limits: { maxResultBytes: 64 * 1024 },
+    now: () => "2026-07-13T00:00:00.000Z",
+  });
+  return {
+    pipeline,
+    gateway,
+    providerCalls: () => providerCallCount,
+    reconciliationCalls: () => reconciliationCallCount,
+    revalidationCalls: () => revalidationCallCount,
   };
 }
 

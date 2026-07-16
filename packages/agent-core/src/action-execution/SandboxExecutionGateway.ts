@@ -15,7 +15,7 @@ import { createPreparedInvocationDigest } from "./ActionFingerprint.js";
 import type { ActionRegistrationSnapshot } from "./ActionRegistration.js";
 import { assertActionDispatchPlan } from "./ActionRevalidation.js";
 import { createCanonicalSha256Digest } from "./CanonicalEncoding.js";
-import { capabilityEffectKey } from "./CapabilityEffect.js";
+import { snapshotCapabilityEffect } from "./CapabilityEffect.js";
 import { assertPreparedInvocationMatchesExecutor } from "./PreparedActionInvocation.js";
 import type {
   ActionExecutionLimits,
@@ -29,6 +29,8 @@ import type {
   SandboxExecutionGateway,
   SandboxExecutionRequest,
   SandboxPolicyEnvelope,
+  PreparedSandboxDispatch,
+  SandboxDispatchPreparationResult,
   SandboxProvider,
   SandboxProviderDescriptor,
   SandboxProviderKind,
@@ -68,6 +70,29 @@ interface RegisteredProvider {
   readonly descriptor: SandboxProviderDescriptor;
 }
 
+interface PreparedDispatchState {
+  readonly attempt: SandboxAttempt;
+  readonly policy: SandboxPolicyEnvelope;
+  readonly actionName: string;
+  readonly invocation: DispatchSandboxActionInput["preparedInvocation"];
+  readonly deadlineAt: ISODateTimeString;
+  readonly interruption: InvocationInterruptionContext;
+  readonly enforcement: "managed" | "external" | "disabled";
+}
+
+const gatewaySandboxDenials = new WeakSet<object>();
+
+export function assertGatewaySandboxDenial(denial: SandboxDenial): void {
+  if (
+    denial === null ||
+    typeof denial !== "object" ||
+    !gatewaySandboxDenials.has(denial) ||
+    !Object.isFrozen(denial)
+  ) {
+    throw new TypeError("Sandbox escalation requires a gateway-validated denial.");
+  }
+}
+
 export function createSandboxExecutionGateway(
   input: CreateSandboxExecutionGatewayInput,
 ): SandboxExecutionGateway {
@@ -82,6 +107,8 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
   private readonly createAttemptId: NonNullable<
     CreateSandboxExecutionGatewayInput["createAttemptId"]
   >;
+  private readonly preparedDispatches = new WeakMap<object, PreparedDispatchState>();
+  private readonly consumedDispatches = new WeakSet<object>();
 
   constructor(private readonly input: CreateSandboxExecutionGatewayInput) {
     this.limits = snapshotLimits(input.limits);
@@ -92,12 +119,14 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
       `${identity.runId}:sandbox_attempt:${identity.actionId}:${identity.ordinal}`);
   }
 
-  async dispatch(input: DispatchSandboxActionInput): Promise<ActionExecutionResult> {
+  async prepare(
+    input: DispatchSandboxActionInput,
+  ): Promise<SandboxDispatchPreparationResult> {
     let validated: Awaited<ReturnType<typeof validateDispatchInput>>;
     try {
       validated = await validateDispatchInput(input);
     } catch (error) {
-      return failed(null, "sandbox_dispatch_invalid", safeMessage(
+      return preparationFailed("sandbox_dispatch_invalid", safeMessage(
         error,
         "Sandbox dispatch input is invalid.",
       ));
@@ -105,19 +134,24 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
 
     const initialInterruption = observeInterruption(input.interruption, input.plan.runId);
     if (initialInterruption.status === "invalid") {
-      return failed(null, "sandbox_interruption_unattributed", initialInterruption.message);
+      return preparationFailed(
+        "sandbox_interruption_unattributed",
+        initialInterruption.message,
+      );
     }
     if (initialInterruption.status === "interrupted") {
       return Object.freeze({
         status: "interrupted" as const,
-        attempt: null,
         interruption: initialInterruption.interruption,
       });
     }
 
     const startedAt = this.now();
     if (!isCanonicalDateTime(startedAt)) {
-      return failed(null, "sandbox_clock_invalid", "Sandbox clock returned an invalid timestamp.");
+      return preparationFailed(
+        "sandbox_clock_invalid",
+        "Sandbox clock returned an invalid timestamp.",
+      );
     }
     const policy = await createSandboxPolicy(input.plan, this.limits);
     const attemptId = this.createAttemptId({
@@ -126,7 +160,10 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
       ordinal: input.plan.attemptOrdinal,
     });
     if (!isCanonicalToken(attemptId)) {
-      return failed(null, "sandbox_attempt_id_invalid", "Sandbox attempt id is invalid.");
+      return preparationFailed(
+        "sandbox_attempt_id_invalid",
+        "Sandbox attempt id is invalid.",
+      );
     }
     const attempt: SandboxAttempt = deepFreeze({
       id: attemptId,
@@ -143,7 +180,6 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
     if (Date.parse(input.deadlineAt) <= Date.parse(startedAt)) {
       return Object.freeze({
         status: "interrupted" as const,
-        attempt,
         interruption: Object.freeze({
           kind: "operation_deadline" as const,
           deadline: Object.freeze({
@@ -154,25 +190,59 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
       });
     }
 
-    if (input.plan.enforcement === "disabled") {
-      return this.dispatchDisabled({
-        attempt,
-        policy,
-        actionName: input.plan.actionName,
-        invocation: validated.invocation,
-        deadlineAt: input.deadlineAt,
-        interruption: input.interruption,
-      });
-    }
-    return this.dispatchProvider({
+    const prepared = Object.freeze({ attempt });
+    this.preparedDispatches.set(prepared, Object.freeze({
       attempt,
       policy,
       actionName: input.plan.actionName,
       invocation: validated.invocation,
       deadlineAt: input.deadlineAt,
       interruption: input.interruption,
-      kind: input.plan.enforcement,
-    });
+      enforcement: input.plan.enforcement,
+    }));
+    return Object.freeze({ status: "ready" as const, prepared });
+  }
+
+  async execute(prepared: PreparedSandboxDispatch): Promise<ActionExecutionResult> {
+    if (
+      prepared === null ||
+      typeof prepared !== "object" ||
+      !Object.isFrozen(prepared)
+    ) {
+      return failed(null, "sandbox_prepared_dispatch_invalid", "Prepared sandbox dispatch is invalid.");
+    }
+    const state = this.preparedDispatches.get(prepared);
+    if (state === undefined) {
+      return failed(null, "sandbox_prepared_dispatch_invalid", "Prepared sandbox dispatch is not owned by this gateway.");
+    }
+    if (this.consumedDispatches.has(prepared)) {
+      return failed(state.attempt, "sandbox_prepared_dispatch_consumed", "Prepared sandbox dispatch is single-use.");
+    }
+    this.consumedDispatches.add(prepared);
+
+    const interruption = observeInterruption(
+      state.interruption,
+      state.attempt.runId,
+    );
+    if (interruption.status === "invalid") {
+      return failed(
+        state.attempt,
+        "sandbox_interruption_unattributed",
+        interruption.message,
+      );
+    }
+    if (interruption.status === "interrupted") {
+      return Object.freeze({
+        status: "interrupted" as const,
+        attempt: state.attempt,
+        interruption: interruption.interruption,
+      });
+    }
+
+    if (state.enforcement === "disabled") {
+      return this.dispatchDisabled(state);
+    }
+    return this.dispatchProvider({ ...state, kind: state.enforcement });
   }
 
   private async dispatchDisabled(input: {
@@ -548,8 +618,12 @@ function snapshotDenial(denial: SandboxDenial, attempt: SandboxAttempt): Sandbox
     denial.message.length === 0 ||
     denial.message.length > 2_000
   ) throw new TypeError("SandboxDenial correlation is invalid.");
-  capabilityEffectKey(denial.deniedEffect);
-  return deepFreeze({ ...denial });
+  const snapshot = deepFreeze({
+    ...denial,
+    deniedEffect: snapshotCapabilityEffect(denial.deniedEffect),
+  });
+  gatewaySandboxDenials.add(snapshot);
+  return snapshot;
 }
 
 function snapshotToolResult(
@@ -834,6 +908,19 @@ function failed(
     attempt,
     error: Object.freeze({
       owner,
+      code,
+      message,
+      retryable: false,
+      metadata: Object.freeze({}),
+    }),
+  });
+}
+
+function preparationFailed(code: string, message: string): SandboxDispatchPreparationResult {
+  return Object.freeze({
+    status: "failed" as const,
+    error: Object.freeze({
+      owner: "sandbox" as const,
       code,
       message,
       retryable: false,

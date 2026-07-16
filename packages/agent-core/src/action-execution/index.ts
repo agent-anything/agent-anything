@@ -42,6 +42,11 @@ export type {
   PreparedExternalAction,
 } from "./PreparedExternalAction.js";
 export * from "./SafeActionSummary.js";
+export type {
+  DeriveSandboxEscalationInput,
+  SandboxEscalationProposal,
+  SandboxEscalationResult,
+} from "./SandboxEscalation.js";
 export * from "./SandboxContracts.js";
 export {
   createSandboxExecutionGateway,
