@@ -3541,6 +3541,42 @@ export class RunExecution<TOutput> {
         itemKind: item.kind,
         itemSequence: item.sequence,
       });
+      this.publishPlanItem(item);
+    }
+  }
+
+  private publishPlanItem(item: RunItem<TOutput>): void {
+    switch (item.kind) {
+      case "plan_created":
+        this.emit("plan.created", {
+          runId: item.runId,
+          plan: item.plan,
+        });
+        return;
+      case "plan_updated":
+        this.emit("plan.updated", {
+          runId: item.runId,
+          plan: item.plan,
+          previousVersion: item.previousVersion,
+          transition: item.transition,
+        });
+        return;
+      case "plan_completed":
+        this.emit("plan.completed", {
+          runId: item.runId,
+          plan: item.plan,
+        });
+        return;
+      case "plan_abandoned":
+        this.emit("plan.abandoned", {
+          runId: item.runId,
+          plan: item.plan,
+          terminalStatus: item.terminalStatus,
+          reasonCode: item.reasonCode,
+        });
+        return;
+      default:
+        return;
     }
   }
 

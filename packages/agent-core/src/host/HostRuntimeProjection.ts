@@ -31,7 +31,10 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
   "loop.iteration.finished": ["runId", "iteration", "status", "durationMs"],
   "planner.started": ["runId", "iteration"],
   "planner.finished": ["runId", "iteration", "status", "code", "durationMs"],
-  "plan.created": ["runId", "planId", "planVersion"],
+  "plan.created": ["runId", "plan"],
+  "plan.updated": ["runId", "plan", "previousVersion", "transition"],
+  "plan.completed": ["runId", "plan"],
+  "plan.abandoned": ["runId", "plan", "terminalStatus", "reasonCode"],
   "action.prepared": [
     "runId",
     "actionId",
@@ -214,6 +217,9 @@ function projectField(field: string, value: unknown): unknown {
   if (field === "attribution") {
     return projectCancellationAttribution(value);
   }
+  if (field === "plan") {
+    return projectPlan(value);
+  }
   if (
     value === null ||
     typeof value === "string" ||
@@ -226,6 +232,38 @@ function projectField(field: string, value: unknown): unknown {
     return Object.freeze([...value]);
   }
   return undefined;
+}
+
+function projectPlan(value: unknown): Metadata | undefined {
+  if (!isRecord(value) || !Array.isArray(value.steps)) {
+    return undefined;
+  }
+  if (
+    typeof value.id !== "string" ||
+    !Number.isSafeInteger(value.version) ||
+    (value.status !== "active" && value.status !== "completed" && value.status !== "abandoned")
+  ) {
+    return undefined;
+  }
+  const steps: Metadata[] = [];
+  for (const candidate of value.steps) {
+    if (
+      !isRecord(candidate) ||
+      typeof candidate.step !== "string" ||
+      (candidate.status !== "pending" &&
+        candidate.status !== "in_progress" &&
+        candidate.status !== "completed")
+    ) {
+      return undefined;
+    }
+    steps.push(Object.freeze({ step: candidate.step, status: candidate.status }));
+  }
+  return Object.freeze({
+    id: value.id,
+    version: value.version,
+    status: value.status,
+    steps: Object.freeze(steps),
+  });
 }
 
 function projectCancellationAttribution(value: unknown): Metadata | undefined {

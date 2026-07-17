@@ -209,6 +209,9 @@ describe("Runner", () => {
   });
 
   it("commits update_plan, exposes it to the next turn, and abandons an active Plan on success", async () => {
+    const runtimeEvents: RuntimeEvent[] = [];
+    const eventEmitter = new RuntimeEventEmitter();
+    eventEmitter.subscribe((event) => runtimeEvents.push(event));
     const controller = new ScriptedController([
       actionsDecision([
         {
@@ -224,7 +227,7 @@ describe("Runner", () => {
       finalDecision("Finished"),
     ]);
 
-    const result = await createRunner(controller).run(
+    const result = await createRunner(controller, { eventEmitter }).run(
       createAgent(),
       createRunInput(),
       createRunConfig(),
@@ -254,6 +257,32 @@ describe("Runner", () => {
       terminalStatus: "succeeded",
       reasonCode: null,
     });
+    expect(runtimeEvents.filter((event) => event.name.startsWith("plan."))).toMatchObject([
+      {
+        name: "plan.created",
+        payload: {
+          runId: "run_001",
+          plan: { id: "run_001:plan:1", version: 1, status: "active" },
+        },
+      },
+      {
+        name: "plan.abandoned",
+        payload: {
+          runId: "run_001",
+          plan: { id: "run_001:plan:1", version: 2, status: "abandoned" },
+          terminalStatus: "succeeded",
+          reasonCode: null,
+        },
+      },
+    ]);
+    for (const planEvent of runtimeEvents.filter((event) => event.name.startsWith("plan."))) {
+      const itemEventIndex = runtimeEvents.findIndex((event) =>
+        event.name === "run.item.appended" &&
+        event.payload.itemKind === planEvent.name.replace(".", "_"));
+      expect(itemEventIndex).toBeGreaterThanOrEqual(0);
+      expect(runtimeEvents.indexOf(planEvent)).toBeGreaterThan(itemEventIndex);
+      expect(JSON.stringify(planEvent)).not.toContain("Track the work.");
+    }
   });
 
   it("maps Controller stop to blocked with an ordered stop lifecycle", async () => {
