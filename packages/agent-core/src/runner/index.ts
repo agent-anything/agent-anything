@@ -115,6 +115,7 @@ export type {
   RunInputItem,
   RunInputMessageRole,
 } from "./RunInput.js";
+export type { RunInvocationOptions } from "./Runner.js";
 export type {
   ActionAssessedRunItem,
   ActionAssessedSummary,

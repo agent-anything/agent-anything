@@ -196,6 +196,7 @@ export type {
   SandboxEscalationProposedRunItem,
   RequestPermissionsActionInput,
   RunLimits,
+  RunInvocationOptions,
   RunnerDependencies,
   RunnerIdentityKind,
   RuntimeError,
@@ -241,6 +242,7 @@ export type {
   EmitRuntimeEventInput,
   RuntimeEvent,
   RuntimeEventName,
+  RuntimeEventPublisher,
   RuntimeEventSubscriber,
 } from "./events/index.js";
 export {

@@ -5,7 +5,11 @@ import type {
 
 export type RuntimeEventSubscriber = (event: RuntimeEvent) => void;
 
-export class RuntimeEventEmitter {
+export interface RuntimeEventPublisher {
+  emit(input: EmitRuntimeEventInput): void;
+}
+
+export class RuntimeEventEmitter implements RuntimeEventPublisher {
   private readonly subscribers = new Set<RuntimeEventSubscriber>();
   private sequence = 0;
 

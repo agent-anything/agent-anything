@@ -5,6 +5,7 @@ export type {
 } from "./RuntimeEvent.js";
 export {
   RuntimeEventEmitter,
+  type RuntimeEventPublisher,
   type RuntimeEventSubscriber,
 } from "./RuntimeEventEmitter.js";
 export { RuntimeEventRecorder } from "./RuntimeEventRecorder.js";

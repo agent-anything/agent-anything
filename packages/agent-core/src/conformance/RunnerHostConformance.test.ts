@@ -14,15 +14,12 @@ import type {
   ControllerInput,
 } from "../controller/index.js";
 import { ProviderBackedController } from "../controller/index.js";
-import { RuntimeEventEmitter } from "../events/index.js";
 import {
-  createHostRuntimeAdapter,
-  mapRuntimeEventToHostEvent,
-  type HostEvent,
-  type HostRunInput,
+  createHostRuntime,
+  type HostRunProjection,
   type HostRunResult,
-  type HostRuntimeAdapter,
-  type HostSessionState,
+  type HostRunStartInput,
+  type HostRuntime,
 } from "../host/index.js";
 import { createSystemRetryExecutor, type RetryClock } from "../retry/index.js";
 import {
@@ -52,17 +49,15 @@ describe("Runner and generic Host conformance", () => {
     const result = await harness.run(createHostInput());
 
     expect(result).toMatchObject({
-      state: { status: "completed" },
+      terminal: { status: "completed" },
       runResult: {
         status: "succeeded",
         finalOutput: { summary: "Direct completion" },
       },
     });
-    expect(result.state.runResult).toBe(result.runResult);
-    expect(harness.states.map((state) => state.status)).toEqual([
-      "running",
-      "completed",
-    ]);
+    expect(result.terminal).toBe(harness.projections.at(-1)?.terminal);
+    expect(harness.projections[0]?.status).toBe("running");
+    expect(harness.projections.at(-1)?.status).toBe("completed");
   });
 
   it("preserves Runner-owned Provider retry history through the generic Host", async () => {
@@ -101,9 +96,10 @@ describe("Runner and generic Host conformance", () => {
       },
     ]);
 
-    const result = await createHostHarness(controller).run(createHostInput());
+    const harness = createHostHarness(controller);
+    const result = await harness.run(createHostInput());
 
-    expect(result.state.runResult).toBe(result.runResult);
+    expect(result.terminal).toBe(harness.projections.at(-1)?.terminal);
     expect(result.runResult.items.map((item) => item.kind)).toEqual([
       "retry_attempt_started",
       "retry_attempt_finished",
@@ -137,15 +133,7 @@ describe("Runner and generic Host conformance", () => {
       retryExecutor: createSystemRetryExecutor(clock),
       retryClock: clock,
     });
-    const eventEmitter = new RuntimeEventEmitter();
-    const hostEvents: HostEvent[] = [];
-    eventEmitter.subscribe((runtimeEvent) => {
-      hostEvents.push(mapRuntimeEventToHostEvent({
-        sessionId: "session-conformance",
-        runtimeEvent,
-      }));
-    });
-    const harness = createHostHarness(controller, eventEmitter);
+    const harness = createHostHarness(controller);
     const input = createHostInput({
       retry: {
         providerRequest: {
@@ -168,7 +156,7 @@ describe("Runner and generic Host conformance", () => {
     const result = await harness.run(input);
 
     expect(result).toMatchObject({
-      state: { status: "completed" },
+      terminal: { status: "completed" },
       runResult: {
         status: "succeeded",
         finalOutput: { summary: "Recovered through the generic Host" },
@@ -187,14 +175,10 @@ describe("Runner and generic Host conformance", () => {
       "final_output",
     ]);
 
-    const retryEvents = hostEvents.filter((event) =>
-      event.name === "host.runtime.event"
-      && event.payload.runtimeEvent.name.startsWith("retry.")
-      && event.payload.runtimeEvent.payload.owner === "provider_request"
-    );
-    expect(retryEvents.map((event) =>
-      event.name === "host.runtime.event" ? event.payload.runtimeEvent.name : null
-    )).toEqual([
+    const retryEvents = (
+      harness.projections.at(-1)?.retry?.recentEvents ?? []
+    ).filter((event) => event.owner === "provider_request");
+    expect(retryEvents.map((event) => event.event)).toEqual([
       "retry.attempt.started",
       "retry.attempt.finished",
       "retry.scheduled",
@@ -202,11 +186,7 @@ describe("Runner and generic Host conformance", () => {
       "retry.attempt.finished",
     ]);
     expect(JSON.stringify(retryEvents)).not.toContain("secret transport details");
-    expect(retryEvents.every((event) =>
-      event.name === "host.runtime.event"
-      && Object.isFrozen(event.payload.runtimeEvent)
-      && Object.isFrozen(event.payload.runtimeEvent.payload)
-    )).toBe(true);
+    expect(retryEvents.every((event) => Object.isFrozen(event))).toBe(true);
   });
 
   it("carries one Plan through creation, completion, reactivation, and terminal abandonment", async () => {
@@ -241,7 +221,8 @@ describe("Runner and generic Host conformance", () => {
       (input) => finalDecision(input, "Plan lifecycle complete"),
     ]);
 
-    const result = await createHostHarness(controller).run(createHostInput());
+    const harness = createHostHarness(controller);
+    const result = await harness.run(createHostInput());
 
     expect(result.runResult.status).toBe("succeeded");
     expect(controller.calls.map((call) => call.context.plan?.status ?? null)).toEqual([
@@ -301,10 +282,11 @@ describe("Runner and generic Host conformance", () => {
       },
     ]);
 
-    const result = await createHostHarness(controller).run(createHostInput());
+    const harness = createHostHarness(controller);
+    const result = await harness.run(createHostInput());
 
     expect(result).toMatchObject({
-      state: { status: "completed" },
+      terminal: { status: "completed" },
       runResult: {
         status: "succeeded",
         finalOutput: { summary: "Recovered after invalid Plan" },
@@ -328,16 +310,17 @@ describe("Runner and generic Host conformance", () => {
       }),
     ]);
 
-    const result = await createHostHarness(controller).run(createHostInput());
+    const harness = createHostHarness(controller);
+    const result = await harness.run(createHostInput());
 
     expect(result).toMatchObject({
-      state: { status: "blocked" },
+      terminal: { status: "blocked" },
       runResult: {
         status: "blocked",
         code: "runtime_no_safe_path",
       },
     });
-    expect(result.state.runResult).toBe(result.runResult);
+    expect(result.terminal).toBe(harness.projections.at(-1)?.terminal);
     expect(result.runResult.items.map((item) => item.kind)).toEqual([
       "model_output",
       "stop",
@@ -366,38 +349,36 @@ class FakeController implements Controller {
 }
 
 class InMemoryHostHarness {
-  readonly states: HostSessionState<ConformanceOutput>[] = [];
+  readonly projections: HostRunProjection[] = [];
 
-  constructor(private readonly adapter: HostRuntimeAdapter) {}
+  constructor(private readonly runtime: HostRuntime) {}
 
   async run(
-    input: HostRunInput<ConformanceOutput>,
+    input: HostRunStartInput<ConformanceOutput>,
   ): Promise<HostRunResult<ConformanceOutput>> {
-    this.states.push({
-      sessionId: input.sessionId,
-      status: "running",
-      taskId: input.runInput.task.id,
-      runId: input.runInput.runId,
-      timestamp: "2026-07-14T00:00:00.000Z",
-      metadata: {},
+    const active = this.runtime.start(input);
+    this.projections.push(active.getProjection());
+    const unsubscribe = active.subscribe((projection) => {
+      this.projections.push(projection);
     });
-    const result = await this.adapter.run(input);
-    this.states.push(result.state);
-    return result;
+    const outcome = await active.result;
+    unsubscribe();
+    if (outcome.kind !== "run_result") {
+      throw new Error(`Conformance Host failed to start: ${outcome.code}.`);
+    }
+    return outcome;
   }
 
 }
 
 function createHostHarness(
   controller: Controller,
-  eventEmitter?: RuntimeEventEmitter,
 ): InMemoryHostHarness {
   const runner = new Runner({
     controller,
-    ...(eventEmitter ? { eventEmitter } : {}),
     now: () => "2026-07-14T00:00:00.000Z",
   });
-  return new InMemoryHostHarness(createHostRuntimeAdapter({
+  return new InMemoryHostHarness(createHostRuntime({
     runner,
     now: () => "2026-07-14T00:00:00.000Z",
   }));
@@ -406,7 +387,7 @@ function createHostHarness(
 function createHostInput(input: {
   limits?: Partial<Omit<RunConfig["limits"], "plan">>;
   retry?: RunConfig["retry"];
-} = {}): HostRunInput<ConformanceOutput> {
+} = {}): HostRunStartInput<ConformanceOutput> {
   const cancellation = createRunCancellationController({
     runId: "run-conformance",
     now: () => "2026-07-14T00:00:00.000Z",
@@ -468,7 +449,6 @@ function createHostInput(input: {
       retry: input.retry ?? disabledRetryConfiguration(),
       metadata: {},
     },
-    metadata: { fixture: "generic-host-conformance" },
   };
 }
 

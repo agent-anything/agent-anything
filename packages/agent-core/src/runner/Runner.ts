@@ -8,7 +8,7 @@ import type {
   SandboxExecutionGateway,
 } from "../action-execution/index.js";
 import type { Controller } from "../controller/index.js";
-import type { RuntimeEventEmitter } from "../events/index.js";
+import type { RuntimeEventPublisher } from "../events/index.js";
 import {
   createSystemRetryExecutor,
   type RetryExecutor,
@@ -42,7 +42,7 @@ export type CreateRunnerIdentity = (input: CreateRunnerIdentityInput) => string;
 
 export interface RunnerDependencies {
   readonly controller: Controller<unknown>;
-  readonly eventEmitter?: RuntimeEventEmitter;
+  readonly eventEmitter?: RuntimeEventPublisher;
   readonly auditPort?: AuditPort;
   readonly telemetryPort?: TelemetryPort;
   readonly actionEnforcementPipeline?: ActionEnforcementPipeline;
@@ -52,6 +52,10 @@ export interface RunnerDependencies {
   readonly retryExecutor?: RetryExecutor;
   readonly now?: () => ISODateTimeString;
   readonly createId?: CreateRunnerIdentity;
+}
+
+export interface RunInvocationOptions {
+  readonly runtimeEventPublisher?: RuntimeEventPublisher;
 }
 
 export class Runner {
@@ -79,14 +83,41 @@ export class Runner {
     agent: Agent<TOutput>,
     input: RunInput,
     config: RunConfig,
+    options: RunInvocationOptions = {},
   ): Promise<RunResult<TOutput>> {
+    const eventEmitter = combineRuntimeEventPublishers(
+      this.dependencies.eventEmitter,
+      options.runtimeEventPublisher,
+    );
     return new RunExecution<TOutput>(
-      this.dependencies,
+      eventEmitter === this.dependencies.eventEmitter
+        ? this.dependencies
+        : Object.freeze({ ...this.dependencies, eventEmitter }),
       agent,
       input,
       config,
     ).run();
   }
+}
+
+function combineRuntimeEventPublishers(
+  configured: RuntimeEventPublisher | undefined,
+  invocation: RuntimeEventPublisher | undefined,
+): RuntimeEventPublisher | undefined {
+  if (configured === undefined) return invocation;
+  if (invocation === undefined || invocation === configured) return configured;
+
+  return Object.freeze({
+    emit(input: Parameters<RuntimeEventPublisher["emit"]>[0]) {
+      for (const publisher of [invocation, configured]) {
+        try {
+          publisher.emit(input);
+        } catch {
+          // Runtime notifications are non-authoritative and publisher-local.
+        }
+      }
+    },
+  });
 }
 
 function createDefaultIdentity(input: CreateRunnerIdentityInput): string {
