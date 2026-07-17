@@ -1,13 +1,12 @@
 import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,
+  createHostRunProjection,
   createUserApprovalReviewBridge,
-  type UserApprovalPendingProjection,
   type UserApprovalReviewBridge,
 } from "@agent-anything/agent-core/host";
 import {
   createRunCancellationController,
-  toRunCancellationSummary,
   type AgentTask,
   type RunCancellationController,
   type RunCancellationSummary,
@@ -24,13 +23,15 @@ import {
   createHelarcTask,
   createHelarcThread,
   createBuiltInHelarcTaskTemplates,
-  mapRuntimeEventToHelarcRunEvent,
-  type HelarcActivityItem,
+  createHelarcProductRunProjection,
+  createHelarcRunProjection,
+  mapHelarcActivityToRunEvent,
+  reduceHelarcRunProjection,
   type HelarcPatchReviewDecisionSubmission,
   type HelarcPendingPatchReviewProjection,
   type HelarcProviderProfile,
-  type HelarcRunApprovalPrompt,
-  type HelarcRunSnapshot,
+  type HelarcRunProjection,
+  type HelarcRunProjectionUpdate,
   type HelarcRunTerminalStatus,
   type HelarcRunTerminalSummary,
   type HelarcSessionHistoryPatchSummary,
@@ -54,7 +55,6 @@ import type { Provider } from "@agent-anything/providers";
 import { basename, isAbsolute, normalize } from "node:path";
 import type { ProviderCredentialStoreError } from "./provider/ProviderCredentialStore.js";
 import {
-  HelarcActiveRunController,
   createHelarcPatchReviewBridge,
   startHelarcHostRun,
   type HelarcHostActiveRun,
@@ -89,6 +89,7 @@ export type HelarcProviderSnapshot =
 export type HelarcMainSnapshotStatus =
   | "idle"
   | "workspace_selected"
+  | "starting"
   | "running"
   | "cancelling"
   | "waiting_for_approval"
@@ -99,14 +100,6 @@ export type HelarcMainSnapshotStatus =
   | "failed"
   | "blocked"
   | "cancelled";
-
-export interface HelarcPendingApprovalSnapshot extends UserApprovalPendingProjection {
-  phase: "reviewing" | "submitted_for_resolution";
-  receipt: Extract<
-    ApprovalSubmissionReceipt,
-    { readonly status: "accepted_for_resolution" }
-  > | null;
-}
 
 export type HelarcConversationMessageRole =
   | "user"
@@ -161,13 +154,9 @@ export interface HelarcMainSnapshot {
   taskTemplates: HelarcTaskTemplate[];
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
-  pendingApproval: HelarcPendingApprovalSnapshot | null;
-  pendingPatchReview: HelarcPendingPatchReviewProjection | null;
   activeThread: HelarcActiveThreadSnapshot | null;
   threadSummaries: HelarcThreadSummarySnapshot[];
-  activity: HelarcActivityItem[];
-  activeRun: HelarcRunSnapshot;
-  output: HelarcProductOutput | null;
+  run: HelarcRunProjection | null;
   error: HelarcMainError | null;
 }
 
@@ -244,10 +233,7 @@ export type HelarcRuntimeToolMode = "read-only" | "shell-enabled";
 export class HelarcMainController {
   private selectedWorkspace: HelarcWorkspaceSnapshot | null = null;
   private acceptedTask: HelarcAcceptedTaskSnapshot | null = null;
-  private pendingApproval: HelarcPendingApprovalSnapshot | null = null;
-  private pendingPatchReview: HelarcPendingPatchReviewProjection | null = null;
-  private activity: HelarcActivityItem[] = [];
-  private output: HelarcProductOutput | null = null;
+  private runProjection: HelarcRunProjection | null = null;
   private lastError: HelarcMainError | null = null;
   private workspaceProfiles: HelarcWorkspaceProfile[] = [];
   private sessionHistory: HelarcSessionHistoryRecord[] = [];
@@ -262,17 +248,17 @@ export class HelarcMainController {
   private provider: HelarcProviderSnapshot;
   private providerInstance: Provider | null;
   private readonly runtimeToolMode: HelarcRuntimeToolMode;
-  private status: HelarcMainSnapshotStatus = "idle";
+  private inactiveStatus: "idle" | "workspace_selected" = "idle";
   private nextTaskNumber = 1;
   private runCancellation: RunCancellationController | null = null;
   private activeHostRun: HelarcHostActiveRun | null = null;
+  private runProjectionUnsubscribers: Array<() => void> = [];
   private readonly sessionAuthorityStore = createInMemoryHostSessionAuthorityStore({
     maxRecords: 64,
   });
   private readonly policyAmendmentStore = createInMemoryHostPolicyAmendmentStore({
     maxRecords: 64,
   });
-  private readonly activeRunController = new HelarcActiveRunController();
   private readonly snapshotSubscribers = new Set<(snapshot: HelarcMainSnapshot) => void>();
 
   constructor(input: HelarcMainControllerInput = {}) {
@@ -295,9 +281,6 @@ export class HelarcMainController {
           },
         }
       : createConfiguredProviderSnapshot(input.providerProfile);
-    this.activeRunController.subscribe(() => {
-      this.publishSnapshot();
-    });
   }
 
   configureProvider(input: {
@@ -320,20 +303,16 @@ export class HelarcMainController {
 
   getSnapshot(): HelarcMainSnapshot {
     return {
-      status: this.status,
+      status: this.getCurrentStatus(),
       workspace: this.selectedWorkspace,
       workspaceProfiles: this.workspaceProfiles,
       sessionHistory: this.sessionHistory,
       taskTemplates: this.taskTemplates,
       provider: this.provider,
       acceptedTask: this.acceptedTask,
-      pendingApproval: this.pendingApproval,
-      pendingPatchReview: this.pendingPatchReview,
       activeThread: createActiveThreadSnapshot(this.currentThreadRecord),
       threadSummaries: this.threadSummaries,
-      activity: this.activity,
-      activeRun: this.activeRunController.getSnapshot(),
-      output: this.output,
+      run: this.runProjection,
       error: this.lastError,
     };
   }
@@ -385,12 +364,9 @@ export class HelarcMainController {
 
   private selectWorkspace(workspace: HelarcWorkspaceSnapshot): HelarcMainSnapshot {
     this.selectedWorkspace = workspace;
-    this.status = "workspace_selected";
+    this.inactiveStatus = "workspace_selected";
     this.acceptedTask = null;
-    this.pendingApproval = null;
-    this.pendingPatchReview = null;
-    this.activity = [];
-    this.output = null;
+    this.runProjection = null;
     this.lastError = null;
     this.currentSessionStartedAt = null;
     this.currentThreadRecord = null;
@@ -398,7 +374,7 @@ export class HelarcMainController {
     this.lastPatchReview = null;
     this.runCancellation = null;
     this.activeHostRun = null;
-    this.activeRunController.reset();
+    this.detachRunProjectionSubscriptions();
     return this.publishSnapshot();
   }
 
@@ -418,7 +394,7 @@ export class HelarcMainController {
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
-    if (isActiveSessionStatus(this.status)) {
+    if (isActiveSessionStatus(this.getCurrentStatus())) {
       const error = this.setError("session_already_running", "A Helarc session is already running.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
@@ -478,11 +454,6 @@ export class HelarcMainController {
       id: taskResult.task.id,
       prompt: taskResult.task.input.prompt,
     };
-    this.status = "running";
-    this.pendingApproval = null;
-    this.pendingPatchReview = null;
-    this.activity = [];
-    this.output = null;
     this.lastError = null;
     this.currentSessionStartedAt = startedAt;
     this.currentThreadRecord = threadRecordResult.record;
@@ -495,25 +466,18 @@ export class HelarcMainController {
     this.runCancellation = createRunCancellationController({
       runId: runResult.input.runId,
     });
-    this.activeRunController.startRun({
-      run: runResult.input,
-      workspace: {
-        profileId: this.selectedWorkspace.id,
-        displayName: this.selectedWorkspace.name,
-        path: this.selectedWorkspace.path,
-      },
-      provider: {
-        profileId: this.provider.activeProfile.id,
-        providerKind: this.provider.activeProfile.providerKind,
-        displayName: this.provider.activeProfile.displayName,
-        endpointLabel: this.provider.activeProfile.endpointLabel,
-        model: this.provider.activeProfile.model,
-      },
-      startedAt,
+    this.runProjection = createHelarcRunProjection({
+      platform: createHostRunProjection({
+        sessionId: threadRecordResult.record.thread.id,
+        taskId: taskResult.task.id,
+        runId: runResult.input.runId,
+        startedAt,
+        enforcement: "disabled",
+      }),
+      product: createHelarcProductRunProjection(runResult.input.runId),
     });
-    this.activeRunController.markRunning();
 
-    void this.runLiveSession(taskResult.task);
+    void this.runLiveSession(taskResult.task, runResult.input.runId);
 
     return {
       ok: true,
@@ -534,26 +498,11 @@ export class HelarcMainController {
       };
     }
     const receipt = activeRun.submitApprovalDecision(input);
-    const pending = this.pendingApproval;
-    if (
-      receipt.status === "accepted_for_resolution" &&
-      pending !== null &&
-      pending.request.runId === receipt.runId &&
-      pending.request.id === receipt.requestId &&
-      pending.pendingVersion === receipt.pendingVersion
-    ) {
-      this.pendingApproval = {
-        ...pending,
-        phase: "submitted_for_resolution",
-        receipt,
-      };
-      this.publishSnapshot();
-    }
     return receipt;
   }
 
   cancelSession(): CancelHelarcSessionResult {
-    if (!isActiveSessionStatus(this.status)) {
+    if (!isActiveSessionStatus(this.getCurrentStatus())) {
       const error = this.setError("session_not_running", "No Helarc session is running.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
@@ -573,14 +522,6 @@ export class HelarcMainController {
       const error = this.setError("session_not_running", "No Helarc session is running.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
-    this.activeRunController.requestCancel(toRunCancellationSummary(request));
-
-    if (this.pendingApproval) {
-      this.pendingApproval = null;
-    }
-
-    this.status = "cancelling";
-    this.pendingPatchReview = null;
     this.lastError = null;
     return { ok: true, snapshot: this.publishSnapshot() };
   }
@@ -591,6 +532,7 @@ export class HelarcMainController {
       const error = this.setError("patch_review_not_pending", "No patch review is pending.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
+    const pending = this.getPendingPatchReview();
     const receipt = activeRun.submitPatchReviewDecision(input);
     if (receipt.status === "rejected") {
       const code = receipt.code === "patch_review_not_pending" ||
@@ -605,7 +547,6 @@ export class HelarcMainController {
       );
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
-    const pending = this.pendingPatchReview;
     if (pending === null) {
       const error = this.setError("patch_review_not_pending", "No patch review is pending.");
       return { ok: false, error, snapshot: this.getSnapshot() };
@@ -615,8 +556,7 @@ export class HelarcMainController {
       decision: input.decision,
       reason: input.reason,
     };
-    this.status = input.decision === "accepted" ? "applying_patch" : "running";
-    return { ok: true, snapshot: this.publishSnapshot() };
+    return { ok: true, snapshot: this.getSnapshot() };
   }
 
   private fail(code: HelarcMainErrorCode, message: string): HelarcMainSnapshot {
@@ -632,9 +572,10 @@ export class HelarcMainController {
 
   private async runLiveSession(
     task: AgentTask<HelarcTaskInput>,
+    runId: string,
   ): Promise<void> {
     let terminal: HelarcRunTerminalSummary | null;
-    const runId = this.activeRunController.getSnapshot().runId;
+    let startFailed = false;
     const userApprovalBridge = this.createApprovalReviewBridge(runId);
     const patchReviewBridge = this.createPatchReviewBridge(runId);
     try {
@@ -650,32 +591,15 @@ export class HelarcMainController {
         sessionAuthorityPort: this.sessionAuthorityStore,
         persistentPolicyAmendments: this.policyAmendmentStore,
         patchReviewBridge,
-        onActivity: (item, event) => {
-          this.activity = [...this.activity, item];
-          this.activeRunController.appendEvent(mapRuntimeEventToHelarcRunEvent(event));
-          if (event.name === "approval.resolved") {
-            this.pendingApproval = null;
-            if (this.status === "waiting_for_approval") {
-              this.status = "running";
-              this.activeRunController.resolveApproval();
-            }
-          }
-          this.publishSnapshot();
-        },
       });
-      this.activeHostRun = composition.activeRun;
+      this.attachActiveHostRun(composition.activeRun);
       const sessionResult = await composition.result;
       if (sessionResult.kind === "start_failure") {
+        startFailed = true;
         throw new Error(sessionResult.failure.code);
       }
 
       const sessionOutput = sessionResult.output;
-      this.status = sessionResult.status;
-      this.activity = [...sessionResult.activity];
-      this.output = sessionOutput;
-      this.pendingApproval = null;
-      this.pendingPatchReview = null;
-
       if (sessionResult.status === "failed") {
         const firstError = sessionResult.output.safeErrors[0] ?? {
           code: "provider_not_available",
@@ -687,7 +611,7 @@ export class HelarcMainController {
         };
       }
       terminal = this.createActiveRunTerminalSummary({
-        status: mapSessionStatusToRunTerminalStatus(this.status, sessionOutput),
+        status: mapSessionStatusToRunTerminalStatus(this.getCurrentStatus(), sessionOutput),
         runtimeStatus: sessionResult.runResult.status,
         runtimeCode: sessionResult.runResult.code,
         cancellation: sessionResult.runResult.cancellation,
@@ -695,10 +619,8 @@ export class HelarcMainController {
         errorSummary: [...sessionOutput.safeErrors],
       });
     } catch (error) {
-      this.status = "failed";
-      this.pendingApproval = null;
-      this.pendingPatchReview = null;
-      this.output = {
+      startFailed = true;
+      const fallbackOutput: HelarcProductOutput = {
         taskId: task.id,
         workspaceId: task.workspaceScope?.roots[task.workspaceScope.defaultRootName ?? ""]?.id ?? null,
         agentSummary: null,
@@ -723,14 +645,14 @@ export class HelarcMainController {
         status: "failed",
         runtimeStatus: "failed",
         runtimeCode: "session_execution_failed",
-        cancellation: this.activeRunController.getSnapshot().cancellation,
-        safeOutput: this.output,
-        errorSummary: [...this.output.safeErrors],
+        cancellation: this.runProjection?.platform.cancellation ?? null,
+        safeOutput: fallbackOutput,
+        errorSummary: [...fallbackOutput.safeErrors],
       });
     }
 
-    this.completeActiveRun(terminal);
     this.activeHostRun = null;
+    this.detachRunProjectionSubscriptions();
     try {
       await this.persistSessionHistory(task, terminal);
       await this.persistWorkContextRun(terminal);
@@ -743,7 +665,56 @@ export class HelarcMainController {
       };
     }
     this.runCancellation = null;
+    if (startFailed && this.runProjection?.platform.terminal === null) {
+      this.runProjection = null;
+    }
     this.publishSnapshot();
+  }
+
+  private attachActiveHostRun(activeRun: HelarcHostActiveRun): void {
+    this.detachRunProjectionSubscriptions();
+    this.activeHostRun = activeRun;
+    this.runProjectionUnsubscribers = [
+      activeRun.subscribe((projection) => {
+        this.applyRunProjectionUpdate({ kind: "platform", projection });
+      }),
+      activeRun.subscribeProductProjection((projection) => {
+        this.applyRunProjectionUpdate({ kind: "product", projection });
+      }),
+    ];
+    this.runProjection = createHelarcRunProjection({
+      platform: activeRun.getProjection(),
+      product: activeRun.getProductProjection(),
+    });
+    this.publishSnapshot();
+  }
+
+  private applyRunProjectionUpdate(update: HelarcRunProjectionUpdate): void {
+    const current = this.runProjection;
+    if (current === null) return;
+    const reduction = reduceHelarcRunProjection(current, update);
+    if (reduction.status !== "applied") return;
+    this.runProjection = reduction.projection;
+    this.publishSnapshot();
+  }
+
+  private detachRunProjectionSubscriptions(): void {
+    for (const unsubscribe of this.runProjectionUnsubscribers) {
+      unsubscribe();
+    }
+    this.runProjectionUnsubscribers = [];
+  }
+
+  private getPendingPatchReview(): HelarcPendingPatchReviewProjection | null {
+    const phase = this.runProjection?.product.phase;
+    return phase?.kind === "waiting_for_patch_review" ? phase.review : null;
+  }
+
+  private getCurrentStatus(): HelarcMainSnapshotStatus {
+    if (this.runProjection !== null) return this.runProjection.display.status;
+    return this.lastError?.code === "session_execution_failed"
+      ? "failed"
+      : this.inactiveStatus;
   }
 
   private createApprovalReviewBridge(
@@ -758,55 +729,24 @@ export class HelarcMainController {
         source: "helarc-desktop",
         metadata: { product: "helarc" },
       },
-      onProjectionChanged: (projection) => {
-        if (projection === null) return;
-        this.pendingApproval = {
-          ...projection,
-          phase: "reviewing",
-          receipt: null,
-        };
-        this.status = "waiting_for_approval";
-        this.activeRunController.requestApproval(
-          createRunApprovalPromptSnapshot(projection, this.selectedWorkspace),
-        );
-        this.publishSnapshot();
-      },
     });
   }
 
   private createPatchReviewBridge(runId: string) {
-    return createHelarcPatchReviewBridge({
-      runId,
-      onProjectionChanged: (projection) => {
-        this.pendingPatchReview = projection;
-        if (projection !== null) {
-          this.lastPatchReview ??= {
-            review: projection,
-            decision: null,
-            reason: null,
-          };
-          this.status = projection.phase === "reviewing"
-            ? "waiting_for_patch_review"
-            : "applying_patch";
-        }
-        this.publishSnapshot();
-      },
-    });
+    return createHelarcPatchReviewBridge({ runId });
   }
 
   private async persistSessionHistory(
     task: AgentTask<HelarcTaskInput>,
     terminal: HelarcRunTerminalSummary | null,
   ): Promise<void> {
-    if (!terminal || !this.output || !this.selectedWorkspace || !this.provider.configured) {
+    const run = this.runProjection;
+    const output = run?.product.result?.output ?? readTerminalProductOutput(terminal);
+    const status = this.getCurrentStatus();
+    if (!terminal || !run || !output || !this.selectedWorkspace || !this.provider.configured) {
       return;
     }
-    if (!isTerminalSessionStatus(this.status)) {
-      return;
-    }
-
-    const activeRun = this.activeRunController.getSnapshot();
-    if (activeRun.runId.length === 0) {
+    if (!isTerminalSessionStatus(status)) {
       return;
     }
 
@@ -829,14 +769,14 @@ export class HelarcMainController {
       },
       startedAt: this.currentSessionStartedAt ?? new Date().toISOString(),
       endedAt: terminal.completedAt,
-      status: this.status,
-      activity: this.activity,
-      output: this.output,
-      patch: createHistoryPatchSummary(this.lastPatchReview, this.output),
+      status,
+      activity: [...run.product.activity],
+      output,
+      patch: createHistoryPatchSummary(this.lastPatchReview, output),
       run: {
-        runId: activeRun.runId,
+        runId: run.runId,
         status: terminal.status,
-        events: activeRun.events,
+        events: run.product.activity.map(mapHelarcActivityToRunEvent),
         terminal,
       },
     });
@@ -1050,7 +990,7 @@ export class HelarcMainController {
     safeOutput: unknown;
     errorSummary: Array<{ code: string; message: string }>;
   }): HelarcRunTerminalSummary | null {
-    const activeRun = this.activeRunController.getSnapshot();
+    const run = this.runProjection;
     const terminalResult = createHelarcRunTerminalSummary({
       status: input.status,
       runtimeStatus: input.runtimeStatus,
@@ -1058,18 +998,12 @@ export class HelarcMainController {
       cancellation: input.cancellation,
       safeOutput: input.safeOutput,
       errorSummary: input.errorSummary,
-      startedAt: activeRun.startedAt ?? this.currentSessionStartedAt ?? new Date().toISOString(),
+      startedAt: run?.platform.startedAt ?? this.currentSessionStartedAt ?? new Date().toISOString(),
       completedAt: new Date().toISOString(),
-      eventCount: activeRun.events.length,
+      eventCount: run?.product.activity.length ?? 0,
     });
 
     return terminalResult.ok ? terminalResult.terminal : null;
-  }
-
-  private completeActiveRun(terminal: HelarcRunTerminalSummary | null): void {
-    if (terminal) {
-      this.activeRunController.completeRun(terminal);
-    }
   }
 
   private publishSnapshot(): HelarcMainSnapshot {
@@ -1089,7 +1023,7 @@ interface CompletedPatchReview {
 
 function isTerminalSessionStatus(
   status: HelarcMainSnapshotStatus,
-): status is Exclude<HelarcMainSnapshotStatus, "idle" | "workspace_selected" | "running" | "cancelling" | "waiting_for_approval" | "waiting_for_patch_review" | "applying_patch"> {
+): status is Exclude<HelarcMainSnapshotStatus, "idle" | "workspace_selected" | "starting" | "running" | "cancelling" | "waiting_for_approval" | "waiting_for_patch_review" | "applying_patch"> {
   return status === "completed" ||
     status === "rejected" ||
     status === "failed" ||
@@ -1098,7 +1032,8 @@ function isTerminalSessionStatus(
 }
 
 function isActiveSessionStatus(status: HelarcMainSnapshotStatus): boolean {
-  return status === "running" ||
+  return status === "starting" ||
+    status === "running" ||
     status === "cancelling" ||
     status === "waiting_for_approval" ||
     status === "waiting_for_patch_review" ||
@@ -1530,49 +1465,17 @@ function isHelarcSessionOutput(value: unknown): value is HelarcProductOutput {
     Array.isArray(output.safeErrors);
 }
 
+function readTerminalProductOutput(
+  terminal: HelarcRunTerminalSummary | null,
+): HelarcProductOutput | null {
+  return terminal !== null && isHelarcSessionOutput(terminal.safeOutput)
+    ? terminal.safeOutput
+    : null;
+}
+
 function createThreadTitle(taskText: string): string {
   const normalized = taskText.trim().replace(/\s+/g, " ");
   return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
-}
-
-function createRunApprovalPromptSnapshot(
-  projection: UserApprovalPendingProjection,
-  workspace: HelarcWorkspaceSnapshot | null,
-): HelarcRunApprovalPrompt {
-  const request = projection.request;
-  return {
-    requestId: request.id,
-    actionLabel: request.category,
-    toolName: request.category === "commandExecution"
-      ? "commandExecution"
-      : "request_permissions",
-    riskLevel: "high",
-    workspaceDisplayName: workspace?.name ?? null,
-    explanation: request.reason,
-    inputSummary: createPermissionInputSummary(projection),
-    createdAt: new Date().toISOString(),
-  };
-}
-
-function createPermissionInputSummary(
-  projection: UserApprovalPendingProjection,
-): string | null {
-  const request = projection.request;
-  if (request.category === "commandExecution") {
-    return request.payload.commandDisplay;
-  }
-  if (request.category === "permissions") {
-    const permissions = request.payload.permissions;
-    const readCount = permissions.fileSystem?.read?.length ?? 0;
-    const writeCount = permissions.fileSystem?.write?.length ?? 0;
-    const network = permissions.network?.enabled === true ? "network" : null;
-    return [
-      readCount > 0 ? `${readCount} read target(s)` : null,
-      writeCount > 0 ? `${writeCount} write target(s)` : null,
-      network,
-    ].filter((value): value is string => value !== null).join(", ") || null;
-  }
-  return request.category;
 }
 
 function createConfiguredProviderSnapshot(

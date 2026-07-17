@@ -154,6 +154,30 @@ export type {
   HelarcWorkContextRunStatus,
   NormalizeHelarcThreadRecordResult,
 } from "./work-context/index.js";
+export type {
+  HelarcProductActivityProjectionUpdate,
+  HelarcProductPhaseProjectionUpdate,
+  HelarcProductResultProjectionUpdate,
+  HelarcProductRunProjection,
+  HelarcProductRunProjectionListener,
+  HelarcProductRunProjectionReduction,
+  HelarcProductRunProjectionRejectionCode,
+  HelarcProductRunProjectionUpdate,
+  HelarcRunDisplayProjection,
+  HelarcRunDisplayStatus,
+  HelarcRunProjection,
+  HelarcRunProjectionReduction,
+  HelarcRunProjectionRejectionCode,
+  HelarcRunProjectionUpdate,
+} from "./run/index.js";
+export {
+  createHelarcProductRunProjection,
+  createHelarcRunProjection,
+  deriveHelarcRunDisplayProjection,
+  reduceHelarcProductRunProjection,
+  reduceHelarcRunProjection,
+} from "./run/index.js";
+export { mapHelarcActivityToRunEvent } from "./run/index.js";
 export {
   createHelarcArtifact,
   createHelarcConversation,
@@ -189,12 +213,8 @@ export type {
   HelarcRunEventSeverity,
   HelarcRunEventViewModel,
   HelarcRunInput,
-  HelarcRunApprovalPrompt,
-  HelarcRunApprovalRiskLevel,
   HelarcRunPermissionPreset,
   HelarcRunProviderRef,
-  HelarcRunSnapshot,
-  HelarcRunStatus,
   HelarcRunTerminalErrorSummary,
   HelarcRunTerminalStatus,
   HelarcRunTerminalSummary,
@@ -203,7 +223,6 @@ export type {
 export {
   createHelarcRunInput,
   createHelarcRunTerminalSummary,
-  createIdleHelarcRunSnapshot,
   mapRuntimeEventToHelarcRunEvent,
 } from "./run/index.js";
 export type {

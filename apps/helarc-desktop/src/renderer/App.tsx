@@ -44,30 +44,16 @@ const initialSnapshot: HelarcMainSnapshot = {
     error: null,
   },
   acceptedTask: null,
-  pendingApproval: null,
-  pendingPatchReview: null,
   activeThread: null,
   threadSummaries: [],
-  activity: [],
-  activeRun: {
-    runId: "",
-    status: "idle",
-    task: {
-      text: "",
-      templateId: null,
-    },
-    workspace: null,
-    provider: null,
-    events: [],
-    pendingApproval: null,
-    cancellation: null,
-    terminal: null,
-    startedAt: null,
-    metadata: {},
-  },
-  output: null,
+  run: null,
   error: null,
 };
+
+type ActiveRunProjection = NonNullable<HelarcMainSnapshot["run"]>;
+type HostApprovalProjection = NonNullable<ActiveRunProjection["platform"]["approval"]>;
+type PendingApprovalView = NonNullable<HostApprovalProjection["review"]> &
+  Pick<HostApprovalProjection, "phase">;
 
 type SidePanelMode = "review" | "threads" | "settings";
 
@@ -79,9 +65,11 @@ export function App() {
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [sidePanelMode, setSidePanelMode] = useState<SidePanelMode>("review");
   const [approvalSubmissionError, setApprovalSubmissionError] = useState<string | null>(null);
+  const pendingApproval = getPendingApproval(snapshot.run);
+  const pendingPatchReview = getPendingPatchReview(snapshot.run);
   const sessionActive = isSessionActive(snapshot.status);
   const selectedThread = snapshot.threadSummaries.find((thread) => thread.id === selectedThreadId) ?? null;
-  const activePanelMode: SidePanelMode = snapshot.pendingApproval || snapshot.pendingPatchReview
+  const activePanelMode: SidePanelMode = pendingApproval || pendingPatchReview
     ? "review"
     : sidePanelMode;
 
@@ -145,7 +133,6 @@ export function App() {
       return;
     }
 
-    setSnapshot((current) => ({ ...current, status: "running", activity: [], output: null, error: null }));
     setIsBusy(true);
     try {
       const result = await api.startSession({ taskText });
@@ -167,10 +154,9 @@ export function App() {
   }
 
   async function submitApprovalDecision(
-    option: NonNullable<HelarcMainSnapshot["pendingApproval"]>["request"]["decisionOptions"][number],
+    option: PendingApprovalView["request"]["decisionOptions"][number],
   ) {
     const api = getHelarcApi();
-    const pendingApproval = snapshot.pendingApproval;
     if (!api || !pendingApproval || pendingApproval.phase !== "reviewing") {
       return;
     }
@@ -215,7 +201,6 @@ export function App() {
 
   async function resolvePatchReview(decision: "accepted" | "rejected") {
     const api = getHelarcApi();
-    const pendingPatchReview = snapshot.pendingPatchReview;
     if (!api || !pendingPatchReview) {
       return;
     }
@@ -241,8 +226,9 @@ export function App() {
     ? snapshot.workspace.path
     : "No workspace selected";
   const statusText = statusLabel(snapshot.status, snapshot.provider.configured);
-  const canCancelRun = isRunCancellable(snapshot.activeRun.status) &&
-    snapshot.activeRun.status !== "cancelling" &&
+  const canCancelRun = snapshot.run !== null &&
+    isRunCancellable(snapshot.run.display.status) &&
+    snapshot.run.display.status !== "cancelling" &&
     !isBusy;
 
   return (
@@ -321,7 +307,7 @@ export function App() {
               <h1 id="activity-title">Run timeline</h1>
             </div>
             <div className="run-header-actions">
-              {isRunCancellable(snapshot.activeRun.status) ? (
+              {snapshot.run !== null && isRunCancellable(snapshot.run.display.status) ? (
                 <button
                   className="secondary-button danger compact-icon"
                   type="button"
@@ -339,7 +325,7 @@ export function App() {
           <div className="activity-stack">
             <ConversationPanel activeThread={snapshot.activeThread} />
             <RunTimelinePanel
-              activeRun={snapshot.activeRun}
+              run={snapshot.run}
               acceptedTask={snapshot.acceptedTask}
             />
           </div>
@@ -357,7 +343,7 @@ export function App() {
                 ? <Settings size={19} aria-hidden="true" />
                 : <ShieldCheck size={19} aria-hidden="true" />}
           </div>
-          <div className={activePanelMode !== "review" || snapshot.pendingApproval || snapshot.pendingPatchReview || snapshot.activeRun.terminal || snapshot.error
+          <div className={activePanelMode !== "review" || pendingApproval || pendingPatchReview || snapshot.run?.display.terminal || snapshot.error
             ? "review-content"
             : "review-empty"}
           >
@@ -370,26 +356,26 @@ export function App() {
               />
             ) : activePanelMode === "settings" ? (
               <SettingsPanel snapshot={snapshot} onSaved={setSnapshot} />
-            ) : snapshot.pendingApproval ? (
+            ) : pendingApproval ? (
               <ApprovalPromptPanel
-                approval={snapshot.pendingApproval}
+                approval={pendingApproval}
                 submissionError={approvalSubmissionError}
                 isBusy={isBusy}
                 onSubmit={(option) => void submitApprovalDecision(option)}
               />
-            ) : snapshot.pendingPatchReview ? (
+            ) : pendingPatchReview ? (
               <div className="patch-panel">
                 <FileCode2 size={24} aria-hidden="true" />
-                <strong>{snapshot.pendingPatchReview.summary}</strong>
-                <span>{snapshot.pendingPatchReview.operation} - {snapshot.pendingPatchReview.path}</span>
+                <strong>{pendingPatchReview.summary}</strong>
+                <span>{pendingPatchReview.operation} - {pendingPatchReview.path}</span>
                 <div className="patch-preview">
                   <section>
                     <span>Original</span>
-                    <pre>{snapshot.pendingPatchReview.originalContent ?? ""}</pre>
+                    <pre>{pendingPatchReview.originalContent ?? ""}</pre>
                   </section>
                   <section>
                     <span>Proposed</span>
-                    <pre>{snapshot.pendingPatchReview.proposedContent ?? ""}</pre>
+                    <pre>{pendingPatchReview.proposedContent ?? ""}</pre>
                   </section>
                 </div>
                 <div className="permission-actions">
@@ -411,11 +397,10 @@ export function App() {
                   </button>
                 </div>
               </div>
-            ) : snapshot.activeRun.terminal ? (
+            ) : snapshot.run?.display.terminal ? (
               <RunTerminalPanel
                 title={terminalTitle(snapshot)}
-                terminal={snapshot.activeRun.terminal}
-                events={snapshot.activeRun.events}
+                run={snapshot.run}
               />
             ) : (
               <>
@@ -512,14 +497,15 @@ export function ConversationPanel({
 }
 
 export function RunTimelinePanel({
-  activeRun,
+  run,
   acceptedTask,
 }: {
-  activeRun: HelarcMainSnapshot["activeRun"];
+  run: HelarcMainSnapshot["run"];
   acceptedTask: HelarcMainSnapshot["acceptedTask"];
 }) {
-  if (activeRun.events.length === 0) {
-    const title = activeRun.task.text || acceptedTask?.prompt || "No active session";
+  const activity = run?.product.activity ?? [];
+  if (activity.length === 0) {
+    const title = acceptedTask?.prompt || "No active session";
     return (
       <div className="empty-state">
         <Activity size={28} aria-hidden="true" />
@@ -532,13 +518,13 @@ export function RunTimelinePanel({
   return (
     <div className="activity-list" aria-label="Run timeline">
       <div className="run-summary">
-        <strong>{activeRun.task.text}</strong>
-        <span>{runStatusLabel(activeRun.status)}</span>
+        <strong>{acceptedTask?.prompt ?? run?.platform.taskId ?? "Run"}</strong>
+        <span>{runStatusLabel(run?.display.status ?? "running")}</span>
       </div>
-      {activeRun.events.map((event) => {
+      {activity.map((event) => {
         const trace = formatTraceMetadata(event.metadata);
         return (
-          <div className={`activity-item severity-${event.severity}`} key={event.id}>
+          <div className={`activity-item severity-${activitySeverity(event)}`} key={event.id}>
             <Activity size={16} aria-hidden="true" />
             <div>
               <strong>{event.title}</strong>
@@ -555,15 +541,16 @@ export function RunTimelinePanel({
 
 export function RunTerminalPanel({
   title,
-  terminal,
-  events,
+  run,
 }: {
   title: string;
-  terminal: NonNullable<HelarcMainSnapshot["activeRun"]["terminal"]>;
-  events: HelarcMainSnapshot["activeRun"]["events"];
+  run: ActiveRunProjection;
 }) {
-  const safeOutput = isSessionOutput(terminal.safeOutput) ? terminal.safeOutput : null;
-  const failed = terminal.status === "failed" || terminal.status === "denied" || terminal.status === "cancelled";
+  const terminal = run.platform.terminal;
+  if (terminal === null) return null;
+  const safeOutput = run.product.result?.output ?? null;
+  const failed = run.display.status === "failed" || run.display.status === "blocked" ||
+    run.display.status === "rejected" || run.display.status === "cancelled";
 
   return (
     <div className="result-panel">
@@ -581,7 +568,7 @@ export function RunTerminalPanel({
         </div>
         <div>
           <dt>Runtime</dt>
-          <dd>{terminal.runtimeStatus ?? "unknown"}</dd>
+          <dd>{safeOutput?.runtimeStatus ?? terminal.status}</dd>
         </div>
         {safeOutput ? (
           <div>
@@ -589,19 +576,19 @@ export function RunTerminalPanel({
             <dd>{enforcementLabel(safeOutput.enforcement)}</dd>
           </div>
         ) : null}
-        {terminal.runtimeCode ? (
+        {terminal.code ? (
           <div>
             <dt>Code</dt>
-            <dd>{terminal.runtimeCode}</dd>
+            <dd>{terminal.code}</dd>
           </div>
         ) : null}
         <div>
           <dt>Events</dt>
-          <dd>{terminal.eventCount}</dd>
+          <dd>{run.product.activity.length}</dd>
         </div>
         <div>
           <dt>Started</dt>
-          <dd>{formatTimestamp(terminal.startedAt)}</dd>
+          <dd>{formatTimestamp(run.platform.startedAt)}</dd>
         </div>
         <div>
           <dt>Completed</dt>
@@ -620,9 +607,9 @@ export function RunTerminalPanel({
           </div>
         ) : null}
       </dl>
-      {terminal.errorSummary.length > 0 ? (
+      {safeOutput !== null && safeOutput.safeErrors.length > 0 ? (
         <ul className="error-list">
-          {terminal.errorSummary.map((error) => (
+          {safeOutput.safeErrors.map((error) => (
             <li key={`${error.code}:${error.message}`}>
               <strong>{error.code}</strong>
               <span>{error.message}</span>
@@ -630,10 +617,10 @@ export function RunTerminalPanel({
           ))}
         </ul>
       ) : null}
-      {events.length > 0 ? (
+      {run.product.activity.length > 0 ? (
         <section className="terminal-events" aria-label="Terminal event summary">
           <strong>Event summary</strong>
-          {events.slice(-4).map((event) => (
+          {run.product.activity.slice(-4).map((event) => (
             <span key={event.id}>{event.title}</span>
           ))}
         </section>
@@ -648,11 +635,11 @@ export function ApprovalPromptPanel({
   isBusy,
   onSubmit,
 }: {
-  approval: HelarcMainSnapshot["pendingApproval"];
+  approval: PendingApprovalView | null;
   submissionError: string | null;
   isBusy: boolean;
   onSubmit: (
-    option: NonNullable<HelarcMainSnapshot["pendingApproval"]>["request"]["decisionOptions"][number],
+    option: PendingApprovalView["request"]["decisionOptions"][number],
   ) => void;
 }) {
   if (!approval) {
@@ -950,21 +937,22 @@ function readProviderKind(formData: FormData, fallback: HelarcProviderKind): Hel
 }
 
 function isSessionActive(status: HelarcMainSnapshot["status"]): boolean {
-  return status === "running" ||
+  return status === "starting" ||
+    status === "running" ||
     status === "cancelling" ||
     status === "waiting_for_approval" ||
     status === "waiting_for_patch_review" ||
     status === "applying_patch";
 }
 
-function isRunCancellable(status: HelarcMainSnapshot["activeRun"]["status"]): boolean {
+function isRunCancellable(status: ActiveRunProjection["display"]["status"]): boolean {
   return status === "starting" ||
     status === "running" ||
     status === "waiting_for_approval" ||
     status === "cancelling";
 }
 
-function runStatusLabel(status: HelarcMainSnapshot["activeRun"]["status"]): string {
+function runStatusLabel(status: ActiveRunProjection["display"]["status"]): string {
   return status[0]?.toUpperCase() + status.slice(1).replaceAll("_", " ");
 }
 
@@ -981,11 +969,7 @@ function artifactKindLabel(kind: NonNullable<HelarcMainSnapshot["activeThread"]>
 }
 
 function terminalTitle(snapshot: HelarcMainSnapshot): string {
-  const terminalStatus = snapshot.activeRun.terminal?.status;
-  if (terminalStatus === "denied") {
-    return "Run denied";
-  }
-
+  const terminalStatus = snapshot.run?.platform.terminal?.status;
   if (terminalStatus === "cancelled") {
     return "Run cancelled";
   }
@@ -1002,7 +986,7 @@ function terminalTitle(snapshot: HelarcMainSnapshot): string {
     return "Session blocked";
   }
 
-  if (snapshot.output?.patchStatus === "applied") {
+  if (snapshot.run?.product.result?.output.patchStatus === "applied") {
     return "Patch applied";
   }
 
@@ -1070,19 +1054,8 @@ function readMetadataStringArray(metadata: Record<string, unknown>, key: string)
     : [];
 }
 
-function isSessionOutput(value: unknown): value is NonNullable<HelarcMainSnapshot["output"]> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-
-  const output = value as Partial<NonNullable<HelarcMainSnapshot["output"]>>;
-  return typeof output.taskId === "string" &&
-    typeof output.runtimeStatus === "string" &&
-    Array.isArray(output.safeErrors);
-}
-
 function enforcementLabel(
-  enforcement: NonNullable<HelarcMainSnapshot["output"]>["enforcement"],
+  enforcement: NonNullable<ActiveRunProjection["product"]["result"]>["output"]["enforcement"],
 ): string {
   switch (enforcement.status) {
     case "not_exercised": return "Not exercised";
@@ -1100,7 +1073,7 @@ function getHelarcApi() {
 }
 
 function approvalCategoryLabel(
-  category: NonNullable<HelarcMainSnapshot["pendingApproval"]>["request"]["category"],
+  category: PendingApprovalView["request"]["category"],
 ): string {
   switch (category) {
     case "commandExecution": return "Command execution";
@@ -1113,7 +1086,7 @@ function approvalCategoryLabel(
 }
 
 function approvalRequestSummary(
-  request: NonNullable<HelarcMainSnapshot["pendingApproval"]>["request"],
+  request: PendingApprovalView["request"],
 ): string {
   switch (request.category) {
     case "commandExecution":
@@ -1142,7 +1115,7 @@ function approvalRequestSummary(
 }
 
 function approvalOptionButtonClass(
-  kind: NonNullable<HelarcMainSnapshot["pendingApproval"]>["request"]["decisionOptions"][number]["kind"],
+  kind: PendingApprovalView["request"]["decisionOptions"][number]["kind"],
 ): string {
   if (kind === "decline" || kind === "cancel") {
     return "secondary-button danger";
@@ -1151,8 +1124,8 @@ function approvalOptionButtonClass(
 }
 
 function defaultGrantedPermissions(
-  approval: NonNullable<HelarcMainSnapshot["pendingApproval"]>,
-  optionKind: NonNullable<HelarcMainSnapshot["pendingApproval"]>["request"]["decisionOptions"][number]["kind"],
+  approval: PendingApprovalView,
+  optionKind: PendingApprovalView["request"]["decisionOptions"][number]["kind"],
 ) {
   if (optionKind !== "grantPermissions") return null;
   const request = approval.request;
@@ -1168,6 +1141,37 @@ function defaultGrantedPermissions(
     case "networkAccess":
       return null;
   }
+}
+
+function getPendingApproval(run: HelarcMainSnapshot["run"]): PendingApprovalView | null {
+  const approval = run?.platform.approval ?? null;
+  return approval?.review === null || approval === null
+    ? null
+    : { ...approval.review, phase: approval.phase };
+}
+
+function getPendingPatchReview(run: HelarcMainSnapshot["run"]) {
+  const phase = run?.product.phase;
+  return phase?.kind === "waiting_for_patch_review" ? phase.review : null;
+}
+
+function activitySeverity(
+  activity: ActiveRunProjection["product"]["activity"][number],
+): "info" | "warning" | "error" {
+  if (
+    activity.kind === "run.failed" || activity.kind === "run.blocked" ||
+    activity.kind === "action.invalidated" ||
+    activity.metadata.status === "failed" || activity.metadata.status === "blocked"
+  ) {
+    return "error";
+  }
+  if (
+    activity.kind === "run.cancelled" || activity.kind === "retry.exhausted" ||
+    activity.kind === "retry.cancelled"
+  ) {
+    return "warning";
+  }
+  return "info";
 }
 
 function renderTaskTemplatePrompt(promptText: string, constraints: string[]): string {

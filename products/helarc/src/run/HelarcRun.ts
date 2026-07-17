@@ -6,21 +6,7 @@ import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { HelarcProviderKind } from "../provider-profile/index.js";
 import type { HelarcPermissionPreset } from "../permission/index.js";
 
-export type HelarcRunStatus =
-  | "idle"
-  | "starting"
-  | "running"
-  | "waiting_for_approval"
-  | "cancelling"
-  | "completed"
-  | "failed"
-  | "denied"
-  | "cancelled";
-
-export type HelarcRunTerminalStatus = Extract<
-  HelarcRunStatus,
-  "completed" | "failed" | "denied" | "cancelled"
->;
+export type HelarcRunTerminalStatus = "completed" | "failed" | "denied" | "cancelled";
 
 export type HelarcRunPermissionPreset = HelarcPermissionPreset;
 
@@ -94,19 +80,6 @@ export interface HelarcRunProviderRef {
   model: string;
 }
 
-export type HelarcRunApprovalRiskLevel = "low" | "medium" | "high";
-
-export interface HelarcRunApprovalPrompt {
-  requestId: string;
-  actionLabel: string;
-  toolName: string;
-  riskLevel: HelarcRunApprovalRiskLevel;
-  workspaceDisplayName: string | null;
-  explanation: string;
-  inputSummary: string | null;
-  createdAt: ISODateTimeString;
-}
-
 export interface HelarcRunTerminalErrorSummary {
   code: string;
   message: string;
@@ -134,23 +107,6 @@ export interface HelarcRunTerminalSummary {
   startedAt: ISODateTimeString;
   completedAt: ISODateTimeString;
   eventCount: number;
-}
-
-export interface HelarcRunSnapshot {
-  runId: string;
-  status: HelarcRunStatus;
-  task: {
-    text: string;
-    templateId: string | null;
-  };
-  workspace: HelarcRunWorkspaceRef | null;
-  provider: HelarcRunProviderRef | null;
-  events: HelarcRunEventViewModel[];
-  pendingApproval: HelarcRunApprovalPrompt | null;
-  cancellation: RunCancellationSummary | null;
-  terminal: HelarcRunTerminalSummary | null;
-  startedAt: ISODateTimeString | null;
-  metadata: Metadata;
 }
 
 export type HelarcRunContractErrorCode =
@@ -289,27 +245,6 @@ export function createHelarcRunTerminalSummary(
       completedAt: input.completedAt,
       eventCount: input.eventCount,
     },
-  };
-}
-
-export function createIdleHelarcRunSnapshot(
-  metadata: Metadata = {},
-): HelarcRunSnapshot {
-  return {
-    runId: "",
-    status: "idle",
-    task: {
-      text: "",
-      templateId: null,
-    },
-    workspace: null,
-    provider: null,
-    events: [],
-    pendingApproval: null,
-      cancellation: null,
-      terminal: null,
-    startedAt: null,
-    metadata,
   };
 }
 

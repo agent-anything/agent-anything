@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   createHelarcRunInput,
   createHelarcRunTerminalSummary,
-  createIdleHelarcRunSnapshot,
 } from "./HelarcRun.js";
 
 describe("HelarcRun", () => {
@@ -163,24 +162,6 @@ describe("HelarcRun", () => {
     });
   });
 
-  it("creates renderer-safe idle snapshots", () => {
-    expect(createIdleHelarcRunSnapshot({ product: "helarc" })).toEqual({
-      runId: "",
-      status: "idle",
-      task: {
-        text: "",
-        templateId: null,
-      },
-      workspace: null,
-      provider: null,
-      events: [],
-      pendingApproval: null,
-      cancellation: null,
-      terminal: null,
-      startedAt: null,
-      metadata: { product: "helarc" },
-    });
-  });
 });
 
 function runInput() {

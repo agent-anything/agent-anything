@@ -9,20 +9,41 @@ export type {
   HelarcRunEventSeverity,
   HelarcRunEventViewModel,
   HelarcRunInput,
-  HelarcRunApprovalPrompt,
-  HelarcRunApprovalRiskLevel,
   HelarcRunPermissionPreset,
   HelarcRunProviderRef,
-  HelarcRunSnapshot,
-  HelarcRunStatus,
   HelarcRunTerminalErrorSummary,
   HelarcRunTerminalStatus,
   HelarcRunTerminalSummary,
   HelarcRunWorkspaceRef,
 } from "./HelarcRun.js";
-export { mapRuntimeEventToHelarcRunEvent } from "./HelarcRunEventMapping.js";
+export {
+  mapHelarcActivityToRunEvent,
+  mapRuntimeEventToHelarcRunEvent,
+} from "./HelarcRunEventMapping.js";
+export type {
+  HelarcProductActivityProjectionUpdate,
+  HelarcProductPhaseProjectionUpdate,
+  HelarcProductResultProjectionUpdate,
+  HelarcProductRunProjection,
+  HelarcProductRunProjectionListener,
+  HelarcProductRunProjectionReduction,
+  HelarcProductRunProjectionRejectionCode,
+  HelarcProductRunProjectionUpdate,
+  HelarcRunDisplayProjection,
+  HelarcRunDisplayStatus,
+  HelarcRunProjection,
+  HelarcRunProjectionReduction,
+  HelarcRunProjectionRejectionCode,
+  HelarcRunProjectionUpdate,
+} from "./HelarcRunProjection.js";
+export {
+  createHelarcProductRunProjection,
+  createHelarcRunProjection,
+  deriveHelarcRunDisplayProjection,
+  reduceHelarcProductRunProjection,
+  reduceHelarcRunProjection,
+} from "./HelarcRunProjection.js";
 export {
   createHelarcRunInput,
   createHelarcRunTerminalSummary,
-  createIdleHelarcRunSnapshot,
 } from "./HelarcRun.js";

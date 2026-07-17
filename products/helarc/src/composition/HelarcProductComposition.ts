@@ -30,19 +30,33 @@ import {
 } from "../run/HelarcControllerTraceProjection.js";
 import { HelarcPatchActionController } from "../patch/HelarcPatchActionController.js";
 import type { HelarcTaskInput } from "../task/index.js";
-import type {
-  HelarcPatchReviewBridge,
-  HelarcProductPhase,
-} from "./HelarcPatchReview.js";
+import type { HelarcPatchReviewBridge } from "./HelarcPatchReview.js";
 import { createHelarcActionComposition } from "./HelarcActionComposition.js";
 import {
   projectHelarcProductResult,
+  mapRuntimeEventToHelarcActivity,
+  type HelarcActivityItem,
   type HelarcProductResult,
 } from "./HelarcProductResult.js";
+import {
+  createHelarcProductRunProjection,
+  reduceHelarcProductRunProjection,
+  type HelarcProductRunProjection,
+  type HelarcProductRunProjectionListener,
+  type HelarcProductRunProjectionUpdate,
+} from "../run/HelarcRunProjection.js";
+
+type HelarcProductProjectionUpdatePayload =
+  HelarcProductRunProjectionUpdate extends infer TUpdate
+    ? TUpdate extends HelarcProductRunProjectionUpdate
+      ? Omit<TUpdate, "runId" | "sequence">
+      : never
+    : never;
 
 export type HelarcToolMode = "read-only" | "shell-enabled";
 
 export interface CreateHelarcProductCompositionInput {
+  readonly runId: string;
   readonly task: AgentTask<HelarcTaskInput>;
   readonly provider: Provider;
   readonly toolMode: HelarcToolMode;
@@ -56,8 +70,12 @@ export interface HelarcProductComposition {
   readonly controller: Controller<HelarcAgentOutput>;
   readonly actions: Awaited<ReturnType<typeof createHelarcActionComposition>>;
   readonly runMetadata: Metadata;
-  getProductPhase(): HelarcProductPhase;
-  projectRuntimeEvent(event: RuntimeEvent): RuntimeEvent;
+  getProductProjection(): HelarcProductRunProjection;
+  subscribeProductProjection(listener: HelarcProductRunProjectionListener): () => void;
+  recordRuntimeEvent(event: RuntimeEvent): {
+    readonly event: RuntimeEvent;
+    readonly activity: HelarcActivityItem;
+  };
   projectResult(
     runResult: RunResult<HelarcAgentOutput>,
     selectedEnforcement: SandboxEnforcement,
@@ -73,6 +91,30 @@ export async function createHelarcProductComposition(
   });
   const retryClock = createHelarcRetryClock(input.now);
   const controllerTraceByIteration = new Map<number, Metadata>();
+  let productProjection = createHelarcProductRunProjection(input.runId);
+  let productSequence = 0;
+  const productListeners = new Set<HelarcProductRunProjectionListener>();
+  const publishProductUpdate = (
+    update: HelarcProductProjectionUpdatePayload,
+  ): void => {
+    productSequence += 1;
+    const reduction = reduceHelarcProductRunProjection(productProjection, {
+      ...update,
+      runId: input.runId,
+      sequence: productSequence,
+    } as Parameters<typeof reduceHelarcProductRunProjection>[1]);
+    if (reduction.status === "rejected") {
+      throw new Error(`Helarc product projection update was rejected: ${reduction.code}.`);
+    }
+    productProjection = reduction.projection;
+    for (const listener of [...productListeners]) {
+      try {
+        listener(productProjection);
+      } catch {
+        // Product projection delivery is non-authoritative.
+      }
+    }
+  };
   const providerController = new HelarcTracingController(
     new ProviderBackedController<HelarcAgentOutput>({
       provider: input.provider,
@@ -88,8 +130,25 @@ export async function createHelarcProductComposition(
   const patchController = new HelarcPatchActionController({
     controller: providerController,
     patchReviewBridge: input.patchReviewBridge,
+    onPhaseChanged: (phase) => {
+      publishProductUpdate({ kind: "phase_changed", phase });
+    },
     now: input.now,
   });
+  const unsubscribePatchReview = input.patchReviewBridge?.subscribe((review) => {
+    if (review !== null) {
+      if (productProjection.phase.kind !== "patch_action_submitted") {
+        publishProductUpdate({
+          kind: "phase_changed",
+          phase: Object.freeze({ kind: "waiting_for_patch_review", review }),
+        });
+      }
+      return;
+    }
+    if (productProjection.phase.kind === "waiting_for_patch_review") {
+      publishProductUpdate({ kind: "phase_changed", phase: Object.freeze({ kind: "none" }) });
+    }
+  }) ?? (() => undefined);
   const runMetadata = Object.freeze({
     product: "helarc",
     toolMode: input.toolMode,
@@ -104,22 +163,37 @@ export async function createHelarcProductComposition(
     controller: patchController,
     actions,
     runMetadata,
-    getProductPhase(): HelarcProductPhase {
-      return patchController.getProductPhase();
+    getProductProjection(): HelarcProductRunProjection {
+      return productProjection;
     },
-    projectRuntimeEvent(event: RuntimeEvent): RuntimeEvent {
-      return enrichRuntimeEventWithControllerTrace(event, controllerTraceByIteration);
+    subscribeProductProjection(listener: HelarcProductRunProjectionListener): () => void {
+      if (typeof listener !== "function") {
+        throw new TypeError("Helarc product projection listener must be a function.");
+      }
+      productListeners.add(listener);
+      return () => {
+        productListeners.delete(listener);
+      };
+    },
+    recordRuntimeEvent(event: RuntimeEvent) {
+      const projected = enrichRuntimeEventWithControllerTrace(event, controllerTraceByIteration);
+      const activity = mapRuntimeEventToHelarcActivity(projected);
+      publishProductUpdate({ kind: "activity_appended", activity });
+      return Object.freeze({ event: projected, activity });
     },
     projectResult(
       runResult: RunResult<HelarcAgentOutput>,
       selectedEnforcement: SandboxEnforcement,
     ): HelarcProductResult {
-      return projectHelarcProductResult(
+      const result = projectHelarcProductResult(
         input.task,
         runResult,
         patchController.getPatchOutcome(),
         selectedEnforcement,
       );
+      publishProductUpdate({ kind: "result_settled", result });
+      unsubscribePatchReview();
+      return result;
     },
   });
 }

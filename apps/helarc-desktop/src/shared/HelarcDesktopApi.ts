@@ -1,8 +1,7 @@
 import type {
-  HelarcRunSnapshot,
+  HelarcRunProjection,
   HelarcSessionHistoryRunRecord,
 } from "@agent-anything/helarc";
-import type { UserApprovalPendingProjection } from "@agent-anything/agent-core/host";
 import type {
   ApprovalDecisionSubmission,
   ApprovalSubmissionReceipt,
@@ -88,6 +87,7 @@ export type HelarcProviderSnapshot =
 export type HelarcMainSnapshotStatus =
   | "idle"
   | "workspace_selected"
+  | "starting"
   | "running"
   | "cancelling"
   | "waiting_for_approval"
@@ -98,14 +98,6 @@ export type HelarcMainSnapshotStatus =
   | "failed"
   | "blocked"
   | "cancelled";
-
-export interface HelarcPendingApprovalSnapshot extends UserApprovalPendingProjection {
-  phase: "reviewing" | "submitted_for_resolution";
-  receipt: Extract<
-    ApprovalSubmissionReceipt,
-    { readonly status: "accepted_for_resolution" }
-  > | null;
-}
 
 export type HelarcSubmitApprovalDecisionInput = ApprovalDecisionSubmission;
 export type HelarcApprovalSubmissionReceipt = ApprovalSubmissionReceipt;
@@ -178,24 +170,6 @@ export interface HelarcThreadSummarySnapshot {
   createdAt: string;
   updatedAt: string;
   latestRun: HelarcThreadLatestRunSnapshot | null;
-}
-
-export interface HelarcPendingPatchReviewSnapshot {
-  runId: string;
-  proposalId: string;
-  reviewId: string;
-  pendingVersion: number;
-  rootName: string;
-  workspaceId: string;
-  path: string;
-  operation: "create" | "update" | "delete";
-  summary: string;
-  rationale: string;
-  originalContent: string | null;
-  proposedContent: string | null;
-  originalContentBytes: number | null;
-  proposedContentBytes: number | null;
-  phase: "reviewing" | "submitted_for_resolution";
 }
 
 export interface HelarcActivityItem {
@@ -276,13 +250,9 @@ export interface HelarcMainSnapshot {
   taskTemplates: HelarcTaskTemplateSnapshot[];
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
-  pendingApproval: HelarcPendingApprovalSnapshot | null;
-  pendingPatchReview: HelarcPendingPatchReviewSnapshot | null;
   activeThread: HelarcActiveThreadSnapshot | null;
   threadSummaries: HelarcThreadSummarySnapshot[];
-  activity: HelarcActivityItem[];
-  activeRun: HelarcRunSnapshot;
-  output: HelarcSessionOutput | null;
+  run: HelarcRunProjection | null;
   error: HelarcMainError | null;
 }
 

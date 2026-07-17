@@ -32,6 +32,7 @@ export interface HelarcPatchOutcome {
 export interface HelarcPatchActionControllerInput {
   readonly controller: Controller<HelarcAgentOutput>;
   readonly patchReviewBridge?: HelarcPatchReviewBridge;
+  readonly onPhaseChanged?: (phase: HelarcProductPhase) => void;
   readonly now?: () => ISODateTimeString;
 }
 
@@ -107,7 +108,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
         context.cancellation,
       );
       if (reviewOutcome.status === "interrupted") {
-        this.phase = Object.freeze({ kind: "none" });
+        this.setPhase(Object.freeze({ kind: "none" }));
         return Object.freeze({
           kind: "stop" as const,
           reason: "Patch review was interrupted by Run cancellation.",
@@ -115,7 +116,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
         });
       }
       if (reviewOutcome.status === "failed") {
-        this.phase = Object.freeze({ kind: "none" });
+        this.setPhase(Object.freeze({ kind: "none" }));
         this.outcome = patchOutcome("failed", "failed", null, [{
           code: reviewOutcome.code,
           message: reviewOutcome.message,
@@ -138,7 +139,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
           ...decisionInput,
           reason: reviewDecision.reason ?? "Patch proposal rejected.",
         });
-        this.phase = Object.freeze({ kind: "none" });
+        this.setPhase(Object.freeze({ kind: "none" }));
         this.outcome = patchOutcome("rejected", "rejected", null, []);
         return completeDecision(output.summary, decision.modelItems);
       }
@@ -154,13 +155,13 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
         summary: output.summary,
         path: proposed.proposal.operation.path,
       });
-      this.phase = Object.freeze({
+      this.setPhase(Object.freeze({
         kind: "patch_action_submitted",
         runId: reviewDecision.runId,
         proposalId: reviewDecision.proposalId,
         reviewId: reviewDecision.reviewId,
         pendingVersion: reviewDecision.pendingVersion,
-      });
+      }));
       return Object.freeze({
         kind: "actions" as const,
         actions: Object.freeze([Object.freeze({
@@ -192,7 +193,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
       candidate.kind === "tool_result" && candidate.result.toolName === pending.actionName,
     );
     this.pending = null;
-    this.phase = Object.freeze({ kind: "none" });
+    this.setPhase(Object.freeze({ kind: "none" }));
     if (observation?.kind === "tool_result" && observation.result.status === "succeeded") {
       this.outcome = patchOutcome("completed", "applied", pending.path, []);
     } else {
@@ -207,6 +208,11 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
       content: Object.freeze({ action: "complete", summary: pending.summary }),
       metadata: Object.freeze({ source: "helarc.patch-action" }),
     })]);
+  }
+
+  private setPhase(phase: HelarcProductPhase): void {
+    this.phase = phase;
+    this.input.onPhaseChanged?.(phase);
   }
 }
 

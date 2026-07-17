@@ -11,6 +11,7 @@ import { createHelarcProductComposition } from "./HelarcProductComposition.js";
 describe("HelarcProductComposition", () => {
   it("defines one invocation's product behavior without exposing an execution entry point", async () => {
     const composition = await createHelarcProductComposition({
+      runId: "run-1",
       task: createTask("D:/workspace"),
       provider: new UnusedProvider(),
       toolMode: "read-only",
@@ -31,6 +32,7 @@ describe("HelarcProductComposition", () => {
 
   it("keeps the model catalog narrower than trusted mutation registrations", async () => {
     const composition = await createHelarcProductComposition({
+      runId: "run-1",
       task: createTask("D:/workspace"),
       provider: new UnusedProvider(),
       toolMode: "read-only",

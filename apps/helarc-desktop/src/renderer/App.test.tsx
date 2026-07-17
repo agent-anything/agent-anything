@@ -59,25 +59,12 @@ describe("Helarc workbench shell", () => {
   it("renders the active run timeline from safe run events", () => {
     const html = renderToStaticMarkup(
       <RunTimelinePanel
-        activeRun={{
-          runId: "run-1",
-          status: "running",
-          task: {
-            text: "Inspect code",
-            templateId: null,
-          },
-          workspace: null,
-          provider: null,
-          events: [
+        run={runProjection({
+          activity: [
             event("event-1", "planning.started", "Planning started", "info"),
-            event("event-2", "tool.completed", "Tool completed", "warning"),
+            event("event-2", "retry.cancelled", "Retry cancelled", "warning"),
           ],
-          pendingApproval: null,
-          cancellation: null,
-          terminal: null,
-          startedAt: "2026-07-05T01:00:00.000Z",
-          metadata: {},
-        }}
+        })}
         acceptedTask={{ id: "task-1", prompt: "Inspect code" }}
       />,
     );
@@ -85,23 +72,15 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Inspect code");
     expect(html).toContain("Running");
     expect(html).toContain("Planning started");
-    expect(html).toContain("Tool completed");
+    expect(html).toContain("Retry cancelled");
     expect(html).toContain("severity-warning");
   });
 
   it("renders compact planner trace details in the run timeline", () => {
     const html = renderToStaticMarkup(
       <RunTimelinePanel
-        activeRun={{
-          runId: "run-1",
-          status: "running",
-          task: {
-            text: "Inspect code",
-            templateId: null,
-          },
-          workspace: null,
-          provider: null,
-          events: [
+        run={runProjection({
+          activity: [
             event("event-1", "tool.proposed", "Tool call proposed", "info", {
               controllerAction: "call_tool",
               requestedToolName: "codeAgent.readFile",
@@ -115,12 +94,7 @@ describe("Helarc workbench shell", () => {
               ],
             }),
           ],
-          pendingApproval: null,
-          cancellation: null,
-          terminal: null,
-          startedAt: "2026-07-05T01:00:00.000Z",
-          metadata: {},
-        }}
+        })}
         acceptedTask={{ id: "task-1", prompt: "Inspect code" }}
       />,
     );
@@ -243,44 +217,17 @@ describe("Helarc workbench shell", () => {
   it.each([
     ["completed", "Run completed", "succeeded"],
     ["failed", "Run failed", "failed"],
-    ["denied", "Run denied", "blocked"],
+    ["blocked", "Run blocked", "blocked"],
     ["cancelled", "Run cancelled", "cancelled"],
   ] as const)("renders terminal %s output", (status, title, runtimeStatus) => {
     const html = renderToStaticMarkup(
       <RunTerminalPanel
         title={title}
-        terminal={{
+        run={runProjection({
           status,
           runtimeStatus,
-          runtimeCode: status === "completed" ? null : `${status}_code`,
-          cancellation: status === "cancelled"
-            ? {
-                requestId: "run-1:cancellation",
-                origin: "user",
-                reasonCode: "user_requested",
-                requestedAt: "2026-07-05T01:00:00.500Z",
-              }
-            : null,
-          safeOutput: {
-            taskId: "task-1",
-            workspaceId: "workspace",
-            agentSummary: "Terminal summary",
-            runtimeStatus,
-            patchStatus: null,
-            appliedPath: null,
-            enforcement: {
-              selected: "disabled",
-              status: "unisolated",
-              code: null,
-            },
-            safeErrors: status === "completed" ? [] : [{ code: `${status}_code`, message: "Terminal error" }],
-          },
-          errorSummary: status === "completed" ? [] : [{ code: `${status}_code`, message: "Terminal error" }],
-          startedAt: "2026-07-05T01:00:00.000Z",
-          completedAt: "2026-07-05T01:00:01.000Z",
-          eventCount: 1,
-        }}
-        events={[event("event-1", "run.completed", "Run event", "info")]}
+          activity: [event("event-1", "run.completed", "Run event", "info")],
+        })}
       />,
     );
 
@@ -294,19 +241,10 @@ describe("Helarc workbench shell", () => {
 });
 
 function pendingApproval(
-  phase: NonNullable<HelarcMainSnapshot["pendingApproval"]>["phase"],
-): NonNullable<HelarcMainSnapshot["pendingApproval"]> {
+  phase: "reviewing" | "submitted_for_resolution",
+): NonNullable<Parameters<typeof ApprovalPromptPanel>[0]["approval"]> {
   return {
     phase,
-    receipt: phase === "submitted_for_resolution"
-      ? {
-          status: "accepted_for_resolution",
-          submissionId: "desktop-submission-1",
-          runId: "run-1",
-          requestId: "approval-1",
-          pendingVersion: 1,
-        }
-      : null,
     pendingVersion: 1,
     request: {
       id: "approval-1",
@@ -366,9 +304,103 @@ function pendingApproval(
   };
 }
 
+function runProjection(input: {
+  status?: "running" | "completed" | "blocked" | "failed" | "cancelled";
+  runtimeStatus?: "succeeded" | "blocked" | "failed" | "cancelled";
+  activity?: ReturnType<typeof event>[];
+} = {}): NonNullable<HelarcMainSnapshot["run"]> {
+  const status = input.status ?? "running";
+  const runtimeStatus = input.runtimeStatus ?? "succeeded";
+  const activity = input.activity ?? [];
+  const terminal = status !== "running";
+  const code = status === "completed"
+    ? null
+    : status === "blocked"
+      ? "runtime_no_safe_path" as const
+      : status === "cancelled"
+        ? "runtime_cancelled" as const
+        : "runtime_limit_exceeded" as const;
+  const cancellation = status === "cancelled"
+    ? {
+        requestId: "run-1:cancellation",
+        origin: "user" as const,
+        reasonCode: "user_requested" as const,
+        requestedAt: "2026-07-05T01:00:00.500Z",
+      }
+    : null;
+
+  return {
+    runId: "run-1",
+    display: { status, terminal, statusSource: "platform" },
+    platform: {
+      sessionId: "session-1",
+      taskId: "task-1",
+      runId: "run-1",
+      sequence: terminal ? 2 : 1,
+      status,
+      startedAt: "2026-07-05T01:00:00.000Z",
+      plan: null,
+      approval: null,
+      retry: null,
+      cancellation,
+      enforcement: {
+        selected: "disabled",
+        status: "unisolated",
+        attemptCount: 1,
+        escalationCount: 0,
+        latestAttempt: null,
+      },
+      terminal: terminal
+        ? {
+            runId: "run-1",
+            taskId: "task-1",
+            status,
+            code,
+            completedAt: "2026-07-05T01:00:01.000Z",
+            durationMs: 1_000,
+            iterations: 1,
+            actions: 1,
+            itemCount: 1,
+            evidenceCount: 0,
+            artifactCount: 0,
+            errors: [],
+            cancellation,
+          }
+        : null,
+    },
+    product: {
+      runId: "run-1",
+      sequence: terminal ? 2 : 1,
+      phase: { kind: "none" },
+      activity,
+      result: terminal
+        ? {
+            status: status === "completed" ? "completed" : status,
+            output: {
+              taskId: "task-1",
+              workspaceId: "workspace",
+              agentSummary: "Terminal summary",
+              runtimeStatus,
+              patchStatus: null,
+              appliedPath: null,
+              enforcement: {
+                selected: "disabled",
+                status: "unisolated",
+                code: null,
+              },
+              safeErrors: status === "completed"
+                ? []
+                : [{ code: code ?? "run_failed", message: "Terminal error" }],
+            },
+          }
+        : null,
+    },
+  };
+}
+
 function event(
   id: string,
-  kind: "planning.started" | "tool.proposed" | "tool.completed" | "run.completed",
+  kind: "planning.started" | "tool.proposed" | "tool.completed" | "run.completed" | "retry.cancelled",
   title: string,
   severity: "info" | "warning" | "error",
   metadata: Record<string, unknown> = {},

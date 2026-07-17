@@ -2,14 +2,12 @@ import {
   ActionEnforcementPipeline,
   Runner,
   RuntimeEventEmitter,
-  RuntimeEventRecorder,
   createCanonicalSha256Digest,
   createSandboxExecutionGateway,
   type AgentTask,
   type ApprovalReviewerBinding,
   type RunCancellationController,
   type RunResult,
-  type RuntimeEvent,
   type SandboxEnforcement,
   type SandboxProvider,
 } from "@agent-anything/agent-core";
@@ -33,14 +31,14 @@ import {
 } from "@agent-anything/governance";
 import {
   createHelarcProductComposition,
-  mapRuntimeEventToHelarcActivity,
   type HelarcActivityItem,
   type HelarcAgentOutput,
   type HelarcPatchReviewBridge,
   type HelarcPatchReviewDecisionSubmission,
   type HelarcPatchReviewSubmissionReceipt,
   type HelarcPendingPatchReviewProjection,
-  type HelarcProductPhase,
+  type HelarcProductRunProjection,
+  type HelarcProductRunProjectionListener,
   type HelarcPermissionPreset,
   type HelarcProductOutput,
   type HelarcProductStatus,
@@ -73,7 +71,6 @@ export interface StartHelarcHostRunInput {
   readonly patchReviewBridge: HelarcPatchReviewBridge;
   readonly storage?: StoragePort;
   readonly now?: () => ISODateTimeString;
-  readonly onActivity?: (item: HelarcActivityItem, event: RuntimeEvent) => void;
 }
 
 export interface HelarcHostRunResult {
@@ -101,7 +98,8 @@ export interface HelarcHostRunComposition {
 
 export interface HelarcHostActiveRun extends HostActiveRun<HelarcAgentOutput> {
   getPatchReviewProjection(): HelarcPendingPatchReviewProjection | null;
-  getProductPhase(): HelarcProductPhase;
+  getProductProjection(): HelarcProductRunProjection;
+  subscribeProductProjection(listener: HelarcProductRunProjectionListener): () => void;
   submitPatchReviewDecision(
     input: HelarcPatchReviewDecisionSubmission,
   ): HelarcPatchReviewSubmissionReceipt;
@@ -144,6 +142,7 @@ export async function startHelarcHostRun(
       createInMemoryHostPolicyAmendmentStore({ maxRecords: 64 }),
   });
   const product = await createHelarcProductComposition({
+    runId: input.runId,
     task: input.task,
     provider: input.provider,
     toolMode: input.toolMode,
@@ -165,11 +164,8 @@ export async function startHelarcHostRun(
     now: input.now,
   });
   const runtimeEvents = new RuntimeEventEmitter();
-  const recorder = new RuntimeEventRecorder();
-  recorder.attachTo(runtimeEvents);
   runtimeEvents.subscribe((event) => {
-    const projected = product.projectRuntimeEvent(event);
-    input.onActivity?.(mapRuntimeEventToHelarcActivity(projected), projected);
+    product.recordRuntimeEvent(event);
   });
   const runMetadata = Object.freeze({
     ...product.runMetadata,
@@ -299,17 +295,19 @@ export async function startHelarcHostRun(
   const activeRun = createHelarcHostActiveRun(
     platformActiveRun,
     input.patchReviewBridge,
-    product.getProductPhase,
+    product.getProductProjection,
+    product.subscribeProductProjection,
   );
 
   return Object.freeze({
     activeRun,
     result: activeRun.result.then((outcome): HelarcHostRunOutcome => {
-      const activity = Object.freeze(recorder.events().map((event) =>
-        mapRuntimeEventToHelarcActivity(product.projectRuntimeEvent(event))
-      ));
       if (outcome.kind === "start_failure") {
-        return Object.freeze({ kind: "start_failure", failure: outcome, activity });
+        return Object.freeze({
+          kind: "start_failure",
+          failure: outcome,
+          activity: product.getProductProjection().activity,
+        });
       }
       const productResult = product.projectResult(outcome.runResult, enforcement);
       return Object.freeze({
@@ -317,7 +315,7 @@ export async function startHelarcHostRun(
         status: productResult.status,
         runResult: outcome.runResult,
         output: productResult.output,
-        activity,
+        activity: product.getProductProjection().activity,
       });
     }),
   });
@@ -326,7 +324,10 @@ export async function startHelarcHostRun(
 function createHelarcHostActiveRun(
   platform: HostActiveRun<HelarcAgentOutput>,
   patchReviews: HelarcPatchReviewBridge,
-  getProductPhase: () => HelarcProductPhase,
+  getProductProjection: () => HelarcProductRunProjection,
+  subscribeProductProjection: (
+    listener: HelarcProductRunProjectionListener,
+  ) => () => void,
 ): HelarcHostActiveRun {
   return Object.freeze({
     sessionId: platform.sessionId,
@@ -338,7 +339,8 @@ function createHelarcHostActiveRun(
       platform.submitApprovalDecision(input),
     cancel: (input: Parameters<HostActiveRun["cancel"]>[0]) => platform.cancel(input),
     getPatchReviewProjection: () => patchReviews.getPendingProjection(),
-    getProductPhase,
+    getProductProjection,
+    subscribeProductProjection,
     submitPatchReviewDecision(
       input: HelarcPatchReviewDecisionSubmission,
     ): HelarcPatchReviewSubmissionReceipt {

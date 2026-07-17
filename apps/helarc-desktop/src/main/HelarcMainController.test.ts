@@ -33,8 +33,7 @@ describe("HelarcMainController", () => {
         path: "D:\\projects\\agent-anything",
       },
       provider: { configured: true },
-      activity: [],
-      output: null,
+      run: null,
       error: null,
     });
     expect(snapshot.provider).toMatchObject({
@@ -217,19 +216,18 @@ describe("HelarcMainController", () => {
     const controller = new HelarcMainController({ provider: new CompleteProvider() });
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
-    const completed = waitForStatus(controller, "completed");
+    const completed = waitForProductResult(controller, "completed");
     const result = controller.startSession({ taskText: "  Update docs  " });
 
     expect(result).toMatchObject({
       ok: true,
       taskId: "helarc-task-1",
       snapshot: {
-        status: "running",
+        status: "starting",
         acceptedTask: {
           id: "helarc-task-1",
           prompt: "Update docs",
         },
-        output: null,
         error: null,
       },
     });
@@ -241,28 +239,32 @@ describe("HelarcMainController", () => {
         id: "helarc-task-1",
         prompt: "Update docs",
       },
-      output: {
-        agentSummary: "No changes needed.",
-        runtimeStatus: "succeeded",
-        patchStatus: null,
-        appliedPath: null,
-        safeErrors: [],
+      run: {
+        display: { status: "completed", terminal: true, statusSource: "platform" },
+        platform: { status: "completed", terminal: { status: "completed" } },
+        product: {
+          result: {
+            output: {
+              agentSummary: "No changes needed.",
+              runtimeStatus: "succeeded",
+              patchStatus: null,
+              appliedPath: null,
+              safeErrors: [],
+            },
+          },
+        },
       },
       error: null,
     });
-    expect(snapshot.activity.map((item) => item.kind)).toContain("controller.started");
-    expect(snapshot.activity.map((item) => item.kind)).toContain("run.item.appended");
-    expect(snapshot.activeRun).toMatchObject({
-      status: "completed",
-      terminal: {
-        status: "completed",
-        runtimeStatus: "succeeded",
-      },
+    expect(snapshot.run?.product.activity.map((item) => item.kind)).toContain("controller.started");
+    expect(snapshot.run?.product.activity.map((item) => item.kind)).toContain("run.item.appended");
+    expect(JSON.stringify(snapshot.run?.product.activity)).not.toContain("rawProvider");
+    const refreshed = controller.getSnapshot();
+    expect(refreshed.run).toBe(snapshot.run);
+    expect(refreshed.run).toMatchObject({
+      platform: { sequence: snapshot.run?.platform.sequence },
+      product: { sequence: snapshot.run?.product.sequence },
     });
-    expect(snapshot.activeRun.events.map((item) => item.kind)).toEqual(
-      expect.arrayContaining(["planning.started", "provider.output", "runtime.output"]),
-    );
-    expect(JSON.stringify(snapshot.activeRun.events)).not.toContain("rawProvider");
   });
 
   it("persists completed session history records for read-only review", async () => {
@@ -359,20 +361,16 @@ describe("HelarcMainController", () => {
     const snapshot = await settled;
     expect(snapshot).toMatchObject({
       status: "completed",
-      output: {
-        runtimeStatus: "succeeded",
-      },
       error: {
         code: "session_persistence_failed",
         message: "History store unavailable.",
       },
-      activeRun: {
-        status: "completed",
-        terminal: {
+      run: {
+        display: { status: "completed" },
+        product: { result: { output: { runtimeStatus: "succeeded" } } },
+        platform: {
           status: "completed",
-          runtimeStatus: "succeeded",
-          runtimeCode: null,
-          cancellation: null,
+          terminal: { status: "completed", code: null, cancellation: null },
         },
       },
     });
@@ -537,42 +535,38 @@ describe("HelarcMainController", () => {
     });
     controller.selectWorkspacePath(workspaceRoot);
 
-    const waiting = waitForStatus(controller, "waiting_for_approval");
+    const waiting = waitForPendingApproval(controller);
     const blocked = waitForSnapshot(
       controller,
       (snapshot) => snapshot.status === "blocked" && snapshot.sessionHistory.length === 1,
     );
     const result = controller.startSession({ taskText: "Run command" });
 
-    expect(result).toMatchObject({ ok: true, snapshot: { status: "running" } });
+    expect(result).toMatchObject({ ok: true, snapshot: { status: "starting" } });
     const waitingSnapshot = await waiting;
-    const pending = waitingSnapshot.pendingApproval;
+    const pending = pendingApproval(waitingSnapshot);
     expect(pending).toMatchObject({
       phase: "reviewing",
       pendingVersion: 1,
-      receipt: null,
       request: {
         category: "permissions",
         reason: "Create a governed marker file.",
       },
     });
-    expect(waitingSnapshot.activeRun).toMatchObject({
-      status: "waiting_for_approval",
-      pendingApproval: {
-        requestId: pending?.request.id,
-        toolName: "request_permissions",
-        riskLevel: "high",
-        workspaceDisplayName: workspaceRoot.split(/[\\/]/).pop(),
-        inputSummary: "1 write target(s)",
+    expect(waitingSnapshot.run).toMatchObject({
+      display: { status: "waiting_for_approval", statusSource: "platform" },
+      platform: {
+        status: "waiting_for_approval",
+        approval: {
+          requestId: pending.request.id,
+          pendingVersion: pending.pendingVersion,
+          phase: "reviewing",
+        },
       },
     });
     expect(controller.getSnapshot()).toMatchObject({
       status: "waiting_for_approval",
-      pendingApproval: {
-        request: { id: pending?.request.id },
-        pendingVersion: pending?.pendingVersion,
-      },
-      activeRun: { pendingApproval: { requestId: pending?.request.id } },
+      run: { platform: { approval: { requestId: pending.request.id } } },
     });
 
     const decline = approvalSubmission(waitingSnapshot, "decline", {
@@ -614,25 +608,19 @@ describe("HelarcMainController", () => {
     });
     expect(controller.getSnapshot()).toMatchObject({
       status: "waiting_for_approval",
-      pendingApproval: {
-        phase: "submitted_for_resolution",
-        receipt: { status: "accepted_for_resolution" },
+      run: {
+        display: { status: "waiting_for_approval" },
+        platform: { approval: { phase: "submitted_for_resolution" } },
       },
-      activeRun: { status: "waiting_for_approval" },
     });
 
     const blockedSnapshot = await blocked;
     expect(blockedSnapshot).toMatchObject({
       status: "blocked",
-      activeRun: {
-        status: "failed",
-        terminal: {
-          status: "failed",
-          runtimeStatus: "blocked",
-        },
-      },
-      output: {
-        safeErrors: [],
+      run: {
+        display: { status: "blocked", statusSource: "platform" },
+        platform: { status: "blocked", terminal: { status: "blocked" } },
+        product: { result: { output: { safeErrors: [] } } },
       },
       sessionHistory: [{
         status: "blocked",
@@ -678,36 +666,39 @@ describe("HelarcMainController", () => {
     });
     controller.selectWorkspacePath(workspaceRoot);
 
-    const waiting = waitForStatus(controller, "waiting_for_approval");
-    const completed = waitForStatus(controller, "completed");
+    const waiting = waitForPendingApproval(controller);
+    const completed = waitForProductResult(controller, "completed");
     controller.startSession({ taskText: "Run command" });
 
     const waitingSnapshot = await waiting;
+    const submitted = waitForSnapshot(
+      controller,
+      (snapshot) => snapshot.run?.platform.approval?.phase === "submitted_for_resolution",
+    );
     expect(controller.submitApprovalDecision(
       approvalSubmission(waitingSnapshot, "grantPermissions"),
     )).toMatchObject({
       status: "accepted_for_resolution",
-      requestId: waitingSnapshot.pendingApproval?.request.id,
-      pendingVersion: waitingSnapshot.pendingApproval?.pendingVersion,
+      requestId: pendingApproval(waitingSnapshot).request.id,
+      pendingVersion: pendingApproval(waitingSnapshot).pendingVersion,
     });
-    expect(controller.getSnapshot()).toMatchObject({
+    expect(await submitted).toMatchObject({
       status: "waiting_for_approval",
-      pendingApproval: { phase: "submitted_for_resolution" },
-      activeRun: { status: "waiting_for_approval" },
+      run: {
+        display: { status: "waiting_for_approval" },
+        platform: { approval: { phase: "submitted_for_resolution" } },
+      },
     });
 
     const completedSnapshot = await completed;
     expect(completedSnapshot).toMatchObject({
       status: "completed",
-      activeRun: {
-        status: "completed",
-        terminal: {
-          status: "completed",
-          runtimeStatus: "succeeded",
+      run: {
+        display: { status: "completed" },
+        platform: { status: "completed", terminal: { status: "completed" } },
+        product: {
+          result: { output: { agentSummary: "Permission was granted for this run." } },
         },
-      },
-      output: {
-        agentSummary: "Permission was granted for this run.",
       },
     });
     await expect(access(markerPath)).rejects.toThrow();
@@ -729,7 +720,7 @@ describe("HelarcMainController", () => {
     });
     controller.selectWorkspacePath(workspaceRoot);
 
-    const waiting = waitForStatus(controller, "waiting_for_approval");
+    const waiting = waitForPendingApproval(controller);
     controller.startSession({ taskText: "Run command" });
     const waitingSnapshot = await waiting;
     const lateSubmission = approvalSubmission(waitingSnapshot, "grantPermissions", {
@@ -740,13 +731,15 @@ describe("HelarcMainController", () => {
       ok: true,
       snapshot: {
         status: "cancelling",
-        pendingApproval: null,
-        activeRun: {
-          status: "cancelling",
-          pendingApproval: null,
-          cancellation: {
-            origin: "user",
-            reasonCode: "user_requested",
+        run: {
+          display: { status: "cancelling" },
+          platform: {
+            status: "cancelling",
+            approval: null,
+            cancellation: {
+              origin: "user",
+              reasonCode: "user_requested",
+            },
           },
         },
       },
@@ -765,17 +758,16 @@ describe("HelarcMainController", () => {
     const terminalSnapshot = await waitForSnapshot(
       controller,
       (snapshot) =>
-        snapshot.activeRun.terminal?.status === "cancelled"
+        snapshot.run?.platform.terminal?.status === "cancelled"
         && snapshot.sessionHistory.length === 1,
     );
     expect(terminalSnapshot).toMatchObject({
       status: "cancelled",
-      activeRun: {
-        status: "cancelled",
-        terminal: {
+      run: {
+        display: { status: "cancelled", statusSource: "platform" },
+        platform: {
           status: "cancelled",
-          runtimeStatus: "cancelled",
-          runtimeCode: "runtime_cancelled",
+          terminal: { status: "cancelled", code: "runtime_cancelled" },
         },
       },
       sessionHistory: [{
@@ -795,7 +787,7 @@ describe("HelarcMainController", () => {
         },
       }],
     });
-    expect(JSON.stringify(terminalSnapshot.activeRun)).not.toContain(
+    expect(JSON.stringify(terminalSnapshot.run)).not.toContain(
       "Cancelled from Helarc desktop.",
     );
     expect(JSON.stringify(terminalSnapshot.sessionHistory)).not.toContain("pendingApproval");
@@ -817,7 +809,7 @@ describe("HelarcMainController", () => {
     });
     controller.selectWorkspacePath(workspaceRoot);
 
-    const waiting = waitForStatus(controller, "waiting_for_approval");
+    const waiting = waitForPendingApproval(controller);
     const cancelled = waitForActiveRunTerminal(controller, "cancelled");
     controller.startSession({ taskText: "Request then cancel" });
     const waitingSnapshot = await waiting;
@@ -833,16 +825,16 @@ describe("HelarcMainController", () => {
 
     expect(await cancelled).toMatchObject({
       status: "cancelled",
-      pendingApproval: null,
-      activeRun: {
-        status: "cancelled",
-        cancellation: {
-          origin: "approval",
-          reasonCode: "approval_cancelled",
-        },
-        terminal: {
+      run: {
+        display: { status: "cancelled" },
+        platform: {
           status: "cancelled",
-          runtimeStatus: "cancelled",
+          approval: null,
+          cancellation: {
+            origin: "approval",
+            reasonCode: "approval_cancelled",
+          },
+          terminal: { status: "cancelled" },
         },
       },
     });
@@ -883,18 +875,16 @@ describe("HelarcMainController", () => {
     const snapshot = await failed;
     expect(snapshot).toMatchObject({
       status: "failed",
-      pendingApproval: null,
-      activeRun: {
-        status: "failed",
-        pendingApproval: null,
-        terminal: {
+      run: {
+        display: { status: "failed", statusSource: "platform" },
+        platform: {
           status: "failed",
-          runtimeStatus: "failed",
-          runtimeCode: "model_structured_output_retry_exhausted",
+          approval: null,
+          terminal: { status: "failed", code: "model_structured_output_retry_exhausted" },
         },
-      },
-      output: {
-        safeErrors: [{ code: "model_structured_output_retry_exhausted" }],
+        product: {
+          result: { output: { safeErrors: [{ code: "model_structured_output_retry_exhausted" }] } },
+        },
       },
       sessionHistory: [{
         status: "failed",
@@ -955,7 +945,7 @@ describe("HelarcMainController", () => {
     });
     controller.selectWorkspacePath(workspaceRoot);
 
-    const waiting = waitForStatus(controller, "waiting_for_patch_review");
+    const waiting = waitForPendingPatchReview(controller);
     const completed = waitForSnapshot(
       controller,
       (snapshot) =>
@@ -964,9 +954,9 @@ describe("HelarcMainController", () => {
     );
     const result = controller.startSession({ taskText: "Create file" });
 
-    expect(result).toMatchObject({ ok: true, snapshot: { status: "running" } });
+    expect(result).toMatchObject({ ok: true, snapshot: { status: "starting" } });
     const waitingSnapshot = await waiting;
-    expect(waitingSnapshot.pendingPatchReview).toMatchObject({
+    expect(pendingPatchReview(waitingSnapshot)).toMatchObject({
       operation: "create",
       path: "src/created.txt",
       proposedContent: "created\n",
@@ -984,19 +974,25 @@ describe("HelarcMainController", () => {
     const acceptedSubmission = patchSubmission(waitingSnapshot, "accepted", {
       reason: "Apply it.",
     });
-    expect(controller.resolvePatchReview(acceptedSubmission)).toMatchObject({
-      ok: true,
-      snapshot: { status: "applying_patch" },
-    });
+    const applying = waitForStatus(controller, "applying_patch");
+    expect(controller.resolvePatchReview(acceptedSubmission)).toMatchObject({ ok: true });
+    await applying;
 
     const completedSnapshot = await completed;
     expect(completedSnapshot).toMatchObject({
       status: "completed",
-      pendingPatchReview: null,
-      output: {
-        patchStatus: "applied",
-        appliedPath: "src/created.txt",
-        safeErrors: [],
+      run: {
+        display: { status: "completed", terminal: true },
+        product: {
+          phase: { kind: "none" },
+          result: {
+            output: {
+              patchStatus: "applied",
+              appliedPath: "src/created.txt",
+              safeErrors: [],
+            },
+          },
+        },
       },
       activeThread: {
         artifacts: [
@@ -1045,8 +1041,8 @@ describe("HelarcMainController", () => {
     });
     controller.selectWorkspacePath(workspaceRoot);
 
-    const waiting = waitForStatus(controller, "waiting_for_patch_review");
-    const cancelled = waitForStatus(controller, "cancelled");
+    const waiting = waitForPendingPatchReview(controller);
+    const cancelled = waitForProductResult(controller, "cancelled");
     controller.startSession({ taskText: "Create then cancel" });
     const waitingSnapshot = await waiting;
     const lateSubmission = patchSubmission(waitingSnapshot, "accepted", {
@@ -1055,13 +1051,23 @@ describe("HelarcMainController", () => {
 
     expect(controller.cancelSession()).toMatchObject({
       ok: true,
-      snapshot: { status: "cancelling", pendingPatchReview: null },
+      snapshot: {
+        status: "cancelling",
+        run: {
+          display: { status: "cancelling" },
+        },
+      },
     });
     const cancelledSnapshot = await cancelled;
     expect(cancelledSnapshot).toMatchObject({
       status: "cancelled",
-      pendingPatchReview: null,
-      output: { runtimeStatus: "cancelled", patchStatus: null },
+      run: {
+        display: { status: "cancelled", terminal: true },
+        product: {
+          phase: { kind: "none" },
+          result: { output: { runtimeStatus: "cancelled", patchStatus: null } },
+        },
+      },
     });
     expect(controller.resolvePatchReview(lateSubmission)).toMatchObject({
       ok: false,
@@ -1095,14 +1101,14 @@ describe("HelarcMainController", () => {
     const controller = new HelarcMainController({ provider });
     controller.selectWorkspacePath(workspaceRoot);
 
-    const waitingForReview = waitForStatus(controller, "waiting_for_patch_review");
-    const completed = waitForStatus(controller, "completed");
+    const waitingForReview = waitForPendingPatchReview(controller);
+    const completed = waitForProductResult(controller, "completed");
     const result = controller.startSession({ taskText: "Update existing file" });
 
-    expect(result).toMatchObject({ ok: true, snapshot: { status: "running" } });
+    expect(result).toMatchObject({ ok: true, snapshot: { status: "starting" } });
     const reviewSnapshot = await waitingForReview;
-    expect(reviewSnapshot.activity.map((item) => item.kind)).toContain("tool.finished");
-    expect(reviewSnapshot.pendingPatchReview).toMatchObject({
+    expect(reviewSnapshot.run?.product.activity.map((item) => item.kind)).toContain("tool.finished");
+    expect(pendingPatchReview(reviewSnapshot)).toMatchObject({
       operation: "update",
       path: "src/existing.txt",
       originalContent: "before\n",
@@ -1116,11 +1122,17 @@ describe("HelarcMainController", () => {
     const completedSnapshot = await completed;
     expect(completedSnapshot).toMatchObject({
       status: "completed",
-      output: {
-        agentSummary: "Update the target file.",
-        patchStatus: "applied",
-        appliedPath: "src/existing.txt",
-        safeErrors: [],
+      run: {
+        product: {
+          result: {
+            output: {
+              agentSummary: "Update the target file.",
+              patchStatus: "applied",
+              appliedPath: "src/existing.txt",
+              safeErrors: [],
+            },
+          },
+        },
       },
     });
     await expect(readFile(targetPath, "utf8")).resolves.toBe("after\n");
@@ -1213,27 +1225,46 @@ class ScriptedProvider implements Provider {
   }
 }
 
+function pendingApproval(snapshot: HelarcMainSnapshot) {
+  const pending = snapshot.run?.platform.approval ?? null;
+  if (pending === null || pending.review === null) {
+    throw new Error("Expected a pending approval.");
+  }
+  return {
+    ...pending.review,
+    phase: pending.phase,
+  };
+}
+
+function pendingPatchReview(snapshot: HelarcMainSnapshot) {
+  const phase = snapshot.run?.product.phase ?? null;
+  if (phase?.kind !== "waiting_for_patch_review") {
+    throw new Error("Expected a pending patch review.");
+  }
+  return phase.review;
+}
+
 function approvalSubmission(
   snapshot: HelarcMainSnapshot,
   kind: ApprovalDecisionKind,
   overrides: Partial<ApprovalDecisionSubmission> = {},
 ): ApprovalDecisionSubmission {
-  const pending = snapshot.pendingApproval;
-  if (pending === null) {
+  const pending = snapshot.run?.platform.approval ?? null;
+  if (pending === null || pending.review === null) {
     throw new Error("Expected a pending approval.");
   }
-  const option = pending.request.decisionOptions.find((candidate) => candidate.kind === kind);
+  const option = pending.review.request.decisionOptions.find((candidate) => candidate.kind === kind);
   if (option === undefined) {
     throw new Error(`Expected approval option ${kind}.`);
   }
   const grantedPermissions = kind === "grantPermissions" &&
-      pending.request.category === "permissions"
-    ? pending.request.payload.permissions
+      pending.review.request.category === "permissions"
+    ? pending.review.request.payload.permissions
     : null;
   return {
     submissionId: "desktop-submission-1",
-    runId: pending.request.runId,
-    requestId: pending.request.id,
+    runId: pending.review.request.runId,
+    requestId: pending.review.request.id,
     pendingVersion: pending.pendingVersion,
     optionId: option.id,
     grantedPermissions,
@@ -1247,10 +1278,11 @@ function patchSubmission(
   decision: "accepted" | "rejected",
   overrides: Partial<HelarcPatchReviewDecisionSubmission> = {},
 ): HelarcPatchReviewDecisionSubmission {
-  const pending = snapshot.pendingPatchReview;
-  if (pending === null) {
+  const phase = snapshot.run?.product.phase ?? null;
+  if (phase?.kind !== "waiting_for_patch_review") {
     throw new Error("Expected a pending patch review.");
   }
+  const pending = phase.review;
   return {
     submissionId: "desktop-patch-submission-1",
     runId: pending.runId,
@@ -1261,6 +1293,35 @@ function patchSubmission(
     reason: decision === "accepted" ? null : "Rejected in test.",
     ...overrides,
   };
+}
+
+function waitForPendingApproval(
+  controller: HelarcMainController,
+): Promise<HelarcMainSnapshot> {
+  return waitForSnapshot(
+    controller,
+    (snapshot) => snapshot.run?.platform.approval?.review !== null &&
+      snapshot.run?.platform.approval?.review !== undefined,
+  );
+}
+
+function waitForPendingPatchReview(
+  controller: HelarcMainController,
+): Promise<HelarcMainSnapshot> {
+  return waitForSnapshot(
+    controller,
+    (snapshot) => snapshot.run?.product.phase.kind === "waiting_for_patch_review",
+  );
+}
+
+function waitForProductResult(
+  controller: HelarcMainController,
+  status: NonNullable<NonNullable<HelarcMainSnapshot["run"]>["product"]["result"]>["status"],
+): Promise<HelarcMainSnapshot> {
+  return waitForSnapshot(
+    controller,
+    (snapshot) => snapshot.run?.product.result?.status === status,
+  );
 }
 
 function waitForStatus(
@@ -1320,10 +1381,10 @@ async function threadFilePath(): Promise<string> {
 
 function waitForActiveRunTerminal(
   controller: HelarcMainController,
-  status: NonNullable<HelarcMainSnapshot["activeRun"]["terminal"]>["status"],
+  status: NonNullable<NonNullable<HelarcMainSnapshot["run"]>["platform"]["terminal"]>["status"],
 ): Promise<HelarcMainSnapshot> {
   const snapshot = controller.getSnapshot();
-  if (snapshot.activeRun.terminal?.status === status) {
+  if (snapshot.run?.platform.terminal?.status === status) {
     return Promise.resolve(snapshot);
   }
 
@@ -1334,7 +1395,7 @@ function waitForActiveRunTerminal(
     }, 2_000);
 
     const unsubscribe = controller.subscribeSnapshot((nextSnapshot) => {
-      if (nextSnapshot.activeRun.terminal?.status === status) {
+      if (nextSnapshot.run?.platform.terminal?.status === status) {
         clearTimeout(timeout);
         unsubscribe();
         resolve(nextSnapshot);

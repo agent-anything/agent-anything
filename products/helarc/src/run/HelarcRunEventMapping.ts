@@ -6,6 +6,7 @@ import type {
   HelarcRunEventSeverity,
   HelarcRunEventViewModel,
 } from "./HelarcRun.js";
+import type { HelarcActivityItem } from "../composition/HelarcProductResult.js";
 
 export function mapRuntimeEventToHelarcRunEvent(
   event: RuntimeEvent,
@@ -22,6 +23,22 @@ export function mapRuntimeEventToHelarcRunEvent(
     detail: detailForEvent(projectedEvent.name, payload),
     severity: severityForEvent(projectedEvent.name, payload),
     metadata: metadataForEvent(projectedEvent, payload),
+  };
+}
+
+export function mapHelarcActivityToRunEvent(
+  activity: HelarcActivityItem,
+): HelarcRunEventViewModel {
+  const name = activity.kind as RuntimeEventName;
+  return {
+    id: activity.id,
+    sequence: activity.sequence,
+    timestamp: activity.timestamp,
+    kind: kindForEvent(name, activity.metadata),
+    title: activity.title,
+    detail: activity.detail,
+    severity: severityForEvent(name, activity.metadata),
+    metadata: { ...activity.metadata },
   };
 }
 
