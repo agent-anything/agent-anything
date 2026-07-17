@@ -186,12 +186,20 @@ describe("code-agent file Actions", () => {
     const fixture = await createFixture();
     await writeFile(join(fixture.root, "patch.txt"), "before", "utf8");
     const proposed = await createPatchProposal({
+      runId: "run_001",
       workspaceScope: fixture.scope,
       change: { kind: "update", path: "patch.txt", proposedContent: "after" },
       summary: "Update patch file",
       rationale: "Test canonical patch translation",
-    }, { createPatchId: () => "patch_1", now: () => NOW });
-    const action = createAcceptedPatchFileAction(acceptPatch(proposed, { now: () => NOW }));
+    }, { createProposalId: () => "proposal_1", now: () => NOW });
+    const action = createAcceptedPatchFileAction(acceptPatch(proposed, {
+      runId: "run_001",
+      proposalId: "proposal_1",
+      reviewId: "review_1",
+      pendingVersion: 1,
+      submissionId: "submission_1",
+      now: () => NOW,
+    }));
 
     expect(action).toEqual({
       actionName: CODE_AGENT_UPDATE_FILE_ACTION,

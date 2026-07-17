@@ -8,6 +8,7 @@ import type {
 } from "./provider/HelarcProviderProfileStore.js";
 import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
 import type { ApprovalDecisionSubmission } from "@agent-anything/permission";
+import type { HelarcPatchReviewDecisionSubmission } from "@agent-anything/helarc";
 
 export const HELARC_IPC_CHANNELS = {
   cancelSession: "helarc:cancel-session",
@@ -251,15 +252,27 @@ function readGrantedPermissions(
 
 function readPatchReviewDecision(
   payload: unknown,
-): { patchId: string; decision: "accepted" | "rejected"; reason?: string } {
+): HelarcPatchReviewDecisionSubmission {
   if (!isRecord(payload)) {
-    return { patchId: "", decision: "rejected", reason: "Rejected by invalid request." };
+    return {
+      submissionId: "",
+      runId: "",
+      proposalId: "",
+      reviewId: "",
+      pendingVersion: 0,
+      decision: "rejected",
+      reason: "Rejected by invalid request.",
+    };
   }
 
   return {
-    patchId: typeof payload.patchId === "string" ? payload.patchId : "",
+    submissionId: typeof payload.submissionId === "string" ? payload.submissionId : "",
+    runId: typeof payload.runId === "string" ? payload.runId : "",
+    proposalId: typeof payload.proposalId === "string" ? payload.proposalId : "",
+    reviewId: typeof payload.reviewId === "string" ? payload.reviewId : "",
+    pendingVersion: typeof payload.pendingVersion === "number" ? payload.pendingVersion : 0,
     decision: payload.decision === "accepted" ? "accepted" : "rejected",
-    reason: typeof payload.reason === "string" ? payload.reason : undefined,
+    reason: typeof payload.reason === "string" ? payload.reason : null,
   };
 }
 

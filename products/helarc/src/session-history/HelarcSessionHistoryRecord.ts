@@ -33,7 +33,7 @@ export type HelarcSessionHistoryPatchDecision =
   | "unknown";
 
 export interface HelarcSessionHistoryPatchSummary {
-  patchId: string | null;
+  proposalId: string | null;
   operation: "create" | "update" | "delete" | null;
   path: string | null;
   summary: string | null;

@@ -124,7 +124,7 @@ function recordInput() {
       safeErrors: [],
     },
     patch: {
-      patchId: "patch-1",
+      proposalId: "proposal-1",
       operation: "update" as const,
       path: "README.md",
       summary: "Update docs.",

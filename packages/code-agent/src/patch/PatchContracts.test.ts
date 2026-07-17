@@ -19,7 +19,8 @@ const originalContent: PatchContentReference = {
 
 function createProposal(operation: PatchOperation): PatchProposal {
   return {
-    id: "patch-1",
+    id: "proposal-1",
+    runId: "run-1",
     rootName: "code",
     workspaceId: "workspace-1",
     operation,
@@ -67,13 +68,21 @@ describe("PatchContracts", () => {
     });
     const accepted: AcceptedPatchDecision = {
       status: "accepted",
-      patchId: proposal.id,
+      runId: proposal.runId,
+      proposalId: proposal.id,
+      reviewId: "review-1",
+      pendingVersion: 1,
+      submissionId: "submission-1",
       decidedAt: "2026-06-20T10:01:00.000Z",
       metadata: {},
     };
     const rejected: RejectedPatchDecision = {
       status: "rejected",
-      patchId: proposal.id,
+      runId: proposal.runId,
+      proposalId: proposal.id,
+      reviewId: "review-1",
+      pendingVersion: 1,
+      submissionId: "submission-2",
       decidedAt: "2026-06-20T10:01:00.000Z",
       reason: "The change is no longer needed.",
       metadata: {},

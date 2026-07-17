@@ -45,9 +45,15 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
     reason: typeof input?.reason === "string" ? input.reason : null,
   }),
   resolvePatchReview: (input) => ipcRenderer.invoke(channels.resolvePatchReview, {
-    patchId: typeof input?.patchId === "string" ? input.patchId : "",
+    submissionId: typeof input?.submissionId === "string" ? input.submissionId : "",
+    runId: typeof input?.runId === "string" ? input.runId : "",
+    proposalId: typeof input?.proposalId === "string" ? input.proposalId : "",
+    reviewId: typeof input?.reviewId === "string" ? input.reviewId : "",
+    pendingVersion: typeof input?.pendingVersion === "number"
+      ? input.pendingVersion
+      : Number(input?.pendingVersion),
     decision: input?.decision === "accepted" ? "accepted" : "rejected",
-    reason: typeof input?.reason === "string" ? input.reason : undefined,
+    reason: typeof input?.reason === "string" ? input.reason : null,
   }),
   subscribeSnapshot: (listener) => {
     const safeListener = (_event, snapshot) => {

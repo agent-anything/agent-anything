@@ -10,7 +10,8 @@ export function createAcceptedPatchFileAction(
   patch: AcceptedPatchStatus,
 ): CodeAgentFileActionRequest {
   if (patch.status !== "accepted" || patch.decision.status !== "accepted" ||
-    patch.decision.patchId !== patch.proposal.id) {
+    patch.decision.runId !== patch.proposal.runId ||
+    patch.decision.proposalId !== patch.proposal.id) {
     throw new TypeError("Only a consistently accepted patch can become a file Action.");
   }
   const operation = patch.proposal.operation;

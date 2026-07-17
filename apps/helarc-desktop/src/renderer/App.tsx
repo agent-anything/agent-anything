@@ -223,7 +223,11 @@ export function App() {
     setIsBusy(true);
     try {
       const result = await api.resolvePatchReview({
-        patchId: pendingPatchReview.patchId,
+        submissionId: globalThis.crypto.randomUUID(),
+        runId: pendingPatchReview.runId,
+        proposalId: pendingPatchReview.proposalId,
+        reviewId: pendingPatchReview.reviewId,
+        pendingVersion: pendingPatchReview.pendingVersion,
         decision,
         reason: decision === "accepted" ? "Accepted from Helarc desktop." : "Rejected from Helarc desktop.",
       });

@@ -6,6 +6,10 @@ export type {
   UpdateHelarcActiveRunResult,
 } from "./HelarcActiveRunController.js";
 export {
+  createHelarcPatchReviewBridge,
+  type CreateHelarcPatchReviewBridgeInput,
+} from "./HelarcPatchReviewBridge.js";
+export {
   HelarcActiveRunController,
 } from "./HelarcActiveRunController.js";
 export type {
@@ -20,6 +24,7 @@ export {
 } from "./prepareHelarcRunStart.js";
 export type {
   HelarcHostRunComposition,
+  HelarcHostActiveRun,
   HelarcHostRunOutcome,
   HelarcHostRunResult,
   HelarcHostRunStartFailureResult,

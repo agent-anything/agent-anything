@@ -180,8 +180,11 @@ export interface HelarcThreadSummarySnapshot {
   latestRun: HelarcThreadLatestRunSnapshot | null;
 }
 
-export interface HelarcPatchReviewViewModel {
-  patchId: string;
+export interface HelarcPendingPatchReviewSnapshot {
+  runId: string;
+  proposalId: string;
+  reviewId: string;
+  pendingVersion: number;
   rootName: string;
   workspaceId: string;
   path: string;
@@ -192,7 +195,7 @@ export interface HelarcPatchReviewViewModel {
   proposedContent: string | null;
   originalContentBytes: number | null;
   proposedContentBytes: number | null;
-  decisionState: "pending";
+  phase: "reviewing" | "submitted_for_resolution";
 }
 
 export interface HelarcActivityItem {
@@ -241,7 +244,7 @@ export interface HelarcSessionHistoryProviderRef {
 }
 
 export interface HelarcSessionHistoryPatchSummary {
-  patchId: string | null;
+  proposalId: string | null;
   operation: "create" | "update" | "delete" | null;
   path: string | null;
   summary: string | null;
@@ -274,7 +277,7 @@ export interface HelarcMainSnapshot {
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   pendingApproval: HelarcPendingApprovalSnapshot | null;
-  pendingPatchReview: HelarcPatchReviewViewModel | null;
+  pendingPatchReview: HelarcPendingPatchReviewSnapshot | null;
   activeThread: HelarcActiveThreadSnapshot | null;
   threadSummaries: HelarcThreadSummarySnapshot[];
   activity: HelarcActivityItem[];
@@ -296,9 +299,13 @@ export type HelarcCancelSessionResult =
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
 export interface HelarcResolvePatchReviewInput {
-  patchId: string;
+  submissionId: string;
+  runId: string;
+  proposalId: string;
+  reviewId: string;
+  pendingVersion: number;
   decision: "accepted" | "rejected";
-  reason?: string;
+  reason: string | null;
 }
 
 export type HelarcResolvePatchReviewResult =

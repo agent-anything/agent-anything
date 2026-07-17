@@ -44,7 +44,8 @@ describe("PatchWorkflow", () => {
     });
 
     expect(proposed.proposal).toMatchObject({
-      id: "patch-1",
+      id: "proposal-1",
+      runId: "run-1",
       rootName: "code",
       workspaceId: "workspace-code",
       operation: {
@@ -52,9 +53,18 @@ describe("PatchWorkflow", () => {
         path: "src/created.txt",
       },
     });
-    const accepted = acceptPatch(proposed, { now: clock });
+    const accepted = acceptPatch(proposed, decisionInput());
 
-    expect(accepted).toMatchObject({ status: "accepted", decision: { patchId: "patch-1" } });
+    expect(accepted).toMatchObject({
+      status: "accepted",
+      decision: {
+        runId: "run-1",
+        proposalId: "proposal-1",
+        reviewId: "review-1",
+        pendingVersion: 1,
+        submissionId: "submission-1",
+      },
+    });
     await expect(readFile(join(codeRoot, "src", "created.txt"), "utf8")).rejects.toThrow();
   });
 
@@ -77,7 +87,7 @@ describe("PatchWorkflow", () => {
     }
     expect(proposed.proposal.operation.originalContent.digest).toHaveLength(64);
 
-    expect(acceptPatch(proposed, { now: clock }).status).toBe("accepted");
+    expect(acceptPatch(proposed, decisionInput()).status).toBe("accepted");
     await expect(readFile(join(codeRoot, "src", "existing.txt"), "utf8"))
       .resolves.toBe("before\n");
   });
@@ -92,10 +102,13 @@ describe("PatchWorkflow", () => {
     const review = await materializePatchReview({
       patch: proposed,
       workspaceScope: createScope(),
+      createReviewId: () => "review-1",
     });
 
     expect(review).toMatchObject({
-      patchId: "patch-1",
+      runId: "run-1",
+      proposalId: "proposal-1",
+      reviewId: "review-1",
       rootName: "code",
       workspaceId: "workspace-code",
       path: "src/existing.txt",
@@ -136,7 +149,7 @@ describe("PatchWorkflow", () => {
       kind: "delete",
       originalContent: { algorithm: "sha256", byteLength: 10 },
     });
-    expect(acceptPatch(proposed, { now: clock }).status).toBe("accepted");
+    expect(acceptPatch(proposed, decisionInput()).status).toBe("accepted");
     await expect(readFile(join(codeRoot, "src", "delete.txt"), "utf8"))
       .resolves.toBe("remove me\n");
   });
@@ -148,13 +161,17 @@ describe("PatchWorkflow", () => {
       proposedContent: "after\n",
     });
     const rejected = rejectPatch(proposed, {
+      ...decisionInput(),
       reason: "Keep the existing behavior.",
-      now: clock,
     });
 
     expect(rejected).toMatchObject({
       status: "rejected",
-      decision: { patchId: "patch-1", reason: "Keep the existing behavior." },
+      decision: {
+        proposalId: "proposal-1",
+        reviewId: "review-1",
+        reason: "Keep the existing behavior.",
+      },
     });
     await expect(readFile(join(codeRoot, "src", "existing.txt"), "utf8"))
       .resolves.toBe("before\n");
@@ -218,6 +235,14 @@ describe("PatchWorkflow", () => {
     })).rejects.toMatchObject({ code: "patch_state_invalid" });
     await expect(readFile(join(codeRoot, "src", "existing.txt"), "utf8"))
       .resolves.toBe("before\n");
+
+    await expect(materializePatchReview({
+      patch: {
+        ...proposed,
+        proposal: { ...proposed.proposal, runId: "" },
+      },
+      workspaceScope: createScope(),
+    })).rejects.toMatchObject({ code: "patch_state_invalid" });
   });
 
   it("enforces trusted content limits during proposal and review", async () => {
@@ -248,6 +273,7 @@ describe("PatchWorkflow", () => {
 
   function proposalInput(change: PatchProposalChange) {
     return {
+      runId: "run-1",
       workspaceScope: createScope(),
       rootName: "code",
       change,
@@ -259,7 +285,18 @@ describe("PatchWorkflow", () => {
   function proposalOptions() {
     return {
       now: clock,
-      createPatchId: () => "patch-1",
+      createProposalId: () => "proposal-1",
+    };
+  }
+
+  function decisionInput() {
+    return {
+      runId: "run-1",
+      proposalId: "proposal-1",
+      reviewId: "review-1",
+      pendingVersion: 1,
+      submissionId: "submission-1",
+      now: clock,
     };
   }
 

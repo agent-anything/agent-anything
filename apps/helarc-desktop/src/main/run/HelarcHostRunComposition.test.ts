@@ -23,16 +23,23 @@ import {
   startHelarcHostRun,
   type StartHelarcHostRunInput,
 } from "./HelarcHostRunComposition.js";
+import { createHelarcPatchReviewBridge } from "./HelarcPatchReviewBridge.js";
 
 type RunHelarcTestInput = Omit<
   StartHelarcHostRunInput,
-  "sessionId" | "runId" | "cancellation" | "toolMode" | "permissionPreset"
+  | "sessionId"
+  | "runId"
+  | "cancellation"
+  | "toolMode"
+  | "permissionPreset"
+  | "patchReviewBridge"
 > & {
   readonly sessionId?: string;
   readonly runId?: string;
   readonly cancellation?: StartHelarcHostRunInput["cancellation"];
   readonly enableShell?: boolean;
   readonly permissionPreset?: StartHelarcHostRunInput["permissionPreset"];
+  readonly patchReviewBridge?: StartHelarcHostRunInput["patchReviewBridge"];
 };
 
 async function executeTestHostRun(input: RunHelarcTestInput) {
@@ -58,6 +65,7 @@ async function executeTestHostRun(input: RunHelarcTestInput) {
     toolMode: input.enableShell ? "shell-enabled" : "read-only",
     permissionPreset,
     userApprovalBridge,
+    patchReviewBridge: input.patchReviewBridge ?? createHelarcPatchReviewBridge({ runId }),
   });
   const outcome = await composition.result;
   if (outcome.kind === "start_failure") {
@@ -321,6 +329,18 @@ describe("Helarc Host Run composition", () => {
     expect(provider.requests).toHaveLength(0);
   });
 
+  it("rejects a cross-Run Patch review bridge before Provider or Runner invocation", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-patch-bridge-mismatch-"));
+    const provider = new ScriptedProvider([{ action: "complete", summary: "Must not run." }]);
+
+    await expect(executeReadOnlyTestHostRun({
+      task: createTask(workspaceRoot),
+      provider,
+      patchReviewBridge: createHelarcPatchReviewBridge({ runId: "run-other" }),
+    })).rejects.toThrow("patch review bridge Run identity does not match");
+    expect(provider.requests).toHaveLength(0);
+  });
+
   it("exhausts repeated malformed output without materializing model items or Actions", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-output-exhausted-"));
     const firstInvalidOutput = "PRIVATE_INVALID_OUTPUT_1";
@@ -511,16 +531,19 @@ describe("Helarc Host Run composition", () => {
     const result = await executeTestHostRun({
       task: createTask(workspaceRoot),
       provider,
-      patchReviewBridge: async (review) => {
+      patchReviewBridge: automaticPatchReviewBridge(
+        "helarc-task-1",
+        "accepted",
+        (review) => {
         expect(review).toMatchObject({
           operation: "create",
           path: "src/created.txt",
           originalContent: null,
           proposedContent: "created\n",
-          decisionState: "pending",
+          phase: "reviewing",
         });
-        return { decision: "accepted", reason: "Looks good." };
-      },
+        },
+      ),
     });
 
     expect(result.status).toBe("completed");
@@ -572,14 +595,17 @@ describe("Helarc Host Run composition", () => {
     const result = await executeTestHostRun({
       task: createTask(workspaceRoot),
       provider,
-      patchReviewBridge: async (review) => {
+      patchReviewBridge: automaticPatchReviewBridge(
+        "helarc-task-1",
+        "rejected",
+        (review) => {
         expect(review).toMatchObject({
           operation: "update",
           originalContent: "before\n",
           proposedContent: "after\n",
         });
-        return { decision: "rejected", reason: "Not this change." };
-      },
+        },
+      ),
     });
 
     expect(result.status).toBe("rejected");
@@ -620,10 +646,13 @@ describe("Helarc Host Run composition", () => {
     const result = await executeTestHostRun({
       task: createTask(workspaceRoot),
       provider,
-      patchReviewBridge: async () => {
-        await writeFile(targetPath, "changed\n");
-        return { decision: "accepted" };
-      },
+      patchReviewBridge: automaticPatchReviewBridge(
+        "helarc-task-1",
+        "accepted",
+        async () => {
+          await writeFile(targetPath, "changed\n");
+        },
+      ),
     });
 
     expect(result.status).toBe("failed");
@@ -646,6 +675,33 @@ describe("Helarc Host Run composition", () => {
     await expect(readFile(targetPath, "utf8")).resolves.toBe("changed\n");
   });
 });
+
+function automaticPatchReviewBridge(
+  runId: string,
+  decision: "accepted" | "rejected",
+  onReview?: (
+    review: NonNullable<ReturnType<ReturnType<typeof createHelarcPatchReviewBridge>["getPendingProjection"]>>,
+  ) => void | Promise<void>,
+) {
+  const bridge = createHelarcPatchReviewBridge({ runId });
+  bridge.subscribe(async (review) => {
+    if (review === null || review.phase !== "reviewing") return;
+    await onReview?.(review);
+    const receipt = bridge.submitDecision({
+      submissionId: `${review.reviewId}:test-submission`,
+      runId: review.runId,
+      proposalId: review.proposalId,
+      reviewId: review.reviewId,
+      pendingVersion: review.pendingVersion,
+      decision,
+      reason: decision === "accepted" ? "Looks good." : "Not this change.",
+    });
+    if (receipt.status !== "accepted_for_resolution") {
+      throw new Error(`Patch review submission failed: ${receipt.code}.`);
+    }
+  });
+  return bridge;
+}
 
 function automaticReviewer(decisionKind: "accept" | "decline") {
   return {

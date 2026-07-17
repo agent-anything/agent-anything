@@ -93,7 +93,7 @@ function record(id: string, endedAt: string) {
       safeErrors: [],
     },
     patch: {
-      patchId: null,
+      proposalId: null,
       operation: null,
       path: null,
       summary: null,

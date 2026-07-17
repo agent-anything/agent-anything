@@ -2,7 +2,6 @@ import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,
   createUserApprovalReviewBridge,
-  type HostActiveRun,
   type UserApprovalPendingProjection,
   type UserApprovalReviewBridge,
 } from "@agent-anything/agent-core/host";
@@ -27,8 +26,8 @@ import {
   createBuiltInHelarcTaskTemplates,
   mapRuntimeEventToHelarcRunEvent,
   type HelarcActivityItem,
-  type HelarcPatchReviewDecision,
-  type HelarcPatchReviewViewModel,
+  type HelarcPatchReviewDecisionSubmission,
+  type HelarcPendingPatchReviewProjection,
   type HelarcProviderProfile,
   type HelarcRunApprovalPrompt,
   type HelarcRunSnapshot,
@@ -56,7 +55,9 @@ import { basename, isAbsolute, normalize } from "node:path";
 import type { ProviderCredentialStoreError } from "./provider/ProviderCredentialStore.js";
 import {
   HelarcActiveRunController,
+  createHelarcPatchReviewBridge,
   startHelarcHostRun,
+  type HelarcHostActiveRun,
 } from "./run/index.js";
 import type { HelarcThreadStore, HelarcThreadSummary } from "./thread/index.js";
 
@@ -161,7 +162,7 @@ export interface HelarcMainSnapshot {
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
   pendingApproval: HelarcPendingApprovalSnapshot | null;
-  pendingPatchReview: HelarcPatchReviewViewModel | null;
+  pendingPatchReview: HelarcPendingPatchReviewProjection | null;
   activeThread: HelarcActiveThreadSnapshot | null;
   threadSummaries: HelarcThreadSummarySnapshot[];
   activity: HelarcActivityItem[];
@@ -217,11 +218,7 @@ export type CancelHelarcSessionResult =
   | { ok: true; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
-export interface ResolveHelarcPatchReviewInput {
-  patchId: string;
-  decision: "accepted" | "rejected";
-  reason?: string;
-}
+export type ResolveHelarcPatchReviewInput = HelarcPatchReviewDecisionSubmission;
 
 export type ResolveHelarcPatchReviewResult =
   | { ok: true; snapshot: HelarcMainSnapshot }
@@ -248,7 +245,7 @@ export class HelarcMainController {
   private selectedWorkspace: HelarcWorkspaceSnapshot | null = null;
   private acceptedTask: HelarcAcceptedTaskSnapshot | null = null;
   private pendingApproval: HelarcPendingApprovalSnapshot | null = null;
-  private pendingPatchReview: PendingPatchReview | null = null;
+  private pendingPatchReview: HelarcPendingPatchReviewProjection | null = null;
   private activity: HelarcActivityItem[] = [];
   private output: HelarcProductOutput | null = null;
   private lastError: HelarcMainError | null = null;
@@ -268,7 +265,7 @@ export class HelarcMainController {
   private status: HelarcMainSnapshotStatus = "idle";
   private nextTaskNumber = 1;
   private runCancellation: RunCancellationController | null = null;
-  private activeHostRun: HostActiveRun | null = null;
+  private activeHostRun: HelarcHostActiveRun | null = null;
   private readonly sessionAuthorityStore = createInMemoryHostSessionAuthorityStore({
     maxRecords: 64,
   });
@@ -331,7 +328,7 @@ export class HelarcMainController {
       provider: this.provider,
       acceptedTask: this.acceptedTask,
       pendingApproval: this.pendingApproval,
-      pendingPatchReview: this.pendingPatchReview?.review ?? null,
+      pendingPatchReview: this.pendingPatchReview,
       activeThread: createActiveThreadSnapshot(this.currentThreadRecord),
       threadSummaries: this.threadSummaries,
       activity: this.activity,
@@ -589,33 +586,36 @@ export class HelarcMainController {
   }
 
   resolvePatchReview(input: ResolveHelarcPatchReviewInput): ResolveHelarcPatchReviewResult {
-    if (!this.pendingPatchReview) {
+    const activeRun = this.activeHostRun;
+    if (activeRun === null) {
       const error = this.setError("patch_review_not_pending", "No patch review is pending.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
-
-    if (this.pendingPatchReview.review.patchId !== input.patchId) {
-      const error = this.setError("patch_review_mismatch", "Patch review is stale.");
+    const receipt = activeRun.submitPatchReviewDecision(input);
+    if (receipt.status === "rejected") {
+      const code = receipt.code === "patch_review_not_pending" ||
+          receipt.code === "patch_review_already_resolved"
+        ? "patch_review_not_pending"
+        : "patch_review_mismatch";
+      const error = this.setError(
+        code,
+        code === "patch_review_not_pending"
+          ? "No patch review is pending."
+          : "Patch review submission is stale or invalid.",
+      );
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
-
-    const rejectReason = input.reason?.trim() ?? "";
-    if (input.decision === "rejected" && rejectReason.length === 0) {
-      const error = this.setError("patch_review_not_pending", "Rejected patch reason is required.");
-      return { ok: false, error, snapshot: this.getSnapshot() };
-    }
-
     const pending = this.pendingPatchReview;
-    this.pendingPatchReview = null;
+    if (pending === null) {
+      const error = this.setError("patch_review_not_pending", "No patch review is pending.");
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
     this.lastPatchReview = {
-      review: pending.review,
+      review: pending,
       decision: input.decision,
-      reason: input.reason?.trim() || null,
+      reason: input.reason,
     };
     this.status = input.decision === "accepted" ? "applying_patch" : "running";
-    pending.resolve(input.decision === "accepted"
-      ? { decision: "accepted", reason: input.reason }
-      : { decision: "rejected", reason: rejectReason });
     return { ok: true, snapshot: this.publishSnapshot() };
   }
 
@@ -636,6 +636,7 @@ export class HelarcMainController {
     let terminal: HelarcRunTerminalSummary | null;
     const runId = this.activeRunController.getSnapshot().runId;
     const userApprovalBridge = this.createApprovalReviewBridge(runId);
+    const patchReviewBridge = this.createPatchReviewBridge(runId);
     try {
       const composition = await startHelarcHostRun({
         task,
@@ -648,7 +649,7 @@ export class HelarcMainController {
         userApprovalBridge,
         sessionAuthorityPort: this.sessionAuthorityStore,
         persistentPolicyAmendments: this.policyAmendmentStore,
-        patchReviewBridge: this.createPatchReviewBridge(),
+        patchReviewBridge,
         onActivity: (item, event) => {
           this.activity = [...this.activity, item];
           this.activeRunController.appendEvent(mapRuntimeEventToHelarcRunEvent(event));
@@ -773,24 +774,23 @@ export class HelarcMainController {
     });
   }
 
-  private createPatchReviewBridge() {
-    return async (review: HelarcPatchReviewViewModel) => new Promise<HelarcPatchReviewDecision>((resolve) => {
-      if (this.pendingPatchReview) {
-        resolve({
-          decision: "rejected",
-          reason: "Another patch review is already pending.",
-        });
-        return;
-      }
-
-      this.pendingPatchReview = { review, resolve };
-      this.lastPatchReview = {
-        review,
-        decision: null,
-        reason: null,
-      };
-      this.status = "waiting_for_patch_review";
-      this.publishSnapshot();
+  private createPatchReviewBridge(runId: string) {
+    return createHelarcPatchReviewBridge({
+      runId,
+      onProjectionChanged: (projection) => {
+        this.pendingPatchReview = projection;
+        if (projection !== null) {
+          this.lastPatchReview ??= {
+            review: projection,
+            decision: null,
+            reason: null,
+          };
+          this.status = projection.phase === "reviewing"
+            ? "waiting_for_patch_review"
+            : "applying_patch";
+        }
+        this.publishSnapshot();
+      },
     });
   }
 
@@ -1081,13 +1081,8 @@ export class HelarcMainController {
   }
 }
 
-interface PendingPatchReview {
-  review: HelarcPatchReviewViewModel;
-  resolve: (decision: HelarcPatchReviewDecision) => void;
-}
-
 interface CompletedPatchReview {
-  review: HelarcPatchReviewViewModel;
+  review: HelarcPendingPatchReviewProjection;
   decision: "accepted" | "rejected" | null;
   reason: string | null;
 }
@@ -1138,7 +1133,7 @@ function createHistoryPatchSummary(
 ): HelarcSessionHistoryPatchSummary {
   if (!patchReview) {
     return {
-      patchId: null,
+      proposalId: null,
       operation: null,
       path: output.appliedPath,
       summary: output.agentSummary,
@@ -1149,7 +1144,7 @@ function createHistoryPatchSummary(
   }
 
   return {
-    patchId: patchReview.review.patchId,
+    proposalId: patchReview.review.proposalId,
     operation: patchReview.review.operation,
     path: patchReview.review.path,
     summary: patchReview.review.summary,

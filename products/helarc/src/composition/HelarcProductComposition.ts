@@ -30,7 +30,10 @@ import {
 } from "../run/HelarcControllerTraceProjection.js";
 import { HelarcPatchActionController } from "../patch/HelarcPatchActionController.js";
 import type { HelarcTaskInput } from "../task/index.js";
-import type { HelarcPatchReviewBridge } from "./HelarcPatchReview.js";
+import type {
+  HelarcPatchReviewBridge,
+  HelarcProductPhase,
+} from "./HelarcPatchReview.js";
 import { createHelarcActionComposition } from "./HelarcActionComposition.js";
 import {
   projectHelarcProductResult,
@@ -53,6 +56,7 @@ export interface HelarcProductComposition {
   readonly controller: Controller<HelarcAgentOutput>;
   readonly actions: Awaited<ReturnType<typeof createHelarcActionComposition>>;
   readonly runMetadata: Metadata;
+  getProductPhase(): HelarcProductPhase;
   projectRuntimeEvent(event: RuntimeEvent): RuntimeEvent;
   projectResult(
     runResult: RunResult<HelarcAgentOutput>,
@@ -100,6 +104,9 @@ export async function createHelarcProductComposition(
     controller: patchController,
     actions,
     runMetadata,
+    getProductPhase(): HelarcProductPhase {
+      return patchController.getProductPhase();
+    },
     projectRuntimeEvent(event: RuntimeEvent): RuntimeEvent {
       return enrichRuntimeEventWithControllerTrace(event, controllerTraceByIteration);
     },

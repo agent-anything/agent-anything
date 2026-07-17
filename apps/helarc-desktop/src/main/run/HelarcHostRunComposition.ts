@@ -37,6 +37,10 @@ import {
   type HelarcActivityItem,
   type HelarcAgentOutput,
   type HelarcPatchReviewBridge,
+  type HelarcPatchReviewDecisionSubmission,
+  type HelarcPatchReviewSubmissionReceipt,
+  type HelarcPendingPatchReviewProjection,
+  type HelarcProductPhase,
   type HelarcPermissionPreset,
   type HelarcProductOutput,
   type HelarcProductStatus,
@@ -66,7 +70,7 @@ export interface StartHelarcHostRunInput {
   readonly enforcement?: SandboxEnforcement;
   readonly sandboxProviders?: readonly SandboxProvider[];
   readonly commandLimits?: Partial<CodeAgentCommandLimits>;
-  readonly patchReviewBridge?: HelarcPatchReviewBridge;
+  readonly patchReviewBridge: HelarcPatchReviewBridge;
   readonly storage?: StoragePort;
   readonly now?: () => ISODateTimeString;
   readonly onActivity?: (item: HelarcActivityItem, event: RuntimeEvent) => void;
@@ -91,8 +95,16 @@ export type HelarcHostRunOutcome =
   | HelarcHostRunStartFailureResult;
 
 export interface HelarcHostRunComposition {
-  readonly activeRun: HostActiveRun<HelarcAgentOutput>;
+  readonly activeRun: HelarcHostActiveRun;
   readonly result: Promise<HelarcHostRunOutcome>;
+}
+
+export interface HelarcHostActiveRun extends HostActiveRun<HelarcAgentOutput> {
+  getPatchReviewProjection(): HelarcPendingPatchReviewProjection | null;
+  getProductPhase(): HelarcProductPhase;
+  submitPatchReviewDecision(
+    input: HelarcPatchReviewDecisionSubmission,
+  ): HelarcPatchReviewSubmissionReceipt;
 }
 
 export async function startHelarcHostRun(
@@ -106,6 +118,7 @@ export async function startHelarcHostRun(
   const enforcement = input.enforcement ?? "disabled";
   const sandboxProviders = input.sandboxProviders ?? [];
   assertSelectedSandboxProvider(enforcement, sandboxProviders);
+  assertPatchReviewBridge(input.runId, input.patchReviewBridge);
 
   const canonicalRoots = await createCodeAgentCanonicalWorkspaceRoots({
     workspaceScope: input.task.workspaceScope,
@@ -172,7 +185,7 @@ export async function startHelarcHostRun(
     now: input.now,
   });
   const runtime = createHostRuntime({ runner, now: input.now });
-  const activeRun = runtime.start({
+  const platformActiveRun = runtime.start({
     sessionId: input.sessionId,
     agent: product.agent,
     userApprovalReviewBridge: permissions.userApprovalBridge,
@@ -283,6 +296,11 @@ export async function startHelarcHostRun(
       metadata: runMetadata,
     },
   });
+  const activeRun = createHelarcHostActiveRun(
+    platformActiveRun,
+    input.patchReviewBridge,
+    product.getProductPhase,
+  );
 
   return Object.freeze({
     activeRun,
@@ -303,6 +321,50 @@ export async function startHelarcHostRun(
       });
     }),
   });
+}
+
+function createHelarcHostActiveRun(
+  platform: HostActiveRun<HelarcAgentOutput>,
+  patchReviews: HelarcPatchReviewBridge,
+  getProductPhase: () => HelarcProductPhase,
+): HelarcHostActiveRun {
+  return Object.freeze({
+    sessionId: platform.sessionId,
+    runId: platform.runId,
+    getProjection: () => platform.getProjection(),
+    subscribe: (listener: Parameters<HostActiveRun["subscribe"]>[0]) =>
+      platform.subscribe(listener),
+    submitApprovalDecision: (input: Parameters<HostActiveRun["submitApprovalDecision"]>[0]) =>
+      platform.submitApprovalDecision(input),
+    cancel: (input: Parameters<HostActiveRun["cancel"]>[0]) => platform.cancel(input),
+    getPatchReviewProjection: () => patchReviews.getPendingProjection(),
+    getProductPhase,
+    submitPatchReviewDecision(
+      input: HelarcPatchReviewDecisionSubmission,
+    ): HelarcPatchReviewSubmissionReceipt {
+      return patchReviews.submitDecision(input);
+    },
+    result: platform.result,
+  });
+}
+
+function assertPatchReviewBridge(
+  runId: string,
+  bridge: HelarcPatchReviewBridge,
+): void {
+  if (
+    bridge === null ||
+    typeof bridge !== "object" ||
+    typeof bridge.review !== "function" ||
+    typeof bridge.getPendingProjection !== "function" ||
+    typeof bridge.subscribe !== "function" ||
+    typeof bridge.submitDecision !== "function"
+  ) {
+    throw new TypeError("Helarc Host Run requires a Patch review bridge.");
+  }
+  if (bridge.runId !== runId) {
+    throw new TypeError("Helarc patch review bridge Run identity does not match the Run.");
+  }
 }
 
 function resolveHelarcRunWorkspace(task: AgentTask): WorkspaceContext {

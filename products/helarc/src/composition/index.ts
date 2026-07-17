@@ -11,8 +11,13 @@ export type {
 export { createHelarcActionComposition } from "./HelarcActionComposition.js";
 export type {
   HelarcPatchReviewBridge,
-  HelarcPatchReviewDecision,
-  HelarcPatchReviewViewModel,
+  HelarcPatchReviewDecisionSubmission,
+  HelarcPatchReviewOutcome,
+  HelarcPatchReviewProjectionListener,
+  HelarcPatchReviewRequest,
+  HelarcPatchReviewSubmissionReceipt,
+  HelarcPendingPatchReviewProjection,
+  HelarcProductPhase,
 } from "./HelarcPatchReview.js";
 export type {
   HelarcActivityItem,

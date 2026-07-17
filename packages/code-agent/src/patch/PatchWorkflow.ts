@@ -17,9 +17,11 @@ import type {
   CreatePatchOperation,
   DeletePatchOperation,
   PatchContentReference,
-  PatchId,
+  PatchDecisionSubmissionId,
   PatchOperation,
   PatchProposal,
+  PatchProposalId,
+  PatchReviewId,
   ProposedPatchStatus,
   RejectedPatchStatus,
   UpdatePatchOperation,
@@ -40,6 +42,7 @@ export type PatchProposalChange =
   | { kind: "delete"; path: string };
 
 export interface CreatePatchProposalInput {
+  runId: string;
   workspaceScope: TaskWorkspaceScope | undefined;
   rootName?: string;
   change: PatchProposalChange;
@@ -51,16 +54,26 @@ export interface CreatePatchProposalInput {
 export interface CreatePatchProposalOptions {
   limits?: Partial<PatchWorkflowLimits>;
   now?: () => ISODateTimeString;
-  createPatchId?: () => PatchId;
+  createProposalId?: () => PatchProposalId;
 }
 
-export interface AcceptPatchOptions {
+export interface AcceptPatchInput {
+  runId: string;
+  proposalId: PatchProposalId;
+  reviewId: PatchReviewId;
+  pendingVersion: number;
+  submissionId: PatchDecisionSubmissionId;
   reason?: string;
   metadata?: Metadata;
   now?: () => ISODateTimeString;
 }
 
 export interface RejectPatchInput {
+  runId: string;
+  proposalId: PatchProposalId;
+  reviewId: PatchReviewId;
+  pendingVersion: number;
+  submissionId: PatchDecisionSubmissionId;
   reason: string;
   metadata?: Metadata;
   now?: () => ISODateTimeString;
@@ -70,10 +83,13 @@ export interface MaterializePatchReviewInput {
   patch: ProposedPatchStatus;
   workspaceScope: TaskWorkspaceScope | undefined;
   limits?: Partial<PatchWorkflowLimits>;
+  createReviewId?: (proposal: PatchProposal) => PatchReviewId;
 }
 
 export interface MaterializedPatchReview {
-  patchId: PatchId;
+  runId: string;
+  proposalId: PatchProposalId;
+  reviewId: PatchReviewId;
   rootName: string;
   workspaceId: string;
   path: string;
@@ -93,16 +109,18 @@ export async function createPatchProposal(
 ): Promise<ProposedPatchStatus> {
   const limits = resolveLimits(options.limits);
   const now = options.now ?? defaultNow;
-  const patchId = options.createPatchId?.() ?? "patch_" + randomUUID();
+  const proposalId = options.createProposalId?.() ?? "patch_proposal_" + randomUUID();
 
-  requireNonEmpty(patchId, "Patch id is required.");
+  requireNonEmpty(input.runId, "Patch proposal Run id is required.");
+  requireNonEmpty(proposalId, "Patch proposal id is required.");
   requireNonEmpty(input.summary, "Patch summary is required.");
   requireNonEmpty(input.rationale, "Patch rationale is required.");
 
   try {
     const operation = await createOperation(input, limits);
     const proposal: PatchProposal = {
-      id: patchId,
+      id: proposalId,
+      runId: input.runId,
       rootName: operation.target.resolved.rootName,
       workspaceId: operation.target.resolved.workspaceId,
       operation: operation.value,
@@ -120,19 +138,24 @@ export async function createPatchProposal(
 
 export function acceptPatch(
   patch: ProposedPatchStatus,
-  options: AcceptPatchOptions = {},
+  input: AcceptPatchInput,
 ): AcceptedPatchStatus {
   assertProposedPatch(patch);
-  if (options.reason !== undefined) {
-    requireNonEmpty(options.reason, "Accepted patch reason must not be empty.");
+  assertDecisionCorrelation(patch, input);
+  if (input.reason !== undefined) {
+    requireNonEmpty(input.reason, "Accepted patch reason must not be empty.");
   }
 
   const decision: AcceptedPatchDecision = {
     status: "accepted",
-    patchId: patch.proposal.id,
-    decidedAt: (options.now ?? defaultNow)(),
-    metadata: options.metadata ?? {},
-    ...(options.reason === undefined ? {} : { reason: options.reason }),
+    runId: input.runId,
+    proposalId: input.proposalId,
+    reviewId: input.reviewId,
+    pendingVersion: input.pendingVersion,
+    submissionId: input.submissionId,
+    decidedAt: (input.now ?? defaultNow)(),
+    metadata: input.metadata ?? {},
+    ...(input.reason === undefined ? {} : { reason: input.reason }),
   };
 
   return { status: "accepted", proposal: patch.proposal, decision };
@@ -143,6 +166,7 @@ export function rejectPatch(
   input: RejectPatchInput,
 ): RejectedPatchStatus {
   assertProposedPatch(patch);
+  assertDecisionCorrelation(patch, input);
   requireNonEmpty(input.reason, "Rejected patch reason is required.");
 
   return {
@@ -150,7 +174,11 @@ export function rejectPatch(
     proposal: patch.proposal,
     decision: {
       status: "rejected",
-      patchId: patch.proposal.id,
+      runId: input.runId,
+      proposalId: input.proposalId,
+      reviewId: input.reviewId,
+      pendingVersion: input.pendingVersion,
+      submissionId: input.submissionId,
       decidedAt: (input.now ?? defaultNow)(),
       reason: input.reason,
       metadata: input.metadata ?? {},
@@ -164,6 +192,8 @@ export async function materializePatchReview(
   assertProposedPatch(input.patch);
   const limits = resolveLimits(input.limits);
   const { proposal } = input.patch;
+  const reviewId = input.createReviewId?.(proposal) ?? "patch_review_" + randomUUID();
+  requireNonEmpty(reviewId, "Patch review id is required.");
   const { operation } = proposal;
   let originalContent: string | null = null;
   let originalContentBytes: number | null = null;
@@ -190,7 +220,9 @@ export async function materializePatchReview(
   }
 
   return {
-    patchId: proposal.id,
+    runId: proposal.runId,
+    proposalId: proposal.id,
+    reviewId,
     rootName: proposal.rootName,
     workspaceId: proposal.workspaceId,
     path: operation.path,
@@ -205,6 +237,28 @@ export async function materializePatchReview(
       : Buffer.byteLength(proposedContent, "utf8"),
     metadata: proposal.metadata,
   };
+}
+
+function assertDecisionCorrelation(
+  patch: ProposedPatchStatus,
+  input: {
+    runId: string;
+    proposalId: PatchProposalId;
+    reviewId: PatchReviewId;
+    pendingVersion: number;
+    submissionId: PatchDecisionSubmissionId;
+  },
+): void {
+  requireNonEmpty(input.runId, "Patch decision Run id is required.");
+  requireNonEmpty(input.proposalId, "Patch decision proposal id is required.");
+  requireNonEmpty(input.reviewId, "Patch decision review id is required.");
+  requireNonEmpty(input.submissionId, "Patch decision submission id is required.");
+  if (!Number.isSafeInteger(input.pendingVersion) || input.pendingVersion < 1) {
+    throw new TypeError("Patch decision pending version must be a positive integer.");
+  }
+  if (input.runId !== patch.proposal.runId || input.proposalId !== patch.proposal.id) {
+    throw new TypeError("Patch decision identity does not match the proposal.");
+  }
 }
 
 async function createOperation(
@@ -367,7 +421,8 @@ function assertProposedPatch(patch: ProposedPatchStatus): void {
 }
 
 function assertPatchProposal(proposal: PatchProposal): void {
-  requireNonEmpty(proposal.id, "Patch id is required.");
+  requireNonEmpty(proposal.id, "Patch proposal id is required.");
+  requireNonEmpty(proposal.runId, "Patch proposal Run id is required.");
   requireNonEmpty(proposal.rootName, "Patch root name is required.");
   requireNonEmpty(proposal.workspaceId, "Patch workspace id is required.");
   requireNonEmpty(proposal.operation.path, "Patch path is required.");

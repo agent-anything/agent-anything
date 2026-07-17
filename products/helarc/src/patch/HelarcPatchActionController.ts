@@ -18,7 +18,8 @@ import type { ISODateTimeString } from "@agent-anything/shared";
 import type { HelarcAgentOutput, HelarcChangeIntent } from "../controller/index.js";
 import type {
   HelarcPatchReviewBridge,
-  HelarcPatchReviewViewModel,
+  HelarcPatchReviewRequest,
+  HelarcProductPhase,
 } from "../composition/HelarcPatchReview.js";
 
 export interface HelarcPatchOutcome {
@@ -43,11 +44,19 @@ interface PendingPatchAction {
 export class HelarcPatchActionController implements Controller<HelarcAgentOutput> {
   private pending: PendingPatchAction | null = null;
   private outcome: HelarcPatchOutcome | null = null;
+  private phase: HelarcProductPhase = Object.freeze({ kind: "none" });
 
   constructor(private readonly input: HelarcPatchActionControllerInput) {}
 
   getPatchOutcome(): HelarcPatchOutcome | null {
     return this.outcome;
+  }
+
+  getProductPhase(): HelarcProductPhase {
+    const pendingReview = this.input.patchReviewBridge?.getPendingProjection() ?? null;
+    return pendingReview === null
+      ? this.phase
+      : Object.freeze({ kind: "waiting_for_patch_review", review: pendingReview });
   }
 
   async next(
@@ -62,11 +71,12 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
     if (decision.kind !== "final_output" || decision.output.kind !== "propose") {
       return decision;
     }
-    return this.reviewProposal(controllerInput, decision);
+    return this.reviewProposal(controllerInput, context, decision);
   }
 
   private async reviewProposal(
     controllerInput: ControllerInput<HelarcAgentOutput>,
+    context: ControllerCallContext,
     decision: Extract<ControllerDecision<HelarcAgentOutput>, { readonly kind: "final_output" }>,
   ): Promise<ControllerDecision<HelarcAgentOutput>> {
     const output = decision.output;
@@ -81,30 +91,59 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
 
     try {
       const proposed = await createPatchProposal({
+        runId: controllerInput.runId,
         workspaceScope: controllerInput.task.workspaceScope,
         change: toPatchProposalChange(output.change),
         summary: output.summary,
         rationale: output.summary,
         metadata: { product: "helarc" },
       }, { now: this.input.now });
-      const review = toReviewViewModel(await materializePatchReview({
+      const review = toReviewRequest(await materializePatchReview({
         patch: proposed,
         workspaceScope: controllerInput.task.workspaceScope,
       }));
-      const reviewDecision = await this.input.patchReviewBridge(review);
+      const reviewOutcome = await this.input.patchReviewBridge.review(
+        review,
+        context.cancellation,
+      );
+      if (reviewOutcome.status === "interrupted") {
+        this.phase = Object.freeze({ kind: "none" });
+        return Object.freeze({
+          kind: "stop" as const,
+          reason: "Patch review was interrupted by Run cancellation.",
+          modelItems: decision.modelItems,
+        });
+      }
+      if (reviewOutcome.status === "failed") {
+        this.phase = Object.freeze({ kind: "none" });
+        this.outcome = patchOutcome("failed", "failed", null, [{
+          code: reviewOutcome.code,
+          message: reviewOutcome.message,
+        }]);
+        return completeDecision(output.summary, decision.modelItems);
+      }
+
+      const reviewDecision = reviewOutcome.submission;
+      const decisionInput = {
+        runId: reviewDecision.runId,
+        proposalId: reviewDecision.proposalId,
+        reviewId: reviewDecision.reviewId,
+        pendingVersion: reviewDecision.pendingVersion,
+        submissionId: reviewDecision.submissionId,
+        reason: reviewDecision.reason ?? undefined,
+        now: this.input.now,
+      };
       if (reviewDecision.decision === "rejected") {
         rejectPatch(proposed, {
-          reason: reviewDecision.reason,
-          now: this.input.now,
+          ...decisionInput,
+          reason: reviewDecision.reason ?? "Patch proposal rejected.",
         });
+        this.phase = Object.freeze({ kind: "none" });
         this.outcome = patchOutcome("rejected", "rejected", null, []);
         return completeDecision(output.summary, decision.modelItems);
       }
 
-      const accepted = acceptPatch(proposed, {
-        reason: reviewDecision.reason,
-        now: this.input.now,
-      });
+      const accepted = acceptPatch(proposed, decisionInput);
       const action = createAcceptedPatchFileAction(accepted);
       const modelItem = decision.modelItems.at(-1);
       if (modelItem === undefined) {
@@ -114,6 +153,13 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
         actionName: action.actionName,
         summary: output.summary,
         path: proposed.proposal.operation.path,
+      });
+      this.phase = Object.freeze({
+        kind: "patch_action_submitted",
+        runId: reviewDecision.runId,
+        proposalId: reviewDecision.proposalId,
+        reviewId: reviewDecision.reviewId,
+        pendingVersion: reviewDecision.pendingVersion,
       });
       return Object.freeze({
         kind: "actions" as const,
@@ -146,6 +192,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
       candidate.kind === "tool_result" && candidate.result.toolName === pending.actionName,
     );
     this.pending = null;
+    this.phase = Object.freeze({ kind: "none" });
     if (observation?.kind === "tool_result" && observation.result.status === "succeeded") {
       this.outcome = patchOutcome("completed", "applied", pending.path, []);
     } else {
@@ -201,9 +248,11 @@ function toPatchProposalChange(change: HelarcChangeIntent): PatchProposalChange 
       };
 }
 
-function toReviewViewModel(review: MaterializedPatchReview): HelarcPatchReviewViewModel {
+function toReviewRequest(review: MaterializedPatchReview): HelarcPatchReviewRequest {
   return {
-    patchId: review.patchId,
+    runId: review.runId,
+    proposalId: review.proposalId,
+    reviewId: review.reviewId,
     rootName: review.rootName,
     workspaceId: review.workspaceId,
     path: review.path,
@@ -214,7 +263,6 @@ function toReviewViewModel(review: MaterializedPatchReview): HelarcPatchReviewVi
     proposedContent: review.proposedContent,
     originalContentBytes: review.originalContentBytes,
     proposedContentBytes: review.proposedContentBytes,
-    decisionState: "pending",
   };
 }
 

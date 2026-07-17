@@ -64,7 +64,9 @@ export type {
   PatchContentReference,
   PatchDecision,
   PatchFailureCode,
-  PatchId,
+  PatchDecisionSubmissionId,
+  PatchProposalId,
+  PatchReviewId,
   PatchOperation,
   PatchProposal,
   PatchStatus,
@@ -82,7 +84,7 @@ export {
   rejectPatch,
 } from "./patch/index.js";
 export type {
-  AcceptPatchOptions,
+  AcceptPatchInput,
   CreatePatchProposalInput,
   CreatePatchProposalOptions,
   MaterializedPatchReview,

@@ -5,10 +5,12 @@ export type {
   DeletePatchOperation,
   PatchContentReference,
   PatchDecision,
+  PatchDecisionSubmissionId,
   PatchFailureCode,
-  PatchId,
   PatchOperation,
   PatchProposal,
+  PatchProposalId,
+  PatchReviewId,
   PatchStatus,
   ProposedPatchStatus,
   RejectedPatchDecision,
@@ -23,7 +25,7 @@ export {
   rejectPatch,
 } from "./PatchWorkflow.js";
 export type {
-  AcceptPatchOptions,
+  AcceptPatchInput,
   CreatePatchProposalInput,
   CreatePatchProposalOptions,
   MaterializedPatchReview,

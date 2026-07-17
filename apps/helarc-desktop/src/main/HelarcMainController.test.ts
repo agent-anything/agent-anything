@@ -1,4 +1,7 @@
-import type { HelarcSessionHistoryRecord } from "@agent-anything/helarc";
+import type {
+  HelarcPatchReviewDecisionSubmission,
+  HelarcSessionHistoryRecord,
+} from "@agent-anything/helarc";
 import type {
   ApprovalDecisionKind,
   ApprovalDecisionSubmission,
@@ -963,26 +966,28 @@ describe("HelarcMainController", () => {
 
     expect(result).toMatchObject({ ok: true, snapshot: { status: "running" } });
     const waitingSnapshot = await waiting;
-    const patchId = waitingSnapshot.pendingPatchReview?.patchId ?? "";
     expect(waitingSnapshot.pendingPatchReview).toMatchObject({
       operation: "create",
       path: "src/created.txt",
       proposedContent: "created\n",
     });
 
-    expect(controller.resolvePatchReview({
-      patchId: "stale-patch",
-      decision: "accepted",
-    })).toMatchObject({
+    expect(controller.resolvePatchReview(patchSubmission(
+      waitingSnapshot,
+      "accepted",
+      { proposalId: "stale-proposal", submissionId: "stale-submission" },
+    ))).toMatchObject({
       ok: false,
-      error: { code: "patch_review_mismatch" },
+      error: { code: "patch_review_not_pending" },
     });
 
-    expect(controller.resolvePatchReview({
-      patchId,
-      decision: "accepted",
+    const acceptedSubmission = patchSubmission(waitingSnapshot, "accepted", {
       reason: "Apply it.",
-    })).toMatchObject({ ok: true, snapshot: { status: "applying_patch" } });
+    });
+    expect(controller.resolvePatchReview(acceptedSubmission)).toMatchObject({
+      ok: true,
+      snapshot: { status: "applying_patch" },
+    });
 
     const completedSnapshot = await completed;
     expect(completedSnapshot).toMatchObject({
@@ -1015,12 +1020,54 @@ describe("HelarcMainController", () => {
     });
     await expect(readFile(targetPath, "utf8")).resolves.toBe("created\n");
     expect(controller.resolvePatchReview({
-      patchId,
-      decision: "accepted",
+      ...acceptedSubmission,
+      submissionId: "late-patch-submission",
     })).toMatchObject({
       ok: false,
       error: { code: "patch_review_not_pending" },
     });
+  });
+
+  it("cancels a pending patch review and rejects its late decision", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-patch-cancel-"));
+    await mkdir(join(workspaceRoot, "src"));
+    const targetPath = join(workspaceRoot, "src", "cancelled.txt");
+    const controller = new HelarcMainController({
+      provider: new ScriptedProvider([{
+        action: "propose",
+        summary: "Create a file.",
+        change: {
+          operation: "create",
+          path: "src/cancelled.txt",
+          content: "must not be created\n",
+        },
+      }]),
+    });
+    controller.selectWorkspacePath(workspaceRoot);
+
+    const waiting = waitForStatus(controller, "waiting_for_patch_review");
+    const cancelled = waitForStatus(controller, "cancelled");
+    controller.startSession({ taskText: "Create then cancel" });
+    const waitingSnapshot = await waiting;
+    const lateSubmission = patchSubmission(waitingSnapshot, "accepted", {
+      submissionId: "late-after-patch-cancel",
+    });
+
+    expect(controller.cancelSession()).toMatchObject({
+      ok: true,
+      snapshot: { status: "cancelling", pendingPatchReview: null },
+    });
+    const cancelledSnapshot = await cancelled;
+    expect(cancelledSnapshot).toMatchObject({
+      status: "cancelled",
+      pendingPatchReview: null,
+      output: { runtimeStatus: "cancelled", patchStatus: null },
+    });
+    expect(controller.resolvePatchReview(lateSubmission)).toMatchObject({
+      ok: false,
+      error: { code: "patch_review_not_pending" },
+    });
+    await expect(access(targetPath)).rejects.toThrow();
   });
 
   it("completes a desktop-host inspect-review-apply scenario", async () => {
@@ -1062,12 +1109,9 @@ describe("HelarcMainController", () => {
       proposedContent: "after\n",
     });
 
-    const patchId = reviewSnapshot.pendingPatchReview?.patchId ?? "";
-    controller.resolvePatchReview({
-      patchId,
-      decision: "accepted",
+    controller.resolvePatchReview(patchSubmission(reviewSnapshot, "accepted", {
       reason: "Apply scenario change.",
-    });
+    }));
 
     const completedSnapshot = await completed;
     expect(completedSnapshot).toMatchObject({
@@ -1194,6 +1238,27 @@ function approvalSubmission(
     optionId: option.id,
     grantedPermissions,
     reason: kind === "decline" ? "Declined in test." : null,
+    ...overrides,
+  };
+}
+
+function patchSubmission(
+  snapshot: HelarcMainSnapshot,
+  decision: "accepted" | "rejected",
+  overrides: Partial<HelarcPatchReviewDecisionSubmission> = {},
+): HelarcPatchReviewDecisionSubmission {
+  const pending = snapshot.pendingPatchReview;
+  if (pending === null) {
+    throw new Error("Expected a pending patch review.");
+  }
+  return {
+    submissionId: "desktop-patch-submission-1",
+    runId: pending.runId,
+    proposalId: pending.proposalId,
+    reviewId: pending.reviewId,
+    pendingVersion: pending.pendingVersion,
+    decision,
+    reason: decision === "accepted" ? null : "Rejected in test.",
     ...overrides,
   };
 }

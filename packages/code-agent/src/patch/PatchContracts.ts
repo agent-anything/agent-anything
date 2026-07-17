@@ -1,6 +1,8 @@
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 
-export type PatchId = string;
+export type PatchProposalId = string;
+export type PatchReviewId = string;
+export type PatchDecisionSubmissionId = string;
 
 export interface PatchContentReference {
   algorithm: "sha256";
@@ -33,7 +35,8 @@ export type PatchOperation =
   | DeletePatchOperation;
 
 export interface PatchProposal {
-  id: PatchId;
+  id: PatchProposalId;
+  runId: string;
   rootName: string;
   workspaceId: string;
   operation: PatchOperation;
@@ -45,7 +48,11 @@ export interface PatchProposal {
 
 export interface AcceptedPatchDecision {
   status: "accepted";
-  patchId: PatchId;
+  runId: string;
+  proposalId: PatchProposalId;
+  reviewId: PatchReviewId;
+  pendingVersion: number;
+  submissionId: PatchDecisionSubmissionId;
   decidedAt: ISODateTimeString;
   reason?: string;
   metadata: Metadata;
@@ -53,7 +60,11 @@ export interface AcceptedPatchDecision {
 
 export interface RejectedPatchDecision {
   status: "rejected";
-  patchId: PatchId;
+  runId: string;
+  proposalId: PatchProposalId;
+  reviewId: PatchReviewId;
+  pendingVersion: number;
+  submissionId: PatchDecisionSubmissionId;
   decidedAt: ISODateTimeString;
   reason: string;
   metadata: Metadata;
