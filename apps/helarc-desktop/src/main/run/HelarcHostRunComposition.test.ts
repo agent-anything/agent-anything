@@ -1,4 +1,7 @@
-import type { ContextProjection } from "@agent-anything/agent-core";
+import {
+  createRunCancellationController,
+  type ContextProjection,
+} from "@agent-anything/agent-core";
 import type { ApprovalReviewInput } from "@agent-anything/permission";
 import type {
   InvocationInterruptionContext,
@@ -11,14 +14,50 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { createHelarcTask } from "../task/index.js";
 import {
   createHelarcActionComposition,
-  runHelarcReadOnlySession,
-  runHelarcSession,
-} from "./index.js";
+  createHelarcTask,
+} from "@agent-anything/helarc";
+import {
+  startHelarcHostRun,
+  type StartHelarcHostRunInput,
+} from "./HelarcHostRunComposition.js";
 
-describe("Helarc read-only session", () => {
+type RunHelarcTestInput = Omit<
+  StartHelarcHostRunInput,
+  "sessionId" | "runId" | "cancellation" | "toolMode" | "permissionPreset"
+> & {
+  readonly sessionId?: string;
+  readonly runId?: string;
+  readonly cancellation?: StartHelarcHostRunInput["cancellation"];
+  readonly enableShell?: boolean;
+  readonly permissionPreset?: StartHelarcHostRunInput["permissionPreset"];
+};
+
+async function executeTestHostRun(input: RunHelarcTestInput) {
+  const runId = input.runId ?? input.sessionId ?? input.task.id;
+  const composition = await startHelarcHostRun({
+    ...input,
+    runId,
+    sessionId: input.sessionId ?? runId,
+    cancellation: input.cancellation ?? createRunCancellationController({ runId }),
+    toolMode: input.enableShell ? "shell-enabled" : "read-only",
+    permissionPreset: input.permissionPreset ?? "ask_for_approval",
+  });
+  const outcome = await composition.result;
+  if (outcome.kind === "start_failure") {
+    throw new Error(outcome.failure.code);
+  }
+  return outcome;
+}
+
+function executeReadOnlyTestHostRun(
+  input: Omit<RunHelarcTestInput, "enableShell">,
+) {
+  return executeTestHostRun({ ...input, enableShell: false });
+}
+
+describe("Helarc Host Run composition", () => {
   it("exposes only read-only Actions while retaining trusted mutation registrations", async () => {
     const task = createTask("D:/workspace");
     const composition = await createHelarcActionComposition(task, { enableShell: false });
@@ -66,7 +105,7 @@ describe("Helarc read-only session", () => {
       },
     ]);
 
-    const result = await runHelarcReadOnlySession({
+    const result = await executeReadOnlyTestHostRun({
       task: createTask(workspaceRoot),
       provider,
       now: () => "2026-06-28T00:00:00.000Z",
@@ -143,7 +182,7 @@ describe("Helarc read-only session", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-provider-retry-"));
     const provider = new RetryThenCompleteProvider();
 
-    const result = await runHelarcReadOnlySession({
+    const result = await executeReadOnlyTestHostRun({
       task: createTask(workspaceRoot),
       provider,
       now: () => "2026-07-14T00:00:00.000Z",
@@ -205,7 +244,7 @@ describe("Helarc read-only session", () => {
       },
     ]);
 
-    const result = await runHelarcReadOnlySession({
+    const result = await executeReadOnlyTestHostRun({
       task: createTask(workspaceRoot),
       provider,
     });
@@ -233,7 +272,7 @@ describe("Helarc read-only session", () => {
       },
     ]);
 
-    const result = await runHelarcReadOnlySession({
+    const result = await executeReadOnlyTestHostRun({
       task: createTask(workspaceRoot),
       provider,
     });
@@ -259,7 +298,7 @@ describe("Helarc read-only session", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-managed-unavailable-"));
     const provider = new ScriptedProvider([{ action: "complete", summary: "Must not run." }]);
 
-    await expect(runHelarcReadOnlySession({
+    await expect(executeReadOnlyTestHostRun({
       task: createTask(workspaceRoot),
       provider,
       enforcement: "managed",
@@ -275,7 +314,7 @@ describe("Helarc read-only session", () => {
       "PRIVATE_INVALID_OUTPUT_2",
     ]);
 
-    const result = await runHelarcReadOnlySession({
+    const result = await executeReadOnlyTestHostRun({
       task: createTask(workspaceRoot),
       provider,
     });
@@ -311,7 +350,7 @@ describe("Helarc read-only session", () => {
         reason: "Permission was denied.",
       },
     ]);
-    const result = await runHelarcSession({
+    const result = await executeTestHostRun({
       task: createTask(workspaceRoot),
       provider,
       enableShell: true,
@@ -342,7 +381,7 @@ describe("Helarc read-only session", () => {
       },
     ]);
 
-    const result = await runHelarcSession({
+    const result = await executeTestHostRun({
       task: createTask(workspaceRoot),
       provider,
       enableShell: true,
@@ -381,7 +420,7 @@ describe("Helarc read-only session", () => {
       },
     ]);
 
-    const result = await runHelarcReadOnlySession({
+    const result = await executeReadOnlyTestHostRun({
       task: createTask(workspaceRoot),
       provider,
     });
@@ -416,7 +455,7 @@ describe("Helarc read-only session", () => {
       },
     ]);
 
-    const result = await runHelarcSession({
+    const result = await executeTestHostRun({
       task: createTask(workspaceRoot),
       provider,
       patchReviewBridge: async (review) => {
@@ -477,7 +516,7 @@ describe("Helarc read-only session", () => {
       },
     ]);
 
-    const result = await runHelarcSession({
+    const result = await executeTestHostRun({
       task: createTask(workspaceRoot),
       provider,
       patchReviewBridge: async (review) => {
@@ -525,7 +564,7 @@ describe("Helarc read-only session", () => {
       },
     ]);
 
-    const result = await runHelarcSession({
+    const result = await executeTestHostRun({
       task: createTask(workspaceRoot),
       provider,
       patchReviewBridge: async () => {

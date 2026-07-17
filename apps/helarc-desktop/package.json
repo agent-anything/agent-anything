@@ -25,9 +25,14 @@
   },
   "dependencies": {
     "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/code-agent": "workspace:*",
+    "@agent-anything/evidence": "workspace:*",
+    "@agent-anything/governance": "workspace:*",
     "@agent-anything/helarc": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/providers": "workspace:*",
+    "@agent-anything/shared": "workspace:*",
+    "@agent-anything/storage": "workspace:*",
     "lucide-react": "^1.21.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"

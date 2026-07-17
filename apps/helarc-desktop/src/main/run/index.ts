@@ -18,3 +18,11 @@ export type {
 export {
   prepareHelarcRunStart,
 } from "./prepareHelarcRunStart.js";
+export type {
+  HelarcHostRunComposition,
+  HelarcHostRunOutcome,
+  HelarcHostRunResult,
+  HelarcHostRunStartFailureResult,
+  StartHelarcHostRunInput,
+} from "./HelarcHostRunComposition.js";
+export { startHelarcHostRun } from "./HelarcHostRunComposition.js";

@@ -4,6 +4,28 @@ export {
   type HelarcProductDescriptor,
 } from "./HelarcProduct.js";
 export type {
+  CreateHelarcActionCompositionInput,
+  CreateHelarcProductCompositionInput,
+  HelarcActionComposition,
+  HelarcActivityItem,
+  HelarcEnforcementSummary,
+  HelarcPatchReviewBridge,
+  HelarcPatchReviewDecision,
+  HelarcPatchReviewViewModel,
+  HelarcPatchStatus,
+  HelarcProductComposition,
+  HelarcProductOutput,
+  HelarcProductResult,
+  HelarcProductStatus,
+  HelarcToolMode,
+} from "./composition/index.js";
+export {
+  createHelarcActionComposition,
+  createHelarcProductComposition,
+  mapRuntimeEventToHelarcActivity,
+  projectHelarcProductResult,
+} from "./composition/index.js";
+export type {
   CreateHelarcTaskInput,
   CreateHelarcTaskResult,
   HelarcTaskInput,
@@ -192,24 +214,3 @@ export {
   createHelarcWorkspaceProfile,
   selectHelarcWorkspaceProfile,
 } from "./workspace-profile/index.js";
-export type {
-  CreateHelarcActionCompositionInput,
-  HelarcActionComposition,
-  HelarcActivityItem,
-  HelarcEnforcementSummary,
-  HelarcPatchReviewBridge,
-  HelarcPatchReviewDecision,
-  HelarcPatchReviewViewModel,
-  HelarcPatchStatus,
-  HelarcSessionOutput,
-  HelarcSessionResult,
-  HelarcSessionStatus,
-  RunHelarcReadOnlySessionInput,
-  RunHelarcSessionInput,
-} from "./session/index.js";
-export {
-  createHelarcActionComposition,
-  mapRuntimeEventToHelarcActivity,
-  runHelarcReadOnlySession,
-  runHelarcSession,
-} from "./session/index.js";

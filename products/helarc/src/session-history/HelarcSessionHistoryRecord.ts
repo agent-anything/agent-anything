@@ -4,9 +4,14 @@ import {
   type HelarcRunTerminalStatus,
   type HelarcRunTerminalSummary,
 } from "../run/index.js";
-import type { HelarcActivityItem, HelarcPatchStatus, HelarcSessionOutput, HelarcSessionStatus } from "../session/index.js";
+import type {
+  HelarcActivityItem,
+  HelarcPatchStatus,
+  HelarcProductOutput,
+  HelarcProductStatus,
+} from "../composition/index.js";
 
-export type HelarcSessionHistoryStatus = Exclude<HelarcSessionStatus, "running">;
+export type HelarcSessionHistoryStatus = HelarcProductStatus;
 
 export interface HelarcSessionHistoryWorkspaceRef {
   profileId: string | null;
@@ -54,7 +59,7 @@ export interface CreateHelarcSessionHistoryRecordInput {
   endedAt: string;
   status: HelarcSessionHistoryStatus;
   activity: HelarcActivityItem[];
-  output: HelarcSessionOutput;
+  output: HelarcProductOutput;
   patch: HelarcSessionHistoryPatchSummary;
   run: HelarcSessionHistoryRunRecord;
 }

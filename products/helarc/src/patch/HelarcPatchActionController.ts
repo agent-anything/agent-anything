@@ -19,7 +19,7 @@ import type { HelarcAgentOutput, HelarcChangeIntent } from "../controller/index.
 import type {
   HelarcPatchReviewBridge,
   HelarcPatchReviewViewModel,
-} from "./HelarcSession.js";
+} from "../composition/HelarcPatchReview.js";
 
 export interface HelarcPatchOutcome {
   readonly sessionStatus: "completed" | "rejected" | "failed" | "blocked";
