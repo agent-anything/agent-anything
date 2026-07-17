@@ -60,6 +60,7 @@ export type {
   CreateUserApprovalReviewBridgeInput,
   UserApprovalNotificationFailure,
   UserApprovalPendingProjection,
+  UserApprovalProjectionListener,
   UserApprovalReviewBridge,
 } from "./UserApprovalReviewBridge.js";
 export { createUserApprovalReviewBridge } from "./UserApprovalReviewBridge.js";

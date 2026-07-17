@@ -4,9 +4,6 @@ import type {
   RunCancellationController,
 } from "@agent-anything/agent-core";
 import {
-  createInMemoryHostPolicyAmendmentStore,
-  createInMemoryHostSessionAuthorityStore,
-  createUserApprovalReviewBridge,
   resolveHostRunPermissionConfig,
   type UserApprovalReviewBridge,
 } from "@agent-anything/agent-core/host";
@@ -15,110 +12,92 @@ import type {
   PersistentPolicyAmendmentPort,
   WorkspaceContext,
 } from "@agent-anything/governance";
+import {
+  resolveHelarcPermissionPreset,
+  type HelarcPermissionPreset,
+} from "@agent-anything/helarc";
 import type { SessionAuthorityPort } from "@agent-anything/permission";
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-} from "@agent-anything/shared";
 import type {
   PermissionEnforcement,
   PermissionProfileDefinition,
 } from "@agent-anything/permission/profile";
+import type {
+  InvocationInterruptionContext,
+  InvocationInterruptionRef,
+} from "@agent-anything/shared";
 
-export type HelarcPermissionPreset =
-  | "ask_for_approval"
-  | "approve_for_me"
-  | "full_access";
-
-export interface CreateHelarcPermissionCompositionInput {
+export interface CreateHelarcHostPermissionCompositionInput {
   readonly preset: HelarcPermissionPreset;
   readonly runId: string;
-  readonly hostSessionId: string;
+  readonly sessionId: string;
   readonly workspace: WorkspaceContext;
   readonly workspaceRoots: readonly { readonly rootId: string; readonly path: string }[];
   readonly platform: "win32" | "posix";
   readonly enforcement: PermissionEnforcement;
   readonly cancellation: RunCancellationController;
-  readonly userApprovalBridge?: UserApprovalReviewBridge;
-  readonly automaticReviewer?: ApprovalReviewerBinding & {
+  readonly userApprovalBridge: UserApprovalReviewBridge | null;
+  readonly automaticReviewer: (ApprovalReviewerBinding & {
     readonly kind: "auto_review";
-  };
-  readonly sessionAuthorityPort?: SessionAuthorityPort;
-  readonly persistentPolicyAmendments?: PersistentPolicyAmendmentPort;
+  }) | null;
+  readonly sessionAuthorityPort: SessionAuthorityPort;
+  readonly persistentPolicyAmendments: PersistentPolicyAmendmentPort;
 }
 
-export interface HelarcPermissionComposition {
+export interface HelarcHostPermissionComposition {
   readonly permissions: ResolvedRunPermissionConfig;
   readonly userApprovalBridge: UserApprovalReviewBridge | null;
 }
 
-const MANAGED_CONSTRAINTS: ManagedPermissionConstraints = Object.freeze({
-  constraintSetId: "helarc-local-default",
-  selectableProfiles: Object.freeze({
-    allowedProfileIds: null,
-    deniedProfileIds: Object.freeze([]),
-  }),
-  fileSystem: Object.freeze([]),
-  network: Object.freeze({
-    enabled: null,
-    allowedDomains: Object.freeze([]),
-    deniedDomains: Object.freeze([]),
-  }),
-  allowUnenforcedExecution: true,
-});
-
-export async function createHelarcPermissionComposition(
-  input: CreateHelarcPermissionCompositionInput,
-): Promise<HelarcPermissionComposition> {
-  const managedConstraints = Object.freeze({
-    ...MANAGED_CONSTRAINTS,
+export async function createHelarcHostPermissionComposition(
+  input: CreateHelarcHostPermissionCompositionInput,
+): Promise<HelarcHostPermissionComposition> {
+  const preset = resolveHelarcPermissionPreset(input.preset);
+  const reviewer = resolveReviewer(input, preset.reviewerKind);
+  const managedConstraints: ManagedPermissionConstraints = Object.freeze({
     constraintSetId: `helarc-local-${input.preset}`,
+    selectableProfiles: Object.freeze({
+      allowedProfileIds: null,
+      deniedProfileIds: Object.freeze([]),
+    }),
+    fileSystem: Object.freeze([]),
+    network: Object.freeze({
+      enabled: null,
+      allowedDomains: Object.freeze([]),
+      deniedDomains: Object.freeze([]),
+    }),
+    allowUnenforcedExecution: input.enforcement === "disabled",
   });
-  const userApprovalBridge = input.preset === "ask_for_approval"
-    ? input.userApprovalBridge ?? createUserApprovalReviewBridge({
-        runId: input.runId,
-        descriptor: {
-          id: "helarc-user-reviewer",
-          kind: "user",
-          displayName: "Helarc user",
-          source: "helarc",
-          metadata: { product: "helarc" },
-        },
-      })
-    : null;
-  const reviewer = resolveReviewer(input, userApprovalBridge);
-  const sessionAuthorityPort = input.sessionAuthorityPort ??
-    createInMemoryHostSessionAuthorityStore({ maxRecords: 64 });
-  const persistentPolicyAmendments = input.persistentPolicyAmendments ??
-    createInMemoryHostPolicyAmendmentStore({ maxRecords: 64 });
-
   const permissions = await resolveHostRunPermissionConfig({
     profile: {
       profileId: profileIdForPreset(input.preset, input.enforcement),
-      profiles: [profileForPreset(input.preset, input.enforcement)],
+      profiles: [profileForPreset(
+        input.preset,
+        preset.baseProfileId,
+        input.enforcement,
+      )],
       environment: {
         environmentId: "helarc-local",
         platform: input.platform,
         workspaceRoots: input.workspaceRoots,
       },
     },
-    approvalPolicy: input.preset === "full_access" ? "never" : "on-request",
+    approvalPolicy: preset.approvalPolicy,
     reviewer,
     rules: [],
     networkRules: [],
     managedConstraints,
     sessionAuthority: {
       context: {
-        hostSessionId: input.hostSessionId,
+        hostSessionId: input.sessionId,
         authorityContextKey: "helarc-local-authority-v1",
         workspaceId: input.workspace.id,
         identityId: null,
         environmentId: "helarc-local",
       },
-      port: sessionAuthorityPort,
+      port: input.sessionAuthorityPort,
       maxInitialRecords: 64,
     },
-    persistentPolicyAmendments,
+    persistentPolicyAmendments: input.persistentPolicyAmendments,
     approvalLimits: {
       maxRequestsPerRun: 8,
       maxRequestsPerActionFingerprint: 2,
@@ -129,32 +108,52 @@ export async function createHelarcPermissionComposition(
     interruption: createInterruptionContext(input.cancellation),
   });
 
-  return Object.freeze({ permissions, userApprovalBridge });
+  return Object.freeze({
+    permissions,
+    userApprovalBridge: preset.reviewerKind === "user"
+      ? input.userApprovalBridge
+      : null,
+  });
 }
 
 function resolveReviewer(
-  input: CreateHelarcPermissionCompositionInput,
-  userApprovalBridge: UserApprovalReviewBridge | null,
+  input: CreateHelarcHostPermissionCompositionInput,
+  expected: "user" | "auto_review" | null,
 ): ApprovalReviewerBinding | null {
-  if (input.preset === "full_access") return null;
-  if (input.preset === "approve_for_me") {
-    if (input.automaticReviewer === undefined) {
-      throw new TypeError(
-        "Helarc Approve for me requires an explicit automatic reviewer binding.",
-      );
+  if (expected === "user") {
+    if (input.userApprovalBridge === null) {
+      throw new TypeError("Ask for approval requires an explicit user approval bridge.");
+    }
+    if (input.automaticReviewer !== null) {
+      throw new TypeError("Ask for approval must not include an automatic reviewer.");
+    }
+    if (input.userApprovalBridge.runId !== input.runId) {
+      throw new TypeError("User approval bridge Run identity does not match the composed Run.");
+    }
+    return Object.freeze({
+      bindingId: `${input.runId}:reviewer:user`,
+      kind: "user",
+      reviewer: input.userApprovalBridge,
+      descriptor: input.userApprovalBridge.descriptor,
+      reviewTimeoutMs: null,
+    });
+  }
+  if (expected === "auto_review") {
+    if (input.automaticReviewer === null) {
+      throw new TypeError("Approve for me requires an explicit automatic reviewer.");
+    }
+    if (input.userApprovalBridge !== null) {
+      throw new TypeError("Approve for me must not include a user approval bridge.");
+    }
+    if (input.automaticReviewer.kind !== "auto_review") {
+      throw new TypeError("Approve for me reviewer kind must be auto_review.");
     }
     return input.automaticReviewer;
   }
-  if (userApprovalBridge === null) {
-    throw new TypeError("Helarc Ask for approval requires a user-review bridge.");
+  if (input.userApprovalBridge !== null || input.automaticReviewer !== null) {
+    throw new TypeError("Full access must not include an approval reviewer.");
   }
-  return Object.freeze({
-    bindingId: `${input.runId}:reviewer:user`,
-    kind: "user",
-    reviewer: userApprovalBridge,
-    descriptor: userApprovalBridge.descriptor,
-    reviewTimeoutMs: null,
-  });
+  return null;
 }
 
 function profileIdForPreset(
@@ -167,11 +166,12 @@ function profileIdForPreset(
 
 function profileForPreset(
   preset: HelarcPermissionPreset,
+  baseProfileId: ":workspace" | ":danger-full-access",
   enforcement: PermissionEnforcement,
 ): PermissionProfileDefinition {
   return Object.freeze({
     id: profileIdForPreset(preset, enforcement),
-    extends: preset === "full_access" ? ":danger-full-access" : ":workspace",
+    extends: baseProfileId,
     enforcement,
     unrestrictedFileSystem: false,
     fileSystem: Object.freeze([]),

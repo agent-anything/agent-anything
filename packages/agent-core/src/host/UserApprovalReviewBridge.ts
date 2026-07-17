@@ -34,9 +34,15 @@ export interface CreateUserApprovalReviewBridgeInput {
   ) => void | Promise<void>;
 }
 
+export type UserApprovalProjectionListener = (
+  projection: UserApprovalPendingProjection | null,
+) => void | Promise<void>;
+
 export interface UserApprovalReviewBridge extends ApprovalReviewerPort {
+  readonly runId: string;
   readonly descriptor: ApprovalReviewerDescriptor & { readonly kind: "user" };
   getPendingProjection(): UserApprovalPendingProjection | null;
+  subscribe(listener: UserApprovalProjectionListener): () => void;
   submitDecision(
     submission: ApprovalDecisionSubmission,
   ): ApprovalSubmissionReceipt;
@@ -64,10 +70,10 @@ export function createUserApprovalReviewBridge(
 }
 
 class DefaultUserApprovalReviewBridge implements UserApprovalReviewBridge {
+  readonly runId: string;
   readonly descriptor: ApprovalReviewerDescriptor & { readonly kind: "user" };
-  private readonly runId: string;
-  private readonly onProjectionChanged: CreateUserApprovalReviewBridgeInput["onProjectionChanged"];
   private readonly onNotificationFailure: CreateUserApprovalReviewBridgeInput["onNotificationFailure"];
+  private readonly projectionListeners = new Set<UserApprovalProjectionListener>();
   private readonly submissions = new Map<string, SubmissionLedgerEntry>();
   private readonly closedRequests = new Set<string>();
   private notificationQueue: Promise<void> = Promise.resolve();
@@ -92,7 +98,9 @@ class DefaultUserApprovalReviewBridge implements UserApprovalReviewBridge {
     ) {
       throw new TypeError("onNotificationFailure must be a function.");
     }
-    this.onProjectionChanged = input.onProjectionChanged;
+    if (input.onProjectionChanged !== undefined) {
+      this.projectionListeners.add(input.onProjectionChanged);
+    }
     this.onNotificationFailure = input.onNotificationFailure;
   }
 
@@ -161,6 +169,16 @@ class DefaultUserApprovalReviewBridge implements UserApprovalReviewBridge {
 
   getPendingProjection(): UserApprovalPendingProjection | null {
     return this.active?.projection ?? null;
+  }
+
+  subscribe(listener: UserApprovalProjectionListener): () => void {
+    if (typeof listener !== "function") {
+      throw new TypeError("User approval projection listener must be a function.");
+    }
+    this.projectionListeners.add(listener);
+    return () => {
+      this.projectionListeners.delete(listener);
+    };
   }
 
   submitDecision(
@@ -238,20 +256,27 @@ class DefaultUserApprovalReviewBridge implements UserApprovalReviewBridge {
     phase: UserApprovalNotificationFailure["phase"],
     previous: UserApprovalPendingProjection | null = projection,
   ): void {
-    if (this.onProjectionChanged === undefined) return;
+    if (this.projectionListeners.size === 0) return;
     const correlation = previous ?? projection;
     if (correlation === null) return;
+    const listeners = [...this.projectionListeners];
     this.notificationQueue = this.notificationQueue
-      .then(() => this.onProjectionChanged?.(projection))
-      .then(() => undefined)
-      .catch(() => this.reportNotificationFailure(Object.freeze({
-        code: "approval_notification_failed" as const,
-        message: "User approval projection notification failed.",
-        runId: correlation.request.runId,
-        requestId: correlation.request.id,
-        pendingVersion: correlation.pendingVersion,
-        phase,
-      })));
+      .then(async () => {
+        for (const listener of listeners) {
+          try {
+            await listener(projection);
+          } catch {
+            await this.reportNotificationFailure(Object.freeze({
+              code: "approval_notification_failed" as const,
+              message: "User approval projection notification failed.",
+              runId: correlation.request.runId,
+              requestId: correlation.request.id,
+              pendingVersion: correlation.pendingVersion,
+              phase,
+            }));
+          }
+        }
+      });
   }
 
   private reportNotificationFailure(

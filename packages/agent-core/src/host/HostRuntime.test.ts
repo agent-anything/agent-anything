@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
-import { resolvePermissionProfile } from "@agent-anything/permission";
+import {
+  resolvePermissionProfile,
+  type ApprovalDecisionSubmission,
+  type ApprovalReviewInput,
+} from "@agent-anything/permission";
+import type {
+  InvocationInterruptionContext,
+  InvocationInterruptionRef,
+} from "@agent-anything/shared";
 import type { Agent } from "../agent/index.js";
 import type {
   Controller,
@@ -21,6 +29,10 @@ import {
   type HostRunResult,
   type HostRunStartInput,
 } from "./HostRuntime.js";
+import {
+  createUserApprovalReviewBridge,
+  type UserApprovalReviewBridge,
+} from "./UserApprovalReviewBridge.js";
 
 interface TestOutput {
   readonly summary: string;
@@ -166,6 +178,115 @@ describe("HostRuntime", () => {
     );
   });
 
+  it("requires the exact Run-bound user reviewer before invoking Runner", () => {
+    const controller = new DeferredController();
+    const runner = new Runner({ controller, now: () => now });
+    const run = vi.spyOn(runner, "run");
+    const runtime = createHostRuntime({ runner, now: () => now });
+    const configuredBridge = createApprovalBridge("run-1");
+    const otherBridge = createApprovalBridge("run-1");
+    const configured = createUserReviewStartInput(configuredBridge);
+
+    expect(() => runtime.start({
+      ...configured,
+      userApprovalReviewBridge: null,
+    })).toThrow("requires an explicit approval review bridge");
+    expect(() => runtime.start({
+      ...configured,
+      userApprovalReviewBridge: createApprovalBridge("run-other"),
+    })).toThrow("Run identity does not match");
+    expect(() => runtime.start({
+      ...configured,
+      userApprovalReviewBridge: otherBridge,
+    })).toThrow("does not match the configured user reviewer");
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("correlates one versioned user submission with the active Host Run", async () => {
+    const bridge = createApprovalBridge("run-1");
+    const controller = new DeferredController();
+    const runtime = createHostRuntime({
+      runner: new Runner({ controller, now: () => now }),
+      now: () => now,
+    });
+    const active = runtime.start(createUserReviewStartInput(bridge));
+    await controller.entered;
+    const pendingReview = bridge.review(
+      createApprovalReviewInput(),
+      interruptionContext(),
+    );
+    await flushMicrotasks();
+
+    const pending = active.getProjection();
+    expect(pending).toMatchObject({
+      status: "waiting_for_approval",
+      approval: {
+        requestId: "request-1",
+        pendingVersion: 1,
+        phase: "reviewing",
+      },
+    });
+    expect(active.getProjection()).toBe(pending);
+    expect(active.submitApprovalDecision(approvalSubmission({
+      runId: "run-other",
+      submissionId: "cross-run",
+    }))).toMatchObject({ code: "approval_not_pending" });
+    expect(active.submitApprovalDecision(approvalSubmission({
+      pendingVersion: 2,
+      submissionId: "stale-version",
+    }))).toMatchObject({ code: "approval_version_mismatch" });
+
+    const accepted = active.submitApprovalDecision(approvalSubmission());
+    expect(accepted).toMatchObject({
+      status: "accepted_for_resolution",
+      runId: "run-1",
+      requestId: "request-1",
+      pendingVersion: 1,
+    });
+    expect(active.getProjection().approval?.phase).toBe("submitted_for_resolution");
+    const submittedSequence = active.getProjection().sequence;
+    expect(active.submitApprovalDecision(approvalSubmission())).toBe(accepted);
+    expect(active.getProjection().sequence).toBe(submittedSequence);
+    await expect(pendingReview).resolves.toMatchObject({ status: "decided" });
+
+    controller.complete("Approved Run complete");
+    expect(requireRunResult(await active.result).runResult.status).toBe("succeeded");
+    expect(active.submitApprovalDecision(approvalSubmission({
+      submissionId: "late-submission",
+    }))).toMatchObject({ code: "approval_not_pending" });
+  });
+
+  it("rejects post-cancellation approval without settling weaker authority", async () => {
+    const bridge = createApprovalBridge("run-1");
+    const controller = new DeferredController();
+    const startInput = createUserReviewStartInput(bridge);
+    const runtime = createHostRuntime({
+      runner: new Runner({ controller, now: () => now }),
+      now: () => now,
+    });
+    const active = runtime.start(startInput);
+    await controller.entered;
+    const pendingReview = bridge.review(
+      createApprovalReviewInput(),
+      runInterruptionContext(startInput.runConfig),
+    );
+    await flushMicrotasks();
+
+    expect(active.cancel({ origin: "user", reasonCode: "user_requested" }).status)
+      .toBe("accepted");
+    await expect(pendingReview).resolves.toMatchObject({
+      status: "interrupted",
+      interruption: { kind: "run_cancellation" },
+    });
+    expect(active.submitApprovalDecision(approvalSubmission({
+      submissionId: "post-cancel",
+    }))).toMatchObject({ code: "approval_not_pending" });
+    expect(requireRunResult(await active.result).runResult.cancellation).toMatchObject({
+      origin: "user",
+      reasonCode: "user_requested",
+    });
+  });
+
   it("isolates a failing global event publisher from invocation projection", async () => {
     const controller = new DeferredController();
     const globalEvents = new RuntimeEventEmitter();
@@ -253,6 +374,30 @@ function createStartInput(input: {
       metadata: {},
     },
     runConfig: createRunConfig(cancellation),
+  };
+}
+
+function createUserReviewStartInput(
+  bridge: UserApprovalReviewBridge,
+): HostRunStartInput<TestOutput> {
+  const input = createStartInput();
+  return {
+    ...input,
+    userApprovalReviewBridge: bridge,
+    runConfig: {
+      ...input.runConfig,
+      permissions: {
+        ...input.runConfig.permissions,
+        approvalPolicy: "on-request",
+        reviewer: {
+          bindingId: "reviewer-user-binding",
+          kind: "user",
+          reviewer: bridge,
+          descriptor: bridge.descriptor,
+          reviewTimeoutMs: null,
+        },
+      },
+    },
   };
 }
 
@@ -387,4 +532,108 @@ function requireRunResult(
     throw new Error(`Expected RunResult, received ${outcome.kind}.`);
   }
   return outcome as HostRunResult<TestOutput>;
+}
+
+function createApprovalBridge(runId: string): UserApprovalReviewBridge {
+  return createUserApprovalReviewBridge({
+    runId,
+    descriptor: {
+      id: "reviewer-user",
+      kind: "user",
+      displayName: "User",
+      source: "host-runtime-test",
+      metadata: {},
+    },
+  });
+}
+
+function createApprovalReviewInput(): ApprovalReviewInput {
+  return {
+    request: {
+      id: "request-1",
+      runId: "run-1",
+      actionId: "action-1",
+      actionFingerprint: "sha256:action-1",
+      category: "mcpToolCall",
+      reason: "Review MCP call.",
+      subject: {
+        runId: "run-1",
+        actionId: "action-1",
+        actionFingerprint: "sha256:action-1",
+        environmentId: "local",
+        applicabilityKeyCount: 0,
+      },
+      payload: {
+        serverId: "server-1",
+        serverDisplayName: "Server",
+        toolName: "read",
+        safeArguments: {},
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        supportsSessionAuthority: false,
+      },
+      decisionOptions: [{
+        id: "accept-action",
+        kind: "accept",
+        scope: "action",
+        label: "Accept",
+        description: null,
+      }],
+      createdAt: now,
+      deadlineAt: "2026-07-17T00:01:00.000Z",
+    },
+    pendingVersion: 1,
+    context: {
+      workspaceTrustState: "trusted",
+      ruleOutcome: "prompt",
+      currentAuthority: {
+        fileSystemRead: true,
+        fileSystemWrite: false,
+        network: false,
+      },
+      annotations: {},
+    },
+  };
+}
+
+function approvalSubmission(
+  overrides: Partial<ApprovalDecisionSubmission> = {},
+): ApprovalDecisionSubmission {
+  return {
+    submissionId: "submission-1",
+    runId: "run-1",
+    requestId: "request-1",
+    pendingVersion: 1,
+    optionId: "accept-action",
+    grantedPermissions: null,
+    reason: null,
+    ...overrides,
+  };
+}
+
+function interruptionContext(): InvocationInterruptionContext {
+  return Object.freeze({ signal: new AbortController().signal, interruption: null });
+}
+
+function runInterruptionContext(runConfig: RunConfig): InvocationInterruptionContext {
+  return Object.freeze({
+    signal: runConfig.cancellation.context.signal,
+    get interruption(): InvocationInterruptionRef | null {
+      const request = runConfig.cancellation.context.request;
+      return request === null
+        ? null
+        : {
+            kind: "run_cancellation",
+            cancellation: { runId: request.runId, requestId: request.id },
+          };
+    },
+  });
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }

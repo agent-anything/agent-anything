@@ -269,7 +269,6 @@ export class HelarcMainController {
   private nextTaskNumber = 1;
   private runCancellation: RunCancellationController | null = null;
   private activeHostRun: HostActiveRun | null = null;
-  private userApprovalBridge: UserApprovalReviewBridge | null = null;
   private readonly sessionAuthorityStore = createInMemoryHostSessionAuthorityStore({
     maxRecords: 64,
   });
@@ -529,15 +528,15 @@ export class HelarcMainController {
   submitApprovalDecision(
     input: ApprovalDecisionSubmission,
   ): ApprovalSubmissionReceipt {
-    const bridge = this.userApprovalBridge;
-    if (!bridge) {
+    const activeRun = this.activeHostRun;
+    if (!activeRun) {
       return {
         status: "rejected",
         submissionId: typeof input?.submissionId === "string" ? input.submissionId : "",
         code: "approval_not_pending",
       };
     }
-    const receipt = bridge.submitDecision(input);
+    const receipt = activeRun.submitApprovalDecision(input);
     const pending = this.pendingApproval;
     if (
       receipt.status === "accepted_for_resolution" &&
@@ -637,7 +636,6 @@ export class HelarcMainController {
     let terminal: HelarcRunTerminalSummary | null;
     const runId = this.activeRunController.getSnapshot().runId;
     const userApprovalBridge = this.createApprovalReviewBridge(runId);
-    this.userApprovalBridge = userApprovalBridge;
     try {
       const composition = await startHelarcHostRun({
         task,
@@ -744,7 +742,6 @@ export class HelarcMainController {
       };
     }
     this.runCancellation = null;
-    this.userApprovalBridge = null;
     this.publishSnapshot();
   }
 

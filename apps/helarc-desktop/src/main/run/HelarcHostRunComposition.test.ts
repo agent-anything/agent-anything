@@ -2,6 +2,7 @@ import {
   createRunCancellationController,
   type ContextProjection,
 } from "@agent-anything/agent-core";
+import { createUserApprovalReviewBridge } from "@agent-anything/agent-core/host";
 import type { ApprovalReviewInput } from "@agent-anything/permission";
 import type {
   InvocationInterruptionContext,
@@ -36,13 +37,27 @@ type RunHelarcTestInput = Omit<
 
 async function executeTestHostRun(input: RunHelarcTestInput) {
   const runId = input.runId ?? input.sessionId ?? input.task.id;
+  const permissionPreset = input.permissionPreset ?? "ask_for_approval";
+  const userApprovalBridge = permissionPreset === "ask_for_approval"
+    ? input.userApprovalBridge ?? createUserApprovalReviewBridge({
+        runId,
+        descriptor: {
+          id: "test-user-reviewer",
+          kind: "user",
+          displayName: "Test user",
+          source: "helarc-host-run-test",
+          metadata: {},
+        },
+      })
+    : input.userApprovalBridge;
   const composition = await startHelarcHostRun({
     ...input,
     runId,
     sessionId: input.sessionId ?? runId,
     cancellation: input.cancellation ?? createRunCancellationController({ runId }),
     toolMode: input.enableShell ? "shell-enabled" : "read-only",
-    permissionPreset: input.permissionPreset ?? "ask_for_approval",
+    permissionPreset,
+    userApprovalBridge,
   });
   const outcome = await composition.result;
   if (outcome.kind === "start_failure") {
@@ -365,6 +380,44 @@ describe("Helarc Host Run composition", () => {
     await expect(access(markerPath)).rejects.toThrow();
   });
 
+  it("does not weaken approval when the automatic reviewer is unavailable", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-reviewer-unavailable-"));
+    const markerPath = join(workspaceRoot, "marker.txt");
+    const provider = new ScriptedProvider([
+      {
+        action: "call_tool",
+        reason: "Try a shell command.",
+        toolName: "codeAgent.runCommand",
+        input: createShellInput(markerPath),
+      },
+      {
+        action: "stop",
+        reason: "The automatic reviewer is unavailable.",
+      },
+    ]);
+
+    const result = await executeTestHostRun({
+      task: createTask(workspaceRoot),
+      provider,
+      enableShell: true,
+      permissionPreset: "approve_for_me",
+      automaticApprovalReviewer: unavailableAutomaticReviewer(),
+    });
+
+    expect(result.status).toBe("blocked");
+    expect(result.runResult.items.some((item) => item.kind === "approval_requested")).toBe(true);
+    expect(result.runResult.items).toContainEqual(expect.objectContaining({
+      kind: "approval_resolved",
+      record: expect.objectContaining({
+        resolutionKind: "review_failure",
+        code: "approval_reviewer_unavailable",
+      }),
+    }));
+    expect(result.runResult.items.some((item) => item.kind === "sandbox_attempt_started"))
+      .toBe(false);
+    await expect(access(markerPath)).rejects.toThrow();
+  });
+
   it("executes Full access commands through the explicit unisolated gateway", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-shell-granted-"));
     const markerPath = join(workspaceRoot, "marker.txt");
@@ -621,6 +674,34 @@ function automaticReviewer(decisionKind: "accept" | "decline") {
             reason: decisionKind === "decline" ? "Denied by test reviewer." : null,
           },
           rationale: null,
+        };
+      },
+    },
+    reviewTimeoutMs: 1_000,
+  };
+}
+
+function unavailableAutomaticReviewer() {
+  return {
+    bindingId: "test-auto-unavailable",
+    kind: "auto_review" as const,
+    descriptor: {
+      id: "test-auto-unavailable",
+      kind: "auto_review" as const,
+      displayName: "Unavailable automatic reviewer",
+      source: "helarc-session-test",
+      metadata: {},
+    },
+    reviewer: {
+      async review() {
+        return {
+          status: "failed" as const,
+          failure: {
+            code: "approval_reviewer_unavailable" as const,
+            message: "Automatic reviewer is unavailable.",
+            retryable: false,
+            metadata: {},
+          },
         };
       },
     },

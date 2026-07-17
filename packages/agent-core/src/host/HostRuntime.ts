@@ -1,4 +1,9 @@
 import type { ISODateTimeString } from "@agent-anything/shared";
+import {
+  snapshotApprovalDecisionSubmission,
+  type ApprovalDecisionSubmission,
+  type ApprovalSubmissionReceipt,
+} from "@agent-anything/permission";
 import type { Agent } from "../agent/index.js";
 import { RuntimeEventEmitter } from "../events/index.js";
 import {
@@ -19,6 +24,7 @@ import {
   type HostTerminalRunProjection,
 } from "./HostRunProjection.js";
 import { createHostRunProjectionStore } from "./HostRunProjectionReducer.js";
+import type { UserApprovalReviewBridge } from "./UserApprovalReviewBridge.js";
 
 export type HostSessionId = string;
 
@@ -27,6 +33,7 @@ export interface HostRunStartInput<TOutput = unknown> {
   readonly agent: Agent<TOutput>;
   readonly runInput: RunInput;
   readonly runConfig: RunConfig;
+  readonly userApprovalReviewBridge?: UserApprovalReviewBridge | null;
 }
 
 export interface HostRunResult<TOutput = unknown> {
@@ -76,6 +83,7 @@ export interface HostActiveRun<TOutput = unknown> {
   readonly runId: string;
   getProjection(): HostRunProjection;
   subscribe(listener: HostRunProjectionListener): () => void;
+  submitApprovalDecision(input: ApprovalDecisionSubmission): ApprovalSubmissionReceipt;
   cancel(input: HostRunCancellationInput): HostRunCancellationReceipt;
   readonly result: Promise<HostRunOutcome<TOutput>>;
 }
@@ -145,6 +153,20 @@ function startHostRun<TOutput>(
       event,
     });
   });
+  const userApprovalReviewBridge = input.userApprovalReviewBridge ?? null;
+  const unsubscribeApprovalReview = userApprovalReviewBridge?.subscribe((review) => {
+    if (review === null || invocationState !== "active") return;
+    const reduction = store.apply({
+      kind: "approval_review_available",
+      runId,
+      sequence: nextSequence(),
+      occurredAt: review.request.createdAt,
+      review,
+    });
+    if (reduction.status === "rejected") {
+      throw new Error(`Host approval review projection was rejected: ${reduction.code}.`);
+    }
+  }) ?? (() => undefined);
 
   let invocation: Promise<RunResult<TOutput>>;
   try {
@@ -177,6 +199,7 @@ function startHostRun<TOutput>(
       }
       invocationState = "settled";
       unsubscribeRuntimeEvents();
+      unsubscribeApprovalReview();
       return Object.freeze({
         kind: "run_result" as const,
         sessionId,
@@ -189,6 +212,7 @@ function startHostRun<TOutput>(
     () => {
       invocationState = "start_failed";
       unsubscribeRuntimeEvents();
+      unsubscribeApprovalReview();
       return Object.freeze({
         kind: "start_failure" as const,
         sessionId,
@@ -205,6 +229,48 @@ function startHostRun<TOutput>(
     runId,
     getProjection: () => store.getProjection(),
     subscribe: (listener: HostRunProjectionListener) => store.subscribe(listener),
+    submitApprovalDecision(
+      candidate: ApprovalDecisionSubmission,
+    ): ApprovalSubmissionReceipt {
+      const submissionId = readSubmissionId(candidate);
+      let submission: ApprovalDecisionSubmission;
+      try {
+        submission = snapshotApprovalDecisionSubmission(candidate);
+      } catch {
+        return rejectedApprovalSubmission(submissionId, "approval_submission_invalid");
+      }
+      if (userApprovalReviewBridge === null || invocationState !== "active") {
+        return rejectedApprovalSubmission(submission.submissionId, "approval_not_pending");
+      }
+      const projection = store.getProjection();
+      const approval = projection.approval;
+      if (
+        projection.status !== "waiting_for_approval" ||
+        approval === null ||
+        submission.runId !== runId ||
+        submission.requestId !== approval.requestId
+      ) {
+        return rejectedApprovalSubmission(submission.submissionId, "approval_not_pending");
+      }
+      if (submission.pendingVersion !== approval.pendingVersion) {
+        return rejectedApprovalSubmission(submission.submissionId, "approval_version_mismatch");
+      }
+
+      const receipt = userApprovalReviewBridge.submitDecision(submission);
+      if (receipt.status !== "accepted_for_resolution") return receipt;
+      if (approval.phase === "submitted_for_resolution") return receipt;
+      const reduction = store.apply({
+        kind: "approval_submission_accepted",
+        runId,
+        sequence: nextSequence(),
+        occurredAt: readNow(now),
+        receipt,
+      });
+      if (reduction.status === "rejected") {
+        throw new Error(`Host approval submission projection was rejected: ${reduction.code}.`);
+      }
+      return receipt;
+    },
     cancel(cancellationInput: HostRunCancellationInput): HostRunCancellationReceipt {
       const currentCancellation = store.getProjection().cancellation;
       if (invocationState === "settled") {
@@ -271,6 +337,27 @@ function assertStartInput<TOutput>(input: HostRunStartInput<TOutput>): void {
   if (enforcement !== "managed" && enforcement !== "external" && enforcement !== "disabled") {
     throw new TypeError("Run permission enforcement is invalid.");
   }
+  assertUserApprovalBinding(input);
+}
+
+function assertUserApprovalBinding<TOutput>(input: HostRunStartInput<TOutput>): void {
+  const reviewer = input.runConfig.permissions.reviewer;
+  const bridge = input.userApprovalReviewBridge ?? null;
+  if (reviewer?.kind === "user") {
+    if (bridge === null) {
+      throw new TypeError("Host user reviewer requires an explicit approval review bridge.");
+    }
+    if (bridge.runId !== input.runInput.runId) {
+      throw new TypeError("Host approval review bridge Run identity does not match the Run.");
+    }
+    if (reviewer.reviewer !== bridge) {
+      throw new TypeError("Host approval review bridge does not match the configured user reviewer.");
+    }
+    return;
+  }
+  if (bridge !== null) {
+    throw new TypeError("Host Run without a user reviewer must not include an approval review bridge.");
+  }
 }
 
 function assertRunResultIdentity<TOutput>(
@@ -295,4 +382,18 @@ function assertIdentity(value: string, field: string): void {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError(`${field} must be a non-empty string.`);
   }
+}
+
+function readSubmissionId(value: unknown): string {
+  return typeof value === "object" && value !== null &&
+      typeof (value as { submissionId?: unknown }).submissionId === "string"
+    ? (value as { submissionId: string }).submissionId
+    : "";
+}
+
+function rejectedApprovalSubmission(
+  submissionId: string,
+  code: Extract<ApprovalSubmissionReceipt, { status: "rejected" }>["code"],
+): ApprovalSubmissionReceipt {
+  return Object.freeze({ status: "rejected", submissionId, code });
 }

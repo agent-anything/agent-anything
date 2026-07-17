@@ -26,3 +26,10 @@ export type {
   StartHelarcHostRunInput,
 } from "./HelarcHostRunComposition.js";
 export { startHelarcHostRun } from "./HelarcHostRunComposition.js";
+export type {
+  CreateHelarcHostPermissionCompositionInput,
+  HelarcHostPermissionComposition,
+} from "./HelarcHostPermissionComposition.js";
+export {
+  createHelarcHostPermissionComposition,
+} from "./HelarcHostPermissionComposition.js";

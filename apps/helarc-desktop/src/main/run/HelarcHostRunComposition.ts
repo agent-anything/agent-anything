@@ -14,6 +14,8 @@ import {
   type SandboxProvider,
 } from "@agent-anything/agent-core";
 import {
+  createInMemoryHostPolicyAmendmentStore,
+  createInMemoryHostSessionAuthorityStore,
   createHostRuntime,
   type HostActiveRun,
   type HostRunStartFailure,
@@ -30,7 +32,6 @@ import {
   type WorkspaceContext,
 } from "@agent-anything/governance";
 import {
-  createHelarcPermissionComposition,
   createHelarcProductComposition,
   mapRuntimeEventToHelarcActivity,
   type HelarcActivityItem,
@@ -46,6 +47,7 @@ import type { SessionAuthorityPort } from "@agent-anything/permission";
 import type { Provider } from "@agent-anything/providers";
 import type { ArtifactRef, ISODateTimeString } from "@agent-anything/shared";
 import type { StoragePort, StoredArtifact } from "@agent-anything/storage";
+import { createHelarcHostPermissionComposition } from "./HelarcHostPermissionComposition.js";
 
 export interface StartHelarcHostRunInput {
   readonly sessionId: string;
@@ -109,10 +111,10 @@ export async function startHelarcHostRun(
     workspaceScope: input.task.workspaceScope,
     platform,
   });
-  const permissions = await createHelarcPermissionComposition({
+  const permissions = await createHelarcHostPermissionComposition({
     preset: input.permissionPreset,
     runId: input.runId,
-    hostSessionId: input.sessionId,
+    sessionId: input.sessionId,
     workspace,
     workspaceRoots: canonicalRoots.map((root) => ({
       rootId: root.rootId,
@@ -121,10 +123,12 @@ export async function startHelarcHostRun(
     platform,
     enforcement,
     cancellation: input.cancellation,
-    userApprovalBridge: input.userApprovalBridge,
-    automaticReviewer: input.automaticApprovalReviewer,
-    sessionAuthorityPort: input.sessionAuthorityPort,
-    persistentPolicyAmendments: input.persistentPolicyAmendments,
+    userApprovalBridge: input.userApprovalBridge ?? null,
+    automaticReviewer: input.automaticApprovalReviewer ?? null,
+    sessionAuthorityPort: input.sessionAuthorityPort ??
+      createInMemoryHostSessionAuthorityStore({ maxRecords: 64 }),
+    persistentPolicyAmendments: input.persistentPolicyAmendments ??
+      createInMemoryHostPolicyAmendmentStore({ maxRecords: 64 }),
   });
   const product = await createHelarcProductComposition({
     task: input.task,
@@ -171,6 +175,7 @@ export async function startHelarcHostRun(
   const activeRun = runtime.start({
     sessionId: input.sessionId,
     agent: product.agent,
+    userApprovalReviewBridge: permissions.userApprovalBridge,
     runInput: {
       runId: input.runId,
       task: input.task,

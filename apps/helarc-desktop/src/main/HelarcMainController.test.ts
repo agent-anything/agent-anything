@@ -756,7 +756,7 @@ describe("HelarcMainController", () => {
     expect(controller.submitApprovalDecision(lateSubmission)).toEqual({
       status: "rejected",
       submissionId: "desktop-after-cancel-1",
-      code: "approval_already_resolved",
+      code: "approval_not_pending",
     });
 
     const terminalSnapshot = await waitForSnapshot(

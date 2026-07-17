@@ -15,6 +15,7 @@ import {
 describe("UserApprovalReviewBridge", () => {
   it("keeps one immutable pending projection and accepts one submission", async () => {
     const bridge = createBridge();
+    expect(bridge.runId).toBe("run.1");
     const source = reviewInput();
     const pending = bridge.review(source, interruptionContext());
 
@@ -130,6 +131,28 @@ describe("UserApprovalReviewBridge", () => {
 
     bridge.submitDecision(submission());
     await pending;
+  });
+
+  it("supports independent projection subscribers and cancellation", async () => {
+    const bridge = createBridge();
+    const first: Array<string | null> = [];
+    const second: Array<string | null> = [];
+    const unsubscribe = bridge.subscribe((projection) => {
+      first.push(projection?.request.id ?? null);
+    });
+    bridge.subscribe((projection) => {
+      second.push(projection?.request.id ?? null);
+    });
+
+    const pending = bridge.review(reviewInput(), interruptionContext());
+    await flushMicrotasks();
+    unsubscribe();
+    bridge.submitDecision(submission());
+    await pending;
+    await flushMicrotasks();
+
+    expect(first).toEqual(["request.1"]);
+    expect(second).toEqual(["request.1", null]);
   });
 });
 

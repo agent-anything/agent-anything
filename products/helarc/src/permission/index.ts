@@ -1,6 +1,6 @@
 export {
-  createHelarcPermissionComposition,
-  type CreateHelarcPermissionCompositionInput,
-  type HelarcPermissionComposition,
+  resolveHelarcPermissionPreset,
+  type HelarcPermissionPresetDefinition,
   type HelarcPermissionPreset,
-} from "./HelarcPermissionComposition.js";
+  type HelarcPermissionPresetReviewerKind,
+} from "./HelarcPermissionPreset.js";
