@@ -4,6 +4,7 @@ import type {
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/providers";
+import { createFailedRunResult } from "@agent-anything/agent-core";
 import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "../task/index.js";
 import { createHelarcProductComposition } from "./HelarcProductComposition.js";
@@ -49,6 +50,36 @@ describe("HelarcProductComposition", () => {
         "codeAgent.updateFile",
         "codeAgent.deleteFile",
       ]));
+  });
+
+  it("projects trusted failures into bounded product messages without leaking raw data", async () => {
+    const secret = "sentinel-provider-secret";
+    const composition = await createHelarcProductComposition({
+      runId: "run-1",
+      task: createTask("D:/workspace"),
+      provider: new UnusedProvider(),
+      toolMode: "read-only",
+    });
+
+    const result = composition.projectResult(createFailedRunResult({
+      runId: "run-1",
+      taskId: "helarc-composition-test-task",
+      metadata: { rawProvider: secret },
+    }, "provider_request_failed", [{
+      owner: "provider",
+      code: "provider_request_failed",
+      message: `Provider failed with ${secret}.`,
+      retryable: false,
+      metadata: { apiKey: secret },
+    }]), "disabled");
+
+    expect(result.output.safeErrors).toEqual([{
+      code: "provider_request_failed",
+      message: "The model request could not be completed.",
+    }]);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain("rawProvider");
+    expect(JSON.stringify(result)).not.toContain("apiKey");
   });
 });
 

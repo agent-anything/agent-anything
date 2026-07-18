@@ -68,7 +68,7 @@ export function projectHelarcProductResult(
   const agentOutput = runResult.status === "succeeded" ? runResult.finalOutput : null;
   const safeErrors = collectSafeRunErrors(runResult);
   for (const error of patchOutcome?.errors ?? []) {
-    appendSafeError(safeErrors, error.code, error.message);
+    appendSafeError(safeErrors, error.code);
   }
 
   return Object.freeze({
@@ -131,17 +131,17 @@ function createEnforcementSummary(
 function collectSafeRunErrors(
   runResult: RunResult<HelarcAgentOutput>,
 ): Array<{ code: string; message: string }> {
-  const errors = runResult.errors.map((error) => ({
-    code: error.code,
-    message: error.message,
-  }));
+  const errors: Array<{ code: string; message: string }> = [];
+  for (const error of runResult.errors) {
+    appendSafeError(errors, error.code);
+  }
   for (const item of runResult.items) {
     if (item.kind !== "observation") continue;
     const observation = item.observation;
     if (observation.kind === "action_denied" || observation.kind === "action_rejected") {
-      appendSafeError(errors, observation.code, observation.message);
+      appendSafeError(errors, observation.code);
     } else if (observation.kind === "action_failure") {
-      appendSafeError(errors, observation.error.code, observation.error.message);
+      appendSafeError(errors, observation.error.code);
     }
   }
   return errors;
@@ -150,11 +150,32 @@ function collectSafeRunErrors(
 function appendSafeError(
   errors: Array<{ code: string; message: string }>,
   code: string,
-  message: string,
 ): void {
-  if (!errors.some((error) => error.code === code && error.message === message)) {
-    errors.push({ code, message });
+  if (!errors.some((error) => error.code === code)) {
+    errors.push({ code, message: safeProductErrorMessage(code) });
   }
+}
+
+function safeProductErrorMessage(code: string): string {
+  if (code.startsWith("model_") || code.startsWith("provider_")) {
+    return "The model request could not be completed.";
+  }
+  if (code.startsWith("approval_") || code.startsWith("granted_permissions_")) {
+    return "Approval could not be completed.";
+  }
+  if (code.startsWith("session_authority_") || code.startsWith("policy_amendment_")) {
+    return "Permission state could not be updated.";
+  }
+  if (code.startsWith("patch_") || code.startsWith("action_") || code.startsWith("filesystem_")) {
+    return "The proposed file change could not be applied.";
+  }
+  if (code.startsWith("sandbox_") || code.startsWith("tool_")) {
+    return "The requested action could not be completed.";
+  }
+  if (code.startsWith("storage_") || code.startsWith("audit_") || code.includes("telemetry")) {
+    return "Run finalization could not be completed.";
+  }
+  return "The run could not be completed.";
 }
 
 function mapRunStatus(status: RunResultStatus): HelarcProductStatus {

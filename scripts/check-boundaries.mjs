@@ -93,6 +93,7 @@ function checkFile(file) {
 
 function checkArchitectureSource(file, text, isTestOnly) {
   const rel = display(file);
+  checkDesktopSafeSurface(rel, text);
   const legacySymbols = [
     "TemporaryToolActionBridge",
     "ToolExecutionBoundary",
@@ -160,10 +161,56 @@ function checkArchitectureSource(file, text, isTestOnly) {
   if (/\b(?:ConformanceSandboxProvider|createConformanceSandboxProvider)\b/.test(text)) {
     violations.push(`${rel} retains a production conformance sandbox provider.`);
   }
+  if (
+    (rel.startsWith("apps/") || rel.startsWith("products/")) &&
+    /\brunner\.run\s*\(/i.test(text)
+  ) {
+    violations.push(`${rel} invokes Runner directly instead of starting it through HostRuntime.`);
+  }
+}
+
+function checkDesktopSafeSurface(rel, text) {
+  const isRenderer = rel.startsWith("apps/helarc-desktop/src/renderer/");
+  const isShared = rel.startsWith("apps/helarc-desktop/src/shared/");
+  const isPreload = rel.startsWith("apps/helarc-desktop/src/preload/");
+  if (!isRenderer && !isShared && !isPreload) return;
+
+  const trustedSymbols = [
+    "Runner",
+    "RunResult",
+    "RunState",
+    "RunCancellationController",
+    "PendingApproval",
+    "ActionEnforcementPipeline",
+    "SandboxExecutionGateway",
+    "ProviderCredentialStore",
+    "SessionAuthorityPort",
+    "PolicyAmendmentStore",
+  ];
+  for (const symbol of trustedSymbols) {
+    if (new RegExp(`\\b${symbol}\\b`).test(text)) {
+      violations.push(`${rel} exposes trusted-only symbol '${symbol}' on the Desktop safe surface.`);
+    }
+  }
 }
 
 function checkWorkspaceImport({ file, owner, imported, isTestOnly }) {
   const rel = display(file);
+
+  if (
+    rel.startsWith("apps/helarc-desktop/src/renderer/") &&
+    imported.packageName.startsWith("@agent-anything/")
+  ) {
+    violations.push(`${rel} Renderer must consume workspace contracts through Desktop shared IPC.`);
+  }
+  if (
+    rel.startsWith("apps/helarc-desktop/src/shared/") &&
+    imported.packageName.startsWith("@agent-anything/") &&
+    imported.packageName !== "@agent-anything/helarc" &&
+    imported.packageName !== "@agent-anything/permission"
+  ) {
+    violations.push(`${rel} Desktop shared IPC imports disallowed workspace package '${imported.packageName}'.`);
+  }
 
   if (imported.packageName === "@agent-anything/platform") {
     violations.push(`${rel} must consume concrete platform packages, not @agent-anything/platform.`);
@@ -304,6 +351,30 @@ function checkRelativeImport(file, owner, specifier) {
   if (resolved !== owner.root && !resolved.startsWith(ownerRoot)) {
     violations.push(`${display(file)} uses a relative import that crosses package boundary: '${specifier}'.`);
   }
+
+  const rel = display(file);
+  const resolvedPath = normalized(resolved);
+  const desktopSource = normalized(resolve(repoRoot, "apps/helarc-desktop/src"));
+  if (
+    rel.startsWith("apps/helarc-desktop/src/renderer/") &&
+    !resolvedPath.startsWith(`${desktopSource}/renderer/`) &&
+    !resolvedPath.startsWith(`${desktopSource}/shared/`)
+  ) {
+    violations.push(`${rel} Renderer relative import must remain in renderer or shared IPC: '${specifier}'.`);
+  }
+  if (
+    rel.startsWith("apps/helarc-desktop/src/shared/") &&
+    !resolvedPath.startsWith(`${desktopSource}/shared/`)
+  ) {
+    violations.push(`${rel} Desktop shared IPC relative import leaves the shared surface: '${specifier}'.`);
+  }
+  if (
+    rel.startsWith("apps/helarc-desktop/src/preload/") &&
+    !resolvedPath.startsWith(`${desktopSource}/preload/`) &&
+    !resolvedPath.startsWith(`${desktopSource}/shared/`)
+  ) {
+    violations.push(`${rel} preload relative import must remain in preload or shared IPC: '${specifier}'.`);
+  }
 }
 
 function checkPackageExports() {
@@ -388,7 +459,7 @@ function walk(dir, result) {
     const stats = statSync(fullPath);
     if (stats.isDirectory()) {
       walk(fullPath, result);
-    } else if (/\.(c|m)?tsx?$/.test(entry)) {
+    } else if (/\.(c|m)?[jt]sx?$/.test(entry)) {
       result.push(fullPath);
     }
   }

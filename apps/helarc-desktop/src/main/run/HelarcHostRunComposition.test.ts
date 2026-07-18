@@ -691,7 +691,7 @@ describe("Helarc Host Run composition", () => {
       appliedPath: null,
       safeErrors: [{
         code: "action_invalid",
-        message: "The file target no longer matches the supplied content baseline.",
+        message: "The proposed file change could not be applied.",
       }],
     });
     await expect(readFile(targetPath, "utf8")).resolves.toBe("changed\n");

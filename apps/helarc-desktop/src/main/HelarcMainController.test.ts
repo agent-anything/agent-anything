@@ -339,7 +339,7 @@ describe("HelarcMainController", () => {
   it("does not let persistence failure replace the authoritative RunResult", async () => {
     const threadStore = new InMemoryHelarcThreadStore();
     vi.spyOn(threadStore, "commitRunTerminal").mockRejectedValue(
-      new Error("Thread store unavailable."),
+      new Error("sentinel-thread-store-secret"),
     );
     const controller = new HelarcMainController({
       provider: new CompleteProvider(),
@@ -360,7 +360,7 @@ describe("HelarcMainController", () => {
       status: "completed",
       error: {
         code: "run_persistence_failed",
-        message: "Thread store unavailable.",
+        message: "Helarc could not persist the terminal Run state.",
       },
       run: {
         display: { status: "completed" },
@@ -371,6 +371,105 @@ describe("HelarcMainController", () => {
         },
       },
     });
+    expect(JSON.stringify(snapshot)).not.toContain("sentinel-thread-store-secret");
+  });
+
+  it("awaits every queued progress commit before the terminal aggregate commit", async () => {
+    const threadStore = new InMemoryHelarcThreadStore();
+    const order: string[] = [];
+    const originalProgress = threadStore.commitRunProgress.bind(threadStore);
+    const originalTerminal = threadStore.commitRunTerminal.bind(threadStore);
+    let releaseFirstProgress!: () => void;
+    let reportFirstProgress!: () => void;
+    const firstProgressGate = new Promise<void>((resolve) => {
+      releaseFirstProgress = resolve;
+    });
+    const firstProgressStarted = new Promise<void>((resolve) => {
+      reportFirstProgress = resolve;
+    });
+    let shouldBlock = true;
+
+    vi.spyOn(threadStore, "commitRunProgress").mockImplementation(async (commit) => {
+      order.push(`progress:${commit.progressSequence}:started`);
+      if (shouldBlock) {
+        shouldBlock = false;
+        reportFirstProgress();
+        await firstProgressGate;
+      }
+      const result = await originalProgress(commit);
+      order.push(`progress:${commit.progressSequence}:settled`);
+      return result;
+    });
+    vi.spyOn(threadStore, "commitRunTerminal").mockImplementation(async (commit) => {
+      order.push("terminal:started");
+      const result = await originalTerminal(commit);
+      order.push("terminal:settled");
+      return result;
+    });
+
+    const controller = new HelarcMainController({
+      provider: new CompleteProvider(),
+      threadStore,
+    });
+    controller.selectWorkspacePath("D:/projects/agent-anything");
+    const terminalPersisted = waitForSnapshot(
+      controller,
+      (snapshot) => snapshot.threadSummaries[0]?.latestRun?.status === "completed",
+    );
+    void controller.startRun({ taskText: "Verify persistence ordering" });
+
+    await firstProgressStarted;
+    await Promise.resolve();
+    expect(order).not.toContain("terminal:started");
+
+    releaseFirstProgress();
+    await terminalPersisted;
+
+    const terminalIndex = order.indexOf("terminal:started");
+    const settledProgressIndexes = order
+      .map((entry, index) => entry.startsWith("progress:") && entry.endsWith(":settled") ? index : -1)
+      .filter((index) => index >= 0);
+    expect(terminalIndex).toBeGreaterThan(-1);
+    expect(settledProgressIndexes.length).toBeGreaterThan(0);
+    expect(settledProgressIndexes.every((index) => index < terminalIndex)).toBe(true);
+    expect(order.filter((entry) => entry === "terminal:started")).toHaveLength(1);
+  });
+
+  it("does not expose trusted failure text or trusted-only objects in Renderer snapshots", async () => {
+    const secret = "sentinel-desktop-provider-secret";
+    const controller = new HelarcMainController({
+      provider: new SecretFailingProvider(secret),
+    });
+    controller.selectWorkspacePath("D:/projects/agent-anything");
+    const failed = waitForSnapshot(
+      controller,
+      (snapshot) => snapshot.status === "failed" && snapshot.run?.product.result !== null,
+    );
+    void controller.startRun({ taskText: "Fail without exposing trusted details" });
+
+    const snapshot = await failed;
+    const serialized = JSON.stringify(snapshot);
+    expect(snapshot.run?.product.result?.output.safeErrors[0]).toMatchObject({
+      message: "The model request could not be completed.",
+    });
+    expect(serialized).not.toContain(secret);
+    for (const trustedName of [
+      "apiKey",
+      "rawProvider",
+      "runResult",
+      "RunState",
+      "cancellationController",
+      "commitLedger",
+      "providerInstance",
+      "reviewerBridge",
+      "sessionAuthorityStore",
+      "policyAmendmentStore",
+      "canonicalSubject",
+      "preparedInvocation",
+      "executor",
+    ]) {
+      expect(serialized).not.toContain(trustedName);
+    }
   });
 
   it("persists work context thread, trigger message, and run records", async () => {
@@ -1252,6 +1351,37 @@ class CountingCompleteProvider extends CompleteProvider {
   ): Promise<ProviderCallResult> {
     this.callCount += 1;
     return super.send(request, context);
+  }
+}
+
+class SecretFailingProvider implements Provider {
+  readonly descriptor = {
+    id: "secret-failing-provider",
+    name: "Secret failing Provider",
+    capabilities: {
+      supportsToolPlanning: true,
+      supportsStructuredOutput: true,
+      supportsStreaming: false,
+    },
+    requestRetryScheduler: { kind: "platform" as const },
+    metadata: {},
+  };
+
+  constructor(private readonly secret: string) {}
+
+  async send(
+    _request: ProviderRequest,
+    _context: InvocationInterruptionContext,
+  ): Promise<ProviderCallResult> {
+    return {
+      kind: "failed",
+      failure: {
+        category: "provider",
+        code: "provider_secret_failure",
+        message: `Provider failed with ${this.secret}.`,
+        metadata: { apiKey: this.secret, rawProvider: this.secret },
+      },
+    };
   }
 }
 

@@ -495,10 +495,10 @@ export class HelarcMainController {
       let committed: Awaited<ReturnType<HelarcThreadStore["commitRunStart"]>>;
       try {
         committed = await this.threadStore.commitRunStart(startCommitResult.commit);
-      } catch (cause) {
+      } catch {
         throw new HelarcDesktopPersistenceError(
           "thread_store_write_failed",
-          cause instanceof Error ? cause.message : "Run start persistence failed.",
+          "Helarc could not persist the Run start.",
         );
       }
       if (committed.status === "rejected") {
@@ -536,7 +536,9 @@ export class HelarcMainController {
       const persistenceFailure = cause instanceof HelarcDesktopPersistenceError;
       const error = this.setError(
         persistenceFailure ? "run_persistence_failed" : "run_execution_failed",
-        cause instanceof Error ? cause.message : "Helarc Run failed to start.",
+        persistenceFailure
+          ? "Helarc could not persist the Run start."
+          : "Helarc could not start the Run.",
       );
       this.publishSnapshot();
       return { ok: false, error, snapshot: this.getSnapshot() };
@@ -655,13 +657,13 @@ export class HelarcMainController {
     let outcome: HelarcHostRunOutcome;
     try {
       outcome = await result;
-    } catch (cause) {
+    } catch {
       const failedSlot = this.activeRunSlot;
       if (failedSlot.kind !== "active" || failedSlot.token !== token) return;
       await failedSlot.progressTail;
       this.lastError = {
         code: "run_execution_failed",
-        message: cause instanceof Error ? cause.message : "Helarc Host result projection failed.",
+        message: "Helarc could not settle the active Run.",
       };
       this.releaseActiveRunSlot(token);
       this.publishSnapshot();
@@ -694,10 +696,10 @@ export class HelarcMainController {
 
     try {
       await this.persistWorkContextTerminal(outcome);
-    } catch (cause) {
+    } catch {
       this.lastError = {
         code: "run_persistence_failed",
-        message: cause instanceof Error ? cause.message : "Helarc Run persistence failed.",
+        message: "Helarc could not persist the terminal Run state.",
       };
     }
     this.releaseActiveRunSlot(token);
@@ -790,7 +792,7 @@ export class HelarcMainController {
       slot.persistenceFailure ??= failure;
       this.lastError = {
         code: "run_persistence_failed",
-        message: failure.message,
+        message: "Helarc could not persist Run progress.",
       };
       this.publishSnapshot();
     });
