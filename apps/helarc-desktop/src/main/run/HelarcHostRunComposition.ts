@@ -17,6 +17,7 @@ import {
   createHostRuntime,
   type HostActiveRun,
   type HostRunStartFailure,
+  type HostTerminalRunProjection,
   type UserApprovalReviewBridge,
 } from "@agent-anything/agent-core/host";
 import {
@@ -40,8 +41,7 @@ import {
   type HelarcProductRunProjection,
   type HelarcProductRunProjectionListener,
   type HelarcPermissionPreset,
-  type HelarcProductOutput,
-  type HelarcProductStatus,
+  type HelarcProductResult,
   type HelarcTaskInput,
   type HelarcToolMode,
 } from "@agent-anything/helarc";
@@ -51,7 +51,7 @@ import type { ArtifactRef, ISODateTimeString } from "@agent-anything/shared";
 import type { StoragePort, StoredArtifact } from "@agent-anything/storage";
 import { createHelarcHostPermissionComposition } from "./HelarcHostPermissionComposition.js";
 
-export interface StartHelarcHostRunInput {
+export interface PrepareHelarcHostRunInput {
   readonly sessionId: string;
   readonly runId: string;
   readonly task: AgentTask<HelarcTaskInput>;
@@ -75,9 +75,9 @@ export interface StartHelarcHostRunInput {
 
 export interface HelarcHostRunResult {
   readonly kind: "run_result";
-  readonly status: HelarcProductStatus;
   readonly runResult: RunResult<HelarcAgentOutput>;
-  readonly output: HelarcProductOutput;
+  readonly terminal: HostTerminalRunProjection;
+  readonly product: HelarcProductResult;
   readonly activity: readonly HelarcActivityItem[];
 }
 
@@ -96,6 +96,12 @@ export interface HelarcHostRunComposition {
   readonly result: Promise<HelarcHostRunOutcome>;
 }
 
+export interface PreparedHelarcHostRun {
+  readonly sessionId: string;
+  readonly runId: string;
+  start(): HelarcHostRunComposition;
+}
+
 export interface HelarcHostActiveRun extends HostActiveRun<HelarcAgentOutput> {
   getPatchReviewProjection(): HelarcPendingPatchReviewProjection | null;
   getProductProjection(): HelarcProductRunProjection;
@@ -105,9 +111,9 @@ export interface HelarcHostActiveRun extends HostActiveRun<HelarcAgentOutput> {
   ): HelarcPatchReviewSubmissionReceipt;
 }
 
-export async function startHelarcHostRun(
-  input: StartHelarcHostRunInput,
-): Promise<HelarcHostRunComposition> {
+export async function prepareHelarcHostRun(
+  input: PrepareHelarcHostRunInput,
+): Promise<PreparedHelarcHostRun> {
   const workspace = resolveHelarcRunWorkspace(input.task);
   const workspaceRoots = resolvePermissionWorkspaceRoots(input.task);
   const platform = workspaceRoots.some((root) => /^[A-Za-z]:[\\/]/.test(root.path))
@@ -181,7 +187,20 @@ export async function startHelarcHostRun(
     now: input.now,
   });
   const runtime = createHostRuntime({ runner, now: input.now });
-  const platformActiveRun = runtime.start({
+  const configurationFingerprint = await createCanonicalSha256Digest(
+    "agent-anything.helarc.local-environment.v1",
+    {
+      platform,
+      enforcement,
+      registrationFingerprints: product.actions.registrations.registrations.map(
+        (registration) => registration.registrationFingerprint,
+      ),
+      workspaceRootFingerprints: canonicalRoots.map(
+        (root) => root.resolutionFingerprint,
+      ),
+    },
+  );
+  const hostRunStartInput = {
     sessionId: input.sessionId,
     agent: product.agent,
     userApprovalReviewBridge: permissions.userApprovalBridge,
@@ -209,19 +228,7 @@ export async function startHelarcHostRun(
         environment: {
           environmentId: permissions.permissions.permissionProfile.environmentId,
           platform,
-          configurationFingerprint: await createCanonicalSha256Digest(
-            "agent-anything.helarc.local-environment.v1",
-            {
-              platform,
-              enforcement,
-              registrationFingerprints: product.actions.registrations.registrations.map(
-                (registration) => registration.registrationFingerprint,
-              ),
-              workspaceRootFingerprints: canonicalRoots.map(
-                (root) => root.resolutionFingerprint,
-              ),
-            },
-          ),
+          configurationFingerprint,
         },
       },
       permissions: permissions.permissions,
@@ -291,33 +298,46 @@ export async function startHelarcHostRun(
       },
       metadata: runMetadata,
     },
-  });
-  const activeRun = createHelarcHostActiveRun(
-    platformActiveRun,
-    input.patchReviewBridge,
-    product.getProductProjection,
-    product.subscribeProductProjection,
-  );
+  } as const;
+  let started = false;
 
   return Object.freeze({
-    activeRun,
-    result: activeRun.result.then((outcome): HelarcHostRunOutcome => {
-      if (outcome.kind === "start_failure") {
-        return Object.freeze({
-          kind: "start_failure",
-          failure: outcome,
-          activity: product.getProductProjection().activity,
-        });
+    sessionId: input.sessionId,
+    runId: input.runId,
+    start(): HelarcHostRunComposition {
+      if (started) {
+        throw new Error("Prepared Helarc Host Run can be started only once.");
       }
-      const productResult = product.projectResult(outcome.runResult, enforcement);
+      started = true;
+      const platformActiveRun = runtime.start(hostRunStartInput);
+      const activeRun = createHelarcHostActiveRun(
+        platformActiveRun,
+        input.patchReviewBridge,
+        product.getProductProjection,
+        product.subscribeProductProjection,
+      );
+
       return Object.freeze({
-        kind: "run_result",
-        status: productResult.status,
-        runResult: outcome.runResult,
-        output: productResult.output,
-        activity: product.getProductProjection().activity,
+        activeRun,
+        result: activeRun.result.then((outcome): HelarcHostRunOutcome => {
+          if (outcome.kind === "start_failure") {
+            return Object.freeze({
+              kind: "start_failure",
+              failure: outcome,
+              activity: product.getProductProjection().activity,
+            });
+          }
+          const productResult = product.projectResult(outcome.runResult, enforcement);
+          return Object.freeze({
+            kind: "run_result",
+            runResult: outcome.runResult,
+            terminal: outcome.terminal,
+            product: productResult,
+            activity: product.getProductProjection().activity,
+          });
+        }),
       });
-    }),
+    },
   });
 }
 

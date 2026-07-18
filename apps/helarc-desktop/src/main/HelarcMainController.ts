@@ -1,18 +1,15 @@
 import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,
-  createHostRunProjection,
   createUserApprovalReviewBridge,
   type UserApprovalReviewBridge,
 } from "@agent-anything/agent-core/host";
 import {
   createRunCancellationController,
   type AgentTask,
-  type RunCancellationController,
   type RunCancellationSummary,
 } from "@agent-anything/agent-core";
 import {
-  createHelarcRunInput,
   createHelarcRunTerminalSummary,
   createHelarcProviderProfile,
   createHelarcConversation,
@@ -20,10 +17,8 @@ import {
   createHelarcArtifact,
   createHelarcPersistedRun,
   createHelarcSessionHistoryRecord,
-  createHelarcTask,
   createHelarcThread,
   createBuiltInHelarcTaskTemplates,
-  createHelarcProductRunProjection,
   createHelarcRunProjection,
   deriveHelarcPersistedRunStatus,
   mapHelarcActivityToRunEvent,
@@ -38,6 +33,9 @@ import {
   type HelarcSessionHistoryPatchSummary,
   type HelarcSessionHistoryRecord,
   type HelarcProductOutput,
+  type HelarcRunProgressCommit,
+  type HelarcRunStartCommit,
+  type HelarcRunTerminalCommit,
   type HelarcTaskInputError,
   type HelarcTaskInput,
   type HelarcTaskTemplate,
@@ -58,10 +56,16 @@ import { basename, isAbsolute, normalize } from "node:path";
 import type { ProviderCredentialStoreError } from "./provider/ProviderCredentialStore.js";
 import {
   createHelarcPatchReviewBridge,
-  startHelarcHostRun,
+  prepareHelarcHostRun,
+  prepareHelarcRunStart,
   type HelarcHostActiveRun,
+  type HelarcHostRunOutcome,
 } from "./run/index.js";
-import type { LegacyHelarcThreadStore, HelarcThreadSummary } from "./thread/index.js";
+import {
+  InMemoryHelarcThreadStore,
+  type HelarcThreadStore,
+  type HelarcThreadSummary,
+} from "./thread/index.js";
 
 export interface HelarcWorkspaceSnapshot {
   id: string;
@@ -222,6 +226,10 @@ export type ResolveHelarcPatchReviewResult =
   | { ok: true; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
+export type OpenHelarcThreadResult =
+  | { ok: true; snapshot: HelarcMainSnapshot }
+  | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
+
 export interface HelarcMainControllerInput {
   provider?: Provider | null;
   providerConfigError?: (HelarcMainError & { missingKeys?: string[] }) | null;
@@ -231,13 +239,32 @@ export interface HelarcMainControllerInput {
   sessionHistory?: HelarcSessionHistoryRecord[];
   threadSummaries?: HelarcThreadSummary[];
   taskTemplates?: HelarcTaskTemplate[];
-  threadStore?: LegacyHelarcThreadStore | null;
+  threadStore?: HelarcThreadStore;
   onSessionHistoryRecord?: (
     record: HelarcSessionHistoryRecord,
   ) => Promise<HelarcSessionHistoryRecord[]> | HelarcSessionHistoryRecord[];
 }
 
 export type HelarcRuntimeToolMode = "read-only" | "shell-enabled";
+
+type DesktopActiveRunSlot =
+  | { readonly kind: "empty" }
+  | {
+      readonly kind: "reserved";
+      readonly token: symbol;
+      readonly threadId: string;
+      readonly runId: string;
+    }
+  | {
+      readonly kind: "active";
+      readonly token: symbol;
+      readonly threadId: string;
+      readonly task: AgentTask<HelarcTaskInput>;
+      readonly handle: HelarcHostActiveRun;
+      progressSequence: number;
+      progressTail: Promise<void>;
+      persistenceFailure: Error | null;
+    };
 
 export class HelarcMainController {
   private selectedWorkspace: HelarcWorkspaceSnapshot | null = null;
@@ -250,17 +277,15 @@ export class HelarcMainController {
   private readonly taskTemplates: HelarcTaskTemplate[];
   private currentSessionStartedAt: string | null = null;
   private currentThreadRecord: HelarcThreadRecord | null = null;
-  private currentThreadWrite: Promise<HelarcThreadRecord | null> | null = null;
   private lastPatchReview: CompletedPatchReview | null = null;
   private readonly onSessionHistoryRecord: HelarcMainControllerInput["onSessionHistoryRecord"];
-  private readonly threadStore: LegacyHelarcThreadStore | null;
+  private readonly threadStore: HelarcThreadStore;
   private provider: HelarcProviderSnapshot;
   private providerInstance: Provider | null;
   private readonly runtimeToolMode: HelarcRuntimeToolMode;
   private inactiveStatus: "idle" | "workspace_selected" = "idle";
   private nextTaskNumber = 1;
-  private runCancellation: RunCancellationController | null = null;
-  private activeHostRun: HelarcHostActiveRun | null = null;
+  private activeRunSlot: DesktopActiveRunSlot = { kind: "empty" };
   private runProjectionUnsubscribers: Array<() => void> = [];
   private readonly sessionAuthorityStore = createInMemoryHostSessionAuthorityStore({
     maxRecords: 64,
@@ -275,9 +300,10 @@ export class HelarcMainController {
     this.workspaceProfiles = input.workspaceProfiles ?? [];
     this.sessionHistory = input.sessionHistory ?? [];
     this.threadSummaries = (input.threadSummaries ?? []).map(createThreadSummarySnapshot);
+    this.nextTaskNumber = resolveNextTaskNumber(input.threadSummaries ?? []);
     this.taskTemplates = input.taskTemplates ?? createBuiltInHelarcTaskTemplates();
     this.onSessionHistoryRecord = input.onSessionHistoryRecord;
-    this.threadStore = input.threadStore ?? null;
+    this.threadStore = input.threadStore ?? new InMemoryHelarcThreadStore();
     this.runtimeToolMode = input.runtimeToolMode ?? "read-only";
     this.provider = input.providerConfigError
       ? {
@@ -372,6 +398,9 @@ export class HelarcMainController {
   }
 
   private selectWorkspace(workspace: HelarcWorkspaceSnapshot): HelarcMainSnapshot {
+    if (this.activeRunSlot.kind !== "empty") {
+      return this.fail("session_already_running", "A Helarc session is already running.");
+    }
     this.selectedWorkspace = workspace;
     this.inactiveStatus = "workspace_selected";
     this.acceptedTask = null;
@@ -379,15 +408,12 @@ export class HelarcMainController {
     this.lastError = null;
     this.currentSessionStartedAt = null;
     this.currentThreadRecord = null;
-    this.currentThreadWrite = null;
     this.lastPatchReview = null;
-    this.runCancellation = null;
-    this.activeHostRun = null;
     this.detachRunProjectionSubscriptions();
     return this.publishSnapshot();
   }
 
-  startSession(input: StartHelarcSessionInput): StartHelarcSessionResult {
+  async startSession(input: StartHelarcSessionInput): Promise<StartHelarcSessionResult> {
     if (!this.provider.configured) {
       const error = this.setError("provider_config_missing", this.provider.error.message);
       return { ok: false, error, snapshot: this.getSnapshot() };
@@ -397,122 +423,167 @@ export class HelarcMainController {
       const error = this.setError("provider_not_available", "Provider is not available.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
+    const providerInstance = this.providerInstance;
 
     if (!this.selectedWorkspace) {
       const error = this.setError("workspace_not_selected", "Choose a workspace before starting a task.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
-    if (isActiveSessionStatus(this.getCurrentStatus())) {
+    if (this.activeRunSlot.kind !== "empty") {
       const error = this.setError("session_already_running", "A Helarc session is already running.");
-      return { ok: false, error, snapshot: this.getSnapshot() };
-    }
-
-    const taskId = `helarc-task-${this.nextTaskNumber}`;
-    const taskResult = createHelarcTask({
-      taskId,
-      prompt: input.taskText,
-      createdAt: new Date().toISOString(),
-      workspace: {
-        id: this.selectedWorkspace.id,
-        name: this.selectedWorkspace.name,
-        rootRef: this.selectedWorkspace.path,
-      },
-    });
-
-    if (!taskResult.ok) {
-      const error = this.setError(taskResult.error.code, taskResult.error.message);
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
     const startedAt = new Date().toISOString();
     const sequenceNumber = this.nextTaskNumber;
-    const runResult = createHelarcRunInput({
-      runId: `helarc-run-${sequenceNumber}`,
-      taskText: taskResult.task.input.prompt,
-      workspaceProfileId: this.selectedWorkspace.id,
+    const taskId = `helarc-task-${sequenceNumber}`;
+    const runId = `helarc-run-${sequenceNumber}`;
+    const threadId = `helarc-thread-${sequenceNumber}`;
+    const workspaceProfile = this.workspaceProfiles.find(
+      (profile) => profile.id === this.selectedWorkspace?.id,
+    ) ?? {
+      id: this.selectedWorkspace.id,
+      displayName: this.selectedWorkspace.name,
+      path: this.selectedWorkspace.path,
+      lastOpenedAt: startedAt,
+      trustState: "trusted" as const,
+    };
+    const preparedStart = prepareHelarcRunStart({
+      runId,
+      taskId,
+      taskText: input.taskText,
+      workspaceProfileId: workspaceProfile.id,
       providerProfileId: this.provider.activeProfile.id,
+      workspaceProfiles: [workspaceProfile],
+      providerProfiles: this.provider.profiles,
+      taskTemplates: this.taskTemplates,
       permissionPreset: "ask_for_approval",
       createdAt: startedAt,
       metadata: {
         product: "helarc",
-        taskId: taskResult.task.id,
+        taskId,
       },
     });
-    if (!runResult.ok) {
-      const error = this.setError(runResult.error.code as HelarcMainErrorCode, runResult.error.message);
-      return { ok: false, error, snapshot: this.getSnapshot() };
-    }
-
-    const threadRecordResult = this.createInitialThreadRecord({
-      sequenceNumber,
-      taskId: taskResult.task.id,
-      taskText: taskResult.task.input.prompt,
-      runId: runResult.input.runId,
-      startedAt,
-    });
-    if (!threadRecordResult.ok) {
+    if (!preparedStart.ok) {
       const error = this.setError(
-        threadRecordResult.error.code as HelarcMainErrorCode,
-        threadRecordResult.error.message,
+        preparedStart.error.code as HelarcMainErrorCode,
+        preparedStart.error.message,
       );
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
-    this.nextTaskNumber += 1;
-    this.acceptedTask = {
-      id: taskResult.task.id,
-      prompt: taskResult.task.input.prompt,
-    };
+    const startCommitResult = this.createInitialRunStartCommit({
+      sequenceNumber,
+      taskId,
+      taskText: preparedStart.prepared.task.input.prompt,
+      runId: `helarc-run-${sequenceNumber}`,
+      startedAt,
+    });
+    if (!startCommitResult.ok) {
+      const error = this.setError(
+        startCommitResult.error.code as HelarcMainErrorCode,
+        startCommitResult.error.message,
+      );
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+
+    const token = Symbol(runId);
+    this.activeRunSlot = { kind: "reserved", token, threadId, runId };
+    this.acceptedTask = null;
+    this.runProjection = null;
     this.lastError = null;
     this.currentSessionStartedAt = startedAt;
-    this.currentThreadRecord = threadRecordResult.record;
-    this.threadSummaries = upsertThreadSummarySnapshot(
-      this.threadSummaries,
-      createThreadSummarySnapshotFromRecord(threadRecordResult.record),
-    );
-    this.currentThreadWrite = this.persistInitialThreadRecord(threadRecordResult.record);
     this.lastPatchReview = null;
-    this.runCancellation = createRunCancellationController({
-      runId: runResult.input.runId,
-    });
-    this.runProjection = createHelarcRunProjection({
-      platform: createHostRunProjection({
-        sessionId: threadRecordResult.record.thread.id,
-        taskId: taskResult.task.id,
-        runId: runResult.input.runId,
-        startedAt,
-        enforcement: "disabled",
-      }),
-      product: createHelarcProductRunProjection(runResult.input.runId),
-    });
+    this.publishSnapshot();
 
-    void this.runLiveSession(taskResult.task, runResult.input.runId);
+    const cancellation = createRunCancellationController({ runId });
+    const userApprovalBridge = this.createApprovalReviewBridge(runId);
+    const patchReviewBridge = this.createPatchReviewBridge(runId);
+    let startCommitted = false;
+    try {
+      const preparedHostRun = await prepareHelarcHostRun({
+        task: preparedStart.prepared.task,
+        runId,
+        sessionId: threadId,
+        cancellation,
+        provider: providerInstance,
+        toolMode: this.runtimeToolMode,
+        permissionPreset: preparedStart.prepared.run.permissionPreset,
+        userApprovalBridge,
+        sessionAuthorityPort: this.sessionAuthorityStore,
+        persistentPolicyAmendments: this.policyAmendmentStore,
+        patchReviewBridge,
+      });
+      let committed: Awaited<ReturnType<HelarcThreadStore["commitRunStart"]>>;
+      try {
+        committed = await this.threadStore.commitRunStart(startCommitResult.commit);
+      } catch (cause) {
+        throw new HelarcDesktopPersistenceError(
+          "thread_store_write_failed",
+          cause instanceof Error ? cause.message : "Run start persistence failed.",
+        );
+      }
+      if (committed.status === "rejected") {
+        throw new HelarcDesktopPersistenceError(committed.code, committed.message);
+      }
+      startCommitted = true;
+      this.nextTaskNumber += 1;
+      this.currentThreadRecord = committed.aggregate.record;
+      this.threadSummaries = upsertThreadSummarySnapshot(
+        this.threadSummaries,
+        createThreadSummarySnapshotFromRecord(committed.aggregate.record),
+      );
+      this.acceptedTask = {
+        id: preparedStart.prepared.task.id,
+        prompt: preparedStart.prepared.task.input.prompt,
+      };
 
-    return {
-      ok: true,
-      taskId: taskResult.task.id,
-      snapshot: this.publishSnapshot(),
-    };
+      const composition = preparedHostRun.start();
+      this.attachActiveHostRun(
+        token,
+        threadId,
+        preparedStart.prepared.task,
+        composition.activeRun,
+      );
+      void this.observeActiveRun(token, composition.result);
+      return {
+        ok: true,
+        taskId: preparedStart.prepared.task.id,
+        snapshot: this.getSnapshot(),
+      };
+    } catch (cause) {
+      if (startCommitted && this.nextTaskNumber === sequenceNumber) {
+        this.nextTaskNumber += 1;
+      }
+      this.releaseActiveRunSlot(token);
+      const persistenceFailure = cause instanceof HelarcDesktopPersistenceError;
+      const error = this.setError(
+        persistenceFailure ? "session_persistence_failed" : "session_execution_failed",
+        cause instanceof Error ? cause.message : "Helarc session failed to start.",
+      );
+      this.publishSnapshot();
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
   }
 
   submitApprovalDecision(
     input: ApprovalDecisionSubmission,
   ): ApprovalSubmissionReceipt {
-    const activeRun = this.activeHostRun;
-    if (!activeRun) {
+    const slot = this.activeRunSlot;
+    if (slot.kind !== "active") {
       return {
         status: "rejected",
         submissionId: typeof input?.submissionId === "string" ? input.submissionId : "",
         code: "approval_not_pending",
       };
     }
-    const receipt = activeRun.submitApprovalDecision(input);
-    return receipt;
+    return slot.handle.submitApprovalDecision(input);
   }
 
   cancelSession(): CancelHelarcSessionResult {
-    if (!isActiveSessionStatus(this.getCurrentStatus())) {
+    const slot = this.activeRunSlot;
+    if (slot.kind !== "active") {
       const error = this.setError("session_not_running", "No Helarc session is running.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
@@ -522,13 +593,8 @@ export class HelarcMainController {
       reasonCode: "user_requested",
       reason: "Cancelled from Helarc desktop.",
     } as const;
-    if (this.activeHostRun !== null) {
-      this.activeHostRun.cancel(cancellationInput);
-    } else {
-      this.runCancellation?.requestCancellation(cancellationInput);
-    }
-    const request = this.runCancellation?.context.request ?? null;
-    if (request === null) {
+    const receipt = slot.handle.cancel(cancellationInput);
+    if (receipt.status === "run_settled" || receipt.status === "start_failed") {
       const error = this.setError("session_not_running", "No Helarc session is running.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
@@ -537,13 +603,13 @@ export class HelarcMainController {
   }
 
   resolvePatchReview(input: ResolveHelarcPatchReviewInput): ResolveHelarcPatchReviewResult {
-    const activeRun = this.activeHostRun;
-    if (activeRun === null) {
+    const slot = this.activeRunSlot;
+    if (slot.kind !== "active") {
       const error = this.setError("patch_review_not_pending", "No patch review is pending.");
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
     const pending = this.getPendingPatchReview();
-    const receipt = activeRun.submitPatchReviewDecision(input);
+    const receipt = slot.handle.submitPatchReviewDecision(input);
     if (receipt.status === "rejected") {
       const code = receipt.code === "patch_review_not_pending" ||
           receipt.code === "patch_review_already_resolved"
@@ -569,6 +635,32 @@ export class HelarcMainController {
     return { ok: true, snapshot: this.getSnapshot() };
   }
 
+  async openThread(threadId: string): Promise<OpenHelarcThreadResult> {
+    const normalizedThreadId = threadId.trim();
+    const slot = this.activeRunSlot;
+    if (slot.kind !== "empty" && slot.threadId !== normalizedThreadId) {
+      const error = this.setError(
+        "session_already_running",
+        "A different Helarc Thread is active.",
+      );
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+    const record = await this.threadStore.loadThread(normalizedThreadId);
+    if (record === null) {
+      const error = this.setError("thread_record_invalid", "Thread was not found.");
+      return { ok: false, error, snapshot: this.getSnapshot() };
+    }
+    this.currentThreadRecord = record;
+    this.selectedWorkspace = {
+      id: record.thread.workspace.profileId ?? "workspace",
+      name: record.thread.workspace.displayName,
+      path: record.thread.workspace.path,
+    };
+    this.inactiveStatus = "workspace_selected";
+    this.lastError = null;
+    return { ok: true, snapshot: this.publishSnapshot() };
+  }
+
   private fail(code: HelarcMainErrorCode, message: string): HelarcMainSnapshot {
     this.setError(code, message);
     return this.getSnapshot();
@@ -580,110 +672,104 @@ export class HelarcMainController {
     return error;
   }
 
-  private async runLiveSession(
-    task: AgentTask<HelarcTaskInput>,
-    runId: string,
+  private async observeActiveRun(
+    token: symbol,
+    result: Promise<HelarcHostRunOutcome>,
   ): Promise<void> {
-    let terminal: HelarcRunTerminalSummary | null;
-    let startFailed = false;
-    const userApprovalBridge = this.createApprovalReviewBridge(runId);
-    const patchReviewBridge = this.createPatchReviewBridge(runId);
+    let outcome: HelarcHostRunOutcome;
     try {
-      const composition = await startHelarcHostRun({
-        task,
-        runId,
-        sessionId: this.currentThreadRecord?.thread.id ?? runId,
-        cancellation: this.runCancellation ?? createRunCancellationController({ runId }),
-        provider: this.providerInstance as Provider,
-        toolMode: this.runtimeToolMode,
-        permissionPreset: "ask_for_approval",
-        userApprovalBridge,
-        sessionAuthorityPort: this.sessionAuthorityStore,
-        persistentPolicyAmendments: this.policyAmendmentStore,
-        patchReviewBridge,
-      });
-      this.attachActiveHostRun(composition.activeRun);
-      const sessionResult = await composition.result;
-      if (sessionResult.kind === "start_failure") {
-        startFailed = true;
-        throw new Error(sessionResult.failure.code);
-      }
+      outcome = await result;
+    } catch (cause) {
+      const failedSlot = this.activeRunSlot;
+      if (failedSlot.kind !== "active" || failedSlot.token !== token) return;
+      await failedSlot.progressTail;
+      this.lastError = {
+        code: "session_execution_failed",
+        message: cause instanceof Error ? cause.message : "Helarc Host result projection failed.",
+      };
+      this.releaseActiveRunSlot(token);
+      this.publishSnapshot();
+      return;
+    }
+    const slot = this.activeRunSlot;
+    if (slot.kind !== "active" || slot.token !== token) return;
+    await slot.progressTail;
 
-      const sessionOutput = sessionResult.output;
-      if (sessionResult.status === "failed") {
-        const firstError = sessionResult.output.safeErrors[0] ?? {
-          code: "provider_not_available",
-          message: "Helarc session failed.",
-        };
+    if (outcome.kind === "start_failure") {
+      this.lastError = {
+        code: "session_execution_failed",
+        message: outcome.failure.code,
+      };
+      this.runProjection = null;
+      this.releaseActiveRunSlot(token);
+      this.publishSnapshot();
+      return;
+    }
+
+    const terminal = this.createActiveRunTerminalSummary({
+      status: mapSessionStatusToRunTerminalStatus(this.getCurrentStatus(), outcome.product.output),
+      runtimeStatus: outcome.runResult.status,
+      runtimeCode: outcome.runResult.code,
+      cancellation: outcome.runResult.cancellation,
+      safeOutput: outcome.product.output,
+      errorSummary: [...outcome.product.output.safeErrors],
+      completedAt: outcome.terminal.completedAt,
+    });
+    if (outcome.product.status === "failed") {
+      const firstError = outcome.product.output.safeErrors[0];
+      if (firstError) {
         this.lastError = {
           code: firstError.code as HelarcMainErrorCode,
           message: firstError.message,
         };
       }
-      terminal = this.createActiveRunTerminalSummary({
-        status: mapSessionStatusToRunTerminalStatus(this.getCurrentStatus(), sessionOutput),
-        runtimeStatus: sessionResult.runResult.status,
-        runtimeCode: sessionResult.runResult.code,
-        cancellation: sessionResult.runResult.cancellation,
-        safeOutput: sessionOutput,
-        errorSummary: [...sessionOutput.safeErrors],
-      });
-    } catch (error) {
-      startFailed = true;
-      const fallbackOutput: HelarcProductOutput = {
-        taskId: task.id,
-        workspaceId: task.workspaceScope?.roots[task.workspaceScope.defaultRootName ?? ""]?.id ?? null,
-        agentSummary: null,
-        runtimeStatus: "failed",
-        patchStatus: null,
-        appliedPath: null,
-        enforcement: {
-          selected: "disabled",
-          status: "not_exercised",
-          code: null,
-        },
-        safeErrors: [{
-          code: "session_execution_failed",
-          message: error instanceof Error ? error.message : "Helarc session failed.",
-        }],
-      };
-      this.lastError = {
-        code: "session_execution_failed",
-        message: error instanceof Error ? error.message : "Helarc session failed.",
-      };
-      terminal = this.createActiveRunTerminalSummary({
-        status: "failed",
-        runtimeStatus: "failed",
-        runtimeCode: "session_execution_failed",
-        cancellation: this.runProjection?.platform.cancellation ?? null,
-        safeOutput: fallbackOutput,
-        errorSummary: [...fallbackOutput.safeErrors],
-      });
     }
 
-    this.activeHostRun = null;
-    this.detachRunProjectionSubscriptions();
     try {
-      await this.persistSessionHistory(task, terminal);
-      await this.persistWorkContextRun(terminal);
-    } catch (error) {
-      this.lastError ??= {
+      if (terminal === null) {
+        throw new HelarcDesktopPersistenceError(
+          "terminal_projection_invalid",
+          "Helarc terminal summary is invalid.",
+        );
+      }
+      await this.persistWorkContextTerminal(outcome, terminal);
+      await this.persistSessionHistory(slot.task, terminal);
+    } catch (cause) {
+      this.lastError = {
         code: "session_persistence_failed",
-        message: error instanceof Error
-          ? error.message
-          : "Helarc session persistence failed.",
+        message: cause instanceof Error ? cause.message : "Helarc session persistence failed.",
       };
     }
-    this.runCancellation = null;
-    if (startFailed && this.runProjection?.platform.terminal === null) {
-      this.runProjection = null;
-    }
+    this.releaseActiveRunSlot(token);
     this.publishSnapshot();
   }
 
-  private attachActiveHostRun(activeRun: HelarcHostActiveRun): void {
+  private attachActiveHostRun(
+    token: symbol,
+    threadId: string,
+    task: AgentTask<HelarcTaskInput>,
+    activeRun: HelarcHostActiveRun,
+  ): void {
+    const reservation = this.activeRunSlot;
+    if (reservation.kind !== "reserved" || reservation.token !== token ||
+      reservation.runId !== activeRun.runId || reservation.threadId !== threadId) {
+      throw new Error("Helarc active Run reservation does not match the prepared launch.");
+    }
     this.detachRunProjectionSubscriptions();
-    this.activeHostRun = activeRun;
+    this.activeRunSlot = {
+      kind: "active",
+      token,
+      threadId,
+      task,
+      handle: activeRun,
+      progressSequence: 0,
+      progressTail: Promise.resolve(),
+      persistenceFailure: null,
+    };
+    this.runProjection = createHelarcRunProjection({
+      platform: activeRun.getProjection(),
+      product: activeRun.getProductProjection(),
+    });
     this.runProjectionUnsubscribers = [
       activeRun.subscribe((projection) => {
         this.applyRunProjectionUpdate({ kind: "platform", projection });
@@ -692,10 +778,6 @@ export class HelarcMainController {
         this.applyRunProjectionUpdate({ kind: "product", projection });
       }),
     ];
-    this.runProjection = createHelarcRunProjection({
-      platform: activeRun.getProjection(),
-      product: activeRun.getProductProjection(),
-    });
     this.publishSnapshot();
   }
 
@@ -705,7 +787,61 @@ export class HelarcMainController {
     const reduction = reduceHelarcRunProjection(current, update);
     if (reduction.status !== "applied") return;
     this.runProjection = reduction.projection;
+    const slot = this.activeRunSlot;
+    if (slot.kind === "active" && reduction.projection.platform.terminal === null &&
+      reduction.projection.product.result === null) {
+      this.enqueueRunProgress(slot, reduction.projection);
+    }
     this.publishSnapshot();
+  }
+
+  private enqueueRunProgress(
+    slot: Extract<DesktopActiveRunSlot, { kind: "active" }>,
+    projection: HelarcRunProjection,
+  ): void {
+    slot.progressSequence += 1;
+    const progressSequence = slot.progressSequence;
+    const currentRun = this.currentThreadRecord?.runs.find(
+      (run) => run.id === slot.handle.runId,
+    );
+    const recordedAt = maxIsoDateTime(
+      currentRun?.updatedAt ?? new Date().toISOString(),
+      new Date().toISOString(),
+    );
+    const commit: HelarcRunProgressCommit = {
+      kind: "run_progress",
+      commitId: `helarc-progress-${slot.handle.runId}-${progressSequence}`,
+      threadId: slot.threadId,
+      runId: slot.handle.runId,
+      committedAt: recordedAt,
+      progressSequence,
+      progress: {
+        recordedAt,
+        platform: projection.platform,
+        product: projection.product,
+      },
+    };
+    slot.progressTail = slot.progressTail.then(async () => {
+      const result = await this.threadStore.commitRunProgress(commit);
+      if (result.status === "rejected") {
+        throw new HelarcDesktopPersistenceError(result.code, result.message);
+      }
+      this.currentThreadRecord = result.aggregate.record;
+    }).catch((cause) => {
+      const failure = cause instanceof Error ? cause : new Error("Run progress persistence failed.");
+      slot.persistenceFailure ??= failure;
+      this.lastError = {
+        code: "session_persistence_failed",
+        message: failure.message,
+      };
+      this.publishSnapshot();
+    });
+  }
+
+  private releaseActiveRunSlot(token: symbol): void {
+    if (this.activeRunSlot.kind === "empty" || this.activeRunSlot.token !== token) return;
+    this.detachRunProjectionSubscriptions();
+    this.activeRunSlot = { kind: "empty" };
   }
 
   private detachRunProjectionSubscriptions(): void {
@@ -722,6 +858,7 @@ export class HelarcMainController {
 
   private getCurrentStatus(): HelarcMainSnapshotStatus {
     if (this.runProjection !== null) return this.runProjection.display.status;
+    if (this.activeRunSlot.kind === "reserved") return "starting";
     return this.lastError?.code === "session_execution_failed"
       ? "failed"
       : this.inactiveStatus;
@@ -800,13 +937,13 @@ export class HelarcMainController {
       : [recordResult.record, ...this.sessionHistory.filter((record) => record.id !== recordResult.record.id)];
   }
 
-  private createInitialThreadRecord(input: {
+  private createInitialRunStartCommit(input: {
     sequenceNumber: number;
     taskId: string;
     taskText: string;
     runId: string;
     startedAt: string;
-  }): { ok: true; record: HelarcThreadRecord } | { ok: false; error: HelarcWorkContextError } {
+  }): { ok: true; commit: HelarcRunStartCommit } | { ok: false; error: HelarcWorkContextError } {
     if (!this.selectedWorkspace || !this.provider.configured) {
       return {
         ok: false,
@@ -835,7 +972,7 @@ export class HelarcMainController {
       createdAt: input.startedAt,
       updatedAt: input.startedAt,
       activeConversationId: conversationId,
-      latestRunId: input.runId,
+      latestRunId: null,
       metadata: {
         product: "helarc",
       },
@@ -849,7 +986,7 @@ export class HelarcMainController {
       threadId,
       createdAt: input.startedAt,
       updatedAt: input.startedAt,
-      messageIds: [messageId],
+      messageIds: [],
     });
     if (!conversationResult.ok) {
       return conversationResult;
@@ -894,101 +1031,75 @@ export class HelarcMainController {
 
     return {
       ok: true,
-      record: {
-        thread: threadResult.thread,
-        conversations: [conversationResult.conversation],
-        messages: [messageResult.message],
-        runs: [runResult.run],
-        artifacts: [],
+      commit: {
+        kind: "run_start",
+        commitId: `helarc-start-${input.runId}`,
+        threadId,
+        runId: input.runId,
+        committedAt: input.startedAt,
+        target: {
+          kind: "create_thread",
+          thread: threadResult.thread,
+          conversation: conversationResult.conversation,
+        },
+        triggeringMessage: messageResult.message,
+        run: runResult.run,
       },
     };
   }
 
-  private async persistInitialThreadRecord(record: HelarcThreadRecord): Promise<HelarcThreadRecord | null> {
-    if (!this.threadStore) {
-      return record;
+  private async persistWorkContextTerminal(
+    outcome: Extract<HelarcHostRunOutcome, { kind: "run_result" }>,
+    terminal: HelarcRunTerminalSummary,
+  ): Promise<void> {
+    const record = this.currentThreadRecord;
+    if (record === null) {
+      throw new HelarcDesktopPersistenceError(
+        "thread_not_found",
+        "The active Thread record is unavailable.",
+      );
     }
-
-    const persisted = await this.threadStore.createThread(record);
-    this.currentThreadRecord = persisted ?? record;
-    this.threadSummaries = upsertThreadSummarySnapshot(
-      this.threadSummaries,
-      createThreadSummarySnapshotFromRecord(this.currentThreadRecord),
-    );
-    return persisted;
-  }
-
-  private async persistWorkContextRun(terminal: HelarcRunTerminalSummary | null): Promise<void> {
-    if (!terminal || !this.currentThreadRecord) {
-      return;
+    const run = record.runs.find((candidate) => candidate.id === outcome.terminal.runId);
+    if (run === undefined) {
+      throw new HelarcDesktopPersistenceError("run_not_found", "The active Run was not found.");
     }
-
-    const existingRun = this.currentThreadRecord.runs[0];
-    if (!existingRun) {
-      return;
-    }
-
-    const projection = this.runProjection;
-    if (
-      projection === null || projection.runId !== existingRun.id ||
-      projection.platform.terminal === null
-    ) {
-      return;
-    }
-
-    const finalRun = createFinalWorkContextRun(existingRun, projection);
-    const nextRecord: HelarcThreadRecord = {
-      ...this.currentThreadRecord,
-      thread: {
-        ...this.currentThreadRecord.thread,
-        updatedAt: terminal.completedAt,
-        latestRunId: finalRun.id,
-      },
-      runs: [finalRun],
-    };
-
-    this.currentThreadRecord = nextRecord;
-    await this.currentThreadWrite;
-    this.currentThreadWrite = this.threadStore
-      ? this.threadStore.updateRun(nextRecord.thread.id, finalRun)
-      : Promise.resolve(nextRecord);
-    const persistedRunRecord = await this.currentThreadWrite;
-    const runRecord = persistedRunRecord ?? nextRecord;
-    this.currentThreadRecord = runRecord;
-
-    const artifacts = createTerminalArtifacts(runRecord, finalRun, terminal, this.lastPatchReview);
-    let artifactRecord = runRecord;
-    for (const artifact of artifacts) {
-      artifactRecord = appendArtifactToThreadRecord(artifactRecord, artifact);
-      this.currentThreadRecord = artifactRecord;
-      this.currentThreadWrite = this.threadStore
-        ? this.threadStore.appendArtifact(artifactRecord.thread.id, artifact)
-        : Promise.resolve(artifactRecord);
-      const persistedArtifactRecord = await this.currentThreadWrite;
-      artifactRecord = persistedArtifactRecord ?? artifactRecord;
-      this.currentThreadRecord = artifactRecord;
-    }
-
+    const artifacts = createTerminalArtifacts(record, run, terminal, this.lastPatchReview);
     const assistantMessage = createAssistantTerminalMessage(
-      artifactRecord,
-      finalRun,
+      record,
+      run,
       terminal,
       artifacts.map((artifact) => artifact.id),
     );
-    if (!assistantMessage) {
-      return;
+    if (assistantMessage === null) {
+      throw new HelarcDesktopPersistenceError(
+        "terminal_message_invalid",
+        "The terminal assistant Message is invalid.",
+      );
     }
-
-    const messageRecord = appendMessageToThreadRecord(artifactRecord, assistantMessage);
-    this.currentThreadRecord = messageRecord;
-    this.currentThreadWrite = this.threadStore
-      ? this.threadStore.appendMessage(messageRecord.thread.id, assistantMessage)
-      : Promise.resolve(messageRecord);
-    const persistedMessageRecord = await this.currentThreadWrite;
-    this.currentThreadRecord = persistedMessageRecord ?? messageRecord;
+    const commit: HelarcRunTerminalCommit = {
+      kind: "run_terminal",
+      commitId: `helarc-terminal-${run.id}`,
+      threadId: record.thread.id,
+      runId: run.id,
+      committedAt: maxIsoDateTime(
+        maxIsoDateTime(run.updatedAt, terminal.completedAt),
+        new Date().toISOString(),
+      ),
+      terminal: {
+        platform: outcome.terminal,
+        product: outcome.product,
+      },
+      assistantMessage,
+      artifacts,
+    };
+    const committed = await this.threadStore.commitRunTerminal(commit);
+    if (committed.status === "rejected") {
+      throw new HelarcDesktopPersistenceError(committed.code, committed.message);
+    }
+    this.currentThreadRecord = committed.aggregate.record;
     this.threadSummaries = upsertThreadSummarySnapshot(
       this.threadSummaries,
-      createThreadSummarySnapshotFromRecord(this.currentThreadRecord),
+      createThreadSummarySnapshotFromRecord(committed.aggregate.record),
     );
   }
 
@@ -999,6 +1110,7 @@ export class HelarcMainController {
     cancellation: RunCancellationSummary | null;
     safeOutput: unknown;
     errorSummary: Array<{ code: string; message: string }>;
+    completedAt: string;
   }): HelarcRunTerminalSummary | null {
     const run = this.runProjection;
     const terminalResult = createHelarcRunTerminalSummary({
@@ -1009,7 +1121,7 @@ export class HelarcMainController {
       safeOutput: input.safeOutput,
       errorSummary: input.errorSummary,
       startedAt: run?.platform.startedAt ?? this.currentSessionStartedAt ?? new Date().toISOString(),
-      completedAt: new Date().toISOString(),
+      completedAt: input.completedAt,
       eventCount: run?.product.activity.length ?? 0,
     });
 
@@ -1018,8 +1130,12 @@ export class HelarcMainController {
 
   private publishSnapshot(): HelarcMainSnapshot {
     const snapshot = this.getSnapshot();
-    for (const subscriber of this.snapshotSubscribers) {
-      subscriber(snapshot);
+    for (const subscriber of [...this.snapshotSubscribers]) {
+      try {
+        subscriber(snapshot);
+      } catch {
+        // Snapshot delivery is non-authoritative and isolated from Run execution.
+      }
     }
     return snapshot;
   }
@@ -1031,6 +1147,13 @@ interface CompletedPatchReview {
   reason: string | null;
 }
 
+class HelarcDesktopPersistenceError extends Error {
+  constructor(readonly persistenceCode: string, message: string) {
+    super(message);
+    this.name = "HelarcDesktopPersistenceError";
+  }
+}
+
 function isTerminalSessionStatus(
   status: HelarcMainSnapshotStatus,
 ): status is Exclude<HelarcMainSnapshotStatus, "idle" | "workspace_selected" | "starting" | "running" | "cancelling" | "waiting_for_approval" | "waiting_for_patch_review" | "applying_patch"> {
@@ -1039,15 +1162,6 @@ function isTerminalSessionStatus(
     status === "failed" ||
     status === "blocked" ||
     status === "cancelled";
-}
-
-function isActiveSessionStatus(status: HelarcMainSnapshotStatus): boolean {
-  return status === "starting" ||
-    status === "running" ||
-    status === "cancelling" ||
-    status === "waiting_for_approval" ||
-    status === "waiting_for_patch_review" ||
-    status === "applying_patch";
 }
 
 function mapSessionStatusToRunTerminalStatus(
@@ -1096,24 +1210,6 @@ function createHistoryPatchSummary(
     decision: patchReview.decision ?? "unknown" as const,
     reason: patchReview.reason,
     status: output.patchStatus,
-  };
-}
-
-function createFinalWorkContextRun(
-  run: HelarcPersistedRun,
-  projection: HelarcRunProjection,
-): HelarcPersistedRun {
-  const terminal = projection.platform.terminal;
-  if (terminal === null) {
-    throw new TypeError("A final work-context Run requires a Host terminal projection.");
-  }
-  return {
-    ...run,
-    updatedAt: terminal.completedAt,
-    terminal: {
-      platform: terminal,
-      product: projection.product.result,
-    },
   };
 }
 
@@ -1319,59 +1415,6 @@ function createRuntimeSummary(safeOutput: unknown): string | null {
   return null;
 }
 
-function appendMessageToThreadRecord(
-  record: HelarcThreadRecord,
-  message: HelarcMessage,
-): HelarcThreadRecord {
-  const conversation = record.conversations.find((item) => item.id === record.thread.activeConversationId);
-  if (!conversation) {
-    return record;
-  }
-
-  const messageIds = appendUniqueString(conversation.messageIds, message.id);
-  const nextConversation = {
-    ...conversation,
-    updatedAt: maxIsoDateTime(conversation.updatedAt, message.createdAt),
-    messageIds,
-  };
-  const messages = replaceById(record.messages, message);
-  const messageById = new Map(messages.map((item) => [item.id, item]));
-
-  return {
-    ...record,
-    thread: {
-      ...record.thread,
-      updatedAt: maxIsoDateTime(record.thread.updatedAt, message.createdAt),
-    },
-    conversations: replaceById(record.conversations, nextConversation),
-    messages: messageIds.flatMap((id) => {
-      const item = messageById.get(id);
-      return item ? [item] : [];
-    }),
-  };
-}
-
-function appendArtifactToThreadRecord(
-  record: HelarcThreadRecord,
-  artifact: HelarcArtifact,
-): HelarcThreadRecord {
-  return {
-    ...record,
-    thread: {
-      ...record.thread,
-      updatedAt: maxIsoDateTime(record.thread.updatedAt, artifact.createdAt),
-    },
-    runs: artifact.runId
-      ? record.runs.map((run) =>
-          run.id === artifact.runId
-            ? { ...run, artifactIds: appendUniqueString(run.artifactIds, artifact.id) }
-            : run
-        )
-      : record.runs,
-    artifacts: replaceById(record.artifacts, artifact),
-  };
-}
-
 function createActiveThreadSnapshot(record: HelarcThreadRecord | null): HelarcActiveThreadSnapshot | null {
   if (!record) {
     return null;
@@ -1472,17 +1515,6 @@ function upsertThreadSummarySnapshot(
   ].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
-function replaceById<T extends { id: string }>(items: readonly T[], item: T): T[] {
-  return [
-    ...items.filter((candidate) => candidate.id !== item.id),
-    item,
-  ];
-}
-
-function appendUniqueString(items: readonly string[], item: string): string[] {
-  return items.includes(item) ? [...items] : [...items, item];
-}
-
 function maxIsoDateTime(left: string, right: string): string {
   return right.localeCompare(left) > 0 ? right : left;
 }
@@ -1521,6 +1553,18 @@ function createConfiguredProviderSnapshot(
     profiles: [activeProfile],
     error: null,
   };
+}
+
+function resolveNextTaskNumber(summaries: readonly HelarcThreadSummary[]): number {
+  let maximum = 0;
+  for (const summary of summaries) {
+    const match = /^helarc-thread-(\d+)$/.exec(summary.id);
+    const value = match?.[1] === undefined ? 0 : Number(match[1]);
+    if (Number.isSafeInteger(value) && value > maximum) {
+      maximum = value;
+    }
+  }
+  return maximum + 1;
 }
 
 function createInjectedProviderProfile(): HelarcProviderProfile {

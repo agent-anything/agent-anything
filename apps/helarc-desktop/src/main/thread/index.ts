@@ -13,4 +13,5 @@ export {
   FileHelarcThreadStore,
   HelarcThreadStoreCorruptionError,
 } from "./FileHelarcThreadStore.js";
+export { InMemoryHelarcThreadStore } from "./InMemoryHelarcThreadStore.js";
 export { LegacyFileHelarcThreadStore } from "./HelarcThreadStore.js";

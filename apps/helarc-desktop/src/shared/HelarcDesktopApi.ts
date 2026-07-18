@@ -280,6 +280,14 @@ export type HelarcResolvePatchReviewResult =
   | { ok: true; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
+export interface HelarcOpenThreadInput {
+  threadId: string;
+}
+
+export type HelarcOpenThreadResult =
+  | { ok: true; snapshot: HelarcMainSnapshot }
+  | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
+
 export interface HelarcSelectWorkspaceProfileInput {
   profileId: string;
 }
@@ -295,7 +303,7 @@ export interface HelarcSaveProviderConfigInput {
 }
 
 export interface HelarcDesktopApi {
-  readonly bridgeVersion: 2;
+  readonly bridgeVersion: 3;
   readonly productId: "helarc";
   chooseWorkspace(): Promise<HelarcMainSnapshot>;
   getSnapshot(): Promise<HelarcMainSnapshot>;
@@ -307,5 +315,6 @@ export interface HelarcDesktopApi {
     input: HelarcSubmitApprovalDecisionInput,
   ): Promise<HelarcApprovalSubmissionReceipt>;
   resolvePatchReview(input: HelarcResolvePatchReviewInput): Promise<HelarcResolvePatchReviewResult>;
+  openThread(input: HelarcOpenThreadInput): Promise<HelarcOpenThreadResult>;
   subscribeSnapshot(listener: (snapshot: HelarcMainSnapshot) => void): () => void;
 }

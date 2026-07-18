@@ -4,6 +4,7 @@ const channels = Object.freeze({
   cancelSession: "helarc:cancel-session",
   chooseWorkspace: "helarc:choose-workspace",
   getSnapshot: "helarc:get-snapshot",
+  openThread: "helarc:open-thread",
   resolvePatchReview: "helarc:resolve-patch-review",
   submitApprovalDecision: "helarc:submit-approval-decision",
   saveProviderConfig: "helarc:save-provider-config",
@@ -13,10 +14,13 @@ const channels = Object.freeze({
 });
 
 contextBridge.exposeInMainWorld("helarc", Object.freeze({
-  bridgeVersion: 2,
+  bridgeVersion: 3,
   productId: "helarc",
   chooseWorkspace: () => ipcRenderer.invoke(channels.chooseWorkspace),
   getSnapshot: () => ipcRenderer.invoke(channels.getSnapshot),
+  openThread: (input) => ipcRenderer.invoke(channels.openThread, {
+    threadId: typeof input?.threadId === "string" ? input.threadId : "",
+  }),
   saveProviderConfig: (input) => ipcRenderer.invoke(channels.saveProviderConfig, {
     providerKind: input?.providerKind === "ollama" ? "ollama" : "openai-compatible",
     displayName: typeof input?.displayName === "string" ? input.displayName : "",

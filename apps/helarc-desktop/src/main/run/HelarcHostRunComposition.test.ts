@@ -20,13 +20,13 @@ import {
   createHelarcTask,
 } from "@agent-anything/helarc";
 import {
-  startHelarcHostRun,
-  type StartHelarcHostRunInput,
+  prepareHelarcHostRun,
+  type PrepareHelarcHostRunInput,
 } from "./HelarcHostRunComposition.js";
 import { createHelarcPatchReviewBridge } from "./HelarcPatchReviewBridge.js";
 
 type RunHelarcTestInput = Omit<
-  StartHelarcHostRunInput,
+  PrepareHelarcHostRunInput,
   | "sessionId"
   | "runId"
   | "cancellation"
@@ -36,13 +36,22 @@ type RunHelarcTestInput = Omit<
 > & {
   readonly sessionId?: string;
   readonly runId?: string;
-  readonly cancellation?: StartHelarcHostRunInput["cancellation"];
+  readonly cancellation?: PrepareHelarcHostRunInput["cancellation"];
   readonly enableShell?: boolean;
-  readonly permissionPreset?: StartHelarcHostRunInput["permissionPreset"];
-  readonly patchReviewBridge?: StartHelarcHostRunInput["patchReviewBridge"];
+  readonly permissionPreset?: PrepareHelarcHostRunInput["permissionPreset"];
+  readonly patchReviewBridge?: PrepareHelarcHostRunInput["patchReviewBridge"];
 };
 
 async function executeTestHostRun(input: RunHelarcTestInput) {
+  const prepared = await prepareTestHostRun(input);
+  const outcome = await prepared.start().result;
+  if (outcome.kind === "start_failure") {
+    throw new Error(outcome.failure.code);
+  }
+  return outcome;
+}
+
+async function prepareTestHostRun(input: RunHelarcTestInput) {
   const runId = input.runId ?? input.sessionId ?? input.task.id;
   const permissionPreset = input.permissionPreset ?? "ask_for_approval";
   const userApprovalBridge = permissionPreset === "ask_for_approval"
@@ -57,7 +66,7 @@ async function executeTestHostRun(input: RunHelarcTestInput) {
         },
       })
     : input.userApprovalBridge;
-  const composition = await startHelarcHostRun({
+  return prepareHelarcHostRun({
     ...input,
     runId,
     sessionId: input.sessionId ?? runId,
@@ -67,11 +76,6 @@ async function executeTestHostRun(input: RunHelarcTestInput) {
     userApprovalBridge,
     patchReviewBridge: input.patchReviewBridge ?? createHelarcPatchReviewBridge({ runId }),
   });
-  const outcome = await composition.result;
-  if (outcome.kind === "start_failure") {
-    throw new Error(outcome.failure.code);
-  }
-  return outcome;
 }
 
 function executeReadOnlyTestHostRun(
@@ -81,6 +85,24 @@ function executeReadOnlyTestHostRun(
 }
 
 describe("Helarc Host Run composition", () => {
+  it("prepares without invoking Runner and permits exactly one start", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-prepared-run-"));
+    const provider = new ScriptedProvider([{ action: "complete", summary: "Prepared." }]);
+    const prepared = await prepareTestHostRun({
+      task: createTask(workspaceRoot),
+      provider,
+    });
+
+    expect(provider.requests).toHaveLength(0);
+    const composition = prepared.start();
+    expect(() => prepared.start()).toThrow("only once");
+    await expect(composition.result).resolves.toMatchObject({
+      kind: "run_result",
+      product: { status: "completed" },
+    });
+    expect(provider.requests).toHaveLength(1);
+  });
+
   it("exposes only read-only Actions while retaining trusted mutation registrations", async () => {
     const task = createTask("D:/workspace");
     const composition = await createHelarcActionComposition(task, { enableShell: false });
@@ -134,9 +156,9 @@ describe("Helarc Host Run composition", () => {
       now: () => "2026-06-28T00:00:00.000Z",
     });
 
-    expect(result.status).toBe("completed");
+    expect(result.product.status).toBe("completed");
     expect(result.runResult.status).toBe("succeeded");
-    expect(result.output).toMatchObject({
+    expect(result.product.output).toMatchObject({
       agentSummary: "Workspace contains src/index.ts. No changes needed.",
       runtimeStatus: "succeeded",
       patchStatus: null,
@@ -211,7 +233,7 @@ describe("Helarc Host Run composition", () => {
       now: () => "2026-07-14T00:00:00.000Z",
     });
 
-    expect(result.status).toBe("completed");
+    expect(result.product.status).toBe("completed");
     expect(provider.requests).toHaveLength(2);
     const retryActivity = result.activity.filter((item) =>
       item.kind.startsWith("retry.") && item.metadata.owner === "provider_request"
@@ -272,8 +294,8 @@ describe("Helarc Host Run composition", () => {
       provider,
     });
 
-    expect(result.status).toBe("completed");
-    expect(result.output.agentSummary).toBe("Read-only tools completed.");
+    expect(result.product.status).toBe("completed");
+    expect(result.product.output.agentSummary).toBe("Read-only tools completed.");
     expect(result.runResult.evidenceRefs).toHaveLength(3);
     expect(result.activity.filter((item) => item.kind === "tool.finished")).toHaveLength(3);
     expect(provider.lastControllerInputContexts).toEqual([0, 1, 2, 3]);
@@ -300,8 +322,8 @@ describe("Helarc Host Run composition", () => {
       provider,
     });
 
-    expect(result.status).toBe("completed");
-    expect(result.output.safeErrors).toEqual([]);
+    expect(result.product.status).toBe("completed");
+    expect(result.product.output.safeErrors).toEqual([]);
     expect(provider.requests).toHaveLength(2);
     expect(provider.requests[1].metadata).toMatchObject({
       structuredOutputAttemptNumber: 2,
@@ -354,7 +376,7 @@ describe("Helarc Host Run composition", () => {
       provider,
     });
 
-    expect(result.status).toBe("failed");
+    expect(result.product.status).toBe("failed");
     expect(result.runResult).toMatchObject({
       status: "failed",
       code: "model_structured_output_retry_exhausted",
@@ -393,7 +415,7 @@ describe("Helarc Host Run composition", () => {
       automaticApprovalReviewer: automaticReviewer("decline"),
     });
 
-    expect(result.status).toBe("blocked");
+    expect(result.product.status).toBe("blocked");
     expect(result.runResult.items.some((item) => item.kind === "approval_requested")).toBe(true);
     expect(result.runResult.items.some((item) => item.kind === "sandbox_attempt_started"))
       .toBe(false);
@@ -424,7 +446,7 @@ describe("Helarc Host Run composition", () => {
       automaticApprovalReviewer: unavailableAutomaticReviewer(),
     });
 
-    expect(result.status).toBe("blocked");
+    expect(result.product.status).toBe("blocked");
     expect(result.runResult.items.some((item) => item.kind === "approval_requested")).toBe(true);
     expect(result.runResult.items).toContainEqual(expect.objectContaining({
       kind: "approval_resolved",
@@ -461,10 +483,10 @@ describe("Helarc Host Run composition", () => {
       permissionPreset: "full_access",
     });
 
-    expect(result.status).toBe("completed");
-    expect(result.output.agentSummary).toBe("Shell command completed.");
+    expect(result.product.status).toBe("completed");
+    expect(result.product.output.agentSummary).toBe("Shell command completed.");
     await expect(access(markerPath)).resolves.toBeUndefined();
-    expect(result.output.enforcement).toEqual({
+    expect(result.product.output.enforcement).toEqual({
       selected: "disabled",
       status: "unisolated",
       code: null,
@@ -498,7 +520,7 @@ describe("Helarc Host Run composition", () => {
       provider,
     });
 
-    expect(result.status).toBe("completed");
+    expect(result.product.status).toBe("completed");
     expect(provider.lastControllerInputPlans).toEqual([
       null,
       {
@@ -546,7 +568,7 @@ describe("Helarc Host Run composition", () => {
       ),
     });
 
-    expect(result.status).toBe("completed");
+    expect(result.product.status).toBe("completed");
     expect(result.runResult).toMatchObject({
       status: "succeeded",
       finalOutput: {
@@ -555,7 +577,7 @@ describe("Helarc Host Run composition", () => {
       },
       errors: [],
     });
-    expect(result.output).toMatchObject({
+    expect(result.product.output).toMatchObject({
       patchStatus: "applied",
       appliedPath: "src/created.txt",
       safeErrors: [],
@@ -608,7 +630,7 @@ describe("Helarc Host Run composition", () => {
       ),
     });
 
-    expect(result.status).toBe("rejected");
+    expect(result.product.status).toBe("rejected");
     expect(result.runResult).toMatchObject({
       status: "succeeded",
       finalOutput: {
@@ -617,7 +639,7 @@ describe("Helarc Host Run composition", () => {
       },
       errors: [],
     });
-    expect(result.output).toMatchObject({
+    expect(result.product.output).toMatchObject({
       patchStatus: "rejected",
       appliedPath: null,
       safeErrors: [],
@@ -655,7 +677,7 @@ describe("Helarc Host Run composition", () => {
       ),
     });
 
-    expect(result.status).toBe("failed");
+    expect(result.product.status).toBe("failed");
     expect(result.runResult).toMatchObject({
       status: "succeeded",
       finalOutput: {
@@ -664,7 +686,7 @@ describe("Helarc Host Run composition", () => {
       },
       errors: [],
     });
-    expect(result.output).toMatchObject({
+    expect(result.product.output).toMatchObject({
       patchStatus: "failed",
       appliedPath: null,
       safeErrors: [{

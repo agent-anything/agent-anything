@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HelarcMainController, type HelarcMainSnapshot } from "./HelarcMainController.js";
-import { LegacyFileHelarcThreadStore } from "./thread/index.js";
+import { FileHelarcThreadStore } from "./thread/index.js";
 
 describe("HelarcMainController", () => {
   it("keeps workspace authority in main state", () => {
@@ -51,6 +51,18 @@ describe("HelarcMainController", () => {
         },
       ],
     });
+  });
+
+  it("isolates snapshot listener failures", () => {
+    const controller = new HelarcMainController({ provider: new CompleteProvider() });
+    const delivered: HelarcMainSnapshot[] = [];
+    controller.subscribeSnapshot(() => {
+      throw new Error("Injected listener failure.");
+    });
+    controller.subscribeSnapshot((snapshot) => delivered.push(snapshot));
+
+    expect(() => controller.selectWorkspacePath("D:/projects/agent-anything")).not.toThrow();
+    expect(delivered).toHaveLength(1);
   });
 
   it("rejects renderer task text until main has a workspace", async () => {
@@ -217,13 +229,12 @@ describe("HelarcMainController", () => {
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
     const completed = waitForProductResult(controller, "completed");
-    const result = controller.startSession({ taskText: "  Update docs  " });
+    const result = await controller.startSession({ taskText: "  Update docs  " });
 
     expect(result).toMatchObject({
       ok: true,
       taskId: "helarc-task-1",
       snapshot: {
-        status: "starting",
         acceptedTask: {
           id: "helarc-task-1",
           prompt: "Update docs",
@@ -377,7 +388,8 @@ describe("HelarcMainController", () => {
   });
 
   it("persists work context thread, trigger message, and run records", async () => {
-    const threadStore = new LegacyFileHelarcThreadStore(await threadFilePath());
+    const storePath = await threadFilePath();
+    const threadStore = new FileHelarcThreadStore(storePath);
     const controller = new HelarcMainController({
       provider: new CompleteProvider(),
       providerProfile: {
@@ -517,6 +529,15 @@ describe("HelarcMainController", () => {
         },
       ],
     });
+
+    const document = JSON.parse(await readFile(storePath, "utf8")) as {
+      aggregates: Array<{ commitLedger: Array<{ kind: string }> }>;
+    };
+    const commitKinds = document.aggregates[0]?.commitLedger.map((entry) => entry.kind) ?? [];
+    expect(commitKinds[0]).toBe("run_start");
+    expect(commitKinds.at(-1)).toBe("run_terminal");
+    expect(commitKinds.slice(1, -1).length).toBeGreaterThan(0);
+    expect(commitKinds.slice(1, -1).every((kind) => kind === "run_progress")).toBe(true);
   });
 
   it("correlates versioned approval submissions and preserves a decline", async () => {
@@ -544,9 +565,9 @@ describe("HelarcMainController", () => {
       controller,
       (snapshot) => snapshot.status === "blocked" && snapshot.sessionHistory.length === 1,
     );
-    const result = controller.startSession({ taskText: "Run command" });
+    const result = await controller.startSession({ taskText: "Run command" });
 
-    expect(result).toMatchObject({ ok: true, snapshot: { status: "starting" } });
+    expect(result).toMatchObject({ ok: true });
     const waitingSnapshot = await waiting;
     const pending = pendingApproval(waitingSnapshot);
     expect(pending).toMatchObject({
@@ -748,7 +769,7 @@ describe("HelarcMainController", () => {
         },
       },
     });
-    expect(controller.startSession({ taskText: "Start another run" })).toMatchObject({
+    await expect(controller.startSession({ taskText: "Start another run" })).resolves.toMatchObject({
       ok: false,
       error: { code: "session_already_running" },
       snapshot: { status: "cancelling" },
@@ -956,9 +977,9 @@ describe("HelarcMainController", () => {
         snapshot.status === "completed"
         && snapshot.activeThread?.artifacts.length === 3,
     );
-    const result = controller.startSession({ taskText: "Create file" });
+    const result = await controller.startSession({ taskText: "Create file" });
 
-    expect(result).toMatchObject({ ok: true, snapshot: { status: "starting" } });
+    expect(result).toMatchObject({ ok: true });
     const waitingSnapshot = await waiting;
     expect(pendingPatchReview(waitingSnapshot)).toMatchObject({
       operation: "create",
@@ -1107,9 +1128,9 @@ describe("HelarcMainController", () => {
 
     const waitingForReview = waitForPendingPatchReview(controller);
     const completed = waitForProductResult(controller, "completed");
-    const result = controller.startSession({ taskText: "Update existing file" });
+    const result = await controller.startSession({ taskText: "Update existing file" });
 
-    expect(result).toMatchObject({ ok: true, snapshot: { status: "starting" } });
+    expect(result).toMatchObject({ ok: true });
     const reviewSnapshot = await waitingForReview;
     expect(reviewSnapshot.run?.product.activity.map((item) => item.kind)).toContain("tool.finished");
     expect(pendingPatchReview(reviewSnapshot)).toMatchObject({
@@ -1140,6 +1161,88 @@ describe("HelarcMainController", () => {
       },
     });
     await expect(readFile(targetPath, "utf8")).resolves.toBe("after\n");
+  });
+
+  it("reserves the active slot before asynchronous preparation", async () => {
+    const controller = new HelarcMainController({ provider: new CompleteProvider() });
+    controller.selectWorkspacePath("D:/projects/agent-anything");
+
+    const firstStart = controller.startSession({ taskText: "First task" });
+    const secondStart = await controller.startSession({ taskText: "Second task" });
+
+    expect(secondStart).toMatchObject({
+      ok: false,
+      error: { code: "session_already_running" },
+    });
+    await expect(firstStart).resolves.toMatchObject({ ok: true, taskId: "helarc-task-1" });
+    await waitForActiveRunTerminal(controller, "completed");
+    expect(controller.getSnapshot().threadSummaries).toHaveLength(1);
+  });
+
+  it("does not invoke the Provider when the atomic start commit fails", async () => {
+    const provider = new CountingCompleteProvider();
+    const threadStore = new FileHelarcThreadStore(await threadFilePath(), {
+      atomicWriteOperations: {
+        async rename() {
+          throw new Error("Injected start replacement failure.");
+        },
+      },
+    });
+    const controller = new HelarcMainController({ provider, threadStore });
+    controller.selectWorkspacePath("D:/projects/agent-anything");
+
+    const result = await controller.startSession({ taskText: "Must not execute" });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "session_persistence_failed" },
+    });
+    expect(provider.callCount).toBe(0);
+    expect(controller.getSnapshot().run).toBeNull();
+  });
+
+  it("opens a persisted Thread through the safe Store query", async () => {
+    const storePath = await threadFilePath();
+    const threadStore = new FileHelarcThreadStore(storePath);
+    const first = new HelarcMainController({ provider: new CompleteProvider(), threadStore });
+    first.selectWorkspacePath("D:/projects/agent-anything");
+    const completed = waitForSnapshot(
+      first,
+      (snapshot) => snapshot.threadSummaries[0]?.latestRun?.status === "completed",
+    );
+    await first.startSession({ taskText: "Persisted task" });
+    await completed;
+
+    const restoredStore = new FileHelarcThreadStore(storePath);
+    const restored = new HelarcMainController({
+      provider: new CompleteProvider(),
+      threadStore: restoredStore,
+      threadSummaries: await restoredStore.listThreadSummaries(),
+    });
+    const opened = await restored.openThread("helarc-thread-1");
+
+    expect(opened).toMatchObject({
+      ok: true,
+      snapshot: {
+        activeThread: {
+          id: "helarc-thread-1",
+          messages: [
+            { role: "user", content: "Persisted task" },
+            { role: "assistant", content: "No changes needed." },
+          ],
+        },
+      },
+    });
+
+    const secondCompleted = waitForSnapshot(
+      restored,
+      (snapshot) => snapshot.threadSummaries.some(
+        (thread) => thread.id === "helarc-thread-2" && thread.latestRun?.status === "completed",
+      ),
+    );
+    await expect(restored.startSession({ taskText: "Second persisted task" })).resolves
+      .toMatchObject({ ok: true, taskId: "helarc-task-2" });
+    await secondCompleted;
   });
 
   it("rejects relative workspace paths", () => {
@@ -1183,6 +1286,18 @@ class CompleteProvider implements Provider {
         metadata: {},
       },
     };
+  }
+}
+
+class CountingCompleteProvider extends CompleteProvider {
+  callCount = 0;
+
+  override async send(
+    request: ProviderRequest,
+    context: InvocationInterruptionContext,
+  ): Promise<ProviderCallResult> {
+    this.callCount += 1;
+    return super.send(request, context);
   }
 }
 

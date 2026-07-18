@@ -126,6 +126,21 @@ export function App() {
     }
   }
 
+  async function openThread(threadId: string) {
+    const api = getHelarcApi();
+    if (!api || threadId.length === 0) {
+      return;
+    }
+    setIsBusy(true);
+    try {
+      const result = await api.openThread({ threadId });
+      setSelectedThreadId(threadId);
+      setSnapshot(result.snapshot);
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
   async function startSession(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const api = getHelarcApi();
@@ -352,7 +367,7 @@ export function App() {
                 threads={snapshot.threadSummaries}
                 selectedThread={selectedThread}
                 selectedThreadId={selectedThreadId}
-                onSelectThread={setSelectedThreadId}
+                onSelectThread={(threadId) => void openThread(threadId)}
               />
             ) : activePanelMode === "settings" ? (
               <SettingsPanel snapshot={snapshot} onSaved={setSnapshot} />

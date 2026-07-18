@@ -1,5 +1,5 @@
 import { helarcProduct } from "@agent-anything/helarc";
-import { BrowserWindow, app } from "electron";
+import { BrowserWindow, app, dialog } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HelarcMainController } from "./HelarcMainController.js";
@@ -9,18 +9,18 @@ import { createElectronProviderCredentialStore } from "./provider/createElectron
 import { FileHelarcProviderProfileStore } from "./provider/HelarcProviderProfileStore.js";
 import { resolveHelarcProviderConfig } from "./provider/resolveHelarcProviderConfig.js";
 import { FileHelarcSessionHistoryStore } from "./session-history/HelarcSessionHistoryStore.js";
-import { LegacyFileHelarcThreadStore } from "./thread/index.js";
+import { FileHelarcThreadStore } from "./thread/index.js";
 import { FileHelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
 import { createHelarcWindowOptions } from "./windowOptions.js";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
 app.whenReady().then(() => {
-  void createWindow();
+  void createWindow().catch(reportWindowCreationFailure);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      void createWindow();
+      void createWindow().catch(reportWindowCreationFailure);
     }
   });
 });
@@ -48,7 +48,7 @@ async function createWindow(): Promise<void> {
   const sessionHistoryStore = new FileHelarcSessionHistoryStore(
     join(userDataPath, "session-history.json"),
   );
-  const threadStore = new LegacyFileHelarcThreadStore(
+  const threadStore = new FileHelarcThreadStore(
     join(userDataPath, "threads.json"),
   );
   const controller = new HelarcMainController({
@@ -77,6 +77,12 @@ async function createWindow(): Promise<void> {
   }
 
   void window.loadFile(join(currentDir, "../renderer/index.html"));
+}
+
+function reportWindowCreationFailure(cause: unknown): void {
+  const message = cause instanceof Error ? cause.message : "Helarc window creation failed.";
+  console.error("Helarc window creation failed.", cause);
+  dialog.showErrorBox("Helarc failed to start", message);
 }
 
 function readRendererDevServerUrl(env: NodeJS.ProcessEnv): string | null {

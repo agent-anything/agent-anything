@@ -18,9 +18,10 @@ export type {
   HelarcHostRunOutcome,
   HelarcHostRunResult,
   HelarcHostRunStartFailureResult,
-  StartHelarcHostRunInput,
+  PreparedHelarcHostRun,
+  PrepareHelarcHostRunInput,
 } from "./HelarcHostRunComposition.js";
-export { startHelarcHostRun } from "./HelarcHostRunComposition.js";
+export { prepareHelarcHostRun } from "./HelarcHostRunComposition.js";
 export type {
   CreateHelarcHostPermissionCompositionInput,
   HelarcHostPermissionComposition,

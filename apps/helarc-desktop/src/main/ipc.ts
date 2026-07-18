@@ -14,6 +14,7 @@ export const HELARC_IPC_CHANNELS = {
   cancelSession: "helarc:cancel-session",
   chooseWorkspace: "helarc:choose-workspace",
   getSnapshot: "helarc:get-snapshot",
+  openThread: "helarc:open-thread",
   resolvePatchReview: "helarc:resolve-patch-review",
   submitApprovalDecision: "helarc:submit-approval-decision",
   saveProviderConfig: "helarc:save-provider-config",
@@ -39,6 +40,10 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   input.window.once("closed", unsubscribe);
 
   ipcMain.handle(HELARC_IPC_CHANNELS.getSnapshot, () => input.controller.getSnapshot());
+
+  ipcMain.handle(HELARC_IPC_CHANNELS.openThread, (_event, payload: unknown) => {
+    return input.controller.openThread(readThreadId(payload));
+  });
 
   ipcMain.handle(HELARC_IPC_CHANNELS.chooseWorkspace, async () => {
     const result = await dialog.showOpenDialog(input.window, {
@@ -144,6 +149,13 @@ function readProfileId(payload: unknown): string {
   }
 
   return typeof payload.profileId === "string" ? payload.profileId : "";
+}
+
+function readThreadId(payload: unknown): string {
+  if (!isRecord(payload)) {
+    return "";
+  }
+  return typeof payload.threadId === "string" ? payload.threadId : "";
 }
 
 function readTaskText(payload: unknown): string {
