@@ -1,6 +1,5 @@
 import type {
   HelarcRunProjection,
-  HelarcSessionHistoryRunRecord,
 } from "@agent-anything/helarc";
 import type {
   ApprovalDecisionSubmission,
@@ -170,81 +169,10 @@ export interface HelarcThreadSummarySnapshot {
   latestRun: HelarcThreadLatestRunSnapshot | null;
 }
 
-export interface HelarcActivityItem {
-  id: string;
-  sequence: number;
-  timestamp: string;
-  kind: string;
-  title: string;
-  detail: string | null;
-  metadata: Record<string, unknown>;
-}
-
-export interface HelarcSessionOutput {
-  taskId: string;
-  workspaceId: string | null;
-  agentSummary: string | null;
-  runtimeStatus: string;
-  patchStatus: "proposed" | "applied" | "rejected" | "failed" | null;
-  appliedPath: string | null;
-  enforcement: {
-    selected: "managed" | "external" | "disabled";
-    status:
-      | "not_exercised"
-      | "unisolated"
-      | "enforced"
-      | "unavailable"
-      | "denied"
-      | "interrupted"
-      | "failed";
-    code: string | null;
-  };
-  safeErrors: Array<{ code: string; message: string }>;
-}
-
-export interface HelarcSessionHistoryWorkspaceRef {
-  profileId: string | null;
-  displayName: string;
-  path: string;
-}
-
-export interface HelarcSessionHistoryProviderRef {
-  profileId: string | null;
-  displayName: string;
-  endpointLabel: string;
-  model: string;
-}
-
-export interface HelarcSessionHistoryPatchSummary {
-  proposalId: string | null;
-  operation: "create" | "update" | "delete" | null;
-  path: string | null;
-  summary: string | null;
-  decision: "accepted" | "rejected" | "not_required" | "unknown";
-  reason: string | null;
-  status: "proposed" | "applied" | "rejected" | "failed" | null;
-}
-
-export interface HelarcSessionHistoryRecord {
-  id: string;
-  taskId: string;
-  taskText: string;
-  workspace: HelarcSessionHistoryWorkspaceRef;
-  provider: HelarcSessionHistoryProviderRef;
-  startedAt: string;
-  endedAt: string;
-  status: "completed" | "rejected" | "failed" | "blocked" | "cancelled";
-  activity: HelarcActivityItem[];
-  output: HelarcSessionOutput;
-  patch: HelarcSessionHistoryPatchSummary;
-  run: HelarcSessionHistoryRunRecord;
-}
-
 export interface HelarcMainSnapshot {
   status: HelarcMainSnapshotStatus;
   workspace: HelarcWorkspaceSnapshot | null;
   workspaceProfiles: HelarcWorkspaceProfileSnapshot[];
-  sessionHistory: HelarcSessionHistoryRecord[];
   taskTemplates: HelarcTaskTemplateSnapshot[];
   provider: HelarcProviderSnapshot;
   acceptedTask: HelarcAcceptedTaskSnapshot | null;
@@ -254,15 +182,15 @@ export interface HelarcMainSnapshot {
   error: HelarcMainError | null;
 }
 
-export interface HelarcStartSessionInput {
+export interface HelarcStartRunInput {
   taskText: string;
 }
 
-export type HelarcStartSessionResult =
+export type HelarcStartRunResult =
   | { ok: true; taskId: string; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
-export type HelarcCancelSessionResult =
+export type HelarcCancelRunResult =
   | { ok: true; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
@@ -303,14 +231,14 @@ export interface HelarcSaveProviderConfigInput {
 }
 
 export interface HelarcDesktopApi {
-  readonly bridgeVersion: 3;
+  readonly bridgeVersion: 4;
   readonly productId: "helarc";
   chooseWorkspace(): Promise<HelarcMainSnapshot>;
   getSnapshot(): Promise<HelarcMainSnapshot>;
   saveProviderConfig(input: HelarcSaveProviderConfigInput): Promise<HelarcMainSnapshot>;
   selectWorkspaceProfile(input: HelarcSelectWorkspaceProfileInput): Promise<HelarcMainSnapshot>;
-  startSession(input: HelarcStartSessionInput): Promise<HelarcStartSessionResult>;
-  cancelSession(): Promise<HelarcCancelSessionResult>;
+  startRun(input: HelarcStartRunInput): Promise<HelarcStartRunResult>;
+  cancelRun(): Promise<HelarcCancelRunResult>;
   submitApprovalDecision(
     input: HelarcSubmitApprovalDecisionInput,
   ): Promise<HelarcApprovalSubmissionReceipt>;

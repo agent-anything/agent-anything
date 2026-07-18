@@ -189,7 +189,6 @@ export {
   reduceHelarcProductRunProjection,
   reduceHelarcRunProjection,
 } from "./run/index.js";
-export { mapHelarcActivityToRunEvent } from "./run/index.js";
 export {
   createHelarcArtifact,
   createHelarcConversation,
@@ -204,43 +203,17 @@ export {
   normalizeHelarcThreadRecord,
 } from "./work-context/index.js";
 export type {
-  CreateHelarcSessionHistoryRecordInput,
-  CreateHelarcSessionHistoryRecordResult,
-  HelarcSessionHistoryPatchDecision,
-  HelarcSessionHistoryPatchSummary,
-  HelarcSessionHistoryProviderRef,
-  HelarcSessionHistoryRecord,
-  HelarcSessionHistoryRecordError,
-  HelarcSessionHistoryRecordErrorCode,
-  HelarcSessionHistoryRunRecord,
-  HelarcSessionHistoryStatus,
-  HelarcSessionHistoryWorkspaceRef,
-} from "./session-history/index.js";
-export {
-  createHelarcSessionHistoryRecord,
-} from "./session-history/index.js";
-export type {
   CreateHelarcRunInput,
   CreateHelarcRunInputResult,
-  CreateHelarcRunTerminalSummaryInput,
-  CreateHelarcRunTerminalSummaryResult,
   HelarcRunContractError,
   HelarcRunContractErrorCode,
-  HelarcRunEventKind,
-  HelarcRunEventSeverity,
-  HelarcRunEventViewModel,
   HelarcRunInput,
   HelarcRunPermissionPreset,
   HelarcRunProviderRef,
-  HelarcRunTerminalErrorSummary,
-  HelarcRunTerminalStatus,
-  HelarcRunTerminalSummary,
   HelarcRunWorkspaceRef,
 } from "./run/index.js";
 export {
   createHelarcRunInput,
-  createHelarcRunTerminalSummary,
-  mapRuntimeEventToHelarcRunEvent,
 } from "./run/index.js";
 export type {
   CreateHelarcWorkspaceProfileInput,

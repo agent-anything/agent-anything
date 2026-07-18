@@ -72,7 +72,7 @@ export function projectHelarcProductResult(
   }
 
   return Object.freeze({
-    status: patchOutcome?.sessionStatus ?? mapRunStatus(runResult.status),
+    status: patchOutcome?.productStatus ?? mapRunStatus(runResult.status),
     output: Object.freeze({
       taskId: task.id,
       workspaceId:

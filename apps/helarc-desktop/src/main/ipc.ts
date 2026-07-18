@@ -11,7 +11,7 @@ import type { ApprovalDecisionSubmission } from "@agent-anything/permission";
 import type { HelarcPatchReviewDecisionSubmission } from "@agent-anything/helarc";
 
 export const HELARC_IPC_CHANNELS = {
-  cancelSession: "helarc:cancel-session",
+  cancelRun: "helarc:cancel-run",
   chooseWorkspace: "helarc:choose-workspace",
   getSnapshot: "helarc:get-snapshot",
   openThread: "helarc:open-thread",
@@ -20,7 +20,7 @@ export const HELARC_IPC_CHANNELS = {
   saveProviderConfig: "helarc:save-provider-config",
   selectWorkspaceProfile: "helarc:select-workspace-profile",
   snapshotUpdated: "helarc:snapshot-updated",
-  startSession: "helarc:start-session",
+  startRun: "helarc:start-run",
 } as const;
 
 export interface RegisterHelarcIpcInput {
@@ -125,13 +125,13 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
     });
   });
 
-  ipcMain.handle(HELARC_IPC_CHANNELS.startSession, (_event, payload: unknown) => {
+  ipcMain.handle(HELARC_IPC_CHANNELS.startRun, (_event, payload: unknown) => {
     const taskText = readTaskText(payload);
-    return input.controller.startSession({ taskText });
+    return input.controller.startRun({ taskText });
   });
 
-  ipcMain.handle(HELARC_IPC_CHANNELS.cancelSession, () => {
-    return input.controller.cancelSession();
+  ipcMain.handle(HELARC_IPC_CHANNELS.cancelRun, () => {
+    return input.controller.cancelRun();
   });
 
   ipcMain.handle(HELARC_IPC_CHANNELS.submitApprovalDecision, (_event, payload: unknown) => {

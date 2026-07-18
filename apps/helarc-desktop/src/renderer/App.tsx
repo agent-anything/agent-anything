@@ -17,14 +17,13 @@ import type {
   HelarcApprovalSubmissionReceipt,
   HelarcMainSnapshot,
   HelarcProviderKind,
-  HelarcStartSessionResult,
+  HelarcStartRunResult,
 } from "../shared/HelarcDesktopApi.js";
 
 const initialSnapshot: HelarcMainSnapshot = {
   status: "idle",
   workspace: null,
   workspaceProfiles: [],
-  sessionHistory: [],
   taskTemplates: [],
   provider: {
     configured: true,
@@ -61,13 +60,13 @@ export function App() {
   const [snapshot, setSnapshot] = useState<HelarcMainSnapshot>(initialSnapshot);
   const [taskText, setTaskText] = useState("");
   const [isBusy, setIsBusy] = useState(false);
-  const [startResult, setStartResult] = useState<HelarcStartSessionResult | null>(null);
+  const [startResult, setStartResult] = useState<HelarcStartRunResult | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [sidePanelMode, setSidePanelMode] = useState<SidePanelMode>("review");
   const [approvalSubmissionError, setApprovalSubmissionError] = useState<string | null>(null);
   const pendingApproval = getPendingApproval(snapshot.run);
   const pendingPatchReview = getPendingPatchReview(snapshot.run);
-  const sessionActive = isSessionActive(snapshot.status);
+  const runActive = isRunActive(snapshot.status);
   const selectedThread = snapshot.threadSummaries.find((thread) => thread.id === selectedThreadId) ?? null;
   const activePanelMode: SidePanelMode = pendingApproval || pendingPatchReview
     ? "review"
@@ -89,9 +88,9 @@ export function App() {
       && snapshot.provider.configured
       && taskText.trim().length > 0
       && !isBusy
-      && !sessionActive
+      && !runActive
     ),
-    [isBusy, sessionActive, snapshot.provider.configured, snapshot.workspace, taskText],
+    [isBusy, runActive, snapshot.provider.configured, snapshot.workspace, taskText],
   );
 
   async function chooseWorkspace() {
@@ -141,7 +140,7 @@ export function App() {
     }
   }
 
-  async function startSession(event: FormEvent<HTMLFormElement>) {
+  async function startRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const api = getHelarcApi();
     if (!api || !canStart) {
@@ -150,7 +149,7 @@ export function App() {
 
     setIsBusy(true);
     try {
-      const result = await api.startSession({ taskText });
+      const result = await api.startRun({ taskText });
       setStartResult(result);
       setSnapshot(result.snapshot);
     } finally {
@@ -199,7 +198,7 @@ export function App() {
     }
   }
 
-  async function cancelSession() {
+  async function cancelRun() {
     const api = getHelarcApi();
     if (!api) {
       return;
@@ -207,7 +206,7 @@ export function App() {
 
     setIsBusy(true);
     try {
-      const result = await api.cancelSession();
+      const result = await api.cancelRun();
       setSnapshot(result.snapshot);
     } finally {
       setIsBusy(false);
@@ -326,7 +325,7 @@ export function App() {
                 <button
                   className="secondary-button danger compact-icon"
                   type="button"
-                  onClick={() => void cancelSession()}
+                  onClick={() => void cancelRun()}
                   disabled={!canCancelRun}
                   title="Cancel run"
                 >
@@ -420,21 +419,21 @@ export function App() {
             ) : (
               <>
                 <FileCode2 size={24} aria-hidden="true" />
-                <span>{sessionActive ? "Waiting for next action" : "No pending review"}</span>
+                <span>{runActive ? "Waiting for next action" : "No pending review"}</span>
               </>
             )}
           </div>
         </aside>
       </main>
 
-      <form className="task-composer" onSubmit={startSession}>
+      <form className="task-composer" onSubmit={startRun}>
         <div className="composer-heading">
           <label htmlFor="task-input">Task</label>
           <select
             aria-label="Task templates"
             value=""
             onChange={(event) => applyTaskTemplate(event.target.value)}
-            disabled={isBusy || sessionActive || snapshot.taskTemplates.length === 0}
+            disabled={isBusy || runActive || snapshot.taskTemplates.length === 0}
           >
             <option value="">Templates</option>
             {snapshot.taskTemplates.map((template) => (
@@ -452,7 +451,7 @@ export function App() {
             placeholder="Describe a code task..."
             value={taskText}
             onChange={(event) => setTaskText(event.target.value)}
-            disabled={!snapshot.workspace || !snapshot.provider.configured || isBusy || sessionActive}
+            disabled={!snapshot.workspace || !snapshot.provider.configured || isBusy || runActive}
           />
           <button className="primary-button" type="submit" disabled={!canStart}>
             <Play size={17} fill="currentColor" aria-hidden="true" />
@@ -461,7 +460,7 @@ export function App() {
         </div>
         {!snapshot.provider.configured ? <p className="composer-message error">{snapshot.provider.error.message}</p> : null}
         {snapshot.error ? <p className="composer-message error">{snapshot.error.message}</p> : null}
-        {startResult?.ok ? <p className="composer-message">Session started</p> : null}
+        {startResult?.ok ? <p className="composer-message">Run started</p> : null}
       </form>
     </div>
   );
@@ -520,7 +519,7 @@ export function RunTimelinePanel({
 }) {
   const activity = run?.product.activity ?? [];
   if (activity.length === 0) {
-    const title = acceptedTask?.prompt || "No active session";
+    const title = acceptedTask?.prompt || "No active run";
     return (
       <div className="empty-state">
         <Activity size={28} aria-hidden="true" />
@@ -905,7 +904,7 @@ function statusTone(status: HelarcMainSnapshot["status"]): string {
     return "danger";
   }
 
-  if (isSessionActive(status)) {
+  if (isRunActive(status)) {
     return "active";
   }
 
@@ -951,7 +950,7 @@ function readProviderKind(formData: FormData, fallback: HelarcProviderKind): Hel
   return value === "openai-compatible" || value === "ollama" ? value : fallback;
 }
 
-function isSessionActive(status: HelarcMainSnapshot["status"]): boolean {
+function isRunActive(status: HelarcMainSnapshot["status"]): boolean {
   return status === "starting" ||
     status === "running" ||
     status === "cancelling" ||
@@ -994,18 +993,18 @@ function terminalTitle(snapshot: HelarcMainSnapshot): string {
   }
 
   if (snapshot.status === "failed") {
-    return "Session failed";
+    return "Run failed";
   }
 
   if (snapshot.status === "blocked") {
-    return "Session blocked";
+    return "Run blocked";
   }
 
   if (snapshot.run?.product.result?.output.patchStatus === "applied") {
     return "Patch applied";
   }
 
-  return "Session completed";
+  return "Run completed";
 }
 
 function formatTimestamp(timestamp: string): string {

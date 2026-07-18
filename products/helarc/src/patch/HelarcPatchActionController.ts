@@ -23,7 +23,7 @@ import type {
 } from "../composition/HelarcPatchReview.js";
 
 export interface HelarcPatchOutcome {
-  readonly sessionStatus: "completed" | "rejected" | "failed" | "blocked";
+  readonly productStatus: "completed" | "rejected" | "failed" | "blocked";
   readonly patchStatus: "proposed" | "applied" | "rejected" | "failed";
   readonly appliedPath: string | null;
   readonly errors: readonly { readonly code: string; readonly message: string }[];
@@ -231,13 +231,13 @@ function completeDecision(
 }
 
 function patchOutcome(
-  sessionStatus: HelarcPatchOutcome["sessionStatus"],
+  productStatus: HelarcPatchOutcome["productStatus"],
   patchStatus: HelarcPatchOutcome["patchStatus"],
   appliedPath: string | null,
   errors: readonly { readonly code: string; readonly message: string }[],
 ): HelarcPatchOutcome {
   return Object.freeze({
-    sessionStatus,
+    productStatus,
     patchStatus,
     appliedPath,
     errors: Object.freeze(errors.map((error) => Object.freeze({ ...error }))),

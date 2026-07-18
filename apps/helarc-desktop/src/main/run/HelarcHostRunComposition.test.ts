@@ -301,7 +301,7 @@ describe("Helarc Host Run composition", () => {
     expect(provider.lastControllerInputContexts).toEqual([0, 1, 2, 3]);
   });
 
-  it("does not register shell execution in the default read-only session", async () => {
+  it("does not register shell execution in the default read-only Run", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-read-only-shell-blocked-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const provider = new ScriptedProvider([
@@ -313,7 +313,7 @@ describe("Helarc Host Run composition", () => {
       },
       {
         action: "complete",
-        summary: "Shell execution is not available in this session.",
+        summary: "Shell execution is not available in this Run.",
       },
     ]);
 

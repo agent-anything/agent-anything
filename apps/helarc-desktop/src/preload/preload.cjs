@@ -1,7 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const channels = Object.freeze({
-  cancelSession: "helarc:cancel-session",
+  cancelRun: "helarc:cancel-run",
   chooseWorkspace: "helarc:choose-workspace",
   getSnapshot: "helarc:get-snapshot",
   openThread: "helarc:open-thread",
@@ -10,11 +10,11 @@ const channels = Object.freeze({
   saveProviderConfig: "helarc:save-provider-config",
   selectWorkspaceProfile: "helarc:select-workspace-profile",
   snapshotUpdated: "helarc:snapshot-updated",
-  startSession: "helarc:start-session",
+  startRun: "helarc:start-run",
 });
 
 contextBridge.exposeInMainWorld("helarc", Object.freeze({
-  bridgeVersion: 3,
+  bridgeVersion: 4,
   productId: "helarc",
   chooseWorkspace: () => ipcRenderer.invoke(channels.chooseWorkspace),
   getSnapshot: () => ipcRenderer.invoke(channels.getSnapshot),
@@ -35,10 +35,10 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
   selectWorkspaceProfile: (input) => ipcRenderer.invoke(channels.selectWorkspaceProfile, {
     profileId: typeof input?.profileId === "string" ? input.profileId : "",
   }),
-  startSession: (input) => ipcRenderer.invoke(channels.startSession, {
+  startRun: (input) => ipcRenderer.invoke(channels.startRun, {
     taskText: typeof input?.taskText === "string" ? input.taskText : "",
   }),
-  cancelSession: () => ipcRenderer.invoke(channels.cancelSession),
+  cancelRun: () => ipcRenderer.invoke(channels.cancelRun),
   submitApprovalDecision: (input) => ipcRenderer.invoke(channels.submitApprovalDecision, {
     submissionId: typeof input?.submissionId === "string" ? input.submissionId : "",
     runId: typeof input?.runId === "string" ? input.runId : "",

@@ -51,7 +51,7 @@ describe("HelarcPatchActionController", () => {
     expect(settled.kind).toBe("final_output");
     expect(controller.getProductPhase()).toEqual({ kind: "none" });
     expect(controller.getPatchOutcome()).toMatchObject({
-      sessionStatus: "failed",
+      productStatus: "failed",
       patchStatus: "failed",
       appliedPath: null,
       errors: [{ code: "permission_denied" }],
@@ -69,7 +69,7 @@ describe("HelarcPatchActionController", () => {
     );
 
     expect(controller.getPatchOutcome()).toMatchObject({
-      sessionStatus: "failed",
+      productStatus: "failed",
       patchStatus: "failed",
       appliedPath: null,
       errors: [{ code: "filesystem_write_failed", message: "Write failed." }],

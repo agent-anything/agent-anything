@@ -1,25 +1,13 @@
 export type {
   CreateHelarcRunInput,
   CreateHelarcRunInputResult,
-  CreateHelarcRunTerminalSummaryInput,
-  CreateHelarcRunTerminalSummaryResult,
   HelarcRunContractError,
   HelarcRunContractErrorCode,
-  HelarcRunEventKind,
-  HelarcRunEventSeverity,
-  HelarcRunEventViewModel,
   HelarcRunInput,
   HelarcRunPermissionPreset,
   HelarcRunProviderRef,
-  HelarcRunTerminalErrorSummary,
-  HelarcRunTerminalStatus,
-  HelarcRunTerminalSummary,
   HelarcRunWorkspaceRef,
 } from "./HelarcRun.js";
-export {
-  mapHelarcActivityToRunEvent,
-  mapRuntimeEventToHelarcRunEvent,
-} from "./HelarcRunEventMapping.js";
 export type {
   HelarcProductActivityProjectionUpdate,
   HelarcProductPhaseProjectionUpdate,
@@ -45,5 +33,4 @@ export {
 } from "./HelarcRunProjection.js";
 export {
   createHelarcRunInput,
-  createHelarcRunTerminalSummary,
 } from "./HelarcRun.js";

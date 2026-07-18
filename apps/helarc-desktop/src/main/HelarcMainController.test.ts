@@ -1,7 +1,4 @@
-import type {
-  HelarcPatchReviewDecisionSubmission,
-  HelarcSessionHistoryRecord,
-} from "@agent-anything/helarc";
+import type { HelarcPatchReviewDecisionSubmission } from "@agent-anything/helarc";
 import type {
   ApprovalDecisionKind,
   ApprovalDecisionSubmission,
@@ -15,9 +12,9 @@ import type {
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { HelarcMainController, type HelarcMainSnapshot } from "./HelarcMainController.js";
-import { FileHelarcThreadStore } from "./thread/index.js";
+import { FileHelarcThreadStore, InMemoryHelarcThreadStore } from "./thread/index.js";
 
 describe("HelarcMainController", () => {
   it("keeps workspace authority in main state", () => {
@@ -68,7 +65,7 @@ describe("HelarcMainController", () => {
   it("rejects renderer task text until main has a workspace", async () => {
     const controller = new HelarcMainController({ provider: new CompleteProvider() });
 
-    const result = await controller.startSession({ taskText: "Update docs" });
+    const result = await controller.startRun({ taskText: "Update docs" });
 
     expect(result).toMatchObject({
       ok: false,
@@ -87,7 +84,7 @@ describe("HelarcMainController", () => {
     });
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
-    const result = await controller.startSession({ taskText: "Update docs" });
+    const result = await controller.startRun({ taskText: "Update docs" });
 
     expect(result).toMatchObject({
       ok: false,
@@ -224,12 +221,12 @@ describe("HelarcMainController", () => {
     );
   });
 
-  it("runs a no-change read-only session after native workspace selection", async () => {
+  it("runs a no-change read-only Run after native workspace selection", async () => {
     const controller = new HelarcMainController({ provider: new CompleteProvider() });
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
     const completed = waitForProductResult(controller, "completed");
-    const result = await controller.startSession({ taskText: "  Update docs  " });
+    const result = await controller.startRun({ taskText: "  Update docs  " });
 
     expect(result).toMatchObject({
       ok: true,
@@ -278,8 +275,9 @@ describe("HelarcMainController", () => {
     });
   });
 
-  it("persists completed session history records for read-only review", async () => {
-    let storedHistory: HelarcSessionHistoryRecord[] = [];
+  it("persists completed Runs in Thread work context for history review", async () => {
+    const storePath = await threadFilePath();
+    const threadStore = new FileHelarcThreadStore(storePath);
     const controller = new HelarcMainController({
       provider: new CompleteProvider(),
       providerProfile: {
@@ -294,70 +292,58 @@ describe("HelarcMainController", () => {
         credentialStatus: "present",
         isActive: true,
       },
-      onSessionHistoryRecord: (record) => {
-        storedHistory = [record, ...storedHistory];
-        return storedHistory;
-      },
+      threadStore,
     });
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
     const completed = waitForSnapshot(
       controller,
-      (snapshot) => snapshot.status === "completed" && snapshot.sessionHistory.length === 1,
+      (snapshot) => snapshot.status === "completed" && snapshot.activeThread?.messages.length === 2,
     );
-    controller.startSession({ taskText: "Update docs" });
+    void controller.startRun({ taskText: "Update docs" });
 
     const snapshot = await completed;
-    expect(snapshot.sessionHistory).toMatchObject([
-      {
-        taskText: "Update docs",
-        status: "completed",
-        workspace: {
-          displayName: "agent-anything",
-        },
-        provider: {
-          profileId: "provider-a",
-          displayName: "Provider A",
-          model: "model-a",
-        },
-        patch: {
-          decision: "not_required",
-          status: null,
-        },
-        run: {
-          runId: "helarc-run-1",
-          status: "completed",
-          terminal: {
-            status: "completed",
-            runtimeStatus: "succeeded",
-          },
-        },
-      },
-    ]);
-    expect(snapshot.sessionHistory[0]?.run.events.map((item) => item.kind)).toEqual(
-      expect.arrayContaining(["planning.started", "provider.output", "runtime.output"]),
-    );
-    expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("secret");
-    expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("rawProvider");
-    expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("pendingApproval");
+    expect(snapshot.threadSummaries).toMatchObject([{
+      id: "helarc-thread-1",
+      latestRun: { runId: "helarc-run-1", status: "completed" },
+    }]);
+    expect(snapshot.activeThread).toMatchObject({
+      title: "Update docs",
+      messages: [
+        { role: "user", content: "Update docs" },
+        { role: "assistant", content: "No changes needed." },
+      ],
+    });
+    expect(JSON.stringify(snapshot.activeThread)).not.toContain("secret");
+    expect(JSON.stringify(snapshot.activeThread)).not.toContain("rawProvider");
+    expect(JSON.stringify(snapshot.activeThread)).not.toContain("pendingApproval");
 
+    const restoredStore = new FileHelarcThreadStore(storePath);
     const restoredController = new HelarcMainController({
       providerConfigError: {
         code: "provider_config_missing",
         message: "Provider configuration is incomplete.",
         missingKeys: [],
       },
-      sessionHistory: storedHistory,
+      threadSummaries: await restoredStore.listThreadSummaries(),
+      threadStore: restoredStore,
     });
-    expect(restoredController.getSnapshot().sessionHistory).toHaveLength(1);
+    await expect(restoredController.openThread("helarc-thread-1")).resolves.toMatchObject({
+      ok: true,
+      snapshot: {
+        activeThread: { messages: [{ role: "user" }, { role: "assistant" }] },
+      },
+    });
   });
 
   it("does not let persistence failure replace the authoritative RunResult", async () => {
+    const threadStore = new InMemoryHelarcThreadStore();
+    vi.spyOn(threadStore, "commitRunTerminal").mockRejectedValue(
+      new Error("Thread store unavailable."),
+    );
     const controller = new HelarcMainController({
       provider: new CompleteProvider(),
-      onSessionHistoryRecord() {
-        throw new Error("History store unavailable.");
-      },
+      threadStore,
     });
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
@@ -365,16 +351,16 @@ describe("HelarcMainController", () => {
       controller,
       (snapshot) =>
         snapshot.status === "completed"
-        && snapshot.error?.code === "session_persistence_failed",
+        && snapshot.error?.code === "run_persistence_failed",
     );
-    controller.startSession({ taskText: "Update docs" });
+    controller.startRun({ taskText: "Update docs" });
 
     const snapshot = await settled;
     expect(snapshot).toMatchObject({
       status: "completed",
       error: {
-        code: "session_persistence_failed",
-        message: "History store unavailable.",
+        code: "run_persistence_failed",
+        message: "Thread store unavailable.",
       },
       run: {
         display: { status: "completed" },
@@ -414,7 +400,7 @@ describe("HelarcMainController", () => {
         snapshot.status === "completed"
         && snapshot.threadSummaries[0]?.latestRun?.status === "completed",
     );
-    controller.startSession({ taskText: "Update docs" });
+    controller.startRun({ taskText: "Update docs" });
     await completed;
 
     const summaries = await threadStore.listThreadSummaries();
@@ -563,9 +549,10 @@ describe("HelarcMainController", () => {
     const waiting = waitForPendingApproval(controller);
     const blocked = waitForSnapshot(
       controller,
-      (snapshot) => snapshot.status === "blocked" && snapshot.sessionHistory.length === 1,
+      (snapshot) => snapshot.status === "blocked"
+        && snapshot.threadSummaries[0]?.latestRun?.status === "blocked",
     );
-    const result = await controller.startSession({ taskText: "Run command" });
+    const result = await controller.startRun({ taskText: "Run command" });
 
     expect(result).toMatchObject({ ok: true });
     const waitingSnapshot = await waiting;
@@ -647,19 +634,10 @@ describe("HelarcMainController", () => {
         platform: { status: "blocked", terminal: { status: "blocked" } },
         product: { result: { output: { safeErrors: [] } } },
       },
-      sessionHistory: [{
-        status: "blocked",
-        run: {
-          runId: "helarc-run-1",
-          status: "failed",
-          terminal: {
-            status: "failed",
-            runtimeStatus: "blocked",
-          },
-        },
-      }],
+      threadSummaries: [{ latestRun: { runId: "helarc-run-1", status: "blocked" } }],
+      activeThread: { messages: [{ role: "user" }, { role: "assistant", content: "Run blocked." }] },
     });
-    expect(JSON.stringify(blockedSnapshot.sessionHistory)).not.toContain("pendingApproval");
+    expect(JSON.stringify(blockedSnapshot.activeThread)).not.toContain("pendingApproval");
     expect(controller.submitApprovalDecision({
       ...decline,
       submissionId: "desktop-late-1",
@@ -693,7 +671,7 @@ describe("HelarcMainController", () => {
 
     const waiting = waitForPendingApproval(controller);
     const completed = waitForProductResult(controller, "completed");
-    controller.startSession({ taskText: "Run command" });
+    controller.startRun({ taskText: "Run command" });
 
     const waitingSnapshot = await waiting;
     const submitted = waitForSnapshot(
@@ -746,13 +724,13 @@ describe("HelarcMainController", () => {
     controller.selectWorkspacePath(workspaceRoot);
 
     const waiting = waitForPendingApproval(controller);
-    controller.startSession({ taskText: "Run command" });
+    controller.startRun({ taskText: "Run command" });
     const waitingSnapshot = await waiting;
     const lateSubmission = approvalSubmission(waitingSnapshot, "grantPermissions", {
       submissionId: "desktop-after-cancel-1",
     });
 
-    expect(controller.cancelSession()).toMatchObject({
+    expect(controller.cancelRun()).toMatchObject({
       ok: true,
       snapshot: {
         status: "cancelling",
@@ -769,9 +747,9 @@ describe("HelarcMainController", () => {
         },
       },
     });
-    await expect(controller.startSession({ taskText: "Start another run" })).resolves.toMatchObject({
+    await expect(controller.startRun({ taskText: "Start another run" })).resolves.toMatchObject({
       ok: false,
-      error: { code: "session_already_running" },
+      error: { code: "run_already_active" },
       snapshot: { status: "cancelling" },
     });
     expect(controller.submitApprovalDecision(lateSubmission)).toEqual({
@@ -784,7 +762,7 @@ describe("HelarcMainController", () => {
       controller,
       (snapshot) =>
         snapshot.run?.platform.terminal?.status === "cancelled"
-        && snapshot.sessionHistory.length === 1,
+        && snapshot.threadSummaries[0]?.latestRun?.status === "cancelled",
     );
     expect(terminalSnapshot).toMatchObject({
       status: "cancelled",
@@ -795,28 +773,14 @@ describe("HelarcMainController", () => {
           terminal: { status: "cancelled", code: "runtime_cancelled" },
         },
       },
-      sessionHistory: [{
-        status: "cancelled",
-        run: {
-          runId: "helarc-run-1",
-          status: "cancelled",
-          terminal: {
-            status: "cancelled",
-            runtimeStatus: "cancelled",
-            runtimeCode: "runtime_cancelled",
-            cancellation: {
-              origin: "user",
-              reasonCode: "user_requested",
-            },
-          },
-        },
-      }],
+      threadSummaries: [{ latestRun: { runId: "helarc-run-1", status: "cancelled" } }],
+      activeThread: { messages: [{ role: "user" }, { role: "assistant", content: "Run cancelled." }] },
     });
     expect(JSON.stringify(terminalSnapshot.run)).not.toContain(
       "Cancelled from Helarc desktop.",
     );
-    expect(JSON.stringify(terminalSnapshot.sessionHistory)).not.toContain("pendingApproval");
-    expect(JSON.stringify(terminalSnapshot.sessionHistory)).not.toContain(
+    expect(JSON.stringify(terminalSnapshot.activeThread)).not.toContain("pendingApproval");
+    expect(JSON.stringify(terminalSnapshot.activeThread)).not.toContain(
       "Cancelled from Helarc desktop.",
     );
     await expect(access(markerPath)).rejects.toThrow();
@@ -836,7 +800,7 @@ describe("HelarcMainController", () => {
 
     const waiting = waitForPendingApproval(controller);
     const cancelled = waitForActiveRunTerminal(controller, "cancelled");
-    controller.startSession({ taskText: "Request then cancel" });
+    controller.startRun({ taskText: "Request then cancel" });
     const waitingSnapshot = await waiting;
 
     expect(controller.submitApprovalDecision(
@@ -893,9 +857,10 @@ describe("HelarcMainController", () => {
 
     const failed = waitForSnapshot(
       controller,
-      (snapshot) => snapshot.status === "failed" && snapshot.sessionHistory.length === 1,
+      (snapshot) => snapshot.status === "failed"
+        && snapshot.threadSummaries[0]?.latestRun?.status === "failed",
     );
-    controller.startSession({ taskText: "Run command" });
+    controller.startRun({ taskText: "Run command" });
 
     const snapshot = await failed;
     expect(snapshot).toMatchObject({
@@ -911,24 +876,13 @@ describe("HelarcMainController", () => {
           result: { output: { safeErrors: [{ code: "model_structured_output_retry_exhausted" }] } },
         },
       },
-      sessionHistory: [{
-        status: "failed",
-        run: {
-          runId: "helarc-run-1",
-          status: "failed",
-          terminal: {
-            status: "failed",
-            runtimeStatus: "failed",
-            runtimeCode: "model_structured_output_retry_exhausted",
-          },
-        },
-      }],
+      threadSummaries: [{ latestRun: { runId: "helarc-run-1", status: "failed" } }],
     });
-    expect(JSON.stringify(snapshot.sessionHistory)).not.toContain("pendingApproval");
+    expect(JSON.stringify(snapshot.activeThread)).not.toContain("pendingApproval");
     await expect(access(markerPath)).rejects.toThrow();
   });
 
-  it("rejects approval submissions and cancellation without a running session", () => {
+  it("rejects approval submissions and cancellation without an active Run", () => {
     const controller = new HelarcMainController({ provider: new CompleteProvider() });
 
     expect(controller.submitApprovalDecision({
@@ -945,9 +899,9 @@ describe("HelarcMainController", () => {
       code: "approval_not_pending",
     });
 
-    expect(controller.cancelSession()).toMatchObject({
+    expect(controller.cancelRun()).toMatchObject({
       ok: false,
-      error: { code: "session_not_running" },
+      error: { code: "run_not_active" },
     });
   });
 
@@ -977,7 +931,7 @@ describe("HelarcMainController", () => {
         snapshot.status === "completed"
         && snapshot.activeThread?.artifacts.length === 3,
     );
-    const result = await controller.startSession({ taskText: "Create file" });
+    const result = await controller.startRun({ taskText: "Create file" });
 
     expect(result).toMatchObject({ ok: true });
     const waitingSnapshot = await waiting;
@@ -1068,13 +1022,13 @@ describe("HelarcMainController", () => {
 
     const waiting = waitForPendingPatchReview(controller);
     const cancelled = waitForProductResult(controller, "cancelled");
-    controller.startSession({ taskText: "Create then cancel" });
+    controller.startRun({ taskText: "Create then cancel" });
     const waitingSnapshot = await waiting;
     const lateSubmission = patchSubmission(waitingSnapshot, "accepted", {
       submissionId: "late-after-patch-cancel",
     });
 
-    expect(controller.cancelSession()).toMatchObject({
+    expect(controller.cancelRun()).toMatchObject({
       ok: true,
       snapshot: {
         status: "cancelling",
@@ -1128,7 +1082,7 @@ describe("HelarcMainController", () => {
 
     const waitingForReview = waitForPendingPatchReview(controller);
     const completed = waitForProductResult(controller, "completed");
-    const result = await controller.startSession({ taskText: "Update existing file" });
+    const result = await controller.startRun({ taskText: "Update existing file" });
 
     expect(result).toMatchObject({ ok: true });
     const reviewSnapshot = await waitingForReview;
@@ -1167,12 +1121,12 @@ describe("HelarcMainController", () => {
     const controller = new HelarcMainController({ provider: new CompleteProvider() });
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
-    const firstStart = controller.startSession({ taskText: "First task" });
-    const secondStart = await controller.startSession({ taskText: "Second task" });
+    const firstStart = controller.startRun({ taskText: "First task" });
+    const secondStart = await controller.startRun({ taskText: "Second task" });
 
     expect(secondStart).toMatchObject({
       ok: false,
-      error: { code: "session_already_running" },
+      error: { code: "run_already_active" },
     });
     await expect(firstStart).resolves.toMatchObject({ ok: true, taskId: "helarc-task-1" });
     await waitForActiveRunTerminal(controller, "completed");
@@ -1191,11 +1145,11 @@ describe("HelarcMainController", () => {
     const controller = new HelarcMainController({ provider, threadStore });
     controller.selectWorkspacePath("D:/projects/agent-anything");
 
-    const result = await controller.startSession({ taskText: "Must not execute" });
+    const result = await controller.startRun({ taskText: "Must not execute" });
 
     expect(result).toMatchObject({
       ok: false,
-      error: { code: "session_persistence_failed" },
+      error: { code: "run_persistence_failed" },
     });
     expect(provider.callCount).toBe(0);
     expect(controller.getSnapshot().run).toBeNull();
@@ -1210,7 +1164,7 @@ describe("HelarcMainController", () => {
       first,
       (snapshot) => snapshot.threadSummaries[0]?.latestRun?.status === "completed",
     );
-    await first.startSession({ taskText: "Persisted task" });
+    await first.startRun({ taskText: "Persisted task" });
     await completed;
 
     const restoredStore = new FileHelarcThreadStore(storePath);
@@ -1240,7 +1194,7 @@ describe("HelarcMainController", () => {
         (thread) => thread.id === "helarc-thread-2" && thread.latestRun?.status === "completed",
       ),
     );
-    await expect(restored.startSession({ taskText: "Second persisted task" })).resolves
+    await expect(restored.startRun({ taskText: "Second persisted task" })).resolves
       .toMatchObject({ ok: true, taskId: "helarc-task-2" });
     await secondCompleted;
   });

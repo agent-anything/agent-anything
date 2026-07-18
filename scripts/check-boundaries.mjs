@@ -105,6 +105,25 @@ function checkArchitectureSource(file, text, isTestOnly) {
     "applyAcceptedPatch",
     "McpToolAdapter",
     "RemoteToolAdapter",
+    "HelarcSessionHistoryRecord",
+    "FileHelarcSessionHistoryStore",
+    "LegacyHelarcThreadStore",
+    "LegacyFileHelarcThreadStore",
+    "HelarcRunTerminalSummary",
+    "HelarcRunEventViewModel",
+    "mapRuntimeEventToHelarcRunEvent",
+    "mapHelarcActivityToRunEvent",
+    "HelarcActiveRunController",
+    "HostRuntimeAdapter",
+    "runHelarcSession",
+    "startSession",
+    "cancelSession",
+    "HelarcStartSessionInput",
+    "HelarcStartSessionResult",
+    "HelarcCancelSessionResult",
+    "sessionHistory",
+    "onSessionHistoryRecord",
+    "sessionStatus",
   ];
 
   for (const symbol of legacySymbols) {
@@ -114,6 +133,19 @@ function checkArchitectureSource(file, text, isTestOnly) {
   }
   if (/\bCODE_AGENT_[A-Z0-9_]+_TOOL\b/.test(text)) {
     violations.push(`${rel} retains a removed code-agent Tool constant.`);
+  }
+  if (/\bwaiting_for_permission\b/.test(text)) {
+    violations.push(`${rel} retains the removed waiting_for_permission status.`);
+  }
+  if (/helarc:(?:start|cancel)-session/.test(text)) {
+    violations.push(`${rel} retains a removed Session-named IPC channel.`);
+  }
+  if (
+    rel.startsWith("products/helarc/src/session-history/") ||
+    rel.startsWith("apps/helarc-desktop/src/main/session-history/") ||
+    rel === "apps/helarc-desktop/src/main/thread/HelarcThreadStore.ts"
+  ) {
+    violations.push(`${rel} restores a removed legacy history source path.`);
   }
 
   if (isTestOnly) {

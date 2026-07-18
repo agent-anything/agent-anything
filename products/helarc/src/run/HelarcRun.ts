@@ -1,12 +1,6 @@
-import type {
-  RunCancellationSummary,
-  RunResultStatus,
-} from "@agent-anything/agent-core";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { HelarcProviderKind } from "../provider-profile/index.js";
 import type { HelarcPermissionPreset } from "../permission/index.js";
-
-export type HelarcRunTerminalStatus = "completed" | "failed" | "denied" | "cancelled";
 
 export type HelarcRunPermissionPreset = HelarcPermissionPreset;
 
@@ -32,40 +26,6 @@ export interface HelarcRunInput {
   metadata: Metadata;
 }
 
-export type HelarcRunEventKind =
-  | "run.started"
-  | "planning.started"
-  | "provider.output"
-  | "tool.proposed"
-  | "tool.started"
-  | "tool.completed"
-  | "action.prepared"
-  | "action.assessed"
-  | "action.invalidated"
-  | "sandbox.started"
-  | "sandbox.resolved"
-  | "sandbox.escalation"
-  | "approval.requested"
-  | "approval.resolved"
-  | "runtime.output"
-  | "retry.progress"
-  | "run.completed"
-  | "run.failed"
-  | "run.cancelled";
-
-export type HelarcRunEventSeverity = "info" | "warning" | "error";
-
-export interface HelarcRunEventViewModel {
-  id: string;
-  sequence: number;
-  timestamp: ISODateTimeString;
-  kind: HelarcRunEventKind;
-  title: string;
-  detail: string | null;
-  severity: HelarcRunEventSeverity;
-  metadata: Metadata;
-}
-
 export interface HelarcRunWorkspaceRef {
   profileId: string;
   displayName: string;
@@ -80,47 +40,13 @@ export interface HelarcRunProviderRef {
   model: string;
 }
 
-export interface HelarcRunTerminalErrorSummary {
-  code: string;
-  message: string;
-}
-
-export interface CreateHelarcRunTerminalSummaryInput {
-  status: HelarcRunTerminalStatus;
-  runtimeStatus: RunResultStatus;
-  runtimeCode?: string | null;
-  cancellation: RunCancellationSummary | null;
-  safeOutput: unknown;
-  errorSummary?: readonly HelarcRunTerminalErrorSummary[];
-  startedAt: ISODateTimeString;
-  completedAt: ISODateTimeString;
-  eventCount: number;
-}
-
-export interface HelarcRunTerminalSummary {
-  status: HelarcRunTerminalStatus;
-  runtimeStatus: RunResultStatus;
-  runtimeCode: string | null;
-  cancellation: RunCancellationSummary | null;
-  safeOutput: unknown;
-  errorSummary: HelarcRunTerminalErrorSummary[];
-  startedAt: ISODateTimeString;
-  completedAt: ISODateTimeString;
-  eventCount: number;
-}
-
 export type HelarcRunContractErrorCode =
   | "run_id_required"
   | "run_task_text_required"
   | "run_workspace_profile_id_required"
   | "run_provider_profile_id_required"
   | "run_created_at_invalid"
-  | "run_permission_preset_invalid"
-  | "run_terminal_status_invalid"
-  | "run_terminal_timestamp_invalid"
-  | "run_terminal_event_count_invalid"
-  | "run_terminal_cancellation_invalid"
-  | "run_terminal_error_summary_invalid";
+  | "run_permission_preset_invalid";
 
 export interface HelarcRunContractError {
   code: HelarcRunContractErrorCode;
@@ -129,10 +55,6 @@ export interface HelarcRunContractError {
 
 export type CreateHelarcRunInputResult =
   | { ok: true; input: HelarcRunInput }
-  | { ok: false; error: HelarcRunContractError };
-
-export type CreateHelarcRunTerminalSummaryResult =
-  | { ok: true; terminal: HelarcRunTerminalSummary }
   | { ok: false; error: HelarcRunContractError };
 
 export function createHelarcRunInput(
@@ -191,121 +113,10 @@ export function createHelarcRunInput(
   };
 }
 
-export function createHelarcRunTerminalSummary(
-  input: CreateHelarcRunTerminalSummaryInput,
-): CreateHelarcRunTerminalSummaryResult {
-  if (!isTerminalStatus(input.status)) {
-    return reject("run_terminal_status_invalid", "Run terminal status is invalid.");
-  }
-
-  if (!isIsoDateTime(input.startedAt) || !isIsoDateTime(input.completedAt)) {
-    return reject(
-      "run_terminal_timestamp_invalid",
-      "Run terminal timestamps are invalid.",
-    );
-  }
-
-  if (!Number.isInteger(input.eventCount) || input.eventCount < 0) {
-    return reject(
-      "run_terminal_event_count_invalid",
-      "Run terminal event count must be a non-negative integer.",
-    );
-  }
-
-  if (!isValidTerminalCancellation(input)) {
-    return reject(
-      "run_terminal_cancellation_invalid",
-      "Run terminal cancellation does not match its runtime status.",
-    );
-  }
-
-  const errors = input.errorSummary ?? [];
-  if (!errors.every(isValidErrorSummary)) {
-    return reject(
-      "run_terminal_error_summary_invalid",
-      "Run terminal error summary is invalid.",
-    );
-  }
-
-  return {
-    ok: true,
-    terminal: {
-      status: input.status,
-      runtimeStatus: input.runtimeStatus,
-      runtimeCode: normalizeNullableString(input.runtimeCode ?? null),
-      cancellation: input.cancellation === null
-        ? null
-        : Object.freeze({ ...input.cancellation }),
-      safeOutput: input.safeOutput,
-      errorSummary: errors.map((error) => ({
-        code: error.code.trim(),
-        message: error.message.trim(),
-      })),
-      startedAt: input.startedAt,
-      completedAt: input.completedAt,
-      eventCount: input.eventCount,
-    },
-  };
-}
-
-function isValidTerminalCancellation(
-  input: CreateHelarcRunTerminalSummaryInput,
-): boolean {
-  if (
-    input.cancellation !== null &&
-    !isRunCancellationSummary(input.cancellation)
-  ) {
-    return false;
-  }
-  if (input.status === "cancelled") {
-    return input.runtimeStatus === "cancelled" && input.cancellation !== null;
-  }
-  if (input.runtimeStatus === "cancelled") {
-    return false;
-  }
-  if (input.cancellation !== null && input.runtimeStatus !== "failed") {
-    return false;
-  }
-  return true;
-}
-
-function isRunCancellationSummary(value: unknown): value is RunCancellationSummary {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const summary = value as Partial<RunCancellationSummary>;
-  return typeof summary.requestId === "string" &&
-    summary.requestId.trim().length > 0 &&
-    ["user", "host", "approval", "parent_run", "runner"].includes(
-      summary.origin ?? "",
-    ) &&
-    [
-      "user_requested",
-      "host_requested",
-      "host_shutdown",
-      "approval_cancelled",
-      "parent_run_cancelled",
-      "runner_shutdown",
-    ].includes(summary.reasonCode ?? "") &&
-    typeof summary.requestedAt === "string" &&
-    isIsoDateTime(summary.requestedAt);
-}
-
 function isPermissionPreset(value: unknown): value is HelarcRunPermissionPreset {
   return value === "ask_for_approval" ||
     value === "approve_for_me" ||
     value === "full_access";
-}
-
-function isTerminalStatus(value: unknown): value is HelarcRunTerminalStatus {
-  return value === "completed" ||
-    value === "failed" ||
-    value === "denied" ||
-    value === "cancelled";
-}
-
-function isValidErrorSummary(value: HelarcRunTerminalErrorSummary): boolean {
-  return value.code.trim().length > 0 && value.message.trim().length > 0;
 }
 
 function isIsoDateTime(value: string): boolean {
