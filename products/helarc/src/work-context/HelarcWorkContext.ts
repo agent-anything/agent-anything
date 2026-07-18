@@ -1,7 +1,14 @@
-import type { RunResultStatus } from "@agent-anything/agent-core";
+import type {
+  HostRunProjection,
+  HostTerminalRunProjection,
+} from "@agent-anything/agent-core/host";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
+import type {
+  HelarcProductResult,
+} from "../composition/HelarcProductResult.js";
 import type { HelarcProviderKind } from "../provider-profile/index.js";
 import type { HelarcRunPermissionPreset } from "../run/index.js";
+import type { HelarcProductRunProjection } from "../run/HelarcRunProjection.js";
 
 export type HelarcThreadStatus = "open" | "closed" | "archived";
 
@@ -17,14 +24,12 @@ export type HelarcRunTriggerMessageRole = Extract<
   "user" | "product-event" | "system"
 >;
 
-export type HelarcWorkContextRunStatus =
-  | "starting"
-  | "running"
-  | "waiting_for_approval"
-  | "cancelling"
+export type HelarcPersistedRunStatus =
+  | "inactive"
   | "completed"
+  | "rejected"
+  | "blocked"
   | "failed"
-  | "denied"
   | "cancelled";
 
 export type HelarcArtifactKind =
@@ -41,13 +46,6 @@ export interface HelarcThreadWorkspaceRef {
   path: string;
 }
 
-export interface HelarcThreadLatestRunSummary {
-  runId: string;
-  status: HelarcWorkContextRunStatus;
-  startedAt: ISODateTimeString;
-  completedAt: ISODateTimeString | null;
-}
-
 export interface CreateHelarcThreadInput {
   id: string;
   workspace: HelarcThreadWorkspaceRef;
@@ -56,7 +54,7 @@ export interface CreateHelarcThreadInput {
   createdAt: ISODateTimeString;
   updatedAt: ISODateTimeString;
   activeConversationId: string;
-  latestRun?: HelarcThreadLatestRunSummary | null;
+  latestRunId?: string | null;
   metadata?: Metadata;
 }
 
@@ -68,7 +66,7 @@ export interface HelarcThread {
   createdAt: ISODateTimeString;
   updatedAt: ISODateTimeString;
   activeConversationId: string;
-  latestRun: HelarcThreadLatestRunSummary | null;
+  latestRunId: string | null;
   metadata: Metadata;
 }
 
@@ -122,48 +120,55 @@ export interface HelarcRunProviderContext {
   model: string;
 }
 
-export interface HelarcRunRuntimeSummary {
-  status: RunResultStatus | null;
-  code: string | null;
-  summary: string | null;
-}
-
-export interface HelarcRunErrorSummary {
-  code: string;
-  message: string;
-}
-
-export interface CreateHelarcRunInput {
+export interface CreateHelarcPersistedRunInput {
   id: string;
+  taskId: string;
+  sessionId: string;
   threadId: string;
   triggeringMessageId: string;
   triggerMessageRole: HelarcRunTriggerMessageRole;
-  status: HelarcWorkContextRunStatus;
   provider?: HelarcRunProviderContext | null;
   permissionPreset?: HelarcRunPermissionPreset;
   startedAt: ISODateTimeString;
-  completedAt?: ISODateTimeString | null;
-  runtime?: HelarcRunRuntimeSummary | null;
-  errors?: readonly HelarcRunErrorSummary[];
-  artifactIds?: readonly string[];
   metadata?: Metadata;
 }
 
-export interface HelarcRun {
+export interface HelarcRunProgressRecord {
+  readonly recordedAt: ISODateTimeString;
+  readonly platform: HostRunProjection;
+  readonly product: HelarcProductRunProjection;
+}
+
+export interface HelarcRunTerminalRecord {
+  readonly platform: HostTerminalRunProjection;
+  readonly product: HelarcProductResult | null;
+}
+
+export interface HelarcPersistedRun {
   id: string;
+  taskId: string;
+  sessionId: string;
   threadId: string;
   triggeringMessageId: string;
   triggerMessageRole: HelarcRunTriggerMessageRole;
-  status: HelarcWorkContextRunStatus;
   provider: HelarcRunProviderContext | null;
   permissionPreset: HelarcRunPermissionPreset;
   startedAt: ISODateTimeString;
-  completedAt: ISODateTimeString | null;
-  runtime: HelarcRunRuntimeSummary | null;
-  errors: HelarcRunErrorSummary[];
+  updatedAt: ISODateTimeString;
+  progressSequence: number;
+  lastProgress: HelarcRunProgressRecord | null;
+  terminal: HelarcRunTerminalRecord | null;
   artifactIds: string[];
   metadata: Metadata;
 }
+
+export type HelarcSafeValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly HelarcSafeValue[]
+  | { readonly [key: string]: HelarcSafeValue };
 
 export interface CreateHelarcArtifactInput {
   id: string;
@@ -173,7 +178,7 @@ export interface CreateHelarcArtifactInput {
   title: string;
   summary?: string | null;
   createdAt: ISODateTimeString;
-  payload?: unknown;
+  payload?: HelarcSafeValue;
   metadata?: Metadata;
 }
 
@@ -185,7 +190,7 @@ export interface HelarcArtifact {
   title: string;
   summary: string | null;
   createdAt: ISODateTimeString;
-  payload: unknown;
+  payload: HelarcSafeValue;
   metadata: Metadata;
 }
 
@@ -193,7 +198,7 @@ export interface HelarcThreadRecord {
   thread: HelarcThread;
   conversations: HelarcConversation[];
   messages: HelarcMessage[];
-  runs: HelarcRun[];
+  runs: HelarcPersistedRun[];
   artifacts: HelarcArtifact[];
 }
 
@@ -204,7 +209,7 @@ export type HelarcWorkContextErrorCode =
   | "thread_status_invalid"
   | "thread_timestamp_invalid"
   | "thread_active_conversation_id_required"
-  | "thread_latest_run_invalid"
+  | "thread_latest_run_id_invalid"
   | "conversation_id_required"
   | "conversation_thread_id_required"
   | "conversation_timestamp_invalid"
@@ -217,15 +222,17 @@ export type HelarcWorkContextErrorCode =
   | "message_timestamp_invalid"
   | "message_related_ids_invalid"
   | "run_id_required"
+  | "run_task_id_required"
+  | "run_session_id_required"
   | "run_thread_id_required"
   | "run_triggering_message_id_required"
   | "run_trigger_message_role_invalid"
-  | "run_status_invalid"
   | "run_provider_invalid"
   | "run_permission_preset_invalid"
   | "run_timestamp_invalid"
-  | "run_runtime_invalid"
-  | "run_errors_invalid"
+  | "run_progress_invalid"
+  | "run_terminal_invalid"
+  | "run_metadata_invalid"
   | "run_artifact_ids_invalid"
   | "artifact_id_required"
   | "artifact_thread_id_required"
@@ -251,8 +258,8 @@ export type CreateHelarcMessageResult =
   | { ok: true; message: HelarcMessage }
   | { ok: false; error: HelarcWorkContextError };
 
-export type CreateHelarcRunResult =
-  | { ok: true; run: HelarcRun }
+export type CreateHelarcPersistedRunResult =
+  | { ok: true; run: HelarcPersistedRun }
   | { ok: false; error: HelarcWorkContextError };
 
 export type CreateHelarcArtifactResult =
@@ -296,9 +303,9 @@ export function createHelarcThread(input: CreateHelarcThreadInput): CreateHelarc
     );
   }
 
-  const latestRunResult = normalizeLatestRun(input.latestRun ?? null);
-  if (!latestRunResult.ok) {
-    return latestRunResult;
+  const latestRunId = normalizeNullableString(input.latestRunId ?? null);
+  if (input.latestRunId !== undefined && input.latestRunId !== null && latestRunId === null) {
+    return reject("thread_latest_run_id_invalid", "Thread latest Run id is invalid.");
   }
 
   return {
@@ -311,7 +318,7 @@ export function createHelarcThread(input: CreateHelarcThreadInput): CreateHelarc
       createdAt: input.createdAt,
       updatedAt: input.updatedAt,
       activeConversationId,
-      latestRun: latestRunResult.latestRun,
+      latestRunId,
       metadata: input.metadata ?? {},
     },
   };
@@ -406,10 +413,22 @@ export function createHelarcMessage(input: CreateHelarcMessageInput): CreateHela
   };
 }
 
-export function createHelarcRun(input: CreateHelarcRunInput): CreateHelarcRunResult {
+export function createHelarcPersistedRun(
+  input: CreateHelarcPersistedRunInput,
+): CreateHelarcPersistedRunResult {
   const id = normalizeRequiredString(input.id);
   if (!id) {
     return reject("run_id_required", "Run id is required.");
+  }
+
+  const taskId = normalizeRequiredString(input.taskId);
+  if (!taskId) {
+    return reject("run_task_id_required", "Run task id is required.");
+  }
+
+  const sessionId = normalizeRequiredString(input.sessionId);
+  if (!sessionId) {
+    return reject("run_session_id_required", "Run session id is required.");
   }
 
   const threadId = normalizeRequiredString(input.threadId);
@@ -426,10 +445,6 @@ export function createHelarcRun(input: CreateHelarcRunInput): CreateHelarcRunRes
     return reject("run_trigger_message_role_invalid", "Run trigger message role is invalid.");
   }
 
-  if (!isWorkContextRunStatus(input.status)) {
-    return reject("run_status_invalid", "Run status is invalid.");
-  }
-
   const provider = normalizeProvider(input.provider ?? null);
   if (!provider.ok) {
     return provider;
@@ -440,43 +455,40 @@ export function createHelarcRun(input: CreateHelarcRunInput): CreateHelarcRunRes
     return reject("run_permission_preset_invalid", "Run permission preset is invalid.");
   }
 
-  if (!isIsoDateTime(input.startedAt) || !isNullableIsoDateTime(input.completedAt ?? null)) {
-    return reject("run_timestamp_invalid", "Run timestamps are invalid.");
-  }
-
-  const runtime = normalizeRuntime(input.runtime ?? null);
-  if (!runtime.ok) {
-    return runtime;
-  }
-
-  const errors = normalizeErrors(input.errors ?? []);
-  if (!errors.ok) {
-    return errors;
-  }
-
-  const artifactIds = normalizeIdList(input.artifactIds ?? []);
-  if (!artifactIds.ok) {
-    return reject("run_artifact_ids_invalid", "Run artifact ids are invalid.");
+  if (!isIsoDateTime(input.startedAt)) {
+    return reject("run_timestamp_invalid", "Run start timestamp is invalid.");
   }
 
   return {
     ok: true,
     run: {
       id,
+      taskId,
+      sessionId,
       threadId,
       triggeringMessageId,
       triggerMessageRole: input.triggerMessageRole,
-      status: input.status,
       provider: provider.provider,
       permissionPreset,
       startedAt: input.startedAt,
-      completedAt: input.completedAt ?? null,
-      runtime: runtime.runtime,
-      errors: errors.errors,
-      artifactIds: artifactIds.ids,
+      updatedAt: input.startedAt,
+      progressSequence: 0,
+      lastProgress: null,
+      terminal: null,
+      artifactIds: [],
       metadata: input.metadata ?? {},
     },
   };
+}
+
+export function deriveHelarcPersistedRunStatus(run: HelarcPersistedRun): HelarcPersistedRunStatus {
+  const terminal = run.terminal;
+  if (terminal === null) return "inactive";
+  if (terminal.platform.status !== "completed") return terminal.platform.status;
+  const productStatus = terminal.product?.status ?? null;
+  return productStatus === "rejected" || productStatus === "blocked" || productStatus === "failed"
+    ? productStatus
+    : "completed";
 }
 
 export function createHelarcArtifact(input: CreateHelarcArtifactInput): CreateHelarcArtifactResult {
@@ -503,6 +515,11 @@ export function createHelarcArtifact(input: CreateHelarcArtifactInput): CreateHe
     return reject("artifact_timestamp_invalid", "Artifact timestamp is invalid.");
   }
 
+  const payload = normalizeSafeValue(input.payload ?? null);
+  if (!payload.ok) {
+    return reject("thread_record_invalid", "Artifact payload must contain canonical safe data.");
+  }
+
   return {
     ok: true,
     artifact: {
@@ -513,10 +530,113 @@ export function createHelarcArtifact(input: CreateHelarcArtifactInput): CreateHe
       title,
       summary: normalizeNullableString(input.summary ?? null),
       createdAt: input.createdAt,
-      payload: input.payload ?? null,
+      payload: payload.value,
       metadata: input.metadata ?? {},
     },
   };
+}
+
+function normalizeHelarcRunRecord(input: HelarcPersistedRun): CreateHelarcPersistedRunResult {
+  const base = createHelarcPersistedRun({
+    id: input.id,
+    taskId: input.taskId,
+    sessionId: input.sessionId,
+    threadId: input.threadId,
+    triggeringMessageId: input.triggeringMessageId,
+    triggerMessageRole: input.triggerMessageRole,
+    provider: input.provider,
+    permissionPreset: input.permissionPreset,
+    startedAt: input.startedAt,
+    metadata: input.metadata,
+  });
+  if (!base.ok) return base;
+  if (!isIsoDateTime(input.updatedAt) || input.updatedAt < input.startedAt) {
+    return reject("run_timestamp_invalid", "Run update timestamp is invalid.");
+  }
+  if (!Number.isSafeInteger(input.progressSequence) || input.progressSequence < 0) {
+    return reject("run_progress_invalid", "Run progress sequence is invalid.");
+  }
+  const progress = normalizeProgressRecord(
+    base.run,
+    input.updatedAt,
+    input.progressSequence,
+    input.lastProgress,
+  );
+  if (!progress.ok) return progress;
+  const terminal = normalizeTerminalRecord(base.run, input.updatedAt, input.terminal);
+  if (!terminal.ok) return terminal;
+  const artifactIds = normalizeIdList(input.artifactIds);
+  if (!artifactIds.ok) {
+    return reject("run_artifact_ids_invalid", "Run artifact ids are invalid.");
+  }
+  const metadata = normalizeSafeValue(input.metadata);
+  if (!metadata.ok || !isSafeObject(metadata.value)) {
+    return reject("run_metadata_invalid", "Run metadata must contain canonical safe data.");
+  }
+  return {
+    ok: true,
+    run: {
+      ...base.run,
+      updatedAt: input.updatedAt,
+      progressSequence: input.progressSequence,
+      lastProgress: progress.progress,
+      terminal: terminal.terminal,
+      artifactIds: artifactIds.ids,
+      metadata: metadata.value,
+    },
+  };
+}
+
+function normalizeProgressRecord(
+  run: HelarcPersistedRun,
+  updatedAt: ISODateTimeString,
+  sequence: number,
+  progress: HelarcRunProgressRecord | null,
+): { ok: true; progress: HelarcRunProgressRecord | null } |
+  { ok: false; error: HelarcWorkContextError } {
+  if ((sequence === 0) !== (progress === null)) {
+    return reject("run_progress_invalid", "Run progress sequence and snapshot are inconsistent.");
+  }
+  if (progress === null) return { ok: true, progress: null };
+  if (
+    !isIsoDateTime(progress.recordedAt) || progress.recordedAt < run.startedAt ||
+    progress.recordedAt > updatedAt ||
+    !isHostProgressProjection(progress.platform) ||
+    !isProductProgressProjection(progress.product) ||
+    progress.platform.runId !== run.id || progress.platform.taskId !== run.taskId ||
+    progress.platform.sessionId !== run.sessionId || progress.product.runId !== run.id
+  ) {
+    return reject("run_progress_invalid", "Run progress projection is invalid.");
+  }
+  const safe = normalizeSafeValue(progress);
+  if (!safe.ok) {
+    return reject("run_progress_invalid", "Run progress must contain canonical safe data.");
+  }
+  return { ok: true, progress };
+}
+
+function normalizeTerminalRecord(
+  run: HelarcPersistedRun,
+  updatedAt: ISODateTimeString,
+  terminal: HelarcRunTerminalRecord | null,
+): { ok: true; terminal: HelarcRunTerminalRecord | null } |
+  { ok: false; error: HelarcWorkContextError } {
+  if (terminal === null) return { ok: true, terminal: null };
+  const platform = terminal.platform;
+  if (
+    platform === null || typeof platform !== "object" ||
+    platform.runId !== run.id || platform.taskId !== run.taskId ||
+    !isIsoDateTime(platform.completedAt) || platform.completedAt < run.startedAt ||
+    platform.completedAt > updatedAt || !isHostTerminalProjection(platform) ||
+    !isCompatibleProductTerminal(run, platform, terminal.product)
+  ) {
+    return reject("run_terminal_invalid", "Run terminal record is invalid.");
+  }
+  const safe = normalizeSafeValue(terminal);
+  if (!safe.ok) {
+    return reject("run_terminal_invalid", "Run terminal record must contain canonical safe data.");
+  }
+  return { ok: true, terminal };
 }
 
 export function normalizeHelarcThreadRecord(
@@ -541,7 +661,7 @@ export function normalizeHelarcThreadRecord(
   }
   const messages = messageResults.map((result) => result.ok ? result.message : never());
 
-  const runResults = input.runs.map(createHelarcRun);
+  const runResults = input.runs.map(normalizeHelarcRunRecord);
   const failedRun = runResults.find((result) => !result.ok);
   if (failedRun && !failedRun.ok) {
     return failedRun;
@@ -582,7 +702,7 @@ function validateThreadRecordRelationships(
   thread: HelarcThread,
   conversations: readonly HelarcConversation[],
   messages: readonly HelarcMessage[],
-  runs: readonly HelarcRun[],
+  runs: readonly HelarcPersistedRun[],
   artifacts: readonly HelarcArtifact[],
 ): { ok: true } | { ok: false; error: HelarcWorkContextError } {
   if (conversations.length !== 1 || conversations[0]?.id !== thread.activeConversationId) {
@@ -661,10 +781,10 @@ function validateThreadRecordRelationships(
     }
   }
 
-  if (thread.latestRun && !runById.has(thread.latestRun.runId)) {
+  if (thread.latestRunId !== null && !runById.has(thread.latestRunId)) {
     return reject(
       "thread_record_invalid",
-      "Thread latest run summary must reference an existing run.",
+      "Thread latest Run id must reference an existing Run.",
     );
   }
 
@@ -686,34 +806,6 @@ function normalizeWorkspace(
       profileId: normalizeNullableString(workspace.profileId),
       displayName,
       path,
-    },
-  };
-}
-
-function normalizeLatestRun(
-  latestRun: HelarcThreadLatestRunSummary | null,
-): { ok: true; latestRun: HelarcThreadLatestRunSummary | null } | { ok: false; error: HelarcWorkContextError } {
-  if (latestRun === null) {
-    return { ok: true, latestRun: null };
-  }
-
-  const runId = normalizeRequiredString(latestRun.runId);
-  if (
-    !runId ||
-    !isWorkContextRunStatus(latestRun.status) ||
-    !isIsoDateTime(latestRun.startedAt) ||
-    !isNullableIsoDateTime(latestRun.completedAt)
-  ) {
-    return reject("thread_latest_run_invalid", "Thread latest run summary is invalid.");
-  }
-
-  return {
-    ok: true,
-    latestRun: {
-      runId,
-      status: latestRun.status,
-      startedAt: latestRun.startedAt,
-      completedAt: latestRun.completedAt,
     },
   };
 }
@@ -747,44 +839,6 @@ function normalizeProvider(
       model,
     },
   };
-}
-
-function normalizeRuntime(
-  runtime: HelarcRunRuntimeSummary | null,
-): { ok: true; runtime: HelarcRunRuntimeSummary | null } | { ok: false; error: HelarcWorkContextError } {
-  if (runtime === null) {
-    return { ok: true, runtime: null };
-  }
-
-  if (runtime.status !== null && !isRunResultStatus(runtime.status)) {
-    return reject("run_runtime_invalid", "Run runtime summary is invalid.");
-  }
-
-  return {
-    ok: true,
-    runtime: {
-      status: runtime.status,
-      code: normalizeNullableString(runtime.code),
-      summary: normalizeNullableString(runtime.summary),
-    },
-  };
-}
-
-function normalizeErrors(
-  errors: readonly HelarcRunErrorSummary[],
-): { ok: true; errors: HelarcRunErrorSummary[] } | { ok: false; error: HelarcWorkContextError } {
-  const normalized: HelarcRunErrorSummary[] = [];
-  for (const error of errors) {
-    const code = normalizeRequiredString(error.code);
-    const message = normalizeRequiredString(error.message);
-    if (!code || !message) {
-      return reject("run_errors_invalid", "Run errors are invalid.");
-    }
-
-    normalized.push({ code, message });
-  }
-
-  return { ok: true, errors: normalized };
 }
 
 function normalizeIdList(
@@ -824,15 +878,217 @@ function isRunTriggerMessageRole(value: unknown): value is HelarcRunTriggerMessa
   return value === "user" || value === "product-event" || value === "system";
 }
 
-function isWorkContextRunStatus(value: unknown): value is HelarcWorkContextRunStatus {
-  return value === "starting" ||
-    value === "running" ||
-    value === "waiting_for_approval" ||
-    value === "cancelling" ||
-    value === "completed" ||
-    value === "failed" ||
-    value === "denied" ||
+function isHostProgressProjection(value: unknown): value is HostRunProjection {
+  if (value === null || typeof value !== "object") return false;
+  const projection = value as Partial<HostRunProjection>;
+  return typeof projection.runId === "string" &&
+    typeof projection.taskId === "string" &&
+    typeof projection.sessionId === "string" &&
+    Number.isSafeInteger(projection.sequence) &&
+    (projection.sequence ?? -1) >= 0 &&
+    projection.terminal === null &&
+    projection.status !== "completed" &&
+    projection.status !== "blocked" &&
+    projection.status !== "failed" &&
+    projection.status !== "cancelled";
+}
+
+function isProductProgressProjection(value: unknown): value is HelarcProductRunProjection {
+  if (value === null || typeof value !== "object") return false;
+  const projection = value as Partial<HelarcProductRunProjection>;
+  return typeof projection.runId === "string" &&
+    Number.isSafeInteger(projection.sequence) &&
+    (projection.sequence ?? -1) >= 0 &&
+    projection.result === null &&
+    Array.isArray(projection.activity) &&
+    projection.phase !== null && typeof projection.phase === "object";
+}
+
+function isCompatibleProductTerminal(
+  run: HelarcPersistedRun,
+  platform: HostTerminalRunProjection,
+  product: HelarcProductResult | null,
+): boolean {
+  if (product === null) return true;
+  if (
+    product.status !== "completed" && product.status !== "rejected" &&
+    product.status !== "blocked" && product.status !== "failed" &&
+    product.status !== "cancelled"
+  ) {
+    return false;
+  }
+  const output = product.output;
+  if (
+    output === null || typeof output !== "object" || output.taskId !== run.taskId ||
+    (output.workspaceId !== null && typeof output.workspaceId !== "string") ||
+    (output.agentSummary !== null && typeof output.agentSummary !== "string") ||
+    !isRuntimeResultStatus(output.runtimeStatus) ||
+    !isPatchStatus(output.patchStatus) ||
+    (output.appliedPath !== null && typeof output.appliedPath !== "string") ||
+    !isEnforcementSummary(output.enforcement) || !Array.isArray(output.safeErrors) ||
+    !output.safeErrors.every((error) =>
+      error !== null && typeof error === "object" && hasText(error.code) && hasText(error.message)
+    )
+  ) {
+    return false;
+  }
+  const expectedRuntimeStatus = platform.status === "completed" ? "succeeded" : platform.status;
+  if (output.runtimeStatus !== expectedRuntimeStatus) return false;
+  if (platform.status === "completed") return product.status !== "cancelled";
+  return product.status === platform.status;
+}
+
+function isHostTerminalProjection(value: HostTerminalRunProjection): boolean {
+  if (
+    !isPlatformTerminalStatus(value.status) ||
+    (value.code !== null && !hasText(value.code)) ||
+    !isNullableNonNegativeInteger(value.durationMs) ||
+    !isNullableNonNegativeInteger(value.iterations) ||
+    !isNullableNonNegativeInteger(value.actions) ||
+    !isNonNegativeInteger(value.itemCount) ||
+    !isNonNegativeInteger(value.evidenceCount) ||
+    !isNonNegativeInteger(value.artifactCount) ||
+    !Array.isArray(value.errors) || !value.errors.every(isHostTerminalError) ||
+    !isCancellationSummary(value.cancellation)
+  ) {
+    return false;
+  }
+  if (value.status === "completed") {
+    return value.code === null && value.errors.length === 0 && value.cancellation === null;
+  }
+  if (value.status === "blocked") {
+    return value.code === "runtime_no_safe_path" && value.errors.length === 0 &&
+      value.cancellation === null;
+  }
+  if (value.status === "cancelled") {
+    return value.code === "runtime_cancelled" && value.errors.length === 0 &&
+      value.cancellation !== null;
+  }
+  return value.code !== null && value.errors.length > 0;
+}
+
+function isHostTerminalError(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  const error = value as { owner?: unknown; code?: unknown; retryable?: unknown };
+  return isRuntimeErrorOwner(error.owner) && hasText(error.code) &&
+    typeof error.retryable === "boolean";
+}
+
+function isRuntimeErrorOwner(value: unknown): boolean {
+  return value === "runtime" || value === "model" || value === "provider" ||
+    value === "approval" || value === "permission" || value === "policy" ||
+    value === "sandbox" || value === "tool" || value === "storage" ||
+    value === "audit" || value === "telemetry";
+}
+
+function isCancellationSummary(value: unknown): boolean {
+  if (value === null) return true;
+  if (typeof value !== "object") return false;
+  const cancellation = value as {
+    requestId?: unknown;
+    origin?: unknown;
+    reasonCode?: unknown;
+    requestedAt?: unknown;
+  };
+  return hasText(cancellation.requestId) &&
+    (cancellation.origin === "user" || cancellation.origin === "host" ||
+      cancellation.origin === "approval" || cancellation.origin === "parent_run" ||
+      cancellation.origin === "runner") &&
+    (cancellation.reasonCode === "user_requested" ||
+      cancellation.reasonCode === "host_requested" ||
+      cancellation.reasonCode === "host_shutdown" ||
+      cancellation.reasonCode === "approval_cancelled" ||
+      cancellation.reasonCode === "parent_run_cancelled" ||
+      cancellation.reasonCode === "runner_shutdown") &&
+    typeof cancellation.requestedAt === "string" && isIsoDateTime(cancellation.requestedAt);
+}
+
+function isRuntimeResultStatus(value: unknown): boolean {
+  return value === "succeeded" || value === "blocked" || value === "failed" ||
     value === "cancelled";
+}
+
+function isPatchStatus(value: unknown): boolean {
+  return value === null || value === "proposed" || value === "applied" ||
+    value === "rejected" || value === "failed";
+}
+
+function isEnforcementSummary(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  const enforcement = value as { selected?: unknown; status?: unknown; code?: unknown };
+  return (enforcement.selected === "managed" || enforcement.selected === "external" ||
+      enforcement.selected === "disabled") &&
+    (enforcement.status === "not_exercised" || enforcement.status === "unisolated" ||
+      enforcement.status === "enforced" || enforcement.status === "unavailable" ||
+      enforcement.status === "denied" || enforcement.status === "interrupted" ||
+      enforcement.status === "failed") &&
+    (enforcement.code === null || typeof enforcement.code === "string");
+}
+
+function isPlatformTerminalStatus(
+  value: unknown,
+): value is HostTerminalRunProjection["status"] {
+  return value === "completed" || value === "blocked" || value === "failed" || value === "cancelled";
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isNullableNonNegativeInteger(value: unknown): value is number | null {
+  return value === null || isNonNegativeInteger(value);
+}
+
+function hasText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function normalizeSafeValue(
+  value: unknown,
+  ancestors: Set<object> = new Set(),
+  depth = 0,
+): { ok: true; value: HelarcSafeValue } | { ok: false } {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return { ok: true, value };
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? { ok: true, value } : { ok: false };
+  }
+  if (typeof value !== "object" || depth >= 64 || ancestors.has(value)) {
+    return { ok: false };
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null && !Array.isArray(value)) {
+    return { ok: false };
+  }
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const items: HelarcSafeValue[] = [];
+      for (const candidate of value) {
+        const normalized = normalizeSafeValue(candidate, ancestors, depth + 1);
+        if (!normalized.ok) return { ok: false };
+        items.push(normalized.value);
+      }
+      return { ok: true, value: items };
+    }
+    const record: Record<string, HelarcSafeValue> = {};
+    for (const [key, candidate] of Object.entries(value)) {
+      if (key === "__proto__" || key === "constructor" || key === "prototype") {
+        return { ok: false };
+      }
+      const normalized = normalizeSafeValue(candidate, ancestors, depth + 1);
+      if (!normalized.ok) return { ok: false };
+      record[key] = normalized.value;
+    }
+    return { ok: true, value: record };
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function isSafeObject(value: HelarcSafeValue): value is { readonly [key: string]: HelarcSafeValue } {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function isArtifactKind(value: unknown): value is HelarcArtifactKind {
@@ -852,13 +1108,6 @@ function isPermissionPreset(value: unknown): value is HelarcRunPermissionPreset 
   return value === "ask_for_approval" ||
     value === "approve_for_me" ||
     value === "full_access";
-}
-
-function isRunResultStatus(value: unknown): value is RunResultStatus {
-  return value === "succeeded" ||
-    value === "failed" ||
-    value === "blocked" ||
-    value === "cancelled";
 }
 
 function isIsoDateTime(value: string): boolean {

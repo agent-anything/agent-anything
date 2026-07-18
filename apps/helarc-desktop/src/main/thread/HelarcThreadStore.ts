@@ -1,11 +1,13 @@
 import {
+  deriveHelarcPersistedRunStatus,
   normalizeHelarcThreadRecord,
   type HelarcArtifact,
   type HelarcConversation,
   type HelarcMessage,
   type HelarcThread,
   type HelarcThreadRecord,
-  type HelarcWorkContextRun,
+  type HelarcPersistedRunStatus,
+  type HelarcPersistedRun,
 } from "@agent-anything/helarc";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -17,7 +19,12 @@ export interface HelarcThreadSummary {
   workspace: HelarcThread["workspace"];
   createdAt: string;
   updatedAt: string;
-  latestRun: HelarcThread["latestRun"];
+  latestRun: {
+    runId: string;
+    status: HelarcPersistedRunStatus;
+    startedAt: string;
+    completedAt: string | null;
+  } | null;
 }
 
 export interface HelarcThreadStore {
@@ -25,8 +32,8 @@ export interface HelarcThreadStore {
   loadThread(threadId: string): Promise<HelarcThreadRecord | null>;
   createThread(record: HelarcThreadRecord): Promise<HelarcThreadRecord | null>;
   appendMessage(threadId: string, message: HelarcMessage): Promise<HelarcThreadRecord | null>;
-  appendRun(threadId: string, run: HelarcWorkContextRun): Promise<HelarcThreadRecord | null>;
-  updateRun(threadId: string, run: HelarcWorkContextRun): Promise<HelarcThreadRecord | null>;
+  appendRun(threadId: string, run: HelarcPersistedRun): Promise<HelarcThreadRecord | null>;
+  updateRun(threadId: string, run: HelarcPersistedRun): Promise<HelarcThreadRecord | null>;
   appendArtifact(threadId: string, artifact: HelarcArtifact): Promise<HelarcThreadRecord | null>;
 }
 
@@ -91,11 +98,11 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
     });
   }
 
-  async appendRun(threadId: string, run: HelarcWorkContextRun): Promise<HelarcThreadRecord | null> {
+  async appendRun(threadId: string, run: HelarcPersistedRun): Promise<HelarcThreadRecord | null> {
     return this.saveRun(threadId, run);
   }
 
-  async updateRun(threadId: string, run: HelarcWorkContextRun): Promise<HelarcThreadRecord | null> {
+  async updateRun(threadId: string, run: HelarcPersistedRun): Promise<HelarcThreadRecord | null> {
     return this.saveRun(threadId, run);
   }
 
@@ -127,25 +134,19 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
 
   private async saveRun(
     threadId: string,
-    run: HelarcWorkContextRun,
+    run: HelarcPersistedRun,
   ): Promise<HelarcThreadRecord | null> {
     const current = await this.loadThread(threadId);
     if (!current || run.threadId !== current.thread.id) {
       return null;
     }
 
-    const completedAt = run.completedAt ?? null;
     return this.saveUpdatedRecord({
       ...current,
       thread: {
         ...current.thread,
-        updatedAt: maxIsoDateTime(current.thread.updatedAt, completedAt ?? run.startedAt),
-        latestRun: {
-          runId: run.id,
-          status: run.status,
-          startedAt: run.startedAt,
-          completedAt,
-        },
+        updatedAt: maxIsoDateTime(current.thread.updatedAt, run.updatedAt),
+        latestRunId: run.id,
       },
       runs: replaceById(current.runs, run),
     });
@@ -193,6 +194,9 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
 }
 
 function toSummary(record: HelarcThreadRecord): HelarcThreadSummary {
+  const latestRun = record.thread.latestRunId === null
+    ? null
+    : record.runs.find((run) => run.id === record.thread.latestRunId) ?? null;
   return {
     id: record.thread.id,
     title: record.thread.title,
@@ -200,7 +204,14 @@ function toSummary(record: HelarcThreadRecord): HelarcThreadSummary {
     workspace: record.thread.workspace,
     createdAt: record.thread.createdAt,
     updatedAt: record.thread.updatedAt,
-    latestRun: record.thread.latestRun,
+    latestRun: latestRun === null
+      ? null
+      : {
+          runId: latestRun.id,
+          status: deriveHelarcPersistedRunStatus(latestRun),
+          startedAt: latestRun.startedAt,
+          completedAt: latestRun.terminal?.platform.completedAt ?? null,
+        },
   };
 }
 

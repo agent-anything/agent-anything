@@ -421,10 +421,7 @@ describe("HelarcMainController", () => {
       thread: {
         id: "helarc-thread-1",
         activeConversationId: "helarc-conversation-1",
-        latestRun: {
-          runId: "helarc-run-1",
-          status: "completed",
-        },
+        latestRunId: "helarc-run-1",
       },
       conversations: [
         {
@@ -452,10 +449,17 @@ describe("HelarcMainController", () => {
           id: "helarc-run-1",
           triggeringMessageId: "helarc-message-1",
           triggerMessageRole: "user",
-          status: "completed",
-          runtime: {
-            status: "succeeded",
-            summary: "No changes needed.",
+          terminal: {
+            platform: {
+              status: "completed",
+            },
+            product: {
+              status: "completed",
+              output: {
+                runtimeStatus: "succeeded",
+                agentSummary: "No changes needed.",
+              },
+            },
           },
           artifactIds: ["helarc-run-1-artifact-final-output"],
           provider: {

@@ -18,13 +18,14 @@ import {
   createHelarcConversation,
   createHelarcMessage,
   createHelarcArtifact,
-  createHelarcWorkContextRun,
+  createHelarcPersistedRun,
   createHelarcSessionHistoryRecord,
   createHelarcTask,
   createHelarcThread,
   createBuiltInHelarcTaskTemplates,
   createHelarcProductRunProjection,
   createHelarcRunProjection,
+  deriveHelarcPersistedRunStatus,
   mapHelarcActivityToRunEvent,
   reduceHelarcRunProjection,
   type HelarcPatchReviewDecisionSubmission,
@@ -42,9 +43,10 @@ import {
   type HelarcTaskTemplate,
   type HelarcArtifact,
   type HelarcMessage,
+  type HelarcPersistedRunStatus,
   type HelarcThreadRecord,
   type HelarcWorkContextError,
-  type HelarcWorkContextRun,
+  type HelarcPersistedRun,
   type HelarcWorkspaceProfile,
 } from "@agent-anything/helarc";
 import type {
@@ -143,7 +145,14 @@ export interface HelarcThreadSummarySnapshot {
   workspace: HelarcWorkspaceSnapshot;
   createdAt: string;
   updatedAt: string;
-  latestRun: HelarcThreadRecord["thread"]["latestRun"];
+  latestRun: HelarcThreadLatestRunSnapshot | null;
+}
+
+export interface HelarcThreadLatestRunSnapshot {
+  runId: string;
+  status: HelarcPersistedRunStatus;
+  startedAt: string;
+  completedAt: string | null;
 }
 
 export interface HelarcMainSnapshot {
@@ -437,6 +446,7 @@ export class HelarcMainController {
 
     const threadRecordResult = this.createInitialThreadRecord({
       sequenceNumber,
+      taskId: taskResult.task.id,
       taskText: taskResult.task.input.prompt,
       runId: runResult.input.runId,
       startedAt,
@@ -792,6 +802,7 @@ export class HelarcMainController {
 
   private createInitialThreadRecord(input: {
     sequenceNumber: number;
+    taskId: string;
     taskText: string;
     runId: string;
     startedAt: string;
@@ -824,12 +835,7 @@ export class HelarcMainController {
       createdAt: input.startedAt,
       updatedAt: input.startedAt,
       activeConversationId: conversationId,
-      latestRun: {
-        runId: input.runId,
-        status: "running",
-        startedAt: input.startedAt,
-        completedAt: null,
-      },
+      latestRunId: input.runId,
       metadata: {
         product: "helarc",
       },
@@ -862,12 +868,13 @@ export class HelarcMainController {
       return messageResult;
     }
 
-    const runResult = createHelarcWorkContextRun({
+    const runResult = createHelarcPersistedRun({
       id: input.runId,
+      taskId: input.taskId,
+      sessionId: threadId,
       threadId,
       triggeringMessageId: messageId,
       triggerMessageRole: "user",
-      status: "running",
       provider: {
         profileId: this.provider.activeProfile.id,
         providerKind: this.provider.activeProfile.providerKind,
@@ -921,18 +928,21 @@ export class HelarcMainController {
       return;
     }
 
-    const finalRun = createFinalWorkContextRun(existingRun, terminal);
+    const projection = this.runProjection;
+    if (
+      projection === null || projection.runId !== existingRun.id ||
+      projection.platform.terminal === null
+    ) {
+      return;
+    }
+
+    const finalRun = createFinalWorkContextRun(existingRun, projection);
     const nextRecord: HelarcThreadRecord = {
       ...this.currentThreadRecord,
       thread: {
         ...this.currentThreadRecord.thread,
         updatedAt: terminal.completedAt,
-        latestRun: {
-          runId: finalRun.id,
-          status: finalRun.status,
-          startedAt: finalRun.startedAt,
-          completedAt: finalRun.completedAt,
-        },
+        latestRunId: finalRun.id,
       },
       runs: [finalRun],
     };
@@ -1090,25 +1100,26 @@ function createHistoryPatchSummary(
 }
 
 function createFinalWorkContextRun(
-  run: HelarcWorkContextRun,
-  terminal: HelarcRunTerminalSummary,
-): HelarcWorkContextRun {
+  run: HelarcPersistedRun,
+  projection: HelarcRunProjection,
+): HelarcPersistedRun {
+  const terminal = projection.platform.terminal;
+  if (terminal === null) {
+    throw new TypeError("A final work-context Run requires a Host terminal projection.");
+  }
   return {
     ...run,
-    status: terminal.status,
-    completedAt: terminal.completedAt,
-    runtime: {
-      status: terminal.runtimeStatus,
-      code: terminal.runtimeCode,
-      summary: createRuntimeSummary(terminal.safeOutput),
+    updatedAt: terminal.completedAt,
+    terminal: {
+      platform: terminal,
+      product: projection.product.result,
     },
-    errors: terminal.errorSummary,
   };
 }
 
 function createAssistantTerminalMessage(
   record: HelarcThreadRecord,
-  run: HelarcWorkContextRun,
+  run: HelarcPersistedRun,
   terminal: HelarcRunTerminalSummary,
   relatedArtifactIds: readonly string[],
 ): HelarcMessage | null {
@@ -1138,7 +1149,7 @@ function createAssistantTerminalMessage(
 
 function createTerminalArtifacts(
   record: HelarcThreadRecord,
-  run: HelarcWorkContextRun,
+  run: HelarcPersistedRun,
   terminal: HelarcRunTerminalSummary,
   patchReview: CompletedPatchReview | null,
 ): HelarcArtifact[] {
@@ -1161,7 +1172,11 @@ function createTerminalArtifacts(
             runtimeStatus: safeOutput.runtimeStatus,
             patchStatus: safeOutput.patchStatus,
             appliedPath: safeOutput.appliedPath,
-            enforcement: safeOutput.enforcement,
+            enforcement: {
+              selected: safeOutput.enforcement.selected,
+              status: safeOutput.enforcement.status,
+              code: safeOutput.enforcement.code,
+            },
           }
         : { summary },
     });
@@ -1233,7 +1248,10 @@ function createTerminalArtifacts(
         status: terminal.status,
         runtimeStatus: terminal.runtimeStatus,
         runtimeCode: terminal.runtimeCode,
-        errors: terminal.errorSummary,
+        errors: terminal.errorSummary.map((error) => ({
+          code: error.code,
+          message: error.message,
+        })),
       },
     });
     if (artifact) {
@@ -1425,7 +1443,22 @@ function createThreadSummarySnapshotFromRecord(record: HelarcThreadRecord): Hela
     },
     createdAt: record.thread.createdAt,
     updatedAt: record.thread.updatedAt,
-    latestRun: record.thread.latestRun,
+    latestRun: createLatestRunSnapshot(record),
+  };
+}
+
+function createLatestRunSnapshot(
+  record: HelarcThreadRecord,
+): HelarcThreadLatestRunSnapshot | null {
+  const latestRun = record.thread.latestRunId === null
+    ? null
+    : record.runs.find((run) => run.id === record.thread.latestRunId) ?? null;
+  if (latestRun === null) return null;
+  return {
+    runId: latestRun.id,
+    status: deriveHelarcPersistedRunStatus(latestRun),
+    startedAt: latestRun.startedAt,
+    completedAt: latestRun.terminal?.platform.completedAt ?? null,
   };
 }
 

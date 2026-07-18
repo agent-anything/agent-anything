@@ -146,13 +146,11 @@ export interface HelarcActiveThreadSnapshot {
 }
 
 export type HelarcThreadRunStatus =
-  | "starting"
-  | "running"
-  | "waiting_for_approval"
-  | "cancelling"
+  | "inactive"
   | "completed"
+  | "rejected"
+  | "blocked"
   | "failed"
-  | "denied"
   | "cancelled";
 
 export interface HelarcThreadLatestRunSnapshot {

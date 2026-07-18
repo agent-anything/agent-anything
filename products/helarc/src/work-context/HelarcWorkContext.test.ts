@@ -3,87 +3,69 @@ import {
   createHelarcArtifact,
   createHelarcConversation,
   createHelarcMessage,
-  createHelarcRun,
+  createHelarcPersistedRun,
   createHelarcThread,
+  deriveHelarcPersistedRunStatus,
   normalizeHelarcThreadRecord,
+  type HelarcPersistedRun,
   type HelarcThreadRecord,
 } from "./HelarcWorkContext.js";
 
 const NOW = "2026-07-09T00:00:00.000Z";
+const LATER = "2026-07-09T00:01:00.000Z";
 
 describe("Helarc work context domain", () => {
-  it("creates normalized thread, conversation, message, run, and artifact records", () => {
-    const thread = createHelarcThread({
+  it("creates normalized initial Thread, Conversation, Message, Run, and Artifact records", () => {
+    expect(createHelarcThread({
       id: " thread-1 ",
       workspace: {
         profileId: " workspace-1 ",
         displayName: " AgentAnything ",
         path: " D:/projects/agent-anything ",
       },
-      title: " Implement Phase11 ",
+      title: " Implement Phase17 ",
       createdAt: NOW,
       updatedAt: NOW,
       activeConversationId: " conversation-1 ",
-    });
-
-    expect(thread).toMatchObject({
+    })).toMatchObject({
       ok: true,
       thread: {
         id: "thread-1",
-        title: "Implement Phase11",
-        status: "open",
-        activeConversationId: "conversation-1",
-        workspace: {
-          profileId: "workspace-1",
-          displayName: "AgentAnything",
-          path: "D:/projects/agent-anything",
-        },
+        title: "Implement Phase17",
+        latestRunId: null,
       },
     });
 
-    const conversation = createHelarcConversation({
+    expect(createHelarcConversation({
       id: " conversation-1 ",
       threadId: " thread-1 ",
       createdAt: NOW,
       updatedAt: NOW,
       messageIds: [" message-1 "],
-    });
-
-    expect(conversation).toMatchObject({
+    })).toMatchObject({
       ok: true,
-      conversation: {
-        id: "conversation-1",
-        threadId: "thread-1",
-        messageIds: ["message-1"],
-      },
+      conversation: { id: "conversation-1", messageIds: ["message-1"] },
     });
 
-    const message = createHelarcMessage({
+    expect(createHelarcMessage({
       id: " message-1 ",
       threadId: " thread-1 ",
       conversationId: " conversation-1 ",
       role: "user",
       content: " Build work context ",
       createdAt: NOW,
-    });
-
-    expect(message).toMatchObject({
+    })).toMatchObject({
       ok: true,
-      message: {
-        id: "message-1",
-        threadId: "thread-1",
-        conversationId: "conversation-1",
-        role: "user",
-        content: "Build work context",
-      },
+      message: { id: "message-1", role: "user", content: "Build work context" },
     });
 
-    const run = createHelarcRun({
+    expect(createHelarcPersistedRun({
       id: " run-1 ",
+      taskId: " task-1 ",
+      sessionId: " session-1 ",
       threadId: " thread-1 ",
       triggeringMessageId: " message-1 ",
       triggerMessageRole: "user",
-      status: "completed",
       provider: {
         profileId: " provider-1 ",
         providerKind: "ollama",
@@ -93,40 +75,21 @@ describe("Helarc work context domain", () => {
       },
       permissionPreset: "ask_for_approval",
       startedAt: NOW,
-      completedAt: NOW,
-      runtime: {
-        status: "succeeded",
-        code: " runtime_ok ",
-        summary: " Done ",
-      },
-      artifactIds: [" artifact-1 "],
-    });
-
-    expect(run).toMatchObject({
+    })).toMatchObject({
       ok: true,
       run: {
         id: "run-1",
-        threadId: "thread-1",
-        triggeringMessageId: "message-1",
-        triggerMessageRole: "user",
-        status: "completed",
-        provider: {
-          profileId: "provider-1",
-          providerKind: "ollama",
-          displayName: "Local Ollama",
-          endpointLabel: "localhost:11434",
-          model: "gemma3",
-        },
-        runtime: {
-          status: "succeeded",
-          code: "runtime_ok",
-          summary: "Done",
-        },
-        artifactIds: ["artifact-1"],
+        taskId: "task-1",
+        sessionId: "session-1",
+        updatedAt: NOW,
+        progressSequence: 0,
+        lastProgress: null,
+        terminal: null,
+        artifactIds: [],
       },
     });
 
-    const artifact = createHelarcArtifact({
+    expect(createHelarcArtifact({
       id: " artifact-1 ",
       threadId: " thread-1 ",
       runId: " run-1 ",
@@ -135,110 +98,85 @@ describe("Helarc work context domain", () => {
       summary: " Completed ",
       createdAt: NOW,
       payload: { safe: true },
-    });
-
-    expect(artifact).toMatchObject({
+    })).toMatchObject({
       ok: true,
-      artifact: {
-        id: "artifact-1",
-        threadId: "thread-1",
-        runId: "run-1",
-        kind: "final-output",
-        title: "Final answer",
-        summary: "Completed",
-        payload: { safe: true },
-      },
+      artifact: { id: "artifact-1", runId: "run-1", payload: { safe: true } },
     });
   });
 
-  it("requires every run to have a durable trigger message role", () => {
-    expect(createHelarcRun({
+  it("requires durable Run source identities and a valid trigger role", () => {
+    expect(createHelarcPersistedRun({
       id: "run-1",
+      taskId: "task-1",
+      sessionId: "session-1",
       threadId: "thread-1",
       triggeringMessageId: "message-1",
       triggerMessageRole: "assistant" as never,
-      status: "starting",
       startedAt: NOW,
-    })).toMatchObject({
-      ok: false,
-      error: { code: "run_trigger_message_role_invalid" },
-    });
+    })).toMatchObject({ ok: false, error: { code: "run_trigger_message_role_invalid" } });
 
-    expect(createHelarcRun({
+    expect(createHelarcPersistedRun({
       id: "run-1",
+      taskId: " ",
+      sessionId: "session-1",
       threadId: "thread-1",
-      triggeringMessageId: " ",
+      triggeringMessageId: "message-1",
       triggerMessageRole: "user",
-      status: "starting",
       startedAt: NOW,
-    })).toMatchObject({
-      ok: false,
-      error: { code: "run_triggering_message_id_required" },
-    });
+    })).toMatchObject({ ok: false, error: { code: "run_task_id_required" } });
   });
 
-  it("normalizes a coherent thread record", () => {
-    const record = createRecord();
+  it("derives persisted status from terminal source truth", () => {
+    const inactive = createRecord().runs[0];
+    expect(deriveHelarcPersistedRunStatus(inactive)).toBe("inactive");
 
+    const completed = terminalRun("completed", "completed");
+    expect(deriveHelarcPersistedRunStatus(completed)).toBe("completed");
+
+    const rejected = terminalRun("completed", "rejected");
+    expect(deriveHelarcPersistedRunStatus(rejected)).toBe("rejected");
+
+    const failed = terminalRun("failed", "failed");
+    expect(deriveHelarcPersistedRunStatus(failed)).toBe("failed");
+  });
+
+  it("normalizes a coherent durable Thread record", () => {
+    const record = createRecord();
     expect(normalizeHelarcThreadRecord(record)).toMatchObject({
       ok: true,
       record: {
-        thread: {
-          id: "thread-1",
-          activeConversationId: "conversation-1",
-          latestRun: {
-            runId: "run-1",
-            status: "completed",
-          },
-        },
-        conversations: [{ id: "conversation-1", messageIds: ["message-1", "message-2"] }],
-        messages: [
-          { id: "message-1", role: "user" },
-          { id: "message-2", role: "assistant", relatedRunIds: ["run-1"] },
-        ],
-        runs: [{ id: "run-1", triggeringMessageId: "message-1" }],
-        artifacts: [{ id: "artifact-1", runId: "run-1" }],
+        thread: { id: "thread-1", latestRunId: "run-1" },
+        conversations: [{ messageIds: ["message-1"] }],
+        messages: [{ id: "message-1", role: "user" }],
+        runs: [{ id: "run-1", taskId: "task-1", terminal: null }],
       },
     });
   });
 
-  it("rejects thread records with mismatched conversation message order", () => {
-    const record = createRecord();
-    record.conversations[0] = {
-      ...record.conversations[0],
-      messageIds: ["message-2", "message-1"],
-    };
-
-    expect(normalizeHelarcThreadRecord(record)).toMatchObject({
+  it("rejects incoherent relationships and unsafe durable payloads", () => {
+    const wrongOrder = createRecord();
+    wrongOrder.conversations[0] = { ...wrongOrder.conversations[0], messageIds: [] };
+    expect(normalizeHelarcThreadRecord(wrongOrder)).toMatchObject({
       ok: false,
       error: { code: "thread_record_invalid" },
     });
-  });
 
-  it("rejects runs whose trigger role does not match the triggering message", () => {
-    const record = createRecord();
-    record.runs[0] = {
-      ...record.runs[0],
-      triggerMessageRole: "product-event",
-    };
-
-    expect(normalizeHelarcThreadRecord(record)).toMatchObject({
+    const unknownLatest = createRecord();
+    unknownLatest.thread = { ...unknownLatest.thread, latestRunId: "missing-run" };
+    expect(normalizeHelarcThreadRecord(unknownLatest)).toMatchObject({
       ok: false,
       error: { code: "thread_record_invalid" },
     });
-  });
 
-  it("rejects artifacts that reference unknown runs", () => {
-    const record = createRecord();
-    record.artifacts[0] = {
-      ...record.artifacts[0],
-      runId: "missing-run",
-    };
-
-    expect(normalizeHelarcThreadRecord(record)).toMatchObject({
-      ok: false,
-      error: { code: "thread_record_invalid" },
-    });
+    class UnsafePayload {}
+    expect(createHelarcArtifact({
+      id: "artifact-unsafe",
+      threadId: "thread-1",
+      kind: "trace-projection",
+      title: "Unsafe",
+      createdAt: NOW,
+      payload: new UnsafePayload() as never,
+    })).toMatchObject({ ok: false });
   });
 });
 
@@ -251,86 +189,94 @@ function createRecord(): HelarcThreadRecord {
         displayName: "AgentAnything",
         path: "D:/projects/agent-anything",
       },
-      title: "Implement Phase11",
+      title: "Implement Phase17",
       status: "open",
       createdAt: NOW,
       updatedAt: NOW,
       activeConversationId: "conversation-1",
-      latestRun: {
-        runId: "run-1",
-        status: "completed",
-        startedAt: NOW,
-        completedAt: NOW,
-      },
+      latestRunId: "run-1",
       metadata: {},
     },
-    conversations: [
-      {
-        id: "conversation-1",
-        threadId: "thread-1",
-        createdAt: NOW,
-        updatedAt: NOW,
-        messageIds: ["message-1", "message-2"],
-        metadata: {},
-      },
-    ],
-    messages: [
-      {
-        id: "message-1",
-        threadId: "thread-1",
-        conversationId: "conversation-1",
-        role: "user",
-        content: "Implement Phase11.",
-        createdAt: NOW,
-        relatedRunIds: ["run-1"],
-        relatedArtifactIds: [],
-        metadata: {},
-      },
-      {
-        id: "message-2",
-        threadId: "thread-1",
-        conversationId: "conversation-1",
-        role: "assistant",
-        content: "Phase11 is complete.",
-        createdAt: NOW,
-        relatedRunIds: ["run-1"],
-        relatedArtifactIds: ["artifact-1"],
-        metadata: {},
-      },
-    ],
-    runs: [
-      {
-        id: "run-1",
-        threadId: "thread-1",
-        triggeringMessageId: "message-1",
-        triggerMessageRole: "user",
-        status: "completed",
-        provider: null,
-        permissionPreset: "ask_for_approval",
-        startedAt: NOW,
-        completedAt: NOW,
-        runtime: {
-          status: "succeeded",
-          code: null,
-          summary: "Completed.",
-        },
-        errors: [],
-        artifactIds: ["artifact-1"],
-        metadata: {},
-      },
-    ],
-    artifacts: [
-      {
-        id: "artifact-1",
-        threadId: "thread-1",
+    conversations: [{
+      id: "conversation-1",
+      threadId: "thread-1",
+      createdAt: NOW,
+      updatedAt: NOW,
+      messageIds: ["message-1"],
+      metadata: {},
+    }],
+    messages: [{
+      id: "message-1",
+      threadId: "thread-1",
+      conversationId: "conversation-1",
+      role: "user",
+      content: "Implement Phase17.",
+      createdAt: NOW,
+      relatedRunIds: ["run-1"],
+      relatedArtifactIds: [],
+      metadata: {},
+    }],
+    runs: [initialRun()],
+    artifacts: [],
+  };
+}
+
+function initialRun(): HelarcPersistedRun {
+  return {
+    id: "run-1",
+    taskId: "task-1",
+    sessionId: "session-1",
+    threadId: "thread-1",
+    triggeringMessageId: "message-1",
+    triggerMessageRole: "user",
+    provider: null,
+    permissionPreset: "ask_for_approval",
+    startedAt: NOW,
+    updatedAt: NOW,
+    progressSequence: 0,
+    lastProgress: null,
+    terminal: null,
+    artifactIds: [],
+    metadata: {},
+  };
+}
+
+function terminalRun(
+  platformStatus: "completed" | "failed",
+  productStatus: "completed" | "rejected" | "failed",
+): HelarcPersistedRun {
+  return {
+    ...initialRun(),
+    updatedAt: LATER,
+    terminal: {
+      platform: {
         runId: "run-1",
-        kind: "final-output",
-        title: "Final answer",
-        summary: "Completed.",
-        createdAt: NOW,
-        payload: { text: "Done" },
-        metadata: {},
+        taskId: "task-1",
+        status: platformStatus,
+        code: platformStatus === "completed" ? null : "runtime_error",
+        completedAt: LATER,
+        durationMs: 60_000,
+        iterations: 1,
+        actions: 0,
+        itemCount: 0,
+        evidenceCount: 0,
+        artifactCount: 0,
+        errors: [],
+        cancellation: null,
       },
-    ],
+      product: {
+        status: productStatus,
+        output: {
+          taskId: "task-1",
+          workspaceId: "workspace-1",
+          agentSummary: "Done",
+          runtimeStatus: platformStatus === "completed" ? "succeeded" : "failed",
+          patchStatus: null,
+          appliedPath: null,
+          enforcement: { selected: "disabled", status: "not_exercised", code: null },
+          safeErrors: [],
+        },
+      },
+    },
   };
 }

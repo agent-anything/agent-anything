@@ -2,7 +2,7 @@ import type {
   HelarcArtifact,
   HelarcMessage,
   HelarcThreadRecord,
-  HelarcWorkContextRun,
+  HelarcPersistedRun,
 } from "@agent-anything/helarc";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -102,36 +102,36 @@ describe("FileHelarcThreadStore", () => {
     const store = new FileHelarcThreadStore(await threadFilePath());
     await store.createThread(record("thread-1", STARTED_AT));
 
-    const running = await store.appendRun("thread-1", run("thread-1", "running", null));
-    expect(running).toMatchObject({
+    const inactive = await store.appendRun("thread-1", run("thread-1", null));
+    expect(inactive).toMatchObject({
       thread: {
-        latestRun: {
-          runId: "run-thread-1",
-          status: "running",
-          completedAt: null,
-        },
+        latestRunId: "run-thread-1",
       },
-      runs: [{ id: "run-thread-1", status: "running" }],
+      runs: [{ id: "run-thread-1", terminal: null }],
     });
 
-    const completed = await store.updateRun("thread-1", run("thread-1", "completed", COMPLETED_AT));
+    const completed = await store.updateRun("thread-1", run("thread-1", COMPLETED_AT));
     expect(completed).toMatchObject({
       thread: {
         updatedAt: COMPLETED_AT,
-        latestRun: {
-          runId: "run-thread-1",
-          status: "completed",
-          completedAt: COMPLETED_AT,
-        },
+        latestRunId: "run-thread-1",
       },
-      runs: [{ id: "run-thread-1", status: "completed" }],
+      runs: [{ id: "run-thread-1", terminal: { platform: { status: "completed" } } }],
     });
+
+    await expect(store.listThreadSummaries()).resolves.toMatchObject([{
+      latestRun: {
+        runId: "run-thread-1",
+        status: "completed",
+        completedAt: COMPLETED_AT,
+      },
+    }]);
   });
 
   it("appends artifacts and links them to their run", async () => {
     const store = new FileHelarcThreadStore(await threadFilePath());
     await store.createThread(record("thread-1", STARTED_AT));
-    await store.appendRun("thread-1", run("thread-1", "completed", COMPLETED_AT));
+    await store.appendRun("thread-1", run("thread-1", COMPLETED_AT));
 
     const updated = await store.appendArtifact("thread-1", artifact("thread-1"));
 
@@ -157,14 +157,14 @@ describe("FileHelarcThreadStore", () => {
     await store.createThread(record("thread-1", STARTED_AT));
 
     await expect(store.appendRun("thread-1", {
-      ...run("thread-1", "running", null),
+      ...run("thread-1", null),
       triggerMessageRole: "product-event",
     })).resolves.toBeNull();
 
     await expect(store.loadThread("thread-1")).resolves.toMatchObject({
       runs: [],
       thread: {
-        latestRun: null,
+        latestRunId: null,
       },
     });
   });
@@ -192,7 +192,7 @@ function record(threadId: string, updatedAt: string): HelarcThreadRecord {
       createdAt: STARTED_AT,
       updatedAt,
       activeConversationId: conversationId,
-      latestRun: null,
+      latestRunId: null,
       metadata: {},
     },
     conversations: [
@@ -239,15 +239,15 @@ function assistantMessage(threadId: string): HelarcMessage {
 
 function run(
   threadId: string,
-  status: HelarcWorkContextRun["status"],
   completedAt: string | null,
-): HelarcWorkContextRun {
+): HelarcPersistedRun {
   return {
     id: `run-${threadId}`,
+    taskId: `task-${threadId}`,
+    sessionId: threadId,
     threadId,
     triggeringMessageId: `message-${threadId}`,
     triggerMessageRole: "user",
-    status,
     provider: {
       profileId: "provider-1",
       providerKind: "ollama",
@@ -257,15 +257,27 @@ function run(
     },
     permissionPreset: "ask_for_approval",
     startedAt: STARTED_AT,
-    completedAt,
-    runtime: completedAt
-      ? {
-        status: "succeeded",
+    updatedAt: completedAt ?? STARTED_AT,
+    progressSequence: 0,
+    lastProgress: null,
+    terminal: completedAt === null ? null : {
+      platform: {
+        runId: `run-${threadId}`,
+        taskId: `task-${threadId}`,
+        status: "completed",
         code: null,
-        summary: "Completed.",
-      }
-      : null,
-    errors: [],
+        completedAt,
+        durationMs: 120_000,
+        iterations: 1,
+        actions: 0,
+        itemCount: 0,
+        evidenceCount: 0,
+        artifactCount: 0,
+        errors: [],
+        cancellation: null,
+      },
+      product: null,
+    },
     artifactIds: [],
     metadata: {},
   };
