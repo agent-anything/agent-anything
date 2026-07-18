@@ -8,16 +8,16 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { FileHelarcThreadStore } from "./HelarcThreadStore.js";
+import { LegacyFileHelarcThreadStore } from "./HelarcThreadStore.js";
 
 const STARTED_AT = "2026-07-09T08:00:00.000Z";
 const UPDATED_AT = "2026-07-09T08:01:00.000Z";
 const COMPLETED_AT = "2026-07-09T08:02:00.000Z";
 
-describe("FileHelarcThreadStore", () => {
+describe("LegacyFileHelarcThreadStore", () => {
   it("persists thread records across store recreation", async () => {
     const filePath = await threadFilePath();
-    const store = new FileHelarcThreadStore(filePath);
+    const store = new LegacyFileHelarcThreadStore(filePath);
 
     const created = await store.createThread(record("thread-1", STARTED_AT));
 
@@ -30,7 +30,7 @@ describe("FileHelarcThreadStore", () => {
       messages: [{ id: "message-thread-1", role: "user" }],
     });
 
-    const restored = new FileHelarcThreadStore(filePath);
+    const restored = new LegacyFileHelarcThreadStore(filePath);
     await expect(restored.loadThread("thread-1")).resolves.toMatchObject({
       thread: {
         id: "thread-1",
@@ -40,7 +40,7 @@ describe("FileHelarcThreadStore", () => {
   });
 
   it("lists thread summaries sorted by update timestamp and replaces duplicate ids", async () => {
-    const store = new FileHelarcThreadStore(await threadFilePath());
+    const store = new LegacyFileHelarcThreadStore(await threadFilePath());
 
     await store.createThread(record("thread-1", STARTED_AT));
     await store.createThread(record("thread-2", UPDATED_AT));
@@ -70,12 +70,12 @@ describe("FileHelarcThreadStore", () => {
       { thread: { id: "" }, conversations: [] },
     ]), "utf8");
 
-    const store = new FileHelarcThreadStore(filePath);
+    const store = new LegacyFileHelarcThreadStore(filePath);
     await expect(store.listThreadSummaries()).resolves.toHaveLength(1);
   });
 
   it("appends messages and keeps conversation message order", async () => {
-    const store = new FileHelarcThreadStore(await threadFilePath());
+    const store = new LegacyFileHelarcThreadStore(await threadFilePath());
     await store.createThread(record("thread-1", STARTED_AT));
 
     const updated = await store.appendMessage("thread-1", assistantMessage("thread-1"));
@@ -99,7 +99,7 @@ describe("FileHelarcThreadStore", () => {
   });
 
   it("appends and updates runs under a valid trigger message", async () => {
-    const store = new FileHelarcThreadStore(await threadFilePath());
+    const store = new LegacyFileHelarcThreadStore(await threadFilePath());
     await store.createThread(record("thread-1", STARTED_AT));
 
     const inactive = await store.appendRun("thread-1", run("thread-1", null));
@@ -129,7 +129,7 @@ describe("FileHelarcThreadStore", () => {
   });
 
   it("appends artifacts and links them to their run", async () => {
-    const store = new FileHelarcThreadStore(await threadFilePath());
+    const store = new LegacyFileHelarcThreadStore(await threadFilePath());
     await store.createThread(record("thread-1", STARTED_AT));
     await store.appendRun("thread-1", run("thread-1", COMPLETED_AT));
 
@@ -153,7 +153,7 @@ describe("FileHelarcThreadStore", () => {
   });
 
   it("rejects invalid thread updates without overwriting stored data", async () => {
-    const store = new FileHelarcThreadStore(await threadFilePath());
+    const store = new LegacyFileHelarcThreadStore(await threadFilePath());
     await store.createThread(record("thread-1", STARTED_AT));
 
     await expect(store.appendRun("thread-1", {

@@ -1,8 +1,16 @@
 export type {
-  HelarcThreadStore,
-  HelarcThreadSummary,
+  LegacyHelarcThreadStore,
 } from "./HelarcThreadStore.js";
+export type {
+  HelarcThreadStore,
+  HelarcThreadStoreDocumentV1,
+  FileHelarcThreadStoreOptions,
+  HelarcAtomicWriteOperations,
+} from "./FileHelarcThreadStore.js";
+export type { HelarcThreadSummary } from "./HelarcThreadSummary.js";
 
 export {
   FileHelarcThreadStore,
-} from "./HelarcThreadStore.js";
+  HelarcThreadStoreCorruptionError,
+} from "./FileHelarcThreadStore.js";
+export { LegacyFileHelarcThreadStore } from "./HelarcThreadStore.js";

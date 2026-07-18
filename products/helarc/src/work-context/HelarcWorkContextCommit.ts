@@ -31,6 +31,15 @@ export interface HelarcThreadAggregate {
   readonly commitLedger: readonly HelarcCommitLedgerEntry[];
 }
 
+export interface HelarcThreadAggregateValidationError {
+  readonly code: "aggregate_invalid";
+  readonly message: string;
+}
+
+export type NormalizeHelarcThreadAggregateResult =
+  | { readonly ok: true; readonly aggregate: HelarcThreadAggregate }
+  | { readonly ok: false; readonly error: HelarcThreadAggregateValidationError };
+
 interface HelarcCommitBase {
   readonly commitId: string;
   readonly threadId: string;
@@ -107,6 +116,36 @@ export interface HelarcWorkContextCommitStore {
   commitRunStart(input: HelarcRunStartCommit): Promise<HelarcCommitResult>;
   commitRunProgress(input: HelarcRunProgressCommit): Promise<HelarcCommitResult>;
   commitRunTerminal(input: HelarcRunTerminalCommit): Promise<HelarcCommitResult>;
+}
+
+export function normalizeHelarcThreadAggregate(
+  input: HelarcThreadAggregate,
+): NormalizeHelarcThreadAggregateResult {
+  if (input === null || typeof input !== "object" || Array.isArray(input) ||
+    !Array.isArray(input.commitLedger)) {
+    return invalidAggregate("Thread aggregate shape is invalid.");
+  }
+  let normalizedRecord: ReturnType<typeof normalizeHelarcThreadRecord>;
+  try {
+    normalizedRecord = normalizeHelarcThreadRecord(input.record);
+  } catch {
+    return invalidAggregate("Thread aggregate record shape is invalid.");
+  }
+  if (!normalizedRecord.ok) {
+    return invalidAggregate(normalizedRecord.error.message);
+  }
+  const threadId = normalizedRecord.record.thread.id;
+  if (!isValidLedger(input.commitLedger, threadId) ||
+    !isLedgerConsistentWithRecord(input.commitLedger, normalizedRecord.record)) {
+    return invalidAggregate("Thread aggregate commit ledger is invalid.");
+  }
+  return {
+    ok: true,
+    aggregate: Object.freeze({
+      record: normalizedRecord.record,
+      commitLedger: Object.freeze(input.commitLedger.map((entry) => Object.freeze({ ...entry }))),
+    }),
+  };
 }
 
 export async function applyHelarcRunStartCommit(
@@ -343,8 +382,8 @@ async function prepareCommit(
     return { status: "settled", result: reject(aggregate, "commit_invalid", "Commit base is invalid.") };
   }
   if (aggregate !== null) {
-    const normalized = normalizeHelarcThreadRecord(aggregate.record);
-    if (!normalized.ok || !isValidLedger(aggregate.commitLedger, aggregate.record.thread.id)) {
+    const normalized = normalizeHelarcThreadAggregate(aggregate);
+    if (!normalized.ok) {
       return { status: "settled", result: reject(aggregate, "aggregate_invalid", "Thread aggregate is invalid.") };
     }
     if (aggregate.record.thread.id !== commit.threadId) {
@@ -430,6 +469,7 @@ function isValidLedger(
   const ids = new Set<string>();
   for (const entry of ledger) {
     if (
+      entry === null || typeof entry !== "object" || Array.isArray(entry) ||
       !hasIdentity(entry.commitId) || entry.threadId !== threadId || !hasIdentity(entry.runId) ||
       !isCommitKind(entry.kind) || !/^sha256:[0-9a-f]{64}$/.test(entry.fingerprint) ||
       !isDateTime(entry.committedAt) ||
@@ -439,6 +479,54 @@ function isValidLedger(
       return false;
     }
     ids.add(entry.commitId);
+  }
+  return true;
+}
+
+function isLedgerConsistentWithRecord(
+  ledger: readonly HelarcCommitLedgerEntry[],
+  record: HelarcThreadRecord,
+): boolean {
+  if (ledger.length === 0 || ledger.at(-1)?.committedAt !== record.thread.updatedAt) {
+    return false;
+  }
+  const runById = new Map(record.runs.map((run) => [run.id, run]));
+  const entriesByRun = new Map<string, HelarcCommitLedgerEntry[]>();
+  let previousCommittedAt: string | null = null;
+  for (const entry of ledger) {
+    if (!runById.has(entry.runId) ||
+      (previousCommittedAt !== null && Date.parse(entry.committedAt) < Date.parse(previousCommittedAt))) {
+      return false;
+    }
+    previousCommittedAt = entry.committedAt;
+    const entries = entriesByRun.get(entry.runId) ?? [];
+    entries.push(entry);
+    entriesByRun.set(entry.runId, entries);
+  }
+  for (const run of record.runs) {
+    const entries = entriesByRun.get(run.id) ?? [];
+    if (entries.length === 0 || entries[0]?.kind !== "run_start" ||
+      entries[0].progressSequence !== 0 ||
+      entries.filter((entry) => entry.kind === "run_start").length !== 1) {
+      return false;
+    }
+    let progressSequence = 0;
+    let terminalCount = 0;
+    for (const entry of entries.slice(1)) {
+      if (entry.kind === "run_start") return false;
+      if (entry.kind === "run_progress") {
+        if (terminalCount > 0 || entry.progressSequence <= progressSequence) return false;
+        progressSequence = entry.progressSequence;
+      } else {
+        terminalCount += 1;
+        if (terminalCount > 1 || entry.progressSequence !== progressSequence) return false;
+      }
+    }
+    if (run.progressSequence !== progressSequence ||
+      (run.terminal === null) !== (terminalCount === 0) ||
+      (terminalCount === 1 && entries.at(-1)?.kind !== "run_terminal")) {
+      return false;
+    }
   }
   return true;
 }
@@ -468,6 +556,13 @@ function reject(
   message: string,
 ): HelarcCommitResult {
   return Object.freeze({ status: "rejected" as const, code, message, aggregate });
+}
+
+function invalidAggregate(message: string): NormalizeHelarcThreadAggregateResult {
+  return Object.freeze({
+    ok: false as const,
+    error: Object.freeze({ code: "aggregate_invalid" as const, message }),
+  });
 }
 
 function replaceById<T extends { readonly id: string }>(items: readonly T[], item: T): T[] {

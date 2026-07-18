@@ -9,7 +9,7 @@ import { createElectronProviderCredentialStore } from "./provider/createElectron
 import { FileHelarcProviderProfileStore } from "./provider/HelarcProviderProfileStore.js";
 import { resolveHelarcProviderConfig } from "./provider/resolveHelarcProviderConfig.js";
 import { FileHelarcSessionHistoryStore } from "./session-history/HelarcSessionHistoryStore.js";
-import { FileHelarcThreadStore } from "./thread/index.js";
+import { LegacyFileHelarcThreadStore } from "./thread/index.js";
 import { FileHelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
 import { createHelarcWindowOptions } from "./windowOptions.js";
 
@@ -48,7 +48,7 @@ async function createWindow(): Promise<void> {
   const sessionHistoryStore = new FileHelarcSessionHistoryStore(
     join(userDataPath, "session-history.json"),
   );
-  const threadStore = new FileHelarcThreadStore(
+  const threadStore = new LegacyFileHelarcThreadStore(
     join(userDataPath, "threads.json"),
   );
   const controller = new HelarcMainController({

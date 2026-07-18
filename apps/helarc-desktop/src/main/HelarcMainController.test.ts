@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HelarcMainController, type HelarcMainSnapshot } from "./HelarcMainController.js";
-import { FileHelarcThreadStore } from "./thread/index.js";
+import { LegacyFileHelarcThreadStore } from "./thread/index.js";
 
 describe("HelarcMainController", () => {
   it("keeps workspace authority in main state", () => {
@@ -377,7 +377,7 @@ describe("HelarcMainController", () => {
   });
 
   it("persists work context thread, trigger message, and run records", async () => {
-    const threadStore = new FileHelarcThreadStore(await threadFilePath());
+    const threadStore = new LegacyFileHelarcThreadStore(await threadFilePath());
     const controller = new HelarcMainController({
       provider: new CompleteProvider(),
       providerProfile: {

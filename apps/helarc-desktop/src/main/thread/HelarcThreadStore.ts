@@ -1,33 +1,20 @@
 import {
-  deriveHelarcPersistedRunStatus,
   normalizeHelarcThreadRecord,
   type HelarcArtifact,
   type HelarcConversation,
   type HelarcMessage,
-  type HelarcThread,
   type HelarcThreadRecord,
-  type HelarcPersistedRunStatus,
   type HelarcPersistedRun,
 } from "@agent-anything/helarc";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import {
+  createHelarcThreadSummary,
+  sortHelarcThreadRecords,
+  type HelarcThreadSummary,
+} from "./HelarcThreadSummary.js";
 
-export interface HelarcThreadSummary {
-  id: string;
-  title: string;
-  status: HelarcThread["status"];
-  workspace: HelarcThread["workspace"];
-  createdAt: string;
-  updatedAt: string;
-  latestRun: {
-    runId: string;
-    status: HelarcPersistedRunStatus;
-    startedAt: string;
-    completedAt: string | null;
-  } | null;
-}
-
-export interface HelarcThreadStore {
+export interface LegacyHelarcThreadStore {
   listThreadSummaries(): Promise<HelarcThreadSummary[]>;
   loadThread(threadId: string): Promise<HelarcThreadRecord | null>;
   createThread(record: HelarcThreadRecord): Promise<HelarcThreadRecord | null>;
@@ -37,14 +24,14 @@ export interface HelarcThreadStore {
   appendArtifact(threadId: string, artifact: HelarcArtifact): Promise<HelarcThreadRecord | null>;
 }
 
-export class FileHelarcThreadStore implements HelarcThreadStore {
+export class LegacyFileHelarcThreadStore implements LegacyHelarcThreadStore {
   constructor(
     private readonly filePath: string,
     private readonly maxThreads = 100,
   ) {}
 
   async listThreadSummaries(): Promise<HelarcThreadSummary[]> {
-    return sortRecords(await this.readRecords()).map(toSummary);
+    return sortHelarcThreadRecords(await this.readRecords()).map(createHelarcThreadSummary);
   }
 
   async loadThread(threadId: string): Promise<HelarcThreadRecord | null> {
@@ -60,7 +47,7 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
     }
 
     const current = await this.readRecords();
-    const nextRecords = sortRecords([
+    const nextRecords = sortHelarcThreadRecords([
       normalized.record,
       ...current.filter((item) => item.thread.id !== normalized.record.thread.id),
     ]).slice(0, this.maxThreads);
@@ -159,7 +146,7 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
     }
 
     const current = await this.readRecords();
-    const nextRecords = sortRecords([
+    const nextRecords = sortHelarcThreadRecords([
       normalized.record,
       ...current.filter((item) => item.thread.id !== normalized.record.thread.id),
     ]).slice(0, this.maxThreads);
@@ -193,28 +180,6 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
   }
 }
 
-function toSummary(record: HelarcThreadRecord): HelarcThreadSummary {
-  const latestRun = record.thread.latestRunId === null
-    ? null
-    : record.runs.find((run) => run.id === record.thread.latestRunId) ?? null;
-  return {
-    id: record.thread.id,
-    title: record.thread.title,
-    status: record.thread.status,
-    workspace: record.thread.workspace,
-    createdAt: record.thread.createdAt,
-    updatedAt: record.thread.updatedAt,
-    latestRun: latestRun === null
-      ? null
-      : {
-          runId: latestRun.id,
-          status: deriveHelarcPersistedRunStatus(latestRun),
-          startedAt: latestRun.startedAt,
-          completedAt: latestRun.terminal?.platform.completedAt ?? null,
-        },
-  };
-}
-
 function findActiveConversation(record: HelarcThreadRecord): HelarcConversation | null {
   return record.conversations.find((conversation) =>
     conversation.id === record.thread.activeConversationId
@@ -238,10 +203,6 @@ function orderMessages(messageIds: readonly string[], messages: readonly HelarcM
 
 function appendUnique(items: readonly string[], item: string): string[] {
   return items.includes(item) ? [...items] : [...items, item];
-}
-
-function sortRecords(records: readonly HelarcThreadRecord[]): HelarcThreadRecord[] {
-  return [...records].sort((left, right) => right.thread.updatedAt.localeCompare(left.thread.updatedAt));
 }
 
 function maxIsoDateTime(left: string, right: string): string {

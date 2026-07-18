@@ -50,10 +50,13 @@ export type {
   HelarcRunStartTarget,
   HelarcRunTerminalCommit,
   HelarcThreadAggregate,
+  HelarcThreadAggregateValidationError,
   HelarcWorkContextCommitStore,
+  NormalizeHelarcThreadAggregateResult,
 } from "./HelarcWorkContextCommit.js";
 export {
   applyHelarcRunProgressCommit,
   applyHelarcRunStartCommit,
   applyHelarcRunTerminalCommit,
+  normalizeHelarcThreadAggregate,
 } from "./HelarcWorkContextCommit.js";

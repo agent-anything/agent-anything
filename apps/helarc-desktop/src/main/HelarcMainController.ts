@@ -61,7 +61,7 @@ import {
   startHelarcHostRun,
   type HelarcHostActiveRun,
 } from "./run/index.js";
-import type { HelarcThreadStore, HelarcThreadSummary } from "./thread/index.js";
+import type { LegacyHelarcThreadStore, HelarcThreadSummary } from "./thread/index.js";
 
 export interface HelarcWorkspaceSnapshot {
   id: string;
@@ -231,7 +231,7 @@ export interface HelarcMainControllerInput {
   sessionHistory?: HelarcSessionHistoryRecord[];
   threadSummaries?: HelarcThreadSummary[];
   taskTemplates?: HelarcTaskTemplate[];
-  threadStore?: HelarcThreadStore | null;
+  threadStore?: LegacyHelarcThreadStore | null;
   onSessionHistoryRecord?: (
     record: HelarcSessionHistoryRecord,
   ) => Promise<HelarcSessionHistoryRecord[]> | HelarcSessionHistoryRecord[];
@@ -253,7 +253,7 @@ export class HelarcMainController {
   private currentThreadWrite: Promise<HelarcThreadRecord | null> | null = null;
   private lastPatchReview: CompletedPatchReview | null = null;
   private readonly onSessionHistoryRecord: HelarcMainControllerInput["onSessionHistoryRecord"];
-  private readonly threadStore: HelarcThreadStore | null;
+  private readonly threadStore: LegacyHelarcThreadStore | null;
   private provider: HelarcProviderSnapshot;
   private providerInstance: Provider | null;
   private readonly runtimeToolMode: HelarcRuntimeToolMode;

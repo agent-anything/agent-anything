@@ -3,6 +3,7 @@ import {
   applyHelarcRunProgressCommit,
   applyHelarcRunStartCommit,
   applyHelarcRunTerminalCommit,
+  normalizeHelarcThreadAggregate,
   type HelarcRunProgressCommit,
   type HelarcRunStartCommit,
   type HelarcRunTerminalCommit,
@@ -166,6 +167,15 @@ describe("Helarc work context commit transitions", () => {
     };
     const result = await applyHelarcRunStartCommit(null, commit);
     expect(result).toMatchObject({ status: "rejected", code: "commit_invalid", aggregate: null });
+  });
+
+  it("normalizes complete ledgers and rejects aggregates without commit history", async () => {
+    const aggregate = await startedAggregate();
+    expect(normalizeHelarcThreadAggregate(aggregate)).toMatchObject({ ok: true });
+    expect(normalizeHelarcThreadAggregate({
+      record: aggregate.record,
+      commitLedger: [],
+    })).toMatchObject({ ok: false, error: { code: "aggregate_invalid" } });
   });
 });
 

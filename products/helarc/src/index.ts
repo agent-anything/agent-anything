@@ -155,6 +155,7 @@ export type {
   HelarcRunProgressCommit,
   HelarcRunTriggerMessageRole,
   HelarcThreadAggregate,
+  HelarcThreadAggregateValidationError,
   HelarcThread,
   HelarcThreadRecord,
   HelarcThreadStatus,
@@ -163,6 +164,7 @@ export type {
   HelarcWorkContextErrorCode,
   HelarcWorkContextCommitStore,
   NormalizeHelarcThreadRecordResult,
+  NormalizeHelarcThreadAggregateResult,
 } from "./work-context/index.js";
 export type {
   HelarcProductActivityProjectionUpdate,
@@ -197,6 +199,7 @@ export {
   applyHelarcRunProgressCommit,
   applyHelarcRunStartCommit,
   applyHelarcRunTerminalCommit,
+  normalizeHelarcThreadAggregate,
   deriveHelarcPersistedRunStatus,
   normalizeHelarcThreadRecord,
 } from "./work-context/index.js";
