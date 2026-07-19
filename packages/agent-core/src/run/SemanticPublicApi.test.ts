@@ -51,5 +51,7 @@ describe("agent-core semantic public API", () => {
     expect(coreApi).not.toHaveProperty("ProviderBackedController");
     expect(coreApi).not.toHaveProperty("RetryExecutor");
     expect(coreApi).not.toHaveProperty("StructuredOutputError");
+    expect(coreApi).not.toHaveProperty("ActionEnforcementPipeline");
+    expect(coreApi).not.toHaveProperty("createSandboxExecutionGateway");
   });
 });

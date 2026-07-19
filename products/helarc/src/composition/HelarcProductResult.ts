@@ -3,8 +3,8 @@ import type {
   RunResult,
   RunResultStatus,
   RuntimeEvent,
-  SandboxEnforcement,
 } from "@agent-anything/agent-core";
+import type { SandboxEnforcement } from "@agent-anything/action-execution";
 import { projectRuntimeEventForHost } from "@agent-anything/host";
 import { CODE_AGENT_RUN_COMMAND_ACTION } from "@agent-anything/code-agent";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";

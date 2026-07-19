@@ -19,7 +19,7 @@ import type {
   InvocationInterruptionRef,
   ISODateTimeString,
 } from "@agent-anything/shared";
-import type { RuntimeError } from "../run/RuntimeError.js";
+import type { RuntimeError } from "@agent-anything/agent-core/run";
 import type { ActionRuleOutcome } from "@agent-anything/governance/policy";
 import type { CanonicalEffectivePermissions } from "./CanonicalEffectivePermissions.js";
 import type { PreparedExternalAction } from "./PreparedExternalAction.js";

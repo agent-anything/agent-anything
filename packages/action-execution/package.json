@@ -1,7 +1,7 @@
 {
-  "name": "@agent-anything/host",
+  "name": "@agent-anything/action-execution",
   "version": "0.0.0",
-  "description": "Product-neutral host integration, safe Run projection, approval bridge, and host authority stores for AgentAnything.",
+  "description": "Trusted external Action preparation, assessment, revalidation, and sandbox execution for AgentAnything.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -20,15 +20,11 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@agent-anything/action-execution": "workspace:*",
     "@agent-anything/agent-core": "workspace:*",
-    "@agent-anything/agent-runtime": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/permission": "workspace:*",
-    "@agent-anything/shared": "workspace:*"
-  },
-  "devDependencies": {
-    "@agent-anything/providers": "workspace:*"
+    "@agent-anything/shared": "workspace:*",
+    "@agent-anything/tools": "workspace:*"
   },
   "license": "Apache-2.0",
   "private": true

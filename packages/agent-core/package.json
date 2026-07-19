@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/agent-core",
   "version": "0.0.0",
-  "description": "Agent, controller, action, run, context, plan, retry, event, and task contracts for AgentAnything platform packages.",
+  "description": "Agent, controller, action, run, context, plan, retry, event, and task semantics for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -21,10 +21,6 @@
     "./controller": {
       "types": "./src/controller/index.ts",
       "import": "./dist/controller/index.js"
-    },
-    "./action-execution": {
-      "types": "./src/action-execution/index.ts",
-      "import": "./dist/action-execution/index.js"
     },
     "./run": {
       "types": "./src/run/index.ts",

@@ -7,8 +7,8 @@ import type {
   CanonicalWorkspaceRootIdentity,
   CanonicalWorkspaceRootIdentityInput,
   FileBaseline,
-} from "@agent-anything/agent-core/action-execution";
-import { createCanonicalSha256Digest } from "@agent-anything/agent-core/action-execution";
+} from "@agent-anything/action-execution";
+import { createCanonicalSha256Digest } from "@agent-anything/action-execution";
 import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
 import {
   resolveExistingTarget,

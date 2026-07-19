@@ -34,15 +34,15 @@ import type {
   ActionPolicyPort,
   ManagedPermissionConstraints,
 } from "@agent-anything/governance";
-import type { ActionAdapterPreparedData } from "@agent-anything/agent-core/action-execution";
-import { ActionEnforcementPipeline } from "@agent-anything/agent-core/action-execution";
-import { createActionRegistrationSnapshot } from "@agent-anything/agent-core/action-execution";
+import type { ActionAdapterPreparedData } from "@agent-anything/action-execution";
+import { ActionEnforcementPipeline } from "@agent-anything/action-execution";
+import { createActionRegistrationSnapshot } from "@agent-anything/action-execution";
 import {
   assertActionExecutorDispatchContext,
   createActionEffectSet,
   createSandboxExecutionGateway,
   type SandboxProvider,
-} from "@agent-anything/agent-core/action-execution";
+} from "@agent-anything/action-execution";
 import type { ResolvedRunPermissionConfig } from "@agent-anything/agent-core/run";
 import { FakeApprovalReviewer } from "@agent-anything/testing";
 import type {

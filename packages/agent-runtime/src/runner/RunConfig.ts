@@ -7,7 +7,7 @@ import type {
   RunCancellationController,
 } from "@agent-anything/agent-core/run";
 import type { ResolvedRunPermissionConfig } from "@agent-anything/agent-core/run";
-import type { RunActionContext, RunActionContextInput } from "@agent-anything/agent-core/action-execution";
+import type { RunActionContext, RunActionContextInput } from "@agent-anything/action-execution";
 
 export type RunInfrastructureRequirement = "optional" | "required";
 

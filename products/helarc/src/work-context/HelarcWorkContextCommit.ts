@@ -1,4 +1,4 @@
-import { createCanonicalSha256Digest } from "@agent-anything/agent-core/action-execution";
+import { createCanonicalSha256Digest } from "@agent-anything/action-execution";
 import type { ISODateTimeString } from "@agent-anything/shared";
 import {
   normalizeHelarcThreadRecord,

@@ -1,14 +1,16 @@
 import {
   ActionEnforcementPipeline,
-  RuntimeEventEmitter,
   createCanonicalSha256Digest,
   createSandboxExecutionGateway,
+  type SandboxEnforcement,
+  type SandboxProvider,
+} from "@agent-anything/action-execution";
+import {
+  RuntimeEventEmitter,
   type AgentTask,
   type ApprovalReviewerBinding,
   type RunCancellationController,
   type RunResult,
-  type SandboxEnforcement,
-  type SandboxProvider,
 } from "@agent-anything/agent-core";
 import { Runner } from "@agent-anything/agent-runtime";
 import {

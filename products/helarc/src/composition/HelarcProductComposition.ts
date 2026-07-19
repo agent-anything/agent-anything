@@ -10,8 +10,8 @@ import type {
   RetryClock,
   RunResult,
   RuntimeEvent,
-  SandboxEnforcement,
 } from "@agent-anything/agent-core";
+import type { SandboxEnforcement } from "@agent-anything/action-execution";
 import type { CodeAgentCommandLimits } from "@agent-anything/code-agent";
 import type { Provider } from "@agent-anything/providers";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";

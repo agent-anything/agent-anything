@@ -15,7 +15,7 @@ import {
   type PreparedActionInvocation,
   type SerializableValue,
   type TargetStateAssertion,
-} from "@agent-anything/agent-core/action-execution";
+} from "@agent-anything/action-execution";
 import type { InvocationInterruptionRef } from "@agent-anything/shared";
 import type { ToolJsonObject, ToolResult } from "@agent-anything/tools";
 import { createToolCatalogSnapshot } from "@agent-anything/tools";

@@ -5,7 +5,7 @@ import type { StoragePort } from "@agent-anything/storage";
 import type {
   ActionEnforcementPipeline,
   SandboxExecutionGateway,
-} from "@agent-anything/agent-core/action-execution";
+} from "@agent-anything/action-execution";
 import type { Controller } from "@agent-anything/agent-core/controller";
 import type { RuntimeEventPublisher } from "@agent-anything/agent-core/events";
 import type { RetryExecutor } from "../retry/RetryExecutor.js";

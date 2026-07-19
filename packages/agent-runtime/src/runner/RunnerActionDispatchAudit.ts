@@ -4,7 +4,7 @@ import {
 } from "@agent-anything/observability";
 import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
 import type { ISODateTimeString } from "@agent-anything/shared";
-import type { ActionDispatchPlan } from "@agent-anything/agent-core/action-execution";
+import type { ActionDispatchPlan } from "@agent-anything/action-execution";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
 import type { RuntimeError } from "@agent-anything/agent-core/run";
 

@@ -13,7 +13,6 @@ export type {
   ControllerInput,
   ControllerModelItem,
 } from "./controller/index.js";
-export * from "./action-execution/index.js";
 export type {
   Context,
   ContextProjection,

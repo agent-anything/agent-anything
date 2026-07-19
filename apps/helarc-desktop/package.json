@@ -25,6 +25,7 @@
     "start": "electron ."
   },
   "dependencies": {
+    "@agent-anything/action-execution": "workspace:*",
     "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/agent-runtime": "workspace:*",
     "@agent-anything/code-agent": "workspace:*",

@@ -13,6 +13,8 @@ initial code-agent desktop stage.
 - Platform packages have been split into focused workspaces with boundary checks.
 - `agent-core` provides Agent, Controller, Run, Action, Observation, Context,
   Plan, Retry, event, and task semantics and protocols.
+- `action-execution` provides the trusted Action preparation, assessment,
+  revalidation, and Sandbox dispatch path.
 - `agent-runtime` provides the authoritative Runner, provider-backed Controller,
   and Retry execution implementations.
 - `host` provides product-neutral active Run integration, safe projections,
@@ -76,6 +78,7 @@ agent-anything/
     testing/         Test fakes and scenario support
     extensions/      MCP, plugins, remote tools, and extension points
     agent-core/      Agent and Run semantics, Controller and Retry protocols
+    action-execution/ Trusted Action preparation and Sandbox dispatch
     agent-runtime/   Runner, provider-backed Controller, Retry execution
     host/            Host runtime integration, safe projections, approval bridges
     code-agent/      Code-oriented tools and workflows
@@ -95,8 +98,10 @@ Platform packages are designed to point inward:
   `governance`, `observability`, and `storage` define focused contracts.
 - `agent-core` owns Agent and Run semantics plus Controller, Retry, Plan, Context,
   and event protocols.
+- `action-execution` owns canonical Action preparation, policy and authority
+  assessment, revalidation, and the mandatory Sandbox execution gateway.
 - `agent-runtime` owns authoritative Run advancement and concrete Controller and
-  Retry execution without depending on Host or product code.
+  Retry execution, and depends on Action execution without reversing that edge.
 - `host` adapts authoritative Runner execution to product-neutral application hosts.
 - `extensions` contains optional integration surfaces such as MCP, plugins,
   remote tools, and enterprise storage.

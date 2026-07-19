@@ -4,7 +4,7 @@ import type {
   ISODateTimeString,
 } from "@agent-anything/shared";
 import type { ToolResult } from "@agent-anything/tools";
-import type { RuntimeError } from "../run/RuntimeError.js";
+import type { RuntimeError } from "@agent-anything/agent-core/run";
 import type { ActionDispatchPlan } from "./ActionRevalidation.js";
 import type { ActionExecutorDescriptor } from "./ActionRegistration.js";
 import type { CanonicalEffectivePermissions } from "./CanonicalEffectivePermissions.js";

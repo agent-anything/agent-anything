@@ -4,7 +4,7 @@ import type {
   ActionRegistrationSnapshot,
   CanonicalRemoteServerIdentity,
   SerializableValue,
-} from "@agent-anything/agent-core/action-execution";
+} from "@agent-anything/action-execution";
 import type { Metadata } from "@agent-anything/shared";
 import type {
   ToolAnnotations,

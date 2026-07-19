@@ -3,7 +3,7 @@ import {
   type ActionAdapterImplementation,
   type ActionExecutor,
   type ActionRegistrationSnapshot,
-} from "@agent-anything/agent-core/action-execution";
+} from "@agent-anything/action-execution";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import {
   CODE_AGENT_LIST_FILES_ACTION,

@@ -5,7 +5,7 @@ import {
   resolvePermissionProfile,
   type ActionApprovalCoverage,
 } from "@agent-anything/permission";
-import type { Action } from "../action/index.js";
+import type { Action } from "@agent-anything/agent-core/action";
 import type { ActionAdapter, ActionAdapterPreparedData } from "./ActionAdapter.js";
 import type { ActionAssessmentAuthoritySnapshot } from "./ActionAssessment.js";
 import { ActionEnforcementPipeline } from "./ActionEnforcementPipeline.js";

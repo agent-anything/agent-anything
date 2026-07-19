@@ -6,7 +6,7 @@ import {
   type TelemetryPort,
 } from "@agent-anything/observability";
 import type { ISODateTimeString } from "@agent-anything/shared";
-import type { SandboxAttempt } from "@agent-anything/agent-core/action-execution";
+import type { SandboxAttempt } from "@agent-anything/action-execution";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
 import type { SandboxAttemptResolutionSummary } from "@agent-anything/agent-core/run";
 import type { RuntimeError } from "@agent-anything/agent-core/run";

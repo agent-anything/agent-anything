@@ -14,6 +14,7 @@ const packageRoots = [
   "packages/providers",
   "packages/storage",
   "packages/agent-core",
+  "packages/action-execution",
   "packages/agent-runtime",
   "packages/host",
   "packages/extensions",
@@ -155,7 +156,7 @@ function checkArchitectureSource(file, text, isTestOnly) {
     return;
   }
   const isGateway = normalized(file).endsWith(
-    "/packages/agent-core/src/action-execution/SandboxExecutionGateway.ts",
+    "/packages/action-execution/src/SandboxExecutionGateway.ts",
   );
   if (!isGateway && /\b(?:actionExecutor|executor|registered\.executor)\.execute\s*\(/i.test(text)) {
     violations.push(`${rel} invokes an ActionExecutor outside SandboxExecutionGateway.`);
@@ -290,6 +291,7 @@ function checkLayerRule(file, ownerName, importedName) {
   if (lowerLayerPackages.has(ownerName)) {
     for (const forbidden of [
       "@agent-anything/agent-core",
+      "@agent-anything/action-execution",
       "@agent-anything/agent-runtime",
       "@agent-anything/host",
       "@agent-anything/extensions",
@@ -306,12 +308,27 @@ function checkLayerRule(file, ownerName, importedName) {
     for (const forbidden of [
       "@agent-anything/extensions",
       "@agent-anything/agent-runtime",
+      "@agent-anything/action-execution",
       "@agent-anything/code-agent",
       "@agent-anything/host",
       "@agent-anything/testing",
     ]) {
       if (importedName === forbidden) {
         violations.push(`${rel} agent-core production code must not import '${forbidden}'.`);
+      }
+    }
+  }
+
+  if (ownerName === "@agent-anything/action-execution") {
+    for (const forbidden of [
+      "@agent-anything/agent-runtime",
+      "@agent-anything/host",
+      "@agent-anything/extensions",
+      "@agent-anything/code-agent",
+      "@agent-anything/testing",
+    ]) {
+      if (importedName === forbidden) {
+        violations.push(`${rel} action-execution production code must not import '${forbidden}'.`);
       }
     }
   }
@@ -345,6 +362,7 @@ function checkLayerRule(file, ownerName, importedName) {
   if (ownerName === "@agent-anything/testing") {
     for (const forbidden of [
       "@agent-anything/agent-core",
+      "@agent-anything/action-execution",
       "@agent-anything/agent-runtime",
       "@agent-anything/host",
       "@agent-anything/extensions",

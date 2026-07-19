@@ -3,7 +3,7 @@ import type {
   ActionExecutor,
   ActionRegistrationSnapshot,
   FileBaseline,
-} from "@agent-anything/agent-core/action-execution";
+} from "@agent-anything/action-execution";
 import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
 import type { ToolCatalogSnapshot } from "@agent-anything/tools";
 import type {

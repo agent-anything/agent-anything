@@ -31,7 +31,7 @@ import type {
   ActionExecutionResult,
   PreparedExternalAction,
   SandboxAttempt,
-} from "@agent-anything/agent-core/action-execution";
+} from "@agent-anything/action-execution";
 import { ControllerError } from "../controller/ProviderBackedController.js";
 import type {
   ControllerDecision,

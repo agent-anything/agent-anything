@@ -5,7 +5,7 @@ import type {
 } from "@agent-anything/shared";
 import type { ApprovalRequirement } from "@agent-anything/permission";
 import type { ActionRuleOutcome } from "@agent-anything/governance/policy";
-import type { RuntimeError } from "../run/RuntimeError.js";
+import type { RuntimeError } from "@agent-anything/agent-core/run";
 import type {
   ActionAssessmentAuthoritySnapshot,
   ActionAssessmentReviewContext,

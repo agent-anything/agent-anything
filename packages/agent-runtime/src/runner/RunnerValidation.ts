@@ -6,7 +6,7 @@ import { snapshotRetryPolicy } from "@agent-anything/agent-core/retry";
 import type { Metadata } from "@agent-anything/shared";
 import { createToolCatalogSnapshot } from "@agent-anything/tools";
 import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
-import { snapshotRunActionContext } from "@agent-anything/agent-core/action-execution";
+import { snapshotRunActionContext } from "@agent-anything/action-execution";
 import type { RunInput, RunInputItem } from "@agent-anything/agent-core/run";
 import type { RuntimeError } from "@agent-anything/agent-core/run";
 import { snapshotResolvedRunPermissionConfig } from "@agent-anything/agent-core/run";
