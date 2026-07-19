@@ -1,6 +1,9 @@
 import type { BrowserWindow } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HelarcMainController } from "./HelarcMainController.js";
+import type {
+  HelarcMainController,
+  HelarcMainSnapshot,
+} from "./HelarcMainController.js";
 
 const electron = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
@@ -21,6 +24,8 @@ vi.mock("electron", () => ({
 import { HELARC_IPC_CHANNELS, registerHelarcIpc } from "./ipc.js";
 
 describe("Helarc IPC", () => {
+  const PRIVATE_RESULT = "private-main-command-result";
+
   beforeEach(() => {
     electron.handlers.clear();
     electron.handle.mockClear();
@@ -28,13 +33,34 @@ describe("Helarc IPC", () => {
   });
 
   it("registers every renderer command and revalidates execution payloads in main", async () => {
-    const startRun = vi.fn(async (input) => ({ ok: true as const, input }));
-    const cancelRun = vi.fn(() => ({ ok: true as const }));
-    const submitApprovalDecision = vi.fn((input) => ({ status: "accepted" as const, input }));
-    const resolvePatchReview = vi.fn((input) => ({ ok: true as const, input }));
+    const snapshot = mainSnapshot();
+    const startRun = vi.fn(async () => ({
+      ok: true as const,
+      taskId: "task-1",
+      snapshot,
+      privateState: PRIVATE_RESULT,
+    }));
+    const cancelRun = vi.fn(() => ({
+      ok: true as const,
+      snapshot,
+      privateState: PRIVATE_RESULT,
+    }));
+    const submitApprovalDecision = vi.fn(() => ({
+      status: "accepted_for_resolution" as const,
+      submissionId: "submission-1",
+      runId: "run-1",
+      requestId: "request-1",
+      pendingVersion: 2,
+      privateAuthority: PRIVATE_RESULT,
+    }));
+    const resolvePatchReview = vi.fn(() => ({
+      ok: true as const,
+      snapshot,
+      privateState: PRIVATE_RESULT,
+    }));
     const controller = {
       subscribeSnapshot: vi.fn(() => () => undefined),
-      getSnapshot: vi.fn(() => ({ status: "idle" })),
+      getSnapshot: vi.fn(() => snapshot),
       openThread: vi.fn(),
       selectWorkspacePath: vi.fn(),
       failWorkspaceSelection: vi.fn(),
@@ -59,9 +85,14 @@ describe("Helarc IPC", () => {
     );
     expect([...electron.handlers.keys()].sort()).toEqual([...commandChannels].sort());
 
-    await electron.handlers.get(HELARC_IPC_CHANNELS.startRun)?.({}, { taskText: 42 });
-    await electron.handlers.get(HELARC_IPC_CHANNELS.cancelRun)?.({});
-    await electron.handlers.get(HELARC_IPC_CHANNELS.submitApprovalDecision)?.({}, {
+    const startResult = await electron.handlers.get(HELARC_IPC_CHANNELS.startRun)?.(
+      {},
+      { taskText: 42 },
+    );
+    const cancelResult = await electron.handlers.get(HELARC_IPC_CHANNELS.cancelRun)?.({});
+    const approvalResult = await electron.handlers.get(
+      HELARC_IPC_CHANNELS.submitApprovalDecision,
+    )?.({}, {
       submissionId: "submission-1",
       runId: "run-1",
       requestId: "request-1",
@@ -74,7 +105,9 @@ describe("Helarc IPC", () => {
       reason: 42,
       trustedReviewer: { secret: true },
     });
-    await electron.handlers.get(HELARC_IPC_CHANNELS.resolvePatchReview)?.({}, {
+    const patchResult = await electron.handlers.get(
+      HELARC_IPC_CHANNELS.resolvePatchReview,
+    )?.({}, {
       submissionId: "patch-1",
       runId: "run-1",
       proposalId: "proposal-1",
@@ -99,6 +132,8 @@ describe("Helarc IPC", () => {
       },
       reason: null,
     });
+    expect(JSON.stringify([startResult, cancelResult, approvalResult, patchResult]))
+      .not.toContain(PRIVATE_RESULT);
     expect(resolvePatchReview).toHaveBeenCalledWith({
       submissionId: "patch-1",
       runId: "run-1",
@@ -111,13 +146,15 @@ describe("Helarc IPC", () => {
   });
 
   it("registers safe Thread opening and validates its payload in main", async () => {
-    const openThread = vi.fn(async (threadId: string) => ({
+    const snapshot = mainSnapshot();
+    const openThread = vi.fn(async () => ({
       ok: true as const,
-      snapshot: { threadId },
+      snapshot,
+      privateState: PRIVATE_RESULT,
     }));
     const controller = {
       subscribeSnapshot: vi.fn(() => () => undefined),
-      getSnapshot: vi.fn(() => ({ status: "idle" })),
+      getSnapshot: vi.fn(() => snapshot),
       openThread,
     } as unknown as HelarcMainController;
     const window = {
@@ -130,10 +167,34 @@ describe("Helarc IPC", () => {
     const handler = electron.handlers.get(HELARC_IPC_CHANNELS.openThread);
     expect(handler).toBeTypeOf("function");
 
-    await handler?.({}, { threadId: "helarc-thread-1" });
+    const result = await handler?.({}, { threadId: "helarc-thread-1" });
     await handler?.({}, { threadId: 42 });
 
     expect(openThread).toHaveBeenNthCalledWith(1, "helarc-thread-1");
     expect(openThread).toHaveBeenNthCalledWith(2, "");
+    expect(JSON.stringify(result)).not.toContain(PRIVATE_RESULT);
   });
 });
+
+function mainSnapshot(): HelarcMainSnapshot {
+  return {
+    status: "idle",
+    workspace: null,
+    workspaceProfiles: [],
+    taskTemplates: [],
+    provider: {
+      configured: false,
+      activeProfile: null,
+      profiles: [],
+      error: {
+        code: "provider_config_missing",
+        message: "Provider configuration is missing.",
+      },
+    },
+    acceptedTask: null,
+    activeThread: null,
+    threadSummaries: [],
+    run: null,
+    error: null,
+  };
+}

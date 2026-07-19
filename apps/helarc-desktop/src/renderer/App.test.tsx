@@ -249,57 +249,31 @@ function pendingApproval(
     request: {
       id: "approval-1",
       runId: "run-1",
-      actionId: "action-1",
-      actionFingerprint: "fingerprint-1",
       category: "permissions",
       reason: "Create a governed marker file.",
-      subject: {
-        runId: "run-1",
-        actionId: "action-1",
-        actionFingerprint: "fingerprint-1",
-        environmentId: "environment-1",
-        applicabilityKeyCount: 1,
-      },
       payload: {
         permissions: { fileSystem: { write: ["D:\\workspace\\marker.txt"] } },
-        cwdDisplay: "workspace",
-        environmentId: "environment-1",
       },
       decisionOptions: [
         {
           id: "grant-run",
           kind: "grantPermissions",
-          scope: "run",
           label: "Grant for run",
           description: "Grant the requested permissions for this run.",
         },
         {
           id: "decline",
           kind: "decline",
-          scope: null,
           label: "Decline",
           description: null,
         },
         {
           id: "cancel",
           kind: "cancel",
-          scope: null,
           label: "Cancel",
           description: null,
         },
       ],
-      createdAt: "2026-07-15T00:00:00.000Z",
-      deadlineAt: "2026-07-15T00:01:00.000Z",
-    },
-    context: {
-      workspaceTrustState: "trusted",
-      ruleOutcome: "prompt",
-      currentAuthority: {
-        fileSystemRead: true,
-        fileSystemWrite: false,
-        network: false,
-      },
-      annotations: {},
     },
   };
 }
@@ -320,57 +294,22 @@ function runProjection(input: {
       : status === "cancelled"
         ? "runtime_cancelled" as const
         : "runtime_limit_exceeded" as const;
-  const cancellation = status === "cancelled"
-    ? {
-        requestId: "run-1:cancellation",
-        origin: "user" as const,
-        reasonCode: "user_requested" as const,
-        requestedAt: "2026-07-05T01:00:00.500Z",
-      }
-    : null;
-
   return {
     runId: "run-1",
     display: { status, terminal, statusSource: "platform" },
     platform: {
-      sessionId: "session-1",
       taskId: "task-1",
-      runId: "run-1",
-      sequence: terminal ? 2 : 1,
-      status,
       startedAt: "2026-07-05T01:00:00.000Z",
-      plan: null,
       approval: null,
-      retry: null,
-      cancellation,
-      enforcement: {
-        selected: "disabled",
-        status: "unisolated",
-        attemptCount: 1,
-        escalationCount: 0,
-        latestAttempt: null,
-      },
       terminal: terminal
         ? {
-            runId: "run-1",
-            taskId: "task-1",
             status,
             code,
             completedAt: "2026-07-05T01:00:01.000Z",
-            durationMs: 1_000,
-            iterations: 1,
-            actions: 1,
-            itemCount: 1,
-            evidenceCount: 0,
-            artifactCount: 0,
-            errors: [],
-            cancellation,
           }
         : null,
     },
     product: {
-      runId: "run-1",
-      sequence: terminal ? 2 : 1,
       phase: { kind: "none" },
       activity,
       result: terminal

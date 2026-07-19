@@ -9,6 +9,10 @@ import type {
 import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
 import type { ApprovalDecisionSubmission } from "@agent-anything/permission";
 import type { HelarcPatchReviewDecisionSubmission } from "@agent-anything/helarc";
+import {
+  projectHelarcApprovalSubmissionReceipt,
+  projectHelarcDesktopSnapshot,
+} from "./HelarcDesktopProjection.js";
 
 export const HELARC_IPC_CHANNELS = {
   cancelRun: "helarc:cancel-run",
@@ -34,15 +38,30 @@ export interface RegisterHelarcIpcInput {
 export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   const unsubscribe = input.controller.subscribeSnapshot((snapshot) => {
     if (!input.window.isDestroyed()) {
-      input.window.webContents.send(HELARC_IPC_CHANNELS.snapshotUpdated, snapshot);
+      input.window.webContents.send(
+        HELARC_IPC_CHANNELS.snapshotUpdated,
+        projectHelarcDesktopSnapshot(snapshot),
+      );
     }
   });
   input.window.once("closed", unsubscribe);
 
-  ipcMain.handle(HELARC_IPC_CHANNELS.getSnapshot, () => input.controller.getSnapshot());
+  ipcMain.handle(HELARC_IPC_CHANNELS.getSnapshot, () => {
+    return projectHelarcDesktopSnapshot(input.controller.getSnapshot());
+  });
 
-  ipcMain.handle(HELARC_IPC_CHANNELS.openThread, (_event, payload: unknown) => {
-    return input.controller.openThread(readThreadId(payload));
+  ipcMain.handle(HELARC_IPC_CHANNELS.openThread, async (_event, payload: unknown) => {
+    const result = await input.controller.openThread(readThreadId(payload));
+    return result.ok
+      ? {
+          ok: true,
+          snapshot: projectHelarcDesktopSnapshot(result.snapshot),
+        }
+      : {
+          ok: false,
+          error: { code: result.error.code, message: result.error.message },
+          snapshot: projectHelarcDesktopSnapshot(result.snapshot),
+        };
   });
 
   ipcMain.handle(HELARC_IPC_CHANNELS.chooseWorkspace, async () => {
@@ -52,56 +71,68 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
     });
 
     if (result.canceled || result.filePaths.length === 0) {
-      return input.controller.getSnapshot();
+      return projectHelarcDesktopSnapshot(input.controller.getSnapshot());
     }
 
     const workspacePath = result.filePaths[0] ?? "";
     if (!input.workspaceProfileStore) {
-      return input.controller.selectWorkspacePath(workspacePath);
+      return projectHelarcDesktopSnapshot(input.controller.selectWorkspacePath(workspacePath));
     }
 
     const remembered = await input.workspaceProfileStore.rememberWorkspacePath(workspacePath);
     if (!remembered.ok) {
-      return input.controller.failWorkspaceSelection(
-        remembered.error.code,
-        remembered.error.message,
+      return projectHelarcDesktopSnapshot(
+        input.controller.failWorkspaceSelection(
+          remembered.error.code,
+          remembered.error.message,
+        ),
       );
     }
 
     input.controller.setWorkspaceProfiles(remembered.profiles);
-    return input.controller.selectWorkspaceProfile(remembered.profile);
+    return projectHelarcDesktopSnapshot(
+      input.controller.selectWorkspaceProfile(remembered.profile),
+    );
   });
 
   ipcMain.handle(HELARC_IPC_CHANNELS.selectWorkspaceProfile, async (_event, payload: unknown) => {
     if (!input.workspaceProfileStore) {
-      return input.controller.failWorkspaceSelection(
-        "workspace_profile_not_found",
-        "Workspace profile was not found.",
+      return projectHelarcDesktopSnapshot(
+        input.controller.failWorkspaceSelection(
+          "workspace_profile_not_found",
+          "Workspace profile was not found.",
+        ),
       );
     }
 
     const resolved = await input.workspaceProfileStore.resolveWorkspaceProfile(readProfileId(payload));
     if (!resolved.ok) {
-      return input.controller.failWorkspaceSelection(
-        resolved.error.code,
-        resolved.error.message,
+      return projectHelarcDesktopSnapshot(
+        input.controller.failWorkspaceSelection(
+          resolved.error.code,
+          resolved.error.message,
+        ),
       );
     }
 
     input.controller.setWorkspaceProfiles(resolved.profiles);
-    return input.controller.selectWorkspaceProfile(resolved.profile);
+    return projectHelarcDesktopSnapshot(
+      input.controller.selectWorkspaceProfile(resolved.profile),
+    );
   });
 
   ipcMain.handle(HELARC_IPC_CHANNELS.saveProviderConfig, async (_event, payload: unknown) => {
     if (!input.providerProfileStore || !input.providerCredentialStore) {
-      return input.controller.configureProvider({
-        provider: null,
-        profile: null,
-        error: {
-          code: "provider_config_missing",
-          message: "Provider profile storage is unavailable.",
-        },
-      });
+      return projectHelarcDesktopSnapshot(
+        input.controller.configureProvider({
+          provider: null,
+          profile: null,
+          error: {
+            code: "provider_config_missing",
+            message: "Provider profile storage is unavailable.",
+          },
+        }),
+      );
     }
 
     const saved = await input.providerProfileStore.saveActiveProfile(
@@ -109,37 +140,74 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
       input.providerCredentialStore,
     );
     if (!saved.ok) {
-      return input.controller.configureProvider({
-        provider: null,
-        profile: null,
-        error: {
-          code: saved.error.code,
-          message: saved.error.message,
-        },
-      });
+      return projectHelarcDesktopSnapshot(
+        input.controller.configureProvider({
+          provider: null,
+          profile: null,
+          error: {
+            code: saved.error.code,
+            message: saved.error.message,
+          },
+        }),
+      );
     }
 
-    return input.controller.configureProvider({
-      provider: createHelarcProvider(saved.config),
-      profile: saved.profile,
-    });
+    return projectHelarcDesktopSnapshot(
+      input.controller.configureProvider({
+        provider: createHelarcProvider(saved.config),
+        profile: saved.profile,
+      }),
+    );
   });
 
-  ipcMain.handle(HELARC_IPC_CHANNELS.startRun, (_event, payload: unknown) => {
+  ipcMain.handle(HELARC_IPC_CHANNELS.startRun, async (_event, payload: unknown) => {
     const taskText = readTaskText(payload);
-    return input.controller.startRun({ taskText });
+    const result = await input.controller.startRun({ taskText });
+    return result.ok
+      ? {
+          ok: true,
+          taskId: result.taskId,
+          snapshot: projectHelarcDesktopSnapshot(result.snapshot),
+        }
+      : {
+          ok: false,
+          error: { code: result.error.code, message: result.error.message },
+          snapshot: projectHelarcDesktopSnapshot(result.snapshot),
+        };
   });
 
   ipcMain.handle(HELARC_IPC_CHANNELS.cancelRun, () => {
-    return input.controller.cancelRun();
+    const result = input.controller.cancelRun();
+    return result.ok
+      ? {
+          ok: true,
+          snapshot: projectHelarcDesktopSnapshot(result.snapshot),
+        }
+      : {
+          ok: false,
+          error: { code: result.error.code, message: result.error.message },
+          snapshot: projectHelarcDesktopSnapshot(result.snapshot),
+        };
   });
 
   ipcMain.handle(HELARC_IPC_CHANNELS.submitApprovalDecision, (_event, payload: unknown) => {
-    return input.controller.submitApprovalDecision(readApprovalDecisionSubmission(payload));
+    return projectHelarcApprovalSubmissionReceipt(
+      input.controller.submitApprovalDecision(readApprovalDecisionSubmission(payload)),
+    );
   });
 
   ipcMain.handle(HELARC_IPC_CHANNELS.resolvePatchReview, (_event, payload: unknown) => {
-    return input.controller.resolvePatchReview(readPatchReviewDecision(payload));
+    const result = input.controller.resolvePatchReview(readPatchReviewDecision(payload));
+    return result.ok
+      ? {
+          ok: true,
+          snapshot: projectHelarcDesktopSnapshot(result.snapshot),
+        }
+      : {
+          ok: false,
+          error: { code: result.error.code, message: result.error.message },
+          snapshot: projectHelarcDesktopSnapshot(result.snapshot),
+        };
   });
 }
 

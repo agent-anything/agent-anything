@@ -274,6 +274,10 @@ function checkDesktopSafeSurface(rel, text) {
   const isPreload = rel.startsWith("apps/helarc-desktop/src/preload/");
   if (!isRenderer && !isShared && !isPreload) return;
 
+  if (/["']@agent-anything\//.test(text)) {
+    violations.push(`${rel} Desktop safe surface must not import or require workspace packages.`);
+  }
+
   const trustedSymbols = [
     "Runner",
     "RunResult",
@@ -304,11 +308,9 @@ function checkWorkspaceImport({ file, owner, imported, isTestOnly }) {
   }
   if (
     rel.startsWith("apps/helarc-desktop/src/shared/") &&
-    imported.packageName.startsWith("@agent-anything/") &&
-    imported.packageName !== "@agent-anything/helarc" &&
-    imported.packageName !== "@agent-anything/permission"
+    imported.packageName.startsWith("@agent-anything/")
   ) {
-    violations.push(`${rel} Desktop shared IPC imports disallowed workspace package '${imported.packageName}'.`);
+    violations.push(`${rel} Desktop shared IPC must own its DTOs instead of importing '${imported.packageName}'.`);
   }
 
   if (imported.packageName === "@agent-anything/platform") {
