@@ -7,16 +7,14 @@ import type {
   ActionEnforcementPipeline,
   SandboxExecutionGateway,
 } from "../action-execution/index.js";
-import type { Controller } from "../controller/index.js";
+import type { Controller } from "../controller/Controller.js";
 import type { RuntimeEventPublisher } from "../events/index.js";
-import {
-  createSystemRetryExecutor,
-  type RetryExecutor,
-} from "../retry/index.js";
+import { createSystemRetryExecutor } from "../retry/createSystemRetryExecutor.js";
+import type { RetryExecutor } from "../retry/RetryExecutor.js";
 import { RunExecution } from "./RunExecution.js";
 import type { RunConfig } from "./RunConfig.js";
-import type { RunInput } from "./RunInput.js";
-import type { RunResult } from "./RunResult.js";
+import type { RunInput } from "../run/RunInput.js";
+import type { RunResult } from "../run/RunResult.js";
 
 export type RunnerIdentityKind =
   | "run_item"

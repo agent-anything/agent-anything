@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
 import { resolvePermissionProfile } from "@agent-anything/permission";
-import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
+import type { ResolvedRunPermissionConfig } from "../run/RunPermissionConfig.js";
 import { preparePermissionRequestAction } from "./PermissionRequestAction.js";
 
 describe("request_permissions Action", () => {

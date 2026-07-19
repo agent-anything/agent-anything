@@ -5,7 +5,7 @@ import {
   type ValidatedApprovalDecision,
 } from "@agent-anything/permission";
 import type { AppliedPolicyAmendmentRecord } from "@agent-anything/governance";
-import type { RunPermissionState } from "./RunPermissionState.js";
+import type { RunPermissionState } from "../run/RunPermissionState.js";
 
 export type ApplyImmediateApprovalAuthorityResult =
   | {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAllowAllActionPolicyPort } from "@agent-anything/governance";
 import type { InvocationInterruptionContext } from "@agent-anything/shared";
-import type { Action } from "../runner/Action.js";
+import type { Action } from "../action/index.js";
 import {
   type ActionAdapter,
   type ActionAdapterPreparedData,

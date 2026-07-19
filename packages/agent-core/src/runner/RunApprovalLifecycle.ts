@@ -5,7 +5,7 @@ import type {
 import type {
   PendingApproval,
   RunPermissionState,
-} from "./RunPermissionState.js";
+} from "../run/RunPermissionState.js";
 
 export type ApprovalSettlementCounterEffect =
   | "applied"

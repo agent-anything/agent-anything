@@ -9,9 +9,9 @@ import {
   type ActionApprovalCause,
 } from "@agent-anything/permission";
 import type { ActionPolicyPort, PolicyDecision } from "@agent-anything/governance";
-import type { Action } from "../runner/Action.js";
-import type { ActionRejectedCode } from "../runner/Observation.js";
-import type { RuntimeError } from "../runner/RuntimeError.js";
+import type { Action } from "../action/Action.js";
+import type { ActionRejectedCode } from "../run/Observation.js";
+import type { RuntimeError } from "../run/RuntimeError.js";
 import {
   type ActionAdapterImplementation,
   type ActionAdapterPreparationResult,

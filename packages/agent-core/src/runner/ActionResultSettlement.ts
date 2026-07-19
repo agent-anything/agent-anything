@@ -2,7 +2,7 @@ import type { Evidence, EvidenceBuilderPort } from "@agent-anything/evidence";
 import type { ArtifactRef, EvidenceRef, Metadata } from "@agent-anything/shared";
 import type { StoragePort } from "@agent-anything/storage";
 import type { ToolResult } from "@agent-anything/tools";
-import type { RuntimeError } from "./RuntimeError.js";
+import type { RuntimeError } from "../run/RuntimeError.js";
 
 export interface ValidToolResultClassification {
   readonly status: "valid";

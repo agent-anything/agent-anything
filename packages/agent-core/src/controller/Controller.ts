@@ -2,11 +2,12 @@ import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { Agent } from "../agent/index.js";
 import type { ContextProjection } from "../context/Context.js";
-import type { ActionCandidate } from "../runner/Action.js";
-import type { CancellationContext } from "../runner/RunCancellation.js";
-import type { RunInputItem } from "../runner/RunInput.js";
+import type { ActionCandidate } from "../action/Action.js";
+import type { CancellationContext } from "../run/RunCancellation.js";
+import type { RunInputItem } from "../run/RunInput.js";
 import type { AgentTask } from "../task/index.js";
-import type { RetryEventSink, RetryPolicy } from "../retry/index.js";
+import type { RetryEventSink } from "../retry/RetryEvent.js";
+import type { RetryPolicy } from "../retry/RetryPolicy.js";
 
 export interface ControllerModelItem {
   readonly id: string;

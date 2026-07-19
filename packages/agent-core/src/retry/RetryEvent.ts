@@ -1,7 +1,7 @@
 import type { ISODateTimeString } from "@agent-anything/shared";
-import type { CancellationAttribution } from "../runner/RunCancellation.js";
+import type { CancellationAttribution } from "../run/RunCancellation.js";
 import type { RetryDelay } from "./RetryFailure.js";
-import type { RetryExhausted } from "./RetryExecution.js";
+import type { RetryExhaustionReason } from "./RetryExhaustion.js";
 import type { RetryOwner } from "./RetryOperation.js";
 
 export type RetryEvent =
@@ -76,7 +76,7 @@ export interface RetryFallbackSelectedEvent extends RetryEventBase {
 export interface RetryExhaustedEvent extends RetryEventBase {
   readonly type: "retry_exhausted";
   readonly finalBudgetId: string;
-  readonly reason: RetryExhausted["reason"];
+  readonly reason: RetryExhaustionReason;
   readonly totalAttempts: number;
   readonly totalRetryDelayMs: number;
   readonly lastFailureCategory: string | null;

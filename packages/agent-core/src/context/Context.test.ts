@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyPlanUpdate } from "../plan/index.js";
-import type { ActionRejectedObservation } from "../runner/index.js";
+import type { ActionRejectedObservation } from "../run/index.js";
 import type { AgentTask } from "../task/index.js";
 import {
   applyContextUpdate,

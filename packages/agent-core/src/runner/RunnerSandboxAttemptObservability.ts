@@ -8,8 +8,8 @@ import {
 import type { ISODateTimeString } from "@agent-anything/shared";
 import type { SandboxAttempt } from "../action-execution/index.js";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
-import type { SandboxAttemptResolutionSummary } from "./RunItem.js";
-import type { RuntimeError } from "./RuntimeError.js";
+import type { SandboxAttemptResolutionSummary } from "../run/RunItem.js";
+import type { RuntimeError } from "../run/RuntimeError.js";
 
 interface SandboxAttemptRecordInput {
   readonly attempt: SandboxAttempt;

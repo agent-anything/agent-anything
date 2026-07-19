@@ -2,7 +2,7 @@ import type { ISODateTimeString } from "@agent-anything/shared";
 import type {
   RunCancellationSummary,
   RunFinalizationContext,
-} from "./RunCancellation.js";
+} from "../run/RunCancellation.js";
 
 export interface RunFinalizationScope {
   readonly context: RunFinalizationContext;

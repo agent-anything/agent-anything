@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRunCancellationController } from "../runner/RunCancellation.js";
+import { createRunCancellationController } from "../run/RunCancellation.js";
 import {
   cancellationAttribution,
   createRetryAttemptInterruptionFactory,

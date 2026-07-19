@@ -1,17 +1,20 @@
 export type {
+  RetryBudgetExhausted,
+  RetryExhausted,
+  RetryExhaustionReason,
+  RetryOperationProgress,
+} from "./RetryExhaustion.js";
+export type {
   RetryAttemptInterruption,
   RetryAttemptInterruptionFactory,
   RetryAttemptContext,
   RetryAttemptExecutionResult,
-  RetryBudgetExhausted,
   RetryClock,
   RetryDeadlineExceeded,
   RetryExecutionInput,
   RetryExecutionResult,
   RetryExecutorDependencies,
-  RetryExhausted,
   RetryIdGenerator,
-  RetryOperationProgress,
   RetryRandomSource,
   RetryWait,
 } from "./RetryExecution.js";

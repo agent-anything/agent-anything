@@ -8,7 +8,7 @@ import {
   type CanonicalAdditionalPermissions,
   type PermissionResolutionEnvironmentInput,
 } from "@agent-anything/permission";
-import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
+import type { ResolvedRunPermissionConfig } from "../run/RunPermissionConfig.js";
 
 const MAX_PERMISSION_REQUEST_REASON_LENGTH = 2_000;
 

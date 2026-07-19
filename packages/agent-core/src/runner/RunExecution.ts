@@ -32,11 +32,11 @@ import type {
   PreparedExternalAction,
   SandboxAttempt,
 } from "../action-execution/index.js";
-import {
-  ControllerError,
-  type ControllerDecision,
-  type ControllerInput,
-} from "../controller/index.js";
+import { ControllerError } from "../controller/ProviderBackedController.js";
+import type {
+  ControllerDecision,
+  ControllerInput,
+} from "../controller/Controller.js";
 import {
   applyContextUpdate,
   createInitialContext,
@@ -50,7 +50,7 @@ import {
   type Plan,
   type PlanLifecycleChange,
 } from "../plan/index.js";
-import type { Action, ActionCandidate } from "./Action.js";
+import type { Action, ActionCandidate } from "../action/Action.js";
 import type {
   ActionDeniedObservation,
   ActionFailureObservation,
@@ -64,16 +64,16 @@ import type {
   PermissionsGrantedObservation,
   PlanUpdateResultObservation,
   ToolResultObservation,
-} from "./Observation.js";
+} from "../run/Observation.js";
 import type {
   InterruptibleOperationKind,
   RunFinalizationContext,
   RunCancellationRequest,
-} from "./RunCancellation.js";
-import { toRunCancellationSummary } from "./RunCancellation.js";
+} from "../run/RunCancellation.js";
+import { toRunCancellationSummary } from "../run/RunCancellation.js";
 import { createRunFinalizationContext } from "./RunFinalization.js";
 import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
-import type { RunInput } from "./RunInput.js";
+import type { RunInput } from "../run/RunInput.js";
 import type {
   ActionAssessedSummary,
   ActionInvalidatedSummary,
@@ -83,7 +83,7 @@ import type {
   RunItemBase,
   SandboxAttemptResolutionSummary,
   SandboxAttemptSummary,
-} from "./RunItem.js";
+} from "../run/RunItem.js";
 import {
   createBlockedRunResult,
   createCancelledRunResult,
@@ -92,7 +92,7 @@ import {
   type RunBlockedCode,
   type RunFailureCode,
   type RunResult,
-} from "./RunResult.js";
+} from "../run/RunResult.js";
 import type { RunnerDependencies } from "./Runner.js";
 import { recordRunnerLifecycle } from "./RunnerObservability.js";
 import {
@@ -101,8 +101,8 @@ import {
   snapshotRunInput,
   validateControllerDecision,
 } from "./RunnerValidation.js";
-import type { RunCounters, RunState } from "./RunState.js";
-import type { RuntimeError } from "./RuntimeError.js";
+import type { RunCounters, RunState } from "../run/RunState.js";
+import type { RuntimeError } from "../run/RuntimeError.js";
 import {
   assertRunPermissionStateInvariant,
   createInitialRunPermissionState,
@@ -110,17 +110,17 @@ import {
   projectPermissionContext,
   type PendingApproval,
   type RunPermissionState,
-} from "./RunPermissionState.js";
+} from "../run/RunPermissionState.js";
 import {
   deriveApprovalReviewDeadline,
   deriveAuthorityCommitDeadline,
   deriveRunDeadline,
-} from "./RunPermissionConfig.js";
+} from "../run/RunPermissionConfig.js";
 import {
   snapshotRetryEvent,
   type RetryEvent,
   type RetryEventSink,
-} from "../retry/index.js";
+} from "../retry/RetryEvent.js";
 import {
   executeApprovalReviewer,
   type ApprovalReviewerExecutionResult,
@@ -150,7 +150,7 @@ import { recordApprovalResolution } from "./RunnerApprovalObservability.js";
 import {
   createApprovalRecordSummary,
   createApprovalRequestSummary,
-} from "./ApprovalSummary.js";
+} from "../run/ApprovalSummary.js";
 import {
   authorityCommitOwner,
   executeAuthorityCommit,

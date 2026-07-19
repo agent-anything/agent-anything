@@ -17,9 +17,9 @@ import {
   type ControllerInput,
 } from "../controller/index.js";
 import { RuntimeEventEmitter, type RuntimeEvent } from "../events/index.js";
-import { createRunCancellationController } from "./RunCancellation.js";
+import { createRunCancellationController } from "../run/RunCancellation.js";
 import type { RunConfig } from "./RunConfig.js";
-import type { RunInput } from "./RunInput.js";
+import type { RunInput } from "../run/RunInput.js";
 import { Runner } from "./Runner.js";
 import type { RetryEvent } from "../retry/index.js";
 import {
@@ -43,7 +43,7 @@ import {
   createSandboxExecutionGateway,
   type SandboxProvider,
 } from "../action-execution/index.js";
-import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
+import type { ResolvedRunPermissionConfig } from "../run/RunPermissionConfig.js";
 import { FakeApprovalReviewer } from "@agent-anything/testing";
 import type {
   AdditionalPermissions,

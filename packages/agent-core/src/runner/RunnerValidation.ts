@@ -1,15 +1,15 @@
 import type { Agent } from "../agent/index.js";
-import type { ControllerDecision } from "../controller/index.js";
+import type { ControllerDecision } from "../controller/Controller.js";
 import type { WorkspaceContext } from "@agent-anything/governance";
 import { assertValidPlanLimits } from "../plan/index.js";
-import { snapshotRetryPolicy } from "../retry/index.js";
+import { snapshotRetryPolicy } from "../retry/RetryPolicy.js";
 import type { Metadata } from "@agent-anything/shared";
 import { createToolCatalogSnapshot } from "@agent-anything/tools";
 import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
 import { snapshotRunActionContext } from "./RunActionContext.js";
-import type { RunInput, RunInputItem } from "./RunInput.js";
-import type { RuntimeError } from "./RuntimeError.js";
-import { snapshotResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
+import type { RunInput, RunInputItem } from "../run/RunInput.js";
+import type { RuntimeError } from "../run/RuntimeError.js";
+import { snapshotResolvedRunPermissionConfig } from "../run/RunPermissionConfig.js";
 
 export interface ConfigValidationFailure {
   readonly valid: false;

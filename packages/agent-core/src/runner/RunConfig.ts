@@ -1,12 +1,12 @@
 import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
 import type { Metadata } from "@agent-anything/shared";
 import type { PlanLimits } from "../plan/index.js";
-import type { RetryPolicy } from "../retry/index.js";
+import type { RetryPolicy } from "../retry/RetryPolicy.js";
 import type {
   CancellationLimits,
   RunCancellationController,
-} from "./RunCancellation.js";
-import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
+} from "../run/RunCancellation.js";
+import type { ResolvedRunPermissionConfig } from "../run/RunPermissionConfig.js";
 import type { RunActionContext, RunActionContextInput } from "./RunActionContext.js";
 
 export type RunInfrastructureRequirement = "optional" | "required";

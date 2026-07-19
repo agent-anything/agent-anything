@@ -8,10 +8,10 @@ import {
 } from "@agent-anything/observability";
 import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
-import type { ApprovalRecordSummary } from "./ApprovalSummary.js";
-import type { ApprovalCounters } from "./RunPermissionState.js";
+import type { ApprovalRecordSummary } from "../run/ApprovalSummary.js";
+import type { ApprovalCounters } from "../run/RunPermissionState.js";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
-import type { RuntimeError, RuntimeErrorOwner } from "./RuntimeError.js";
+import type { RuntimeError, RuntimeErrorOwner } from "../run/RuntimeError.js";
 
 export interface RecordApprovalResolutionInput {
   readonly runId: string;

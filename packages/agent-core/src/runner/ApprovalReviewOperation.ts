@@ -9,11 +9,8 @@ import {
   type ApprovalReviewOutcome,
 } from "@agent-anything/permission";
 import type { InvocationInterruptionContext } from "@agent-anything/shared";
-import type {
-  RetryClassification,
-  RetryClassifier,
-  RetryDeadlineExceeded,
-} from "../retry/index.js";
+import type { RetryDeadlineExceeded } from "../retry/RetryExecution.js";
+import type { RetryClassification, RetryClassifier } from "../retry/RetryFailure.js";
 
 export type ApprovalReviewRetryCategory =
   | "reviewer_unavailable"

@@ -3,7 +3,7 @@ import type { Context } from "../context/Context.js";
 import type { Plan } from "../plan/index.js";
 import type { RunCancellationRequest } from "./RunCancellation.js";
 import type { RunItem } from "./RunItem.js";
-import type { RunBlockedCode, RunFailureCode } from "./RunResult.js";
+import type { RunBlockedCode, RunFailureCode } from "./RunStatus.js";
 import type { RuntimeError } from "./RuntimeError.js";
 import type {
   PendingApproval,

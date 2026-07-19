@@ -4,7 +4,7 @@ import type { RuntimeEvent, RuntimeEventName } from "../events/index.js";
 import {
   createFailedRunResult,
   createSucceededRunResult,
-} from "../runner/index.js";
+} from "../run/index.js";
 import {
   createHostRunProjection,
   createHostTerminalRunProjection,

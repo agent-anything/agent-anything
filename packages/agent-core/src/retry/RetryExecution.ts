@@ -1,31 +1,13 @@
-import type { CancellationAttribution, CancellationContext } from "../runner/RunCancellation.js";
+import type { CancellationAttribution, CancellationContext } from "../run/RunCancellation.js";
 import type { RetryClassifier, RetryFailure } from "./RetryFailure.js";
 import type { RetryEventSink } from "./RetryEvent.js";
-import type { RetryAttempt, RetryOperation, RetryOwner } from "./RetryOperation.js";
+import type {
+  RetryBudgetExhausted,
+  RetryExhausted,
+  RetryOperationProgress,
+} from "./RetryExhaustion.js";
+import type { RetryAttempt, RetryOperation } from "./RetryOperation.js";
 import type { RetryPolicy } from "./RetryPolicy.js";
-
-export interface RetryExhausted<TFailure extends RetryFailure = RetryFailure> {
-  readonly kind: "retry_exhausted";
-  readonly owner: RetryOwner;
-  readonly operationId: string;
-  readonly reason: "retry_budget_exhausted" | "deadline_exceeded";
-  readonly totalAttempts: number;
-  readonly totalRetryDelayMs: number;
-  readonly lastFailure: TFailure | null;
-  readonly exhaustedAt: string;
-}
-
-export interface RetryBudgetExhausted<
-  TFailure extends RetryFailure = RetryFailure,
-> {
-  readonly kind: "retry_budget_exhausted";
-  readonly owner: RetryOwner;
-  readonly operationId: string;
-  readonly budgetId: string;
-  readonly progress: RetryOperationProgress;
-  readonly lastFailure: TFailure;
-  readonly exhaustedAt: string;
-}
 
 export interface RetryExecutionInput<TError, TCategory extends string> {
   readonly operation: RetryOperation;
@@ -35,11 +17,6 @@ export interface RetryExecutionInput<TError, TCategory extends string> {
   readonly classifier: RetryClassifier<TError, TCategory>;
   readonly cancellation: CancellationContext;
   readonly events: RetryEventSink;
-}
-
-export interface RetryOperationProgress {
-  readonly completedAttempts: number;
-  readonly totalRetryDelayMs: number;
 }
 
 export type RetryAttemptExecutionResult<TResult, TError> =
@@ -132,3 +109,9 @@ export interface RetryExecutorDependencies {
   readonly wait: RetryWait;
   readonly interruptions: RetryAttemptInterruptionFactory;
 }
+
+export type {
+  RetryBudgetExhausted,
+  RetryExhausted,
+  RetryOperationProgress,
+} from "./RetryExhaustion.js";

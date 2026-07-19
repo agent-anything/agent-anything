@@ -8,7 +8,7 @@ import type {
 import { FakeProvider } from "@agent-anything/testing";
 import type { Agent } from "../agent/index.js";
 import { projectContext, createInitialContext } from "../context/index.js";
-import { createRunCancellationController } from "../runner/index.js";
+import { createRunCancellationController } from "../run/index.js";
 import type { AgentTask } from "../task/index.js";
 import type {
   ControllerCallContext,

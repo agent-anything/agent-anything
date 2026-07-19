@@ -8,8 +8,8 @@ import {
 } from "@agent-anything/observability";
 import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
-import type { RunCounters } from "./RunState.js";
-import type { RuntimeError, RuntimeErrorOwner } from "./RuntimeError.js";
+import type { RunCounters } from "../run/RunState.js";
+import type { RuntimeError, RuntimeErrorOwner } from "../run/RuntimeError.js";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
 
 export interface RecordRunnerLifecycleInput {

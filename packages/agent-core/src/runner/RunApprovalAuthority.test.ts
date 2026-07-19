@@ -3,7 +3,7 @@ import type {
   GrantedPermissions,
   ValidatedApprovalDecision,
 } from "@agent-anything/permission";
-import type { RunPermissionState } from "./RunPermissionState.js";
+import type { RunPermissionState } from "../run/RunPermissionState.js";
 import {
   applyImmediateApprovalAuthority,
   consumeActionApprovalCoverage,

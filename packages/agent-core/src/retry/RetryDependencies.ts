@@ -2,7 +2,7 @@ import type {
   CancellationAttribution,
   CancellationContext,
   RunCancellationRequest,
-} from "../runner/RunCancellation.js";
+} from "../run/RunCancellation.js";
 import type {
   RetryAttemptInterruption,
   RetryAttemptInterruptionFactory,

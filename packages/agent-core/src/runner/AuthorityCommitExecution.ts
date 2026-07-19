@@ -17,11 +17,11 @@ import type {
   InvocationInterruptionRef,
   ISODateTimeString,
 } from "@agent-anything/shared";
-import type { CancellationContext } from "./RunCancellation.js";
+import type { CancellationContext } from "../run/RunCancellation.js";
 import {
   type ResolvedRunPermissionConfig,
-} from "./RunPermissionConfig.js";
-import type { PendingApproval } from "./RunPermissionState.js";
+} from "../run/RunPermissionConfig.js";
+import type { PendingApproval } from "../run/RunPermissionState.js";
 
 type SessionAuthorityDecision =
   | Extract<ValidatedApprovalDecision, { readonly kind: "acceptForSession" }>

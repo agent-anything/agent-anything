@@ -6,7 +6,7 @@ import type {
 } from "@agent-anything/permission";
 import { canonicalizePermissionDomain } from "@agent-anything/permission/profile";
 import type { ISODateTimeString } from "@agent-anything/shared";
-import type { Action, ActionProvenance } from "../runner/Action.js";
+import type { Action, ActionProvenance } from "../action/Action.js";
 import {
   assertCanonicalArray,
   assertStrictRecord,

@@ -18,9 +18,11 @@ import type {
 } from "../controller/index.js";
 import { RuntimeEventEmitter } from "../events/index.js";
 import {
-  Runner,
   createRunCancellationController,
   type ResolvedRunPermissionConfig,
+} from "../run/index.js";
+import {
+  Runner,
   type RunConfig,
 } from "../runner/index.js";
 import {

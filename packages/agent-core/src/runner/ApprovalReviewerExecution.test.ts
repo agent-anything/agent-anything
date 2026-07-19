@@ -4,7 +4,7 @@ import type {
   ApprovalReviewInput,
 } from "@agent-anything/permission";
 import { createSystemRetryExecutor } from "../retry/index.js";
-import { createRunCancellationController } from "./RunCancellation.js";
+import { createRunCancellationController } from "../run/RunCancellation.js";
 import { executeApprovalReviewer } from "./ApprovalReviewerExecution.js";
 
 describe("Approval reviewer execution", () => {

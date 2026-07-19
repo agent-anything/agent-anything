@@ -9,10 +9,12 @@ import { RuntimeEventEmitter } from "../events/index.js";
 import {
   toRunCancellationSummary,
   type RunCancellationRequestInput,
-  type RunConfig,
   type RunInput,
   type RunResult,
-  type Runner,
+} from "../run/index.js";
+import type {
+  RunConfig,
+  Runner,
 } from "../runner/index.js";
 import {
   createHostRunProjection,

@@ -12,7 +12,7 @@ import type {
   RunResult,
   RunResultCode,
   RuntimeErrorOwner,
-} from "../runner/index.js";
+} from "../run/index.js";
 
 export const HOST_RETRY_EVENT_LIMIT = 16;
 

@@ -6,7 +6,7 @@ import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
 import type { ISODateTimeString } from "@agent-anything/shared";
 import type { ActionDispatchPlan } from "../action-execution/index.js";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
-import type { RuntimeError } from "./RuntimeError.js";
+import type { RuntimeError } from "../run/RuntimeError.js";
 
 export async function recordActionDispatchAuthorizationAudit(input: {
   readonly plan: ActionDispatchPlan;

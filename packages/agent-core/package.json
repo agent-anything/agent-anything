@@ -14,6 +14,10 @@
       "types": "./src/agent/index.ts",
       "import": "./dist/agent/index.js"
     },
+    "./action": {
+      "types": "./src/action/index.ts",
+      "import": "./dist/action/index.js"
+    },
     "./controller": {
       "types": "./src/controller/index.ts",
       "import": "./dist/controller/index.js"
@@ -25,6 +29,10 @@
     "./runner": {
       "types": "./src/runner/index.ts",
       "import": "./dist/runner/index.js"
+    },
+    "./run": {
+      "types": "./src/run/index.ts",
+      "import": "./dist/run/index.js"
     },
     "./retry": {
       "types": "./src/retry/index.ts",

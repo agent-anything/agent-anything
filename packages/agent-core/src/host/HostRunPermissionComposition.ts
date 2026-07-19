@@ -23,7 +23,7 @@ import {
   type ApprovalReviewerBinding,
   type AuthorityApplicationLimits,
   type ResolvedRunPermissionConfig,
-} from "../runner/index.js";
+} from "../run/index.js";
 
 export interface HostPermissionProfileSelection {
   readonly profileId: string;

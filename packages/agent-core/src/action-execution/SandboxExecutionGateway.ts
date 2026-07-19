@@ -4,7 +4,7 @@ import type {
   ISODateTimeString,
 } from "@agent-anything/shared";
 import type { ToolResult } from "@agent-anything/tools";
-import type { RuntimeError } from "../runner/RuntimeError.js";
+import type { RuntimeError } from "../run/RuntimeError.js";
 import {
   createActionExecutorDispatchPermit,
   type ActionExecutor,

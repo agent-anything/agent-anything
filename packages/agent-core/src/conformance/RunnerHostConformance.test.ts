@@ -22,12 +22,14 @@ import {
   type HostRuntime,
 } from "../host/index.js";
 import { createSystemRetryExecutor, type RetryClock } from "../retry/index.js";
+import type { ActionCandidate } from "../action/index.js";
+import {
+  createRunCancellationController,
+  type ResolvedRunPermissionConfig,
+} from "../run/index.js";
 import {
   Runner,
-  createRunCancellationController,
-  type ActionCandidate,
   type RunConfig,
-  type ResolvedRunPermissionConfig,
 } from "../runner/index.js";
 
 interface ConformanceOutput {

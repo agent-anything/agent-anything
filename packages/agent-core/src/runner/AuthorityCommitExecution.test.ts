@@ -8,14 +8,14 @@ import type {
   ManagedPermissionConstraints,
   PersistentPolicyAmendmentCommit,
 } from "@agent-anything/governance";
-import { createRunCancellationController } from "./RunCancellation.js";
+import { createRunCancellationController } from "../run/RunCancellation.js";
 import {
   authorityCommitOwner,
   executeAuthorityCommit,
   type DurableAuthorityDecision,
 } from "./AuthorityCommitExecution.js";
-import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
-import type { PendingApproval } from "./RunPermissionState.js";
+import type { ResolvedRunPermissionConfig } from "../run/RunPermissionConfig.js";
+import type { PendingApproval } from "../run/RunPermissionState.js";
 
 describe("executeAuthorityCommit", () => {
   it("attributes persistent commit settlement to policy", () => {

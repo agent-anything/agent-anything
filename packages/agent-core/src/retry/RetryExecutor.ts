@@ -1,4 +1,4 @@
-import type { CancellationAttribution } from "../runner/RunCancellation.js";
+import type { CancellationAttribution } from "../run/RunCancellation.js";
 import {
   cancellationAttribution,
   exactCancellationRequest,
