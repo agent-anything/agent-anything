@@ -10,7 +10,8 @@ initial code-agent desktop stage.
 
 ## Current State
 
-- Platform packages have been split into focused workspaces with boundary checks.
+- The platform is split into fifteen focused workspaces with executable dependency,
+  source, and public API checks.
 - `agent-core` provides Agent, Controller, Run, Action, Observation, Context,
   Plan, Retry, event, and task semantics and protocols. Its root is a small
   type-only composition surface; detailed Contracts use focused subpaths.
@@ -22,8 +23,8 @@ initial code-agent desktop stage.
   approval bridges, and Host authority stores.
 - Helarc is the main active product and has a working Electron desktop host.
 - Helarc supports workspace profiles, provider profiles, local credential storage,
-  provider-backed runs, session history, run traces, permission-aware tools, and
-  reviewable changes.
+  provider-backed Runs, durable Thread history, Run traces, permission-aware
+  Actions, and reviewable changes.
 - Helarc's agent behavior foundation includes prompt sections, a Controller action
   contract, a dynamic tool catalog, provider response recovery, protocol eval
   fixtures, and renderer-safe trace projection.
@@ -35,9 +36,9 @@ initial code-agent desktop stage.
 Helarc is the main product direction for AgentAnything.
 
 Its first stage is a developer-focused agent workbench that combines a desktop
-host, provider configuration, workspace/task/session concepts, traceable agent
-runs, permission-aware tool use, and reviewable changes. The longer-term product
-direction is broader than this first code-agent workflow. The desktop app currently
+host, Provider configuration, workspace, Task, Thread, and Run concepts,
+traceable Agent execution, permission-aware Actions, and reviewable changes. The
+longer-term product direction is broader than this first code-agent workflow. The desktop app currently
 supports OpenAI-compatible providers and Ollama through editable provider profiles.
 
 Current Helarc capabilities include:
@@ -50,7 +51,7 @@ Current Helarc capabilities include:
 - Read-only code tools for listing, reading, and searching workspace files
 - Permission-gated shell execution for enabled runs
 - Patch proposal, review, and application flow
-- Durable session history and run timeline data
+- Durable Thread, Conversation, Message, Run, and Artifact history
 - Safe trace projection for renderer-visible Controller behavior
 - Protocol fixtures for validating Controller action behavior
 
@@ -70,13 +71,13 @@ agent-anything/
   packages/
     shared/          Shared primitives and result helpers
     providers/       Provider contracts
-    tools/           Tool definitions, registry, and adapters
+    tools/           Declarative Tool catalog and result contracts
     evidence/        Evidence contracts and builders
-    permission/      Permission modes, requests, and services
+    permission/      Permission profiles, approvals, and authority contracts
     governance/      Policy, workspace, and identity context
     observability/   Audit, telemetry, and redaction contracts
     storage/         Storage port contracts
-    testing/         Test fakes and scenario support
+    testing/         Lower-level test fakes
     extensions/      MCP, plugins, remote tools, and extension points
     agent-core/      Agent and Run semantics, Controller and Retry protocols
     action-execution/ Trusted Action preparation and Sandbox dispatch
@@ -86,9 +87,11 @@ agent-anything/
   products/
     helarc/          Helarc product composition
   apps/
-    helarc-desktop/      Electron desktop app for Helarc
+    helarc-desktop/  Electron desktop app for Helarc
   scripts/
+    architecture/       Workspace discovery, dependency policy, and fixtures
     check-boundaries.mjs
+    check-built-public-apis.mjs
 ```
 
 ## Package Boundaries
@@ -112,9 +115,12 @@ Platform packages are designed to point inward:
 - App packages own UI, local persistence, credentials, desktop concerns, and
   product hosting.
 
-Boundary rules are checked by `scripts/check-boundaries.mjs` and run as part of
-the root test command. Product and app packages should depend on platform packages,
-but platform packages should not depend on products or apps.
+`pnpm-workspace.yaml` is the package-location authority. Boundary rules are checked
+by `scripts/check-boundaries.mjs` using the reusable policy under
+`scripts/architecture/` and run as part of the root test command. Platform packages
+cannot depend on products or apps; products cannot depend on apps or another
+product; apps cannot depend on another app. Platform production edges must also
+match the exact reviewed dependency graph.
 
 ## Common Commands
 
@@ -134,6 +140,14 @@ Run boundary checks and tests:
 
 ```powershell
 pnpm test
+```
+
+Run the authoritative cross-package conformance matrix for Runner, Host, Action
+execution, approval, Retry, Sandbox attempts, Helarc projection, and atomic Thread
+commits:
+
+```powershell
+pnpm run conformance:test
 ```
 
 Build all workspace packages:
@@ -192,17 +206,20 @@ Provider timeout values use positive whole-second increments expressed in millis
 
 ## Status
 
-The repository is still pre-product-1.0, but the platform package structure and
-the Helarc agent behavior foundation are in place. Current validation passes
-through boundary checks, root typecheck, tests, build, and Helarc desktop package
-readiness checks.
+The repository is still pre-product-1.0. The platform now has separate ownership
+for Agent semantics, trusted Action execution, authoritative Run advancement,
+Host integration, capabilities, and lower Contracts. Helarc exercises that graph
+through a working Desktop Run, review, cancellation, and durable Thread workflow.
 
 Current validation commands:
 
 ```powershell
 pnpm run boundaries
+pnpm run architecture:test
+pnpm run conformance:test
 pnpm run typecheck
 pnpm run test
 pnpm run build
+pnpm run api:check
 pnpm --filter @agent-anything/helarc-desktop run package:check
 ```

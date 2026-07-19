@@ -1156,6 +1156,8 @@ describe("HelarcMainController", () => {
 
   it("completes a desktop-host inspect-review-apply scenario", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-scenario-"));
+    const storePath = await threadFilePath();
+    const threadStore = new FileHelarcThreadStore(storePath);
     await mkdir(join(workspaceRoot, "src"));
     const targetPath = join(workspaceRoot, "src", "existing.txt");
     await writeFile(targetPath, "before\n");
@@ -1176,11 +1178,18 @@ describe("HelarcMainController", () => {
         },
       },
     ]);
-    const controller = new HelarcMainController({ provider });
+    const controller = new HelarcMainController({ provider, threadStore });
     controller.selectWorkspacePath(workspaceRoot);
 
     const waitingForReview = waitForPendingPatchReview(controller);
     const completed = waitForProductResult(controller, "completed");
+    const persisted = waitForSnapshot(
+      controller,
+      (snapshot) =>
+        snapshot.status === "completed"
+        && snapshot.threadSummaries[0]?.latestRun?.status === "completed",
+      15_000,
+    );
     const result = await controller.startRun({ taskText: "Update existing file" });
 
     expect(result).toMatchObject({ ok: true });
@@ -1214,7 +1223,63 @@ describe("HelarcMainController", () => {
       },
     });
     await expect(readFile(targetPath, "utf8")).resolves.toBe("after\n");
-  });
+    await persisted;
+
+    await expect(threadStore.loadThread("helarc-thread-1")).resolves.toMatchObject({
+      conversations: [{
+        messageIds: ["helarc-message-1", "helarc-message-1-assistant"],
+      }],
+      messages: [
+        {
+          role: "user",
+          content: "Update existing file",
+          relatedRunIds: ["helarc-run-1"],
+        },
+        {
+          role: "assistant",
+          content: "Update the target file.",
+          relatedRunIds: ["helarc-run-1"],
+          relatedArtifactIds: expect.arrayContaining([
+            "helarc-run-1-artifact-final-output",
+            "helarc-run-1-artifact-patch-proposal",
+            "helarc-run-1-artifact-applied-patch",
+          ]),
+        },
+      ],
+      runs: [{
+        id: "helarc-run-1",
+        terminal: {
+          platform: { status: "completed" },
+          product: {
+            status: "completed",
+            output: {
+              runtimeStatus: "succeeded",
+              patchStatus: "applied",
+              appliedPath: "src/existing.txt",
+            },
+          },
+        },
+        artifactIds: expect.arrayContaining([
+          "helarc-run-1-artifact-final-output",
+          "helarc-run-1-artifact-patch-proposal",
+          "helarc-run-1-artifact-applied-patch",
+        ]),
+      }],
+      artifacts: expect.arrayContaining([
+        expect.objectContaining({ kind: "final-output", runId: "helarc-run-1" }),
+        expect.objectContaining({ kind: "patch-proposal", runId: "helarc-run-1" }),
+        expect.objectContaining({ kind: "applied-patch", runId: "helarc-run-1" }),
+      ]),
+    });
+
+    const document = JSON.parse(await readFile(storePath, "utf8")) as {
+      aggregates: Array<{ commitLedger: Array<{ kind: string }> }>;
+    };
+    const commitKinds = document.aggregates[0]?.commitLedger.map(({ kind }) => kind) ?? [];
+    expect(commitKinds[0]).toBe("run_start");
+    expect(commitKinds.at(-1)).toBe("run_terminal");
+    expect(commitKinds.filter((kind) => kind === "run_terminal")).toHaveLength(1);
+  }, 20_000);
 
   it("reserves the active slot before asynchronous preparation", async () => {
     const controller = new HelarcMainController({ provider: new CompleteProvider() });
@@ -1555,6 +1620,7 @@ function waitForStatus(
 function waitForSnapshot(
   controller: HelarcMainController,
   predicate: (snapshot: HelarcMainSnapshot) => boolean,
+  timeoutMs = 2_000,
 ): Promise<HelarcMainSnapshot> {
   const snapshot = controller.getSnapshot();
   if (predicate(snapshot)) {
@@ -1565,7 +1631,7 @@ function waitForSnapshot(
     const timeout = setTimeout(() => {
       unsubscribe();
       reject(new Error("Timed out waiting for matching Helarc snapshot."));
-    }, 2_000);
+    }, timeoutMs);
 
     const unsubscribe = controller.subscribeSnapshot((nextSnapshot) => {
       if (predicate(nextSnapshot)) {

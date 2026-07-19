@@ -7,6 +7,7 @@
     "architecture:test": "node --test scripts/architecture/*.test.mjs",
     "boundaries": "node scripts/check-boundaries.mjs",
     "build": "pnpm -r run build",
+    "conformance:test": "pnpm --filter @agent-anything/host exec vitest run src/RunnerHostConformance.test.ts && pnpm --filter @agent-anything/helarc exec vitest run src/work-context/HelarcWorkContextCommit.test.ts && pnpm --filter @agent-anything/helarc-desktop exec vitest run src/main/run/HelarcHostRunComposition.test.ts src/main/HelarcMainController.test.ts src/main/HelarcDesktopProjection.test.ts src/main/ipc.test.ts src/renderer/App.test.tsx",
     "test": "pnpm run boundaries && pnpm run architecture:test && pnpm -r run test",
     "typecheck": "pnpm -r run typecheck"
   },

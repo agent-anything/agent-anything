@@ -331,6 +331,73 @@ describe("Runner and generic Host conformance", () => {
     ]);
   });
 
+  it("carries accepted Host cancellation through Runner and the terminal projection", async () => {
+    const controllerStarted = createDeferred<void>();
+    const releaseController = createDeferred<void>();
+    const controller: Controller<ConformanceOutput> = {
+      async next(input) {
+        controllerStarted.resolve();
+        await releaseController.promise;
+        return finalDecision(input, "Discarded after cancellation");
+      },
+    };
+    const runtime = createHostRuntime({
+      runner: new Runner({
+        controller,
+        now: () => "2026-07-14T00:00:00.000Z",
+      }),
+      now: () => "2026-07-14T00:00:00.000Z",
+    });
+    const active = runtime.start(createHostInput());
+    await controllerStarted.promise;
+
+    const receipt = active.cancel({
+      origin: "user",
+      reasonCode: "user_requested",
+    });
+
+    expect(receipt).toMatchObject({
+      status: "accepted",
+      cancellation: {
+        origin: "user",
+        reasonCode: "user_requested",
+      },
+    });
+    expect(active.getProjection()).toMatchObject({
+      status: "cancelling",
+      cancellation: {
+        origin: "user",
+        reasonCode: "user_requested",
+      },
+    });
+
+    releaseController.resolve();
+    const outcome = await active.result;
+    if (outcome.kind !== "run_result") {
+      throw new Error(`Conformance Host failed to start: ${outcome.code}.`);
+    }
+
+    expect(outcome).toMatchObject({
+      runResult: {
+        status: "cancelled",
+        code: "runtime_cancelled",
+        cancellation: {
+          origin: "user",
+          reasonCode: "user_requested",
+        },
+      },
+      terminal: {
+        status: "cancelled",
+        code: "runtime_cancelled",
+      },
+    });
+    expect(outcome.terminal).toBe(active.getProjection().terminal);
+    expect(outcome.runResult.items.map((item) => item.kind)).toEqual([
+      "run_cancellation_requested",
+      "run_cancelled",
+    ]);
+  });
+
 });
 
 class FakeController implements Controller {
@@ -615,4 +682,14 @@ class RetryOnceProvider implements Provider {
       },
     };
   }
+}
+
+function createDeferred<TValue>() {
+  let resolve!: (value: TValue | PromiseLike<TValue>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<TValue>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
