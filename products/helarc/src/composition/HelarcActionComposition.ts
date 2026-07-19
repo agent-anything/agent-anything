@@ -8,12 +8,14 @@ import type { AgentTask } from "@agent-anything/agent-core/task";
 import {
   CODE_AGENT_LIST_FILES_ACTION,
   CODE_AGENT_READ_FILE_ACTION,
-  CODE_AGENT_RUN_COMMAND_ACTION,
   CODE_AGENT_SEARCH_FILES_ACTION,
-  createCodeAgentCommandActionCapability,
   createCodeAgentFileActionCapability,
+} from "@agent-anything/code-agent/filesystem";
+import {
+  CODE_AGENT_RUN_COMMAND_ACTION,
+  createCodeAgentCommandActionCapability,
   type CodeAgentCommandLimits,
-} from "@agent-anything/code-agent";
+} from "@agent-anything/code-agent/command";
 import {
   createToolCatalogSnapshot,
   type ToolCatalogSnapshot,

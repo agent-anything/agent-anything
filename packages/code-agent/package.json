@@ -9,6 +9,22 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"
+    },
+    "./workspace": {
+      "types": "./src/workspace/index.ts",
+      "import": "./dist/workspace/index.js"
+    },
+    "./filesystem": {
+      "types": "./src/filesystem/index.ts",
+      "import": "./dist/filesystem/index.js"
+    },
+    "./command": {
+      "types": "./src/process/index.ts",
+      "import": "./dist/process/index.js"
+    },
+    "./patch": {
+      "types": "./src/patch/index.ts",
+      "import": "./dist/patch/index.js"
     }
   },
   "files": [

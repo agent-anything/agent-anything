@@ -105,7 +105,9 @@ Platform packages are designed to point inward:
   Retry execution, and depends on Action execution without reversing that edge.
 - `host` adapts authoritative Runner execution to product-neutral application hosts.
 - `extensions` contains optional integration surfaces such as MCP, plugins,
-  remote tools, and enterprise storage.
+  remote tools, remote Actions, and enterprise storage behind focused subpaths.
+- `code-agent` exposes focused workspace, filesystem, command, and patch
+  capability subpaths while keeping external effects behind Action execution.
 - Product packages compose platform contracts into product behavior.
 - App packages own UI, local persistence, credentials, desktop concerns, and
   product hosting.
@@ -140,8 +142,8 @@ Build all workspace packages:
 pnpm build
 ```
 
-Build and verify the exact Core, Action Execution, Runtime, and Host ESM entry
-points, including removed and private paths:
+Build and verify the exact Core, Action Execution, Runtime, Host, Code Agent,
+and Extensions ESM entry points, including removed and private paths:
 
 ```powershell
 pnpm run api:check

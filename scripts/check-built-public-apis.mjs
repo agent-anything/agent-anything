@@ -22,6 +22,15 @@ const packageExportKeys = {
   "packages/action-execution": ["."],
   "packages/agent-runtime": ["."],
   "packages/host": ["."],
+  "packages/code-agent": [".", "./command", "./filesystem", "./patch", "./workspace"],
+  "packages/extensions": [
+    ".",
+    "./enterprise-storage",
+    "./mcp",
+    "./plugins",
+    "./remote-actions",
+    "./remote-tools",
+  ],
 };
 
 for (const [packagePath, expectedKeys] of Object.entries(packageExportKeys)) {
@@ -151,6 +160,70 @@ const expectedValueExports = {
     "resolveHostRunPermissionConfig",
     "snapshotHostCancellation",
   ],
+  "@agent-anything/code-agent": [
+    "CODE_AGENT_CREATE_FILE_ACTION",
+    "CODE_AGENT_DELETE_FILE_ACTION",
+    "CODE_AGENT_LIST_FILES_ACTION",
+    "CODE_AGENT_READ_FILE_ACTION",
+    "CODE_AGENT_RUN_COMMAND_ACTION",
+    "CODE_AGENT_SEARCH_FILES_ACTION",
+    "CODE_AGENT_UPDATE_FILE_ACTION",
+    "PatchWorkflowError",
+    "acceptPatch",
+    "createAcceptedPatchFileAction",
+    "createCodeAgentCanonicalWorkspaceRoots",
+    "createCodeAgentCommandActionCapability",
+    "createCodeAgentFileActionCapability",
+    "createPatchProposal",
+    "defaultCodeAgentCommandLimits",
+    "defaultCodeAgentFileLimits",
+    "defaultPatchWorkflowLimits",
+    "materializePatchReview",
+    "rejectPatch",
+    "resolveWorkspacePath",
+  ],
+  "@agent-anything/code-agent/workspace": ["resolveWorkspacePath"],
+  "@agent-anything/code-agent/filesystem": [
+    "CODE_AGENT_CREATE_FILE_ACTION",
+    "CODE_AGENT_DELETE_FILE_ACTION",
+    "CODE_AGENT_LIST_FILES_ACTION",
+    "CODE_AGENT_READ_FILE_ACTION",
+    "CODE_AGENT_SEARCH_FILES_ACTION",
+    "CODE_AGENT_UPDATE_FILE_ACTION",
+    "createAcceptedPatchFileAction",
+    "createCodeAgentCanonicalWorkspaceRoots",
+    "createCodeAgentFileActionCapability",
+    "defaultCodeAgentFileLimits",
+  ],
+  "@agent-anything/code-agent/command": [
+    "CODE_AGENT_RUN_COMMAND_ACTION",
+    "createCodeAgentCommandActionCapability",
+    "defaultCodeAgentCommandLimits",
+  ],
+  "@agent-anything/code-agent/patch": [
+    "PatchWorkflowError",
+    "acceptPatch",
+    "createPatchProposal",
+    "defaultPatchWorkflowLimits",
+    "materializePatchReview",
+    "rejectPatch",
+  ],
+};
+
+const expectedExtensionValueExports = {
+  "@agent-anything/extensions": [
+    "McpRegistry",
+    "PluginRegistry",
+    "PluginRegistryError",
+    "createMcpActionCapability",
+    "createRemoteActionCapability",
+    "createRemoteToolActionCapability",
+  ],
+  "@agent-anything/extensions/remote-tools": ["createRemoteToolActionCapability"],
+  "@agent-anything/extensions/remote-actions": ["createRemoteActionCapability"],
+  "@agent-anything/extensions/mcp": ["McpRegistry", "createMcpActionCapability"],
+  "@agent-anything/extensions/plugins": ["PluginRegistry", "PluginRegistryError"],
+  "@agent-anything/extensions/enterprise-storage": [],
 };
 
 const removedOrPrivateSpecifiers = [
@@ -160,39 +233,53 @@ const removedOrPrivateSpecifiers = [
   "@agent-anything/action-execution/ActionGovernanceAssessment",
   "@agent-anything/agent-runtime/runner",
   "@agent-anything/host/HostRuntime",
+  "@agent-anything/code-agent/file-actions",
+  "@agent-anything/code-agent/command-actions",
 ];
 
-const childSource = `
-  import assert from "node:assert/strict";
-  const expected = ${JSON.stringify(expectedValueExports)};
-  for (const [specifier, expectedKeys] of Object.entries(expected)) {
-    const api = await import(specifier);
-    assert.deepEqual(Object.keys(api).sort(), expectedKeys, specifier + " value exports changed");
-  }
-  for (const specifier of ${JSON.stringify(removedOrPrivateSpecifiers)}) {
-    let unavailable = false;
-    try {
-      await import(specifier);
-    } catch {
-      unavailable = true;
-    }
-    assert.equal(unavailable, true, specifier + " must not be importable");
-  }
-`;
-
-const result = spawnSync(
-  process.execPath,
-  ["--input-type=module", "--eval", childSource],
-  {
-    cwd: join(repoRoot, "apps/helarc-desktop"),
-    encoding: "utf8",
-  },
+checkBuiltSurfaces(
+  expectedValueExports,
+  removedOrPrivateSpecifiers,
+  join(repoRoot, "apps/helarc-desktop"),
+);
+checkBuiltSurfaces(
+  expectedExtensionValueExports,
+  [
+    "@agent-anything/extensions/action-registrations",
+    "@agent-anything/extensions/RemoteActionRegistration",
+  ],
+  join(repoRoot, "packages/extensions"),
 );
 
-if (result.status !== 0) {
-  process.stderr.write(result.stderr);
-  process.stdout.write(result.stdout);
-  process.exit(result.status ?? 1);
-}
-
 console.log("Built public API check passed.");
+
+function checkBuiltSurfaces(expected, unavailableSpecifiers, cwd) {
+  const childSource = `
+    import assert from "node:assert/strict";
+    const expected = ${JSON.stringify(expected)};
+    for (const [specifier, expectedKeys] of Object.entries(expected)) {
+      const api = await import(specifier);
+      assert.deepEqual(Object.keys(api).sort(), expectedKeys, specifier + " value exports changed");
+    }
+    for (const specifier of ${JSON.stringify(unavailableSpecifiers)}) {
+      let unavailable = false;
+      try {
+        await import(specifier);
+      } catch {
+        unavailable = true;
+      }
+      assert.equal(unavailable, true, specifier + " must not be importable");
+    }
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "--eval", childSource],
+    { cwd, encoding: "utf8" },
+  );
+
+  if (result.status !== 0) {
+    process.stderr.write(result.stderr);
+    process.stdout.write(result.stdout);
+    process.exit(result.status ?? 1);
+  }
+}

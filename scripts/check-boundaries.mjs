@@ -48,6 +48,7 @@ for (const root of packageRoots) {
 }
 checkPackageExports();
 checkPackageCycles();
+checkCapabilityManifests();
 
 if (violations.length > 0) {
   console.error("Boundary check failed:");
@@ -106,6 +107,13 @@ function checkPublicApiImport(file, owner, statement, specifier) {
   const packageName = parseWorkspaceSpecifier(specifier).packageName;
 
   if (
+    (specifier === "@agent-anything/code-agent" || specifier === "@agent-anything/extensions") &&
+    owner.name !== packageName
+  ) {
+    violations.push(`${rel} must import a focused capability subpath instead of '${specifier}'.`);
+  }
+
+  if (
     ts.isExportDeclaration(statement) &&
     executionPackages.has(packageName) &&
     owner.name !== packageName
@@ -140,6 +148,43 @@ function checkPublicApiImport(file, owner, statement, specifier) {
     }
     if (!clause.isTypeOnly && !element.isTypeOnly) {
       violations.push(`${rel} imports runtime value '${importedName}' from the type-only agent-core root.`);
+    }
+  }
+}
+
+function checkCapabilityManifests() {
+  const expectedDependencies = new Map([
+    [
+      "@agent-anything/code-agent",
+      [
+        "@agent-anything/action-execution",
+        "@agent-anything/agent-core",
+        "@agent-anything/governance",
+        "@agent-anything/shared",
+        "@agent-anything/tools",
+      ],
+    ],
+    [
+      "@agent-anything/extensions",
+      [
+        "@agent-anything/action-execution",
+        "@agent-anything/shared",
+        "@agent-anything/tools",
+      ],
+    ],
+  ]);
+
+  for (const [packageName, expected] of expectedDependencies) {
+    const info = packageByName.get(packageName);
+    if (!info) {
+      violations.push(`Required capability package '${packageName}' is missing.`);
+      continue;
+    }
+    const actual = [...info.dependencies].sort();
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      violations.push(
+        `${packageName} production dependencies must be exactly: ${expected.join(", ")}.`,
+      );
     }
   }
 }

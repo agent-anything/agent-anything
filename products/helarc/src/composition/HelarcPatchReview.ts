@@ -1,5 +1,5 @@
 import type { CancellationContext } from "@agent-anything/agent-core/run";
-import type { MaterializedPatchReview } from "@agent-anything/code-agent";
+import type { MaterializedPatchReview } from "@agent-anything/code-agent/patch";
 
 export interface HelarcPatchReviewRequest {
   readonly runId: string;

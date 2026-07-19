@@ -26,8 +26,8 @@ import {
 } from "@agent-anything/host";
 import {
   createCodeAgentCanonicalWorkspaceRoots,
-  type CodeAgentCommandLimits,
-} from "@agent-anything/code-agent";
+} from "@agent-anything/code-agent/filesystem";
+import type { CodeAgentCommandLimits } from "@agent-anything/code-agent/command";
 import { EvidenceBuilder, type Evidence } from "@agent-anything/evidence";
 import {
   createAllowAllActionPolicyPort,

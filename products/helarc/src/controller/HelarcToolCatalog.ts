@@ -2,9 +2,9 @@ import type { ControllerInput } from "@agent-anything/agent-core/controller";
 import {
   CODE_AGENT_LIST_FILES_ACTION,
   CODE_AGENT_READ_FILE_ACTION,
-  CODE_AGENT_RUN_COMMAND_ACTION,
   CODE_AGENT_SEARCH_FILES_ACTION,
-} from "@agent-anything/code-agent";
+} from "@agent-anything/code-agent/filesystem";
+import { CODE_AGENT_RUN_COMMAND_ACTION } from "@agent-anything/code-agent/command";
 import type { Metadata } from "@agent-anything/shared";
 import type { ToolAnnotations, ToolDescriptor } from "@agent-anything/tools";
 

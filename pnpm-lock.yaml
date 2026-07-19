@@ -204,9 +204,6 @@ importers:
       '@agent-anything/action-execution':
         specifier: workspace:*
         version: link:../action-execution
-      '@agent-anything/agent-core':
-        specifier: workspace:*
-        version: link:../agent-core
       '@agent-anything/shared':
         specifier: workspace:*
         version: link:../shared
@@ -214,6 +211,9 @@ importers:
         specifier: workspace:*
         version: link:../tools
     devDependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
       '@agent-anything/agent-runtime':
         specifier: workspace:*
         version: link:../agent-runtime

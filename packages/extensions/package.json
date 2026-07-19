@@ -14,6 +14,10 @@
       "types": "./src/remote-tools/index.ts",
       "import": "./dist/remote-tools/index.js"
     },
+    "./remote-actions": {
+      "types": "./src/action-registrations/index.ts",
+      "import": "./dist/action-registrations/index.js"
+    },
     "./mcp": {
       "types": "./src/mcp/index.ts",
       "import": "./dist/mcp/index.js"
@@ -37,11 +41,11 @@
   },
   "dependencies": {
     "@agent-anything/action-execution": "workspace:*",
-    "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/shared": "workspace:*",
     "@agent-anything/tools": "workspace:*"
   },
   "devDependencies": {
+    "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/agent-runtime": "workspace:*",
     "@agent-anything/evidence": "workspace:*",
     "@agent-anything/governance": "workspace:*",

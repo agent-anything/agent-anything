@@ -6,14 +6,14 @@ import type {
 } from "@agent-anything/agent-core/controller";
 import {
   acceptPatch,
-  createAcceptedPatchFileAction,
   createPatchProposal,
   materializePatchReview,
   PatchWorkflowError,
   rejectPatch,
   type MaterializedPatchReview,
   type PatchProposalChange,
-} from "@agent-anything/code-agent";
+} from "@agent-anything/code-agent/patch";
+import { createAcceptedPatchFileAction } from "@agent-anything/code-agent/filesystem";
 import type { ISODateTimeString } from "@agent-anything/shared";
 import type { HelarcAgentOutput, HelarcChangeIntent } from "../controller/index.js";
 import type {
