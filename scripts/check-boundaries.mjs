@@ -2,36 +2,39 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
+import {
+  evaluatePlatformProductionDependency,
+  evaluateRepositoryDirection,
+  expectedPlatformDependencies,
+} from "./architecture/ArchitectureRules.mjs";
+import {
+  WorkspaceDiscoveryError,
+  discoverWorkspacePackages,
+} from "./architecture/WorkspaceDiscovery.mjs";
 
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const packageRoots = [
-  "packages/shared",
-  "packages/tools",
-  "packages/evidence",
-  "packages/permission",
-  "packages/governance",
-  "packages/observability",
-  "packages/providers",
-  "packages/storage",
-  "packages/agent-core",
-  "packages/action-execution",
-  "packages/agent-runtime",
-  "packages/host",
-  "packages/extensions",
-  "packages/code-agent",
-  "packages/testing",
-  "products/helarc",
-  "apps/helarc-desktop",
-].map((item) => resolve(repoRoot, item));
+let discoveredPackages;
+try {
+  discoveredPackages = discoverWorkspacePackages(repoRoot);
+} catch (error) {
+  if (!(error instanceof WorkspaceDiscoveryError)) throw error;
+  printViolations(error.issues.map((item) => ({
+    ...item,
+    file: display(item.file),
+  })));
+  process.exit(1);
+}
+
+const packageRoots = discoveredPackages.map((item) => item.root);
 
 const packageInfo = new Map();
 const packageByName = new Map();
-for (const root of packageRoots) {
-  const packageJson = readJson(join(root, "package.json"));
+for (const discovered of discoveredPackages) {
+  const { root, manifest: packageJson } = discovered;
   const info = {
     root,
     name: packageJson.name,
-    kind: packageKind(root),
+    kind: discovered.kind,
     exports: exportedSpecifiers(packageJson),
     dependencies: new Set(Object.keys(packageJson.dependencies ?? {})),
     devDependencies: new Set(Object.keys(packageJson.devDependencies ?? {})),
@@ -52,14 +55,34 @@ checkReviewedManifests();
 checkHelarcSourceCycles();
 
 if (violations.length > 0) {
-  console.error("Boundary check failed:");
-  for (const violation of violations) {
-    console.error(`- ${violation}`);
-  }
+  printViolations(violations);
   process.exit(1);
 }
 
 console.log("Boundary check passed.");
+
+function report(rule, { file = null, owner = null, imported = null, message }) {
+  const resolvedOwner = typeof owner === "string"
+    ? owner
+    : owner?.name ?? (file ? owningPackage(file)?.name : null) ?? null;
+  const resolvedImported = typeof imported === "string" ? imported : imported?.name ?? null;
+  violations.push({
+    rule,
+    owner: resolvedOwner,
+    imported: resolvedImported,
+    file: file ? display(file) : null,
+    message,
+  });
+}
+
+function printViolations(items) {
+  console.error("Boundary check failed:");
+  for (const item of items) {
+    console.error(
+      `- [${item.rule}] owner=${item.owner ?? "-"} imported=${item.imported ?? "-"} file=${item.file ?? "-"}: ${item.message}`,
+    );
+  }
+}
 
 function checkFile(file) {
   const owner = owningPackage(file);
@@ -98,7 +121,6 @@ function checkFile(file) {
 }
 
 function checkPublicApiImport(file, owner, statement, specifier) {
-  const rel = display(file);
   const executionPackages = new Set([
     "@agent-anything/agent-core",
     "@agent-anything/action-execution",
@@ -111,7 +133,7 @@ function checkPublicApiImport(file, owner, statement, specifier) {
     (specifier === "@agent-anything/code-agent" || specifier === "@agent-anything/extensions") &&
     owner.name !== packageName
   ) {
-    violations.push(`${rel} must import a focused capability subpath instead of '${specifier}'.`);
+    report("capability_root_import", { file, owner, imported: packageName, message: `Must import a focused capability subpath instead of '${specifier}'.` });
   }
 
   if (
@@ -119,7 +141,7 @@ function checkPublicApiImport(file, owner, statement, specifier) {
     executionPackages.has(packageName) &&
     owner.name !== packageName
   ) {
-    violations.push(`${rel} must not re-export API owned by '${packageName}'.`);
+    report("execution_api_reexport", { file, owner, imported: packageName, message: `Must not re-export API owned by '${packageName}'.` });
   }
 
   if (specifier !== "@agent-anything/agent-core" || !ts.isImportDeclaration(statement)) {
@@ -136,86 +158,37 @@ function checkPublicApiImport(file, owner, statement, specifier) {
   ]);
   const clause = statement.importClause;
   if (!clause || clause.name || !clause.namedBindings || !ts.isNamedImports(clause.namedBindings)) {
-    violations.push(`${rel} must use named type imports from the agent-core root.`);
+    report("agent_core_root_import", { file, owner, imported: packageName, message: "Must use named type imports from the agent-core root." });
     return;
   }
 
   for (const element of clause.namedBindings.elements) {
     const importedName = (element.propertyName ?? element.name).text;
     if (!allowedRootTypes.has(importedName)) {
-      violations.push(
-        `${rel} imports specialized Agent Core Contract '${importedName}' from the root.`,
-      );
+      report("agent_core_root_import", { file, owner, imported: packageName, message: `Imports specialized Agent Core Contract '${importedName}' from the root.` });
     }
     if (!clause.isTypeOnly && !element.isTypeOnly) {
-      violations.push(`${rel} imports runtime value '${importedName}' from the type-only agent-core root.`);
+      report("agent_core_root_value_import", { file, owner, imported: packageName, message: `Imports runtime value '${importedName}' from the type-only agent-core root.` });
     }
   }
 }
 
 function checkReviewedManifests() {
-  const expectedDependencies = new Map([
-    ["@agent-anything/shared", []],
-    ["@agent-anything/tools", ["@agent-anything/shared"]],
-    [
-      "@agent-anything/evidence",
-      ["@agent-anything/shared", "@agent-anything/tools"],
-    ],
-    ["@agent-anything/governance", ["@agent-anything/shared"]],
-    [
-      "@agent-anything/permission",
-      ["@agent-anything/governance", "@agent-anything/shared"],
-    ],
-    [
-      "@agent-anything/observability",
-      ["@agent-anything/evidence", "@agent-anything/shared"],
-    ],
-    ["@agent-anything/providers", ["@agent-anything/shared"]],
-    [
-      "@agent-anything/storage",
-      ["@agent-anything/evidence", "@agent-anything/shared"],
-    ],
-    [
-      "@agent-anything/testing",
-      [
-        "@agent-anything/governance",
-        "@agent-anything/observability",
-        "@agent-anything/permission",
-        "@agent-anything/providers",
-        "@agent-anything/shared",
-      ],
-    ],
-    [
-      "@agent-anything/code-agent",
-      [
-        "@agent-anything/action-execution",
-        "@agent-anything/agent-core",
-        "@agent-anything/governance",
-        "@agent-anything/shared",
-        "@agent-anything/tools",
-      ],
-    ],
-    [
-      "@agent-anything/extensions",
-      [
-        "@agent-anything/action-execution",
-        "@agent-anything/shared",
-        "@agent-anything/tools",
-      ],
-    ],
-  ]);
-
-  for (const [packageName, expected] of expectedDependencies) {
-    const info = packageByName.get(packageName);
-    if (!info) {
-      violations.push(`Required reviewed package '${packageName}' is missing.`);
+  for (const info of packageInfo.values()) {
+    if (info.kind !== "platform") continue;
+    const expected = expectedPlatformDependencies(info.name);
+    if (!expected) {
+      report("platform_dependency_policy_missing", { file: join(info.root, "package.json"), owner: info, message: `Platform package '${info.name}' has no production dependency policy.` });
       continue;
     }
     const actual = [...info.dependencies].sort();
-    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-      violations.push(
-        `${packageName} production dependencies must be exactly: ${expected.join(", ")}.`,
-      );
+    const sortedExpected = [...expected].sort();
+    if (JSON.stringify(actual) !== JSON.stringify(sortedExpected)) {
+      report("platform_manifest_dependencies", {
+        file: join(info.root, "package.json"),
+        owner: info,
+        message: `Production dependencies must be exactly: ${sortedExpected.join(", ") || "(none)"}.`,
+      });
     }
   }
 }
@@ -258,24 +231,24 @@ function checkArchitectureSource(file, text, isTestOnly) {
 
   for (const symbol of legacySymbols) {
     if (new RegExp(`\\b${symbol}\\b`).test(text)) {
-      violations.push(`${rel} retains removed execution symbol '${symbol}'.`);
+      report("removed_execution_contract", { file, message: `Retains removed execution symbol '${symbol}'.` });
     }
   }
   if (/\bCODE_AGENT_[A-Z0-9_]+_TOOL\b/.test(text)) {
-    violations.push(`${rel} retains a removed code-agent Tool constant.`);
+    report("removed_tool_constant", { file, message: "Retains a removed code-agent Tool constant." });
   }
   if (/\bwaiting_for_permission\b/.test(text)) {
-    violations.push(`${rel} retains the removed waiting_for_permission status.`);
+    report("removed_run_status", { file, message: "Retains the removed waiting_for_permission status." });
   }
   if (/helarc:(?:start|cancel)-session/.test(text)) {
-    violations.push(`${rel} retains a removed Session-named IPC channel.`);
+    report("removed_session_ipc", { file, message: "Retains a removed Session-named IPC channel." });
   }
   if (
     rel.startsWith("products/helarc/src/session-history/") ||
     rel.startsWith("apps/helarc-desktop/src/main/session-history/") ||
     rel === "apps/helarc-desktop/src/main/thread/HelarcThreadStore.ts"
   ) {
-    violations.push(`${rel} restores a removed legacy history source path.`);
+    report("removed_history_path", { file, message: "Restores a removed legacy history source path." });
   }
 
   if (isTestOnly) {
@@ -285,16 +258,16 @@ function checkArchitectureSource(file, text, isTestOnly) {
     "/packages/action-execution/src/SandboxExecutionGateway.ts",
   );
   if (!isGateway && /\b(?:actionExecutor|executor|registered\.executor)\.execute\s*\(/i.test(text)) {
-    violations.push(`${rel} invokes an ActionExecutor outside SandboxExecutionGateway.`);
+    report("action_executor_dispatch", { file, message: "Invokes an ActionExecutor outside SandboxExecutionGateway." });
   }
   if (/\b(?:ConformanceSandboxProvider|createConformanceSandboxProvider)\b/.test(text)) {
-    violations.push(`${rel} retains a production conformance sandbox provider.`);
+    report("conformance_sandbox_in_production", { file, message: "Retains a production conformance sandbox provider." });
   }
   if (
     (rel.startsWith("apps/") || rel.startsWith("products/")) &&
     /\brunner\.run\s*\(/i.test(text)
   ) {
-    violations.push(`${rel} invokes Runner directly instead of starting it through HostRuntime.`);
+    report("direct_runner_invocation", { file, message: "Invokes Runner directly instead of starting it through HostRuntime." });
   }
 }
 
@@ -305,7 +278,7 @@ function checkDesktopSafeSurface(rel, text) {
   if (!isRenderer && !isShared && !isPreload) return;
 
   if (/["']@agent-anything\//.test(text)) {
-    violations.push(`${rel} Desktop safe surface must not import or require workspace packages.`);
+    report("desktop_workspace_import", { file: resolve(repoRoot, rel), message: "Desktop safe surface must not import or require workspace packages." });
   }
 
   const trustedSymbols = [
@@ -322,7 +295,7 @@ function checkDesktopSafeSurface(rel, text) {
   ];
   for (const symbol of trustedSymbols) {
     if (new RegExp(`\\b${symbol}\\b`).test(text)) {
-      violations.push(`${rel} exposes trusted-only symbol '${symbol}' on the Desktop safe surface.`);
+      report("desktop_trusted_symbol", { file: resolve(repoRoot, rel), message: `Exposes trusted-only symbol '${symbol}' on the Desktop safe surface.` });
     }
   }
 }
@@ -334,17 +307,17 @@ function checkWorkspaceImport({ file, owner, imported, isTestOnly }) {
     rel.startsWith("apps/helarc-desktop/src/renderer/") &&
     imported.packageName.startsWith("@agent-anything/")
   ) {
-    violations.push(`${rel} Renderer must consume workspace contracts through Desktop shared IPC.`);
+    report("desktop_renderer_workspace_import", { file, owner, imported: imported.packageName, message: "Renderer must consume workspace contracts through Desktop shared IPC." });
   }
   if (
     rel.startsWith("apps/helarc-desktop/src/shared/") &&
     imported.packageName.startsWith("@agent-anything/")
   ) {
-    violations.push(`${rel} Desktop shared IPC must own its DTOs instead of importing '${imported.packageName}'.`);
+    report("desktop_shared_workspace_import", { file, owner, imported: imported.packageName, message: "Desktop shared IPC must own its DTOs instead of importing workspace Contracts." });
   }
 
   if (imported.packageName === "@agent-anything/platform") {
-    violations.push(`${rel} must consume concrete platform packages, not @agent-anything/platform.`);
+    report("platform_facade_import", { file, owner, imported: imported.packageName, message: "Must consume concrete platform packages, not @agent-anything/platform." });
     return;
   }
 
@@ -354,176 +327,31 @@ function checkWorkspaceImport({ file, owner, imported, isTestOnly }) {
   }
 
   if (!importedPackage.exports.has(imported.exportKey)) {
-    violations.push(`${rel} imports non-public package path '${imported.raw}'.`);
+    report("package_subpath_private", { file, owner, imported: importedPackage, message: `Imports non-public package path '${imported.raw}'.` });
   }
 
   const hasDependency = owner.dependencies.has(imported.packageName);
   const hasDevDependency = owner.devDependencies.has(imported.packageName);
   const isSelf = owner.name === imported.packageName;
   if (!isSelf) {
-    checkRepositoryDirection(file, owner, importedPackage);
+    for (const result of evaluateRepositoryDirection({ owner, imported: importedPackage })) {
+      report(result.rule, { file, owner, imported: importedPackage, message: result.message });
+    }
   }
   if (!isSelf && !hasDependency && !(isTestOnly && hasDevDependency)) {
-    violations.push(`${rel} imports '${imported.packageName}' without declaring it in ${isTestOnly ? "dependencies or devDependencies" : "dependencies"}.`);
+    report("dependency_undeclared", { file, owner, imported: importedPackage, message: `Import is not declared in ${isTestOnly ? "dependencies or devDependencies" : "dependencies"}.` });
   }
   if (!isSelf && !isTestOnly && !hasDependency) {
-    violations.push(`${rel} production import '${imported.packageName}' must be declared in dependencies, not only devDependencies.`);
+    report("dependency_dev_only", { file, owner, imported: importedPackage, message: "Production import must be declared in dependencies, not only devDependencies." });
   }
 
   if (!isTestOnly && imported.packageName === "@agent-anything/testing") {
-    violations.push(`${rel} production code must not import @agent-anything/testing.`);
+    report("testing_import_in_production", { file, owner, imported: importedPackage, message: "Production code must not import @agent-anything/testing." });
   }
 
-  if (!isTestOnly) {
-    checkLayerRule(file, owner.name, imported.packageName);
-  }
-}
-
-function checkRepositoryDirection(file, owner, importedPackage) {
-  const rel = display(file);
-
-  if (owner.kind === "platform" && importedPackage.kind !== "platform") {
-    violations.push(`${rel} platform package must not import ${importedPackage.kind} package '${importedPackage.name}'.`);
-  }
-
-  if (owner.kind === "product" && importedPackage.kind === "app") {
-    violations.push(`${rel} product package must not import app package '${importedPackage.name}'.`);
-  }
-
-  if (
-    owner.kind === "product" &&
-    importedPackage.kind === "product" &&
-    owner.name !== importedPackage.name
-  ) {
-    violations.push(`${rel} product package must not import another product package '${importedPackage.name}'.`);
-  }
-}
-
-function checkLayerRule(file, ownerName, importedName) {
-  const rel = display(file);
-  const lowerLayerPackages = new Set([
-    "@agent-anything/shared",
-    "@agent-anything/tools",
-    "@agent-anything/evidence",
-    "@agent-anything/permission",
-    "@agent-anything/governance",
-    "@agent-anything/observability",
-    "@agent-anything/providers",
-    "@agent-anything/storage",
-  ]);
-
-  if (ownerName === "@agent-anything/shared" && importedName !== "@agent-anything/shared") {
-    violations.push(`${rel} shared package must not import '${importedName}'.`);
-  }
-
-  if (lowerLayerPackages.has(ownerName)) {
-    for (const forbidden of [
-      "@agent-anything/agent-core",
-      "@agent-anything/action-execution",
-      "@agent-anything/agent-runtime",
-      "@agent-anything/host",
-      "@agent-anything/extensions",
-      "@agent-anything/code-agent",
-      "@agent-anything/testing",
-    ]) {
-      if (importedName === forbidden) {
-        violations.push(`${rel} layer 1 package must not import '${forbidden}'.`);
-      }
-    }
-  }
-
-  if (ownerName === "@agent-anything/agent-core") {
-    for (const forbidden of [
-      "@agent-anything/extensions",
-      "@agent-anything/agent-runtime",
-      "@agent-anything/action-execution",
-      "@agent-anything/code-agent",
-      "@agent-anything/host",
-      "@agent-anything/testing",
-    ]) {
-      if (importedName === forbidden) {
-        violations.push(`${rel} agent-core production code must not import '${forbidden}'.`);
-      }
-    }
-  }
-
-  if (ownerName === "@agent-anything/action-execution") {
-    for (const forbidden of [
-      "@agent-anything/agent-runtime",
-      "@agent-anything/host",
-      "@agent-anything/extensions",
-      "@agent-anything/code-agent",
-      "@agent-anything/testing",
-    ]) {
-      if (importedName === forbidden) {
-        violations.push(`${rel} action-execution production code must not import '${forbidden}'.`);
-      }
-    }
-  }
-
-  if (ownerName === "@agent-anything/extensions") {
-    for (const forbidden of [
-      "@agent-anything/agent-runtime",
-      "@agent-anything/code-agent",
-      "@agent-anything/host",
-      "@agent-anything/testing",
-    ]) {
-      if (importedName === forbidden) {
-        violations.push(`${rel} extensions production code must not import '${forbidden}'.`);
-      }
-    }
-  }
-
-  if (ownerName === "@agent-anything/code-agent") {
-    for (const forbidden of [
-      "@agent-anything/agent-runtime",
-      "@agent-anything/extensions",
-      "@agent-anything/host",
-      "@agent-anything/testing",
-    ]) {
-      if (importedName === forbidden) {
-        violations.push(`${rel} code-agent production code must not import '${forbidden}'.`);
-      }
-    }
-  }
-
-  if (ownerName === "@agent-anything/testing") {
-    for (const forbidden of [
-      "@agent-anything/agent-core",
-      "@agent-anything/action-execution",
-      "@agent-anything/agent-runtime",
-      "@agent-anything/host",
-      "@agent-anything/extensions",
-      "@agent-anything/code-agent",
-    ]) {
-      if (importedName === forbidden) {
-        violations.push(`${rel} testing package must not import '${forbidden}' to avoid package cycles.`);
-      }
-    }
-  }
-
-  if (ownerName === "@agent-anything/host") {
-    for (const forbidden of [
-      "@agent-anything/extensions",
-      "@agent-anything/code-agent",
-      "@agent-anything/testing",
-    ]) {
-      if (importedName === forbidden) {
-        violations.push(`${rel} host production code must not import '${forbidden}'.`);
-      }
-    }
-  }
-
-  if (ownerName === "@agent-anything/agent-runtime") {
-    for (const forbidden of [
-      "@agent-anything/host",
-      "@agent-anything/extensions",
-      "@agent-anything/code-agent",
-      "@agent-anything/testing",
-    ]) {
-      if (importedName === forbidden) {
-        violations.push(`${rel} agent-runtime production code must not import '${forbidden}'.`);
-      }
+  if (!isTestOnly && !isSelf) {
+    for (const result of evaluatePlatformProductionDependency({ owner, imported: importedPackage })) {
+      report(result.rule, { file, owner, imported: importedPackage, message: result.message });
     }
   }
 }
@@ -532,7 +360,7 @@ function checkRelativeImport(file, owner, specifier) {
   const resolved = resolve(dirname(file), specifier);
   const ownerRoot = `${owner.root}${sep}`;
   if (resolved !== owner.root && !resolved.startsWith(ownerRoot)) {
-    violations.push(`${display(file)} uses a relative import that crosses package boundary: '${specifier}'.`);
+    report("relative_package_boundary", { file, owner, message: `Relative import crosses the package boundary: '${specifier}'.` });
   }
 
   const rel = display(file);
@@ -543,20 +371,20 @@ function checkRelativeImport(file, owner, specifier) {
     !resolvedPath.startsWith(`${desktopSource}/renderer/`) &&
     !resolvedPath.startsWith(`${desktopSource}/shared/`)
   ) {
-    violations.push(`${rel} Renderer relative import must remain in renderer or shared IPC: '${specifier}'.`);
+    report("desktop_renderer_relative_import", { file, owner, message: `Renderer relative import must remain in renderer or shared IPC: '${specifier}'.` });
   }
   if (
     rel.startsWith("apps/helarc-desktop/src/shared/") &&
     !resolvedPath.startsWith(`${desktopSource}/shared/`)
   ) {
-    violations.push(`${rel} Desktop shared IPC relative import leaves the shared surface: '${specifier}'.`);
+    report("desktop_shared_relative_import", { file, owner, message: `Desktop shared IPC relative import leaves the shared surface: '${specifier}'.` });
   }
   if (
     rel.startsWith("apps/helarc-desktop/src/preload/") &&
     !resolvedPath.startsWith(`${desktopSource}/preload/`) &&
     !resolvedPath.startsWith(`${desktopSource}/shared/`)
   ) {
-    violations.push(`${rel} preload relative import must remain in preload or shared IPC: '${specifier}'.`);
+    report("desktop_preload_relative_import", { file, owner, message: `Preload relative import must remain in preload or shared IPC: '${specifier}'.` });
   }
 }
 
@@ -565,13 +393,13 @@ function checkPackageExports() {
     const packageJson = readJson(join(info.root, "package.json"));
     for (const [exportKey, exportValue] of Object.entries(packageJson.exports ?? {})) {
       if (typeof exportValue !== "object" || exportValue === null || !("types" in exportValue)) {
-        violations.push(`${display(join(info.root, "package.json"))} export '${exportKey}' must declare a types entry.`);
+        report("package_export_types_missing", { file: join(info.root, "package.json"), owner: info, message: `Export '${exportKey}' must declare a types entry.` });
         continue;
       }
 
       const typesPath = resolve(info.root, exportValue.types);
       if (!exists(typesPath)) {
-        violations.push(`${display(join(info.root, "package.json"))} export '${exportKey}' points to missing types file '${exportValue.types}'.`);
+        report("package_export_types_file_missing", { file: join(info.root, "package.json"), owner: info, message: `Export '${exportKey}' points to missing types file '${exportValue.types}'.` });
       }
     }
   }
@@ -593,7 +421,7 @@ function checkPackageCycles() {
     if (visiting.has(info.name)) {
       const cycleStart = stack.indexOf(info.name);
       const cycle = [...stack.slice(cycleStart), info.name].join(" -> ");
-      violations.push(`Workspace dependency cycle detected: ${cycle}.`);
+      report("package_dependency_cycle", { file: join(info.root, "package.json"), owner: info, message: `Workspace dependency cycle detected: ${cycle}.` });
       return;
     }
 
@@ -614,7 +442,7 @@ function checkPackageCycles() {
 function checkHelarcSourceCycles() {
   const helarc = packageByName.get("@agent-anything/helarc");
   if (!helarc) {
-    violations.push("Required Helarc product package is missing.");
+    report("helarc_package_missing", { file: join(repoRoot, "products/helarc/package.json"), owner: "@agent-anything/helarc", message: "Required Helarc product package is missing." });
     return;
   }
 
@@ -645,9 +473,11 @@ function checkHelarcSourceCycles() {
 
   for (const component of stronglyConnectedComponents(graph)) {
     if (component.length > 1) {
-      violations.push(
-        `Helarc production source cycle detected: ${component.map(display).join(" -> ")}.`,
-      );
+      report("helarc_source_cycle", {
+        file: component[0],
+        owner: helarc,
+        message: `Helarc production source cycle detected: ${component.map(display).join(" -> ")}.`,
+      });
     }
   }
 }
@@ -775,20 +605,6 @@ function exists(file) {
   } catch {
     return false;
   }
-}
-
-function packageKind(root) {
-  const rel = relative(repoRoot, root).replaceAll("\\", "/");
-  if (rel.startsWith("packages/")) {
-    return "platform";
-  }
-  if (rel.startsWith("products/")) {
-    return "product";
-  }
-  if (rel.startsWith("apps/")) {
-    return "app";
-  }
-  throw new Error(`Unknown package root kind: ${rel}`);
 }
 
 function display(file) {

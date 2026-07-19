@@ -4,9 +4,10 @@
   "description": "A TypeScript platform for building tool-using AI agent products with structured tasks, permissions, evidence, and runtime output.",
   "scripts": {
     "api:check": "pnpm build && node scripts/check-built-public-apis.mjs",
+    "architecture:test": "node --test scripts/architecture/*.test.mjs",
     "boundaries": "node scripts/check-boundaries.mjs",
     "build": "pnpm -r run build",
-    "test": "pnpm run boundaries && pnpm -r run test",
+    "test": "pnpm run boundaries && pnpm run architecture:test && pnpm -r run test",
     "typecheck": "pnpm -r run typecheck"
   },
   "keywords": [],
