@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/agent-runtime": "workspace:*",
     "@agent-anything/code-agent": "workspace:*",
     "@agent-anything/evidence": "workspace:*",
     "@agent-anything/governance": "workspace:*",

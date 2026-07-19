@@ -24,7 +24,7 @@ import {
 import {
   Runner,
   type RunConfig,
-} from "@agent-anything/agent-core/runner";
+} from "@agent-anything/agent-runtime";
 import {
   createHostRuntime,
   type HostRunOutcome,

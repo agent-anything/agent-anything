@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/agent-core",
   "version": "0.0.0",
-  "description": "Agent, controller, runner, context, plan, event, and task contracts for AgentAnything platform packages.",
+  "description": "Agent, controller, action, run, context, plan, retry, event, and task contracts for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -25,10 +25,6 @@
     "./action-execution": {
       "types": "./src/action-execution/index.ts",
       "import": "./dist/action-execution/index.js"
-    },
-    "./runner": {
-      "types": "./src/runner/index.ts",
-      "import": "./dist/runner/index.js"
     },
     "./run": {
       "types": "./src/run/index.ts",
@@ -64,13 +60,9 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@agent-anything/evidence": "workspace:*",
     "@agent-anything/governance": "workspace:*",
-    "@agent-anything/observability": "workspace:*",
     "@agent-anything/permission": "workspace:*",
-    "@agent-anything/providers": "workspace:*",
     "@agent-anything/shared": "workspace:*",
-    "@agent-anything/storage": "workspace:*",
     "@agent-anything/tools": "workspace:*"
   },
   "devDependencies": {

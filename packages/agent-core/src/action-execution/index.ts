@@ -37,6 +37,11 @@ export * from "./CanonicalEffectivePermissions.js";
 export * from "./CanonicalIdentity.js";
 export * from "./CapabilityEffect.js";
 export * from "./PreparedActionInvocation.js";
+export {
+  snapshotRunActionContext,
+  type RunActionContext,
+  type RunActionContextInput,
+} from "./RunActionContext.js";
 export type {
   PreparedActionReference,
   PreparedExternalAction,

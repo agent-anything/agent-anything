@@ -1,0 +1,38 @@
+{
+  "name": "@agent-anything/agent-runtime",
+  "version": "0.0.0",
+  "description": "Authoritative Run execution, provider-backed controller, and retry implementations for AgentAnything.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/evidence": "workspace:*",
+    "@agent-anything/governance": "workspace:*",
+    "@agent-anything/observability": "workspace:*",
+    "@agent-anything/permission": "workspace:*",
+    "@agent-anything/providers": "workspace:*",
+    "@agent-anything/shared": "workspace:*",
+    "@agent-anything/storage": "workspace:*",
+    "@agent-anything/tools": "workspace:*"
+  },
+  "devDependencies": {
+    "@agent-anything/testing": "workspace:*"
+  },
+  "license": "Apache-2.0",
+  "private": true
+}

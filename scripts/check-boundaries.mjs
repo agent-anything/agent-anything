@@ -14,6 +14,7 @@ const packageRoots = [
   "packages/providers",
   "packages/storage",
   "packages/agent-core",
+  "packages/agent-runtime",
   "packages/host",
   "packages/extensions",
   "packages/code-agent",
@@ -289,6 +290,7 @@ function checkLayerRule(file, ownerName, importedName) {
   if (lowerLayerPackages.has(ownerName)) {
     for (const forbidden of [
       "@agent-anything/agent-core",
+      "@agent-anything/agent-runtime",
       "@agent-anything/host",
       "@agent-anything/extensions",
       "@agent-anything/code-agent",
@@ -303,6 +305,7 @@ function checkLayerRule(file, ownerName, importedName) {
   if (ownerName === "@agent-anything/agent-core") {
     for (const forbidden of [
       "@agent-anything/extensions",
+      "@agent-anything/agent-runtime",
       "@agent-anything/code-agent",
       "@agent-anything/host",
       "@agent-anything/testing",
@@ -315,6 +318,7 @@ function checkLayerRule(file, ownerName, importedName) {
 
   if (ownerName === "@agent-anything/extensions") {
     for (const forbidden of [
+      "@agent-anything/agent-runtime",
       "@agent-anything/code-agent",
       "@agent-anything/host",
       "@agent-anything/testing",
@@ -327,6 +331,7 @@ function checkLayerRule(file, ownerName, importedName) {
 
   if (ownerName === "@agent-anything/code-agent") {
     for (const forbidden of [
+      "@agent-anything/agent-runtime",
       "@agent-anything/extensions",
       "@agent-anything/host",
       "@agent-anything/testing",
@@ -340,6 +345,7 @@ function checkLayerRule(file, ownerName, importedName) {
   if (ownerName === "@agent-anything/testing") {
     for (const forbidden of [
       "@agent-anything/agent-core",
+      "@agent-anything/agent-runtime",
       "@agent-anything/host",
       "@agent-anything/extensions",
       "@agent-anything/code-agent",
@@ -358,6 +364,19 @@ function checkLayerRule(file, ownerName, importedName) {
     ]) {
       if (importedName === forbidden) {
         violations.push(`${rel} host production code must not import '${forbidden}'.`);
+      }
+    }
+  }
+
+  if (ownerName === "@agent-anything/agent-runtime") {
+    for (const forbidden of [
+      "@agent-anything/host",
+      "@agent-anything/extensions",
+      "@agent-anything/code-agent",
+      "@agent-anything/testing",
+    ]) {
+      if (importedName === forbidden) {
+        violations.push(`${rel} agent-runtime production code must not import '${forbidden}'.`);
       }
     }
   }

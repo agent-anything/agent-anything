@@ -1,0 +1,55 @@
+import type { EvidenceBuilderPort } from "@agent-anything/evidence";
+import type { AuditPort, TelemetryPort } from "@agent-anything/observability";
+import type { ISODateTimeString } from "@agent-anything/shared";
+import type { StoragePort } from "@agent-anything/storage";
+import type {
+  ActionEnforcementPipeline,
+  SandboxExecutionGateway,
+} from "@agent-anything/agent-core/action-execution";
+import type { Controller } from "@agent-anything/agent-core/controller";
+import type { RuntimeEventPublisher } from "@agent-anything/agent-core/events";
+import type { RetryExecutor } from "../retry/RetryExecutor.js";
+
+export type RunnerIdentityKind =
+  | "run_item"
+  | "action"
+  | "observation"
+  | "plan"
+  | "approval_request"
+  | "approval_record"
+  | "approval_review_operation"
+  | "authority_operation"
+  | "action_authority"
+  | "run_permission_grant"
+  | "session_authority_record"
+  | "policy_amendment_record";
+
+export interface CreateRunnerIdentityInput {
+  readonly kind: RunnerIdentityKind;
+  readonly runId: string;
+  readonly sequence: number;
+}
+
+export type CreateRunnerIdentity = (input: CreateRunnerIdentityInput) => string;
+
+export interface RunnerDependencies {
+  readonly controller: Controller<unknown>;
+  readonly eventEmitter?: RuntimeEventPublisher;
+  readonly auditPort?: AuditPort;
+  readonly telemetryPort?: TelemetryPort;
+  readonly actionEnforcementPipeline?: ActionEnforcementPipeline;
+  readonly sandboxExecutionGateway?: SandboxExecutionGateway;
+  readonly evidenceBuilder?: EvidenceBuilderPort;
+  readonly evidenceStorage?: StoragePort;
+  readonly retryExecutor?: RetryExecutor;
+  readonly now?: () => ISODateTimeString;
+  readonly createId?: CreateRunnerIdentity;
+}
+
+export interface RunInvocationOptions {
+  readonly runtimeEventPublisher?: RuntimeEventPublisher;
+}
+
+export type ResolvedRunnerDependencies = Required<
+  Pick<RunnerDependencies, "controller" | "now" | "createId" | "retryExecutor">
+> & Omit<RunnerDependencies, "controller" | "now" | "createId" | "retryExecutor">;

@@ -11,8 +11,10 @@ initial code-agent desktop stage.
 ## Current State
 
 - Platform packages have been split into focused workspaces with boundary checks.
-- `agent-core` provides Agent, Controller, Runner, Run, Action, Observation,
-  Context, Plan, event, and task contracts.
+- `agent-core` provides Agent, Controller, Run, Action, Observation, Context,
+  Plan, Retry, event, and task semantics and protocols.
+- `agent-runtime` provides the authoritative Runner, provider-backed Controller,
+  and Retry execution implementations.
 - `host` provides product-neutral active Run integration, safe projections,
   approval bridges, and Host authority stores.
 - Helarc is the main active product and has a working Electron desktop host.
@@ -73,7 +75,8 @@ agent-anything/
     storage/         Storage port contracts
     testing/         Test fakes and scenario support
     extensions/      MCP, plugins, remote tools, and extension points
-    agent-core/      Agent, Controller, Runner, Context, Plan, events
+    agent-core/      Agent and Run semantics, Controller and Retry protocols
+    agent-runtime/   Runner, provider-backed Controller, Retry execution
     host/            Host runtime integration, safe projections, approval bridges
     code-agent/      Code-oriented tools and workflows
   products/
@@ -90,8 +93,10 @@ Platform packages are designed to point inward:
 
 - Lower-level packages such as `shared`, `providers`, `tools`, `permission`,
   `governance`, `observability`, and `storage` define focused contracts.
-- `agent-core` composes Agent, Controller, unified Runner, dynamic Plan, Context,
-  and events.
+- `agent-core` owns Agent and Run semantics plus Controller, Retry, Plan, Context,
+  and event protocols.
+- `agent-runtime` owns authoritative Run advancement and concrete Controller and
+  Retry execution without depending on Host or product code.
 - `host` adapts authoritative Runner execution to product-neutral application hosts.
 - `extensions` contains optional integration surfaces such as MCP, plugins,
   remote tools, and enterprise storage.

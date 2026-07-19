@@ -28,6 +28,7 @@
     "@agent-anything/tools": "workspace:*"
   },
   "devDependencies": {
+    "@agent-anything/agent-runtime": "workspace:*",
     "@agent-anything/evidence": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/storage": "workspace:*",

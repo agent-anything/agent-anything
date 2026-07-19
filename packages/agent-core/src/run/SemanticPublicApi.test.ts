@@ -5,6 +5,7 @@ import type {
   RunResult,
 } from "@agent-anything/agent-core/run";
 import { describe, expect, expectTypeOf, it } from "vitest";
+import * as coreApi from "../index.js";
 import { createSucceededRunResult } from "./index.js";
 
 describe("agent-core semantic public API", () => {
@@ -43,5 +44,12 @@ describe("agent-core semantic public API", () => {
     expect(result.status).toBe("succeeded");
     expectTypeOf(result).toMatchTypeOf<RunResult<{ summary: string }>>();
     expectTypeOf<RunInput>().toBeObject();
+  });
+
+  it("does not expose concrete Runtime implementations", () => {
+    expect(coreApi).not.toHaveProperty("Runner");
+    expect(coreApi).not.toHaveProperty("ProviderBackedController");
+    expect(coreApi).not.toHaveProperty("RetryExecutor");
+    expect(coreApi).not.toHaveProperty("StructuredOutputError");
   });
 });

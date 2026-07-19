@@ -49,16 +49,5 @@ export type {
   RetryPolicy,
   RetryServerDelayPolicy,
 } from "./RetryPolicy.js";
-export {
-  cancellationAttribution,
-  createRetryAttemptInterruptionFactory,
-  createRetryWait,
-  defaultRetryIdGenerator,
-  exactCancellationRequest,
-  systemRetryClock,
-  systemRetryRandomSource,
-} from "./RetryDependencies.js";
-export { RetryExecutor } from "./RetryExecutor.js";
-export { createSystemRetryExecutor } from "./createSystemRetryExecutor.js";
 export { snapshotRetryOperation } from "./RetryOperation.js";
 export { snapshotRetryPolicy } from "./RetryPolicy.js";

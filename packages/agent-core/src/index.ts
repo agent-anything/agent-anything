@@ -10,21 +10,8 @@ export type {
   ControllerCallContext,
   ControllerRetryContext,
   ControllerDecision,
-  ControllerFailure,
-  ControllerFailureCode,
   ControllerInput,
   ControllerModelItem,
-  ProviderBackedControllerInput,
-  ProviderRequestBuildContext,
-  StructuredOutputCorrection,
-  StructuredOutputFailure,
-  StructuredOutputFailureCategory,
-} from "./controller/index.js";
-export {
-  ControllerError,
-  ProviderBackedController,
-  snapshotStructuredOutputFailure,
-  StructuredOutputError,
 } from "./controller/index.js";
 export * from "./action-execution/index.js";
 export type {
@@ -85,55 +72,12 @@ export type {
   RetryServerDelayPolicy,
 } from "./retry/index.js";
 export {
-  createRetryAttemptInterruptionFactory,
-  createRetryWait,
-  createSystemRetryExecutor,
-  defaultRetryIdGenerator,
-  RetryExecutor,
   snapshotRetryEvent,
   snapshotRetryOperation,
   snapshotRetryPolicy,
-  systemRetryClock,
-  systemRetryRandomSource,
 } from "./retry/index.js";
 export * from "./action/index.js";
 export * from "./run/index.js";
-export type {
-  ApprovalReviewAttemptError,
-  ApprovalReviewRetryCategory,
-  ApplyImmediateApprovalAuthorityResult,
-  CreateRunnerIdentity,
-  CreateRunnerIdentityInput,
-  EvidenceSettlementResult,
-  ExecuteApprovalReviewAttemptInput,
-  ConsumeActionApprovalCoverageResult,
-  PreparedPermissionRequestAction,
-  PreparePermissionRequestActionResult,
-  RunActionContext,
-  RunActionContextInput,
-  RunConfig,
-  RunInfrastructureRequirement,
-  ResolvedRunConfig,
-  ResolvedRunRetryConfiguration,
-  RequestPermissionsActionInput,
-  RunLimits,
-  RunInvocationOptions,
-  RunnerDependencies,
-  RunnerIdentityKind,
-  ToolResultClassification,
-  ValidToolResultClassification,
-} from "./runner/index.js";
-export {
-  approvalReviewRetryClassifier,
-  allowsExplicitPermissionRequest,
-  applyImmediateApprovalAuthority,
-  consumeActionApprovalCoverage,
-  executeApprovalReviewAttempt,
-  normalizeApprovalReviewOutcome,
-  preparePermissionRequestAction,
-  Runner,
-  snapshotRunActionContext,
-} from "./runner/index.js";
 export type {
   EmitRuntimeEventInput,
   RuntimeEvent,

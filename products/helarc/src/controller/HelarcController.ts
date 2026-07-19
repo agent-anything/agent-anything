@@ -2,10 +2,12 @@ import type {
   ControllerDecision,
   ControllerInput,
   ControllerModelItem,
-  ProviderRequestBuildContext,
-  StructuredOutputFailure,
 } from "@agent-anything/agent-core";
-import { StructuredOutputError } from "@agent-anything/agent-core";
+import {
+  StructuredOutputError,
+  type ProviderRequestBuildContext,
+  type StructuredOutputFailure,
+} from "@agent-anything/agent-runtime";
 import type { ProviderRequest, ProviderResponse } from "@agent-anything/providers";
 import type { Metadata } from "@agent-anything/shared";
 import {

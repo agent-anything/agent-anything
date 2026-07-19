@@ -1,6 +1,5 @@
 import {
   ActionEnforcementPipeline,
-  Runner,
   RuntimeEventEmitter,
   createCanonicalSha256Digest,
   createSandboxExecutionGateway,
@@ -11,6 +10,7 @@ import {
   type SandboxEnforcement,
   type SandboxProvider,
 } from "@agent-anything/agent-core";
+import { Runner } from "@agent-anything/agent-runtime";
 import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,

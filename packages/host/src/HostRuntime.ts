@@ -15,7 +15,7 @@ import {
 import type {
   RunConfig,
   Runner,
-} from "@agent-anything/agent-core/runner";
+} from "@agent-anything/agent-runtime";
 import {
   createHostRunProjection,
   createHostTerminalRunProjection,

@@ -12,14 +12,13 @@ import {
   createRunCancellationController,
   createSandboxExecutionGateway,
   createTargetStateAssertions,
-  Runner,
   type Agent,
   type AgentTask,
   type Controller,
   type ControllerDecision,
-  type RunConfig,
   type RunResult,
 } from "@agent-anything/agent-core";
+import { Runner, type RunConfig } from "@agent-anything/agent-runtime";
 import { EvidenceBuilder } from "@agent-anything/evidence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";

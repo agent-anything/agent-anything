@@ -20,6 +20,9 @@ importers:
       '@agent-anything/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
+      '@agent-anything/agent-runtime':
+        specifier: workspace:*
+        version: link:../../packages/agent-runtime
       '@agent-anything/code-agent':
         specifier: workspace:*
         version: link:../../packages/code-agent
@@ -78,6 +81,28 @@ importers:
 
   packages/agent-core:
     dependencies:
+      '@agent-anything/governance':
+        specifier: workspace:*
+        version: link:../governance
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../permission
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../tools
+    devDependencies:
+      '@agent-anything/testing':
+        specifier: workspace:*
+        version: link:../testing
+
+  packages/agent-runtime:
+    dependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
       '@agent-anything/evidence':
         specifier: workspace:*
         version: link:../evidence
@@ -122,6 +147,9 @@ importers:
         specifier: workspace:*
         version: link:../tools
     devDependencies:
+      '@agent-anything/agent-runtime':
+        specifier: workspace:*
+        version: link:../agent-runtime
       '@agent-anything/evidence':
         specifier: workspace:*
         version: link:../evidence
@@ -156,6 +184,9 @@ importers:
         specifier: workspace:*
         version: link:../tools
     devDependencies:
+      '@agent-anything/agent-runtime':
+        specifier: workspace:*
+        version: link:../agent-runtime
       '@agent-anything/evidence':
         specifier: workspace:*
         version: link:../evidence
@@ -186,6 +217,9 @@ importers:
       '@agent-anything/agent-core':
         specifier: workspace:*
         version: link:../agent-core
+      '@agent-anything/agent-runtime':
+        specifier: workspace:*
+        version: link:../agent-runtime
       '@agent-anything/governance':
         specifier: workspace:*
         version: link:../governance
@@ -264,6 +298,9 @@ importers:
       '@agent-anything/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
+      '@agent-anything/agent-runtime':
+        specifier: workspace:*
+        version: link:../../packages/agent-runtime
       '@agent-anything/code-agent':
         specifier: workspace:*
         version: link:../../packages/code-agent
