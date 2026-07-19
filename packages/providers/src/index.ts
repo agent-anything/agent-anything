@@ -1,10 +1,4 @@
 export type { Provider, ProviderCallResult } from "./Provider.js";
-export type {
-  InvocationCancellationRef,
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-  InvocationOperationDeadlineRef,
-} from "@agent-anything/shared";
 export {
   createProviderAttemptInterruption,
   providerResultFromInterruption,

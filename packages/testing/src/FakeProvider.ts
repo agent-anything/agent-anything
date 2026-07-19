@@ -3,9 +3,9 @@ import type {
   ProviderCallResult,
   ProviderCapabilities,
   ProviderDescriptor,
-  InvocationInterruptionContext,
   ProviderRequest,
 } from "@agent-anything/providers";
+import type { InvocationInterruptionContext } from "@agent-anything/shared";
 
 export interface FakeProviderInput {
   descriptor?: Partial<Omit<ProviderDescriptor, "capabilities">> & {

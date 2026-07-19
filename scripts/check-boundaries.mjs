@@ -48,7 +48,7 @@ for (const root of packageRoots) {
 }
 checkPackageExports();
 checkPackageCycles();
-checkCapabilityManifests();
+checkReviewedManifests();
 checkHelarcSourceCycles();
 
 if (violations.length > 0) {
@@ -153,8 +153,38 @@ function checkPublicApiImport(file, owner, statement, specifier) {
   }
 }
 
-function checkCapabilityManifests() {
+function checkReviewedManifests() {
   const expectedDependencies = new Map([
+    ["@agent-anything/shared", []],
+    ["@agent-anything/tools", ["@agent-anything/shared"]],
+    [
+      "@agent-anything/evidence",
+      ["@agent-anything/shared", "@agent-anything/tools"],
+    ],
+    ["@agent-anything/governance", ["@agent-anything/shared"]],
+    [
+      "@agent-anything/permission",
+      ["@agent-anything/governance", "@agent-anything/shared"],
+    ],
+    [
+      "@agent-anything/observability",
+      ["@agent-anything/evidence", "@agent-anything/shared"],
+    ],
+    ["@agent-anything/providers", ["@agent-anything/shared"]],
+    [
+      "@agent-anything/storage",
+      ["@agent-anything/evidence", "@agent-anything/shared"],
+    ],
+    [
+      "@agent-anything/testing",
+      [
+        "@agent-anything/governance",
+        "@agent-anything/observability",
+        "@agent-anything/permission",
+        "@agent-anything/providers",
+        "@agent-anything/shared",
+      ],
+    ],
     [
       "@agent-anything/code-agent",
       [
@@ -178,7 +208,7 @@ function checkCapabilityManifests() {
   for (const [packageName, expected] of expectedDependencies) {
     const info = packageByName.get(packageName);
     if (!info) {
-      violations.push(`Required capability package '${packageName}' is missing.`);
+      violations.push(`Required reviewed package '${packageName}' is missing.`);
       continue;
     }
     const actual = [...info.dependencies].sort();

@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/storage",
   "version": "0.0.0",
-  "description": "Storage contracts for AgentAnything platform packages.",
+  "description": "Storage contracts and basic implementations for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",

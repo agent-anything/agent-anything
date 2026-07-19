@@ -1,9 +1,9 @@
 import type {
-  InvocationInterruptionContext,
   Provider,
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/providers";
+import type { InvocationInterruptionContext } from "@agent-anything/shared";
 import { createFailedRunResult } from "@agent-anything/agent-core/run";
 import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "../task/index.js";

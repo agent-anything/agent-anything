@@ -5,10 +5,10 @@ import {
   type ProviderCallResult,
   type ProviderDescriptor,
   type ProviderFailure,
-  type InvocationInterruptionContext,
   type ProviderRequest,
   type ProviderResponse,
 } from "@agent-anything/providers";
+import type { InvocationInterruptionContext } from "@agent-anything/shared";
 import type { HelarcProviderConfig } from "./resolveHelarcProviderConfig.js";
 import {
   readProviderHttpFailureMetadata,

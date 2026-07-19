@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/observability",
   "version": "0.0.0",
-  "description": "Audit, telemetry, and platform event contracts for AgentAnything platform packages.",
+  "description": "Audit, telemetry, and redaction contracts for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -17,6 +17,10 @@
     "./telemetry": {
       "types": "./src/telemetry/index.ts",
       "import": "./dist/telemetry/index.js"
+    },
+    "./redaction": {
+      "types": "./src/redaction/index.ts",
+      "import": "./dist/redaction/index.js"
     }
   },
   "files": [

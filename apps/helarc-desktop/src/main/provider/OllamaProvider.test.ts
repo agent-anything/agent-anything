@@ -1,7 +1,7 @@
 import type {
-  InvocationInterruptionContext,
   ProviderRequest,
 } from "@agent-anything/providers";
+import type { InvocationInterruptionContext } from "@agent-anything/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OllamaProvider } from "./OllamaProvider.js";
 import type { FetchLike } from "./OpenAICompatibleProvider.js";

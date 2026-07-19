@@ -42,7 +42,6 @@
   "license": "Apache-2.0",
   "private": true,
   "dependencies": {
-    "@agent-anything/shared": "workspace:*",
-    "@agent-anything/tools": "workspace:*"
+    "@agent-anything/shared": "workspace:*"
   }
 }

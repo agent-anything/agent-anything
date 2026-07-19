@@ -5,10 +5,10 @@ import {
   type ProviderCallResult,
   type ProviderDescriptor,
   type ProviderFailure,
-  type InvocationInterruptionContext,
   type ProviderRequest,
   type ProviderResponse,
 } from "@agent-anything/providers";
+import type { InvocationInterruptionContext } from "@agent-anything/shared";
 import type { FetchLike } from "./OpenAICompatibleProvider.js";
 import { readProviderHttpFailureMetadata } from "./ProviderHttpFailureMetadata.js";
 import type { HelarcProviderConfig } from "./resolveHelarcProviderConfig.js";

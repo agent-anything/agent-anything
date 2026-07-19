@@ -5,11 +5,11 @@ import type { ContextProjection } from "@agent-anything/agent-core/context";
 import { createUserApprovalReviewBridge } from "@agent-anything/host";
 import type { ApprovalReviewInput } from "@agent-anything/permission";
 import type {
-  InvocationInterruptionContext,
   Provider,
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/providers";
+import type { InvocationInterruptionContext } from "@agent-anything/shared";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";

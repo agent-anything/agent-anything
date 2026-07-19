@@ -238,9 +238,6 @@ importers:
       '@agent-anything/shared':
         specifier: workspace:*
         version: link:../shared
-      '@agent-anything/tools':
-        specifier: workspace:*
-        version: link:../tools
 
   packages/host:
     dependencies:

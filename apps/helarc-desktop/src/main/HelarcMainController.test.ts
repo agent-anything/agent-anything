@@ -4,11 +4,11 @@ import type {
   ApprovalDecisionSubmission,
 } from "@agent-anything/permission";
 import type {
-  InvocationInterruptionContext,
   Provider,
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/providers";
+import type { InvocationInterruptionContext } from "@agent-anything/shared";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

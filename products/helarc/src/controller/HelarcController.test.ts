@@ -10,12 +10,12 @@ import {
 } from "@agent-anything/agent-core/controller";
 import { createRunCancellationController } from "@agent-anything/agent-core/run";
 import type {
-  InvocationInterruptionContext,
   Provider,
   ProviderCallResult,
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/providers";
+import type { InvocationInterruptionContext } from "@agent-anything/shared";
 import type { ToolDescriptor } from "@agent-anything/tools";
 import { describe, expect, it } from "vitest";
 import {
