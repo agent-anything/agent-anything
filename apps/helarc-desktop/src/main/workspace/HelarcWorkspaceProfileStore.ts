@@ -3,6 +3,7 @@ import {
   selectHelarcWorkspaceProfile,
   type HelarcWorkspaceProfile,
 } from "@agent-anything/helarc";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, normalize } from "node:path";
 
@@ -145,7 +146,12 @@ export class FileHelarcWorkspaceProfileStore implements HelarcWorkspaceProfileSt
 }
 
 export function workspaceProfileId(workspacePath: string): string {
-  return `workspace:${normalize(workspacePath).toLowerCase()}`;
+  const normalizedPath = normalize(workspacePath.trim());
+  const comparisonPath = process.platform === "win32"
+    ? normalizedPath.toLowerCase()
+    : normalizedPath;
+  const digest = createHash("sha256").update(comparisonPath, "utf8").digest("hex");
+  return `workspace-${digest}`;
 }
 
 async function validateWorkspacePath(

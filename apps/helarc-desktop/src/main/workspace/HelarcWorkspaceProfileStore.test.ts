@@ -8,6 +8,16 @@ import {
 } from "./HelarcWorkspaceProfileStore.js";
 
 describe("FileHelarcWorkspaceProfileStore", () => {
+  it("creates stable opaque profile ids compatible with workspace-root identity", () => {
+    const workspacePath = join("D:\\", "private", "workspace-a");
+    const first = workspaceProfileId(workspacePath);
+
+    expect(first).toMatch(/^workspace-[a-f0-9]{64}$/);
+    expect(first).not.toContain("private");
+    expect(first).not.toContain("workspace-a");
+    expect(workspaceProfileId(workspacePath)).toBe(first);
+  });
+
   it("remembers trusted workspace directories", async () => {
     const { store, workspacePath } = await createStoreWithWorkspace();
 

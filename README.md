@@ -138,6 +138,15 @@ Run the Helarc desktop development flow:
 pnpm --filter @agent-anything/helarc-desktop dev:electron
 ```
 
+Delete all local Helarc desktop user data before starting against the current
+development Contracts. This removes provider profiles and credentials, workspace
+profiles, Threads, Runs, and every other file in the Helarc Electron `userData`
+directory:
+
+```powershell
+pnpm --filter @agent-anything/helarc-desktop clean:user-data
+```
+
 Check Helarc desktop packaging readiness:
 
 ```powershell
@@ -155,6 +164,7 @@ Helarc desktop stores provider profiles locally and supports these provider kind
   `http://localhost:11434`. The adapter calls `/api/generate`.
 
 HTTP provider URLs are accepted only for loopback addresses.
+Provider timeout values use positive whole-second increments expressed in milliseconds.
 
 ## Status
 

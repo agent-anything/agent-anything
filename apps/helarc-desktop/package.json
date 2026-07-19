@@ -21,6 +21,7 @@
     "debug:main:break": "electron --inspect-brk=9229 .",
     "debug:test": "vitest run --inspect-brk --pool forks --poolOptions.forks.singleFork",
     "debug:test:provider": "vitest run src/main/provider/OpenAICompatibleProvider.test.ts --inspect-brk --pool forks --poolOptions.forks.singleFork",
+    "clean:user-data": "node scripts/clear-user-data.mjs",
     "start": "electron ."
   },
   "dependencies": {

@@ -853,7 +853,7 @@ function SettingsPanel({
         <input
           name="timeoutMs"
           type="number"
-          min="1"
+          min="1000"
           step="1000"
           defaultValue={provider?.timeoutMs.toString() ?? "30000"}
           autoComplete="off"
