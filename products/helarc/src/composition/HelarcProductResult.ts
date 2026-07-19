@@ -1,9 +1,9 @@
 import type {
   AgentTask,
   RunResult,
-  RunResultStatus,
   RuntimeEvent,
 } from "@agent-anything/agent-core";
+import type { RunResultStatus } from "@agent-anything/agent-core/run";
 import type { SandboxEnforcement } from "@agent-anything/action-execution";
 import { projectRuntimeEventForHost } from "@agent-anything/host";
 import { CODE_AGENT_RUN_COMMAND_ACTION } from "@agent-anything/code-agent";

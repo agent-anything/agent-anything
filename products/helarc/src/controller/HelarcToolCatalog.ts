@@ -1,4 +1,4 @@
-import type { ControllerInput } from "@agent-anything/agent-core";
+import type { ControllerInput } from "@agent-anything/agent-core/controller";
 import {
   CODE_AGENT_LIST_FILES_ACTION,
   CODE_AGENT_READ_FILE_ACTION,

@@ -4,7 +4,7 @@ import type {
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/providers";
-import { createFailedRunResult } from "@agent-anything/agent-core";
+import { createFailedRunResult } from "@agent-anything/agent-core/run";
 import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "../task/index.js";
 import { createHelarcProductComposition } from "./HelarcProductComposition.js";

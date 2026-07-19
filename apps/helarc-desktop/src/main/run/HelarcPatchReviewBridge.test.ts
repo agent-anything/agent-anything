@@ -1,4 +1,4 @@
-import { createRunCancellationController } from "@agent-anything/agent-core";
+import { createRunCancellationController } from "@agent-anything/agent-core/run";
 import type {
   HelarcPatchReviewDecisionSubmission,
   HelarcPatchReviewRequest,

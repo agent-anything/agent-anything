@@ -1,6 +1,6 @@
 import { basename, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { TaskWorkspaceScope } from "@agent-anything/agent-core";
+import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
 import type { WorkspaceContext } from "@agent-anything/governance";
 import { resolveWorkspacePath } from "./resolveWorkspacePath.js";
 

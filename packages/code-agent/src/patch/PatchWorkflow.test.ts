@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { TaskWorkspaceScope } from "@agent-anything/agent-core";
+import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
 import type { WorkspaceContext } from "@agent-anything/governance";
 import {
   acceptPatch,

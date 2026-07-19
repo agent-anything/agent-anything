@@ -7,7 +7,7 @@ import {
 } from "@agent-anything/host";
 import {
   createRunCancellationController,
-} from "@agent-anything/agent-core";
+} from "@agent-anything/agent-core/run";
 import {
   createHelarcProviderProfile,
   createHelarcConversation,

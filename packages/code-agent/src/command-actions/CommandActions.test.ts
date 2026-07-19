@@ -12,13 +12,13 @@ import {
   createTargetStateAssertions,
 } from "@agent-anything/action-execution";
 import {
-  createRunCancellationController,
   type Agent,
   type AgentTask,
   type Controller,
-  type ControllerDecision,
   type RunResult,
 } from "@agent-anything/agent-core";
+import type { ControllerDecision } from "@agent-anything/agent-core/controller";
+import { createRunCancellationController } from "@agent-anything/agent-core/run";
 import { Runner, type RunConfig } from "@agent-anything/agent-runtime";
 import { EvidenceBuilder } from "@agent-anything/evidence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";

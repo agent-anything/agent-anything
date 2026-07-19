@@ -46,7 +46,8 @@ describe("agent-core semantic public API", () => {
     expectTypeOf<RunInput>().toBeObject();
   });
 
-  it("does not expose concrete Runtime implementations", () => {
+  it("does not expose runtime values through the type-only Core root", () => {
+    expect(Object.keys(coreApi)).toEqual([]);
     expect(coreApi).not.toHaveProperty("Runner");
     expect(coreApi).not.toHaveProperty("ProviderBackedController");
     expect(coreApi).not.toHaveProperty("RetryExecutor");

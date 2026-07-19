@@ -1,11 +1,10 @@
-import {
-  createRunCancellationController,
-  type Controller,
-  type ControllerCallContext,
-  type ControllerDecision,
-  type ControllerInput,
-  type RuntimeEvent,
-} from "@agent-anything/agent-core";
+import type { Controller, RuntimeEvent } from "@agent-anything/agent-core";
+import type {
+  ControllerCallContext,
+  ControllerDecision,
+  ControllerInput,
+} from "@agent-anything/agent-core/controller";
+import { createRunCancellationController } from "@agent-anything/agent-core/run";
 import type { Metadata } from "@agent-anything/shared";
 import { describe, expect, it } from "vitest";
 import {

@@ -1,8 +1,16 @@
-import { describe, expect, it } from "vitest";
+import type {
+  ActionAdapter,
+  RunActionContext,
+  SandboxProvider,
+} from "@agent-anything/action-execution";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import * as actionExecutionApi from "./index.js";
 
 describe("Action Execution public API", () => {
   it("exposes the trusted Action execution surface without private assessment stages", () => {
+    expectTypeOf<ActionAdapter>().toBeObject();
+    expectTypeOf<RunActionContext>().toBeObject();
+    expectTypeOf<SandboxProvider>().toBeObject();
     expect(Object.keys(actionExecutionApi).sort()).toEqual([
       "ACTION_FINGERPRINT_DOMAIN",
       "ActionContractValidationError",

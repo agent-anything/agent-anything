@@ -1,4 +1,4 @@
-import type { TaskWorkspaceScope } from "@agent-anything/agent-core";
+import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
 import type { WorkspaceTrustState } from "@agent-anything/governance";
 
 export type WorkspacePathErrorCode =

@@ -12,7 +12,8 @@ initial code-agent desktop stage.
 
 - Platform packages have been split into focused workspaces with boundary checks.
 - `agent-core` provides Agent, Controller, Run, Action, Observation, Context,
-  Plan, Retry, event, and task semantics and protocols.
+  Plan, Retry, event, and task semantics and protocols. Its root is a small
+  type-only composition surface; detailed Contracts use focused subpaths.
 - `action-execution` provides the trusted Action preparation, assessment,
   revalidation, and Sandbox dispatch path.
 - `agent-runtime` provides the authoritative Runner, provider-backed Controller,
@@ -137,6 +138,13 @@ Build all workspace packages:
 
 ```powershell
 pnpm build
+```
+
+Build and verify the exact Core, Action Execution, Runtime, and Host ESM entry
+points, including removed and private paths:
+
+```powershell
+pnpm run api:check
 ```
 
 Run the Helarc desktop app after building:

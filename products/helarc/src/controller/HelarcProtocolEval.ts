@@ -1,7 +1,7 @@
 import type {
   ControllerDecision,
   ControllerInput,
-} from "@agent-anything/agent-core";
+} from "@agent-anything/agent-core/controller";
 import type { ProviderResponse } from "@agent-anything/providers";
 import type { ToolDescriptor } from "@agent-anything/tools";
 import {

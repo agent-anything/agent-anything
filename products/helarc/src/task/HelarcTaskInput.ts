@@ -1,4 +1,5 @@
-import type { AgentTask, TaskWorkspaceScope } from "@agent-anything/agent-core";
+import type { AgentTask } from "@agent-anything/agent-core";
+import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
 import type { WorkspaceContext } from "@agent-anything/governance";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 

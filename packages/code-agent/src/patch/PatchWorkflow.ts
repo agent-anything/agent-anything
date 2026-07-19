@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
-import type { TaskWorkspaceScope } from "@agent-anything/agent-core";
+import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import { FileSystemError } from "../filesystem/FileSystemError.js";
 import {

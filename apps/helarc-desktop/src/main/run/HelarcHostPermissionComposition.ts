@@ -2,7 +2,7 @@ import type {
   ApprovalReviewerBinding,
   ResolvedRunPermissionConfig,
   RunCancellationController,
-} from "@agent-anything/agent-core";
+} from "@agent-anything/agent-core/run";
 import {
   resolveHostRunPermissionConfig,
   type UserApprovalReviewBridge,

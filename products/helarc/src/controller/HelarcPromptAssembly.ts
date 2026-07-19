@@ -1,4 +1,4 @@
-import type { ControllerInput } from "@agent-anything/agent-core";
+import type { ControllerInput } from "@agent-anything/agent-core/controller";
 import {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,

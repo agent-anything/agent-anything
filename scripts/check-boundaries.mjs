@@ -82,6 +82,7 @@ function checkFile(file) {
 
     const specifier = moduleSpecifier.text;
     if (specifier.startsWith("@agent-anything/")) {
+      checkPublicApiImport(file, owner, statement, specifier);
       checkWorkspaceImport({
         file,
         owner,
@@ -90,6 +91,55 @@ function checkFile(file) {
       });
     } else if (specifier.startsWith(".")) {
       checkRelativeImport(file, owner, specifier);
+    }
+  }
+}
+
+function checkPublicApiImport(file, owner, statement, specifier) {
+  const rel = display(file);
+  const executionPackages = new Set([
+    "@agent-anything/agent-core",
+    "@agent-anything/action-execution",
+    "@agent-anything/agent-runtime",
+    "@agent-anything/host",
+  ]);
+  const packageName = parseWorkspaceSpecifier(specifier).packageName;
+
+  if (
+    ts.isExportDeclaration(statement) &&
+    executionPackages.has(packageName) &&
+    owner.name !== packageName
+  ) {
+    violations.push(`${rel} must not re-export API owned by '${packageName}'.`);
+  }
+
+  if (specifier !== "@agent-anything/agent-core" || !ts.isImportDeclaration(statement)) {
+    return;
+  }
+
+  const allowedRootTypes = new Set([
+    "Agent",
+    "AgentTask",
+    "Controller",
+    "RunInput",
+    "RunResult",
+    "RuntimeEvent",
+  ]);
+  const clause = statement.importClause;
+  if (!clause || clause.name || !clause.namedBindings || !ts.isNamedImports(clause.namedBindings)) {
+    violations.push(`${rel} must use named type imports from the agent-core root.`);
+    return;
+  }
+
+  for (const element of clause.namedBindings.elements) {
+    const importedName = (element.propertyName ?? element.name).text;
+    if (!allowedRootTypes.has(importedName)) {
+      violations.push(
+        `${rel} imports specialized Agent Core Contract '${importedName}' from the root.`,
+      );
+    }
+    if (!clause.isTypeOnly && !element.isTypeOnly) {
+      violations.push(`${rel} imports runtime value '${importedName}' from the type-only agent-core root.`);
     }
   }
 }

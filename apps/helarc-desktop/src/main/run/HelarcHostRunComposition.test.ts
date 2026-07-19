@@ -1,7 +1,7 @@
 import {
   createRunCancellationController,
-  type ContextProjection,
-} from "@agent-anything/agent-core";
+} from "@agent-anything/agent-core/run";
+import type { ContextProjection } from "@agent-anything/agent-core/context";
 import { createUserApprovalReviewBridge } from "@agent-anything/host";
 import type { ApprovalReviewInput } from "@agent-anything/permission";
 import type {

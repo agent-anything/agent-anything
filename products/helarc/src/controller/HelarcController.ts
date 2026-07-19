@@ -2,7 +2,7 @@ import type {
   ControllerDecision,
   ControllerInput,
   ControllerModelItem,
-} from "@agent-anything/agent-core";
+} from "@agent-anything/agent-core/controller";
 import {
   StructuredOutputError,
   type ProviderRequestBuildContext,

@@ -7,10 +7,10 @@ import type {
   Agent,
   AgentTask,
   Controller,
-  RetryClock,
   RunResult,
   RuntimeEvent,
 } from "@agent-anything/agent-core";
+import type { RetryClock } from "@agent-anything/agent-core/retry";
 import type { SandboxEnforcement } from "@agent-anything/action-execution";
 import type { CodeAgentCommandLimits } from "@agent-anything/code-agent";
 import type { Provider } from "@agent-anything/providers";

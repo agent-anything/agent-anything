@@ -1,4 +1,4 @@
-import type { CancellationContext } from "@agent-anything/agent-core";
+import type { CancellationContext } from "@agent-anything/agent-core/run";
 import type { MaterializedPatchReview } from "@agent-anything/code-agent";
 
 export interface HelarcPatchReviewRequest {
