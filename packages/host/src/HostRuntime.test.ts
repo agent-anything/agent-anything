@@ -9,22 +9,22 @@ import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
 } from "@agent-anything/shared";
-import type { Agent } from "../agent/index.js";
+import type { Agent } from "@agent-anything/agent-core/agent";
 import type {
   Controller,
   ControllerCallContext,
   ControllerDecision,
   ControllerInput,
-} from "../controller/index.js";
-import { RuntimeEventEmitter } from "../events/index.js";
+} from "@agent-anything/agent-core/controller";
+import { RuntimeEventEmitter } from "@agent-anything/agent-core/events";
 import {
   createRunCancellationController,
   type ResolvedRunPermissionConfig,
-} from "../run/index.js";
+} from "@agent-anything/agent-core/run";
 import {
   Runner,
   type RunConfig,
-} from "../runner/index.js";
+} from "@agent-anything/agent-core/runner";
 import {
   createHostRuntime,
   type HostRunOutcome,

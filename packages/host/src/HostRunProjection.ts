@@ -4,15 +4,15 @@ import type {
   ApprovalSubmissionReceipt,
 } from "@agent-anything/permission";
 import type { ISODateTimeString } from "@agent-anything/shared";
-import type { SandboxEnforcement } from "../action-execution/index.js";
-import type { RuntimeEvent, RuntimeEventName } from "../events/index.js";
-import type { PlanProjection } from "../plan/index.js";
+import type { SandboxEnforcement } from "@agent-anything/agent-core/action-execution";
+import type { RuntimeEvent, RuntimeEventName } from "@agent-anything/agent-core/events";
+import type { PlanProjection } from "@agent-anything/agent-core/plan";
 import type {
   RunCancellationSummary,
   RunResult,
   RunResultCode,
   RuntimeErrorOwner,
-} from "../run/index.js";
+} from "@agent-anything/agent-core/run";
 
 export const HOST_RETRY_EVENT_LIMIT = 16;
 

@@ -6,7 +6,7 @@ import type {
 import {
   resolveHostRunPermissionConfig,
   type UserApprovalReviewBridge,
-} from "@agent-anything/agent-core/host";
+} from "@agent-anything/host";
 import type {
   ManagedPermissionConstraints,
   PersistentPolicyAmendmentPort,

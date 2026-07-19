@@ -1,5 +1,5 @@
 import type { Metadata } from "@agent-anything/shared";
-import type { RuntimeEvent, RuntimeEventName } from "../events/index.js";
+import type { RuntimeEvent, RuntimeEventName } from "@agent-anything/agent-core/events";
 
 const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
   "run.started": ["runId", "status"],

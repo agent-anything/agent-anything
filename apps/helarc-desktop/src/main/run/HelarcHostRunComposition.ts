@@ -19,7 +19,7 @@ import {
   type HostRunStartFailure,
   type HostTerminalRunProjection,
   type UserApprovalReviewBridge,
-} from "@agent-anything/agent-core/host";
+} from "@agent-anything/host";
 import {
   createCodeAgentCanonicalWorkspaceRoots,
   type CodeAgentCommandLimits,

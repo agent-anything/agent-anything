@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/agent-core",
   "version": "0.0.0",
-  "description": "Agent, controller, runner, context, plan, event, host, and task contracts for AgentAnything platform packages.",
+  "description": "Agent, controller, runner, context, plan, event, and task contracts for AgentAnything platform packages.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -49,10 +49,6 @@
     "./events": {
       "types": "./src/events/index.ts",
       "import": "./dist/events/index.js"
-    },
-    "./host": {
-      "types": "./src/host/index.ts",
-      "import": "./dist/host/index.js"
     },
     "./task": {
       "types": "./src/task/index.ts",

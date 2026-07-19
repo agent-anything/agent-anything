@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApprovalReviewInput } from "@agent-anything/permission";
-import type { RuntimeEvent, RuntimeEventName } from "../events/index.js";
+import type { RuntimeEvent, RuntimeEventName } from "@agent-anything/agent-core/events";
 import {
   createFailedRunResult,
   createSucceededRunResult,
-} from "../run/index.js";
+} from "@agent-anything/agent-core/run";
 import {
   createHostRunProjection,
   createHostTerminalRunProjection,

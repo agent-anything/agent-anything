@@ -4,7 +4,7 @@ import {
   createUserApprovalReviewBridge,
   type HostTerminalRunProjection,
   type UserApprovalReviewBridge,
-} from "@agent-anything/agent-core/host";
+} from "@agent-anything/host";
 import {
   createRunCancellationController,
 } from "@agent-anything/agent-core";

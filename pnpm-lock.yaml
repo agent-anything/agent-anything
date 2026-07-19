@@ -32,6 +32,9 @@ importers:
       '@agent-anything/helarc':
         specifier: workspace:*
         version: link:../../products/helarc
+      '@agent-anything/host':
+        specifier: workspace:*
+        version: link:../../packages/host
       '@agent-anything/permission':
         specifier: workspace:*
         version: link:../../packages/permission
@@ -178,6 +181,25 @@ importers:
         specifier: workspace:*
         version: link:../tools
 
+  packages/host:
+    dependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
+      '@agent-anything/governance':
+        specifier: workspace:*
+        version: link:../governance
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../permission
+      '@agent-anything/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      '@agent-anything/providers':
+        specifier: workspace:*
+        version: link:../providers
+
   packages/observability:
     dependencies:
       '@agent-anything/evidence':
@@ -251,6 +273,9 @@ importers:
       '@agent-anything/governance':
         specifier: workspace:*
         version: link:../../packages/governance
+      '@agent-anything/host':
+        specifier: workspace:*
+        version: link:../../packages/host
       '@agent-anything/permission':
         specifier: workspace:*
         version: link:../../packages/permission

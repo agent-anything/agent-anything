@@ -12,7 +12,9 @@ initial code-agent desktop stage.
 
 - Platform packages have been split into focused workspaces with boundary checks.
 - `agent-core` provides Agent, Controller, Runner, Run, Action, Observation,
-  Context, Plan, event, task, and host-facing contracts.
+  Context, Plan, event, and task contracts.
+- `host` provides product-neutral active Run integration, safe projections,
+  approval bridges, and Host authority stores.
 - Helarc is the main active product and has a working Electron desktop host.
 - Helarc supports workspace profiles, provider profiles, local credential storage,
   provider-backed runs, session history, run traces, permission-aware tools, and
@@ -71,7 +73,8 @@ agent-anything/
     storage/         Storage port contracts
     testing/         Test fakes and scenario support
     extensions/      MCP, plugins, remote tools, and extension points
-    agent-core/      Agent, Controller, Runner, Context, Plan, events, host contracts
+    agent-core/      Agent, Controller, Runner, Context, Plan, events
+    host/            Host runtime integration, safe projections, approval bridges
     code-agent/      Code-oriented tools and workflows
   products/
     helarc/          Helarc product composition
@@ -88,7 +91,8 @@ Platform packages are designed to point inward:
 - Lower-level packages such as `shared`, `providers`, `tools`, `permission`,
   `governance`, `observability`, and `storage` define focused contracts.
 - `agent-core` composes Agent, Controller, unified Runner, dynamic Plan, Context,
-  events, and host integration.
+  and events.
+- `host` adapts authoritative Runner execution to product-neutral application hosts.
 - `extensions` contains optional integration surfaces such as MCP, plugins,
   remote tools, and enterprise storage.
 - Product packages compose platform contracts into product behavior.

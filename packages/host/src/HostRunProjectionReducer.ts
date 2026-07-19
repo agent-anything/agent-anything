@@ -4,8 +4,8 @@ import {
   type ApprovalReviewInput,
 } from "@agent-anything/permission";
 import type { Metadata } from "@agent-anything/shared";
-import type { RuntimeEvent } from "../events/index.js";
-import type { PlanProjection, PlanStepStatus } from "../plan/index.js";
+import type { RuntimeEvent } from "@agent-anything/agent-core/events";
+import type { PlanProjection, PlanStepStatus } from "@agent-anything/agent-core/plan";
 import { projectRuntimeEventForHost } from "./HostRuntimeProjection.js";
 import {
   HOST_RETRY_EVENT_LIMIT,

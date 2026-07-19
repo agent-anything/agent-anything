@@ -4,18 +4,18 @@ import {
   type ApprovalDecisionSubmission,
   type ApprovalSubmissionReceipt,
 } from "@agent-anything/permission";
-import type { Agent } from "../agent/index.js";
-import { RuntimeEventEmitter } from "../events/index.js";
+import type { Agent } from "@agent-anything/agent-core/agent";
+import { RuntimeEventEmitter } from "@agent-anything/agent-core/events";
 import {
   toRunCancellationSummary,
   type RunCancellationRequestInput,
   type RunInput,
   type RunResult,
-} from "../run/index.js";
+} from "@agent-anything/agent-core/run";
 import type {
   RunConfig,
   Runner,
-} from "../runner/index.js";
+} from "@agent-anything/agent-core/runner";
 import {
   createHostRunProjection,
   createHostTerminalRunProjection,

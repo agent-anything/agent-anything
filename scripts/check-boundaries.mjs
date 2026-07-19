@@ -14,6 +14,7 @@ const packageRoots = [
   "packages/providers",
   "packages/storage",
   "packages/agent-core",
+  "packages/host",
   "packages/extensions",
   "packages/code-agent",
   "packages/testing",
@@ -288,6 +289,7 @@ function checkLayerRule(file, ownerName, importedName) {
   if (lowerLayerPackages.has(ownerName)) {
     for (const forbidden of [
       "@agent-anything/agent-core",
+      "@agent-anything/host",
       "@agent-anything/extensions",
       "@agent-anything/code-agent",
       "@agent-anything/testing",
@@ -302,6 +304,7 @@ function checkLayerRule(file, ownerName, importedName) {
     for (const forbidden of [
       "@agent-anything/extensions",
       "@agent-anything/code-agent",
+      "@agent-anything/host",
       "@agent-anything/testing",
     ]) {
       if (importedName === forbidden) {
@@ -313,6 +316,7 @@ function checkLayerRule(file, ownerName, importedName) {
   if (ownerName === "@agent-anything/extensions") {
     for (const forbidden of [
       "@agent-anything/code-agent",
+      "@agent-anything/host",
       "@agent-anything/testing",
     ]) {
       if (importedName === forbidden) {
@@ -324,6 +328,7 @@ function checkLayerRule(file, ownerName, importedName) {
   if (ownerName === "@agent-anything/code-agent") {
     for (const forbidden of [
       "@agent-anything/extensions",
+      "@agent-anything/host",
       "@agent-anything/testing",
     ]) {
       if (importedName === forbidden) {
@@ -335,11 +340,24 @@ function checkLayerRule(file, ownerName, importedName) {
   if (ownerName === "@agent-anything/testing") {
     for (const forbidden of [
       "@agent-anything/agent-core",
+      "@agent-anything/host",
       "@agent-anything/extensions",
       "@agent-anything/code-agent",
     ]) {
       if (importedName === forbidden) {
         violations.push(`${rel} testing package must not import '${forbidden}' to avoid package cycles.`);
+      }
+    }
+  }
+
+  if (ownerName === "@agent-anything/host") {
+    for (const forbidden of [
+      "@agent-anything/extensions",
+      "@agent-anything/code-agent",
+      "@agent-anything/testing",
+    ]) {
+      if (importedName === forbidden) {
+        violations.push(`${rel} host production code must not import '${forbidden}'.`);
       }
     }
   }

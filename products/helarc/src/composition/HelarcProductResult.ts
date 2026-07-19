@@ -5,7 +5,7 @@ import type {
   RuntimeEvent,
   SandboxEnforcement,
 } from "@agent-anything/agent-core";
-import { projectRuntimeEventForHost } from "@agent-anything/agent-core/host";
+import { projectRuntimeEventForHost } from "@agent-anything/host";
 import { CODE_AGENT_RUN_COMMAND_ACTION } from "@agent-anything/code-agent";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { HelarcAgentOutput } from "../controller/index.js";

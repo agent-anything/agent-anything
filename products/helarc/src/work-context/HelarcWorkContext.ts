@@ -1,7 +1,7 @@
 import type {
   HostRunProjection,
   HostTerminalRunProjection,
-} from "@agent-anything/agent-core/host";
+} from "@agent-anything/host";
 import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type {
   HelarcProductResult,

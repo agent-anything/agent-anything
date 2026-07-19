@@ -30,6 +30,7 @@
     "@agent-anything/evidence": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/helarc": "workspace:*",
+    "@agent-anything/host": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/providers": "workspace:*",
     "@agent-anything/shared": "workspace:*",

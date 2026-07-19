@@ -6,31 +6,31 @@ import type {
 } from "@agent-anything/providers";
 import { resolvePermissionProfile } from "@agent-anything/permission";
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
-import type { Agent } from "../agent/index.js";
+import type { Agent } from "@agent-anything/agent-core/agent";
 import type {
   Controller,
   ControllerCallContext,
   ControllerDecision,
   ControllerInput,
-} from "../controller/index.js";
-import { ProviderBackedController } from "../controller/index.js";
+} from "@agent-anything/agent-core/controller";
+import { ProviderBackedController } from "@agent-anything/agent-core/controller";
 import {
   createHostRuntime,
   type HostRunProjection,
   type HostRunResult,
   type HostRunStartInput,
   type HostRuntime,
-} from "../host/index.js";
-import { createSystemRetryExecutor, type RetryClock } from "../retry/index.js";
-import type { ActionCandidate } from "../action/index.js";
+} from "./index.js";
+import { createSystemRetryExecutor, type RetryClock } from "@agent-anything/agent-core/retry";
+import type { ActionCandidate } from "@agent-anything/agent-core/action";
 import {
   createRunCancellationController,
   type ResolvedRunPermissionConfig,
-} from "../run/index.js";
+} from "@agent-anything/agent-core/run";
 import {
   Runner,
   type RunConfig,
-} from "../runner/index.js";
+} from "@agent-anything/agent-core/runner";
 
 interface ConformanceOutput {
   readonly summary: string;
