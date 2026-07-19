@@ -49,6 +49,7 @@ for (const root of packageRoots) {
 checkPackageExports();
 checkPackageCycles();
 checkCapabilityManifests();
+checkHelarcSourceCycles();
 
 if (violations.length > 0) {
   console.error("Boundary check failed:");
@@ -576,6 +577,111 @@ function checkPackageCycles() {
     visiting.delete(info.name);
     visited.add(info.name);
   }
+}
+
+function checkHelarcSourceCycles() {
+  const helarc = packageByName.get("@agent-anything/helarc");
+  if (!helarc) {
+    violations.push("Required Helarc product package is missing.");
+    return;
+  }
+
+  const sourceRoot = resolve(helarc.root, "src");
+  const files = collectSourceFiles(sourceRoot).filter((file) =>
+    !isTestFile(file) && !file.endsWith(".d.ts")
+  );
+  const fileByPath = new Map(files.map((file) => [normalized(file), file]));
+  const graph = new Map(files.map((file) => [file, []]));
+
+  for (const file of files) {
+    const sourceFile = ts.createSourceFile(
+      file,
+      readFileSync(file, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    for (const statement of sourceFile.statements) {
+      if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) continue;
+      const specifier = statement.moduleSpecifier;
+      if (!specifier || !ts.isStringLiteral(specifier) || !specifier.text.startsWith(".")) {
+        continue;
+      }
+      const dependency = resolveSourceDependency(file, specifier.text, fileByPath);
+      if (dependency) graph.get(file).push(dependency);
+    }
+  }
+
+  for (const component of stronglyConnectedComponents(graph)) {
+    if (component.length > 1) {
+      violations.push(
+        `Helarc production source cycle detected: ${component.map(display).join(" -> ")}.`,
+      );
+    }
+  }
+}
+
+function resolveSourceDependency(file, specifier, fileByPath) {
+  const unresolved = resolve(dirname(file), specifier);
+  const withoutJs = unresolved.replace(/\.js$/, "");
+  const candidates = [
+    unresolved,
+    `${withoutJs}.ts`,
+    `${withoutJs}.tsx`,
+    join(withoutJs, "index.ts"),
+    join(withoutJs, "index.tsx"),
+  ];
+  for (const candidate of candidates) {
+    const dependency = fileByPath.get(normalized(candidate));
+    if (dependency) return dependency;
+  }
+  return null;
+}
+
+function stronglyConnectedComponents(graph) {
+  let nextIndex = 0;
+  const indexByNode = new Map();
+  const lowLinkByNode = new Map();
+  const stack = [];
+  const onStack = new Set();
+  const components = [];
+
+  function visit(node) {
+    indexByNode.set(node, nextIndex);
+    lowLinkByNode.set(node, nextIndex);
+    nextIndex += 1;
+    stack.push(node);
+    onStack.add(node);
+
+    for (const dependency of graph.get(node) ?? []) {
+      if (!indexByNode.has(dependency)) {
+        visit(dependency);
+        lowLinkByNode.set(
+          node,
+          Math.min(lowLinkByNode.get(node), lowLinkByNode.get(dependency)),
+        );
+      } else if (onStack.has(dependency)) {
+        lowLinkByNode.set(
+          node,
+          Math.min(lowLinkByNode.get(node), indexByNode.get(dependency)),
+        );
+      }
+    }
+
+    if (lowLinkByNode.get(node) !== indexByNode.get(node)) return;
+    const component = [];
+    let member;
+    do {
+      member = stack.pop();
+      onStack.delete(member);
+      component.push(member);
+    } while (member !== node);
+    components.push(component);
+  }
+
+  for (const node of graph.keys()) {
+    if (!indexByNode.has(node)) visit(node);
+  }
+  return components;
 }
 
 function parseWorkspaceSpecifier(raw) {

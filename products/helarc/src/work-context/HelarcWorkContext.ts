@@ -6,8 +6,8 @@ import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type {
   HelarcProductResult,
 } from "../composition/HelarcProductResult.js";
-import type { HelarcProviderKind } from "../provider-profile/index.js";
-import type { HelarcRunPermissionPreset } from "../run/index.js";
+import type { HelarcProviderKind } from "../provider-profile/HelarcProviderProfile.js";
+import type { HelarcRunPermissionPreset } from "../run/HelarcRun.js";
 import type { HelarcProductRunProjection } from "../run/HelarcRunProjection.js";
 
 export type HelarcThreadStatus = "open" | "closed" | "archived";

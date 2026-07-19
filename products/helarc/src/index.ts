@@ -27,8 +27,6 @@ export type {
 export {
   createHelarcActionComposition,
   createHelarcProductComposition,
-  mapRuntimeEventToHelarcActivity,
-  projectHelarcProductResult,
 } from "./composition/index.js";
 export type {
   CreateHelarcTaskInput,
@@ -61,47 +59,14 @@ export {
   selectHelarcTaskTemplate,
 } from "./task-template/index.js";
 export type {
-  HelarcActionContract,
-  HelarcActionDecisionRule,
   HelarcAgentOutput,
   HelarcChangeIntent,
   HelarcChangeOperationKind,
-  HelarcControllerActionDescription,
-  HelarcControllerActionName,
-  HelarcControllerParseErrorCode,
-  HelarcPromptAssemblyInput,
-  HelarcPromptAssemblyResult,
-  HelarcPromptAssemblyVersions,
-  HelarcPromptSection,
-  HelarcPromptSectionId,
-  HelarcProviderStructuredOutput,
   HelarcToolCatalog,
   HelarcToolDescriptorSummary,
   HelarcToolCatalogItem,
   HelarcToolCatalogMetadata,
   HelarcToolCatalogMode,
-} from "./controller/index.js";
-export {
-  buildHelarcActionDecisionRulesText,
-  buildHelarcActionProtocolText,
-  buildHelarcToolCatalogText,
-  buildHelarcPromptAssembly,
-  buildHelarcProviderRequest,
-  createDefaultHelarcToolCatalog,
-  createHelarcActionContract,
-  createHelarcToolCatalogFromDescriptors,
-  createHelarcToolCatalogMetadata,
-  HELARC_ACTION_CONTRACT_VERSION,
-  HELARC_CONTROLLER_ACTIONS,
-  HELARC_CONTROLLER_CAPABILITY,
-  HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
-  HELARC_PROMPT_ARCHITECTURE_VERSION,
-  HELARC_TOOL_CATALOG_METADATA_KEY,
-  HELARC_TOOL_CATALOG_VERSION,
-  HelarcControllerParseError,
-  parseHelarcProviderResponse,
-  parseStructuredOutput,
-  readHelarcToolCatalog,
 } from "./controller/index.js";
 export type {
   CreateHelarcProviderProfileInput,

@@ -3,7 +3,7 @@ import {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,
 } from "./HelarcActionContract.js";
-import type { HelarcTaskInput } from "../task/index.js";
+import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
 import {
   buildHelarcToolCatalogText,
   readHelarcToolCatalog,

@@ -1,9 +1,9 @@
 import type { HostRunProjection } from "@agent-anything/host";
+import type { HelarcProductPhase } from "../composition/HelarcPatchReview.js";
 import type {
   HelarcActivityItem,
-  HelarcProductPhase,
   HelarcProductResult,
-} from "../composition/index.js";
+} from "../composition/HelarcProductResult.js";
 
 export interface HelarcProductRunProjection {
   readonly runId: string;

@@ -15,7 +15,10 @@ import {
 } from "@agent-anything/code-agent/patch";
 import { createAcceptedPatchFileAction } from "@agent-anything/code-agent/filesystem";
 import type { ISODateTimeString } from "@agent-anything/shared";
-import type { HelarcAgentOutput, HelarcChangeIntent } from "../controller/index.js";
+import type {
+  HelarcAgentOutput,
+  HelarcChangeIntent,
+} from "../controller/HelarcController.js";
 import type {
   HelarcPatchReviewBridge,
   HelarcPatchReviewRequest,

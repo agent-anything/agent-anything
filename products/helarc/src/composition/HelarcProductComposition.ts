@@ -18,20 +18,22 @@ import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
 import type { ToolDescriptor } from "@agent-anything/tools";
 import {
   buildHelarcProviderRequest,
-  createHelarcToolCatalogMetadata,
-  HELARC_ACTION_CONTRACT_VERSION,
   HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
-  HELARC_TOOL_CATALOG_METADATA_KEY,
   parseHelarcProviderResponse,
   type HelarcAgentOutput,
   type HelarcChangeIntent,
-} from "../controller/index.js";
+} from "../controller/HelarcController.js";
+import { HELARC_ACTION_CONTRACT_VERSION } from "../controller/HelarcPromptAssembly.js";
+import {
+  createHelarcToolCatalogMetadata,
+  HELARC_TOOL_CATALOG_METADATA_KEY,
+} from "../controller/HelarcToolCatalog.js";
 import {
   enrichRuntimeEventWithControllerTrace,
   HelarcTracingController,
 } from "../run/HelarcControllerTraceProjection.js";
 import { HelarcPatchActionController } from "../patch/HelarcPatchActionController.js";
-import type { HelarcTaskInput } from "../task/index.js";
+import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
 import type { HelarcPatchReviewBridge } from "./HelarcPatchReview.js";
 import { createHelarcActionComposition } from "./HelarcActionComposition.js";
 import {

@@ -26,13 +26,10 @@
                          "@agent-anything/agent-core":  "workspace:*",
                          "@agent-anything/agent-runtime":  "workspace:*",
                          "@agent-anything/code-agent":  "workspace:*",
-                         "@agent-anything/evidence":  "workspace:*",
                          "@agent-anything/governance":  "workspace:*",
                          "@agent-anything/host":  "workspace:*",
-                         "@agent-anything/permission":  "workspace:*",
                          "@agent-anything/providers":  "workspace:*",
                          "@agent-anything/shared":  "workspace:*",
-                         "@agent-anything/storage":  "workspace:*",
                          "@agent-anything/tools":  "workspace:*"
                      },
     "devDependencies":  {
