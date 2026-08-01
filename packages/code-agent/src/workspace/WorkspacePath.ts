@@ -1,11 +1,11 @@
-import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
-import type { WorkspaceTrustState } from "@agent-anything/governance";
+import type {
+  RunWorkspace,
+  WorkspaceTrustState,
+} from "@agent-anything/foundation";
 
 export type WorkspacePathErrorCode =
-  | "workspace_scope_missing"
-  | "workspace_scope_empty"
+  | "workspace_missing"
   | "workspace_root_name_invalid"
-  | "workspace_root_name_required"
   | "workspace_root_not_found"
   | "workspace_root_missing"
   | "workspace_root_not_absolute"
@@ -41,7 +41,7 @@ export type WorkspacePathResolution =
   | RejectedWorkspacePath;
 
 export interface ResolveWorkspacePathInput {
-  workspaceScope: TaskWorkspaceScope | undefined;
+  workspace: RunWorkspace | null;
   rootName?: string;
   requestedPath: string;
 }

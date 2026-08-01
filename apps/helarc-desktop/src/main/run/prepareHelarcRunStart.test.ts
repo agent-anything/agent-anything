@@ -25,14 +25,18 @@ describe("prepareHelarcRunStart", () => {
           input: {
             prompt: "Inspect workspace",
           },
-          workspaceScope: {
-            defaultRootName: "workspace",
-          },
           metadata: {
             runId: "run-1",
             providerProfileId: "provider-1",
             taskTemplateId: null,
           },
+        },
+        runWorkspace: {
+          primary: {
+            id: "workspace-1",
+            rootRef: "D:\\projects\\agent-anything",
+          },
+          additional: [],
         },
         workspace: {
           profileId: "workspace-1",

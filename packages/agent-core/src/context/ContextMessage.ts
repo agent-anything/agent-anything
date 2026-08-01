@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/shared";
+import type { Metadata } from "@agent-anything/foundation";
 
 export type ContextMessageRole = "system" | "user" | "assistant";
 

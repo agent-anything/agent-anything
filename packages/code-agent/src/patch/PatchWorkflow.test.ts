@@ -1,9 +1,11 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type {
+  RunWorkspace,
+  WorkspaceContext,
+} from "@agent-anything/foundation/workspace";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
-import type { WorkspaceContext } from "@agent-anything/governance";
 import {
   acceptPatch,
   createPatchProposal,
@@ -46,7 +48,7 @@ describe("PatchWorkflow", () => {
     expect(proposed.proposal).toMatchObject({
       id: "proposal-1",
       runId: "run-1",
-      rootName: "code",
+      rootName: "workspace-code",
       workspaceId: "workspace-code",
       operation: {
         kind: "create",
@@ -101,7 +103,7 @@ describe("PatchWorkflow", () => {
 
     const review = await materializePatchReview({
       patch: proposed,
-      workspaceScope: createScope(),
+      workspace: createRunWorkspace(),
       createReviewId: () => "review-1",
     });
 
@@ -109,7 +111,7 @@ describe("PatchWorkflow", () => {
       runId: "run-1",
       proposalId: "proposal-1",
       reviewId: "review-1",
-      rootName: "code",
+      rootName: "workspace-code",
       workspaceId: "workspace-code",
       path: "src/existing.txt",
       operation: "update",
@@ -132,7 +134,7 @@ describe("PatchWorkflow", () => {
 
     await expect(materializePatchReview({
       patch: proposed,
-      workspaceScope: createScope(),
+      workspace: createRunWorkspace(),
     })).rejects.toMatchObject({
       name: "PatchWorkflowError",
       code: "patch_stale",
@@ -231,7 +233,7 @@ describe("PatchWorkflow", () => {
 
     await expect(materializePatchReview({
       patch: malformed,
-      workspaceScope: createScope(),
+      workspace: createRunWorkspace(),
     })).rejects.toMatchObject({ code: "patch_state_invalid" });
     await expect(readFile(join(codeRoot, "src", "existing.txt"), "utf8"))
       .resolves.toBe("before\n");
@@ -241,7 +243,7 @@ describe("PatchWorkflow", () => {
         ...proposed,
         proposal: { ...proposed.proposal, runId: "" },
       },
-      workspaceScope: createScope(),
+      workspace: createRunWorkspace(),
     })).rejects.toMatchObject({ code: "patch_state_invalid" });
   });
 
@@ -262,7 +264,7 @@ describe("PatchWorkflow", () => {
     });
     await expect(materializePatchReview({
       patch: proposed,
-      workspaceScope: createScope(),
+      workspace: createRunWorkspace(),
       limits: { maxContentBytes: 4 },
     })).rejects.toMatchObject({ code: "patch_state_invalid" });
   });
@@ -274,8 +276,7 @@ describe("PatchWorkflow", () => {
   function proposalInput(change: PatchProposalChange) {
     return {
       runId: "run-1",
-      workspaceScope: createScope(),
-      rootName: "code",
+      workspace: createRunWorkspace(),
       change,
       summary: "Test patch",
       rationale: "Exercise the patch workflow.",
@@ -300,10 +301,10 @@ describe("PatchWorkflow", () => {
     };
   }
 
-  function createScope(workspaceId = "workspace-code"): TaskWorkspaceScope {
+  function createRunWorkspace(workspaceId = "workspace-code"): RunWorkspace {
     return {
-      roots: { code: createWorkspace(workspaceId, codeRoot) },
-      defaultRootName: "code",
+      primary: createWorkspace(workspaceId, codeRoot),
+      additional: [],
     };
   }
 });

@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/shared";
+import type { ISODateTimeString } from "@agent-anything/foundation";
 import type { CancellationAttribution } from "../run/RunCancellation.js";
 import type { RetryDelay } from "./RetryFailure.js";
 import type { RetryExhaustionReason } from "./RetryExhaustion.js";

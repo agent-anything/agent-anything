@@ -1,15 +1,20 @@
-import type { Agent } from "@agent-anything/agent-core/agent";
+import {
+  snapshotAgent,
+  snapshotIdentityRef,
+  snapshotRunInput,
+  snapshotRunWorkspace,
+  type Metadata,
+  type RuntimeError,
+} from "@agent-anything/foundation";
 import type { ControllerDecision } from "@agent-anything/agent-core/controller";
-import type { WorkspaceContext } from "@agent-anything/governance";
 import { assertValidPlanLimits } from "@agent-anything/agent-core/plan";
 import { snapshotRetryPolicy } from "@agent-anything/agent-core/retry";
-import type { Metadata } from "@agent-anything/shared";
+import { snapshotResolvedRunPermissionConfig } from "@agent-anything/agent-core/run";
+import { snapshotRunActionContext } from "@agent-anything/action-execution";
 import { createToolCatalogSnapshot } from "@agent-anything/tools";
 import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
-import { snapshotRunActionContext } from "@agent-anything/action-execution";
-import type { RunInput, RunInputItem } from "@agent-anything/agent-core/run";
-import type { RuntimeError } from "@agent-anything/agent-core/run";
-import { snapshotResolvedRunPermissionConfig } from "@agent-anything/agent-core/run";
+
+export { snapshotAgent, snapshotRunInput };
 
 export interface ConfigValidationFailure {
   readonly valid: false;
@@ -23,68 +28,6 @@ export interface ConfigValidationSuccess {
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
-export function snapshotAgent<TOutput>(agent: Agent<TOutput>): Agent<TOutput> {
-  if (!isRecord(agent)) {
-    throw new TypeError("Agent must be an object.");
-  }
-  assertNonEmpty(agent.id, "Agent.id");
-  assertNonEmpty(agent.name, "Agent.name");
-  if (typeof agent.instructions !== "string") {
-    throw new TypeError("Agent.instructions must be text.");
-  }
-  if (!Array.isArray(agent.tools)) {
-    throw new TypeError("Agent.tools must be an array.");
-  }
-  const tools = createToolCatalogSnapshot(agent.tools).tools;
-  if (!agent.output || typeof agent.output.validate !== "function") {
-    throw new TypeError("Agent.output must provide validate().");
-  }
-  assertMetadata(agent.metadata, "Agent.metadata");
-
-  return Object.freeze({
-    ...agent,
-    tools: Object.freeze(tools),
-    metadata: Object.freeze({ ...agent.metadata }),
-  });
-}
-
-export function snapshotRunInput(input: RunInput): RunInput {
-  if (!isRecord(input)) {
-    throw new TypeError("RunInput must be an object.");
-  }
-  assertNonEmpty(input.runId, "RunInput.runId");
-  if (!isRecord(input.task)) {
-    throw new TypeError("RunInput.task must be an AgentTask.");
-  }
-  assertNonEmpty(input.task.id, "RunInput.task.id");
-  assertNonEmpty(input.task.kind, "RunInput.task.kind");
-  assertDateTime(input.task.createdAt, "RunInput.task.createdAt");
-  assertMetadata(input.task.metadata, "RunInput.task.metadata");
-  if (!Array.isArray(input.conversationItems)) {
-    throw new TypeError("RunInput.conversationItems must be an array.");
-  }
-  assertMetadata(input.metadata, "RunInput.metadata");
-
-  const ids = new Set<string>();
-  const conversationItems = input.conversationItems.map((item, index) =>
-    snapshotConversationItem(item, index, ids));
-  const workspaceScope = input.task.workspaceScope === undefined
-    ? undefined
-    : snapshotWorkspaceScope(input.task.workspaceScope);
-  const task = Object.freeze({
-    ...input.task,
-    ...(workspaceScope === undefined ? {} : { workspaceScope }),
-    metadata: Object.freeze({ ...input.task.metadata }),
-  });
-
-  return Object.freeze({
-    runId: input.runId,
-    task,
-    conversationItems: Object.freeze(conversationItems),
-    metadata: Object.freeze({ ...input.metadata }),
-  });
-}
-
 export function snapshotRunConfig(
   config: RunConfig,
   runId: string,
@@ -93,38 +36,25 @@ export function snapshotRunConfig(
     if (!isRecord(config)) {
       throw new TypeError("RunConfig must be an object.");
     }
-    const workspace = snapshotWorkspaceContext(config.workspace, "RunConfig.workspace");
-
-    if (!isRecord(config.identity)) {
-      throw new TypeError("RunConfig.identity must be an IdentityRef.");
-    }
-    assertNonEmpty(config.identity.id, "RunConfig.identity.id");
-    if (
-      config.identity.kind !== "user" &&
-      config.identity.kind !== "service" &&
-      config.identity.kind !== "anonymous"
-    ) {
-      throw new TypeError("RunConfig.identity.kind is unsupported.");
-    }
-    assertNonEmpty(config.identity.displayName, "RunConfig.identity.displayName");
-    assertMetadata(config.identity.metadata, "RunConfig.identity.metadata");
-    const identity = Object.freeze({
-      ...config.identity,
-      metadata: Object.freeze({ ...config.identity.metadata }),
-    });
+    const workspace = snapshotRunWorkspace(config.workspace);
+    const identity = snapshotIdentityRef(config.identity);
     const permissions = snapshotResolvedRunPermissionConfig({
       permissions: config.permissions,
-      workspace,
+      workspace: workspace.primary,
       identity,
     });
     const actionContext = config.actionContext === null
       ? null
       : snapshotRunActionContext({
           context: config.actionContext,
-          workspace,
+          workspace: workspace.primary,
           identity,
           profile: permissions.permissionProfile,
         });
+    if (!isRecord(config.toolCatalog) || !Array.isArray(config.toolCatalog.tools)) {
+      throw new TypeError("RunConfig.toolCatalog must be a ToolCatalogSnapshot.");
+    }
+    const toolCatalog = createToolCatalogSnapshot(config.toolCatalog.tools);
 
     if (!isRecord(config.limits)) {
       throw new TypeError("RunConfig.limits must be a RunLimits object.");
@@ -194,6 +124,7 @@ export function snapshotRunConfig(
         identity,
         actionContext,
         permissions,
+        toolCatalog,
         limits: Object.freeze({
           ...config.limits,
           plan: Object.freeze({ ...config.limits.plan }),
@@ -231,14 +162,22 @@ export function validateControllerDecision(
   }
   const modelItemIds = new Set<string>();
   for (const item of candidate.modelItems) {
-    if (!isRecord(item) || typeof item.id !== "string" || item.id.trim().length === 0) {
+    if (
+      !isRecord(item) ||
+      typeof item.id !== "string" ||
+      item.id.trim().length === 0
+    ) {
       return "Controller model items require non-empty ids.";
     }
     if (modelItemIds.has(item.id)) {
       return `Controller model item id ${item.id} is duplicated.`;
     }
     modelItemIds.add(item.id);
-    if (typeof item.kind !== "string" || item.kind.trim().length === 0 || !isRecord(item.metadata)) {
+    if (
+      typeof item.kind !== "string" ||
+      item.kind.trim().length === 0 ||
+      !isRecord(item.metadata)
+    ) {
       return `Controller model item ${item.id} is malformed.`;
     }
   }
@@ -251,13 +190,21 @@ export function validateControllerDecision(
       ? null
       : "Controller stop decision requires a reason.";
   }
-  if (candidate.kind !== "actions" || !Array.isArray(candidate.actions) || candidate.actions.length === 0) {
+  if (
+    candidate.kind !== "actions" ||
+    !Array.isArray(candidate.actions) ||
+    candidate.actions.length === 0
+  ) {
     return "Controller decision kind is unsupported or contains no actions.";
   }
   for (const action of candidate.actions) {
     if (
       !isRecord(action) ||
-      (action.kind !== "internal" && action.kind !== "tool" && action.kind !== "permission_request") ||
+      (
+        action.kind !== "internal" &&
+        action.kind !== "tool" &&
+        action.kind !== "permission_request"
+      ) ||
       typeof action.name !== "string" ||
       action.name.trim().length === 0 ||
       typeof action.modelItemId !== "string" ||
@@ -267,93 +214,6 @@ export function validateControllerDecision(
     }
   }
   return null;
-}
-
-function snapshotWorkspaceScope(
-  scope: NonNullable<RunInput["task"]["workspaceScope"]>,
-): NonNullable<RunInput["task"]["workspaceScope"]> {
-  if (!isRecord(scope) || !isRecord(scope.roots)) {
-    throw new TypeError("RunInput.task.workspaceScope.roots must be an object.");
-  }
-
-  const roots: Record<string, WorkspaceContext> = {};
-  for (const [name, workspace] of Object.entries(scope.roots)) {
-    assertNonEmpty(name, "RunInput.task.workspaceScope root name");
-    roots[name] = snapshotWorkspaceContext(
-      workspace,
-      `RunInput.task.workspaceScope.roots.${name}`,
-    );
-  }
-  if (scope.defaultRootName !== undefined) {
-    assertNonEmpty(scope.defaultRootName, "RunInput.task.workspaceScope.defaultRootName");
-  }
-
-  return Object.freeze({
-    roots: Object.freeze(roots),
-    ...(scope.defaultRootName === undefined
-      ? {}
-      : { defaultRootName: scope.defaultRootName }),
-  });
-}
-
-function snapshotWorkspaceContext(
-  workspace: WorkspaceContext,
-  field: string,
-): WorkspaceContext {
-  if (!isRecord(workspace)) {
-    throw new TypeError(`${field} must be a WorkspaceContext.`);
-  }
-  assertNonEmpty(workspace.id, `${field}.id`);
-  assertNonEmpty(workspace.name, `${field}.name`);
-  assertNonEmpty(workspace.source, `${field}.source`);
-  if (workspace.rootRef !== null && typeof workspace.rootRef !== "string") {
-    throw new TypeError(`${field}.rootRef must be text or null.`);
-  }
-  if (
-    workspace.trustState !== "trusted" &&
-    workspace.trustState !== "restricted" &&
-    workspace.trustState !== "unknown"
-  ) {
-    throw new TypeError(`${field}.trustState is unsupported.`);
-  }
-  if (!Array.isArray(workspace.policyRefs) ||
-      workspace.policyRefs.some((policyRef) => typeof policyRef !== "string")) {
-    throw new TypeError(`${field}.policyRefs must be a string array.`);
-  }
-  assertMetadata(workspace.metadata, `${field}.metadata`);
-
-  return Object.freeze({
-    ...workspace,
-    policyRefs: Object.freeze([...workspace.policyRefs]) as unknown as string[],
-    metadata: Object.freeze({ ...workspace.metadata }),
-  });
-}
-
-function snapshotConversationItem(
-  item: RunInputItem,
-  index: number,
-  ids: Set<string>,
-): RunInputItem {
-  if (!isRecord(item)) {
-    throw new TypeError(`RunInput conversation item ${index} must be an object.`);
-  }
-  assertNonEmpty(item.id, `RunInput conversation item ${index} id`);
-  if (ids.has(item.id)) {
-    throw new TypeError(`RunInput conversation item id ${item.id} is duplicated.`);
-  }
-  ids.add(item.id);
-  if (item.kind !== "message") {
-    throw new TypeError(`RunInput conversation item ${item.id} kind is unsupported.`);
-  }
-  if (item.role !== "system" && item.role !== "user" && item.role !== "assistant") {
-    throw new TypeError(`RunInput conversation item ${item.id} role is unsupported.`);
-  }
-  if (typeof item.content !== "string") {
-    throw new TypeError(`RunInput conversation item ${item.id} content must be text.`);
-  }
-  assertDateTime(item.createdAt, `RunInput conversation item ${item.id} createdAt`);
-  assertMetadata(item.metadata, `RunInput conversation item ${item.id} metadata`);
-  return Object.freeze({ ...item, metadata: Object.freeze({ ...item.metadata }) });
 }
 
 function assertRequirement(value: unknown, field: string): void {
@@ -382,21 +242,9 @@ function assertNonNegativeInteger(value: number, field: string): void {
   }
 }
 
-function assertDateTime(value: unknown, field: string): void {
-  if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) {
-    throw new TypeError(`${field} must be a valid date-time string.`);
-  }
-}
-
 function assertMetadata(value: unknown, field: string): asserts value is Metadata {
   if (!isRecord(value)) {
     throw new TypeError(`${field} must be an object.`);
-  }
-}
-
-function assertNonEmpty(value: unknown, field: string): asserts value is string {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new TypeError(`${field} must be a non-empty string.`);
   }
 }
 

@@ -1,7 +1,7 @@
 import type {
   InvocationInterruptionContext,
   ISODateTimeString,
-} from "@agent-anything/shared";
+} from "@agent-anything/foundation";
 import type { ToolResult } from "@agent-anything/tools";
 import type { ActionExecutorDescriptor } from "./ActionRegistration.js";
 import type {

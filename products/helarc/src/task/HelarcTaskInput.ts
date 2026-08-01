@@ -1,10 +1,12 @@
-import type { AgentTask } from "@agent-anything/agent-core";
-import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
-import type { WorkspaceContext } from "@agent-anything/governance";
-import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
+import type {
+  AgentTask,
+  ISODateTimeString,
+  Metadata,
+  RunWorkspace,
+  WorkspaceContext,
+} from "@agent-anything/foundation";
 
 export const HELARC_TASK_KIND = "helarc.code-task";
-export const HELARC_WORKSPACE_ROOT_NAME = "workspace";
 export const DEFAULT_HELARC_TASK_PROMPT_MAX_LENGTH = 8_000;
 
 export interface HelarcTaskInput {
@@ -40,7 +42,7 @@ export interface HelarcTaskInputError {
 }
 
 export type CreateHelarcTaskResult =
-  | { ok: true; task: AgentTask<HelarcTaskInput>; workspaceScope: TaskWorkspaceScope }
+  | { ok: true; task: AgentTask<HelarcTaskInput>; workspace: RunWorkspace }
   | { ok: false; error: HelarcTaskInputError };
 
 export function createHelarcTask(
@@ -51,7 +53,7 @@ export function createHelarcTask(
     return promptResult;
   }
 
-  const workspaceResult = createTrustedHelarcWorkspaceScope(input.workspace);
+  const workspaceResult = createTrustedHelarcRunWorkspace(input.workspace);
   if (!workspaceResult.ok) {
     return workspaceResult;
   }
@@ -62,20 +64,19 @@ export function createHelarcTask(
     input: { prompt: promptResult.prompt },
     createdAt: input.createdAt,
     metadata: input.metadata ?? {},
-    workspaceScope: workspaceResult.workspaceScope,
   };
 
   return {
     ok: true,
     task,
-    workspaceScope: workspaceResult.workspaceScope,
+    workspace: workspaceResult.workspace,
   };
 }
 
-export function createTrustedHelarcWorkspaceScope(
+export function createTrustedHelarcRunWorkspace(
   workspace: TrustedHelarcWorkspaceSelection,
 ):
-  | { ok: true; workspaceScope: TaskWorkspaceScope; workspaceContext: WorkspaceContext }
+  | { ok: true; workspace: RunWorkspace; workspaceContext: WorkspaceContext }
   | { ok: false; error: HelarcTaskInputError } {
   const id = workspace.id.trim();
   if (id.length === 0) {
@@ -105,11 +106,9 @@ export function createTrustedHelarcWorkspaceScope(
   return {
     ok: true,
     workspaceContext,
-    workspaceScope: {
-      roots: {
-        [HELARC_WORKSPACE_ROOT_NAME]: workspaceContext,
-      },
-      defaultRootName: HELARC_WORKSPACE_ROOT_NAME,
+    workspace: {
+      primary: workspaceContext,
+      additional: [],
     },
   };
 }

@@ -9,7 +9,7 @@ import {
   type StructuredOutputFailure,
 } from "@agent-anything/agent-runtime";
 import type { ProviderRequest, ProviderResponse } from "@agent-anything/providers";
-import type { Metadata } from "@agent-anything/shared";
+import type { Metadata } from "@agent-anything/foundation";
 import {
   buildHelarcPromptAssembly,
   HELARC_ACTION_CONTRACT_VERSION,

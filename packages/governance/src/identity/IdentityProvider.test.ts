@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { IdentityRef } from "@agent-anything/foundation/workspace";
 import { createAnonymousIdentityProvider } from "./IdentityProvider.js";
 import type { IdentityProvider, ResolveIdentityInput } from "./IdentityProvider.js";
-import type { IdentityRef } from "./IdentityRef.js";
 
 describe("IdentityProvider", () => {
   it("resolves anonymous identity by default", async () => {

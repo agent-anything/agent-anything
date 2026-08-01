@@ -9,7 +9,7 @@ import type {
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/providers";
-import type { InvocationInterruptionContext } from "@agent-anything/shared";
+import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -89,7 +89,7 @@ describe("Helarc Host Run composition", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-prepared-run-"));
     const provider = new ScriptedProvider([{ action: "complete", summary: "Prepared." }]);
     const prepared = await prepareTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
     });
 
@@ -104,8 +104,8 @@ describe("Helarc Host Run composition", () => {
   });
 
   it("exposes only read-only Actions while retaining trusted mutation registrations", async () => {
-    const task = createTask("D:/workspace");
-    const composition = await createHelarcActionComposition(task, { enableShell: false });
+    const runFixture = createTask("D:/workspace");
+    const composition = await createHelarcActionComposition(runFixture.workspace, { enableShell: false });
 
     expect(composition.exposedCatalog.tools.map((tool) => tool.name)).toEqual([
       "codeAgent.listFiles",
@@ -123,8 +123,8 @@ describe("Helarc Host Run composition", () => {
   });
 
   it("adds the canonical command Action only when shell execution is enabled", async () => {
-    const task = createTask("D:/workspace");
-    const composition = await createHelarcActionComposition(task, { enableShell: true });
+    const runFixture = createTask("D:/workspace");
+    const composition = await createHelarcActionComposition(runFixture.workspace, { enableShell: true });
 
     expect(composition.exposedCatalog.tools.map(({ name }) => name))
       .toContain("codeAgent.runCommand");
@@ -151,7 +151,7 @@ describe("Helarc Host Run composition", () => {
     ]);
 
     const result = await executeReadOnlyTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
       now: () => "2026-06-28T00:00:00.000Z",
     });
@@ -228,7 +228,7 @@ describe("Helarc Host Run composition", () => {
     const provider = new RetryThenCompleteProvider();
 
     const result = await executeReadOnlyTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
       now: () => "2026-07-14T00:00:00.000Z",
     });
@@ -290,7 +290,7 @@ describe("Helarc Host Run composition", () => {
     ]);
 
     const result = await executeReadOnlyTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
     });
 
@@ -318,7 +318,7 @@ describe("Helarc Host Run composition", () => {
     ]);
 
     const result = await executeReadOnlyTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
     });
 
@@ -344,7 +344,7 @@ describe("Helarc Host Run composition", () => {
     const provider = new ScriptedProvider([{ action: "complete", summary: "Must not run." }]);
 
     await expect(executeReadOnlyTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
       enforcement: "managed",
     })).rejects.toThrow("requires a matching SandboxProvider");
@@ -356,7 +356,7 @@ describe("Helarc Host Run composition", () => {
     const provider = new ScriptedProvider([{ action: "complete", summary: "Must not run." }]);
 
     await expect(executeReadOnlyTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
       patchReviewBridge: createHelarcPatchReviewBridge({ runId: "run-other" }),
     })).rejects.toThrow("patch review bridge Run identity does not match");
@@ -372,7 +372,7 @@ describe("Helarc Host Run composition", () => {
     ]);
 
     const result = await executeReadOnlyTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
     });
 
@@ -408,7 +408,7 @@ describe("Helarc Host Run composition", () => {
       },
     ]);
     const result = await executeTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
       enableShell: true,
       permissionPreset: "approve_for_me",
@@ -439,7 +439,7 @@ describe("Helarc Host Run composition", () => {
     ]);
 
     const result = await executeTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
       enableShell: true,
       permissionPreset: "approve_for_me",
@@ -477,7 +477,7 @@ describe("Helarc Host Run composition", () => {
     ]);
 
     const result = await executeTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
       enableShell: true,
       permissionPreset: "full_access",
@@ -516,7 +516,7 @@ describe("Helarc Host Run composition", () => {
     ]);
 
     const result = await executeReadOnlyTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
     });
 
@@ -551,7 +551,7 @@ describe("Helarc Host Run composition", () => {
     ]);
 
     const result = await executeTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
       patchReviewBridge: automaticPatchReviewBridge(
         "helarc-task-1",
@@ -615,7 +615,7 @@ describe("Helarc Host Run composition", () => {
     ]);
 
     const result = await executeTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
       patchReviewBridge: automaticPatchReviewBridge(
         "helarc-task-1",
@@ -666,7 +666,7 @@ describe("Helarc Host Run composition", () => {
     ]);
 
     const result = await executeTestHostRun({
-      task: createTask(workspaceRoot),
+      ...createTask(workspaceRoot),
       provider,
       patchReviewBridge: automaticPatchReviewBridge(
         "helarc-task-1",
@@ -892,7 +892,10 @@ function createTask(workspaceRoot: string) {
     throw new Error(result.error.message);
   }
 
-  return result.task;
+  return {
+    task: result.task,
+    workspace: result.workspace,
+  };
 }
 
 function readObservationCount(request: ProviderRequest): number {

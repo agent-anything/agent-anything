@@ -1,7 +1,7 @@
 import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
-} from "@agent-anything/shared";
+} from "@agent-anything/foundation";
 import type {
   AppliedPolicyAmendmentRecord,
   TrustedPolicyAmendment,

@@ -1,4 +1,4 @@
-import type { InvocationInterruptionContext } from "@agent-anything/shared";
+import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 import { describe, expect, it } from "vitest";
 import type {
   PersistentPolicyAmendmentCommit,

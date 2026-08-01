@@ -7,7 +7,7 @@ import type {
   InvocationInterruptionRef,
   ISODateTimeString,
   Metadata,
-} from "@agent-anything/shared";
+} from "@agent-anything/foundation";
 import type {
   ApprovalApplicabilityKey,
   RunPermissionGrant,

@@ -32,7 +32,7 @@ describe("HelarcPatchActionController", () => {
     const fixture = await createFixture();
     const controller = createController();
     const first = await controller.next(
-      createInput(fixture.task, []),
+      createInput(fixture, []),
       createCallContext(),
     );
 
@@ -47,7 +47,7 @@ describe("HelarcPatchActionController", () => {
     });
 
     const settled = await controller.next(
-      createInput(fixture.task, [actionDenied()]),
+      createInput(fixture, [actionDenied()]),
       createCallContext(),
     );
     expect(settled.kind).toBe("final_output");
@@ -63,10 +63,10 @@ describe("HelarcPatchActionController", () => {
   it("settles execution failure without claiming an applied patch", async () => {
     const fixture = await createFixture();
     const controller = createController();
-    await controller.next(createInput(fixture.task, []), createCallContext());
+    await controller.next(createInput(fixture, []), createCallContext());
 
     await controller.next(
-      createInput(fixture.task, [actionFailure()]),
+      createInput(fixture, [actionFailure()]),
       createCallContext(),
     );
 
@@ -150,16 +150,16 @@ async function createFixture() {
     workspace: { id: "workspace-1", name: "Workspace", rootRef: root },
   });
   if (!taskResult.ok) throw new Error(taskResult.error.message);
-  return { task: taskResult.task };
+  return {
+    task: taskResult.task,
+    workspace: taskResult.workspace,
+  };
 }
 
 function createInput(
-  task: ReturnType<typeof createFixture> extends Promise<infer T>
-    ? T extends { task: infer TTask } ? TTask : never
-    : never,
+  fixture: Awaited<ReturnType<typeof createFixture>>,
   observations: readonly Observation[],
 ): ControllerInput<HelarcAgentOutput> {
-  const workspace = task.workspaceScope!.roots[task.workspaceScope!.defaultRootName!];
   return {
     runId: "run-1",
     iteration: observations.length === 0 ? 1 : 2,
@@ -167,12 +167,15 @@ function createInput(
       id: "helarc",
       name: "Helarc",
       instructions: "Complete task.",
-      tools: [],
       output: { validate: (candidate) => ({ valid: true, output: candidate as HelarcAgentOutput }) },
       metadata: {},
     },
-    task,
+    task: fixture.task,
     conversationItems: [],
+    toolCatalog: {
+      schemaVersion: 1,
+      tools: [],
+    },
     context: {
       messages: [],
       observations,
@@ -181,7 +184,7 @@ function createInput(
       permission: {},
       metadata: {},
     } as unknown as ControllerInput<HelarcAgentOutput>["context"],
-    workspace: workspace!,
+    workspace: fixture.workspace,
     identity: {
       id: "identity-1",
       kind: "anonymous",

@@ -3,7 +3,7 @@ import {
   type ApprovalCategory,
   type ApprovalReviewInput,
 } from "@agent-anything/permission";
-import type { Metadata } from "@agent-anything/shared";
+import type { Metadata } from "@agent-anything/foundation";
 import type { RuntimeEvent } from "@agent-anything/agent-core/events";
 import type { PlanProjection, PlanStepStatus } from "@agent-anything/agent-core/plan";
 import { projectRuntimeEventForHost } from "./HostRuntimeProjection.js";

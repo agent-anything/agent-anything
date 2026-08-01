@@ -1,12 +1,14 @@
 import type {
   IdentityProvider,
-  IdentityRef,
 } from "@agent-anything/governance/identity";
 import type {
-  WorkspaceContext,
   WorkspaceResolver,
 } from "@agent-anything/governance/workspace";
-import type { Metadata } from "@agent-anything/shared";
+import type {
+  IdentityRef,
+  Metadata,
+  WorkspaceContext,
+} from "@agent-anything/foundation";
 
 export interface CreateHostWorkspaceResolverInput {
   workspace?: WorkspaceContext;

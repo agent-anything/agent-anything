@@ -2,16 +2,16 @@ import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
   ISODateTimeString,
-} from "@agent-anything/shared";
+} from "@agent-anything/foundation";
 import { snapshotApprovalPayload } from "@agent-anything/permission/approval";
 import {
   allowsActionApproval,
   type ActionApprovalCause,
 } from "@agent-anything/permission";
 import type { ActionPolicyPort, PolicyDecision } from "@agent-anything/governance";
-import type { Action } from "@agent-anything/agent-core/action";
+import type { Action } from "@agent-anything/foundation/action";
 import type { ActionRejectedCode } from "@agent-anything/agent-core/run";
-import type { RuntimeError } from "@agent-anything/agent-core/run";
+import type { RuntimeError } from "@agent-anything/foundation";
 import {
   type ActionAdapterImplementation,
   type ActionAdapterPreparationResult,

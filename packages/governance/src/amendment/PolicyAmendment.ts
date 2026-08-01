@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/shared";
+import type { ISODateTimeString } from "@agent-anything/foundation";
 
 export type PolicyAmendmentEffect = "allow" | "forbidden";
 

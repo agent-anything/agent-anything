@@ -13,7 +13,7 @@ import {
   type SessionAuthorityRecord,
   type ValidatedApprovalDecision,
 } from "@agent-anything/permission";
-import type { ISODateTimeString } from "@agent-anything/shared";
+import type { ISODateTimeString } from "@agent-anything/foundation";
 import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
 import { isReviewCapablePolicy } from "./RunPermissionConfig.js";
 

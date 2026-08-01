@@ -5,10 +5,7 @@ import {
   type SandboxEnforcement,
   type SandboxProvider,
 } from "@agent-anything/action-execution";
-import {
-  type AgentTask,
-  type RunResult,
-} from "@agent-anything/agent-core";
+import type { RunResult } from "@agent-anything/agent-core";
 import { RuntimeEventEmitter } from "@agent-anything/agent-core/events";
 import type {
   ApprovalReviewerBinding,
@@ -32,7 +29,6 @@ import { EvidenceBuilder, type Evidence } from "@agent-anything/evidence";
 import {
   createAllowAllActionPolicyPort,
   type PersistentPolicyAmendmentPort,
-  type WorkspaceContext,
 } from "@agent-anything/governance";
 import {
   createHelarcProductComposition,
@@ -51,7 +47,14 @@ import {
 } from "@agent-anything/helarc";
 import type { SessionAuthorityPort } from "@agent-anything/permission";
 import type { Provider } from "@agent-anything/providers";
-import type { ArtifactRef, ISODateTimeString } from "@agent-anything/shared";
+import {
+  listRunWorkspaces,
+  type AgentTask,
+  type ArtifactRef,
+  type ISODateTimeString,
+  type RunWorkspace,
+  type WorkspaceContext,
+} from "@agent-anything/foundation";
 import type { StoragePort, StoredArtifact } from "@agent-anything/storage";
 import { createHelarcHostPermissionComposition } from "./HelarcHostPermissionComposition.js";
 
@@ -59,6 +62,7 @@ export interface PrepareHelarcHostRunInput {
   readonly sessionId: string;
   readonly runId: string;
   readonly task: AgentTask<HelarcTaskInput>;
+  readonly workspace: RunWorkspace;
   readonly provider: Provider;
   readonly cancellation: RunCancellationController;
   readonly toolMode: HelarcToolMode;
@@ -118,8 +122,8 @@ export interface HelarcHostActiveRun extends HostActiveRun<HelarcAgentOutput> {
 export async function prepareHelarcHostRun(
   input: PrepareHelarcHostRunInput,
 ): Promise<PreparedHelarcHostRun> {
-  const workspace = resolveHelarcRunWorkspace(input.task);
-  const workspaceRoots = resolvePermissionWorkspaceRoots(input.task);
+  const workspace = input.workspace.primary;
+  const workspaceRoots = resolvePermissionWorkspaceRoots(input.workspace);
   const platform = workspaceRoots.some((root) => /^[A-Za-z]:[\\/]/.test(root.path))
     ? "win32" as const
     : "posix" as const;
@@ -129,7 +133,7 @@ export async function prepareHelarcHostRun(
   assertPatchReviewBridge(input.runId, input.patchReviewBridge);
 
   const canonicalRoots = await createCodeAgentCanonicalWorkspaceRoots({
-    workspaceScope: input.task.workspaceScope,
+    workspace: input.workspace,
     platform,
   });
   const permissions = await createHelarcHostPermissionComposition({
@@ -154,6 +158,7 @@ export async function prepareHelarcHostRun(
   const product = await createHelarcProductComposition({
     runId: input.runId,
     task: input.task,
+    workspace: input.workspace,
     provider: input.provider,
     toolMode: input.toolMode,
     commandLimits: input.commandLimits,
@@ -215,7 +220,7 @@ export async function prepareHelarcHostRun(
       metadata: runMetadata,
     },
     runConfig: {
-      workspace,
+      workspace: input.workspace,
       identity: {
         id: input.sessionId,
         kind: "anonymous",
@@ -236,6 +241,7 @@ export async function prepareHelarcHostRun(
         },
       },
       permissions: permissions.permissions,
+      toolCatalog: product.actions.exposedCatalog,
       limits: {
         maxIterations: 5,
         maxActions: 8,
@@ -393,26 +399,12 @@ function assertPatchReviewBridge(
   }
 }
 
-function resolveHelarcRunWorkspace(task: AgentTask): WorkspaceContext {
-  const scope = task.workspaceScope;
-  if (!scope) throw new TypeError("Helarc requires a task workspace scope.");
-  if (scope.defaultRootName !== undefined) {
-    const workspace = scope.roots[scope.defaultRootName];
-    if (workspace) return workspace;
-  }
-  const workspaces = Object.values(scope.roots);
-  if (workspaces.length === 1 && workspaces[0]) return workspaces[0];
-  throw new TypeError("Helarc requires one resolvable default workspace.");
-}
-
 function resolvePermissionWorkspaceRoots(
-  task: AgentTask,
+  workspace: RunWorkspace,
 ): Array<{ rootId: string; path: string }> {
-  const scope = task.workspaceScope;
-  if (!scope) throw new TypeError("Helarc requires workspace roots for permission resolution.");
-  const roots = Object.entries(scope.roots).map(([rootName, workspace]) => ({
-    rootId: workspace.id || rootName,
-    path: requireWorkspacePath(workspace),
+  const roots = listRunWorkspaces(workspace).map((candidate) => ({
+    rootId: candidate.id,
+    path: requireWorkspacePath(candidate),
   }));
   if (roots.length === 0) {
     throw new TypeError("Helarc requires at least one permission workspace root.");

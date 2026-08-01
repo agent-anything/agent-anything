@@ -16,7 +16,7 @@ import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
   ISODateTimeString,
-} from "@agent-anything/shared";
+} from "@agent-anything/foundation";
 import type { CancellationContext } from "@agent-anything/agent-core/run";
 import {
   type ResolvedRunPermissionConfig,

@@ -6,12 +6,16 @@ import {
   type ObservabilityRecordContext,
   type TelemetryPort,
 } from "@agent-anything/observability";
-import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
-import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
+import type {
+  IdentityRef,
+  ISODateTimeString,
+  Metadata,
+  WorkspaceContext,
+} from "@agent-anything/foundation";
 import type { ApprovalRecordSummary } from "@agent-anything/agent-core/run";
 import type { ApprovalCounters } from "@agent-anything/agent-core/run";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
-import type { RuntimeError, RuntimeErrorOwner } from "@agent-anything/agent-core/run";
+import type { RuntimeError, RuntimeErrorOwner } from "@agent-anything/foundation";
 
 export interface RecordApprovalResolutionInput {
   readonly runId: string;

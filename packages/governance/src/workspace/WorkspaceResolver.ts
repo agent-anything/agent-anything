@@ -1,5 +1,7 @@
-import type { Metadata } from "@agent-anything/shared";
-import type { WorkspaceContext } from "./WorkspaceContext.js";
+import type {
+  Metadata,
+  WorkspaceContext,
+} from "@agent-anything/foundation";
 
 export interface ResolveWorkspaceInput {
   taskId: string;
@@ -17,7 +19,7 @@ export interface CreateDefaultWorkspaceResolverInput {
   rootRef?: string | null;
   trustState?: WorkspaceContext["trustState"];
   source?: string;
-  policyRefs?: string[];
+  policyRefs?: readonly string[];
   metadata?: Metadata;
 }
 

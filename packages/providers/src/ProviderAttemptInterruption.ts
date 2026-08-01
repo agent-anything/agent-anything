@@ -1,7 +1,7 @@
 import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
-} from "@agent-anything/shared";
+} from "@agent-anything/foundation";
 import type { ProviderCallResult } from "./Provider.js";
 
 export type ProviderAttemptInterruptionCause =

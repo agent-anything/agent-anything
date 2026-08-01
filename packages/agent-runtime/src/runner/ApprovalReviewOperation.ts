@@ -8,7 +8,7 @@ import {
   type ApprovalReviewInput,
   type ApprovalReviewOutcome,
 } from "@agent-anything/permission";
-import type { InvocationInterruptionContext } from "@agent-anything/shared";
+import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 import type { RetryDeadlineExceeded } from "@agent-anything/agent-core/retry";
 import type { RetryClassification, RetryClassifier } from "@agent-anything/agent-core/retry";
 

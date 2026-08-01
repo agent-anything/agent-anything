@@ -4,7 +4,7 @@ import {
   type ActionExecutor,
   type ActionRegistrationSnapshot,
 } from "@agent-anything/action-execution";
-import type { AgentTask } from "@agent-anything/agent-core/task";
+import type { RunWorkspace } from "@agent-anything/foundation";
 import {
   CODE_AGENT_LIST_FILES_ACTION,
   CODE_AGENT_READ_FILE_ACTION,
@@ -38,19 +38,18 @@ export interface HelarcActionComposition {
   readonly registrations: ActionRegistrationSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
   readonly executors: readonly ActionExecutor[];
-  readonly agentTools: readonly ToolDescriptor[];
 }
 
 export async function createHelarcActionComposition(
-  task: AgentTask,
+  workspace: RunWorkspace,
   input: CreateHelarcActionCompositionInput,
 ): Promise<HelarcActionComposition> {
   const file = createCodeAgentFileActionCapability({
-    workspaceScope: task.workspaceScope,
+    workspace,
   });
   const command = input.enableShell
     ? await createCodeAgentCommandActionCapability({
-        workspaceScope: task.workspaceScope,
+        workspace,
         limits: input.commandLimits,
       })
     : null;
@@ -74,7 +73,6 @@ export async function createHelarcActionComposition(
     registrations,
     adapters: Object.freeze(capabilities.flatMap((capability) => capability.adapters)),
     executors: Object.freeze(capabilities.flatMap((capability) => capability.executors)),
-    agentTools: exposedCatalog.tools,
   });
 }
 

@@ -1,7 +1,7 @@
 import type {
   InvocationCancellationRef,
   InvocationInterruptionContext,
-} from "@agent-anything/shared";
+} from "@agent-anything/foundation";
 import type { ProviderDescriptor } from "./ProviderCapabilities.js";
 import type { ProviderRequest } from "./ProviderRequest.js";
 import type { ProviderFailure, ProviderResponse } from "./ProviderResponse.js";

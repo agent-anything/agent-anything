@@ -8,7 +8,7 @@ import type {
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/providers";
-import type { InvocationInterruptionContext } from "@agent-anything/shared";
+import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

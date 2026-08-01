@@ -16,7 +16,7 @@ import {
   type SerializableValue,
   type TargetStateAssertion,
 } from "@agent-anything/action-execution";
-import type { InvocationInterruptionRef } from "@agent-anything/shared";
+import type { InvocationInterruptionRef } from "@agent-anything/foundation";
 import type { ToolJsonObject, ToolResult } from "@agent-anything/tools";
 import { createToolCatalogSnapshot } from "@agent-anything/tools";
 import {
@@ -136,7 +136,7 @@ function createCommandActionAdapter(
         assertStrictCommandInput(action.input);
         const parsed = parseCommandInput(action.input, limits);
         const cwd = await prepareFileSystemTarget({
-          workspaceScope: input.workspaceScope,
+          workspace: input.workspace,
           workspaceRoots: context.workspace.roots,
           platform: context.environment.platform,
           rootName: parsed.rootName,

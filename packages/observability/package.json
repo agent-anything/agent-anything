@@ -35,6 +35,6 @@
   "private": true,
   "dependencies": {
     "@agent-anything/evidence": "workspace:*",
-    "@agent-anything/shared": "workspace:*"
+    "@agent-anything/foundation": "workspace:*"
   }
 }

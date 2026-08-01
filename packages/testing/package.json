@@ -24,7 +24,7 @@
     "@agent-anything/observability": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/providers": "workspace:*",
-    "@agent-anything/shared": "workspace:*"
+    "@agent-anything/foundation": "workspace:*"
   },
   "license": "Apache-2.0",
   "private": true

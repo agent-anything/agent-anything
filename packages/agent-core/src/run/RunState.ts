@@ -1,24 +1,20 @@
-import type { ArtifactRef, EvidenceRef, ISODateTimeString, Metadata } from "@agent-anything/shared";
+import type {
+  ArtifactRef,
+  EvidenceRef,
+  ISODateTimeString,
+  Metadata,
+  RunLifecycleStatus,
+  RuntimeError,
+} from "@agent-anything/foundation";
 import type { Context } from "../context/Context.js";
 import type { Plan } from "../plan/index.js";
 import type { RunCancellationRequest } from "./RunCancellation.js";
 import type { RunItem } from "./RunItem.js";
-import type { RunBlockedCode, RunFailureCode } from "./RunStatus.js";
-import type { RuntimeError } from "./RuntimeError.js";
+import type { RunBlockedCode, RunFailureCode } from "@agent-anything/foundation/result";
 import type {
   PendingApproval,
   RunPermissionState,
 } from "./RunPermissionState.js";
-
-export type RunLifecycleStatus =
-  | "initializing"
-  | "running"
-  | "waiting_for_approval"
-  | "cancelling"
-  | "succeeded"
-  | "blocked"
-  | "failed"
-  | "cancelled";
 
 export interface RunCounters {
   readonly iterations: number;

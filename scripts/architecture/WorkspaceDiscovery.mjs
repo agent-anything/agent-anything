@@ -119,10 +119,11 @@ export function discoverPackageRoots(repoRoot, patterns) {
 
 export function classifyWorkspacePackage(repoRoot, packageRoot) {
   const path = display(repoRoot, packageRoot);
+  if (/^harness\/[^/]+$/.test(path)) return "harness";
   if (/^packages\/[^/]+$/.test(path)) return "platform";
   if (/^products\/[^/]+$/.test(path)) return "product";
   if (/^apps\/[^/]+$/.test(path)) return "app";
-  throw new Error(`Workspace package location '${path}' is not a platform, product, or app package.`);
+  throw new Error(`Workspace package location '${path}' is not a harness, transitional package, product, or app package.`);
 }
 
 function issue(rule, file, message) {

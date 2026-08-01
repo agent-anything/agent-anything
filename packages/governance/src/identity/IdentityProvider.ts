@@ -1,5 +1,4 @@
-import type { Metadata } from "@agent-anything/shared";
-import type { IdentityRef } from "./IdentityRef.js";
+import type { IdentityRef, Metadata } from "@agent-anything/foundation";
 
 export interface ResolveIdentityInput {
   taskId: string;

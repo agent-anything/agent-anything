@@ -1,41 +1,40 @@
 export const PLATFORM_PRODUCTION_DEPENDENCIES = Object.freeze({
-  "@agent-anything/shared": [],
-  "@agent-anything/tools": ["@agent-anything/shared"],
-  "@agent-anything/evidence": ["@agent-anything/shared", "@agent-anything/tools"],
-  "@agent-anything/governance": ["@agent-anything/shared"],
-  "@agent-anything/permission": ["@agent-anything/governance", "@agent-anything/shared"],
-  "@agent-anything/observability": ["@agent-anything/evidence", "@agent-anything/shared"],
-  "@agent-anything/providers": ["@agent-anything/shared"],
-  "@agent-anything/storage": ["@agent-anything/evidence", "@agent-anything/shared"],
+  "@agent-anything/tools": ["@agent-anything/foundation"],
+  "@agent-anything/evidence": ["@agent-anything/foundation", "@agent-anything/tools"],
+  "@agent-anything/governance": ["@agent-anything/foundation"],
+  "@agent-anything/permission": ["@agent-anything/foundation", "@agent-anything/governance"],
+  "@agent-anything/observability": ["@agent-anything/evidence", "@agent-anything/foundation"],
+  "@agent-anything/providers": ["@agent-anything/foundation"],
+  "@agent-anything/storage": ["@agent-anything/evidence", "@agent-anything/foundation"],
   "@agent-anything/testing": [
+    "@agent-anything/foundation",
     "@agent-anything/governance",
     "@agent-anything/observability",
     "@agent-anything/permission",
     "@agent-anything/providers",
-    "@agent-anything/shared",
   ],
   "@agent-anything/agent-core": [
+    "@agent-anything/foundation",
     "@agent-anything/governance",
     "@agent-anything/permission",
-    "@agent-anything/shared",
     "@agent-anything/tools",
   ],
   "@agent-anything/action-execution": [
     "@agent-anything/agent-core",
+    "@agent-anything/foundation",
     "@agent-anything/governance",
     "@agent-anything/permission",
-    "@agent-anything/shared",
     "@agent-anything/tools",
   ],
   "@agent-anything/agent-runtime": [
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",
     "@agent-anything/evidence",
+    "@agent-anything/foundation",
     "@agent-anything/governance",
     "@agent-anything/observability",
     "@agent-anything/permission",
     "@agent-anything/providers",
-    "@agent-anything/shared",
     "@agent-anything/storage",
     "@agent-anything/tools",
   ],
@@ -43,31 +42,42 @@ export const PLATFORM_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",
     "@agent-anything/agent-runtime",
+    "@agent-anything/foundation",
     "@agent-anything/governance",
     "@agent-anything/permission",
-    "@agent-anything/shared",
   ],
   "@agent-anything/code-agent": [
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",
+    "@agent-anything/foundation",
     "@agent-anything/governance",
-    "@agent-anything/shared",
     "@agent-anything/tools",
   ],
   "@agent-anything/extensions": [
     "@agent-anything/action-execution",
-    "@agent-anything/shared",
+    "@agent-anything/foundation",
     "@agent-anything/tools",
   ],
 });
 
 export const PLATFORM_PACKAGE_NAMES = Object.freeze(Object.keys(PLATFORM_PRODUCTION_DEPENDENCIES));
+export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
+  "@agent-anything/foundation": [],
+});
+export const HARNESS_PACKAGE_NAMES = Object.freeze(Object.keys(HARNESS_PRODUCTION_DEPENDENCIES));
 
 export function evaluateRepositoryDirection({ owner, imported }) {
   if (owner.name === imported.name) return [];
 
-  if (owner.kind === "platform" && imported.kind !== "platform") {
-    return [violation("repository_direction", `Platform package must not depend on ${imported.kind} package '${imported.name}'.`)];
+  if (owner.kind === "harness" && imported.kind !== "harness") {
+    return [violation("repository_direction", `Harness package must not depend on ${imported.kind} package '${imported.name}'.`)];
+  }
+  if (
+    owner.kind === "platform" &&
+    imported.kind !== "platform" &&
+    imported.kind !== "harness"
+  ) {
+    return [violation("repository_direction", `Transitional package must not depend on ${imported.kind} package '${imported.name}'.`)];
   }
   if (owner.kind === "product" && imported.kind === "app") {
     return [violation("repository_direction", `Product package must not depend on app package '${imported.name}'.`)];
@@ -98,6 +108,25 @@ export function evaluatePlatformProductionDependency({ owner, imported }) {
 
 export function expectedPlatformDependencies(packageName) {
   return PLATFORM_PRODUCTION_DEPENDENCIES[packageName] ?? null;
+}
+
+export function evaluateHarnessProductionDependency({ owner, imported }) {
+  if (owner.kind !== "harness" || owner.name === imported.name) {
+    return [];
+  }
+
+  const allowed = HARNESS_PRODUCTION_DEPENDENCIES[owner.name];
+  if (!allowed) {
+    return [violation("harness_dependency_policy_missing", `Harness package '${owner.name}' has no production dependency policy.`)];
+  }
+  if (!allowed.includes(imported.name)) {
+    return [violation("harness_dependency_forbidden", `Harness package '${owner.name}' must not depend on '${imported.name}'.`)];
+  }
+  return [];
+}
+
+export function expectedHarnessDependencies(packageName) {
+  return HARNESS_PRODUCTION_DEPENDENCIES[packageName] ?? null;
 }
 
 function violation(rule, message) {

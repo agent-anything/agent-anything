@@ -3,15 +3,17 @@ import type {
   ApprovalReviewInput,
   ApprovalSubmissionReceipt,
 } from "@agent-anything/permission";
-import type { ISODateTimeString } from "@agent-anything/shared";
+import type {
+  ISODateTimeString,
+  RunResultCode,
+  RuntimeErrorOwner,
+} from "@agent-anything/foundation";
 import type { SandboxEnforcement } from "@agent-anything/action-execution";
 import type { RuntimeEvent, RuntimeEventName } from "@agent-anything/agent-core/events";
 import type { PlanProjection } from "@agent-anything/agent-core/plan";
 import type {
   RunCancellationSummary,
   RunResult,
-  RunResultCode,
-  RuntimeErrorOwner,
 } from "@agent-anything/agent-core/run";
 
 export const HOST_RETRY_EVENT_LIMIT = 16;

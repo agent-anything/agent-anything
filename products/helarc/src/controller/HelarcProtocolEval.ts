@@ -3,7 +3,10 @@ import type {
   ControllerInput,
 } from "@agent-anything/agent-core/controller";
 import type { ProviderResponse } from "@agent-anything/providers";
-import type { ToolDescriptor } from "@agent-anything/tools";
+import {
+  createToolCatalogSnapshot,
+  type ToolDescriptor,
+} from "@agent-anything/tools";
 import {
   buildHelarcProviderRequest,
   HelarcControllerParseError,
@@ -119,7 +122,6 @@ function createProtocolEvalControllerInput(
       id: "helarc",
       name: "Helarc",
       instructions: "Complete the code task.",
-      tools,
       output: {
         validate(candidate) {
           return { valid: true, output: candidate as HelarcAgentOutput };
@@ -135,6 +137,7 @@ function createProtocolEvalControllerInput(
       metadata: {},
     },
     conversationItems: [],
+    toolCatalog: createToolCatalogSnapshot(tools),
     context: {
       messages: [],
       observations: [],
@@ -187,13 +190,16 @@ function createProtocolEvalControllerInput(
       metadata: {},
     },
     workspace: {
-      id: "workspace_eval",
-      name: "Eval workspace",
-      rootRef: "workspace://eval",
-      trustState: "trusted",
-      source: "eval",
-      policyRefs: [],
-      metadata: {},
+      primary: {
+        id: "workspace_eval",
+        name: "Eval workspace",
+        rootRef: "workspace://eval",
+        trustState: "trusted",
+        source: "eval",
+        policyRefs: [],
+        metadata: {},
+      },
+      additional: [],
     },
     identity: {
       id: "identity_eval",
@@ -204,7 +210,6 @@ function createProtocolEvalControllerInput(
     metadata: {
       [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
         mode: fixture.mode,
-        tools,
       }),
     },
   };

@@ -1,5 +1,5 @@
 import type { EvidenceSensitivity } from "@agent-anything/evidence";
-import type { Metadata } from "@agent-anything/shared";
+import type { Metadata } from "@agent-anything/foundation";
 import { defaultRedactionRules } from "./defaultRules.js";
 import type { Redaction, RedactionResult } from "./RedactionResult.js";
 import type { RedactionRule } from "./RedactionRule.js";

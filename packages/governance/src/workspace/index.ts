@@ -1,4 +1,3 @@
-export type { WorkspaceContext, WorkspaceTrustState } from "./WorkspaceContext.js";
 export type {
   CreateDefaultWorkspaceResolverInput,
   ResolveWorkspaceInput,

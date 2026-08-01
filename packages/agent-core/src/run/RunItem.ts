@@ -1,11 +1,10 @@
-import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
-import type { Action } from "../action/Action.js";
+import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
+import type { Action, RuntimeError } from "@agent-anything/foundation";
 import type { ControllerModelItem } from "../controller/Controller.js";
 import type { PlanProjection } from "../plan/index.js";
 import type { Observation } from "./Observation.js";
 import type { RunCancellationSummary } from "./RunCancellation.js";
-import type { RunBlockedCode, RunFailureCode } from "./RunStatus.js";
-import type { RuntimeError } from "./RuntimeError.js";
+import type { RunBlockedCode, RunFailureCode } from "@agent-anything/foundation/result";
 import type { ApprovalsReviewer } from "@agent-anything/permission";
 import type {
   ApprovalRecordSummary,

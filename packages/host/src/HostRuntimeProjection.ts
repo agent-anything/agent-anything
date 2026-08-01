@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/shared";
+import type { Metadata } from "@agent-anything/foundation";
 import type { RuntimeEvent, RuntimeEventName } from "@agent-anything/agent-core/events";
 
 const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {

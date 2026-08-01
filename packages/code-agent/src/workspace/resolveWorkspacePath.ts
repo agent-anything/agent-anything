@@ -1,5 +1,8 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { WorkspaceContext } from "@agent-anything/governance";
+import type {
+  RunWorkspace,
+  WorkspaceContext,
+} from "@agent-anything/foundation";
 import type {
   RejectedWorkspacePath,
   ResolveWorkspacePathInput,
@@ -96,62 +99,22 @@ function selectWorkspace(
 ):
   | { rootName: string; workspace: WorkspaceContext }
   | RejectedWorkspacePath {
-  const { workspaceScope, requestedPath } = input;
+  const { workspace: runWorkspace, requestedPath } = input;
 
-  if (workspaceScope === undefined) {
+  if (runWorkspace === null) {
     return reject(
-      "workspace_scope_missing",
-      "Task workspace scope is required.",
+      "workspace_missing",
+      "Run workspace is required.",
       requestedPath,
     );
   }
 
-  const roots = Object.entries(workspaceScope.roots);
-  if (roots.length === 0) {
-    return reject(
-      "workspace_scope_empty",
-      "Task workspace scope must declare at least one root.",
-      requestedPath,
-    );
-  }
-
-  const invalidRoot = roots.find(([rootName]) => rootName.trim().length === 0);
-  if (invalidRoot) {
-    return reject(
-      "workspace_root_name_invalid",
-      "Task workspace root names must be non-empty.",
-      requestedPath,
-      invalidRoot[0],
-      invalidRoot[1].id,
-    );
-  }
-
-  const defaultRootName = workspaceScope.defaultRootName;
-  if (defaultRootName !== undefined && defaultRootName.trim().length === 0) {
-    return reject(
-      "workspace_root_name_invalid",
-      "Default task workspace root name must be non-empty.",
-      requestedPath,
-      defaultRootName,
-    );
-  }
-
-  if (
-    defaultRootName !== undefined &&
-    !roots.some(([rootName]) => rootName === defaultRootName)
-  ) {
-    return reject(
-      "workspace_root_not_found",
-      "Default task workspace root is not declared in the scope.",
-      requestedPath,
-      defaultRootName,
-    );
-  }
+  const roots = runWorkspaceEntries(runWorkspace);
 
   if (input.rootName !== undefined && input.rootName.trim().length === 0) {
     return reject(
       "workspace_root_name_invalid",
-      "Requested task workspace root name must be non-empty.",
+      "Requested workspace identity must be non-empty.",
       requestedPath,
       input.rootName,
     );
@@ -159,22 +122,13 @@ function selectWorkspace(
 
   const selectedRootName =
     input.rootName ??
-    defaultRootName ??
-    (roots.length === 1 ? roots[0]![0] : undefined);
-
-  if (selectedRootName === undefined) {
-    return reject(
-      "workspace_root_name_required",
-      "A task workspace root name is required when the scope has multiple roots and no default.",
-      requestedPath,
-    );
-  }
+    runWorkspace.primary.id;
 
   const selectedRoot = roots.find(([rootName]) => rootName === selectedRootName);
   if (!selectedRoot) {
     return reject(
       "workspace_root_not_found",
-      "Requested task workspace root is not declared in the scope.",
+      "Requested workspace is not part of the Run workspace.",
       requestedPath,
       selectedRootName,
     );
@@ -184,6 +138,17 @@ function selectWorkspace(
     rootName: selectedRoot[0],
     workspace: selectedRoot[1],
   };
+}
+
+function runWorkspaceEntries(
+  workspace: RunWorkspace,
+): readonly (readonly [string, WorkspaceContext])[] {
+  return [
+    [workspace.primary.id, workspace.primary] as const,
+    ...workspace.additional.map(
+      (candidate) => [candidate.id, candidate] as const,
+    ),
+  ];
 }
 
 function reject(

@@ -20,8 +20,11 @@ import {
   type SessionAuthorityPort,
   type SessionAuthorityRecord,
 } from "@agent-anything/permission";
-import type { ISODateTimeString } from "@agent-anything/shared";
-import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
+import type {
+  IdentityRef,
+  ISODateTimeString,
+  WorkspaceContext,
+} from "@agent-anything/foundation";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 

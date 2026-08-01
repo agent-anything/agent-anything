@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  HARNESS_PACKAGE_NAMES,
+  HARNESS_PRODUCTION_DEPENDENCIES,
   PLATFORM_PACKAGE_NAMES,
   PLATFORM_PRODUCTION_DEPENDENCIES,
+  evaluateHarnessProductionDependency,
   evaluatePlatformProductionDependency,
   evaluateRepositoryDirection,
 } from "./ArchitectureRules.mjs";
@@ -33,10 +36,32 @@ for (const ownerName of PLATFORM_PACKAGE_NAMES) {
   });
 }
 
+for (const ownerName of HARNESS_PACKAGE_NAMES) {
+  test(`complete Harness dependency policy for ${ownerName}`, () => {
+    for (const importedName of HARNESS_PACKAGE_NAMES) {
+      if (ownerName === importedName) continue;
+      const accepted = HARNESS_PRODUCTION_DEPENDENCIES[ownerName].includes(importedName);
+      const violations = evaluateHarnessProductionDependency({
+        owner: { kind: "harness", name: ownerName },
+        imported: { kind: "harness", name: importedName },
+      });
+      assert.equal(violations.length === 0, accepted, `${ownerName} -> ${importedName}`);
+    }
+  });
+}
+
 test("an unreviewed platform owner fails closed", () => {
   const violations = evaluatePlatformProductionDependency({
     owner: { kind: "platform", name: "@agent-anything/new-package" },
-    imported: { kind: "platform", name: "@agent-anything/shared" },
+    imported: { kind: "platform", name: "@agent-anything/tools" },
   });
   assert.equal(violations[0]?.rule, "platform_dependency_policy_missing");
+});
+
+test("an unreviewed Harness owner fails closed", () => {
+  const violations = evaluateHarnessProductionDependency({
+    owner: { kind: "harness", name: "@agent-anything/new-package" },
+    imported: { kind: "harness", name: "@agent-anything/foundation" },
+  });
+  assert.equal(violations[0]?.rule, "harness_dependency_policy_missing");
 });

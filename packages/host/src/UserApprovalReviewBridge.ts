@@ -10,7 +10,7 @@ import {
   type ApprovalReviewOutcome,
   type ApprovalSubmissionReceipt,
 } from "@agent-anything/permission";
-import type { InvocationInterruptionContext } from "@agent-anything/shared";
+import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 
 export interface UserApprovalPendingProjection extends ApprovalReviewInput {}
 

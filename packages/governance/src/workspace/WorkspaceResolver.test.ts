@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { WorkspaceContext } from "@agent-anything/foundation/workspace";
 import type { ResolveWorkspaceInput, WorkspaceResolver } from "./WorkspaceResolver.js";
-import type { WorkspaceContext } from "./WorkspaceContext.js";
 import { createDefaultWorkspaceResolver } from "./WorkspaceResolver.js";
 
 describe("WorkspaceResolver", () => {

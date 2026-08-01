@@ -1,4 +1,4 @@
-import type { AgentTask } from "@agent-anything/agent-core";
+import type { AgentTask, RunWorkspace } from "@agent-anything/foundation";
 import {
   createHelarcRunInput,
   createHelarcTask,
@@ -38,6 +38,7 @@ export interface PrepareHelarcRunStartInput {
 export interface PreparedHelarcRunStart {
   run: HelarcRunInput;
   task: AgentTask<HelarcTaskInput>;
+  runWorkspace: RunWorkspace;
   workspace: HelarcRunWorkspaceRef;
   provider: HelarcRunProviderRef;
 }
@@ -126,9 +127,10 @@ export function prepareHelarcRunStart(
   return {
     ok: true,
     prepared: {
-      run: runResult.input,
-      task: taskResult.task,
-      workspace: {
+        run: runResult.input,
+        task: taskResult.task,
+        runWorkspace: taskResult.workspace,
+        workspace: {
         profileId: workspaceResult.profile.id,
         displayName: workspaceResult.profile.displayName,
         path: workspaceResult.profile.path,

@@ -5,10 +5,11 @@ import type {
   TelemetryPort,
   TelemetryRecord,
 } from "@agent-anything/observability";
-import type { ToolDescriptor, ToolResult } from "@agent-anything/tools";
+import type { ToolResult } from "@agent-anything/tools";
 import { EvidenceBuilder } from "@agent-anything/evidence";
 import { InMemoryStorage } from "@agent-anything/storage";
-import type { Agent } from "@agent-anything/agent-core/agent";
+import type { Agent } from "@agent-anything/foundation/agent";
+import type { RunInput } from "@agent-anything/foundation/run";
 import {
   ControllerError,
   type Controller,
@@ -19,7 +20,6 @@ import {
 import { RuntimeEventEmitter, type RuntimeEvent } from "@agent-anything/agent-core/events";
 import { createRunCancellationController } from "@agent-anything/agent-core/run";
 import type { RunConfig } from "./RunConfig.js";
-import type { RunInput } from "@agent-anything/agent-core/run";
 import { Runner } from "./Runner.js";
 import type { RetryEvent } from "../retry/index.js";
 import {
@@ -320,7 +320,7 @@ describe("Runner", () => {
     ]);
 
     const result = await createRunner(controller).run(
-      createAgent([createAgentTool("workspace.readFile")]),
+      createAgent(),
       createRunInput(),
       createRunConfig(),
     );
@@ -1137,11 +1137,9 @@ describe("Runner", () => {
     expect(second.items.every((item) => item.runId === "run_b")).toBe(true);
   });
 
-  it("snapshots multi-root Task workspace scope before asynchronous execution", async () => {
-    const input = createRunInput();
-    input.task.workspaceScope = {
-      roots: {
-        code: {
+  it("snapshots the Run Workspace before asynchronous execution", async () => {
+    const workspace = {
+      primary: {
           id: "workspace_code",
           name: "Code",
           rootRef: "workspace://code",
@@ -1150,7 +1148,7 @@ describe("Runner", () => {
           policyRefs: [],
           metadata: {},
         },
-        docs: {
+      additional: [{
           id: "workspace_docs",
           name: "Docs",
           rootRef: "workspace://docs",
@@ -1158,26 +1156,23 @@ describe("Runner", () => {
           source: "test",
           policyRefs: [],
           metadata: {},
-        },
-      },
-      defaultRootName: "code",
+        }],
     };
     const controller = new ScriptedController([finalDecision("Done")]);
+    const config = createRunConfig({ workspace });
     const running = createRunner(controller).run(
       createAgent(),
-      input,
-      createRunConfig(),
+      createRunInput(),
+      config,
     );
 
-    input.task.workspaceScope.roots.code.id = "mutated_after_start";
+    workspace.primary.id = "mutated_after_start";
     await running;
 
-    expect(controller.calls[0]?.task.workspaceScope?.roots.code.id).toBe("workspace_code");
-    expect(Object.isFrozen(controller.calls[0]?.task.workspaceScope?.roots)).toBe(true);
-    expect(Object.keys(controller.calls[0]?.task.workspaceScope?.roots ?? {})).toEqual([
-      "code",
-      "docs",
-    ]);
+    expect(controller.calls[0]?.workspace.primary.id).toBe("workspace_code");
+    expect(controller.calls[0]?.workspace.additional[0]?.id).toBe("workspace_docs");
+    expect(Object.isFrozen(controller.calls[0]?.workspace)).toBe(true);
+    expect(Object.isFrozen(controller.calls[0]?.workspace.additional)).toBe(true);
   });
 
 });
@@ -1232,7 +1227,7 @@ describe("Runner external Action approval attachment", () => {
       sandboxExecutionGateway: fixture.gateway,
       auditPort,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
@@ -1293,7 +1288,7 @@ describe("Runner external Action approval attachment", () => {
       actionEnforcementPipeline: fixture.pipeline,
       sandboxExecutionGateway: fixture.gateway,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
@@ -1352,7 +1347,7 @@ describe("Runner external Action approval attachment", () => {
       auditPort,
       sandboxExecutionGateway: fixture.gateway,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
@@ -1398,7 +1393,7 @@ describe("Runner external Action approval attachment", () => {
       auditPort,
       sandboxExecutionGateway: fixture.gateway,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
@@ -1446,7 +1441,7 @@ describe("Runner sandbox denial escalation", () => {
       actionEnforcementPipeline: fixture.pipeline,
       sandboxExecutionGateway: fixture.gateway,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
@@ -1491,7 +1486,7 @@ describe("Runner sandbox denial escalation", () => {
       actionEnforcementPipeline: fixture.pipeline,
       sandboxExecutionGateway: fixture.gateway,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({ actionContext: externalActionContext() }),
     );
@@ -1534,7 +1529,7 @@ describe("Runner sandbox denial escalation", () => {
       actionEnforcementPipeline: fixture.pipeline,
       sandboxExecutionGateway: fixture.gateway,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
@@ -1580,7 +1575,7 @@ describe("Runner sandbox denial escalation", () => {
       actionEnforcementPipeline: fixture.pipeline,
       sandboxExecutionGateway: fixture.gateway,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
@@ -1619,7 +1614,7 @@ describe("Runner sandbox denial escalation", () => {
         actionEnforcementPipeline: fixture.pipeline,
         sandboxExecutionGateway: fixture.gateway,
       }).run(
-        createAgent([createAgentTool("test.external")]),
+        createAgent(),
         createRunInput(),
         createRunConfig({ actionContext: externalActionContext() }),
       );
@@ -1649,7 +1644,7 @@ describe("Runner sandbox denial escalation", () => {
       actionEnforcementPipeline: fixture.pipeline,
       sandboxExecutionGateway: fixture.gateway,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({ actionContext: externalActionContext() }),
     );
@@ -1685,7 +1680,7 @@ describe("Runner sandbox denial escalation", () => {
       actionEnforcementPipeline: fixture.pipeline,
       sandboxExecutionGateway: fixture.gateway,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({ actionContext: externalActionContext() }),
     );
@@ -1718,7 +1713,7 @@ describe("Runner sandbox denial escalation", () => {
       actionEnforcementPipeline: fixture.pipeline,
       sandboxExecutionGateway: fixture.gateway,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({ actionContext: externalActionContext(), cancellation }),
     );
@@ -1749,7 +1744,7 @@ describe("Runner sandbox denial escalation", () => {
       sandboxExecutionGateway: fixture.gateway,
       auditPort,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
@@ -1774,7 +1769,7 @@ describe("Runner sandbox denial escalation", () => {
       actionEnforcementPipeline: fixture.pipeline,
       sandboxExecutionGateway: fixture.gateway,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
@@ -1807,7 +1802,7 @@ describe("Runner sandbox denial escalation", () => {
       sandboxExecutionGateway: fixture.gateway,
       auditPort,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
@@ -2797,7 +2792,7 @@ describe("Runner external Action result settlement", () => {
       sandboxExecutionGateway: fixture.gateway,
       eventEmitter,
     }).run(
-      createAgent([]),
+      createAgent(),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
@@ -2847,7 +2842,7 @@ describe("Runner external Action result settlement", () => {
         },
       },
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
@@ -2886,7 +2881,7 @@ describe("Runner external Action result settlement", () => {
       now: () => "2026-07-13T00:00:00.000Z",
     });
     const result = await runner.run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
@@ -2920,7 +2915,7 @@ describe("Runner external Action result settlement", () => {
       actionEnforcementPipeline: fixture.pipeline,
       sandboxExecutionGateway: fixture.gateway,
     }).run(
-      createAgent([createAgentTool("test.external")]),
+      createAgent(),
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
@@ -2961,12 +2956,11 @@ function createRunner(
   });
 }
 
-function createAgent(tools: readonly ToolDescriptor[] = []): Agent<TestOutput> {
+function createAgent(): Agent<TestOutput> {
   return {
     id: "agent_001",
     name: "Test Agent",
     instructions: "Complete the task.",
-    tools,
     output: {
       validate(candidate) {
         if (
@@ -2979,21 +2973,6 @@ function createAgent(tools: readonly ToolDescriptor[] = []): Agent<TestOutput> {
         }
         return { valid: false, message: "Output requires a summary." };
       },
-    },
-    metadata: {},
-  };
-}
-
-function createAgentTool(
-  name: string,
-  risk: "safe" | "risky" = "safe",
-): ToolDescriptor {
-  return {
-    name,
-    inputSchema: {},
-    annotations: {
-      readOnlyHint: risk === "safe",
-      destructiveHint: risk === "risky",
     },
     metadata: {},
   };
@@ -3034,18 +3013,23 @@ function createRunConfig(
     readonly limits?: Partial<Omit<RunConfig["limits"], "plan">>;
     readonly permissions?: ResolvedRunPermissionConfig;
     readonly actionContext?: RunConfig["actionContext"];
+    readonly workspace?: RunConfig["workspace"];
+    readonly toolCatalog?: RunConfig["toolCatalog"];
   } = {},
 ): RunConfig {
   const runId = overrides.runId ?? "run_001";
   return {
-    workspace: {
-      id: "workspace_001",
-      name: "Test workspace",
-      rootRef: "workspace://root",
-      trustState: "trusted",
-      source: "test",
-      policyRefs: [],
-      metadata: {},
+    workspace: overrides.workspace ?? {
+      primary: {
+        id: "workspace_001",
+        name: "Test workspace",
+        rootRef: "workspace://root",
+        trustState: "trusted",
+        source: "test",
+        policyRefs: [],
+        metadata: {},
+      },
+      additional: [],
     },
     identity: {
       id: "user_001",
@@ -3055,6 +3039,10 @@ function createRunConfig(
     },
     actionContext: overrides.actionContext ?? null,
     permissions: overrides.permissions ?? createTestPermissionConfig(),
+    toolCatalog: overrides.toolCatalog ?? {
+      schemaVersion: 1,
+      tools: [],
+    },
     limits: {
       maxIterations: 4,
       maxActions: 8,

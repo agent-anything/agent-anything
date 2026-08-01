@@ -1,10 +1,4 @@
-export type Metadata = Record<string, unknown>;
-
-export type ISODateTimeString = string;
-
-export type EvidenceRef = string;
-
-export type ArtifactRef = string;
+import type { ISODateTimeString } from "../primitives/index.js";
 
 export interface InvocationCancellationRef {
   readonly runId: string;

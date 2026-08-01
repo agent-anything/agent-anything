@@ -4,7 +4,7 @@ import type {
   ActionRegistrationSnapshot,
   FileBaseline,
 } from "@agent-anything/action-execution";
-import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
+import type { RunWorkspace } from "@agent-anything/foundation";
 import type { ToolCatalogSnapshot } from "@agent-anything/tools";
 import type { CodeAgentFileLimits } from "../filesystem/FileSystemContracts.js";
 
@@ -24,7 +24,7 @@ export type CodeAgentFileActionName =
   | typeof CODE_AGENT_DELETE_FILE_ACTION;
 
 export interface CreateCodeAgentFileActionCapabilityInput {
-  readonly workspaceScope: TaskWorkspaceScope | undefined;
+  readonly workspace: RunWorkspace | null;
   readonly limits?: Partial<CodeAgentFileLimits>;
   readonly now?: () => string;
 }

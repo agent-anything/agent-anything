@@ -5,7 +5,7 @@ import type {
   CanonicalRemoteServerIdentity,
   SerializableValue,
 } from "@agent-anything/action-execution";
-import type { Metadata } from "@agent-anything/shared";
+import type { Metadata } from "@agent-anything/foundation";
 import type {
   ToolAnnotations,
   ToolCatalogSnapshot,

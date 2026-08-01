@@ -5,7 +5,7 @@ import {
   type PersistentPolicyAmendmentCommitResult,
   type PersistentPolicyAmendmentPort,
 } from "@agent-anything/governance";
-import type { InvocationInterruptionContext } from "@agent-anything/shared";
+import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 
 export interface InMemoryHostPolicyAmendmentStore
   extends PersistentPolicyAmendmentPort {

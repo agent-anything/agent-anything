@@ -1,5 +1,8 @@
-import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
-import type { Metadata } from "@agent-anything/shared";
+import type {
+  IdentityRef,
+  Metadata,
+  RunWorkspace,
+} from "@agent-anything/foundation";
 import type { PlanLimits } from "@agent-anything/agent-core/plan";
 import type { RetryPolicy } from "@agent-anything/agent-core/retry";
 import type {
@@ -8,6 +11,7 @@ import type {
 } from "@agent-anything/agent-core/run";
 import type { ResolvedRunPermissionConfig } from "@agent-anything/agent-core/run";
 import type { RunActionContext, RunActionContextInput } from "@agent-anything/action-execution";
+import type { ToolCatalogSnapshot } from "@agent-anything/tools";
 
 export type RunInfrastructureRequirement = "optional" | "required";
 
@@ -26,10 +30,11 @@ export interface ResolvedRunRetryConfiguration {
 }
 
 export interface RunConfig {
-  readonly workspace: WorkspaceContext;
+  readonly workspace: RunWorkspace;
   readonly identity: IdentityRef;
   readonly actionContext: RunActionContextInput | null;
   readonly permissions: ResolvedRunPermissionConfig;
+  readonly toolCatalog: ToolCatalogSnapshot;
   readonly limits: RunLimits;
   readonly audit: RunInfrastructureRequirement;
   readonly telemetry: RunInfrastructureRequirement;

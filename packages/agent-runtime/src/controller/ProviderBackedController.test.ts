@@ -6,10 +6,10 @@ import type {
   ProviderResponse,
 } from "@agent-anything/providers";
 import { FakeProvider } from "@agent-anything/testing";
-import type { Agent } from "@agent-anything/agent-core/agent";
+import type { Agent } from "@agent-anything/foundation/agent";
 import { projectContext, createInitialContext } from "@agent-anything/agent-core/context";
 import { createRunCancellationController } from "@agent-anything/agent-core/run";
-import type { AgentTask } from "@agent-anything/agent-core/task";
+import type { AgentTask } from "@agent-anything/foundation/task";
 import type {
   ControllerCallContext,
   ControllerDecision,

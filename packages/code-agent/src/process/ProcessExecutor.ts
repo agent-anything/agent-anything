@@ -3,7 +3,7 @@ import {
   type ChildProcess,
   type SpawnOptions,
 } from "node:child_process";
-import type { InvocationInterruptionContext } from "@agent-anything/shared";
+import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 import { BoundedOutput } from "./BoundedOutput.js";
 import type { ProcessTerminationLimits } from "./ProcessContracts.js";
 

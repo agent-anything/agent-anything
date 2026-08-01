@@ -16,7 +16,7 @@ import {
   type SessionAuthorityContext,
   type SessionAuthorityPort,
 } from "@agent-anything/permission";
-import type { InvocationInterruptionContext } from "@agent-anything/shared";
+import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 import {
   isReviewCapablePolicy,
   type ApprovalLimits,

@@ -1,9 +1,16 @@
 import type {
+  Agent,
+  Action,
+  ActionCandidate,
   ArtifactRef,
   EvidenceRef,
   ISODateTimeString,
   Metadata,
-} from "@agent-anything/shared";
+  RunBlockedCode,
+  RunFailureCode,
+  RunInput,
+  RuntimeError,
+} from "@agent-anything/foundation";
 import type { ObservabilityRecordContext } from "@agent-anything/observability";
 import type { AppliedPolicyAmendmentRecord } from "@agent-anything/governance";
 import {
@@ -21,7 +28,6 @@ import {
   type SessionAuthorityRecord,
   type ValidatedApprovalDecision,
 } from "@agent-anything/permission";
-import type { Agent } from "@agent-anything/agent-core/agent";
 import type {
   ActionAssessment,
   ActionAssessmentReviewContext,
@@ -50,7 +56,6 @@ import {
   type Plan,
   type PlanLifecycleChange,
 } from "@agent-anything/agent-core/plan";
-import type { Action, ActionCandidate } from "@agent-anything/agent-core/action";
 import type {
   ActionDeniedObservation,
   ActionFailureObservation,
@@ -73,7 +78,6 @@ import type {
 import { toRunCancellationSummary } from "@agent-anything/agent-core/run";
 import { createRunFinalizationContext } from "./RunFinalization.js";
 import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
-import type { RunInput } from "@agent-anything/agent-core/run";
 import type {
   ActionAssessedSummary,
   ActionInvalidatedSummary,
@@ -89,8 +93,6 @@ import {
   createCancelledRunResult,
   createFailedRunResult,
   createSucceededRunResult,
-  type RunBlockedCode,
-  type RunFailureCode,
   type RunResult,
 } from "@agent-anything/agent-core/run";
 import type {
@@ -105,7 +107,6 @@ import {
   validateControllerDecision,
 } from "./RunnerValidation.js";
 import type { RunCounters, RunState } from "@agent-anything/agent-core/run";
-import type { RuntimeError } from "@agent-anything/agent-core/run";
 import {
   assertRunPermissionStateInvariant,
   createInitialRunPermissionState,
@@ -590,6 +591,7 @@ export class RunExecution<TOutput> {
       agent: this.agent,
       task: this.input.task,
       conversationItems: this.input.conversationItems,
+      toolCatalog: this.config.toolCatalog,
       context: projectContext(
         this.state.context,
         this.state.plan,
@@ -837,7 +839,7 @@ export class RunExecution<TOutput> {
       request,
       pendingVersion,
       taskId: this.state.taskId,
-      workspace: this.config.workspace,
+      workspace: this.config.workspace.primary,
       identity: this.config.identity,
       timestamp: this.now(),
       requirement: this.config.audit,
@@ -1100,7 +1102,7 @@ export class RunExecution<TOutput> {
       this.state.permission,
     );
     return Object.freeze({
-      workspaceTrustState: this.config.workspace.trustState,
+      workspaceTrustState: this.config.workspace.primary.trustState,
       ruleOutcome: input.ruleOutcome,
       currentAuthority: input.currentAuthority ?? Object.freeze({
         fileSystemRead: permissionProjection.authority.hasAdditionalFileSystemRead,
@@ -1121,7 +1123,7 @@ export class RunExecution<TOutput> {
       pendingVersion: pendingAtValidation.version,
       decision,
       taskId: this.state.taskId,
-      workspace: this.config.workspace,
+      workspace: this.config.workspace.primary,
       identity: this.config.identity,
       timestamp: this.now(),
       requirement: this.config.audit,
@@ -1637,7 +1639,7 @@ export class RunExecution<TOutput> {
         runId: record.runId,
         summary,
         taskId: this.state.taskId,
-        workspace: this.config.workspace,
+        workspace: this.config.workspace.primary,
         identity: this.config.identity,
         timestamp: recordingStartedAt,
         counters: permission.counters,
@@ -2217,7 +2219,7 @@ export class RunExecution<TOutput> {
         () => recordActionDispatchAuthorizationAudit({
           plan,
           taskId: this.state.taskId,
-          workspace: this.config.workspace,
+          workspace: this.config.workspace.primary,
           identity: this.config.identity,
           timestamp: this.now(),
           requirement: this.config.audit,
@@ -2299,7 +2301,7 @@ export class RunExecution<TOutput> {
         () => recordSandboxAttemptStarted({
           attempt: sandboxAttempt,
           taskId: this.state.taskId,
-          workspace: this.config.workspace,
+          workspace: this.config.workspace.primary,
           identity: this.config.identity,
           timestamp: this.now(),
           auditRequirement: this.config.audit,
@@ -2403,7 +2405,7 @@ export class RunExecution<TOutput> {
           attempt: sandboxAttempt,
           resolution,
           taskId: this.state.taskId,
-          workspace: this.config.workspace,
+          workspace: this.config.workspace.primary,
           identity: this.config.identity,
           timestamp: resolution.settledAt,
           auditRequirement: this.config.audit,
@@ -3757,7 +3759,7 @@ export class RunExecution<TOutput> {
       timestamp,
       counters: this.state.counters,
       itemCount: this.state.items.length,
-      workspace: this.config.workspace,
+      workspace: this.config.workspace.primary,
       identity: this.config.identity,
       auditRequirement: this.config.audit,
       telemetryRequirement: this.config.telemetry,

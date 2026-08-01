@@ -1,6 +1,6 @@
-import type { Agent } from "@agent-anything/agent-core/agent";
+import type { Agent, RunInput } from "@agent-anything/foundation";
 import type { RuntimeEventPublisher } from "@agent-anything/agent-core/events";
-import type { RunInput, RunResult } from "@agent-anything/agent-core/run";
+import type { RunResult } from "@agent-anything/agent-core/run";
 import { createSystemRetryExecutor } from "../retry/createSystemRetryExecutor.js";
 import { RunExecution } from "./RunExecution.js";
 import type { RunConfig } from "./RunConfig.js";

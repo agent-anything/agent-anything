@@ -1,5 +1,5 @@
 import type { ManagedFileSystemMaximumAccess } from "@agent-anything/governance/managed-permission";
-import type { Metadata } from "@agent-anything/shared";
+import type { Metadata } from "@agent-anything/foundation";
 
 export const BUILT_IN_PERMISSION_PROFILE_IDS = [
   ":read-only",

@@ -8,7 +8,7 @@ import {
   type ProviderRequest,
   type ProviderResponse,
 } from "@agent-anything/providers";
-import type { InvocationInterruptionContext } from "@agent-anything/shared";
+import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 import type { HelarcProviderConfig } from "./resolveHelarcProviderConfig.js";
 import {
   readProviderHttpFailureMetadata,

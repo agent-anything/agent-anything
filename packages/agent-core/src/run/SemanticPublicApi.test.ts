@@ -1,9 +1,9 @@
-import type { Action } from "@agent-anything/agent-core/action";
+import type { Action } from "@agent-anything/foundation/action";
 import type {
   ActionRunItem,
-  RunInput,
   RunResult,
 } from "@agent-anything/agent-core/run";
+import type { RunInput } from "@agent-anything/foundation/run";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as coreApi from "../index.js";
 import { createSucceededRunResult } from "./index.js";

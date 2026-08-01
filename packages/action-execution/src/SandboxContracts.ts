@@ -2,9 +2,9 @@ import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
   ISODateTimeString,
-} from "@agent-anything/shared";
+} from "@agent-anything/foundation";
 import type { ToolResult } from "@agent-anything/tools";
-import type { RuntimeError } from "@agent-anything/agent-core/run";
+import type { RuntimeError } from "@agent-anything/foundation";
 import type { ActionDispatchPlan } from "./ActionRevalidation.js";
 import type { ActionExecutorDescriptor } from "./ActionRegistration.js";
 import type { CanonicalEffectivePermissions } from "./CanonicalEffectivePermissions.js";

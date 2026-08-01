@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/shared";
+import type { Metadata } from "@agent-anything/foundation";
 import type { EvidenceSource } from "./EvidenceSource.js";
 
 export type EvidenceSensitivity = "public" | "private" | "secret" | "restricted";

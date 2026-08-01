@@ -1,19 +1,10 @@
-import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
+import type { ObservationBase, RuntimeError } from "@agent-anything/foundation";
 import type { ToolResult } from "@agent-anything/tools";
 import type { PlanUpdateObservation } from "../plan/index.js";
 import type {
   ApprovalCategory,
   ApprovalScope,
 } from "@agent-anything/permission";
-import type { RuntimeError } from "./RuntimeError.js";
-
-export interface ObservationBase {
-  readonly id: string;
-  readonly runId: string;
-  readonly actionId: string;
-  readonly createdAt: ISODateTimeString;
-  readonly metadata: Metadata;
-}
 
 export interface PlanUpdateResultObservation extends ObservationBase {
   readonly kind: "plan_update";

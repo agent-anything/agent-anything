@@ -1,6 +1,6 @@
 import type { EvidenceBuilderPort } from "@agent-anything/evidence";
 import type { AuditPort, TelemetryPort } from "@agent-anything/observability";
-import type { ISODateTimeString } from "@agent-anything/shared";
+import type { ISODateTimeString } from "@agent-anything/foundation";
 import type { StoragePort } from "@agent-anything/storage";
 import type {
   ActionEnforcementPipeline,

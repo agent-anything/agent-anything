@@ -16,6 +16,18 @@ test("discovers a newly added package from workspace patterns", () => {
   });
 });
 
+test("classifies Harness packages from the Harness repository root", () => {
+  withWorkspace((root) => {
+    writeFileSync(join(root, "pnpm-workspace.yaml"), 'packages:\n  - "harness/*"\n');
+    createPackage(root, "harness/foundation", "@test/foundation");
+
+    assert.deepEqual(
+      discoverWorkspacePackages(root).map(({ kind, name }) => ({ kind, name })),
+      [{ kind: "harness", name: "@test/foundation" }],
+    );
+  });
+});
+
 test("rejects unsupported workspace patterns", () => {
   withWorkspace((root) => {
     writeFileSync(join(root, "pnpm-workspace.yaml"), 'packages:\n  - "packages/**"\n');

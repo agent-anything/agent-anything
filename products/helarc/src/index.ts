@@ -38,10 +38,9 @@ export type {
 } from "./task/index.js";
 export {
   createHelarcTask,
-  createTrustedHelarcWorkspaceScope,
+  createTrustedHelarcRunWorkspace,
   DEFAULT_HELARC_TASK_PROMPT_MAX_LENGTH,
   HELARC_TASK_KIND,
-  HELARC_WORKSPACE_ROOT_NAME,
 } from "./task/index.js";
 export type {
   CreateHelarcTaskTemplateInput,

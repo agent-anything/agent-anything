@@ -1,15 +1,15 @@
-import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
+import type { IdentityRef, WorkspaceContext } from "@agent-anything/foundation";
 import {
   createAuditRecord,
   createTelemetryRecord,
   type AuditPort,
   type TelemetryPort,
 } from "@agent-anything/observability";
-import type { ISODateTimeString } from "@agent-anything/shared";
+import type { ISODateTimeString } from "@agent-anything/foundation";
 import type { SandboxAttempt } from "@agent-anything/action-execution";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
 import type { SandboxAttemptResolutionSummary } from "@agent-anything/agent-core/run";
-import type { RuntimeError } from "@agent-anything/agent-core/run";
+import type { RuntimeError } from "@agent-anything/foundation";
 
 interface SandboxAttemptRecordInput {
   readonly attempt: SandboxAttempt;

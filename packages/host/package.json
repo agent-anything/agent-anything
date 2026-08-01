@@ -25,7 +25,7 @@
     "@agent-anything/agent-runtime": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/permission": "workspace:*",
-    "@agent-anything/shared": "workspace:*"
+    "@agent-anything/foundation": "workspace:*"
   },
   "devDependencies": {
     "@agent-anything/providers": "workspace:*"

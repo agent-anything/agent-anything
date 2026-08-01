@@ -6,10 +6,13 @@ import type {
   ApprovalRequest,
   ValidatedApprovalDecision,
 } from "@agent-anything/permission";
-import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
-import type { ISODateTimeString } from "@agent-anything/shared";
+import type {
+  IdentityRef,
+  ISODateTimeString,
+  WorkspaceContext,
+} from "@agent-anything/foundation";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
-import type { RuntimeError } from "@agent-anything/agent-core/run";
+import type { RuntimeError } from "@agent-anything/foundation";
 
 interface ApprovalAuditBaseInput {
   readonly request: ApprovalRequest;

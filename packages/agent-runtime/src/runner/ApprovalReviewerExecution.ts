@@ -7,7 +7,7 @@ import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
   ISODateTimeString,
-} from "@agent-anything/shared";
+} from "@agent-anything/foundation";
 import type { RetryAttemptContext } from "@agent-anything/agent-core/retry";
 import type { RetryEventSink } from "@agent-anything/agent-core/retry";
 import type { RetryExecutor } from "../retry/RetryExecutor.js";

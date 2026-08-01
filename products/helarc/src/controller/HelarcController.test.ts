@@ -15,8 +15,11 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/providers";
-import type { InvocationInterruptionContext } from "@agent-anything/shared";
-import type { ToolDescriptor } from "@agent-anything/tools";
+import type { InvocationInterruptionContext } from "@agent-anything/foundation";
+import {
+  createToolCatalogSnapshot,
+  type ToolDescriptor,
+} from "@agent-anything/tools";
 import { describe, expect, it } from "vitest";
 import {
   buildHelarcActionDecisionRulesText,
@@ -363,7 +366,6 @@ function createControllerInput(input: {
       id: "helarc",
       name: "Helarc",
       instructions: "Complete the code task.",
-      tools,
       output: {
         validate(candidate) {
           return { valid: true, output: candidate as HelarcAgentOutput };
@@ -379,6 +381,7 @@ function createControllerInput(input: {
       metadata: {},
     },
     conversationItems: [],
+    toolCatalog: createToolCatalogSnapshot(tools),
     context: {
       messages: [],
       observations: [],
@@ -387,13 +390,16 @@ function createControllerInput(input: {
       metadata: {},
     },
     workspace: {
-      id: "workspace-1",
-      name: "Workspace",
-      rootRef: "workspace://root",
-      trustState: "trusted",
-      source: "test",
-      policyRefs: [],
-      metadata: {},
+      primary: {
+        id: "workspace-1",
+        name: "Workspace",
+        rootRef: "workspace://root",
+        trustState: "trusted",
+        source: "test",
+        policyRefs: [],
+        metadata: {},
+      },
+      additional: [],
     },
     identity: {
       id: "identity-1",
@@ -404,7 +410,6 @@ function createControllerInput(input: {
     metadata: {
       [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
         mode: input.mode ?? "read-only",
-        tools,
       }),
     },
   };

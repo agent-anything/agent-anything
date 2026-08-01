@@ -6,7 +6,7 @@ import type {
   ApprovalRequest,
   ApprovalsReviewer,
 } from "@agent-anything/permission";
-import type { ISODateTimeString } from "@agent-anything/shared";
+import type { ISODateTimeString } from "@agent-anything/foundation";
 
 export interface ApprovalRequestSummary {
   readonly requestId: string;

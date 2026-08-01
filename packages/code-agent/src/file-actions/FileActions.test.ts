@@ -13,11 +13,15 @@ import {
   createTargetStateAssertions,
 } from "@agent-anything/action-execution";
 import {
-  type Agent,
-  type AgentTask,
   type Controller,
   type RunResult,
 } from "@agent-anything/agent-core";
+import type {
+  Agent,
+  AgentTask,
+  RunWorkspace,
+  WorkspaceContext,
+} from "@agent-anything/foundation";
 import type { ControllerDecision } from "@agent-anything/agent-core/controller";
 import { createRunCancellationController } from "@agent-anything/agent-core/run";
 import { Runner, type RunConfig } from "@agent-anything/agent-runtime";
@@ -25,7 +29,7 @@ import { EvidenceBuilder } from "@agent-anything/evidence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
 import { InMemoryStorage } from "@agent-anything/storage";
-import type { ToolDescriptor } from "@agent-anything/tools";
+import type { ToolCatalogSnapshot } from "@agent-anything/tools";
 import { describe, expect, it } from "vitest";
 import { acceptPatch, createPatchProposal } from "../patch/index.js";
 import {
@@ -45,7 +49,7 @@ const NOW = "2026-07-16T00:00:00.000Z";
 describe("code-agent file Actions", () => {
   it("separates declarative catalog entries from trusted execution registrations", async () => {
     const fixture = await createFixture();
-    const capability = createCodeAgentFileActionCapability({ workspaceScope: fixture.scope });
+    const capability = createCodeAgentFileActionCapability({ workspace: fixture.scope });
 
     expect(capability.catalog.tools.map(({ name }) => name)).toEqual([
       CODE_AGENT_LIST_FILES_ACTION,
@@ -110,7 +114,7 @@ describe("code-agent file Actions", () => {
     const fixture = await createFixture();
     const target = join(fixture.root, "target.txt");
     await writeFile(target, "before", "utf8");
-    const capability = createCodeAgentFileActionCapability({ workspaceScope: fixture.scope });
+    const capability = createCodeAgentFileActionCapability({ workspace: fixture.scope });
     const context = await actionPreparationContext(fixture);
     const adapter = capability.adapters.find(
       ({ actionName }) => actionName === CODE_AGENT_UPDATE_FILE_ACTION,
@@ -138,7 +142,7 @@ describe("code-agent file Actions", () => {
     const fixture = await createFixture();
     await writeFile(join(fixture.root, "exists.txt"), "x", "utf8");
     const capability = createCodeAgentFileActionCapability({
-      workspaceScope: fixture.scope,
+      workspace: fixture.scope,
       limits: { maxWriteBytes: 3 },
     });
     const context = await actionPreparationContext(fixture);
@@ -166,7 +170,7 @@ describe("code-agent file Actions", () => {
 
   it("returns attributed interruption before filesystem preparation", async () => {
     const fixture = await createFixture();
-    const capability = createCodeAgentFileActionCapability({ workspaceScope: fixture.scope });
+    const capability = createCodeAgentFileActionCapability({ workspace: fixture.scope });
     const context = await actionPreparationContext(fixture);
     const controller = new AbortController();
     const interruption = {
@@ -188,7 +192,7 @@ describe("code-agent file Actions", () => {
     await writeFile(join(fixture.root, "patch.txt"), "before", "utf8");
     const proposed = await createPatchProposal({
       runId: "run_001",
-      workspaceScope: fixture.scope,
+      workspace: fixture.scope,
       change: { kind: "update", path: "patch.txt", proposedContent: "after" },
       summary: "Update patch file",
       rationale: "Test canonical patch translation",
@@ -205,7 +209,7 @@ describe("code-agent file Actions", () => {
     expect(action).toEqual({
       actionName: CODE_AGENT_UPDATE_FILE_ACTION,
       input: {
-        rootName: "root",
+        rootName: "workspace_1",
         path: "patch.txt",
         expectedContentDigest: `sha256:${createHash("sha256").update("before").digest("hex")}`,
         content: "after",
@@ -216,8 +220,8 @@ describe("code-agent file Actions", () => {
 
 interface Fixture {
   readonly root: string;
-  readonly workspace: NonNullable<AgentTask["workspaceScope"]>["roots"][string];
-  readonly scope: NonNullable<AgentTask["workspaceScope"]>;
+  readonly workspace: WorkspaceContext;
+  readonly scope: RunWorkspace;
   readonly platform: "win32" | "posix";
 }
 
@@ -235,7 +239,7 @@ async function createFixture(): Promise<Fixture> {
   return {
     root,
     workspace,
-    scope: { defaultRootName: "root", roots: { root: workspace } },
+    scope: { primary: workspace, additional: [] },
     platform: process.platform === "win32" ? "win32" : "posix",
   };
 }
@@ -247,7 +251,7 @@ async function runFileAction(
   limits?: Parameters<typeof createCodeAgentFileActionCapability>[0]["limits"],
 ): Promise<RunResult<{ summary: string }>> {
   const capability = createCodeAgentFileActionCapability({
-    workspaceScope: fixture.scope,
+    workspace: fixture.scope,
     limits,
     now: () => NOW,
   });
@@ -281,7 +285,7 @@ async function runFileAction(
       conversationItems: [],
       metadata: {},
     },
-    await runConfig(fixture, runId),
+    await runConfig(fixture, runId, capability.catalog),
   );
 }
 
@@ -307,17 +311,10 @@ class ScriptedController implements Controller<unknown> {
 }
 
 function agent(actionName: string): Agent<{ summary: string }> {
-  const descriptor: ToolDescriptor = {
-    name: actionName,
-    inputSchema: {},
-    annotations: {},
-    metadata: {},
-  };
   return {
     id: "code_agent_test",
     name: "Code Agent Test",
     instructions: "Execute one test Action.",
-    tools: [descriptor],
     output: {
       validate(candidate) {
         return typeof candidate === "object" && candidate !== null &&
@@ -335,13 +332,16 @@ function task(fixture: Fixture): AgentTask {
     id: "task_1",
     kind: "test.code-agent",
     input: {},
-    workspaceScope: fixture.scope,
     createdAt: NOW,
     metadata: {},
   };
 }
 
-async function runConfig(fixture: Fixture, runId: string): Promise<RunConfig> {
+async function runConfig(
+  fixture: Fixture,
+  runId: string,
+  toolCatalog: ToolCatalogSnapshot,
+): Promise<RunConfig> {
   const actionContext = await actionPreparationContext(fixture);
   const managedConstraints: ManagedPermissionConstraints = {
     constraintSetId: "test-disabled",
@@ -351,9 +351,10 @@ async function runConfig(fixture: Fixture, runId: string): Promise<RunConfig> {
     allowUnenforcedExecution: true,
   };
   return {
-    workspace: fixture.workspace,
+    workspace: fixture.scope,
     identity: { id: "user_1", kind: "user", displayName: "Test User", metadata: {} },
     actionContext,
+    toolCatalog,
     permissions: {
       permissionProfile: resolvePermissionProfile({
         profileId: ":danger-full-access",
@@ -410,7 +411,7 @@ async function runConfig(fixture: Fixture, runId: string): Promise<RunConfig> {
 
 async function actionPreparationContext(fixture: Fixture) {
   const roots = await createCodeAgentCanonicalWorkspaceRoots({
-    workspaceScope: fixture.scope,
+    workspace: fixture.scope,
     platform: fixture.platform,
   });
   return Object.freeze({

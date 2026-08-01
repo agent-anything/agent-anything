@@ -1,7 +1,7 @@
 import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
-} from "@agent-anything/shared";
+} from "@agent-anything/foundation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createProviderAttemptInterruption,

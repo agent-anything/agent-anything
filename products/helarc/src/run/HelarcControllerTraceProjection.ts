@@ -7,7 +7,7 @@ import type {
   ControllerDecision,
   ControllerInput,
 } from "@agent-anything/agent-core/controller";
-import type { Metadata } from "@agent-anything/shared";
+import type { Metadata } from "@agent-anything/foundation";
 
 export class HelarcTracingController<TOutput = unknown> implements Controller<TOutput> {
   constructor(

@@ -1,4 +1,8 @@
 export const repositoryDirectionFixtures = [
+  { name: "harness to harness", accepted: true, owner: pkg("harness", "harness-a"), imported: pkg("harness", "harness-b") },
+  { name: "harness to transitional package", accepted: false, owner: pkg("harness", "harness-a"), imported: pkg("platform", "platform-a") },
+  { name: "harness to product", accepted: false, owner: pkg("harness", "harness-a"), imported: pkg("product", "product-a") },
+  { name: "transitional package to harness", accepted: true, owner: pkg("platform", "platform-a"), imported: pkg("harness", "harness-a") },
   { name: "platform to platform", accepted: true, owner: pkg("platform", "platform-a"), imported: pkg("platform", "platform-b") },
   { name: "platform to product", accepted: false, owner: pkg("platform", "platform-a"), imported: pkg("product", "product-a") },
   { name: "platform to app", accepted: false, owner: pkg("platform", "platform-a"), imported: pkg("app", "app-a") },

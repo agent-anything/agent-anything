@@ -1,4 +1,4 @@
-import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
+import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
 import type { HelarcPermissionPreset } from "../permission/HelarcPermissionPreset.js";
 import type { HelarcProviderKind } from "../provider-profile/HelarcProviderProfile.js";
 

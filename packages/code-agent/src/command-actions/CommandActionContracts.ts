@@ -4,7 +4,7 @@ import type {
   ActionRegistrationSnapshot,
   FileBaseline,
 } from "@agent-anything/action-execution";
-import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
+import type { RunWorkspace } from "@agent-anything/foundation";
 import type { ToolCatalogSnapshot } from "@agent-anything/tools";
 import type {
   CodeAgentCommandLimits,
@@ -15,7 +15,7 @@ import type {
 export const CODE_AGENT_RUN_COMMAND_ACTION = "codeAgent.runCommand";
 
 export interface CreateCodeAgentCommandActionCapabilityInput {
-  readonly workspaceScope: TaskWorkspaceScope | undefined;
+  readonly workspace: RunWorkspace | null;
   readonly limits?: Partial<CodeAgentCommandLimits>;
   readonly environment?: Readonly<Record<string, string>>;
   readonly environmentPolicyId?: string;

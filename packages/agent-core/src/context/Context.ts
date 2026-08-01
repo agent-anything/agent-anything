@@ -1,8 +1,8 @@
-import type { EvidenceRef, Metadata } from "@agent-anything/shared";
+import type { EvidenceRef, Metadata } from "@agent-anything/foundation";
 import { projectPlan, type Plan, type PlanProjection } from "../plan/index.js";
 import type { Observation } from "../run/Observation.js";
 import type { PermissionContextProjection } from "../run/RunPermissionState.js";
-import type { AgentTask } from "../task/index.js";
+import type { AgentTask } from "@agent-anything/foundation";
 import type { ContextMessage } from "./ContextMessage.js";
 
 export interface Context {

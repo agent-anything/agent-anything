@@ -1,29 +1,28 @@
 import { basename, join, resolve } from "node:path";
+import type {
+  RunWorkspace,
+  WorkspaceContext,
+} from "@agent-anything/foundation/workspace";
 import { describe, expect, it } from "vitest";
-import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
-import type { WorkspaceContext } from "@agent-anything/governance";
 import { resolveWorkspacePath } from "./resolveWorkspacePath.js";
 
 const codeRoot = resolve("workspace-fixtures", "code");
 const docsRoot = resolve("workspace-fixtures", "docs");
 
 describe("resolveWorkspacePath", () => {
-  it("selects an explicit root from a multi-root task scope", () => {
+  it("selects an explicit additional Workspace by identity", () => {
     const result = resolveWorkspacePath({
-      workspaceScope: createScope(
-        {
-          code: createWorkspace("workspace-code", codeRoot),
-          docs: createWorkspace("workspace-docs", docsRoot),
-        },
-        "code",
+      workspace: createRunWorkspace(
+        createWorkspace("workspace-code", codeRoot),
+        [createWorkspace("workspace-docs", docsRoot)],
       ),
-      rootName: "docs",
+      rootName: "workspace-docs",
       requestedPath: join("design", "..", "README.md"),
     });
 
     expect(result).toEqual({
       status: "resolved",
-      rootName: "docs",
+      rootName: "workspace-docs",
       workspaceId: "workspace-docs",
       trustState: "trusted",
       workspaceRoot: docsRoot,
@@ -32,139 +31,69 @@ describe("resolveWorkspacePath", () => {
     });
   });
 
-  it("selects the default root when no root name is requested", () => {
+  it("selects the primary Workspace when no identity is requested", () => {
     const result = resolveWorkspacePath({
-      workspaceScope: createScope(
-        {
-          code: createWorkspace("workspace-code", codeRoot),
-          docs: createWorkspace("workspace-docs", docsRoot),
-        },
-        "docs",
+      workspace: createRunWorkspace(
+        createWorkspace("workspace-docs", docsRoot),
+        [createWorkspace("workspace-code", codeRoot)],
       ),
       requestedPath: ".",
     });
 
     expect(result).toMatchObject({
       status: "resolved",
-      rootName: "docs",
+      rootName: "workspace-docs",
       workspaceId: "workspace-docs",
       relativePath: ".",
       absolutePath: docsRoot,
     });
   });
 
-  it("implicitly selects the only root", () => {
+  it("preserves the selected Workspace trust state", () => {
     const result = resolveWorkspacePath({
-      workspaceScope: createScope({
-        code: createWorkspace("workspace-code", codeRoot),
-      }),
+      workspace: createRunWorkspace(createWorkspace("workspace-docs", docsRoot, {
+        trustState: "restricted",
+      })),
       requestedPath: "README.md",
     });
 
     expect(result).toMatchObject({
       status: "resolved",
-      rootName: "code",
-      workspaceId: "workspace-code",
-    });
-  });
-
-  it("preserves the selected root trust state", () => {
-    const restricted = createWorkspace("workspace-docs", docsRoot, {
-      trustState: "restricted",
-    });
-    const result = resolveWorkspacePath({
-      workspaceScope: createScope({ docs: restricted }),
-      requestedPath: "README.md",
-    });
-
-    expect(result).toMatchObject({
-      status: "resolved",
-      rootName: "docs",
+      rootName: "workspace-docs",
       trustState: "restricted",
     });
   });
 
-  it.each([
-    {
-      name: "a missing scope",
-      workspaceScope: undefined,
-      expectedCode: "workspace_scope_missing",
-    },
-    {
-      name: "an empty scope",
-      workspaceScope: createScope({}),
-      expectedCode: "workspace_scope_empty",
-    },
-    {
-      name: "an empty declared root name",
-      workspaceScope: createScope({
-        " ": createWorkspace("workspace-code", codeRoot),
-      }),
-      expectedCode: "workspace_root_name_invalid",
-    },
-    {
-      name: "an unknown default root",
-      workspaceScope: createScope(
-        { code: createWorkspace("workspace-code", codeRoot) },
-        "docs",
-      ),
-      expectedCode: "workspace_root_not_found",
-    },
-  ])("rejects $name", ({ workspaceScope, expectedCode }) => {
-    const result = resolveWorkspacePath({
-      workspaceScope,
+  it("rejects a Run without a Workspace", () => {
+    expect(resolveWorkspacePath({
+      workspace: null,
       requestedPath: "README.md",
-    });
-
-    expect(result).toMatchObject({
+    })).toMatchObject({
       status: "rejected",
-      error: { code: expectedCode },
+      error: { code: "workspace_missing" },
     });
   });
 
-  it("requires a root name for multiple roots without a default", () => {
-    const result = resolveWorkspacePath({
-      workspaceScope: createScope({
-        code: createWorkspace("workspace-code", codeRoot),
-        docs: createWorkspace("workspace-docs", docsRoot),
-      }),
+  it("rejects an unknown explicitly requested Workspace", () => {
+    expect(resolveWorkspacePath({
+      workspace: createCodeWorkspace(),
+      rootName: "workspace-docs",
       requestedPath: "README.md",
-    });
-
-    expect(result).toMatchObject({
-      status: "rejected",
-      error: { code: "workspace_root_name_required" },
-    });
-  });
-
-  it("rejects an unknown explicitly requested root", () => {
-    const result = resolveWorkspacePath({
-      workspaceScope: createScope({
-        code: createWorkspace("workspace-code", codeRoot),
-      }),
-      rootName: "docs",
-      requestedPath: "README.md",
-    });
-
-    expect(result).toMatchObject({
+    })).toMatchObject({
       status: "rejected",
       error: {
         code: "workspace_root_not_found",
-        rootName: "docs",
+        rootName: "workspace-docs",
       },
     });
   });
 
-  it("rejects an empty explicitly requested root name", () => {
-    const result = resolveWorkspacePath({
-      workspaceScope: createScope({
-        code: createWorkspace("workspace-code", codeRoot),
-      }),
+  it("rejects an empty explicitly requested Workspace identity", () => {
+    expect(resolveWorkspacePath({
+      workspace: createCodeWorkspace(),
       rootName: " ",
       requestedPath: "README.md",
-    });
-
-    expect(result).toMatchObject({
+    })).toMatchObject({
       status: "rejected",
       error: { code: "workspace_root_name_invalid" },
     });
@@ -172,38 +101,34 @@ describe("resolveWorkspacePath", () => {
 
   it.each([
     {
-      name: "a missing selected workspace root",
+      name: "a missing selected Workspace root",
       workspace: createWorkspace("workspace-code", null),
       expectedCode: "workspace_root_missing",
     },
     {
-      name: "a non-absolute selected workspace root",
+      name: "a non-absolute selected Workspace root",
       workspace: createWorkspace("workspace-code", join("relative", "code")),
       expectedCode: "workspace_root_not_absolute",
     },
   ])("rejects $name", ({ workspace, expectedCode }) => {
-    const result = resolveWorkspacePath({
-      workspaceScope: createScope({ code: workspace }),
+    expect(resolveWorkspacePath({
+      workspace: createRunWorkspace(workspace),
       requestedPath: "README.md",
-    });
-
-    expect(result).toMatchObject({
+    })).toMatchObject({
       status: "rejected",
       error: {
         code: expectedCode,
-        rootName: "code",
+        rootName: "workspace-code",
         workspaceId: "workspace-code",
       },
     });
   });
 
   it("rejects a missing requested path", () => {
-    const result = resolveWorkspacePath({
-      workspaceScope: createCodeScope(),
+    expect(resolveWorkspacePath({
+      workspace: createCodeWorkspace(),
       requestedPath: "   ",
-    });
-
-    expect(result).toMatchObject({
+    })).toMatchObject({
       status: "rejected",
       error: { code: "requested_path_missing" },
     });
@@ -211,12 +136,10 @@ describe("resolveWorkspacePath", () => {
 
   it("rejects an absolute requested path", () => {
     const requestedPath = join(codeRoot, "README.md");
-    const result = resolveWorkspacePath({
-      workspaceScope: createCodeScope(),
+    expect(resolveWorkspacePath({
+      workspace: createCodeWorkspace(),
       requestedPath,
-    });
-
-    expect(result).toMatchObject({
+    })).toMatchObject({
       status: "rejected",
       error: {
         code: "absolute_path_not_allowed",
@@ -225,49 +148,36 @@ describe("resolveWorkspacePath", () => {
     });
   });
 
-  it("rejects traversal outside the selected root", () => {
-    const result = resolveWorkspacePath({
-      workspaceScope: createCodeScope(),
+  it("rejects traversal outside the selected Workspace", () => {
+    expect(resolveWorkspacePath({
+      workspace: createCodeWorkspace(),
       requestedPath: join("..", "outside.txt"),
-    });
-
-    expect(result).toMatchObject({
+    })).toMatchObject({
       status: "rejected",
       error: { code: "path_outside_workspace" },
     });
   });
 
   it("rejects a sibling path with the selected root name as a prefix", () => {
-    const result = resolveWorkspacePath({
-      workspaceScope: createCodeScope(),
-      requestedPath: join(
-        "..",
-        basename(codeRoot) + "-backup",
-        "outside.txt",
-      ),
-    });
-
-    expect(result).toMatchObject({
+    expect(resolveWorkspacePath({
+      workspace: createCodeWorkspace(),
+      requestedPath: join("..", `${basename(codeRoot)}-backup`, "outside.txt"),
+    })).toMatchObject({
       status: "rejected",
       error: { code: "path_outside_workspace" },
     });
   });
 });
 
-function createScope(
-  roots: Readonly<Record<string, WorkspaceContext>>,
-  defaultRootName?: string,
-): TaskWorkspaceScope {
-  return {
-    roots,
-    ...(defaultRootName === undefined ? {} : { defaultRootName }),
-  };
+function createRunWorkspace(
+  primary: WorkspaceContext,
+  additional: readonly WorkspaceContext[] = [],
+): RunWorkspace {
+  return { primary, additional };
 }
 
-function createCodeScope(): TaskWorkspaceScope {
-  return createScope({
-    code: createWorkspace("workspace-code", codeRoot),
-  });
+function createCodeWorkspace(): RunWorkspace {
+  return createRunWorkspace(createWorkspace("workspace-code", codeRoot));
 }
 
 function createWorkspace(

@@ -1,3 +1,5 @@
+import type { ISODateTimeString, Metadata } from "../primitives/index.js";
+
 export type ActionKind = "internal" | "tool" | "permission_request";
 
 export interface ActionCandidate {
@@ -20,4 +22,12 @@ export interface Action {
   readonly name: string;
   readonly input: unknown;
   readonly provenance: ActionProvenance;
+}
+
+export interface ObservationBase {
+  readonly id: string;
+  readonly runId: string;
+  readonly actionId: string;
+  readonly createdAt: ISODateTimeString;
+  readonly metadata: Metadata;
 }

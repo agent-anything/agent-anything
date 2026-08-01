@@ -188,7 +188,7 @@ function createFileActionAdapter(
           return rejected("Content exceeds the configured write byte limit.");
         }
         const target = await prepareFileSystemTarget({
-          workspaceScope: input.workspaceScope,
+          workspace: input.workspace,
           workspaceRoots: context.workspace.roots,
           platform: context.environment.platform,
           rootName: parsed.rootName,

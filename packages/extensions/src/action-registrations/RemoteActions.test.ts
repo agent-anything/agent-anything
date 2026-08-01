@@ -9,11 +9,10 @@ import {
   createTargetStateAssertions,
 } from "@agent-anything/action-execution";
 import {
-  type Agent,
-  type AgentTask,
   type Controller,
   type RunResult,
 } from "@agent-anything/agent-core";
+import type { Agent, AgentTask } from "@agent-anything/foundation";
 import type { ControllerDecision } from "@agent-anything/agent-core/controller";
 import { createRunCancellationController } from "@agent-anything/agent-core/run";
 import { Runner, type RunConfig } from "@agent-anything/agent-runtime";
@@ -22,7 +21,7 @@ import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } fro
 import type { ApprovalReviewerPort } from "@agent-anything/permission";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
 import { InMemoryStorage } from "@agent-anything/storage";
-import type { ToolDescriptor } from "@agent-anything/tools";
+import { createToolCatalogSnapshot } from "@agent-anything/tools";
 import { describe, expect, it, vi } from "vitest";
 import { createMcpActionCapability } from "../mcp/index.js";
 import { createRemoteToolActionCapability } from "../remote-tools/index.js";
@@ -289,17 +288,10 @@ class ScriptedController implements Controller<unknown> {
 }
 
 function agent(actionName: string): Agent<{ summary: string }> {
-  const descriptor: ToolDescriptor = {
-    name: actionName,
-    inputSchema: {},
-    annotations: {},
-    metadata: {},
-  };
   return {
     id: "remote_test_agent",
     name: "Remote Test Agent",
     instructions: "Execute one remote Action.",
-    tools: [descriptor],
     output: {
       validate(candidate) {
         return typeof candidate === "object" && candidate !== null &&
@@ -317,10 +309,6 @@ function task(): AgentTask {
     id: "task_remote",
     kind: "test.remote",
     input: {},
-    workspaceScope: {
-      defaultRootName: "root",
-      roots: { root: workspace() },
-    },
     createdAt: NOW,
     metadata: {},
   };
@@ -367,9 +355,15 @@ async function runConfig(actionName: string): Promise<RunConfig> {
     },
   };
   return {
-    workspace: workspace(),
+    workspace: { primary: workspace(), additional: [] },
     identity: { id: "user_remote", kind: "user", displayName: "Test User", metadata: {} },
     actionContext: await preparationContext(),
+    toolCatalog: createToolCatalogSnapshot([{
+      name: actionName,
+      inputSchema: {},
+      annotations: {},
+      metadata: {},
+    }]),
     permissions: {
       permissionProfile: resolvePermissionProfile({
         profileId: ":danger-full-access",

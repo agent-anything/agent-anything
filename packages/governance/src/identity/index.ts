@@ -1,4 +1,3 @@
-export type { IdentityKind, IdentityRef } from "./IdentityRef.js";
 export type {
   CreateAnonymousIdentityProviderInput,
   IdentityProvider,

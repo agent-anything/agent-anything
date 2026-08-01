@@ -2,7 +2,7 @@ import type {
   HostRunProjection,
   HostTerminalRunProjection,
 } from "@agent-anything/host";
-import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
+import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
 import type {
   HelarcProductResult,
 } from "../composition/HelarcProductResult.js";

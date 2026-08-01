@@ -479,9 +479,10 @@ export class HelarcMainController {
     const patchReviewBridge = this.createPatchReviewBridge(runId);
     let startCommitted = false;
     try {
-      const preparedHostRun = await prepareHelarcHostRun({
-        task: preparedStart.prepared.task,
-        runId,
+        const preparedHostRun = await prepareHelarcHostRun({
+          task: preparedStart.prepared.task,
+          workspace: preparedStart.prepared.runWorkspace,
+          runId,
         sessionId: threadId,
         cancellation,
         provider: providerInstance,

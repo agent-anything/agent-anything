@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { InvocationInterruptionRef } from "@agent-anything/shared";
+import type { InvocationInterruptionRef } from "@agent-anything/foundation";
 import {
   assertActionExecutorDispatchContext,
   type ActionExecutor,

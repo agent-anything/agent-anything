@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/shared";
+import type { Metadata } from "@agent-anything/foundation";
 import type { PolicyDecision } from "./PolicyDecision.js";
 
 export type ActionPolicyOperationKind =

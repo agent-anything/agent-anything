@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   createHelarcTask,
-  createTrustedHelarcWorkspaceScope,
+  createTrustedHelarcRunWorkspace,
   HELARC_TASK_KIND,
-  HELARC_WORKSPACE_ROOT_NAME,
 } from "./index.js";
 
 describe("createHelarcTask", () => {
-  it("creates a task with a trusted single-root workspace scope", () => {
+  it("creates an independent Task and trusted primary Run Workspace", () => {
     const result = createHelarcTask({
       taskId: "task-1",
       prompt: "  update the README  ",
@@ -29,14 +28,15 @@ describe("createHelarcTask", () => {
       kind: HELARC_TASK_KIND,
       input: { prompt: "update the README" },
     });
-    expect(result.task.workspaceScope?.defaultRootName).toBe(HELARC_WORKSPACE_ROOT_NAME);
-    expect(result.task.workspaceScope?.roots.workspace).toMatchObject({
+    expect(result.task).not.toHaveProperty("workspaceScope");
+    expect(result.workspace.primary).toMatchObject({
       id: "workspace-1",
       name: "agent-anything",
       rootRef: "D:/projects/agent-anything",
       trustState: "trusted",
       source: "helarc-desktop",
     });
+    expect(result.workspace.additional).toEqual([]);
   });
 
   it("rejects empty task text", () => {
@@ -61,7 +61,7 @@ describe("createHelarcTask", () => {
   });
 
   it("rejects missing workspace authority", () => {
-    const result = createTrustedHelarcWorkspaceScope({
+    const result = createTrustedHelarcRunWorkspace({
       id: "workspace-1",
       name: "agent-anything",
       rootRef: " ",

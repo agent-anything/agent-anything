@@ -10,8 +10,8 @@ import {
 import type {
   ManagedPermissionConstraints,
   PersistentPolicyAmendmentPort,
-  WorkspaceContext,
 } from "@agent-anything/governance";
+import type { WorkspaceContext } from "@agent-anything/foundation";
 import {
   resolveHelarcPermissionPreset,
   type HelarcPermissionPreset,
@@ -24,7 +24,7 @@ import type {
 import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
-} from "@agent-anything/shared";
+} from "@agent-anything/foundation";
 
 export interface CreateHelarcHostPermissionCompositionInput {
   readonly preset: HelarcPermissionPreset;

@@ -1,8 +1,8 @@
 import type {
   ResolveWorkspaceInput,
-  WorkspaceContext,
   WorkspaceResolver,
 } from "@agent-anything/governance/workspace";
+import type { WorkspaceContext } from "@agent-anything/foundation";
 
 export type FakeWorkspaceResolverHandler = (
   input: ResolveWorkspaceInput,

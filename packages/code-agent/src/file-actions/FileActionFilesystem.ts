@@ -9,7 +9,7 @@ import type {
   FileBaseline,
 } from "@agent-anything/action-execution";
 import { createCanonicalSha256Digest } from "@agent-anything/action-execution";
-import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
+import type { RunWorkspace } from "@agent-anything/foundation";
 import {
   resolveExistingTarget,
   resolveWritableTarget,
@@ -31,16 +31,18 @@ export interface PreparedFileSystemTarget {
 }
 
 export async function createCodeAgentCanonicalWorkspaceRoots(input: {
-  readonly workspaceScope: TaskWorkspaceScope | undefined;
+  readonly workspace: RunWorkspace | null;
   readonly platform: FileSystemPlatform;
 }): Promise<readonly CanonicalWorkspaceRootIdentityInput[]> {
-  if (input.workspaceScope === undefined) {
-    throw new TypeError("Code-agent file Actions require a task workspace scope.");
+  if (input.workspace === null) {
+    throw new TypeError("Code-agent file Actions require a Run workspace.");
   }
-  const entries = Object.entries(input.workspaceScope.roots);
-  if (entries.length === 0) {
-    throw new TypeError("Code-agent file Actions require at least one workspace root.");
-  }
+  const entries = [
+    [input.workspace.primary.id, input.workspace.primary] as const,
+    ...input.workspace.additional.map(
+      (workspace) => [workspace.id, workspace] as const,
+    ),
+  ];
 
   return Promise.all(entries.map(async ([rootName, workspace]) => {
     if (workspace.rootRef === null) {
@@ -70,7 +72,7 @@ export async function createCodeAgentCanonicalWorkspaceRoots(input: {
 }
 
 export async function prepareFileSystemTarget(input: {
-  readonly workspaceScope: TaskWorkspaceScope | undefined;
+  readonly workspace: RunWorkspace | null;
   readonly workspaceRoots: readonly CanonicalWorkspaceRootIdentity[];
   readonly platform: FileSystemPlatform;
   readonly rootName?: string;
@@ -81,13 +83,13 @@ export async function prepareFileSystemTarget(input: {
     input.operation === "delete";
   const target = input.operation === "create"
     ? await resolveWritableTarget({
-        workspaceScope: input.workspaceScope,
+        workspace: input.workspace,
         rootName: input.rootName,
         path: input.path,
         overwrite: false,
       })
     : await resolveExistingTarget({
-        workspaceScope: input.workspaceScope,
+        workspace: input.workspace,
         rootName: input.rootName,
         path: input.path,
         expectedKind: input.operation === "list"

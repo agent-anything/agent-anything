@@ -35,7 +35,7 @@
     "@agent-anything/host": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/providers": "workspace:*",
-    "@agent-anything/shared": "workspace:*",
+    "@agent-anything/foundation": "workspace:*",
     "@agent-anything/storage": "workspace:*",
     "lucide-react": "^1.21.0",
     "react": "^19.2.7",

@@ -5,7 +5,7 @@ import type {
 import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
-} from "@agent-anything/shared";
+} from "@agent-anything/foundation";
 import { describe, expect, it } from "vitest";
 import {
   createUserApprovalReviewBridge,

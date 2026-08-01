@@ -1,4 +1,4 @@
-import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
+import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
 
 export type TelemetryCounters = Record<string, number>;
 export type TelemetryDimensionValue = string | number | boolean | null;

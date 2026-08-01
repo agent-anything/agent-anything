@@ -29,7 +29,7 @@
                          "@agent-anything/governance":  "workspace:*",
                          "@agent-anything/host":  "workspace:*",
                          "@agent-anything/providers":  "workspace:*",
-                         "@agent-anything/shared":  "workspace:*",
+                         "@agent-anything/foundation":  "workspace:*",
                          "@agent-anything/tools":  "workspace:*"
                      },
     "devDependencies":  {

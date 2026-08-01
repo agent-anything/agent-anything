@@ -11,7 +11,6 @@ export type {
   ApprovalPolicyRejectedObservation,
   ApprovalReviewFailedObservation,
   Observation,
-  ObservationBase,
   PermissionsGrantedObservation,
   PlanUpdateResultObservation,
   ToolResultObservation,
@@ -44,11 +43,6 @@ export {
   createRunCancellationController,
   toRunCancellationSummary,
 } from "./RunCancellation.js";
-export type {
-  RunInput,
-  RunInputItem,
-  RunInputMessageRole,
-} from "./RunInput.js";
 export type {
   ActionAssessedRunItem,
   ActionAssessedSummary,
@@ -130,15 +124,6 @@ export {
   createSucceededRunResult,
 } from "./RunResult.js";
 export type {
-  RunBlockedCode,
-  RunCancelledCode,
-  RunFailureCode,
-  RunResultCode,
-  RunResultStatus,
-} from "./RunStatus.js";
-export type {
   RunCounters,
-  RunLifecycleStatus,
   RunState,
 } from "./RunState.js";
-export type { RuntimeError, RuntimeErrorOwner } from "./RuntimeError.js";

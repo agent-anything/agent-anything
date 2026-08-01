@@ -1,8 +1,8 @@
 import type {
   IdentityProvider,
-  IdentityRef,
   ResolveIdentityInput,
 } from "@agent-anything/governance/identity";
+import type { IdentityRef } from "@agent-anything/foundation";
 
 export type FakeIdentityProviderHandler = (
   input: ResolveIdentityInput,

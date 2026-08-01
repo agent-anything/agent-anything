@@ -7,7 +7,7 @@ import type {
 import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
-} from "@agent-anything/shared";
+} from "@agent-anything/foundation";
 import type { CanonicalActionOperationInput } from "./CanonicalActionOperation.js";
 import type {
   CanonicalActorIdentity,

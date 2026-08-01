@@ -1,4 +1,4 @@
-import type { InvocationInterruptionRef, Metadata } from "@agent-anything/shared";
+import type { InvocationInterruptionRef, Metadata } from "@agent-anything/foundation";
 import type {
   AdditionalPermissions,
   CanonicalAdditionalPermissions,

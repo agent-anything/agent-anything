@@ -7,7 +7,19 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const packageExportKeys = {
-  "packages/shared": ["."],
+  "harness/foundation": [
+    ".",
+    "./action",
+    "./agent",
+    "./artifact",
+    "./interaction",
+    "./invocation",
+    "./primitives",
+    "./result",
+    "./run",
+    "./task",
+    "./workspace",
+  ],
   "packages/tools": [".", "./catalog"],
   "packages/evidence": ["."],
   "packages/governance": [
@@ -25,15 +37,12 @@ const packageExportKeys = {
   "packages/testing": ["."],
   "packages/agent-core": [
     ".",
-    "./action",
-    "./agent",
     "./context",
     "./controller",
     "./events",
     "./plan",
     "./retry",
     "./run",
-    "./task",
   ],
   "packages/action-execution": ["."],
   "packages/agent-runtime": ["."],
@@ -60,7 +69,32 @@ for (const [packagePath, expectedKeys] of Object.entries(packageExportKeys)) {
 }
 
 const expectedLowerValueExports = {
-  "@agent-anything/shared": [],
+  "@agent-anything/foundation": [
+    "findRunWorkspace",
+    "listRunWorkspaces",
+    "snapshotAgent",
+    "snapshotAgentTask",
+    "snapshotIdentityRef",
+    "snapshotRunInput",
+    "snapshotRunWorkspace",
+    "snapshotWorkspaceContext",
+  ],
+  "@agent-anything/foundation/action": [],
+  "@agent-anything/foundation/agent": ["snapshotAgent"],
+  "@agent-anything/foundation/artifact": [],
+  "@agent-anything/foundation/interaction": [],
+  "@agent-anything/foundation/invocation": [],
+  "@agent-anything/foundation/primitives": [],
+  "@agent-anything/foundation/result": [],
+  "@agent-anything/foundation/run": ["snapshotRunInput"],
+  "@agent-anything/foundation/task": ["snapshotAgentTask"],
+  "@agent-anything/foundation/workspace": [
+    "findRunWorkspace",
+    "listRunWorkspaces",
+    "snapshotIdentityRef",
+    "snapshotRunWorkspace",
+    "snapshotWorkspaceContext",
+  ],
   "@agent-anything/tools": [
     "ToolCatalogValidationError",
     "createToolCatalogSnapshot",
@@ -189,8 +223,6 @@ const expectedLowerValueExports = {
 
 const expectedValueExports = {
   "@agent-anything/agent-core": [],
-  "@agent-anything/agent-core/action": [],
-  "@agent-anything/agent-core/agent": [],
   "@agent-anything/agent-core/context": [
     "applyContextUpdate",
     "createInitialContext",
@@ -231,7 +263,6 @@ const expectedValueExports = {
     "snapshotResolvedRunPermissionConfig",
     "toRunCancellationSummary",
   ],
-  "@agent-anything/agent-core/task": [],
   "@agent-anything/action-execution": [
     "ACTION_FINGERPRINT_DOMAIN",
     "ActionContractValidationError",
@@ -349,7 +380,6 @@ const expectedValueExports = {
     "DEFAULT_HELARC_TASK_PROMPT_MAX_LENGTH",
     "HELARC_PRODUCT_ID",
     "HELARC_TASK_KIND",
-    "HELARC_WORKSPACE_ROOT_NAME",
     "applyHelarcRunProgressCommit",
     "applyHelarcRunStartCommit",
     "applyHelarcRunTerminalCommit",
@@ -368,7 +398,7 @@ const expectedValueExports = {
     "createHelarcTaskTemplate",
     "createHelarcThread",
     "createHelarcWorkspaceProfile",
-    "createTrustedHelarcWorkspaceScope",
+    "createTrustedHelarcRunWorkspace",
     "deriveHelarcPersistedRunStatus",
     "deriveHelarcRunDisplayProjection",
     "helarcProduct",
@@ -409,9 +439,12 @@ const expectedExtensionValueExports = {
 };
 
 const removedOrPrivateSpecifiers = [
+  "@agent-anything/agent-core/action",
+  "@agent-anything/agent-core/agent",
   "@agent-anything/agent-core/runner",
   "@agent-anything/agent-core/action-execution",
   "@agent-anything/agent-core/host",
+  "@agent-anything/agent-core/task",
   "@agent-anything/action-execution/ActionGovernanceAssessment",
   "@agent-anything/agent-runtime/runner",
   "@agent-anything/host/HostRuntime",
@@ -422,6 +455,7 @@ const removedOrPrivateSpecifiers = [
 checkBuiltSurfaces(
   expectedLowerValueExports,
   [
+    "@agent-anything/shared",
     "@agent-anything/evidence/EvidenceRef",
     "@agent-anything/governance/policy/ActionPolicyPort",
     "@agent-anything/observability/redaction/Redactor",

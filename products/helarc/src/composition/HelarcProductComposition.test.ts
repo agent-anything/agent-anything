@@ -3,7 +3,7 @@ import type {
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/providers";
-import type { InvocationInterruptionContext } from "@agent-anything/shared";
+import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 import { createFailedRunResult } from "@agent-anything/agent-core/run";
 import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "../task/index.js";
@@ -13,7 +13,7 @@ describe("HelarcProductComposition", () => {
   it("defines one invocation's product behavior without exposing an execution entry point", async () => {
     const composition = await createHelarcProductComposition({
       runId: "run-1",
-      task: createTask("D:/workspace"),
+      ...createTask("D:/workspace"),
       provider: new UnusedProvider(),
       toolMode: "read-only",
     });
@@ -34,7 +34,7 @@ describe("HelarcProductComposition", () => {
   it("keeps the model catalog narrower than trusted mutation registrations", async () => {
     const composition = await createHelarcProductComposition({
       runId: "run-1",
-      task: createTask("D:/workspace"),
+      ...createTask("D:/workspace"),
       provider: new UnusedProvider(),
       toolMode: "read-only",
     });
@@ -56,7 +56,7 @@ describe("HelarcProductComposition", () => {
     const secret = "sentinel-provider-secret";
     const composition = await createHelarcProductComposition({
       runId: "run-1",
-      task: createTask("D:/workspace"),
+      ...createTask("D:/workspace"),
       provider: new UnusedProvider(),
       toolMode: "read-only",
     });
@@ -94,7 +94,10 @@ function createTask(workspaceRoot: string) {
     },
   });
   if (!result.ok) throw new Error(result.error.message);
-  return result.task;
+  return {
+    task: result.task,
+    workspace: result.workspace,
+  };
 }
 
 class UnusedProvider implements Provider {

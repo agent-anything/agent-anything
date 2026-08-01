@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/shared";
+import type { Metadata } from "@agent-anything/foundation";
 
 export interface RemoteToolCall<TInput = unknown> {
   id: string;

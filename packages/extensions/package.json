@@ -41,7 +41,7 @@
   },
   "dependencies": {
     "@agent-anything/action-execution": "workspace:*",
-    "@agent-anything/shared": "workspace:*",
+    "@agent-anything/foundation": "workspace:*",
     "@agent-anything/tools": "workspace:*"
   },
   "devDependencies": {

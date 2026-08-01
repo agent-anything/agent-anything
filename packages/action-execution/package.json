@@ -23,7 +23,7 @@
     "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/permission": "workspace:*",
-    "@agent-anything/shared": "workspace:*",
+    "@agent-anything/foundation": "workspace:*",
     "@agent-anything/tools": "workspace:*"
   },
   "license": "Apache-2.0",

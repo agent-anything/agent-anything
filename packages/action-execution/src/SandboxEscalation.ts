@@ -7,8 +7,8 @@ import {
 import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
-} from "@agent-anything/shared";
-import type { RuntimeError } from "@agent-anything/agent-core/run";
+} from "@agent-anything/foundation";
+import type { RuntimeError } from "@agent-anything/foundation";
 import type { ActionDispatchPlan } from "./ActionRevalidation.js";
 import type { CanonicalPathIdentity } from "./CanonicalIdentity.js";
 import { assertCanonicalActionCoherence } from "./CanonicalActionCoherence.js";

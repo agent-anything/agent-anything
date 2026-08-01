@@ -8,8 +8,8 @@ import {
 import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
-} from "@agent-anything/shared";
-import type { Agent } from "@agent-anything/agent-core/agent";
+} from "@agent-anything/foundation";
+import type { Agent } from "@agent-anything/foundation/agent";
 import type {
   Controller,
   ControllerCallContext,
@@ -408,7 +408,6 @@ function createAgent(): Agent<TestOutput> {
     id: "agent-1",
     name: "Test Agent",
     instructions: "Complete the task.",
-    tools: [],
     output: {
       validate(candidate) {
         if (
@@ -431,13 +430,16 @@ function createRunConfig(
 ): RunConfig {
   return {
     workspace: {
-      id: "workspace-1",
-      name: "Workspace",
-      rootRef: "workspace://test",
-      trustState: "trusted",
-      source: "test",
-      policyRefs: [],
-      metadata: {},
+      primary: {
+        id: "workspace-1",
+        name: "Workspace",
+        rootRef: "workspace://test",
+        trustState: "trusted",
+        source: "test",
+        policyRefs: [],
+        metadata: {},
+      },
+      additional: [],
     },
     identity: {
       id: "identity-1",
@@ -447,6 +449,10 @@ function createRunConfig(
     },
     actionContext: null,
     permissions: createTestPermissionConfig(),
+    toolCatalog: {
+      schemaVersion: 1,
+      tools: [],
+    },
     limits: {
       maxIterations: 2,
       maxActions: 0,

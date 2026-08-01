@@ -1,5 +1,5 @@
 import type { ManagedPermissionConstraints } from "@agent-anything/governance/managed-permission";
-import type { Metadata } from "@agent-anything/shared";
+import type { Metadata } from "@agent-anything/foundation";
 import {
   canonicalizePermissionDomains,
   canonicalizePermissionFileSystemTarget,

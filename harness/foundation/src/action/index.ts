@@ -3,4 +3,5 @@ export type {
   ActionCandidate,
   ActionKind,
   ActionProvenance,
+  ObservationBase,
 } from "./Action.js";

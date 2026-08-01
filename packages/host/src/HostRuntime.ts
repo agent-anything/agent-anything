@@ -1,15 +1,17 @@
-import type { ISODateTimeString } from "@agent-anything/shared";
+import type {
+  Agent,
+  ISODateTimeString,
+  RunInput,
+} from "@agent-anything/foundation";
 import {
   snapshotApprovalDecisionSubmission,
   type ApprovalDecisionSubmission,
   type ApprovalSubmissionReceipt,
 } from "@agent-anything/permission";
-import type { Agent } from "@agent-anything/agent-core/agent";
 import { RuntimeEventEmitter } from "@agent-anything/agent-core/events";
 import {
   toRunCancellationSummary,
   type RunCancellationRequestInput,
-  type RunInput,
   type RunResult,
 } from "@agent-anything/agent-core/run";
 import type {

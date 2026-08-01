@@ -2,11 +2,14 @@ import {
   createAuditRecord,
   type AuditPort,
 } from "@agent-anything/observability";
-import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
-import type { ISODateTimeString } from "@agent-anything/shared";
+import type {
+  IdentityRef,
+  ISODateTimeString,
+  WorkspaceContext,
+} from "@agent-anything/foundation";
 import type { ActionDispatchPlan } from "@agent-anything/action-execution";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
-import type { RuntimeError } from "@agent-anything/agent-core/run";
+import type { RuntimeError } from "@agent-anything/foundation";
 
 export async function recordActionDispatchAuthorizationAudit(input: {
   readonly plan: ActionDispatchPlan;

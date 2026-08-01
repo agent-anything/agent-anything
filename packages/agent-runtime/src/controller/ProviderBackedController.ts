@@ -10,14 +10,14 @@ import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
   Metadata,
-} from "@agent-anything/shared";
-import type { ActionCandidate, ActionKind } from "@agent-anything/agent-core/action";
+} from "@agent-anything/foundation";
+import type { ActionCandidate, ActionKind } from "@agent-anything/foundation/action";
 import type { RetryAttemptContext, RetryClock } from "@agent-anything/agent-core/retry";
 import { RetryExecutor } from "../retry/RetryExecutor.js";
 import type { RetryClassification, RetryFailure } from "@agent-anything/agent-core/retry";
 import type { RetryExhaustedEvent } from "@agent-anything/agent-core/retry";
 import type { RetryOperation } from "@agent-anything/agent-core/retry";
-import type { RuntimeError } from "@agent-anything/agent-core/run";
+import type { RuntimeError } from "@agent-anything/foundation";
 import type {
   Controller,
   ControllerCallContext,

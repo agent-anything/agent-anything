@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/shared";
+import type { Metadata } from "@agent-anything/foundation";
 import { ApprovalContractError } from "./ApprovalContractError.js";
 
 export function cloneApprovalMetadata(metadata: Metadata): Metadata {

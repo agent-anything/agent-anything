@@ -1,13 +1,16 @@
 import type {
-  AgentTask,
   RunResult,
   RuntimeEvent,
 } from "@agent-anything/agent-core";
-import type { RunResultStatus } from "@agent-anything/agent-core/run";
+import type {
+  AgentTask,
+  RunWorkspace,
+} from "@agent-anything/foundation";
+import type { RunResultStatus } from "@agent-anything/foundation";
 import type { SandboxEnforcement } from "@agent-anything/action-execution";
 import { projectRuntimeEventForHost } from "@agent-anything/host";
 import { CODE_AGENT_RUN_COMMAND_ACTION } from "@agent-anything/code-agent/command";
-import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
+import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import type { HelarcPatchOutcome } from "../patch/HelarcPatchActionController.js";
 
@@ -61,6 +64,7 @@ export interface HelarcProductResult {
 
 export function projectHelarcProductResult(
   task: AgentTask,
+  workspace: RunWorkspace,
   runResult: RunResult<HelarcAgentOutput>,
   patchOutcome: HelarcPatchOutcome | null,
   selectedEnforcement: SandboxEnforcement,
@@ -75,8 +79,7 @@ export function projectHelarcProductResult(
     status: patchOutcome?.productStatus ?? mapRunStatus(runResult.status),
     output: Object.freeze({
       taskId: task.id,
-      workspaceId:
-        task.workspaceScope?.roots[task.workspaceScope.defaultRootName ?? ""]?.id ?? null,
+      workspaceId: workspace.primary.id,
       agentSummary: agentOutput?.summary ?? null,
       runtimeStatus: runResult.status,
       patchStatus: patchOutcome?.patchStatus ?? null,

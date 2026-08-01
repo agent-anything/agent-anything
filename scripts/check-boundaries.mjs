@@ -3,8 +3,10 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 import {
+  evaluateHarnessProductionDependency,
   evaluatePlatformProductionDependency,
   evaluateRepositoryDirection,
+  expectedHarnessDependencies,
   expectedPlatformDependencies,
 } from "./architecture/ArchitectureRules.mjs";
 import {
@@ -149,10 +151,7 @@ function checkPublicApiImport(file, owner, statement, specifier) {
   }
 
   const allowedRootTypes = new Set([
-    "Agent",
-    "AgentTask",
     "Controller",
-    "RunInput",
     "RunResult",
     "RuntimeEvent",
   ]);
@@ -175,16 +174,19 @@ function checkPublicApiImport(file, owner, statement, specifier) {
 
 function checkReviewedManifests() {
   for (const info of packageInfo.values()) {
-    if (info.kind !== "platform") continue;
-    const expected = expectedPlatformDependencies(info.name);
+    if (info.kind !== "platform" && info.kind !== "harness") continue;
+    const expected = info.kind === "harness"
+      ? expectedHarnessDependencies(info.name)
+      : expectedPlatformDependencies(info.name);
     if (!expected) {
-      report("platform_dependency_policy_missing", { file: join(info.root, "package.json"), owner: info, message: `Platform package '${info.name}' has no production dependency policy.` });
+      const ownerLabel = info.kind === "harness" ? "Harness" : "Transitional";
+      report(`${info.kind}_dependency_policy_missing`, { file: join(info.root, "package.json"), owner: info, message: `${ownerLabel} package '${info.name}' has no production dependency policy.` });
       continue;
     }
     const actual = [...info.dependencies].sort();
     const sortedExpected = [...expected].sort();
     if (JSON.stringify(actual) !== JSON.stringify(sortedExpected)) {
-      report("platform_manifest_dependencies", {
+      report(`${info.kind}_manifest_dependencies`, {
         file: join(info.root, "package.json"),
         owner: info,
         message: `Production dependencies must be exactly: ${sortedExpected.join(", ") || "(none)"}.`,
@@ -350,6 +352,9 @@ function checkWorkspaceImport({ file, owner, imported, isTestOnly }) {
   }
 
   if (!isTestOnly && !isSelf) {
+    for (const result of evaluateHarnessProductionDependency({ owner, imported: importedPackage })) {
+      report(result.rule, { file, owner, imported: importedPackage, message: result.message });
+    }
     for (const result of evaluatePlatformProductionDependency({ owner, imported: importedPackage })) {
       report(result.rule, { file, owner, imported: importedPackage, message: result.message });
     }

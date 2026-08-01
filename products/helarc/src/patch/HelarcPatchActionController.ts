@@ -14,7 +14,7 @@ import {
   type PatchProposalChange,
 } from "@agent-anything/code-agent/patch";
 import { createAcceptedPatchFileAction } from "@agent-anything/code-agent/filesystem";
-import type { ISODateTimeString } from "@agent-anything/shared";
+import type { ISODateTimeString } from "@agent-anything/foundation";
 import type {
   HelarcAgentOutput,
   HelarcChangeIntent,
@@ -96,7 +96,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
     try {
       const proposed = await createPatchProposal({
         runId: controllerInput.runId,
-        workspaceScope: controllerInput.task.workspaceScope,
+        workspace: controllerInput.workspace,
         change: toPatchProposalChange(output.change),
         summary: output.summary,
         rationale: output.summary,
@@ -104,7 +104,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
       }, { now: this.input.now });
       const review = toReviewRequest(await materializePatchReview({
         patch: proposed,
-        workspaceScope: controllerInput.task.workspaceScope,
+        workspace: controllerInput.workspace,
       }));
       const reviewOutcome = await this.input.patchReviewBridge.review(
         review,

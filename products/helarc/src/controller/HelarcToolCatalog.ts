@@ -5,7 +5,7 @@ import {
   CODE_AGENT_SEARCH_FILES_ACTION,
 } from "@agent-anything/code-agent/filesystem";
 import { CODE_AGENT_RUN_COMMAND_ACTION } from "@agent-anything/code-agent/command";
-import type { Metadata } from "@agent-anything/shared";
+import type { Metadata } from "@agent-anything/foundation";
 import type { ToolAnnotations, ToolDescriptor } from "@agent-anything/tools";
 
 export type HelarcToolCatalogMode = "read-only" | "shell-enabled";
@@ -30,11 +30,6 @@ export interface HelarcToolCatalog {
 
 export interface HelarcToolCatalogMetadata {
   mode: HelarcToolCatalogMode;
-  tools: Array<{
-    name: string;
-    description: string | null;
-    annotations: ToolAnnotations;
-  }>;
 }
 
 export const HELARC_TOOL_CATALOG_METADATA_KEY = "helarcToolCatalog";
@@ -94,28 +89,19 @@ export function createDefaultHelarcToolCatalog(): HelarcToolCatalog {
 
 export function createHelarcToolCatalogMetadata(input: {
   mode: HelarcToolCatalogMode;
-  tools: readonly Pick<ToolDescriptor, "name" | "description" | "annotations">[];
 }): HelarcToolCatalogMetadata {
   return {
     mode: input.mode,
-    tools: input.tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description ?? null,
-      annotations: tool.annotations,
-    })),
   };
 }
 
 export function readHelarcToolCatalog(input: ControllerInput): HelarcToolCatalog {
   const metadata = input.metadata[HELARC_TOOL_CATALOG_METADATA_KEY];
   const catalogMetadata = parseHelarcToolCatalogMetadata(metadata);
-  if (!catalogMetadata) {
-    return createDefaultHelarcToolCatalog();
-  }
 
   return createHelarcToolCatalogFromDescriptors({
-    mode: catalogMetadata.mode,
-    tools: catalogMetadata.tools,
+    mode: catalogMetadata?.mode ?? inferCatalogMode(input.toolCatalog.tools),
+    tools: input.toolCatalog.tools,
   });
 }
 
@@ -161,51 +147,15 @@ function parseHelarcToolCatalogMetadata(value: unknown): HelarcToolCatalogMetada
     return null;
   }
 
-  if (!Array.isArray(value.tools)) {
-    return null;
-  }
-
-  const tools = value.tools.flatMap((tool) => {
-    if (!isRecord(tool)) {
-      return [];
-    }
-
-    const name = tool.name;
-    const description = tool.description;
-    const annotations = tool.annotations;
-    if (
-      typeof name !== "string" ||
-      (description !== null && typeof description !== "string") ||
-      !isToolAnnotations(annotations)
-    ) {
-      return [];
-    }
-
-    return [{
-      name,
-      description,
-      annotations,
-    }];
-  });
-
-  return {
-    mode,
-    tools,
-  };
+  return { mode };
 }
 
-function isToolAnnotations(value: unknown): value is ToolAnnotations {
-  if (!isRecord(value)) return false;
-  const keys = new Set([
-    "title",
-    "readOnlyHint",
-    "destructiveHint",
-    "idempotentHint",
-    "openWorldHint",
-  ]);
-  return Object.entries(value).every(([key, entry]) =>
-    keys.has(key) && (key === "title" ? typeof entry === "string" : typeof entry === "boolean"),
-  );
+function inferCatalogMode(
+  tools: readonly Pick<ToolDescriptor, "name">[],
+): HelarcToolCatalogMode {
+  return tools.some((tool) => tool.name === CODE_AGENT_RUN_COMMAND_ACTION)
+    ? "shell-enabled"
+    : "read-only";
 }
 
 function isRecord(value: unknown): value is Metadata {

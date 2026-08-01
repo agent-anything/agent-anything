@@ -1,19 +1,14 @@
-import type { ArtifactRef, EvidenceRef, Metadata } from "@agent-anything/shared";
+import type {
+  ArtifactRef,
+  EvidenceRef,
+  Metadata,
+  RunBlockedCode,
+  RunCancelledCode,
+  RunFailureCode,
+  RuntimeError,
+} from "@agent-anything/foundation";
 import type { RunCancellationSummary } from "./RunCancellation.js";
 import type { RunItem } from "./RunItem.js";
-import type { RuntimeError } from "./RuntimeError.js";
-import type {
-  RunBlockedCode,
-  RunCancelledCode,
-  RunFailureCode,
-} from "./RunStatus.js";
-export type {
-  RunBlockedCode,
-  RunCancelledCode,
-  RunFailureCode,
-  RunResultCode,
-  RunResultStatus,
-} from "./RunStatus.js";
 
 interface RunResultBase<TOutput> {
   readonly runId: string;

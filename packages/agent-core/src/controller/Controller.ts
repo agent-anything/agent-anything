@@ -1,13 +1,18 @@
-import type { IdentityRef, WorkspaceContext } from "@agent-anything/governance";
-import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
-import type { Agent } from "../agent/index.js";
+import type {
+  Agent,
+  AgentTask,
+  IdentityRef,
+  ISODateTimeString,
+  Metadata,
+  RunInputItem,
+  RunWorkspace,
+} from "@agent-anything/foundation";
 import type { ContextProjection } from "../context/Context.js";
-import type { ActionCandidate } from "../action/Action.js";
+import type { ActionCandidate } from "@agent-anything/foundation/action";
 import type { CancellationContext } from "../run/RunCancellation.js";
-import type { RunInputItem } from "../run/RunInput.js";
-import type { AgentTask } from "../task/index.js";
 import type { RetryEventSink } from "../retry/RetryEvent.js";
 import type { RetryPolicy } from "../retry/RetryPolicy.js";
+import type { ToolCatalogSnapshot } from "@agent-anything/tools";
 
 export interface ControllerModelItem {
   readonly id: string;
@@ -22,8 +27,9 @@ export interface ControllerInput<TOutput = unknown> {
   readonly agent: Agent<TOutput>;
   readonly task: AgentTask;
   readonly conversationItems: readonly RunInputItem[];
+  readonly toolCatalog: ToolCatalogSnapshot;
   readonly context: ContextProjection;
-  readonly workspace: WorkspaceContext;
+  readonly workspace: RunWorkspace;
   readonly identity: IdentityRef;
   readonly metadata: Metadata;
 }

@@ -6,7 +6,7 @@ import type {
 } from "@agent-anything/providers";
 import { resolvePermissionProfile } from "@agent-anything/permission";
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
-import type { Agent } from "@agent-anything/agent-core/agent";
+import type { Agent } from "@agent-anything/foundation/agent";
 import type {
   Controller,
   ControllerCallContext,
@@ -27,7 +27,7 @@ import {
   type HostRuntime,
 } from "./index.js";
 import type { RetryClock } from "@agent-anything/agent-core/retry";
-import type { ActionCandidate } from "@agent-anything/agent-core/action";
+import type { ActionCandidate } from "@agent-anything/foundation/action";
 import {
   createRunCancellationController,
   type ResolvedRunPermissionConfig,
@@ -479,13 +479,16 @@ function createHostInput(input: {
     },
     runConfig: {
       workspace: {
-        id: "workspace-conformance",
-        name: "Conformance workspace",
-        rootRef: "workspace://conformance",
-        trustState: "trusted",
-        source: "conformance",
-        policyRefs: [],
-        metadata: {},
+        primary: {
+          id: "workspace-conformance",
+          name: "Conformance workspace",
+          rootRef: "workspace://conformance",
+          trustState: "trusted",
+          source: "conformance",
+          policyRefs: [],
+          metadata: {},
+        },
+        additional: [],
       },
       identity: {
         id: "identity-conformance",
@@ -495,6 +498,10 @@ function createHostInput(input: {
       },
       actionContext: null,
       permissions: createTestPermissionConfig(),
+      toolCatalog: {
+        schemaVersion: 1,
+        tools: [],
+      },
       limits: {
         maxIterations: 5,
         maxActions: 5,
@@ -592,7 +599,6 @@ function createAgent(): Agent<ConformanceOutput> {
     id: "agent-conformance",
     name: "Conformance Agent",
     instructions: "Complete the conformance task.",
-    tools: [],
     output: {
       validate(candidate) {
         if (

@@ -1,8 +1,11 @@
 import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
-import type { TaskWorkspaceScope } from "@agent-anything/agent-core/task";
-import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
+import type {
+  ISODateTimeString,
+  Metadata,
+  RunWorkspace,
+} from "@agent-anything/foundation";
 import { FileSystemError } from "../filesystem/FileSystemError.js";
 import {
   resolveExistingTarget,
@@ -43,7 +46,7 @@ export type PatchProposalChange =
 
 export interface CreatePatchProposalInput {
   runId: string;
-  workspaceScope: TaskWorkspaceScope | undefined;
+  workspace: RunWorkspace | null;
   rootName?: string;
   change: PatchProposalChange;
   summary: string;
@@ -81,7 +84,7 @@ export interface RejectPatchInput {
 
 export interface MaterializePatchReviewInput {
   patch: ProposedPatchStatus;
-  workspaceScope: TaskWorkspaceScope | undefined;
+  workspace: RunWorkspace | null;
   limits?: Partial<PatchWorkflowLimits>;
   createReviewId?: (proposal: PatchProposal) => PatchReviewId;
 }
@@ -200,7 +203,7 @@ export async function materializePatchReview(
 
   if (operation.kind === "update" || operation.kind === "delete") {
     const current = await readExistingPatchTarget(
-      input.workspaceScope,
+      input.workspace,
       proposal.rootName,
       operation.path,
       limits,
@@ -274,7 +277,7 @@ async function createOperation(
   if (change.kind === "create") {
     assertContentLimit(change.proposedContent, limits);
     const target = await resolveWritableTarget({
-      workspaceScope: input.workspaceScope,
+      workspace: input.workspace,
       rootName: input.rootName,
       path: change.path,
       overwrite: false,
@@ -294,7 +297,7 @@ async function createOperation(
   }
 
   const current = await readExistingPatchTarget(
-    input.workspaceScope,
+    input.workspace,
     input.rootName,
     change.path,
     limits,
@@ -324,7 +327,7 @@ async function createOperation(
 }
 
 async function readExistingPatchTarget(
-  workspaceScope: TaskWorkspaceScope | undefined,
+  workspace: RunWorkspace | null,
   rootName: string | undefined,
   path: string,
   limits: PatchWorkflowLimits,
@@ -335,7 +338,7 @@ async function readExistingPatchTarget(
   content: string;
 }> {
   const target = await resolveExistingTarget({
-    workspaceScope,
+    workspace,
     rootName,
     path,
     expectedKind: "file",

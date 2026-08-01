@@ -2,7 +2,7 @@ import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
   ISODateTimeString,
-} from "@agent-anything/shared";
+} from "@agent-anything/foundation";
 import type { ApprovalCategory } from "../approval/ApprovalCategory.js";
 import type {
   CanonicalAdditionalPermissions,

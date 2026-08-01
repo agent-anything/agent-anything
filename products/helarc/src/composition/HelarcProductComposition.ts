@@ -4,18 +4,21 @@ import {
   systemRetryClock,
 } from "@agent-anything/agent-runtime";
 import type {
-  Agent,
-  AgentTask,
   Controller,
   RunResult,
   RuntimeEvent,
 } from "@agent-anything/agent-core";
+import type {
+  Agent,
+  AgentTask,
+  ISODateTimeString,
+  Metadata,
+  RunWorkspace,
+} from "@agent-anything/foundation";
 import type { RetryClock } from "@agent-anything/agent-core/retry";
 import type { SandboxEnforcement } from "@agent-anything/action-execution";
 import type { CodeAgentCommandLimits } from "@agent-anything/code-agent/command";
 import type { Provider } from "@agent-anything/providers";
-import type { ISODateTimeString, Metadata } from "@agent-anything/shared";
-import type { ToolDescriptor } from "@agent-anything/tools";
 import {
   buildHelarcProviderRequest,
   HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
@@ -62,6 +65,7 @@ export type HelarcToolMode = "read-only" | "shell-enabled";
 export interface CreateHelarcProductCompositionInput {
   readonly runId: string;
   readonly task: AgentTask<HelarcTaskInput>;
+  readonly workspace: RunWorkspace;
   readonly provider: Provider;
   readonly toolMode: HelarcToolMode;
   readonly commandLimits?: Partial<CodeAgentCommandLimits>;
@@ -89,7 +93,7 @@ export interface HelarcProductComposition {
 export async function createHelarcProductComposition(
   input: CreateHelarcProductCompositionInput,
 ): Promise<HelarcProductComposition> {
-  const actions = await createHelarcActionComposition(input.task, {
+  const actions = await createHelarcActionComposition(input.workspace, {
     enableShell: input.toolMode === "shell-enabled",
     commandLimits: input.commandLimits,
   });
@@ -158,12 +162,11 @@ export async function createHelarcProductComposition(
     toolMode: input.toolMode,
     [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
       mode: input.toolMode,
-      tools: actions.exposedCatalog.tools,
     }),
   });
 
   return Object.freeze({
-    agent: createHelarcAgent(actions.agentTools),
+    agent: createHelarcAgent(),
     controller: patchController,
     actions,
     runMetadata,
@@ -191,6 +194,7 @@ export async function createHelarcProductComposition(
     ): HelarcProductResult {
       const result = projectHelarcProductResult(
         input.task,
+        input.workspace,
         runResult,
         patchController.getPatchOutcome(),
         selectedEnforcement,
@@ -210,14 +214,11 @@ function createHelarcRetryClock(
     : Object.freeze({ now: () => new Date(now()) });
 }
 
-function createHelarcAgent(
-  tools: readonly ToolDescriptor[],
-): Agent<HelarcAgentOutput> {
+function createHelarcAgent(): Agent<HelarcAgentOutput> {
   return Object.freeze({
     id: "helarc-code-agent",
     name: "Helarc",
     instructions: "Complete the requested code task within the active workspace and safety boundaries.",
-    tools: Object.freeze([...tools]),
     output: Object.freeze({
       validate(candidate: unknown) {
         if (!isRecord(candidate) || typeof candidate.summary !== "string") {
