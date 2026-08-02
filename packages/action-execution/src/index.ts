@@ -10,6 +10,8 @@ export type {
   ActionExecutor,
   ActionExecutorContext,
   ActionExecutorDispatchPermit,
+  ActionExecutorFailure,
+  ActionExecutorResult,
   ResolvedActionSecret,
 } from "./ActionExecutor.js";
 export { assertActionExecutorDispatchContext } from "./ActionExecutor.js";

@@ -96,6 +96,34 @@ describe("executeProcess", () => {
     });
     expect(terminations).toEqual([]);
   });
+
+  it("distinguishes failed process start from unknown post-spawn settlement", async () => {
+    const cancellation = createInterruptionContext();
+
+    await expect(executeProcess(
+      createInput(cancellation.context),
+      {
+        spawnProcess() {
+          throw new Error("spawn failed");
+        },
+      },
+    )).resolves.toEqual({
+      kind: "failed",
+      effectState: "none",
+    });
+
+    const child = createChildProcess();
+    const pending = executeProcess(
+      createInput(cancellation.context),
+      { spawnProcess: () => child },
+    );
+    child.emit("error", new Error("process failed after spawn"));
+
+    await expect(pending).resolves.toEqual({
+      kind: "failed",
+      effectState: "unknown",
+    });
+  });
 });
 
 function createChildProcess(): ChildProcess {

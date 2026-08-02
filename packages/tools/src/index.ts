@@ -12,4 +12,13 @@ export {
   findToolDescriptor,
   ToolCatalogValidationError,
 } from "./catalog/index.js";
-export type { ToolResult, ToolResultError, ToolResultStatus } from "./ToolResult.js";
+export type {
+  FailedToolResult,
+  PartialToolResult,
+  SucceededToolResult,
+  TimedOutToolResult,
+  ToolResult,
+  ToolResultBase,
+  ToolResultError,
+  ToolResultStatus,
+} from "./ToolResult.js";

@@ -9,16 +9,10 @@ import type {
   StoredEvidenceArtifact,
 } from "../persistence/index.js";
 
-export interface ValidToolResultClassification {
-  readonly status: "valid";
-  readonly createObservation: boolean;
+export interface ToolResultClassification {
   readonly createEvidence: boolean;
   readonly failed: boolean;
 }
-
-export type ToolResultClassification =
-  | ValidToolResultClassification
-  | { readonly status: "invalid"; readonly error: RuntimeError };
 
 export type EvidenceSettlementResult =
   | {
@@ -34,40 +28,29 @@ export type EvidenceSettlementResult =
     };
 
 export function classifyToolResult(toolResult: ToolResult): ToolResultClassification {
-  const metadata = toolResultMetadata(toolResult);
   switch (toolResult.status) {
     case "succeeded":
-      return toolResult.output === null || toolResult.error !== null
-        ? invalidToolResult("Succeeded ToolResult requires non-null output and no error.", metadata)
-        : valid(true, true, false);
+      return classification(true, false);
     case "partial":
-      return toolResult.output === null
-        ? invalidToolResult("Partial ToolResult requires non-null output.", metadata)
-        : valid(true, true, true);
-    case "interrupted":
-      return toolResult.output === null
-        ? invalidToolResult("Interrupted ToolResult requires non-null usable output.", metadata)
-        : valid(true, true, true);
+      return classification(true, true);
     case "failed":
-    case "cancelled":
     case "timeout":
-      return valid(true, false, true);
-    case "skipped":
-      return toolResult.output !== null || toolResult.error !== null
-        ? invalidToolResult("Skipped ToolResult cannot include output or an error.", metadata)
-        : valid(false, false, false);
+      return classification(false, true);
   }
 }
 
 export async function settleToolResultEvidence(input: {
   readonly actionId: string;
   readonly toolResult: ToolResult;
-  readonly classification: ValidToolResultClassification;
   readonly evidenceBuilder: EvidenceBuilderPort;
   readonly persistence: EvidencePersistencePort;
   readonly isInterrupted: () => boolean;
 }): Promise<EvidenceSettlementResult> {
-  if (!input.classification.createEvidence || input.isInterrupted()) {
+  if (
+    input.toolResult.status === "failed" ||
+    input.toolResult.status === "timeout" ||
+    input.isInterrupted()
+  ) {
     return settled(input.isInterrupted() ? "interrupted" : "settled", [], []);
   }
 
@@ -193,22 +176,14 @@ function snapshotStoredEvidenceArtifact(
   });
 }
 
-function valid(
-  createObservation: boolean,
+function classification(
   createEvidence: boolean,
   failed: boolean,
-): ValidToolResultClassification {
-  return Object.freeze({ status: "valid", createObservation, createEvidence, failed });
+): ToolResultClassification {
+  return Object.freeze({ createEvidence, failed });
 }
 
-function invalidToolResult(message: string, metadata: Metadata): ToolResultClassification {
-  return Object.freeze({
-    status: "invalid" as const,
-    error: runtimeError("tool", "tool_result_invalid", message, metadata),
-  });
-}
-
-function snapshotEvidence(candidate: Evidence[], toolResult: ToolResult): readonly Evidence[] {
+function snapshotEvidence(candidate: readonly Evidence[], toolResult: ToolResult): readonly Evidence[] {
   if (!Array.isArray(candidate)) throw new TypeError("EvidenceBuilderPort must return an array.");
   const ids = new Set<string>();
   return Object.freeze(candidate.map((item) => {

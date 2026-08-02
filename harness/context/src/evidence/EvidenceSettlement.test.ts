@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolResult, ToolResultStatus } from "@agent-anything/tools";
-import type { EvidenceBuilderPort } from "./EvidenceBuilder.js";
+import type {
+  EvidenceBuilderPort,
+  EvidenceEligibleToolResult,
+} from "./EvidenceBuilder.js";
 import type { EvidencePersistencePort } from "../persistence/index.js";
 import {
   classifyToolResult,
@@ -9,29 +12,44 @@ import {
 
 describe("Evidence settlement", () => {
   it.each([
-    ["succeeded", { createObservation: true, createEvidence: true, failed: false }],
-    ["partial", { createObservation: true, createEvidence: true, failed: true }],
-    ["interrupted", { createObservation: true, createEvidence: true, failed: true }],
-    ["failed", { createObservation: true, createEvidence: false, failed: true }],
-    ["cancelled", { createObservation: true, createEvidence: false, failed: true }],
-    ["timeout", { createObservation: true, createEvidence: false, failed: true }],
-    ["skipped", { createObservation: false, createEvidence: false, failed: false }],
+    ["succeeded", { createEvidence: true, failed: false }],
+    ["partial", { createEvidence: true, failed: true }],
+    ["failed", { createEvidence: false, failed: true }],
+    ["timeout", { createEvidence: false, failed: true }],
   ] as const)("classifies %s ToolResult", (status, expected) => {
-    expect(classifyToolResult(toolResult(status))).toMatchObject({
-      status: "valid",
-      ...expected,
-    });
+    expect(classifyToolResult(toolResult(status))).toEqual(expected);
   });
 
-  it("rejects contradictory succeeded, partial, interrupted, and skipped results", () => {
-    expect(classifyToolResult(toolResult("succeeded", null))).toMatchObject({
-      status: "invalid",
-      error: { owner: "tool", code: "tool_result_invalid" },
+  it.each(["failed", "timeout"] as const)(
+    "starts no Evidence work for %s ToolResult",
+    async (status) => {
+      const buildFromToolResult = vi.fn();
+      const persistEvidence = vi.fn();
+      await expect(settleToolResultEvidence({
+        actionId: "action_1",
+        toolResult: toolResult(status),
+        evidenceBuilder: { buildFromToolResult },
+        persistence: { persistEvidence },
+        isInterrupted: () => false,
+      })).resolves.toEqual({
+        status: "settled",
+        evidenceRefs: [],
+        artifactRefs: [],
+      });
+      expect(buildFromToolResult).not.toHaveBeenCalled();
+      expect(persistEvidence).not.toHaveBeenCalled();
+    },
+  );
+
+  it("recognizes partial Evidence eligibility only from the typed attestation", () => {
+    const result = toolResult("partial");
+    expect(result).toMatchObject({
+      outputUsability: "validated",
+      error: { code: "tool_partial" },
     });
-    expect(classifyToolResult(toolResult("partial", null))).toMatchObject({ status: "invalid" });
-    expect(classifyToolResult(toolResult("interrupted", null))).toMatchObject({ status: "invalid" });
-    expect(classifyToolResult(toolResult("skipped", { unexpected: true }))).toMatchObject({
-      status: "invalid",
+    expect(classifyToolResult(result)).toEqual({
+      createEvidence: true,
+      failed: true,
     });
   });
 
@@ -42,7 +60,6 @@ describe("Evidence settlement", () => {
     const settlement = await settleToolResultEvidence({
       actionId: "action_1",
       toolResult: result,
-      classification: validClassification(result),
       evidenceBuilder: builder,
       persistence: { persistEvidence },
       isInterrupted: () => false,
@@ -76,7 +93,6 @@ describe("Evidence settlement", () => {
     expect(await settleToolResultEvidence({
       actionId: "action_1",
       toolResult: result,
-      classification: validClassification(result),
       evidenceBuilder: builder,
       persistence,
       isInterrupted: () => false,
@@ -108,7 +124,6 @@ describe("Evidence settlement", () => {
     expect(await settleToolResultEvidence({
       actionId: "action_1",
       toolResult: result,
-      classification: validClassification(result),
       evidenceBuilder: builder,
       persistence: { persistEvidence },
       isInterrupted: () => interrupted,
@@ -126,7 +141,6 @@ describe("Evidence settlement", () => {
     const settlement = await settleToolResultEvidence({
       actionId: "action_1",
       toolResult: result,
-      classification: validClassification(result),
       evidenceBuilder: {
         buildFromToolResult() {
           return [{
@@ -156,7 +170,6 @@ describe("Evidence settlement", () => {
     const settlement = await settleToolResultEvidence({
       actionId: "action_1",
       toolResult: result,
-      classification: validClassification(result),
       evidenceBuilder: evidenceBuilder("evidence_1"),
       persistence: {
         async persistEvidence() {
@@ -181,7 +194,6 @@ describe("Evidence settlement", () => {
     const settlement = await settleToolResultEvidence({
       actionId: "action_1",
       toolResult: result,
-      classification: validClassification(result),
       evidenceBuilder: { buildFromToolResult },
       persistence: { persistEvidence },
       isInterrupted: () => true,
@@ -193,38 +205,40 @@ describe("Evidence settlement", () => {
   });
 });
 
-function toolResult(status: ToolResultStatus, output: unknown = defaultOutput(status)): ToolResult {
-  return {
+function toolResult(status: ToolResultStatus): ToolResult {
+  const base = {
     toolCallId: "action_1",
     toolName: "test.external",
-    status,
-    output,
-    error: status === "succeeded" || status === "skipped"
-      ? null
-      : { code: `tool_${status}`, message: status },
     startedAt: "2026-07-13T00:00:00.000Z",
     finishedAt: "2026-07-13T00:00:01.000Z",
     metadata: {},
   };
-}
-
-function defaultOutput(status: ToolResultStatus): unknown {
-  return status === "succeeded" || status === "partial" || status === "interrupted"
-    ? { ok: true }
-    : null;
-}
-
-function validClassification(result: ToolResult) {
-  const classification = classifyToolResult(result);
-  if (classification.status !== "valid") throw new Error("Expected valid ToolResult.");
-  return classification;
+  switch (status) {
+    case "succeeded":
+      return { ...base, status, output: { ok: true } };
+    case "partial":
+      return {
+        ...base,
+        status,
+        output: { ok: true },
+        outputUsability: "validated",
+        error: { code: "tool_partial", message: "partial" },
+      };
+    case "failed":
+    case "timeout":
+      return {
+        ...base,
+        status,
+        error: { code: `tool_${status}`, message: status },
+      };
+  }
 }
 
 function evidenceBuilder(id: string): EvidenceBuilderPort {
   return { buildFromToolResult: ({ toolResult: result }) => [evidence(id, result)] };
 }
 
-function evidence(id: string, result: ToolResult) {
+function evidence(id: string, result: EvidenceEligibleToolResult) {
   return {
     id,
     source: {

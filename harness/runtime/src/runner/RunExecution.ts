@@ -38,6 +38,7 @@ import type {
   PreparedExternalAction,
   SandboxAttempt,
 } from "@agent-anything/action-execution";
+import type { ToolResult } from "@agent-anything/tools";
 import { ControllerError } from "../controller/ProviderBackedController.js";
 import type {
   ControllerDecision,
@@ -171,7 +172,7 @@ import {
 import {
   classifyToolResult,
   settleToolResultEvidence,
-  type ValidToolResultClassification,
+  type ToolResultClassification,
 } from "@agent-anything/context/evidence";
 
 type RunItemDraft<TOutput> = (base: RunItemBase) => RunItem<TOutput>;
@@ -2357,7 +2358,7 @@ export class RunExecution<TOutput> {
       return this.handleActionPipelineOperationError(action, error, "dispatch");
     }
 
-    let toolResultClassification: ValidToolResultClassification | null = null;
+    let toolResultClassification: ToolResultClassification | null = null;
     let retainedToolOutcome: {
       readonly observation: ToolResultObservation | null;
       readonly items: readonly RunItem<TOutput>[];
@@ -2365,22 +2366,12 @@ export class RunExecution<TOutput> {
     } | null = null;
     if (execution.status === "executed") {
       const classification = classifyToolResult(execution.toolResult);
-      if (classification.status === "invalid") {
-        execution = Object.freeze({
-          status: "failed" as const,
-          attempt: execution.attempt,
-          error: classification.error,
-        });
-      } else {
-        toolResultClassification = classification;
-        const observation = classification.createObservation
-          ? this.createExternalToolResultObservation(action, execution)
-          : null;
-        retainedToolOutcome = Object.freeze({
-          observation,
-          ...this.retainExternalToolOutcome(action, observation, classification.failed),
-        });
-      }
+      toolResultClassification = classification;
+      const observation = this.createExternalToolResultObservation(action, execution);
+      retainedToolOutcome = Object.freeze({
+        observation,
+        ...this.retainExternalToolOutcome(action, observation, classification.failed),
+      });
     }
 
     const resolution = sandboxAttemptResolution(sandboxAttempt, execution, this.now());
@@ -2509,7 +2500,10 @@ export class RunExecution<TOutput> {
     if (execution.status === "interrupted") {
       return this.handleActionInterruption(action, execution.interruption);
     }
-    if (execution.error.code === "tool_result_invalid") {
+    if (
+      execution.effectState === "unknown" ||
+      execution.error.code === "tool_result_invalid"
+    ) {
       return {
         invalidatesBatch: true,
         terminalResult: await this.fail(execution.error, "tool_execution_failed"),
@@ -2527,7 +2521,7 @@ export class RunExecution<TOutput> {
   private async settleExecutedActionResult(
     action: Action & { readonly kind: "tool" },
     execution: Extract<ActionExecutionResult, { readonly status: "executed" }>,
-    classification: ValidToolResultClassification,
+    classification: ToolResultClassification,
     retained: {
       readonly observation: ToolResultObservation | null;
       readonly items: readonly RunItem<TOutput>[];
@@ -2547,7 +2541,6 @@ export class RunExecution<TOutput> {
         () => settleToolResultEvidence({
           actionId: action.id,
           toolResult: execution.toolResult,
-          classification,
           evidenceBuilder,
           persistence: evidencePersistence,
           isInterrupted: () => this.cancellationRequest() !== null,
@@ -2604,7 +2597,10 @@ export class RunExecution<TOutput> {
       settlement.evidenceRefs,
       settlement.status === "failed"
         ? { status: "failed", code: settlement.error.code }
-        : { status: classification.failed ? "failed" : "succeeded", code: execution.toolResult.error?.code ?? null },
+        : {
+            status: classification.failed ? "failed" : "succeeded",
+            code: toolResultErrorCode(execution.toolResult),
+          },
     );
 
     if (settlement.status === "failed") {
@@ -3910,7 +3906,7 @@ function observationNotificationOutcome(
     case "tool_result":
       return {
         status: observation.result.status,
-        code: observation.result.error?.code ?? null,
+        code: toolResultErrorCode(observation.result),
       };
     case "action_denied":
       return { status: "denied", code: observation.code };
@@ -4038,7 +4034,7 @@ function sandboxAttemptResolution(
         ordinal: attempt.ordinal,
         enforcement: attempt.enforcement,
         outcome: execution.status,
-        code: execution.toolResult.error?.code ?? execution.toolResult.status,
+        code: toolResultErrorCode(execution.toolResult),
         effectState: null,
         settledAt,
       });
@@ -4083,10 +4079,14 @@ function sandboxAttemptResolution(
         enforcement: attempt.enforcement,
         outcome: execution.status,
         code: execution.error.code,
-        effectState: null,
+        effectState: execution.effectState,
         settledAt,
       });
   }
+}
+
+function toolResultErrorCode(result: ToolResult): string | null {
+  return result.status === "succeeded" ? null : result.error.code;
 }
 
 function infrastructureFailureCode(error: RuntimeError): RunFailureCode {

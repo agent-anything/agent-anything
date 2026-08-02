@@ -3,12 +3,14 @@ export type { EvidenceSource } from "./EvidenceSource.js";
 export {
   EvidenceBuilder,
   type BuildEvidenceInput,
+  type ConservativeEvidenceSensitivity,
+  type EvidenceEligibleToolResult,
   type EvidenceBuilderPort,
+  type EvidenceSensitivityPolicy,
 } from "./EvidenceBuilder.js";
 export {
   classifyToolResult,
   settleToolResultEvidence,
   type EvidenceSettlementResult,
   type ToolResultClassification,
-  type ValidToolResultClassification,
 } from "./EvidenceSettlement.js";

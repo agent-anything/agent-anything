@@ -12,6 +12,7 @@ import {
   type ActionExecutor,
   type ActionExecutorContext,
   type ActionExecutorDescriptor,
+  type ActionExecutorResult,
   type CanonicalWorkspaceRootIdentity,
   type FileBaseline,
   type PreparedActionInvocation,
@@ -369,24 +370,50 @@ function createFileActionExecutor(
       assertActionExecutorDispatchContext(context);
       const startedAt = now();
       let payload: CodeAgentPreparedFileInvocationPayload;
+      let externalEffectStarted = false;
       try {
         payload = readPreparedPayload(invocation);
         throwIfInterrupted(context);
-        const output = await executePreparedFileAction(payload, limits, context);
-        throwIfInterrupted(context);
-        return result(payload, context, startedAt, now(), "succeeded", output, null);
+        const output = await executePreparedFileAction(
+          payload,
+          limits,
+          context,
+          () => {
+            externalEffectStarted = true;
+          },
+        );
+        return executed(succeededResult(payload, context, startedAt, now(), output));
       } catch (error) {
         const candidate = safeReadPayload(invocation);
-        return interruptionToolResult(candidate, context, startedAt, now()) ??
-          result(
+        const finishedAt = now();
+        if (error instanceof FileActionInterruptionError) {
+          return interruptionResult(
             candidate,
             context,
+            externalEffectStarted ? "unknown" : "none",
             startedAt,
-            now(),
-            "failed",
-            null,
-            toToolError(error),
+            finishedAt,
           );
+        }
+        if (externalEffectStarted && !isKnownNoEffectFileError(error)) {
+          return executionFailed(
+            "file_effect_settlement_unknown",
+            safeMessage(error, "File operation failed after its external effect began."),
+            "unknown",
+            {
+              ...fileActionMetadata(candidate),
+              startedAt,
+              finishedAt,
+            },
+          );
+        }
+        return executed(failedResult(
+          candidate,
+          context,
+          startedAt,
+          finishedAt,
+          toToolError(error),
+        ));
       }
     },
   };
@@ -397,14 +424,18 @@ async function executePreparedFileAction(
   payload: CodeAgentPreparedFileInvocationPayload,
   limits: ReturnType<typeof resolveFileSystemLimits>,
   context: ActionExecutorContext,
+  markExternalEffectStarted: () => void,
 ): Promise<unknown> {
   switch (payload.operation) {
     case "list": return executeList(payload, limits.maxListEntries, context);
     case "read": return executeRead(payload, limits.maxReadBytes, context);
     case "search": return executeSearch(payload, limits, context);
-    case "create": return executeCreate(payload, limits.maxWriteBytes, context);
-    case "update": return executeUpdate(payload, limits.maxWriteBytes, context);
-    case "delete": return executeDelete(payload, context);
+    case "create":
+      return executeCreate(payload, limits.maxWriteBytes, context, markExternalEffectStarted);
+    case "update":
+      return executeUpdate(payload, limits.maxWriteBytes, context, markExternalEffectStarted);
+    case "delete":
+      return executeDelete(payload, context, markExternalEffectStarted);
   }
 }
 
@@ -591,9 +622,11 @@ async function executeCreate(
   payload: CodeAgentPreparedFileInvocationPayload,
   maxWriteBytes: number,
   context: ActionExecutorContext,
+  markExternalEffectStarted: () => void,
 ): Promise<FileWriteOutput> {
   const content = requirePreparedContent(payload, maxWriteBytes);
   throwIfInterrupted(context);
+  markExternalEffectStarted();
   await writeFile(payload.canonicalTarget, content, { encoding: "utf8", flag: "wx" });
   return {
     rootName: payload.rootName,
@@ -609,10 +642,12 @@ async function executeUpdate(
   payload: CodeAgentPreparedFileInvocationPayload,
   maxWriteBytes: number,
   context: ActionExecutorContext,
+  markExternalEffectStarted: () => void,
 ): Promise<FileWriteOutput> {
   const content = requirePreparedContent(payload, maxWriteBytes);
   await assertExecutorBaseline(payload);
   throwIfInterrupted(context);
+  markExternalEffectStarted();
   await writeFile(payload.canonicalTarget, content, { encoding: "utf8", flag: "w" });
   return {
     rootName: payload.rootName,
@@ -627,9 +662,11 @@ async function executeUpdate(
 async function executeDelete(
   payload: CodeAgentPreparedFileInvocationPayload,
   context: ActionExecutorContext,
+  markExternalEffectStarted: () => void,
 ): Promise<DeleteFileOutput> {
   await assertExecutorBaseline(payload);
   throwIfInterrupted(context);
+  markExternalEffectStarted();
   await unlink(payload.canonicalTarget);
   return {
     rootName: payload.rootName,
@@ -721,55 +758,105 @@ function safeReadPayload(invocation: PreparedActionInvocation): CodeAgentPrepare
   try { return readPreparedPayload(invocation); } catch { return null; }
 }
 
-function result(
+function succeededResult(
   payload: CodeAgentPreparedFileInvocationPayload | null,
   context: ActionExecutorContext,
   startedAt: string,
   finishedAt: string,
-  status: "succeeded" | "failed",
   output: unknown,
-  error: { code: string; message: string } | null,
+): ToolResult {
+  if (output === null || output === undefined) {
+    throw new TypeError("File Action succeeded without output.");
+  }
+  return {
+    toolCallId: context.attempt.actionId,
+    toolName: payload?.actionName ?? "codeAgent.fileAction",
+    status: "succeeded",
+    output,
+    startedAt,
+    finishedAt,
+    metadata: fileActionMetadata(payload),
+  };
+}
+
+function failedResult(
+  payload: CodeAgentPreparedFileInvocationPayload | null,
+  context: ActionExecutorContext,
+  startedAt: string,
+  finishedAt: string,
+  error: { readonly code: string; readonly message: string },
 ): ToolResult {
   return {
     toolCallId: context.attempt.actionId,
     toolName: payload?.actionName ?? "codeAgent.fileAction",
-    status,
-    output,
+    status: "failed",
     error,
     startedAt,
     finishedAt,
-    metadata: payload === null ? {} : {
-      rootName: payload.rootName,
-      workspaceId: payload.workspaceId,
-      path: payload.relativePath,
-      operation: payload.operation,
-    },
+    metadata: fileActionMetadata(payload),
   };
 }
 
-function interruptionToolResult(
+function interruptionResult(
   payload: CodeAgentPreparedFileInvocationPayload | null,
   context: ActionExecutorContext,
+  effectState: "none" | "unknown",
   startedAt: string,
   finishedAt: string,
-): ToolResult | null {
-  if (!context.interruption.signal.aborted) return null;
+): ActionExecutorResult {
   const interruption = context.interruption.interruption;
-  const base = {
-    toolCallId: context.attempt.actionId,
-    toolName: payload?.actionName ?? "codeAgent.fileAction",
-    output: null,
-    startedAt,
-    finishedAt,
-    metadata: {},
+  if (interruption !== null && effectState === "none") {
+    return Object.freeze({
+      status: "interrupted" as const,
+      interruption,
+    });
+  }
+  return executionFailed(
+    interruption === null
+      ? "tool_cancellation_unconfirmed"
+      : "file_interruption_settlement_unknown",
+    interruption === null
+      ? "File operation was interrupted without trusted attribution."
+      : "File operation interruption could not confirm external-effect settlement.",
+    effectState,
+    {
+      ...fileActionMetadata(payload),
+      startedAt,
+      finishedAt,
+    },
+  );
+}
+
+function executed(toolResult: ToolResult): ActionExecutorResult {
+  return Object.freeze({ status: "executed" as const, toolResult });
+}
+
+function executionFailed(
+  code: string,
+  message: string,
+  effectState: "none" | "unknown",
+  metadata: Readonly<Record<string, unknown>>,
+): ActionExecutorResult {
+  return Object.freeze({
+    status: "failed" as const,
+    failure: Object.freeze({
+      code,
+      message,
+      effectState,
+      metadata: Object.freeze({ ...metadata }),
+    }),
+  });
+}
+
+function fileActionMetadata(
+  payload: CodeAgentPreparedFileInvocationPayload | null,
+): Readonly<Record<string, unknown>> {
+  return payload === null ? {} : {
+    rootName: payload.rootName,
+    workspaceId: payload.workspaceId,
+    path: payload.relativePath,
+    operation: payload.operation,
   };
-  if (interruption?.kind === "run_cancellation") {
-    return { ...base, status: "cancelled", error: { code: "tool_cancelled", message: "File operation was cancelled." } };
-  }
-  if (interruption?.kind === "operation_deadline") {
-    return { ...base, status: "timeout", error: { code: "tool_timeout", message: "File operation exceeded its deadline." } };
-  }
-  return { ...base, status: "interrupted", error: { code: "tool_cancellation_unconfirmed", message: "File operation was interrupted without trusted attribution." } };
 }
 
 function observeInterruption(interruption: { readonly signal: AbortSignal; readonly interruption: unknown }) {
@@ -786,8 +873,10 @@ function observeInterruption(interruption: { readonly signal: AbortSignal; reado
 }
 
 function throwIfInterrupted(context: ActionExecutorContext): void {
-  if (context.interruption.signal.aborted) throw context.interruption.signal.reason;
+  if (context.interruption.signal.aborted) throw new FileActionInterruptionError();
 }
+
+class FileActionInterruptionError extends Error {}
 
 function invalidated(code: string, message: string) {
   return { status: "invalidated" as const, code, message };
@@ -967,6 +1056,10 @@ function safeMessage(error: unknown, fallback: string): string {
 
 function isNodeError(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === code;
+}
+
+function isKnownNoEffectFileError(error: unknown): boolean {
+  return isNodeError(error, "EEXIST") || isNodeError(error, "ENOENT");
 }
 
 async function sha256Text(value: string): Promise<string> {

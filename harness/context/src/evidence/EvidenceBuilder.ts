@@ -2,74 +2,88 @@ import type { Metadata } from "@agent-anything/foundation";
 import type { ToolResult } from "@agent-anything/tools";
 import type { Evidence, EvidenceSensitivity } from "./Evidence.js";
 
+export type EvidenceEligibleToolResult<TOutput = unknown> = Extract<
+  ToolResult<TOutput>,
+  { readonly status: "succeeded" | "partial" }
+>;
+
+export type ConservativeEvidenceSensitivity = Exclude<EvidenceSensitivity, "public">;
+
+export interface EvidenceSensitivityPolicy {
+  readonly unclassifiedSensitivity: ConservativeEvidenceSensitivity;
+}
+
 export interface BuildEvidenceInput {
-  toolResult: ToolResult;
-  id?: string;
-  summary?: string;
-  sensitivity?: EvidenceSensitivity;
-  metadata?: Metadata;
+  readonly toolResult: EvidenceEligibleToolResult;
+  readonly id?: string;
+  readonly summary?: string;
+  readonly sensitivity?: EvidenceSensitivity;
+  readonly metadata?: Readonly<Metadata>;
 }
 
 export interface EvidenceBuilderPort {
-  buildFromToolResult(input: BuildEvidenceInput): Evidence[];
+  buildFromToolResult(input: BuildEvidenceInput): readonly Evidence[];
 }
 
 export class EvidenceBuilder implements EvidenceBuilderPort {
-  buildFromToolResult(input: BuildEvidenceInput): Evidence[] {
-    const { toolResult } = input;
+  readonly #sensitivityPolicy: EvidenceSensitivityPolicy;
 
-    if (!hasUsableOutput(toolResult)) {
-      return [];
+  constructor(
+    sensitivityPolicy: EvidenceSensitivityPolicy = {
+      unclassifiedSensitivity: "restricted",
+    },
+  ) {
+    if (!isConservativeSensitivity(sensitivityPolicy?.unclassifiedSensitivity)) {
+      throw new TypeError(
+        "EvidenceSensitivityPolicy requires a conservative unclassified sensitivity.",
+      );
     }
+    this.#sensitivityPolicy = Object.freeze({
+      unclassifiedSensitivity: sensitivityPolicy.unclassifiedSensitivity,
+    });
+  }
 
-    return [
-      {
+  buildFromToolResult(input: BuildEvidenceInput): readonly Evidence[] {
+    const { toolResult } = input;
+    const sensitivity = input.sensitivity === undefined
+      ? this.#sensitivityPolicy.unclassifiedSensitivity
+      : requireSensitivity(input.sensitivity);
+    return Object.freeze([
+      Object.freeze({
         id: input.id ?? createEvidenceId(toolResult),
-        source: {
-          kind: "toolResult",
+        source: Object.freeze({
+          kind: "toolResult" as const,
           toolCallId: toolResult.toolCallId,
           toolName: toolResult.toolName,
-          metadata: toolResult.metadata,
-        },
+          metadata: Object.freeze({ ...toolResult.metadata }),
+        }),
         summary: input.summary ?? createSummary(toolResult),
         content: toolResult.output,
-        sensitivity:
-          input.sensitivity ?? getSensitivityFromMetadata(toolResult.metadata),
-        metadata: {
+        sensitivity,
+        metadata: Object.freeze({
           ...input.metadata,
           createdFrom: toolResult.toolCallId,
-        },
-      },
-    ];
+        }),
+      }),
+    ]);
   }
 }
 
-function createEvidenceId(toolResult: ToolResult): string {
+function createEvidenceId(toolResult: EvidenceEligibleToolResult): string {
   return `evidence_${toolResult.toolCallId}`;
 }
 
-function createSummary(toolResult: ToolResult): string {
+function createSummary(toolResult: EvidenceEligibleToolResult): string {
   return toolResult.status === "partial"
     ? `Partial evidence from ${toolResult.toolName}.`
     : `Evidence from ${toolResult.toolName}.`;
 }
 
-function getSensitivityFromMetadata(metadata: Metadata): EvidenceSensitivity {
-  return isEvidenceSensitivity(metadata.sensitivity)
-    ? metadata.sensitivity
-    : "public";
-}
-
-function hasUsableOutput(toolResult: ToolResult): boolean {
-  if (toolResult.output === null) {
-    return false;
+function requireSensitivity(value: EvidenceSensitivity): EvidenceSensitivity {
+  if (!isEvidenceSensitivity(value)) {
+    throw new TypeError("BuildEvidenceInput.sensitivity is invalid.");
   }
-
-  return (
-    toolResult.status === "succeeded" ||
-    toolResult.status === "partial" ||
-    toolResult.status === "interrupted"
-  );
+  return value;
 }
 
 function isEvidenceSensitivity(value: unknown): value is EvidenceSensitivity {
@@ -79,4 +93,10 @@ function isEvidenceSensitivity(value: unknown): value is EvidenceSensitivity {
     value === "secret" ||
     value === "restricted"
   );
+}
+
+function isConservativeSensitivity(
+  value: unknown,
+): value is ConservativeEvidenceSensitivity {
+  return value === "private" || value === "secret" || value === "restricted";
 }

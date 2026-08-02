@@ -39,12 +39,17 @@ export function createMcpActionCapability(
               "MCP result did not match the authorized remote invocation.",
             );
           }
+          if (result.output === null || result.output === undefined) {
+            throw codedError(
+              "tool_mcp_result_invalid",
+              "MCP result did not contain a valid output.",
+            );
+          }
           return {
             toolCallId: invocation.actionId,
             toolName: invocation.actionName,
             status: "succeeded" as const,
             output: result.output,
-            error: null,
             startedAt,
             finishedAt: now(),
             metadata: {

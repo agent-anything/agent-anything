@@ -161,7 +161,6 @@ describe("canonical remote Actions", () => {
         toolName: input.toolName,
         status: "succeeded" as const,
         output: { answer: "remote-ok" },
-        error: null,
         startedAt: NOW,
         finishedAt: NOW,
         metadata: {},

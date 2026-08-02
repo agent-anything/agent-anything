@@ -277,7 +277,9 @@ function toReviewRequest(review: MaterializedPatchReview): HelarcPatchReviewRequ
 
 function observationCode(observation: ControllerInput["context"]["observations"][number] | undefined): string {
   if (observation === undefined) return "patch_action_result_missing";
-  if (observation.kind === "tool_result") return observation.result.error?.code ?? "patch_action_failed";
+  if (observation.kind === "tool_result" && observation.result.status !== "succeeded") {
+    return observation.result.error.code;
+  }
   if (observation.kind === "action_failure") return observation.error.code;
   if (observation.kind === "action_denied" || observation.kind === "action_rejected") return observation.code;
   return "patch_action_failed";
@@ -285,7 +287,9 @@ function observationCode(observation: ControllerInput["context"]["observations"]
 
 function observationMessage(observation: ControllerInput["context"]["observations"][number] | undefined): string {
   if (observation === undefined) return "Patch Action produced no settled result.";
-  if (observation.kind === "tool_result") return observation.result.error?.message ?? "Patch Action failed.";
+  if (observation.kind === "tool_result" && observation.result.status !== "succeeded") {
+    return observation.result.error.message;
+  }
   if (observation.kind === "action_failure") return observation.error.message;
   if (observation.kind === "action_denied" || observation.kind === "action_rejected") return observation.message;
   return "Patch Action failed.";

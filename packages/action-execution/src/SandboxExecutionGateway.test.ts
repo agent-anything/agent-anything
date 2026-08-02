@@ -283,6 +283,125 @@ describe("SandboxExecutionGateway", () => {
     })]);
   });
 
+  it.each(["failed", "timeout"] as const)(
+    "rejects a %s ToolResult that also carries output",
+    async (status) => {
+      const fixture = await createFixture("disabled");
+      const gateway = createGateway(fixture, {
+        executors: [createRawExecutor((_context) => ({
+          status: "executed",
+          toolResult: {
+            ...toolResult("action-1"),
+            status,
+            output: { mustNotExist: true },
+            error: {
+              code: `tool_${status}`,
+              message: `Tool ${status}.`,
+              metadata: {},
+            },
+          },
+        }))],
+      });
+
+      const result = await prepareAndExecute(gateway, dispatchInput(fixture));
+
+      expect(result).toMatchObject({
+        status: "failed",
+        effectState: "unknown",
+        error: {
+          owner: "tool",
+          code: "tool_result_invalid",
+        },
+      });
+    },
+  );
+
+  it("preserves an executor-settled interruption outside ToolResult", async () => {
+    const fixture = await createFixture("disabled");
+    const gateway = createGateway(fixture, {
+      executors: [createRawExecutor((context) => ({
+        status: "interrupted",
+        interruption: {
+          kind: "run_cancellation",
+          cancellation: {
+            runId: context.attempt.runId,
+            requestId: "cancel-1",
+          },
+        },
+      }))],
+    });
+
+    await expect(prepareAndExecute(gateway, dispatchInput(fixture))).resolves.toMatchObject({
+      status: "interrupted",
+      attempt: {
+        runId: "run-1",
+        actionId: "action-1",
+      },
+      interruption: {
+        kind: "run_cancellation",
+        cancellation: {
+          runId: "run-1",
+          requestId: "cancel-1",
+        },
+      },
+    });
+  });
+
+  it("preserves an executor failure with unknown external effect state", async () => {
+    const fixture = await createFixture("disabled");
+    const failure = {
+      code: "tool_settlement_unknown",
+      message: "The executor could not confirm whether the external effect settled.",
+      effectState: "unknown",
+      metadata: { stage: "settlement" },
+    } as const;
+    const gateway = createGateway(fixture, {
+      executors: [createRawExecutor(() => ({
+        status: "failed",
+        failure,
+      }))],
+    });
+
+    const result = await prepareAndExecute(gateway, dispatchInput(fixture));
+
+    expect(result).toMatchObject({
+      status: "failed",
+      effectState: "unknown",
+      error: {
+        owner: "tool",
+        code: "tool_settlement_unknown",
+        metadata: { stage: "settlement" },
+      },
+    });
+    expect(result).not.toHaveProperty("toolResult");
+    if (result.status !== "failed") throw new Error("Expected executor failure.");
+    expect(result.error.metadata).not.toBe(failure.metadata);
+    expect(Object.isFrozen(result.error.metadata)).toBe(true);
+  });
+
+  it("distinguishes a malformed executor result from a malformed ToolResult", async () => {
+    const fixture = await createFixture("disabled");
+    const gateway = createGateway(fixture, {
+      executors: [createRawExecutor(() => ({
+        status: "failed",
+        failure: {
+          code: "tool_failed",
+          message: "Failure metadata is missing.",
+          effectState: "none",
+        },
+      }))],
+    });
+
+    await expect(prepareAndExecute(gateway, dispatchInput(fixture))).resolves.toMatchObject({
+      status: "failed",
+      effectState: "unknown",
+      error: {
+        owner: "tool",
+        code: "tool_executor_result_invalid",
+      },
+    });
+  });
+
   it("requires a local executor only when the selected disabled endpoint dispatches", async () => {
     const fixture = await createFixture("disabled");
     const gateway = createGateway(fixture, { executors: [] });
@@ -439,7 +558,23 @@ function createExecutor(
     descriptor: executorDescriptor,
     async execute(_invocation, context) {
       beforeReturn(context);
-      return toolResult(context.attempt.actionId);
+      return {
+        status: "executed",
+        toolResult: toolResult(context.attempt.actionId),
+      };
+    },
+  };
+}
+
+function createRawExecutor(
+  createResult: (
+    context: Parameters<ActionExecutor["execute"]>[1],
+  ) => unknown,
+): ActionExecutor {
+  return {
+    descriptor: executorDescriptor,
+    async execute(_invocation, context) {
+      return createResult(context) as never;
     },
   };
 }
@@ -495,7 +630,6 @@ function toolResult(actionId: string) {
     toolName: "test.action",
     status: "succeeded" as const,
     output: { ok: true },
-    error: null,
     startedAt: NOW,
     finishedAt: NOW,
     metadata: {},

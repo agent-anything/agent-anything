@@ -51,7 +51,10 @@ export type ProcessExecutionOutcome =
       readonly kind: "cancellation_unconfirmed";
       readonly message: string;
     } & CapturedProcessOutput)
-  | { readonly kind: "failed" };
+  | {
+      readonly kind: "failed";
+      readonly effectState: "none" | "unknown";
+    };
 
 export interface ProcessExecutionDependencies {
   readonly spawnProcess?: (
@@ -95,7 +98,7 @@ export function executeProcess(
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch {
-      resolve({ kind: "failed" });
+      resolve({ kind: "failed", effectState: "none" });
       return;
     }
 
@@ -178,7 +181,7 @@ export function executeProcess(
 
     child.once("error", () => {
       if (terminationCause === null) {
-        finish({ kind: "failed" });
+        finish({ kind: "failed", effectState: "unknown" });
       }
     });
 

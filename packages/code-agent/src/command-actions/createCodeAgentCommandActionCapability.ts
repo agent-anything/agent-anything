@@ -11,6 +11,7 @@ import {
   type ActionExecutor,
   type ActionExecutorContext,
   type ActionExecutorDescriptor,
+  type ActionExecutorResult,
   type CanonicalEnvironmentIdentity,
   type PreparedActionInvocation,
   type SerializableValue,
@@ -346,8 +347,11 @@ function createCommandActionExecutor(
       const startedAt = now();
       const startedMs = nowMs();
       let payload: PreparedCommandInvocationPayload;
+      let processDispatchStarted = false;
       try {
         payload = readPreparedPayload(invocation);
+        const beforeRevalidation = interruptionResult(payload, context, "none");
+        if (beforeRevalidation !== null) return beforeRevalidation;
         if (payload.environmentPolicyId !== environment.id ||
           payload.environmentDigest !== environment.digest) {
           throw new TypeError("Prepared command environment policy changed.");
@@ -361,6 +365,9 @@ function createCommandActionExecutor(
         if (!sameBaseline(executable.identity.baseline, payload.executableBaseline)) {
           throw new TypeError("Command executable changed before dispatch.");
         }
+        const beforeDispatch = interruptionResult(payload, context, "none");
+        if (beforeDispatch !== null) return beforeDispatch;
+        processDispatchStarted = true;
         const outcome = await executeProcess({
           command: payload.executablePath,
           args: payload.args,
@@ -378,15 +385,21 @@ function createCommandActionExecutor(
         return processResult(payload, outcome, context, startedAt, now());
       } catch (error) {
         const candidate = safeReadPayload(invocation);
-        return interruptionResult(candidate, context, startedAt, now()) ?? result(
+        if (processDispatchStarted) {
+          return executionFailed(
+            "command_execution_settlement_unknown",
+            safeMessage(error, "Command execution failed after process dispatch began."),
+            "unknown",
+            commandMetadata(candidate),
+          );
+        }
+        return executed(failedResult(
           candidate,
           context,
           startedAt,
           now(),
-          "failed",
-          null,
           { code: "command_execution_failed", message: safeMessage(error, "Command execution failed.") },
-        );
+        ));
       }
     },
   };
@@ -399,52 +412,92 @@ function processResult(
   context: ActionExecutorContext,
   startedAt: string,
   finishedAt: string,
-): ToolResult {
+): ActionExecutorResult {
   if (outcome.kind === "cancelled_before_start") {
-    return interruptionResult(payload, context, startedAt, finishedAt) ?? result(
-      payload, context, startedAt, finishedAt, "interrupted", null,
-      { code: "tool_cancellation_unconfirmed", message: "Command did not start after an unattributed interruption." },
+    return interruptionResult(payload, context, "none") ?? executionFailed(
+      "tool_cancellation_unconfirmed",
+      "Command did not start after an unattributed interruption.",
+      "none",
+      commandMetadata(payload),
     );
   }
   if (outcome.kind === "failed") {
-    return result(payload, context, startedAt, finishedAt, "failed", null, {
+    if (outcome.effectState === "unknown") {
+      return executionFailed(
+        "command_process_settlement_unknown",
+        "The command process failed without confirmed external-effect settlement.",
+        "unknown",
+        commandMetadata(payload),
+      );
+    }
+    return executed(failedResult(payload, context, startedAt, finishedAt, {
       code: "command_process_start_failed",
       message: "Failed to start or monitor the command process.",
-    });
+    }));
   }
   if (outcome.kind === "timeout") {
-    return result(payload, context, startedAt, finishedAt, "timeout", null, {
-      code: outcome.terminationConfirmed ? "command_timeout" : "command_timeout_termination_unconfirmed",
-      message: outcome.terminationConfirmed
-        ? "Command exceeded the configured timeout."
-        : "Command timed out and process termination could not be confirmed.",
+    if (!outcome.terminationConfirmed) {
+      return executionFailed(
+        "command_timeout_termination_unconfirmed",
+        "Command timed out and process termination could not be confirmed.",
+        "unknown",
+        {
+          ...commandMetadata(payload),
+          durationMs: outcome.durationMs,
+          stdoutTruncated: outcome.stdoutTruncated,
+          stderrTruncated: outcome.stderrTruncated,
+        },
+      );
+    }
+    return executed(timedOutResult(payload, context, startedAt, finishedAt, {
+      code: "command_timeout",
+      message: "Command exceeded the configured timeout.",
       metadata: capturedMetadata(outcome),
-    });
+    }));
   }
   if (outcome.kind === "cancellation_unconfirmed") {
-    return result(payload, context, startedAt, finishedAt, "interrupted", processOutput(
-      payload, outcome, null, null, true, false, "forced", false,
-    ), { code: "tool_cancellation_unconfirmed", message: outcome.message });
+    return executionFailed(
+      "tool_cancellation_unconfirmed",
+      outcome.message,
+      "unknown",
+      {
+        ...commandMetadata(payload),
+        durationMs: outcome.durationMs,
+        stdoutTruncated: outcome.stdoutTruncated,
+        stderrTruncated: outcome.stderrTruncated,
+      },
+    );
   }
   if (outcome.kind === "cancelled") {
     const interruption = context.interruption.interruption;
-    const attributed = interruption?.kind === "run_cancellation";
-    return result(payload, context, startedAt, finishedAt, "interrupted", processOutput(
-      payload, outcome, outcome.exitCode, outcome.signal, true, attributed, outcome.termination, true,
-    ), attributed
-      ? {
-          code: "command_cancelled",
-          message: "Command process was terminated after Run cancellation.",
-          metadata: {
-            runId: interruption.cancellation.runId,
-            requestId: interruption.cancellation.requestId,
-          },
-        }
-      : { code: "tool_cancellation_unconfirmed", message: "Command stopped without trusted Run cancellation attribution." });
+    return interruption === null
+      ? executionFailed(
+          "tool_cancellation_unconfirmed",
+          "Command stopped without trusted interruption attribution.",
+          "unknown",
+          commandMetadata(payload),
+        )
+      : Object.freeze({
+          status: "interrupted" as const,
+          interruption,
+        });
   }
-  return result(payload, context, startedAt, finishedAt, "succeeded", processOutput(
-    payload, outcome, outcome.exitCode, outcome.signal, false, false, null, true,
-  ), null);
+  return executed(succeededResult(
+    payload,
+    context,
+    startedAt,
+    finishedAt,
+    processOutput(
+      payload,
+      outcome,
+      outcome.exitCode,
+      outcome.signal,
+      false,
+      false,
+      null,
+      true,
+    ),
+  ));
 }
 
 function processOutput(
@@ -478,65 +531,119 @@ function processOutput(
     : { ...common, interrupted: false, cancellationAttributed: false, termination: null, settlementConfirmed: true };
 }
 
-function result(
+function succeededResult(
   payload: PreparedCommandInvocationPayload | null,
   context: ActionExecutorContext,
   startedAt: string,
   finishedAt: string,
-  status: ToolResult["status"],
   output: unknown,
-  error: ToolResult["error"],
+): ToolResult {
+  if (output === null || output === undefined) {
+    throw new TypeError("Command Action succeeded without output.");
+  }
+  return {
+    toolCallId: context.attempt.actionId,
+    toolName: payload?.actionName ?? CODE_AGENT_RUN_COMMAND_ACTION,
+    status: "succeeded",
+    output,
+    startedAt,
+    finishedAt,
+    metadata: commandMetadata(payload),
+  };
+}
+
+function failedResult(
+  payload: PreparedCommandInvocationPayload | null,
+  context: ActionExecutorContext,
+  startedAt: string,
+  finishedAt: string,
+  error: Exclude<ToolResult, { readonly status: "succeeded" }>["error"],
 ): ToolResult {
   return {
     toolCallId: context.attempt.actionId,
     toolName: payload?.actionName ?? CODE_AGENT_RUN_COMMAND_ACTION,
-    status,
-    output,
+    status: "failed",
     error,
     startedAt,
     finishedAt,
-    metadata: payload === null ? {} : {
-      rootName: payload.rootName,
-      workspaceId: payload.workspaceId,
-      cwd: payload.cwdDisplay,
-      executable: payload.executablePath,
-      environmentPolicyId: payload.environmentPolicyId,
-    },
+    metadata: commandMetadata(payload),
+  };
+}
+
+function timedOutResult(
+  payload: PreparedCommandInvocationPayload | null,
+  context: ActionExecutorContext,
+  startedAt: string,
+  finishedAt: string,
+  error: Exclude<ToolResult, { readonly status: "succeeded" }>["error"],
+): ToolResult {
+  return {
+    toolCallId: context.attempt.actionId,
+    toolName: payload?.actionName ?? CODE_AGENT_RUN_COMMAND_ACTION,
+    status: "timeout",
+    error,
+    startedAt,
+    finishedAt,
+    metadata: commandMetadata(payload),
   };
 }
 
 function interruptionResult(
   payload: PreparedCommandInvocationPayload | null,
   context: ActionExecutorContext,
-  startedAt: string,
-  finishedAt: string,
-): ToolResult | null {
+  unattributedEffectState: "none" | "unknown",
+): ActionExecutorResult | null {
   if (!context.interruption.signal.aborted) return null;
   const interruption = context.interruption.interruption;
-  if (interruption?.kind === "run_cancellation") {
-    return result(payload, context, startedAt, finishedAt, "cancelled", null, {
-      code: "tool_cancelled",
-      message: "Command was cancelled before process execution.",
-      metadata: {
-        runId: interruption.cancellation.runId,
-        requestId: interruption.cancellation.requestId,
-      },
+  if (interruption !== null && unattributedEffectState === "none") {
+    return Object.freeze({
+      status: "interrupted" as const,
+      interruption,
     });
   }
-  if (interruption?.kind === "operation_deadline") {
-    return result(payload, context, startedAt, finishedAt, "timeout", null, {
-      code: "tool_timeout",
-      message: "Command operation exceeded its invocation deadline.",
-      metadata: {
-        operationId: interruption.deadline.operationId,
-        deadlineAt: interruption.deadline.deadlineAt,
-      },
-    });
-  }
-  return result(payload, context, startedAt, finishedAt, "interrupted", null, {
-    code: "tool_cancellation_unconfirmed",
-    message: "Command was interrupted without trusted attribution.",
+  return executionFailed(
+    interruption === null
+      ? "tool_cancellation_unconfirmed"
+      : "command_interruption_settlement_unknown",
+    interruption === null
+      ? "Command was interrupted without trusted attribution."
+      : "Command interruption could not confirm process settlement.",
+    unattributedEffectState,
+    commandMetadata(payload),
+  );
+}
+
+function executed(toolResult: ToolResult): ActionExecutorResult {
+  return Object.freeze({ status: "executed" as const, toolResult });
+}
+
+function executionFailed(
+  code: string,
+  message: string,
+  effectState: "none" | "unknown",
+  metadata: Readonly<Record<string, unknown>>,
+): ActionExecutorResult {
+  return Object.freeze({
+    status: "failed" as const,
+    failure: Object.freeze({
+      code,
+      message,
+      effectState,
+      metadata: Object.freeze({ ...metadata }),
+    }),
   });
+}
+
+function commandMetadata(
+  payload: PreparedCommandInvocationPayload | null,
+): Readonly<Record<string, unknown>> {
+  return payload === null ? {} : {
+    rootName: payload.rootName,
+    workspaceId: payload.workspaceId,
+    cwd: payload.cwdDisplay,
+    executable: payload.executablePath,
+    environmentPolicyId: payload.environmentPolicyId,
+  };
 }
 
 function readPreparedPayload(invocation: PreparedActionInvocation): PreparedCommandInvocationPayload {

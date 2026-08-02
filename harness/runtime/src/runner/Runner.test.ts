@@ -1617,7 +1617,7 @@ describe("Runner sandbox denial escalation", () => {
     }));
   });
 
-  it.each(["failed", "timeout", "partial", "interrupted"] as const)(
+  it.each(["failed", "timeout", "partial"] as const)(
     "does not treat an ordinary %s ToolResult as sandbox escalation",
     async (toolResultStatus) => {
       const fixture = createEscalatingExternalActionFixture({
@@ -3160,7 +3160,7 @@ function createTestPermissionConfig(
 
 function createExternalActionPipeline(
   policyStatus: "allowed" | "requires_review",
-  toolResultOverride: Partial<Pick<ToolResult, "status" | "output" | "error">> = {},
+  toolResultOverride: Readonly<Record<string, unknown>> = {},
 ) {
   let prepareCallCount = 0;
   let policyCallCount = 0;
@@ -3247,15 +3247,17 @@ function createExternalActionPipeline(
         assertActionExecutorDispatchContext(context);
         executionCallCount += 1;
         return {
-          toolCallId: context.attempt.actionId,
-          toolName: "test.external",
-          status: "succeeded" as const,
-          output: { ok: true },
-          error: null,
-          startedAt: "2026-07-13T00:00:00.000Z",
-          finishedAt: "2026-07-13T00:00:01.000Z",
-          metadata: { invocationContractVersion: invocation.contractVersion },
-          ...toolResultOverride,
+          status: "executed" as const,
+          toolResult: {
+            toolCallId: context.attempt.actionId,
+            toolName: "test.external",
+            status: "succeeded" as const,
+            output: { ok: true },
+            startedAt: "2026-07-13T00:00:00.000Z",
+            finishedAt: "2026-07-13T00:00:01.000Z",
+            metadata: { invocationContractVersion: invocation.contractVersion },
+            ...toolResultOverride,
+          } as ToolResult,
         };
       },
     }],
@@ -3276,7 +3278,7 @@ function createEscalatingExternalActionFixture(
   options: {
     readonly effectState?: "none" | "unknown";
     readonly secondDenial?: boolean;
-    readonly ordinaryToolResultStatus?: "failed" | "timeout" | "partial" | "interrupted";
+    readonly ordinaryToolResultStatus?: "failed" | "timeout" | "partial";
     readonly targetChangesBeforeEscalation?: boolean;
     readonly denyEscalatedPolicy?: boolean;
     readonly onReconcile?: () => void;
@@ -3402,18 +3404,7 @@ function createEscalatingExternalActionFixture(
         const status = options.ordinaryToolResultStatus;
         return {
           status: "executed",
-          toolResult: {
-            toolCallId: request.attempt.actionId,
-            toolName: "test.external",
-            status,
-            output: status === "partial" || status === "interrupted"
-              ? { usable: true }
-              : null,
-            error: { code: `tool_test_${status}`, message: `Expected test ${status}.` },
-            startedAt: "2026-07-13T00:00:00.000Z",
-            finishedAt: "2026-07-13T00:00:01.000Z",
-            metadata: {},
-          },
+          toolResult: ordinaryToolResult(request.attempt.actionId, status),
           enforcementEvidence: {
             providerId: "test.sandbox.provider",
             providerVersion: "1",
@@ -3451,7 +3442,6 @@ function createEscalatingExternalActionFixture(
           toolName: "test.external",
           status: "succeeded",
           output: { connected: true },
-          error: null,
           startedAt: "2026-07-13T00:00:00.000Z",
           finishedAt: "2026-07-13T00:00:01.000Z",
           metadata: {},
@@ -3484,6 +3474,32 @@ function createEscalatingExternalActionFixture(
     reconciliationCalls: () => reconciliationCallCount,
     revalidationCalls: () => revalidationCallCount,
   };
+}
+
+function ordinaryToolResult(
+  actionId: string,
+  status: "failed" | "timeout" | "partial",
+): ToolResult {
+  const base = {
+    toolCallId: actionId,
+    toolName: "test.external",
+    startedAt: "2026-07-13T00:00:00.000Z",
+    finishedAt: "2026-07-13T00:00:01.000Z",
+    metadata: {},
+  };
+  const error = {
+    code: `tool_test_${status}`,
+    message: `Expected test ${status}.`,
+  };
+  return status === "partial"
+    ? {
+        ...base,
+        status,
+        output: { usable: true },
+        outputUsability: "validated",
+        error,
+      }
+    : { ...base, status, error };
 }
 
 function externalActionContext(): NonNullable<RunConfig["actionContext"]> {

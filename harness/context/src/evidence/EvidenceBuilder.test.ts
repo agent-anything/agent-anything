@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ToolResult } from "@agent-anything/tools";
-import { EvidenceBuilder } from "./EvidenceBuilder.js";
+import {
+  EvidenceBuilder,
+  type EvidenceEligibleToolResult,
+} from "./EvidenceBuilder.js";
 
 describe("EvidenceBuilder", () => {
   it("builds evidence from a successful tool result", () => {
@@ -25,7 +28,7 @@ describe("EvidenceBuilder", () => {
         content: {
           records: ["93.184.216.34"],
         },
-        sensitivity: "public",
+        sensitivity: "restricted",
         metadata: {
           createdFrom: "tool_call_001",
         },
@@ -45,34 +48,11 @@ describe("EvidenceBuilder", () => {
     });
   });
 
-  it("does not create misleading evidence for unusable tool results", () => {
-    const builder = new EvidenceBuilder();
-
-    for (const status of ["failed", "cancelled", "timeout", "skipped"] as const) {
-      const evidence = builder.buildFromToolResult({
-        toolResult: {
-          ...createSuccessfulToolResult(),
-          status,
-          output: null,
-          error: {
-            code: `${status}_tool`,
-            message: `Tool ${status}.`,
-          },
-        },
-      });
-
-      expect(evidence).toEqual([]);
-    }
-  });
-
-  it("builds evidence from partial tool results with usable output", () => {
+  it("builds Evidence from partial results only with a usability attestation", () => {
     const builder = new EvidenceBuilder();
 
     const [evidence] = builder.buildFromToolResult({
-      toolResult: {
-        ...createSuccessfulToolResult(),
-        status: "partial",
-      },
+      toolResult: createPartialToolResult(),
     });
 
     expect(evidence).toMatchObject({
@@ -83,7 +63,7 @@ describe("EvidenceBuilder", () => {
     });
   });
 
-  it("marks sensitivity from tool result metadata", () => {
+  it("does not trust sensitivity-like ToolResult metadata", () => {
     const builder = new EvidenceBuilder();
 
     const [evidence] = builder.buildFromToolResult({
@@ -95,7 +75,31 @@ describe("EvidenceBuilder", () => {
       },
     });
 
+    expect(evidence?.sensitivity).toBe("restricted");
+  });
+
+  it("accepts an explicit trusted sensitivity classification", () => {
+    const builder = new EvidenceBuilder();
+
+    const [evidence] = builder.buildFromToolResult({
+      toolResult: createSuccessfulToolResult(),
+      sensitivity: "public",
+    });
+
+    expect(evidence?.sensitivity).toBe("public");
+  });
+
+  it("supports an explicit conservative unclassified-material policy", () => {
+    const builder = new EvidenceBuilder({ unclassifiedSensitivity: "private" });
+
+    const [evidence] = builder.buildFromToolResult({
+      toolResult: createSuccessfulToolResult(),
+    });
+
     expect(evidence?.sensitivity).toBe("private");
+    expect(() => new EvidenceBuilder({
+      unclassifiedSensitivity: "public",
+    } as never)).toThrow(/conservative/);
   });
 
   it("produces stable evidence references", () => {
@@ -117,7 +121,27 @@ function createSuccessfulToolResult(): ToolResult {
     output: {
       records: ["93.184.216.34"],
     },
-    error: null,
+    startedAt: "2026-06-04T00:00:00.000Z",
+    finishedAt: "2026-06-04T00:00:01.000Z",
+    metadata: {
+      adapter: "fake",
+    },
+  };
+}
+
+function createPartialToolResult(): EvidenceEligibleToolResult {
+  return {
+    toolCallId: "tool_call_001",
+    toolName: "net.lookupDns",
+    status: "partial",
+    output: {
+      records: ["93.184.216.34"],
+    },
+    outputUsability: "validated",
+    error: {
+      code: "tool_output_incomplete",
+      message: "The Tool retained a validated result prefix.",
+    },
     startedAt: "2026-06-04T00:00:00.000Z",
     finishedAt: "2026-06-04T00:00:01.000Z",
     metadata: {

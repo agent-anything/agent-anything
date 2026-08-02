@@ -1,6 +1,8 @@
 import type {
   InvocationInterruptionContext,
+  InvocationInterruptionRef,
   ISODateTimeString,
+  Metadata,
 } from "@agent-anything/foundation";
 import type { ToolResult } from "@agent-anything/tools";
 import type { ActionExecutorDescriptor } from "./ActionRegistration.js";
@@ -33,6 +35,27 @@ export interface ActionExecutorContext {
   readonly dispatchPermit: ActionExecutorDispatchPermit;
 }
 
+export interface ActionExecutorFailure {
+  readonly code: string;
+  readonly message: string;
+  readonly effectState: "none" | "unknown";
+  readonly metadata: Readonly<Metadata>;
+}
+
+export type ActionExecutorResult =
+  | {
+      readonly status: "executed";
+      readonly toolResult: ToolResult;
+    }
+  | {
+      readonly status: "interrupted";
+      readonly interruption: InvocationInterruptionRef;
+    }
+  | {
+      readonly status: "failed";
+      readonly failure: ActionExecutorFailure;
+    };
+
 export interface ActionExecutor<
   TInvocation extends PreparedActionInvocation = PreparedActionInvocation,
 > {
@@ -41,7 +64,7 @@ export interface ActionExecutor<
   execute(
     invocation: TInvocation,
     context: ActionExecutorContext,
-  ): Promise<ToolResult>;
+  ): Promise<ActionExecutorResult>;
 }
 
 export function assertActionExecutorDispatchContext(

@@ -10,6 +10,7 @@ import {
   type ActionExecutor,
   type ActionExecutorContext,
   type ActionExecutorDescriptor,
+  type ActionExecutorResult,
   type PreparedActionInvocation,
   type SerializableValue,
   type TargetStateAssertion,
@@ -228,9 +229,10 @@ function createRemoteActionExecutor(
       assertActionExecutorDispatchContext(context);
       const startedAt = now();
       let payload: PreparedRemoteActionInvocationPayload;
+      let dispatched = false;
       try {
         payload = readPayload(invocation);
-        const beforeCall = interruptionResult(payload, context, startedAt, now());
+        const beforeCall = interruptionResult(payload, context, "none");
         if (beforeCall !== null) return beforeCall;
         const current = await resolveCurrent(resolver, payload.serverId, payload.toolName);
         if (!sameAuthorityRegistration(current, expected) ||
@@ -240,6 +242,9 @@ function createRemoteActionExecutor(
             "Remote Action registration changed before dispatch.",
           );
         }
+        const beforeDispatch = interruptionResult(payload, context, "none");
+        if (beforeDispatch !== null) return beforeDispatch;
+        dispatched = true;
         const result = await invokePort.invoke({
           actionId: context.attempt.actionId,
           actionName: payload.actionName,
@@ -254,16 +259,24 @@ function createRemoteActionExecutor(
             "Remote Action result did not match the authorized Action.",
           );
         }
-        return result;
+        return executed(result);
       } catch (error) {
         const candidate = safeReadPayload(invocation);
-        return interruptionResult(candidate, context, startedAt, now()) ?? failedResult(
+        if (dispatched) {
+          return executionFailed(
+            errorCode(error),
+            error instanceof Error ? error.message : "Remote Action execution failed.",
+            "unknown",
+            remoteMetadata(candidate),
+          );
+        }
+        return executed(failedResult(
           candidate,
           context,
           startedAt,
           now(),
           error,
-        );
+        ));
       }
     },
   };
@@ -419,17 +432,11 @@ function failedResult(
   finishedAt: string,
   error: unknown,
 ): ToolResult {
-  const code = error instanceof RemoteActionError
-    ? error.code
-    : error !== null && typeof error === "object" && "code" in error &&
-        typeof (error as { code?: unknown }).code === "string"
-      ? (error as { code: string }).code
-      : "tool_remote_execution_failed";
+  const code = errorCode(error);
   return {
     toolCallId: context.attempt.actionId,
     toolName: payload?.actionName ?? "remote.action",
-    status: code === "tool_timeout" ? "timeout" : "failed",
-    output: null,
+    status: "failed",
     error: {
       code,
       message: error instanceof Error ? error.message : "Remote Action execution failed.",
@@ -446,47 +453,60 @@ function failedResult(
 function interruptionResult(
   payload: PreparedRemoteActionInvocationPayload | null,
   context: ActionExecutorContext,
-  startedAt: string,
-  finishedAt: string,
-): ToolResult | null {
+  unattributedEffectState: "none" | "unknown",
+): ActionExecutorResult | null {
   if (!context.interruption.signal.aborted) return null;
   const interruption = context.interruption.interruption;
-  const base = {
-    toolCallId: context.attempt.actionId,
-    toolName: payload?.actionName ?? "remote.action",
-    output: null,
-    startedAt,
-    finishedAt,
-    metadata: {},
-  };
-  if (interruption?.kind === "run_cancellation") {
-    return {
-      ...base,
-      status: "cancelled",
-      error: {
-        code: "tool_cancelled",
-        message: "Remote Action was cancelled before dispatch.",
-        metadata: {
-          runId: interruption.cancellation.runId,
-          requestId: interruption.cancellation.requestId,
-        },
-      },
-    };
+  if (interruption !== null) {
+    return Object.freeze({
+      status: "interrupted" as const,
+      interruption,
+    });
   }
-  if (interruption?.kind === "operation_deadline") {
-    return {
-      ...base,
-      status: "timeout",
-      error: { code: "tool_timeout", message: "Remote Action exceeded its invocation deadline." },
-    };
-  }
-  return {
-    ...base,
-    status: "interrupted",
-    error: {
-      code: "tool_cancellation_unconfirmed",
-      message: "Remote Action was interrupted without trusted attribution.",
-    },
+  return executionFailed(
+    "tool_cancellation_unconfirmed",
+    "Remote Action was interrupted without trusted attribution.",
+    unattributedEffectState,
+    remoteMetadata(payload),
+  );
+}
+
+function executed(toolResult: ToolResult): ActionExecutorResult {
+  return Object.freeze({ status: "executed" as const, toolResult });
+}
+
+function executionFailed(
+  code: string,
+  message: string,
+  effectState: "none" | "unknown",
+  metadata: Readonly<Record<string, unknown>>,
+): ActionExecutorResult {
+  return Object.freeze({
+    status: "failed" as const,
+    failure: Object.freeze({
+      code,
+      message,
+      effectState,
+      metadata: Object.freeze({ ...metadata }),
+    }),
+  });
+}
+
+function errorCode(error: unknown): string {
+  return error instanceof RemoteActionError
+    ? error.code
+    : error !== null && typeof error === "object" && "code" in error &&
+        typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : "tool_remote_execution_failed";
+}
+
+function remoteMetadata(
+  payload: PreparedRemoteActionInvocationPayload | null,
+): Readonly<Record<string, unknown>> {
+  return payload === null ? {} : {
+    remoteServerId: payload.serverId,
+    remoteToolName: payload.toolName,
   };
 }
 

@@ -170,7 +170,12 @@ export type ActionExecutionResult =
       readonly attempt: SandboxAttempt | null;
       readonly interruption: InvocationInterruptionRef;
     }
-  | { readonly status: "failed"; readonly attempt: SandboxAttempt | null; readonly error: RuntimeError };
+  | {
+      readonly status: "failed";
+      readonly attempt: SandboxAttempt | null;
+      readonly effectState: "none" | "unknown";
+      readonly error: RuntimeError;
+    };
 
 export interface SandboxExecutionGateway {
   prepare(input: DispatchSandboxActionInput): Promise<SandboxDispatchPreparationResult>;
