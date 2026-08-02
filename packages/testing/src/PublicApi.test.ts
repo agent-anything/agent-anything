@@ -6,6 +6,7 @@ describe("Testing public API", () => {
     expect(Object.keys(api).sort()).toEqual([
       "FakeApprovalReviewer",
       "FakeAuditPort",
+      "FakeEvidencePersistencePort",
       "FakeProvider",
       "FakeTelemetryPort",
     ]);

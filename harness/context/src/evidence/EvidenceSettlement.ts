@@ -1,8 +1,13 @@
-import type { Evidence, EvidenceBuilderPort } from "@agent-anything/evidence";
 import type { ArtifactRef, EvidenceRef, Metadata } from "@agent-anything/foundation";
-import type { StoragePort } from "@agent-anything/storage";
 import type { ToolResult } from "@agent-anything/tools";
 import type { RuntimeError } from "@agent-anything/foundation";
+import type { Evidence } from "./Evidence.js";
+import type { EvidenceBuilderPort } from "./EvidenceBuilder.js";
+import type {
+  EvidencePersistenceError,
+  EvidencePersistencePort,
+  StoredEvidenceArtifact,
+} from "../persistence/index.js";
 
 export interface ValidToolResultClassification {
   readonly status: "valid";
@@ -59,7 +64,7 @@ export async function settleToolResultEvidence(input: {
   readonly toolResult: ToolResult;
   readonly classification: ValidToolResultClassification;
   readonly evidenceBuilder: EvidenceBuilderPort;
-  readonly storage: StoragePort;
+  readonly persistence: EvidencePersistencePort;
   readonly isInterrupted: () => boolean;
 }): Promise<EvidenceSettlementResult> {
   if (!input.classification.createEvidence || input.isInterrupted()) {
@@ -82,23 +87,31 @@ export async function settleToolResultEvidence(input: {
     );
   }
 
-  const evidenceRefs = Object.freeze(evidence.map((item) => item.id));
+  const evidenceRefs: EvidenceRef[] = [];
   const artifactRefs: ArtifactRef[] = [];
   for (const item of evidence) {
     if (input.isInterrupted()) {
       return settled("interrupted", evidenceRefs, artifactRefs);
     }
     try {
-      const artifact = await input.storage.storeEvidence(item);
-      if (typeof artifact?.id !== "string" || artifact.id.length === 0) {
-        throw new TypeError("StoragePort returned an invalid StoredArtifact id.");
+      const result = await input.persistence.persistEvidence(item);
+      if (result.status === "failed") {
+        return persistenceFailed(
+          input.actionId,
+          item.id,
+          result.error,
+          evidenceRefs,
+          artifactRefs,
+        );
       }
-      artifactRefs.push(artifact.id);
+      const stored = snapshotStoredEvidenceArtifact(result.artifact, item.id);
+      evidenceRefs.push(stored.evidenceRef);
+      artifactRefs.push(stored.artifactRef);
     } catch (error) {
       return failed(
         "storage",
         "storage_write_failed",
-        error instanceof Error ? error.message : "Failed to store Evidence.",
+        error instanceof Error ? error.message : "Failed to persist Evidence.",
         { actionId: input.actionId, evidenceId: item.id },
         evidenceRefs,
         artifactRefs,
@@ -107,6 +120,77 @@ export async function settleToolResultEvidence(input: {
   }
 
   return settled(input.isInterrupted() ? "interrupted" : "settled", evidenceRefs, artifactRefs);
+}
+
+function persistenceFailed(
+  actionId: string,
+  evidenceId: string,
+  error: EvidencePersistenceError,
+  evidenceRefs: readonly EvidenceRef[],
+  artifactRefs: readonly ArtifactRef[],
+): EvidenceSettlementResult {
+  if (
+    error === null ||
+    typeof error !== "object" ||
+    typeof error.code !== "string" ||
+    error.code.length === 0 ||
+    typeof error.message !== "string" ||
+    typeof error.retryable !== "boolean" ||
+    error.metadata === null ||
+    typeof error.metadata !== "object"
+  ) {
+    return failed(
+      "storage",
+      "storage_write_failed",
+      "EvidencePersistencePort returned an invalid failure.",
+      { actionId, evidenceId },
+      evidenceRefs,
+      artifactRefs,
+    );
+  }
+
+  return failed(
+    "storage",
+    "storage_write_failed",
+    error.message,
+    {
+      ...error.metadata,
+      actionId,
+      evidenceId,
+      persistenceCode: error.code,
+      persistenceRetryable: error.retryable,
+    },
+    evidenceRefs,
+    artifactRefs,
+  );
+}
+
+function snapshotStoredEvidenceArtifact(
+  candidate: StoredEvidenceArtifact,
+  evidenceId: string,
+): StoredEvidenceArtifact {
+  if (
+    candidate === null ||
+    typeof candidate !== "object" ||
+    typeof candidate.storageId !== "string" ||
+    candidate.storageId.length === 0 ||
+    candidate.evidenceRef !== evidenceId ||
+    typeof candidate.artifactRef !== "string" ||
+    candidate.artifactRef.length === 0 ||
+    typeof candidate.createdAt !== "string" ||
+    candidate.createdAt.length === 0 ||
+    candidate.metadata === null ||
+    typeof candidate.metadata !== "object"
+  ) {
+    throw new TypeError(
+      "EvidencePersistencePort returned an invalid or uncorrelated StoredEvidenceArtifact.",
+    );
+  }
+
+  return Object.freeze({
+    ...candidate,
+    metadata: Object.freeze({ ...candidate.metadata }),
+  });
 }
 
 function valid(

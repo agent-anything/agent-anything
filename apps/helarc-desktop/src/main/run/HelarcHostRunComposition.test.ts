@@ -1,7 +1,7 @@
 import {
   createRunCancellationController,
 } from "@agent-anything/runtime/run";
-import type { ContextProjection } from "@agent-anything/agent-core/context";
+import type { ContextProjection } from "@agent-anything/context/context";
 import {
   createStaticHostIdentityResolver,
   createStaticHostWorkspaceResolver,

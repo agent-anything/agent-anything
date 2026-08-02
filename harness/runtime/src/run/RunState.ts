@@ -8,7 +8,7 @@ import type {
   RunWorkspace,
   RuntimeError,
 } from "@agent-anything/foundation";
-import type { Context } from "@agent-anything/agent-core/context";
+import type { Context } from "@agent-anything/context/context";
 import type { Plan } from "../plan/index.js";
 import type { RunCancellationRequest } from "./RunCancellation.js";
 import type { RunItem } from "./RunItem.js";

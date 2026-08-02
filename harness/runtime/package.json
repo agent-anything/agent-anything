@@ -38,13 +38,12 @@
   "dependencies": {
     "@agent-anything/action-execution": "workspace:*",
     "@agent-anything/agent-core": "workspace:*",
-    "@agent-anything/evidence": "workspace:*",
+    "@agent-anything/context": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/observability": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/model-interaction": "workspace:*",
     "@agent-anything/foundation": "workspace:*",
-    "@agent-anything/storage": "workspace:*",
     "@agent-anything/tools": "workspace:*"
   },
   "devDependencies": {

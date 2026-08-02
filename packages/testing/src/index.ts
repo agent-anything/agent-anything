@@ -12,3 +12,7 @@ export {
   FakeTelemetryPort,
   type FakeTelemetryPortHandler,
 } from "./FakeTelemetryPort.js";
+export {
+  FakeEvidencePersistencePort,
+  type FakeEvidencePersistenceHandler,
+} from "./FakeEvidencePersistencePort.js";

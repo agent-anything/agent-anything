@@ -2,7 +2,7 @@ import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
 import type { Action, RuntimeError } from "@agent-anything/foundation";
 import type { ControllerModelItem } from "../controller/Controller.js";
 import type { PlanProjection } from "../plan/index.js";
-import type { Observation } from "@agent-anything/agent-core/context";
+import type { Observation } from "@agent-anything/context/observation";
 import type { RunCancellationSummary } from "./RunCancellation.js";
 import type { RunBlockedCode, RunFailureCode } from "@agent-anything/foundation/result";
 import type { ApprovalsReviewer } from "@agent-anything/permission";

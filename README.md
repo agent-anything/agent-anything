@@ -10,7 +10,7 @@ initial code-agent desktop stage.
 
 ## Current State
 
-- The repository is split into seventeen focused workspaces with executable dependency,
+- The repository is split into sixteen focused workspaces with executable dependency,
   source, and public API checks.
 - `foundation` provides dependency-free Agent, Task, Run, Workspace, Identity,
   Action, Observation, Artifact, interaction, result, and technical Contracts.
@@ -18,8 +18,10 @@ initial code-agent desktop stage.
   interruption, and Retry-scheduler ownership Contracts.
 - `runtime` owns the authoritative Runner, Agent Loop, Controller, RunState,
   planning, cancellation, Retry coordination, limits, and terminalization.
-- `agent-core` is temporarily limited to Context and RuntimeEvent Contracts
-  awaiting their dedicated Harness package moves.
+- `context` owns active Context transitions, Observations, Evidence, and
+  owner-defined Evidence persistence.
+- `agent-core` is temporarily limited to RuntimeEvent Contracts awaiting their
+  Observability package move.
 - `action-execution` provides the trusted Action preparation, assessment,
   revalidation, and Sandbox dispatch path.
 - `host` provides product-neutral active Run integration, safe projections,
@@ -73,18 +75,17 @@ Current Helarc capabilities include:
 agent-anything/
   harness/
     foundation/       Dependency-free Harness contracts and semantics
+    context/          Context, Observation, Evidence, and persistence contracts
     model-interaction/ Provider-neutral model invocation contracts
     runtime/          Runner, Agent Loop, Controller, Plan, Retry, Run lifecycle
   packages/
     tools/           Declarative Tool catalog and result contracts
-    evidence/        Evidence contracts and builders
     permission/      Permission profiles, approvals, and authority contracts
     governance/      Policy, workspace, and identity context
     observability/   Audit, telemetry, and redaction contracts
-    storage/         Storage port contracts
     testing/         Lower-level test fakes
     extensions/      MCP, plugins, remote tools, and extension points
-    agent-core/      Transitional Context and RuntimeEvent contracts
+    agent-core/      Transitional RuntimeEvent contracts
     action-execution/ Trusted Action preparation and Sandbox dispatch
     host/            Host runtime integration, safe projections, approval bridges
     code-agent/      Code-oriented tools and workflows
@@ -105,9 +106,11 @@ Reusable Harness packages are designed to point inward:
 - `foundation` is dependency-free with respect to higher Harness components and
   Products.
 - `model-interaction` owns Provider-neutral invocation semantics.
+- `context` owns Context, Observation, Evidence, and narrow Evidence
+  persistence semantics without becoming a general storage facade.
 - `runtime` owns authoritative Run advancement and coordinates other components
   through their public Contracts.
-- `agent-core` currently exposes only Context and RuntimeEvent subpaths.
+- `agent-core` currently exposes only RuntimeEvent semantics.
 - `action-execution` owns canonical Action preparation, policy and authority
   assessment, revalidation, and the mandatory Sandbox execution gateway.
 - `host` adapts authoritative Runner execution to product-neutral application hosts.

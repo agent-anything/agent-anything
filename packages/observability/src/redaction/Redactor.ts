@@ -1,4 +1,4 @@
-import type { EvidenceSensitivity } from "@agent-anything/evidence";
+import type { EvidenceSensitivity } from "@agent-anything/context/evidence";
 import type { Metadata } from "@agent-anything/foundation";
 import { defaultRedactionRules } from "./defaultRules.js";
 import type { Redaction, RedactionResult } from "./RedactionResult.js";

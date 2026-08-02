@@ -6,8 +6,7 @@ import type {
   TelemetryRecord,
 } from "@agent-anything/observability";
 import type { ToolResult } from "@agent-anything/tools";
-import { EvidenceBuilder } from "@agent-anything/evidence";
-import { InMemoryStorage } from "@agent-anything/storage";
+import { EvidenceBuilder } from "@agent-anything/context/evidence";
 import type { Agent } from "@agent-anything/foundation/agent";
 import type { RunInput } from "@agent-anything/foundation/run";
 import {
@@ -44,7 +43,10 @@ import {
   type SandboxProvider,
 } from "@agent-anything/action-execution";
 import type { ResolvedRunPermissionConfig } from "@agent-anything/runtime/run";
-import { FakeApprovalReviewer } from "@agent-anything/testing";
+import {
+  FakeApprovalReviewer,
+  FakeEvidencePersistencePort,
+} from "@agent-anything/testing";
 import type {
   AdditionalPermissions,
   ApprovalReviewInput,
@@ -2843,7 +2845,7 @@ describe("Runner external Action result settlement", () => {
     ]));
   });
 
-  it("preserves the settled ToolResult and Evidence refs when Storage fails", async () => {
+  it("preserves the settled ToolResult without publishing unconfirmed Evidence refs", async () => {
     const fixture = createExternalActionPipeline("allowed");
     const result = await createRunner(new ScriptedController([
       actionsDecision([{
@@ -2855,11 +2857,15 @@ describe("Runner external Action result settlement", () => {
     ]), {
       actionEnforcementPipeline: fixture.pipeline,
       sandboxExecutionGateway: fixture.gateway,
-      evidenceStorage: {
-        async storeEvidence() {
-          throw new Error("Storage unavailable.");
+      evidencePersistence: new FakeEvidencePersistencePort(() => ({
+        status: "failed",
+        error: {
+          code: "evidence_store_unavailable",
+          message: "Evidence persistence is unavailable.",
+          retryable: true,
+          metadata: {},
         },
-      },
+      })),
     }).run(
       createAgent(),
       createRunInput(),
@@ -2876,7 +2882,7 @@ describe("Runner external Action result settlement", () => {
       code: "storage_write_failed",
       errors: [{ owner: "storage", code: "storage_write_failed" }],
     });
-    expect(result.evidenceRefs).toHaveLength(1);
+    expect(result.evidenceRefs).toEqual([]);
     expect(result.artifactRefs).toEqual([]);
     expect(result.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "sandbox_attempt_resolved" }),
@@ -2896,7 +2902,7 @@ describe("Runner external Action result settlement", () => {
       controller: new ScriptedController([finalDecision("unused")]),
       actionEnforcementPipeline: fixture.pipeline,
       sandboxExecutionGateway: fixture.gateway,
-      evidenceStorage: new InMemoryStorage(),
+      evidencePersistence: new FakeEvidencePersistencePort(),
       now: () => "2026-07-13T00:00:00.000Z",
     });
     const result = await runner.run(
@@ -2965,7 +2971,7 @@ function createRunner(
     ? {}
     : {
         evidenceBuilder: new EvidenceBuilder(),
-        evidenceStorage: new InMemoryStorage(),
+        evidencePersistence: new FakeEvidencePersistencePort(),
       };
   return new Runner({
     controller,

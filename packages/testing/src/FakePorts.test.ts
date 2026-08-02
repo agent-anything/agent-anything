@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FakeAuditPort } from "./FakeAuditPort.js";
+import { FakeEvidencePersistencePort } from "./FakeEvidencePersistencePort.js";
 import { FakeTelemetryPort } from "./FakeTelemetryPort.js";
 
 describe("testing fake ports", () => {
@@ -32,5 +33,31 @@ describe("testing fake ports", () => {
 
     expect(auditPort.records).toHaveLength(1);
     expect(telemetryPort.records).toHaveLength(1);
+  });
+
+  it("returns a correlated durable Evidence receipt", async () => {
+    const persistence = new FakeEvidencePersistencePort();
+
+    const result = await persistence.persistEvidence({
+      id: "evidence_001",
+      source: {
+        kind: "toolResult",
+        toolCallId: "call_001",
+        toolName: "test.read",
+      },
+      summary: "Evidence",
+      content: { value: 1 },
+      sensitivity: "private",
+      metadata: {},
+    });
+
+    expect(result).toMatchObject({
+      status: "stored",
+      artifact: {
+        evidenceRef: "evidence_001",
+        artifactRef: "memory://evidence/evidence_001",
+      },
+    });
+    expect(persistence.evidence).toHaveLength(1);
   });
 });

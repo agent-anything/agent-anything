@@ -25,10 +25,10 @@ import type {
 import type { ControllerDecision } from "@agent-anything/runtime/controller";
 import { createRunCancellationController } from "@agent-anything/runtime/run";
 import { Runner, type RunConfig } from "@agent-anything/runtime";
-import { EvidenceBuilder } from "@agent-anything/evidence";
+import { EvidenceBuilder } from "@agent-anything/context/evidence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
-import { InMemoryStorage } from "@agent-anything/storage";
+import { FakeEvidencePersistencePort } from "@agent-anything/testing";
 import type { ToolCatalogSnapshot } from "@agent-anything/tools";
 import { describe, expect, it } from "vitest";
 import { acceptPatch, createPatchProposal } from "../patch/index.js";
@@ -274,7 +274,7 @@ async function runFileAction(
     actionEnforcementPipeline: pipeline,
     sandboxExecutionGateway: gateway,
     evidenceBuilder: new EvidenceBuilder(),
-    evidenceStorage: new InMemoryStorage(),
+    evidencePersistence: new FakeEvidencePersistencePort(),
     now: () => NOW,
   });
   return runner.run(

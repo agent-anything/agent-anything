@@ -1,7 +1,7 @@
-import type { EvidenceBuilderPort } from "@agent-anything/evidence";
+import type { EvidenceBuilderPort } from "@agent-anything/context/evidence";
+import type { EvidencePersistencePort } from "@agent-anything/context/persistence";
 import type { AuditPort, TelemetryPort } from "@agent-anything/observability";
 import type { ISODateTimeString } from "@agent-anything/foundation";
-import type { StoragePort } from "@agent-anything/storage";
 import type {
   ActionEnforcementPipeline,
   SandboxExecutionGateway,
@@ -40,7 +40,7 @@ export interface RunnerDependencies {
   readonly actionEnforcementPipeline?: ActionEnforcementPipeline;
   readonly sandboxExecutionGateway?: SandboxExecutionGateway;
   readonly evidenceBuilder?: EvidenceBuilderPort;
-  readonly evidenceStorage?: StoragePort;
+  readonly evidencePersistence?: EvidencePersistencePort;
   readonly retryExecutor?: RetryExecutor;
   readonly now?: () => ISODateTimeString;
   readonly createId?: CreateRunnerIdentity;

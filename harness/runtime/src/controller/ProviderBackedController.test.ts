@@ -7,7 +7,7 @@ import type {
 } from "@agent-anything/model-interaction";
 import { FakeProvider } from "@agent-anything/testing";
 import type { Agent } from "@agent-anything/foundation/agent";
-import { projectContext, createInitialContext } from "@agent-anything/agent-core/context";
+import { projectContext, createInitialContext } from "@agent-anything/context/context";
 import { createRunCancellationController } from "@agent-anything/runtime/run";
 import type { AgentTask } from "@agent-anything/foundation/task";
 import type {

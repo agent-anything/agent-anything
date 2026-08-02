@@ -44,10 +44,10 @@
     "@agent-anything/tools": "workspace:*"
   },
   "devDependencies": {
+    "@agent-anything/context": "workspace:*",
     "@agent-anything/runtime": "workspace:*",
-    "@agent-anything/evidence": "workspace:*",
     "@agent-anything/permission": "workspace:*",
-    "@agent-anything/storage": "workspace:*",
+    "@agent-anything/testing": "workspace:*",
     "@types/node": "^25.9.1"
   }
 }

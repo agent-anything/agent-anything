@@ -26,9 +26,9 @@ importers:
       '@agent-anything/code-agent':
         specifier: workspace:*
         version: link:../../packages/code-agent
-      '@agent-anything/evidence':
+      '@agent-anything/context':
         specifier: workspace:*
-        version: link:../../packages/evidence
+        version: link:../../harness/context
       '@agent-anything/foundation':
         specifier: workspace:*
         version: link:../../harness/foundation
@@ -50,9 +50,6 @@ importers:
       '@agent-anything/runtime':
         specifier: workspace:*
         version: link:../../harness/runtime
-      '@agent-anything/storage':
-        specifier: workspace:*
-        version: link:../../packages/storage
       lucide-react:
         specifier: ^1.21.0
         version: 1.21.0(react@19.2.7)
@@ -82,6 +79,18 @@ importers:
         specifier: ^8.0.16
         version: 8.0.16(@types/node@25.9.1)(esbuild@0.28.0)
 
+  harness/context:
+    dependencies:
+      '@agent-anything/foundation':
+        specifier: workspace:*
+        version: link:../foundation
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../../packages/permission
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
+
   harness/foundation: {}
 
   harness/model-interaction:
@@ -98,9 +107,9 @@ importers:
       '@agent-anything/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
-      '@agent-anything/evidence':
+      '@agent-anything/context':
         specifier: workspace:*
-        version: link:../../packages/evidence
+        version: link:../context
       '@agent-anything/foundation':
         specifier: workspace:*
         version: link:../foundation
@@ -116,9 +125,6 @@ importers:
       '@agent-anything/permission':
         specifier: workspace:*
         version: link:../../packages/permission
-      '@agent-anything/storage':
-        specifier: workspace:*
-        version: link:../../packages/storage
       '@agent-anything/tools':
         specifier: workspace:*
         version: link:../../packages/tools
@@ -147,12 +153,6 @@ importers:
       '@agent-anything/foundation':
         specifier: workspace:*
         version: link:../../harness/foundation
-      '@agent-anything/permission':
-        specifier: workspace:*
-        version: link:../permission
-      '@agent-anything/tools':
-        specifier: workspace:*
-        version: link:../tools
     devDependencies:
       '@agent-anything/testing':
         specifier: workspace:*
@@ -173,30 +173,21 @@ importers:
         specifier: workspace:*
         version: link:../tools
     devDependencies:
-      '@agent-anything/evidence':
+      '@agent-anything/context':
         specifier: workspace:*
-        version: link:../evidence
+        version: link:../../harness/context
       '@agent-anything/permission':
         specifier: workspace:*
         version: link:../permission
       '@agent-anything/runtime':
         specifier: workspace:*
         version: link:../../harness/runtime
-      '@agent-anything/storage':
+      '@agent-anything/testing':
         specifier: workspace:*
-        version: link:../storage
+        version: link:../testing
       '@types/node':
         specifier: ^25.9.1
         version: 25.9.1
-
-  packages/evidence:
-    dependencies:
-      '@agent-anything/foundation':
-        specifier: workspace:*
-        version: link:../../harness/foundation
-      '@agent-anything/tools':
-        specifier: workspace:*
-        version: link:../tools
 
   packages/extensions:
     dependencies:
@@ -210,9 +201,9 @@ importers:
         specifier: workspace:*
         version: link:../tools
     devDependencies:
-      '@agent-anything/evidence':
+      '@agent-anything/context':
         specifier: workspace:*
-        version: link:../evidence
+        version: link:../../harness/context
       '@agent-anything/governance':
         specifier: workspace:*
         version: link:../governance
@@ -222,9 +213,6 @@ importers:
       '@agent-anything/runtime':
         specifier: workspace:*
         version: link:../../harness/runtime
-      '@agent-anything/storage':
-        specifier: workspace:*
-        version: link:../storage
       '@agent-anything/testing':
         specifier: workspace:*
         version: link:../testing
@@ -262,9 +250,9 @@ importers:
 
   packages/observability:
     dependencies:
-      '@agent-anything/evidence':
+      '@agent-anything/context':
         specifier: workspace:*
-        version: link:../evidence
+        version: link:../../harness/context
       '@agent-anything/foundation':
         specifier: workspace:*
         version: link:../../harness/foundation
@@ -278,17 +266,11 @@ importers:
         specifier: workspace:*
         version: link:../governance
 
-  packages/storage:
-    dependencies:
-      '@agent-anything/evidence':
-        specifier: workspace:*
-        version: link:../evidence
-      '@agent-anything/foundation':
-        specifier: workspace:*
-        version: link:../../harness/foundation
-
   packages/testing:
     dependencies:
+      '@agent-anything/context':
+        specifier: workspace:*
+        version: link:../../harness/context
       '@agent-anything/foundation':
         specifier: workspace:*
         version: link:../../harness/foundation

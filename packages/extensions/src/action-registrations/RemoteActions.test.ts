@@ -16,11 +16,11 @@ import type { Agent, AgentTask } from "@agent-anything/foundation";
 import type { ControllerDecision } from "@agent-anything/runtime/controller";
 import { createRunCancellationController } from "@agent-anything/runtime/run";
 import { Runner, type RunConfig } from "@agent-anything/runtime";
-import { EvidenceBuilder } from "@agent-anything/evidence";
+import { EvidenceBuilder } from "@agent-anything/context/evidence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
 import type { ApprovalReviewerPort } from "@agent-anything/permission";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
-import { InMemoryStorage } from "@agent-anything/storage";
+import { FakeEvidencePersistencePort } from "@agent-anything/testing";
 import { createToolCatalogSnapshot } from "@agent-anything/tools";
 import { describe, expect, it, vi } from "vitest";
 import { createMcpActionCapability } from "../mcp/index.js";
@@ -258,7 +258,7 @@ async function runRemoteAction(
     actionEnforcementPipeline: pipeline,
     sandboxExecutionGateway: gateway,
     evidenceBuilder: new EvidenceBuilder(),
-    evidenceStorage: new InMemoryStorage(),
+    evidencePersistence: new FakeEvidencePersistencePort(),
     now: () => NOW,
   });
   return runner.run(

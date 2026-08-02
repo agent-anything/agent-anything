@@ -48,7 +48,7 @@ import {
   createInitialContext,
   projectContext,
   type Context,
-} from "@agent-anything/agent-core/context";
+} from "@agent-anything/context/context";
 import type { RuntimeEventName } from "@agent-anything/agent-core/events";
 import {
   abandonPlan,
@@ -70,7 +70,7 @@ import type {
   PermissionsGrantedObservation,
   PlanUpdateResultObservation,
   ToolResultObservation,
-} from "@agent-anything/agent-core/context";
+} from "@agent-anything/context/observation";
 import type {
   InterruptibleOperationKind,
   RunFinalizationContext,
@@ -172,7 +172,7 @@ import {
   classifyToolResult,
   settleToolResultEvidence,
   type ValidToolResultClassification,
-} from "./ActionResultSettlement.js";
+} from "@agent-anything/context/evidence";
 
 type RunItemDraft<TOutput> = (base: RunItemBase) => RunItem<TOutput>;
 
@@ -293,14 +293,14 @@ export class RunExecution<TOutput> {
       this.dependencies.actionEnforcementPipeline !== undefined,
       this.dependencies.sandboxExecutionGateway !== undefined,
       this.dependencies.evidenceBuilder !== undefined,
-      this.dependencies.evidenceStorage !== undefined,
+      this.dependencies.evidencePersistence !== undefined,
       this.config.actionContext !== null,
     ];
     if (actionPipelineParts.some(Boolean) && !actionPipelineParts.every(Boolean)) {
       return this.createInvalidConfigResult(runtimeError(
         "runtime",
         "runtime_invalid_options",
-        "ActionEnforcementPipeline, SandboxExecutionGateway, EvidenceBuilderPort, StoragePort, and RunConfig.actionContext must be configured together.",
+        "ActionEnforcementPipeline, SandboxExecutionGateway, EvidenceBuilderPort, EvidencePersistencePort, and RunConfig.actionContext must be configured together.",
         false,
         {},
       ));
@@ -2535,8 +2535,8 @@ export class RunExecution<TOutput> {
     },
   ): Promise<ProcessActionResult> {
     const evidenceBuilder = this.dependencies.evidenceBuilder;
-    const evidenceStorage = this.dependencies.evidenceStorage;
-    if (evidenceBuilder === undefined || evidenceStorage === undefined) {
+    const evidencePersistence = this.dependencies.evidencePersistence;
+    if (evidenceBuilder === undefined || evidencePersistence === undefined) {
       throw new Error("Complete Action result settlement dependencies are unavailable.");
     }
 
@@ -2549,7 +2549,7 @@ export class RunExecution<TOutput> {
           toolResult: execution.toolResult,
           classification,
           evidenceBuilder,
-          storage: evidenceStorage,
+          persistence: evidencePersistence,
           isInterrupted: () => this.cancellationRequest() !== null,
         }),
         this.runDeadlineAt(),

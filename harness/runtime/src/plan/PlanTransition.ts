@@ -1,5 +1,5 @@
 import type { ISODateTimeString } from "@agent-anything/foundation";
-import type { PlanUpdateObservation } from "@agent-anything/agent-core/context";
+import type { PlanUpdateObservation } from "@agent-anything/context/observation";
 import type {
   Plan,
   PlanLimits,

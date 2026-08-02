@@ -7,7 +7,7 @@ import type {
   RunInputItem,
   RunWorkspace,
 } from "@agent-anything/foundation";
-import type { ContextProjection } from "@agent-anything/agent-core/context";
+import type { ContextProjection } from "@agent-anything/context/context";
 import type { ActionCandidate } from "@agent-anything/foundation/action";
 import type { PlanProjection } from "../plan/index.js";
 import type { CancellationContext } from "../run/RunCancellation.js";

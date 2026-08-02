@@ -1,7 +1,7 @@
 import type { EvidenceRef, Metadata } from "@agent-anything/foundation";
 import type { AgentTask } from "@agent-anything/foundation";
 import type { ContextMessage } from "./ContextMessage.js";
-import type { Observation } from "./Observation.js";
+import type { Observation } from "../observation/index.js";
 
 export interface Context {
   readonly messages: readonly ContextMessage[];

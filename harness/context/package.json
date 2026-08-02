@@ -1,0 +1,51 @@
+{
+  "name": "@agent-anything/context",
+  "version": "0.0.0",
+  "description": "Run Context, Observations, Evidence, and owner-defined Evidence persistence for Agent Harness.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./context": {
+      "types": "./src/context/index.ts",
+      "import": "./dist/context/index.js"
+    },
+    "./observation": {
+      "types": "./src/observation/index.ts",
+      "import": "./dist/observation/index.js"
+    },
+    "./evidence": {
+      "types": "./src/evidence/index.ts",
+      "import": "./dist/evidence/index.js"
+    },
+    "./persistence": {
+      "types": "./src/persistence/index.ts",
+      "import": "./dist/persistence/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "layer": "harness",
+      "component": "context"
+    }
+  },
+  "dependencies": {
+    "@agent-anything/foundation": "workspace:*",
+    "@agent-anything/permission": "workspace:*",
+    "@agent-anything/tools": "workspace:*"
+  },
+  "license": "Apache-2.0",
+  "private": true
+}

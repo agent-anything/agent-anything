@@ -20,8 +20,14 @@ const packageExportKeys = {
     "./task",
     "./workspace",
   ],
+  "harness/context": [
+    ".",
+    "./context",
+    "./evidence",
+    "./observation",
+    "./persistence",
+  ],
   "packages/tools": [".", "./catalog"],
-  "packages/evidence": ["."],
   "packages/governance": [
     ".",
     "./amendment",
@@ -31,11 +37,9 @@ const packageExportKeys = {
   "packages/permission": [".", "./approval", "./authority", "./profile"],
   "packages/observability": [".", "./audit", "./redaction", "./telemetry"],
   "harness/model-interaction": ["."],
-  "packages/storage": ["."],
   "packages/testing": ["."],
   "packages/agent-core": [
     ".",
-    "./context",
     "./events",
   ],
   "packages/action-execution": ["."],
@@ -89,6 +93,26 @@ const expectedLowerValueExports = {
     "snapshotRunWorkspace",
     "snapshotWorkspaceContext",
   ],
+  "@agent-anything/context": [
+    "EvidenceBuilder",
+    "applyContextUpdate",
+    "classifyToolResult",
+    "createInitialContext",
+    "projectContext",
+    "settleToolResultEvidence",
+  ],
+  "@agent-anything/context/context": [
+    "applyContextUpdate",
+    "createInitialContext",
+    "projectContext",
+  ],
+  "@agent-anything/context/evidence": [
+    "EvidenceBuilder",
+    "classifyToolResult",
+    "settleToolResultEvidence",
+  ],
+  "@agent-anything/context/observation": [],
+  "@agent-anything/context/persistence": [],
   "@agent-anything/tools": [
     "ToolCatalogValidationError",
     "createToolCatalogSnapshot",
@@ -99,7 +123,6 @@ const expectedLowerValueExports = {
     "createToolCatalogSnapshot",
     "findToolDescriptor",
   ],
-  "@agent-anything/evidence": ["EvidenceBuilder"],
   "@agent-anything/governance": [
     "createAllowAllActionPolicyPort",
     "evaluateExecPolicyRules",
@@ -200,10 +223,10 @@ const expectedLowerValueExports = {
     "createProviderAttemptInterruption",
     "providerResultFromInterruption",
   ],
-  "@agent-anything/storage": ["InMemoryStorage"],
   "@agent-anything/testing": [
     "FakeApprovalReviewer",
     "FakeAuditPort",
+    "FakeEvidencePersistencePort",
     "FakeProvider",
     "FakeTelemetryPort",
   ],
@@ -211,11 +234,6 @@ const expectedLowerValueExports = {
 
 const expectedValueExports = {
   "@agent-anything/agent-core": [],
-  "@agent-anything/agent-core/context": [
-    "applyContextUpdate",
-    "createInitialContext",
-    "projectContext",
-  ],
   "@agent-anything/runtime/controller": [
     "ControllerError",
     "ProviderBackedController",
@@ -462,6 +480,9 @@ const expectedExtensionValueExports = {
 const removedOrPrivateSpecifiers = [
   "@agent-anything/agent-runtime",
   "@agent-anything/providers",
+  "@agent-anything/evidence",
+  "@agent-anything/storage",
+  "@agent-anything/agent-core/context",
   "@agent-anything/agent-core/action",
   "@agent-anything/agent-core/agent",
   "@agent-anything/agent-core/controller",

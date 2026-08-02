@@ -30,7 +30,11 @@ import {
   createCodeAgentCanonicalWorkspaceRoots,
 } from "@agent-anything/code-agent/filesystem";
 import type { CodeAgentCommandLimits } from "@agent-anything/code-agent/command";
-import { EvidenceBuilder, type Evidence } from "@agent-anything/evidence";
+import { EvidenceBuilder, type Evidence } from "@agent-anything/context/evidence";
+import type {
+  EvidencePersistencePort,
+  EvidencePersistenceResult,
+} from "@agent-anything/context/persistence";
 import {
   createAllowAllActionPolicyPort,
   type PersistentPolicyAmendmentPort,
@@ -55,13 +59,11 @@ import type { Provider } from "@agent-anything/model-interaction";
 import {
   listRunWorkspaces,
   type AgentTask,
-  type ArtifactRef,
   type IdentityRef,
   type ISODateTimeString,
   type RunWorkspace,
   type WorkspaceContext,
 } from "@agent-anything/foundation";
-import type { StoragePort, StoredArtifact } from "@agent-anything/storage";
 import { createHelarcHostPermissionComposition } from "./HelarcHostPermissionComposition.js";
 
 export interface PrepareHelarcHostRunInput {
@@ -86,7 +88,7 @@ export interface PrepareHelarcHostRunInput {
   readonly sandboxProviders?: readonly SandboxProvider[];
   readonly commandLimits?: Partial<CodeAgentCommandLimits>;
   readonly patchReviewBridge: HelarcPatchReviewBridge;
-  readonly storage?: StoragePort;
+  readonly evidencePersistence?: EvidencePersistencePort;
   readonly now?: () => ISODateTimeString;
 }
 
@@ -217,7 +219,8 @@ export async function prepareHelarcHostRun(
     actionEnforcementPipeline,
     sandboxExecutionGateway,
     evidenceBuilder: new EvidenceBuilder(),
-    evidenceStorage: input.storage ?? new InMemoryHelarcHostStorage(input.now),
+    evidencePersistence:
+      input.evidencePersistence ?? new InMemoryHelarcEvidencePersistence(input.now),
     eventEmitter: runtimeEvents,
     now: input.now,
   });
@@ -457,20 +460,28 @@ function assertSelectedSandboxProvider(
   }
 }
 
-class InMemoryHelarcHostStorage implements StoragePort {
+class InMemoryHelarcEvidencePersistence implements EvidencePersistencePort {
+  private readonly evidence = new Map<string, Evidence>();
   private nextId = 1;
 
   constructor(private readonly now: (() => ISODateTimeString) | undefined) {}
 
-  async storeEvidence(evidence: Evidence): Promise<StoredArtifact> {
-    const id = `helarc_artifact_${this.nextId}`;
+  async persistEvidence(evidence: Evidence): Promise<EvidencePersistenceResult> {
+    this.evidence.set(evidence.id, evidence);
+    const storageId = `helarc_evidence_${this.nextId}`;
     this.nextId += 1;
     return {
-      id,
-      kind: "evidence",
-      ref: `memory://${evidence.id}` as ArtifactRef,
-      createdAt: this.now?.() ?? new Date().toISOString(),
-      metadata: { evidenceId: evidence.id },
+      status: "stored",
+      artifact: {
+        storageId,
+        evidenceRef: evidence.id,
+        artifactRef: `memory://evidence/${evidence.id}`,
+        createdAt: this.now?.() ?? new Date().toISOString(),
+        metadata: {
+          adapter: "helarc-in-memory",
+          retention: "process",
+        },
+      },
     };
   }
 }

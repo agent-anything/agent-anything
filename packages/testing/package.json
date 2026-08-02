@@ -20,6 +20,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@agent-anything/context": "workspace:*",
     "@agent-anything/observability": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/model-interaction": "workspace:*",

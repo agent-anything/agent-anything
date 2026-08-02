@@ -68,20 +68,22 @@ test("an unreviewed Harness owner fails closed", () => {
   assert.equal(violations[0]?.rule, "harness_dependency_policy_missing");
 });
 
-test("the exact Phase 19 Runtime migration bridge is accepted", () => {
-  for (const importedName of PHASE_19_HARNESS_MIGRATION_DEPENDENCIES[
-    "@agent-anything/runtime"
-  ]) {
-    const directionViolations = evaluateRepositoryDirection({
-      owner: { kind: "harness", name: "@agent-anything/runtime" },
-      imported: { kind: "platform", name: importedName },
-    });
-    const policyViolations = evaluateHarnessProductionDependency({
-      owner: { kind: "harness", name: "@agent-anything/runtime" },
-      imported: { kind: "platform", name: importedName },
-    });
-    assert.deepEqual(directionViolations, [], importedName);
-    assert.deepEqual(policyViolations, [], importedName);
+test("the exact Phase 19 Harness migration bridges are accepted", () => {
+  for (const [ownerName, importedNames] of Object.entries(
+    PHASE_19_HARNESS_MIGRATION_DEPENDENCIES,
+  )) {
+    for (const importedName of importedNames) {
+      const directionViolations = evaluateRepositoryDirection({
+        owner: { kind: "harness", name: ownerName },
+        imported: { kind: "platform", name: importedName },
+      });
+      const policyViolations = evaluateHarnessProductionDependency({
+        owner: { kind: "harness", name: ownerName },
+        imported: { kind: "platform", name: importedName },
+      });
+      assert.deepEqual(directionViolations, [], `${ownerName} -> ${importedName}`);
+      assert.deepEqual(policyViolations, [], `${ownerName} -> ${importedName}`);
+    }
   }
 });
 

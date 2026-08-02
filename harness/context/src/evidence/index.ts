@@ -5,3 +5,10 @@ export {
   type BuildEvidenceInput,
   type EvidenceBuilderPort,
 } from "./EvidenceBuilder.js";
+export {
+  classifyToolResult,
+  settleToolResultEvidence,
+  type EvidenceSettlementResult,
+  type ToolResultClassification,
+  type ValidToolResultClassification,
+} from "./EvidenceSettlement.js";

@@ -1,7 +1,7 @@
 {
   "name": "agent-anything",
   "version": "0.0.0",
-  "description": "A TypeScript platform for building tool-using AI agent products with structured tasks, permissions, evidence, and runtime output.",
+  "description": "A TypeScript Agent Harness for building tool-using AI agent products with structured tasks, permissions, evidence, and runtime output.",
   "scripts": {
     "api:check": "pnpm build && node scripts/check-built-public-apis.mjs",
     "architecture:test": "node --test scripts/architecture/*.test.mjs",

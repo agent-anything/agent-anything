@@ -223,6 +223,9 @@ function checkArchitectureSource(file, text, isTestOnly) {
     "HelarcStartSessionInput",
     "HelarcStartSessionResult",
     "HelarcCancelSessionResult",
+    "StoragePort",
+    "StoredArtifact",
+    "InMemoryStorage",
     "sessionHistory",
     "onSessionHistoryRecord",
     "sessionStatus",
@@ -245,6 +248,23 @@ function checkArchitectureSource(file, text, isTestOnly) {
     report("removed_provider_retry_owner", {
       file,
       message: "Retains the removed architectural Provider Retry owner 'platform'.",
+    });
+  }
+  if (
+    /@agent-anything\/(?:evidence|storage)(?:\/|["'])|@agent-anything\/agent-core\/context/.test(
+      text,
+    )
+  ) {
+    report("removed_context_owner", {
+      file,
+      message:
+        "Retains a removed Evidence, Storage, or agent-core Context package path.",
+    });
+  }
+  if (/\bevidenceStorage\b/.test(text)) {
+    report("removed_storage_facade", {
+      file,
+      message: "Retains the removed generic Evidence storage dependency name.",
     });
   }
   if (

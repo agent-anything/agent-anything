@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import type { EvidenceBuilderPort } from "@agent-anything/evidence";
-import type { StoragePort } from "@agent-anything/storage";
 import type { ToolResult, ToolResultStatus } from "@agent-anything/tools";
+import type { EvidenceBuilderPort } from "./EvidenceBuilder.js";
+import type { EvidencePersistencePort } from "../persistence/index.js";
 import {
   classifyToolResult,
   settleToolResultEvidence,
-} from "./ActionResultSettlement.js";
+} from "./EvidenceSettlement.js";
 
-describe("ActionResultSettlement", () => {
+describe("Evidence settlement", () => {
   it.each([
     ["succeeded", { createObservation: true, createEvidence: true, failed: false }],
     ["partial", { createObservation: true, createEvidence: true, failed: true }],
@@ -35,28 +35,28 @@ describe("ActionResultSettlement", () => {
     });
   });
 
-  it("builds and stores exact Evidence references", async () => {
+  it("publishes the correlated EvidenceRef and ArtifactRef after persistence", async () => {
     const result = toolResult("succeeded");
     const builder = evidenceBuilder("evidence_1");
-    const storeEvidence = vi.fn(async () => storedArtifact("artifact_1"));
+    const persistEvidence = vi.fn(async () => stored("evidence_1", "storage_1"));
     const settlement = await settleToolResultEvidence({
       actionId: "action_1",
       toolResult: result,
       classification: validClassification(result),
       evidenceBuilder: builder,
-      storage: { storeEvidence },
+      persistence: { persistEvidence },
       isInterrupted: () => false,
     });
 
     expect(settlement).toEqual({
       status: "settled",
       evidenceRefs: ["evidence_1"],
-      artifactRefs: ["artifact_1"],
+      artifactRefs: ["memory://evidence/evidence_1"],
     });
-    expect(storeEvidence).toHaveBeenCalledOnce();
+    expect(persistEvidence).toHaveBeenCalledOnce();
   });
 
-  it("retains all Evidence refs and the stored artifact prefix when Storage fails", async () => {
+  it("retains only the confirmed reference prefix when later persistence fails", async () => {
     const result = toolResult("succeeded");
     const builder: EvidenceBuilderPort = {
       buildFromToolResult() {
@@ -64,11 +64,12 @@ describe("ActionResultSettlement", () => {
       },
     };
     let calls = 0;
-    const storage: StoragePort = {
-      async storeEvidence() {
+    const persistence: EvidencePersistencePort = {
+      async persistEvidence(item) {
         calls += 1;
-        if (calls === 2) throw new Error("Storage unavailable.");
-        return storedArtifact("artifact_1");
+        return calls === 1
+          ? stored(item.id, "storage_1")
+          : failedPersistence("evidence_store_unavailable");
       },
     };
 
@@ -77,19 +78,51 @@ describe("ActionResultSettlement", () => {
       toolResult: result,
       classification: validClassification(result),
       evidenceBuilder: builder,
-      storage,
+      persistence,
       isInterrupted: () => false,
     })).toMatchObject({
       status: "failed",
-      evidenceRefs: ["evidence_1", "evidence_2"],
-      artifactRefs: ["artifact_1"],
-      error: { owner: "storage", code: "storage_write_failed" },
+      evidenceRefs: ["evidence_1"],
+      artifactRefs: ["memory://evidence/evidence_1"],
+      error: {
+        owner: "storage",
+        code: "storage_write_failed",
+        metadata: { persistenceCode: "evidence_store_unavailable" },
+      },
     });
+  });
+
+  it("retains only the confirmed reference prefix when interruption wins", async () => {
+    const result = toolResult("succeeded");
+    const builder: EvidenceBuilderPort = {
+      buildFromToolResult() {
+        return [evidence("evidence_1", result), evidence("evidence_2", result)];
+      },
+    };
+    let interrupted = false;
+    const persistEvidence = vi.fn(async (item: ReturnType<typeof evidence>) => {
+      interrupted = true;
+      return stored(item.id, "storage_1");
+    });
+
+    expect(await settleToolResultEvidence({
+      actionId: "action_1",
+      toolResult: result,
+      classification: validClassification(result),
+      evidenceBuilder: builder,
+      persistence: { persistEvidence },
+      isInterrupted: () => interrupted,
+    })).toEqual({
+      status: "interrupted",
+      evidenceRefs: ["evidence_1"],
+      artifactRefs: ["memory://evidence/evidence_1"],
+    });
+    expect(persistEvidence).toHaveBeenCalledOnce();
   });
 
   it("rejects Evidence that is not correlated to the exact ToolResult", async () => {
     const result = toolResult("succeeded");
-    const storeEvidence = vi.fn(async () => storedArtifact("artifact_1"));
+    const persistEvidence = vi.fn(async () => stored("evidence_1", "storage_1"));
     const settlement = await settleToolResultEvidence({
       actionId: "action_1",
       toolResult: result,
@@ -107,7 +140,7 @@ describe("ActionResultSettlement", () => {
           }];
         },
       },
-      storage: { storeEvidence },
+      persistence: { persistEvidence },
       isInterrupted: () => false,
     });
 
@@ -115,23 +148,48 @@ describe("ActionResultSettlement", () => {
       status: "failed",
       error: { owner: "tool", code: "tool_evidence_creation_failed" },
     });
-    expect(storeEvidence).not.toHaveBeenCalled();
+    expect(persistEvidence).not.toHaveBeenCalled();
+  });
+
+  it("rejects an uncorrelated persistence receipt without publishing references", async () => {
+    const result = toolResult("succeeded");
+    const settlement = await settleToolResultEvidence({
+      actionId: "action_1",
+      toolResult: result,
+      classification: validClassification(result),
+      evidenceBuilder: evidenceBuilder("evidence_1"),
+      persistence: {
+        async persistEvidence() {
+          return stored("different_evidence", "storage_1");
+        },
+      },
+      isInterrupted: () => false,
+    });
+
+    expect(settlement).toMatchObject({
+      status: "failed",
+      evidenceRefs: [],
+      artifactRefs: [],
+      error: { owner: "storage", code: "storage_write_failed" },
+    });
   });
 
   it("starts no Evidence work after interruption is accepted", async () => {
     const result = toolResult("succeeded");
     const buildFromToolResult = vi.fn(() => [evidence("evidence_1", result)]);
+    const persistEvidence = vi.fn(async () => stored("evidence_1", "storage_1"));
     const settlement = await settleToolResultEvidence({
       actionId: "action_1",
       toolResult: result,
       classification: validClassification(result),
       evidenceBuilder: { buildFromToolResult },
-      storage: { async storeEvidence() { return storedArtifact("artifact_1"); } },
+      persistence: { persistEvidence },
       isInterrupted: () => true,
     });
 
     expect(settlement).toEqual({ status: "interrupted", evidenceRefs: [], artifactRefs: [] });
     expect(buildFromToolResult).not.toHaveBeenCalled();
+    expect(persistEvidence).not.toHaveBeenCalled();
   });
 });
 
@@ -182,12 +240,27 @@ function evidence(id: string, result: ToolResult) {
   };
 }
 
-function storedArtifact(id: string) {
+function stored(evidenceRef: string, storageId: string) {
   return {
-    id,
-    kind: "evidence" as const,
-    ref: `memory://evidence/${id}`,
-    createdAt: "2026-07-13T00:00:01.000Z",
-    metadata: {},
+    status: "stored" as const,
+    artifact: {
+      storageId,
+      evidenceRef,
+      artifactRef: `memory://evidence/${evidenceRef}`,
+      createdAt: "2026-07-13T00:00:01.000Z",
+      metadata: {},
+    },
+  };
+}
+
+function failedPersistence(code: string) {
+  return {
+    status: "failed" as const,
+    error: {
+      code,
+      message: "Evidence persistence is unavailable.",
+      retryable: true,
+      metadata: {},
+    },
   };
 }

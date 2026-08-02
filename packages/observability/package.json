@@ -34,7 +34,7 @@
   "license": "Apache-2.0",
   "private": true,
   "dependencies": {
-    "@agent-anything/evidence": "workspace:*",
+    "@agent-anything/context": "workspace:*",
     "@agent-anything/foundation": "workspace:*"
   }
 }
