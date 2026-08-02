@@ -1,9 +1,7 @@
 import type { EvidenceRef, Metadata } from "@agent-anything/foundation";
-import { projectPlan, type Plan, type PlanProjection } from "../plan/index.js";
-import type { Observation } from "../run/Observation.js";
-import type { PermissionContextProjection } from "../run/RunPermissionState.js";
 import type { AgentTask } from "@agent-anything/foundation";
 import type { ContextMessage } from "./ContextMessage.js";
+import type { Observation } from "./Observation.js";
 
 export interface Context {
   readonly messages: readonly ContextMessage[];
@@ -23,8 +21,6 @@ export interface ContextProjection {
   readonly messages: readonly ContextMessage[];
   readonly observations: readonly Observation[];
   readonly evidenceRefs: readonly EvidenceRef[];
-  readonly plan: PlanProjection | null;
-  readonly permission: PermissionContextProjection;
   readonly metadata: Metadata;
 }
 
@@ -56,17 +52,11 @@ export function applyContextUpdate(
   });
 }
 
-export function projectContext(
-  context: Context,
-  plan: Plan | null,
-  permission: PermissionContextProjection,
-): ContextProjection {
+export function projectContext(context: Context): ContextProjection {
   return Object.freeze({
     messages: Object.freeze([...context.messages]),
     observations: Object.freeze([...context.observations]),
     evidenceRefs: Object.freeze([...context.evidenceRefs]),
-    plan: plan === null ? null : projectPlan(plan),
-    permission,
     metadata: Object.freeze({ ...context.metadata }),
   });
 }

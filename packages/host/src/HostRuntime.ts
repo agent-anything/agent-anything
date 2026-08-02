@@ -13,11 +13,11 @@ import {
   toRunCancellationSummary,
   type RunCancellationRequestInput,
   type RunResult,
-} from "@agent-anything/agent-core/run";
+} from "@agent-anything/runtime/run";
 import type {
   RunConfig,
   Runner,
-} from "@agent-anything/agent-runtime";
+} from "@agent-anything/runtime";
 import {
   createHostRunProjection,
   createHostTerminalRunProjection,

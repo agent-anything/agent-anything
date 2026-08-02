@@ -3,7 +3,7 @@ import type {
   ControllerCallContext,
   ControllerDecision,
   ControllerInput,
-} from "@agent-anything/agent-core/controller";
+} from "@agent-anything/runtime/controller";
 import {
   acceptPatch,
   createPatchProposal,

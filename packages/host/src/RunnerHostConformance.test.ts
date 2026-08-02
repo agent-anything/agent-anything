@@ -3,7 +3,7 @@ import type {
   Provider,
   ProviderCallResult,
   ProviderRequest,
-} from "@agent-anything/providers";
+} from "@agent-anything/model-interaction";
 import { resolvePermissionProfile } from "@agent-anything/permission";
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
 import type { Agent } from "@agent-anything/foundation/agent";
@@ -12,13 +12,13 @@ import type {
   ControllerCallContext,
   ControllerDecision,
   ControllerInput,
-} from "@agent-anything/agent-core/controller";
+} from "@agent-anything/runtime/controller";
 import {
   createSystemRetryExecutor,
   ProviderBackedController,
   Runner,
   type RunConfig,
-} from "@agent-anything/agent-runtime";
+} from "@agent-anything/runtime";
 import {
   createHostRuntime,
   type HostRunProjection,
@@ -26,12 +26,12 @@ import {
   type HostRunStartInput,
   type HostRuntime,
 } from "./index.js";
-import type { RetryClock } from "@agent-anything/agent-core/retry";
+import type { RetryClock } from "@agent-anything/runtime/retry";
 import type { ActionCandidate } from "@agent-anything/foundation/action";
 import {
   createRunCancellationController,
   type ResolvedRunPermissionConfig,
-} from "@agent-anything/agent-core/run";
+} from "@agent-anything/runtime/run";
 
 interface ConformanceOutput {
   readonly summary: string;
@@ -228,13 +228,13 @@ describe("Runner and generic Host conformance", () => {
     const result = await harness.run(createHostInput());
 
     expect(result.runResult.status).toBe("succeeded");
-    expect(controller.calls.map((call) => call.context.plan?.status ?? null)).toEqual([
+    expect(controller.calls.map((call) => call.plan?.status ?? null)).toEqual([
       null,
       "active",
       "completed",
       "active",
     ]);
-    expect(controller.calls.map((call) => call.context.plan?.version ?? null)).toEqual([
+    expect(controller.calls.map((call) => call.plan?.version ?? null)).toEqual([
       null,
       1,
       2,
@@ -273,7 +273,7 @@ describe("Runner and generic Host conformance", () => {
         },
       }]),
       (input) => {
-        expect(input.context.plan).toBeNull();
+        expect(input.plan).toBeNull();
         expect(input.context.observations.at(-1)).toMatchObject({
           kind: "plan_update",
           result: {
@@ -661,7 +661,7 @@ class RetryOnceProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
-    requestRetryScheduler: { kind: "platform" as const },
+    requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
   };
   readonly requests: ProviderRequest[] = [];

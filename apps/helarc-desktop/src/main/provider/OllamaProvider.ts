@@ -7,7 +7,7 @@ import {
   type ProviderFailure,
   type ProviderRequest,
   type ProviderResponse,
-} from "@agent-anything/providers";
+} from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 import type { FetchLike } from "./OpenAICompatibleProvider.js";
 import { readProviderHttpFailureMetadata } from "./ProviderHttpFailureMetadata.js";
@@ -22,7 +22,7 @@ export class OllamaProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
-    requestRetryScheduler: { kind: "platform" },
+    requestRetryScheduler: { kind: "harness" },
     metadata: {},
   };
 

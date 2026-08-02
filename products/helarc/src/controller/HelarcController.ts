@@ -2,13 +2,13 @@ import type {
   ControllerDecision,
   ControllerInput,
   ControllerModelItem,
-} from "@agent-anything/agent-core/controller";
+} from "@agent-anything/runtime/controller";
 import {
   StructuredOutputError,
   type ProviderRequestBuildContext,
   type StructuredOutputFailure,
-} from "@agent-anything/agent-runtime";
-import type { ProviderRequest, ProviderResponse } from "@agent-anything/providers";
+} from "@agent-anything/runtime";
+import type { ProviderRequest, ProviderResponse } from "@agent-anything/model-interaction";
 import type { Metadata } from "@agent-anything/foundation";
 import {
   buildHelarcPromptAssembly,

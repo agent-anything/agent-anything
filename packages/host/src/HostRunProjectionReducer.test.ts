@@ -4,7 +4,7 @@ import type { RuntimeEvent, RuntimeEventName } from "@agent-anything/agent-core/
 import {
   createFailedRunResult,
   createSucceededRunResult,
-} from "@agent-anything/agent-core/run";
+} from "@agent-anything/runtime/run";
 import {
   createHostRunProjection,
   createHostTerminalRunProjection,

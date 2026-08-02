@@ -2,7 +2,7 @@ import type {
   ProviderCallResult,
   ProviderRequest,
   ProviderResponse,
-} from "@agent-anything/providers";
+} from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 import { describe, expect, it } from "vitest";
 import { FakeProvider } from "./FakeProvider.js";

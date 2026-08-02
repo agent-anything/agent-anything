@@ -7,7 +7,7 @@ import type {
   Provider,
   ProviderCallResult,
   ProviderRequest,
-} from "@agent-anything/providers";
+} from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1385,7 +1385,7 @@ class CompleteProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
-    requestRetryScheduler: { kind: "platform" as const },
+    requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
   };
 
@@ -1428,7 +1428,7 @@ class SecretFailingProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
-    requestRetryScheduler: { kind: "platform" as const },
+    requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
   };
 
@@ -1459,7 +1459,7 @@ class ScriptedProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
-    requestRetryScheduler: { kind: "platform" as const },
+    requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
   };
 

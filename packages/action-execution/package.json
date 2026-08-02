@@ -20,7 +20,6 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/foundation": "workspace:*",

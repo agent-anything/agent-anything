@@ -1,12 +1,12 @@
 import type {
   Controller,
-  RuntimeEvent,
-} from "@agent-anything/agent-core";
+} from "@agent-anything/runtime/controller";
+import type { RuntimeEvent } from "@agent-anything/agent-core/events";
 import type {
   ControllerCallContext,
   ControllerDecision,
   ControllerInput,
-} from "@agent-anything/agent-core/controller";
+} from "@agent-anything/runtime/controller";
 import type { Metadata } from "@agent-anything/foundation";
 
 export class HelarcTracingController<TOutput = unknown> implements Controller<TOutput> {

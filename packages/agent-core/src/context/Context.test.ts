@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyPlanUpdate } from "../plan/index.js";
-import type { ActionRejectedObservation } from "../run/index.js";
-import type { AgentTask } from "../task/index.js";
+import type { AgentTask } from "@agent-anything/foundation";
+import type { ActionRejectedObservation } from "./Observation.js";
 import {
   applyContextUpdate,
   createInitialContext,
@@ -51,81 +50,17 @@ describe("Context transitions", () => {
     expect(Object.isFrozen(updated.observations)).toBe(true);
   });
 
-  it("projects prior Context and the current Plan through one immutable value", () => {
+  it("projects only Context-owned state through one immutable value", () => {
     const context = applyContextUpdate(createInitialContext(createTask()), {
       observations: [createObservation()],
     });
-    const planResult = applyPlanUpdate({
-      currentPlan: null,
-      newPlanId: "plan-1",
-      candidate: {
-        plan: [{ step: "Inspect the workspace", status: "in_progress" }],
-      },
-      limits: createPlanLimits(),
-      now: "2026-07-13T00:01:00.000Z",
-    });
-    if (planResult.status !== "applied") {
-      throw new Error("Expected Plan creation to succeed.");
-    }
-
-    const permission = permissionProjection();
-    const projection = projectContext(context, planResult.plan, permission);
+    const projection = projectContext(context);
 
     expect(projection.observations).toEqual(context.observations);
-    expect(projection.permission).toBe(permission);
-    expect(projection.plan).toEqual({
-      id: "plan-1",
-      version: 1,
-      status: "active",
-      steps: [{ step: "Inspect the workspace", status: "in_progress" }],
-    });
+    expect(projection.metadata).toEqual(context.metadata);
     expect(Object.isFrozen(projection)).toBe(true);
-    expect(Object.isFrozen(projection.plan)).toBe(true);
-    expect(Object.isFrozen(projection.plan?.steps)).toBe(true);
   });
 });
-
-function permissionProjection() {
-  return {
-    profile: {
-      profileId: ":read-only",
-      sourceProfileIds: [":read-only"],
-      environmentId: "test",
-      enforcement: "managed" as const,
-      workspaceRootCount: 1,
-      fileSystem: {
-        unrestricted: false,
-        allowsRead: true,
-        allowsWrite: false,
-        hasDenials: false,
-        managed: false,
-      },
-      network: {
-        enabled: false,
-        profileRestricted: false,
-        managedRestricted: false,
-        hasDenials: false,
-      },
-      managedConstraintSetId: "test",
-      canRequestAdditionalPermissions: false,
-    },
-    authority: {
-      hasAdditionalFileSystemRead: false,
-      hasAdditionalFileSystemWrite: false,
-      hasAdditionalNetwork: false,
-      actionCoverageCount: 0,
-      runGrantCount: 0,
-      sessionAuthorityCount: 0,
-      policyAmendmentCount: 0,
-    },
-    approval: {
-      canRequest: false,
-      reviewer: null,
-      pending: false,
-      requestsRemaining: 0,
-    },
-  };
-}
 
 function createTask(): AgentTask {
   return {
@@ -147,13 +82,5 @@ function createObservation(): ActionRejectedObservation {
     message: "Action is not supported.",
     createdAt: "2026-07-13T00:00:01.000Z",
     metadata: {},
-  };
-}
-
-function createPlanLimits() {
-  return {
-    maxSteps: 10,
-    maxStepLength: 200,
-    maxExplanationLength: 500,
   };
 }

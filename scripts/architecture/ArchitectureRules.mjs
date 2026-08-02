@@ -4,50 +4,34 @@ export const PLATFORM_PRODUCTION_DEPENDENCIES = Object.freeze({
   "@agent-anything/governance": ["@agent-anything/foundation"],
   "@agent-anything/permission": ["@agent-anything/foundation", "@agent-anything/governance"],
   "@agent-anything/observability": ["@agent-anything/evidence", "@agent-anything/foundation"],
-  "@agent-anything/providers": ["@agent-anything/foundation"],
   "@agent-anything/storage": ["@agent-anything/evidence", "@agent-anything/foundation"],
   "@agent-anything/testing": [
     "@agent-anything/foundation",
     "@agent-anything/observability",
     "@agent-anything/permission",
-    "@agent-anything/providers",
+    "@agent-anything/model-interaction",
   ],
   "@agent-anything/agent-core": [
     "@agent-anything/foundation",
-    "@agent-anything/governance",
     "@agent-anything/permission",
     "@agent-anything/tools",
   ],
   "@agent-anything/action-execution": [
-    "@agent-anything/agent-core",
     "@agent-anything/foundation",
     "@agent-anything/governance",
     "@agent-anything/permission",
-    "@agent-anything/tools",
-  ],
-  "@agent-anything/agent-runtime": [
-    "@agent-anything/action-execution",
-    "@agent-anything/agent-core",
-    "@agent-anything/evidence",
-    "@agent-anything/foundation",
-    "@agent-anything/governance",
-    "@agent-anything/observability",
-    "@agent-anything/permission",
-    "@agent-anything/providers",
-    "@agent-anything/storage",
     "@agent-anything/tools",
   ],
   "@agent-anything/host": [
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",
-    "@agent-anything/agent-runtime",
+    "@agent-anything/runtime",
     "@agent-anything/foundation",
     "@agent-anything/governance",
     "@agent-anything/permission",
   ],
   "@agent-anything/code-agent": [
     "@agent-anything/action-execution",
-    "@agent-anything/agent-core",
     "@agent-anything/foundation",
     "@agent-anything/governance",
     "@agent-anything/tools",
@@ -62,12 +46,44 @@ export const PLATFORM_PRODUCTION_DEPENDENCIES = Object.freeze({
 export const PLATFORM_PACKAGE_NAMES = Object.freeze(Object.keys(PLATFORM_PRODUCTION_DEPENDENCIES));
 export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
   "@agent-anything/foundation": [],
+  "@agent-anything/model-interaction": ["@agent-anything/foundation"],
+  "@agent-anything/runtime": [
+    "@agent-anything/foundation",
+    "@agent-anything/model-interaction",
+  ],
 });
 export const HARNESS_PACKAGE_NAMES = Object.freeze(Object.keys(HARNESS_PRODUCTION_DEPENDENCIES));
+export const PHASE_19_HARNESS_MIGRATION_DEPENDENCIES = Object.freeze({
+  "@agent-anything/runtime": Object.freeze([
+    "@agent-anything/action-execution",
+    "@agent-anything/agent-core",
+    "@agent-anything/evidence",
+    "@agent-anything/governance",
+    "@agent-anything/observability",
+    "@agent-anything/permission",
+    "@agent-anything/storage",
+    "@agent-anything/tools",
+  ]),
+});
+export const PHASE_19_HARNESS_TEST_DEPENDENCIES = Object.freeze({
+  "@agent-anything/runtime": Object.freeze([
+    "@agent-anything/testing",
+  ]),
+});
 
 export function evaluateRepositoryDirection({ owner, imported }) {
   if (owner.name === imported.name) return [];
 
+  if (
+    owner.kind === "harness" &&
+    imported.kind === "platform" &&
+    (
+      isPhase19HarnessMigrationDependency(owner.name, imported.name) ||
+      isPhase19HarnessTestDependency(owner.name, imported.name)
+    )
+  ) {
+    return [];
+  }
   if (owner.kind === "harness" && imported.kind !== "harness") {
     return [violation("repository_direction", `Harness package must not depend on ${imported.kind} package '${imported.name}'.`)];
   }
@@ -118,14 +134,36 @@ export function evaluateHarnessProductionDependency({ owner, imported }) {
   if (!allowed) {
     return [violation("harness_dependency_policy_missing", `Harness package '${owner.name}' has no production dependency policy.`)];
   }
-  if (!allowed.includes(imported.name)) {
+  if (
+    !allowed.includes(imported.name) &&
+    !isPhase19HarnessMigrationDependency(owner.name, imported.name)
+  ) {
     return [violation("harness_dependency_forbidden", `Harness package '${owner.name}' must not depend on '${imported.name}'.`)];
   }
   return [];
 }
 
 export function expectedHarnessDependencies(packageName) {
-  return HARNESS_PRODUCTION_DEPENDENCIES[packageName] ?? null;
+  const permanent = HARNESS_PRODUCTION_DEPENDENCIES[packageName];
+  if (!permanent) return null;
+  return [
+    ...permanent,
+    ...(PHASE_19_HARNESS_MIGRATION_DEPENDENCIES[packageName] ?? []),
+  ];
+}
+
+function isPhase19HarnessMigrationDependency(ownerName, importedName) {
+  return (
+    PHASE_19_HARNESS_MIGRATION_DEPENDENCIES[ownerName]?.includes(importedName) ??
+    false
+  );
+}
+
+function isPhase19HarnessTestDependency(ownerName, importedName) {
+  return (
+    PHASE_19_HARNESS_TEST_DEPENDENCIES[ownerName]?.includes(importedName) ??
+    false
+  );
 }
 
 function violation(rule, message) {

@@ -4,7 +4,7 @@ import type {
   ProviderCapabilities,
   ProviderDescriptor,
   ProviderRequest,
-} from "@agent-anything/providers";
+} from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 
 export interface FakeProviderInput {
@@ -31,7 +31,7 @@ export class FakeProvider implements Provider {
         ...input.descriptor?.capabilities,
       },
       requestRetryScheduler: input.descriptor?.requestRetryScheduler ?? {
-        kind: "platform",
+        kind: "harness",
       },
     };
     this.results = [...(input.results ?? [])];

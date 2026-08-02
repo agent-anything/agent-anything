@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   HARNESS_PACKAGE_NAMES,
   HARNESS_PRODUCTION_DEPENDENCIES,
+  PHASE_19_HARNESS_MIGRATION_DEPENDENCIES,
+  PHASE_19_HARNESS_TEST_DEPENDENCIES,
   PLATFORM_PACKAGE_NAMES,
   PLATFORM_PRODUCTION_DEPENDENCIES,
   evaluateHarnessProductionDependency,
@@ -64,4 +66,41 @@ test("an unreviewed Harness owner fails closed", () => {
     imported: { kind: "harness", name: "@agent-anything/foundation" },
   });
   assert.equal(violations[0]?.rule, "harness_dependency_policy_missing");
+});
+
+test("the exact Phase 19 Runtime migration bridge is accepted", () => {
+  for (const importedName of PHASE_19_HARNESS_MIGRATION_DEPENDENCIES[
+    "@agent-anything/runtime"
+  ]) {
+    const directionViolations = evaluateRepositoryDirection({
+      owner: { kind: "harness", name: "@agent-anything/runtime" },
+      imported: { kind: "platform", name: importedName },
+    });
+    const policyViolations = evaluateHarnessProductionDependency({
+      owner: { kind: "harness", name: "@agent-anything/runtime" },
+      imported: { kind: "platform", name: importedName },
+    });
+    assert.deepEqual(directionViolations, [], importedName);
+    assert.deepEqual(policyViolations, [], importedName);
+  }
+});
+
+test("an unlisted Harness-to-transitional edge still fails closed", () => {
+  const violations = evaluateRepositoryDirection({
+    owner: { kind: "harness", name: "@agent-anything/runtime" },
+    imported: { kind: "platform", name: "@agent-anything/extensions" },
+  });
+  assert.equal(violations[0]?.rule, "repository_direction");
+});
+
+test("the exact Phase 19 Runtime test-support bridge is accepted", () => {
+  for (const importedName of PHASE_19_HARNESS_TEST_DEPENDENCIES[
+    "@agent-anything/runtime"
+  ]) {
+    const violations = evaluateRepositoryDirection({
+      owner: { kind: "harness", name: "@agent-anything/runtime" },
+      imported: { kind: "platform", name: importedName },
+    });
+    assert.deepEqual(violations, [], importedName);
+  }
 });

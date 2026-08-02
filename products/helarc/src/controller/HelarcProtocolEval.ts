@@ -1,8 +1,8 @@
 import type {
   ControllerDecision,
   ControllerInput,
-} from "@agent-anything/agent-core/controller";
-import type { ProviderResponse } from "@agent-anything/providers";
+} from "@agent-anything/runtime/controller";
+import type { ProviderResponse } from "@agent-anything/model-interaction";
 import {
   createToolCatalogSnapshot,
   type ToolDescriptor,
@@ -142,52 +142,52 @@ function createProtocolEvalControllerInput(
       messages: [],
       observations: [],
       evidenceRefs: [],
-      plan: null,
-      permission: {
-        profile: {
-          profileId: fixture.mode === "read-only" ? ":read-only" : ":workspace",
-          sourceProfileIds: [
-            ...(fixture.mode === "read-only"
-              ? [":read-only"]
-              : [":read-only", ":workspace"]),
-          ],
-          environmentId: "eval-local",
-          enforcement: "managed",
-          workspaceRootCount: 1,
+      metadata: {},
+    },
+    plan: null,
+    permission: {
+      profile: {
+        profileId: fixture.mode === "read-only" ? ":read-only" : ":workspace",
+        sourceProfileIds: [
+          ...(fixture.mode === "read-only"
+            ? [":read-only"]
+            : [":read-only", ":workspace"]),
+        ],
+        environmentId: "eval-local",
+        enforcement: "managed",
+        workspaceRootCount: 1,
         fileSystem: {
-            unrestricted: false,
-            allowsRead: true,
-            allowsWrite: fixture.mode !== "read-only",
-            hasDenials: false,
+          unrestricted: false,
+          allowsRead: true,
+          allowsWrite: fixture.mode !== "read-only",
+          hasDenials: false,
           managed: false,
         },
         process: { unrestricted: false },
         network: {
-            enabled: false,
-            profileRestricted: false,
-            managedRestricted: false,
-            hasDenials: false,
-          },
-          managedConstraintSetId: "eval-managed",
-          canRequestAdditionalPermissions: false,
+          enabled: false,
+          profileRestricted: false,
+          managedRestricted: false,
+          hasDenials: false,
         },
-        authority: {
-          hasAdditionalFileSystemRead: false,
-          hasAdditionalFileSystemWrite: false,
-          hasAdditionalNetwork: false,
-          actionCoverageCount: 0,
-          runGrantCount: 0,
-          sessionAuthorityCount: 0,
-          policyAmendmentCount: 0,
-        },
-        approval: {
-          canRequest: false,
-          reviewer: null,
-          pending: false,
-          requestsRemaining: 0,
-        },
+        managedConstraintSetId: "eval-managed",
+        canRequestAdditionalPermissions: false,
       },
-      metadata: {},
+      authority: {
+        hasAdditionalFileSystemRead: false,
+        hasAdditionalFileSystemWrite: false,
+        hasAdditionalNetwork: false,
+        actionCoverageCount: 0,
+        runGrantCount: 0,
+        sessionAuthorityCount: 0,
+        policyAmendmentCount: 0,
+      },
+      approval: {
+        canRequest: false,
+        reviewer: null,
+        pending: false,
+        requestsRemaining: 0,
+      },
     },
     workspace: {
       primary: {

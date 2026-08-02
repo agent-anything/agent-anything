@@ -1,0 +1,27 @@
+{
+  "name": "@agent-anything/model-interaction",
+  "version": "0.0.0",
+  "description": "Provider-neutral model invocation contracts and adapters for Agent Harness.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "license": "Apache-2.0",
+  "private": true,
+  "dependencies": {
+    "@agent-anything/foundation": "workspace:*"
+  }
+}

@@ -2,9 +2,9 @@ import type {
   Provider,
   ProviderCallResult,
   ProviderRequest,
-} from "@agent-anything/providers";
+} from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/foundation";
-import { createFailedRunResult } from "@agent-anything/agent-core/run";
+import { createFailedRunResult } from "@agent-anything/runtime/run";
 import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "../task/index.js";
 import { createHelarcProductComposition } from "./HelarcProductComposition.js";
@@ -115,7 +115,7 @@ class UnusedProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
-    requestRetryScheduler: { kind: "platform" as const },
+    requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
   };
 

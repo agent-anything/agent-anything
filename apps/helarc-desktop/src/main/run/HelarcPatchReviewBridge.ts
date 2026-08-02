@@ -1,4 +1,4 @@
-import type { CancellationContext } from "@agent-anything/agent-core/run";
+import type { CancellationContext } from "@agent-anything/runtime/run";
 import type {
   HelarcPatchReviewBridge,
   HelarcPatchReviewDecisionSubmission,

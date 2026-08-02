@@ -5,13 +5,13 @@ import {
   type SandboxEnforcement,
   type SandboxProvider,
 } from "@agent-anything/action-execution";
-import type { RunResult } from "@agent-anything/agent-core";
+import type { RunResult } from "@agent-anything/runtime/run";
 import { RuntimeEventEmitter } from "@agent-anything/agent-core/events";
 import type {
   ApprovalReviewerBinding,
   RunCancellationController,
-} from "@agent-anything/agent-core/run";
-import { Runner } from "@agent-anything/agent-runtime";
+} from "@agent-anything/runtime/run";
+import { Runner } from "@agent-anything/runtime";
 import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,
@@ -51,7 +51,7 @@ import {
   type HelarcToolMode,
 } from "@agent-anything/helarc";
 import type { SessionAuthorityPort } from "@agent-anything/permission";
-import type { Provider } from "@agent-anything/providers";
+import type { Provider } from "@agent-anything/model-interaction";
 import {
   listRunWorkspaces,
   type AgentTask,

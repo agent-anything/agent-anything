@@ -5,7 +5,7 @@ import {
 } from "@agent-anything/permission";
 import type { Metadata } from "@agent-anything/foundation";
 import type { RuntimeEvent } from "@agent-anything/agent-core/events";
-import type { PlanProjection, PlanStepStatus } from "@agent-anything/agent-core/plan";
+import type { PlanProjection, PlanStepStatus } from "@agent-anything/runtime/plan";
 import { projectRuntimeEventForHost } from "./HostRuntimeProjection.js";
 import {
   HOST_RETRY_EVENT_LIMIT,

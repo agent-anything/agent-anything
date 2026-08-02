@@ -124,9 +124,8 @@ function checkFile(file) {
 
 function checkPublicApiImport(file, owner, statement, specifier) {
   const executionPackages = new Set([
-    "@agent-anything/agent-core",
     "@agent-anything/action-execution",
-    "@agent-anything/agent-runtime",
+    "@agent-anything/runtime",
     "@agent-anything/host",
   ]);
   const packageName = parseWorkspaceSpecifier(specifier).packageName;
@@ -151,8 +150,6 @@ function checkPublicApiImport(file, owner, statement, specifier) {
   }
 
   const allowedRootTypes = new Set([
-    "Controller",
-    "RunResult",
     "RuntimeEvent",
   ]);
   const clause = statement.importClause;
@@ -241,6 +238,22 @@ function checkArchitectureSource(file, text, isTestOnly) {
   }
   if (/\bwaiting_for_permission\b/.test(text)) {
     report("removed_run_status", { file, message: "Retains the removed waiting_for_permission status." });
+  }
+  if (
+    /requestRetryScheduler[\s\S]{0,200}?kind\s*:\s*["']platform["']/.test(text)
+  ) {
+    report("removed_provider_retry_owner", {
+      file,
+      message: "Retains the removed architectural Provider Retry owner 'platform'.",
+    });
+  }
+  if (
+    /requestRetryScheduler[\s\S]{0,200}?kind\s*:\s*["']platform["']/.test(text)
+  ) {
+    report("removed_provider_retry_owner", {
+      file,
+      message: "Retains the removed architectural Provider Retry owner 'platform'.",
+    });
   }
   if (/helarc:(?:start|cancel)-session/.test(text)) {
     report("removed_session_ipc", { file, message: "Retains a removed Session-named IPC channel." });

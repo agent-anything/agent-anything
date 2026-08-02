@@ -1,4 +1,4 @@
-import type { Provider } from "@agent-anything/providers";
+import type { Provider } from "@agent-anything/model-interaction";
 import { OllamaProvider } from "./OllamaProvider.js";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider.js";
 import type { HelarcProviderConfig } from "./resolveHelarcProviderConfig.js";

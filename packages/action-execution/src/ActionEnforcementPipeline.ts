@@ -9,8 +9,10 @@ import {
   type ActionApprovalCause,
 } from "@agent-anything/permission";
 import type { ActionPolicyPort, PolicyDecision } from "@agent-anything/governance";
-import type { Action } from "@agent-anything/foundation/action";
-import type { ActionRejectedCode } from "@agent-anything/agent-core/run";
+import type {
+  Action,
+  ActionRejectedCode,
+} from "@agent-anything/foundation/action";
 import type { RuntimeError } from "@agent-anything/foundation";
 import {
   type ActionAdapterImplementation,

@@ -1,6 +1,6 @@
 import {
   createRunCancellationController,
-} from "@agent-anything/agent-core/run";
+} from "@agent-anything/runtime/run";
 import type { ContextProjection } from "@agent-anything/agent-core/context";
 import {
   createStaticHostIdentityResolver,
@@ -16,7 +16,7 @@ import type {
   Provider,
   ProviderCallResult,
   ProviderRequest,
-} from "@agent-anything/providers";
+} from "@agent-anything/model-interaction";
 import type {
   InvocationInterruptionContext,
   RunWorkspace,
@@ -858,7 +858,7 @@ class ScriptedProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
-    requestRetryScheduler: { kind: "platform" as const },
+    requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
   };
   readonly requests: ProviderRequest[] = [];
@@ -907,7 +907,7 @@ class RetryThenCompleteProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
-    requestRetryScheduler: { kind: "platform" as const },
+    requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
   };
   readonly requests: ProviderRequest[] = [];

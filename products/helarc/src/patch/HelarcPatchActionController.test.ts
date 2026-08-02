@@ -1,13 +1,13 @@
-import type { Controller } from "@agent-anything/agent-core";
+import type { Controller } from "@agent-anything/runtime/controller";
 import type {
   ControllerCallContext,
   ControllerDecision,
   ControllerInput,
-} from "@agent-anything/agent-core/controller";
+} from "@agent-anything/runtime/controller";
 import {
   createRunCancellationController,
   type Observation,
-} from "@agent-anything/agent-core/run";
+} from "@agent-anything/runtime/run";
 import type {
   HelarcPatchReviewBridge,
   HelarcPatchReviewDecisionSubmission,

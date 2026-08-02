@@ -7,7 +7,7 @@ import {
 } from "@agent-anything/host";
 import {
   createRunCancellationController,
-} from "@agent-anything/agent-core/run";
+} from "@agent-anything/runtime/run";
 import {
   createHelarcProviderProfile,
   createHelarcConversation,
@@ -47,7 +47,7 @@ import type {
   ApprovalDecisionSubmission,
   ApprovalSubmissionReceipt,
 } from "@agent-anything/permission";
-import type { Provider } from "@agent-anything/providers";
+import type { Provider } from "@agent-anything/model-interaction";
 import { basename, isAbsolute, normalize } from "node:path";
 import type { ProviderCredentialStoreError } from "./provider/ProviderCredentialStore.js";
 import {

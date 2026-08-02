@@ -3,18 +3,18 @@ import {
   StructuredOutputError,
   createSystemRetryExecutor,
   systemRetryClock,
-} from "@agent-anything/agent-runtime";
+} from "@agent-anything/runtime";
 import {
   type ControllerCallContext,
   type ControllerInput,
-} from "@agent-anything/agent-core/controller";
-import { createRunCancellationController } from "@agent-anything/agent-core/run";
+} from "@agent-anything/runtime/controller";
+import { createRunCancellationController } from "@agent-anything/runtime/run";
 import type {
   Provider,
   ProviderCallResult,
   ProviderRequest,
   ProviderResponse,
-} from "@agent-anything/providers";
+} from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 import {
   createToolCatalogSnapshot,
@@ -463,7 +463,7 @@ class FakeProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
     },
-    requestRetryScheduler: { kind: "platform" as const },
+    requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
   };
   readonly requests: ProviderRequest[] = [];

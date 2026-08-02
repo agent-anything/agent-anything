@@ -11,11 +11,11 @@ import {
 import {
   type Controller,
   type RunResult,
-} from "@agent-anything/agent-core";
+} from "@agent-anything/runtime";
 import type { Agent, AgentTask } from "@agent-anything/foundation";
-import type { ControllerDecision } from "@agent-anything/agent-core/controller";
-import { createRunCancellationController } from "@agent-anything/agent-core/run";
-import { Runner, type RunConfig } from "@agent-anything/agent-runtime";
+import type { ControllerDecision } from "@agent-anything/runtime/controller";
+import { createRunCancellationController } from "@agent-anything/runtime/run";
+import { Runner, type RunConfig } from "@agent-anything/runtime";
 import { EvidenceBuilder } from "@agent-anything/evidence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
 import type { ApprovalReviewerPort } from "@agent-anything/permission";

@@ -23,7 +23,7 @@ import {
   type ApprovalReviewerBinding,
   type AuthorityApplicationLimits,
   type ResolvedRunPermissionConfig,
-} from "@agent-anything/agent-core/run";
+} from "@agent-anything/runtime/run";
 
 export interface HostPermissionProfileSelection {
   readonly profileId: string;

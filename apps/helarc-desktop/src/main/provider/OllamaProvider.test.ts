@@ -1,6 +1,6 @@
 import type {
   ProviderRequest,
-} from "@agent-anything/providers";
+} from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/foundation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OllamaProvider } from "./OllamaProvider.js";

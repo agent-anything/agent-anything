@@ -39,13 +39,12 @@
   "private": true,
   "dependencies": {
     "@agent-anything/action-execution": "workspace:*",
-    "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/foundation": "workspace:*",
     "@agent-anything/tools": "workspace:*"
   },
   "devDependencies": {
-    "@agent-anything/agent-runtime": "workspace:*",
+    "@agent-anything/runtime": "workspace:*",
     "@agent-anything/evidence": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/storage": "workspace:*",

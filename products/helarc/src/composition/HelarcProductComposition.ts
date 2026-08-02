@@ -2,12 +2,12 @@ import {
   ProviderBackedController,
   createSystemRetryExecutor,
   systemRetryClock,
-} from "@agent-anything/agent-runtime";
+} from "@agent-anything/runtime";
 import type {
   Controller,
   RunResult,
-  RuntimeEvent,
-} from "@agent-anything/agent-core";
+} from "@agent-anything/runtime";
+import type { RuntimeEvent } from "@agent-anything/agent-core/events";
 import type {
   Agent,
   AgentTask,
@@ -15,10 +15,10 @@ import type {
   Metadata,
   RunWorkspace,
 } from "@agent-anything/foundation";
-import type { RetryClock } from "@agent-anything/agent-core/retry";
+import type { RetryClock } from "@agent-anything/runtime/retry";
 import type { SandboxEnforcement } from "@agent-anything/action-execution";
 import type { CodeAgentCommandLimits } from "@agent-anything/code-agent/command";
-import type { Provider } from "@agent-anything/providers";
+import type { Provider } from "@agent-anything/model-interaction";
 import {
   buildHelarcProviderRequest,
   HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,

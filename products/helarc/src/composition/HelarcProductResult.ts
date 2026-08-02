@@ -1,7 +1,5 @@
-import type {
-  RunResult,
-  RuntimeEvent,
-} from "@agent-anything/agent-core";
+import type { RuntimeEvent } from "@agent-anything/agent-core/events";
+import type { RunResult } from "@agent-anything/runtime/run";
 import type {
   AgentTask,
   RunWorkspace,

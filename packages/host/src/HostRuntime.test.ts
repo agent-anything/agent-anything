@@ -15,16 +15,16 @@ import type {
   ControllerCallContext,
   ControllerDecision,
   ControllerInput,
-} from "@agent-anything/agent-core/controller";
+} from "@agent-anything/runtime/controller";
 import { RuntimeEventEmitter } from "@agent-anything/agent-core/events";
 import {
   createRunCancellationController,
   type ResolvedRunPermissionConfig,
-} from "@agent-anything/agent-core/run";
+} from "@agent-anything/runtime/run";
 import {
   Runner,
   type RunConfig,
-} from "@agent-anything/agent-runtime";
+} from "@agent-anything/runtime";
 import {
   createHostRuntime,
   type HostRunOutcome,

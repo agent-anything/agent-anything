@@ -1,4 +1,4 @@
-import { createRunCancellationController } from "@agent-anything/agent-core/run";
+import { createRunCancellationController } from "@agent-anything/runtime/run";
 import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,

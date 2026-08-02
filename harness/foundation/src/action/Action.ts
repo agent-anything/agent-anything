@@ -2,6 +2,11 @@ import type { ISODateTimeString, Metadata } from "../primitives/index.js";
 
 export type ActionKind = "internal" | "tool" | "permission_request";
 
+export type ActionRejectedCode =
+  | "action_invalid"
+  | "action_unsupported"
+  | "tool_not_found";
+
 export interface ActionCandidate {
   readonly kind: ActionKind;
   readonly name: string;

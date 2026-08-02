@@ -2,7 +2,7 @@
 
 AgentAnything is a TypeScript workspace for building tool-using AI agent products.
 
-The project is organized around a reusable platform foundation, product-level agent
+The project is organized around a reusable Agent Harness, product-level agent
 composition, and host applications. Helarc is the primary product direction: an
 agent workbench that starts with workspace-aware developer tasks, tool orchestration,
 permission flows, change review, and durable run history, then grows beyond the
@@ -10,15 +10,18 @@ initial code-agent desktop stage.
 
 ## Current State
 
-- The platform is split into fifteen focused workspaces with executable dependency,
+- The repository is split into seventeen focused workspaces with executable dependency,
   source, and public API checks.
-- `agent-core` provides Agent, Controller, Run, Action, Observation, Context,
-  Plan, Retry, event, and task semantics and protocols. Its root is a small
-  type-only composition surface; detailed Contracts use focused subpaths.
+- `foundation` provides dependency-free Agent, Task, Run, Workspace, Identity,
+  Action, Observation, Artifact, interaction, result, and technical Contracts.
+- `model-interaction` owns Provider-neutral request, response, capability,
+  interruption, and Retry-scheduler ownership Contracts.
+- `runtime` owns the authoritative Runner, Agent Loop, Controller, RunState,
+  planning, cancellation, Retry coordination, limits, and terminalization.
+- `agent-core` is temporarily limited to Context and RuntimeEvent Contracts
+  awaiting their dedicated Harness package moves.
 - `action-execution` provides the trusted Action preparation, assessment,
   revalidation, and Sandbox dispatch path.
-- `agent-runtime` provides the authoritative Runner, provider-backed Controller,
-  and Retry execution implementations.
 - `host` provides product-neutral active Run integration, safe projections,
   approval bridges, and Host authority stores.
 - Helarc is the main active product and has a working Electron desktop host.
@@ -68,9 +71,11 @@ Current Helarc capabilities include:
 
 ```text
 agent-anything/
+  harness/
+    foundation/       Dependency-free Harness contracts and semantics
+    model-interaction/ Provider-neutral model invocation contracts
+    runtime/          Runner, Agent Loop, Controller, Plan, Retry, Run lifecycle
   packages/
-    shared/          Shared primitives and result helpers
-    providers/       Provider contracts
     tools/           Declarative Tool catalog and result contracts
     evidence/        Evidence contracts and builders
     permission/      Permission profiles, approvals, and authority contracts
@@ -79,9 +84,8 @@ agent-anything/
     storage/         Storage port contracts
     testing/         Lower-level test fakes
     extensions/      MCP, plugins, remote tools, and extension points
-    agent-core/      Agent and Run semantics, Controller and Retry protocols
+    agent-core/      Transitional Context and RuntimeEvent contracts
     action-execution/ Trusted Action preparation and Sandbox dispatch
-    agent-runtime/   Runner, provider-backed Controller, Retry execution
     host/            Host runtime integration, safe projections, approval bridges
     code-agent/      Code-oriented tools and workflows
   products/
@@ -96,31 +100,31 @@ agent-anything/
 
 ## Package Boundaries
 
-Platform packages are designed to point inward:
+Reusable Harness packages are designed to point inward:
 
-- Lower-level packages such as `shared`, `providers`, `tools`, `permission`,
-  `governance`, `observability`, and `storage` define focused contracts.
-- `agent-core` owns Agent and Run semantics plus Controller, Retry, Plan, Context,
-  and event protocols.
+- `foundation` is dependency-free with respect to higher Harness components and
+  Products.
+- `model-interaction` owns Provider-neutral invocation semantics.
+- `runtime` owns authoritative Run advancement and coordinates other components
+  through their public Contracts.
+- `agent-core` currently exposes only Context and RuntimeEvent subpaths.
 - `action-execution` owns canonical Action preparation, policy and authority
   assessment, revalidation, and the mandatory Sandbox execution gateway.
-- `agent-runtime` owns authoritative Run advancement and concrete Controller and
-  Retry execution, and depends on Action execution without reversing that edge.
 - `host` adapts authoritative Runner execution to product-neutral application hosts.
 - `extensions` contains optional integration surfaces such as MCP, plugins,
   remote tools, remote Actions, and enterprise storage behind focused subpaths.
 - `code-agent` exposes focused workspace, filesystem, command, and patch
   capability subpaths while keeping external effects behind Action execution.
-- Product packages compose platform contracts into product behavior.
+- Product packages compose Harness contracts into product behavior.
 - App packages own UI, local persistence, credentials, desktop concerns, and
   product hosting.
 
 `pnpm-workspace.yaml` is the package-location authority. Boundary rules are checked
 by `scripts/check-boundaries.mjs` using the reusable policy under
-`scripts/architecture/` and run as part of the root test command. Platform packages
-cannot depend on products or apps; products cannot depend on apps or another
-product; apps cannot depend on another app. Platform production edges must also
-match the exact reviewed dependency graph.
+`scripts/architecture/` and run as part of the root test command. Harness and
+reusable component packages cannot depend on products or apps; products cannot
+depend on apps or another product; apps cannot depend on another app. Production
+edges must also match the exact reviewed dependency graph.
 
 ## Common Commands
 
@@ -206,7 +210,7 @@ Provider timeout values use positive whole-second increments expressed in millis
 
 ## Status
 
-The repository is still pre-product-1.0. The platform now has separate ownership
+The repository is still pre-product-1.0. The Harness now has separate ownership
 for Agent semantics, trusted Action execution, authoritative Run advancement,
 Host integration, capabilities, and lower Contracts. Helarc exercises that graph
 through a working Desktop Run, review, cancellation, and durable Thread workflow.
