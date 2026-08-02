@@ -77,7 +77,7 @@ function reviewInput(): ApprovalReviewInput {
       runId: "run.1",
       actionId: "action.1",
       actionFingerprint: "fingerprint.1",
-      category: "mcpToolCall",
+      category: "remoteToolCall",
       reason: "Review MCP call.",
       subject: {
         runId: "run.1",
@@ -87,9 +87,25 @@ function reviewInput(): ApprovalReviewInput {
         applicabilityKeyCount: 0,
       },
       payload: {
-        serverId: "server.1",
-        serverDisplayName: "Server",
-        toolName: "read",
+        source: {
+          kind: "mcp",
+          sourceId: "mcp.server.1",
+          displayName: "MCP Server",
+          sourceRevision: "1",
+          activationEpoch: 1,
+          capabilityId: "read",
+        },
+        server: {
+          serverId: "server.1",
+          displayName: "Server",
+          registrationFingerprint: "sha256:server.1",
+          transport: "stdio",
+          endpoint: null,
+        },
+        tool: {
+          name: "read",
+          displayName: "Read",
+        },
         safeArguments: {},
         annotations: {
           readOnlyHint: true,

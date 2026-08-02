@@ -5,7 +5,7 @@ import type {
   FileBaseline,
 } from "@agent-anything/action-execution";
 import type { RunWorkspace } from "@agent-anything/foundation";
-import type { ToolCatalogSnapshot } from "@agent-anything/tools";
+import type { ToolRegistrationSnapshot } from "@agent-anything/tools";
 import type {
   CodeAgentCommandLimits,
   ProcessTerminationLimits,
@@ -25,8 +25,8 @@ export interface CreateCodeAgentCommandActionCapabilityInput {
 }
 
 export interface CodeAgentCommandActionCapability {
-  readonly catalog: ToolCatalogSnapshot;
-  readonly registrations: ActionRegistrationSnapshot;
+  readonly toolRegistrations: ToolRegistrationSnapshot;
+  readonly actionRegistrations: ActionRegistrationSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
   readonly executors: readonly ActionExecutor[];
 }

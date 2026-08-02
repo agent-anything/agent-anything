@@ -195,6 +195,7 @@ export async function prepareHelarcHostRun(
   });
   const actionEnforcementPipeline = new ActionEnforcementPipeline({
     registrations: product.actions.registrations,
+    toolBindings: product.actions.toolBindings,
     adapters: product.actions.adapters,
     policyPort: createAllowAllActionPolicyPort(),
     now: input.now,
@@ -233,6 +234,7 @@ export async function prepareHelarcHostRun(
       registrationFingerprints: product.actions.registrations.registrations.map(
         (registration) => registration.registrationFingerprint,
       ),
+      toolBindingSnapshotId: product.actions.toolBindings.snapshotId,
       workspaceRootFingerprints: canonicalRoots.map(
         (root) => root.resolutionFingerprint,
       ),
@@ -268,7 +270,7 @@ export async function prepareHelarcHostRun(
         },
       },
       permissions: permissions.permissions,
-      toolCatalog: product.actions.exposedCatalog,
+      toolBindings: product.actions.toolBindings,
       limits: {
         maxIterations: 5,
         maxActions: 8,

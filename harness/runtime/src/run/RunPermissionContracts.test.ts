@@ -441,7 +441,7 @@ function approvalRequest() {
     id: "approval.request.1",
     createdAt: "2026-07-15T00:00:00.000Z",
     requirement: {
-      category: "mcpToolCall",
+      category: "remoteToolCall",
       subject: {
         runId: "run.test",
         actionId: "action.test",
@@ -451,9 +451,25 @@ function approvalRequest() {
       },
       reason: "Review MCP tool call.",
       payload: {
-        serverId: "server.test",
-        serverDisplayName: "Test server",
-        toolName: "read",
+        source: {
+          kind: "mcp",
+          sourceId: "mcp.server.test",
+          displayName: "Test MCP source",
+          sourceRevision: "1",
+          activationEpoch: 1,
+          capabilityId: "read",
+        },
+        server: {
+          serverId: "server.test",
+          displayName: "Test server",
+          registrationFingerprint: "sha256:server.test",
+          transport: "stdio",
+          endpoint: null,
+        },
+        tool: {
+          name: "read",
+          displayName: "Read",
+        },
         safeArguments: {},
         annotations: {
           readOnlyHint: true,

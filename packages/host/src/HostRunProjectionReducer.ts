@@ -30,7 +30,7 @@ const approvalCategories: readonly ApprovalCategory[] = [
   "commandExecution",
   "fileChange",
   "permissions",
-  "mcpToolCall",
+  "remoteToolCall",
   "skill",
   "networkAccess",
 ];

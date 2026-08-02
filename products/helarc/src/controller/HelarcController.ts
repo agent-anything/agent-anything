@@ -167,11 +167,13 @@ export function parseHelarcProviderResponse(
           kind: "tool" as const,
           name: output.toolName,
           input: output.input,
+          origin: "model" as const,
           modelItemId: modelItem.id,
         })]) as readonly [{
           readonly kind: "tool";
           readonly name: string;
           readonly input: unknown;
+          readonly origin: "model";
           readonly modelItemId: string;
         }],
         modelItems,
@@ -188,11 +190,13 @@ export function parseHelarcProviderResponse(
             permissions: output.permissions,
             reason: output.reason,
           }),
+          origin: "model" as const,
           modelItemId: modelItem.id,
         })]) as readonly [{
           readonly kind: "permission_request";
           readonly name: "request_permissions";
           readonly input: unknown;
+          readonly origin: "model";
           readonly modelItemId: string;
         }],
         modelItems,
@@ -210,11 +214,13 @@ export function parseHelarcProviderResponse(
               : { explanation: output.explanation }),
             plan: output.plan,
           }),
+          origin: "model" as const,
           modelItemId: modelItem.id,
         })]) as readonly [{
           readonly kind: "internal";
           readonly name: "update_plan";
           readonly input: unknown;
+          readonly origin: "model";
           readonly modelItemId: string;
         }],
         modelItems,

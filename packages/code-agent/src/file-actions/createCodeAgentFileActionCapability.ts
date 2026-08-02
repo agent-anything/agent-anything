@@ -20,7 +20,7 @@ import {
   type TargetStateAssertion,
 } from "@agent-anything/action-execution";
 import type { ToolJsonObject, ToolResult } from "@agent-anything/tools";
-import { createToolCatalogSnapshot } from "@agent-anything/tools";
+import { createToolRegistrationSnapshot } from "@agent-anything/tools";
 import type {
   FileSearchMatch,
   ListFilesOutput,
@@ -79,7 +79,7 @@ export function createCodeAgentFileActionCapability(
 ): CodeAgentFileActionCapability {
   const limits = resolveFileSystemLimits(input.limits);
   const now = input.now ?? (() => new Date().toISOString());
-  const registrations = createActionRegistrationSnapshot(ACTION_NAMES.map((actionName) => ({
+  const actionRegistrations = createActionRegistrationSnapshot(ACTION_NAMES.map((actionName) => ({
     actionName,
     adapter: ADAPTER_DESCRIPTOR,
     executor: EXECUTOR_DESCRIPTOR,
@@ -88,8 +88,8 @@ export function createCodeAgentFileActionCapability(
   const executor = createFileActionExecutor(limits, now);
 
   return Object.freeze({
-    catalog: createFileToolCatalog(),
-    registrations,
+    toolRegistrations: createFileToolRegistrations(),
+    actionRegistrations,
     adapters: Object.freeze(ACTION_NAMES.map((actionName) => Object.freeze({
       actionName,
       adapter,
@@ -98,38 +98,38 @@ export function createCodeAgentFileActionCapability(
   });
 }
 
-function createFileToolCatalog() {
+function createFileToolRegistrations() {
   const pathProperty = { type: "string" } as const;
   const baseProperties = {
     rootName: { type: "string" },
     path: pathProperty,
   };
-  return createToolCatalogSnapshot([
-    descriptor(CODE_AGENT_LIST_FILES_ACTION, "List files inside a declared task workspace root.", {
+  const descriptors = [
+    descriptor(CODE_AGENT_LIST_FILES_ACTION, "List files inside a declared Run workspace root.", {
       type: "object",
       additionalProperties: false,
       required: ["path"],
       properties: { ...baseProperties, recursive: { type: "boolean" } },
     }, true, false),
-    descriptor(CODE_AGENT_READ_FILE_ACTION, "Read a UTF-8 file inside a declared task workspace root.", {
+    descriptor(CODE_AGENT_READ_FILE_ACTION, "Read a UTF-8 file inside a declared Run workspace root.", {
       type: "object",
       additionalProperties: false,
       required: ["path"],
       properties: baseProperties,
     }, true, false),
-    descriptor(CODE_AGENT_SEARCH_FILES_ACTION, "Search UTF-8 files inside a declared task workspace root.", {
+    descriptor(CODE_AGENT_SEARCH_FILES_ACTION, "Search UTF-8 files inside a declared Run workspace root.", {
       type: "object",
       additionalProperties: false,
       required: ["path", "query"],
       properties: { ...baseProperties, query: { type: "string", minLength: 1 } },
     }, true, false),
-    descriptor(CODE_AGENT_CREATE_FILE_ACTION, "Create a UTF-8 file inside a declared task workspace root.", {
+    descriptor(CODE_AGENT_CREATE_FILE_ACTION, "Create a UTF-8 file inside a declared Run workspace root.", {
       type: "object",
       additionalProperties: false,
       required: ["path", "content"],
       properties: { ...baseProperties, content: { type: "string" } },
     }, false, true),
-    descriptor(CODE_AGENT_UPDATE_FILE_ACTION, "Replace one UTF-8 file inside a declared task workspace root.", {
+    descriptor(CODE_AGENT_UPDATE_FILE_ACTION, "Replace one UTF-8 file inside a declared Run workspace root.", {
       type: "object",
       additionalProperties: false,
       required: ["path", "content"],
@@ -139,7 +139,7 @@ function createFileToolCatalog() {
         expectedContentDigest: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
       },
     }, false, true),
-    descriptor(CODE_AGENT_DELETE_FILE_ACTION, "Delete one file inside a declared task workspace root.", {
+    descriptor(CODE_AGENT_DELETE_FILE_ACTION, "Delete one file inside a declared Run workspace root.", {
       type: "object",
       additionalProperties: false,
       required: ["path"],
@@ -148,7 +148,23 @@ function createFileToolCatalog() {
         expectedContentDigest: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
       },
     }, false, true),
-  ]);
+  ];
+  return createToolRegistrationSnapshot(descriptors.map((toolDescriptor) => ({
+    descriptor: toolDescriptor,
+    source: {
+      kind: "product",
+      sourceId: "helarc-code-agent",
+      sourceRevision: "1",
+      activationEpoch: null,
+      capabilityId: toolDescriptor.name,
+    },
+    schema: {
+      dialect: "json-schema-2020-12",
+      translationVersion: "native-v1",
+    },
+    boundActionName: toolDescriptor.name,
+    registrationVersion: "1",
+  })));
 }
 
 function descriptor(

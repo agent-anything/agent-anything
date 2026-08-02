@@ -16,6 +16,9 @@ export interface CreateMcpActionCapabilityInput {
 export function createMcpActionCapability(
   input: CreateMcpActionCapabilityInput,
 ): RemoteActionCapability {
+  if (input.registration.source.kind !== "mcp") {
+    throw new TypeError("MCP Action capability requires MCP Tool source provenance.");
+  }
   const now = input.now ?? (() => new Date().toISOString());
   return createRemoteActionCapability({
     registration: input.registration,
@@ -54,6 +57,9 @@ export function createMcpActionCapability(
             finishedAt: now(),
             metadata: {
               ...result.metadata,
+              remoteSourceKind: invocation.source.kind,
+              remoteSourceId: invocation.source.sourceId,
+              remoteSourceCapabilityId: invocation.source.capabilityId,
               mcpServerId: invocation.serverId,
               mcpToolName: invocation.toolName,
             },

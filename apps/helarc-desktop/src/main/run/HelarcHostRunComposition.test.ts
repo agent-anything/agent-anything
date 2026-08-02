@@ -169,7 +169,7 @@ describe("Helarc Host Run composition", () => {
     const runFixture = createTask("D:/workspace");
     const composition = await createHelarcActionComposition(runFixture.workspace, { enableShell: false });
 
-    expect(composition.exposedCatalog.tools.map((tool) => tool.name)).toEqual([
+    expect(composition.toolBindings.toolCatalog.tools.map((tool) => tool.name)).toEqual([
       "codeAgent.listFiles",
       "codeAgent.readFile",
       "codeAgent.searchFiles",
@@ -180,7 +180,15 @@ describe("Helarc Host Run composition", () => {
         "codeAgent.updateFile",
         "codeAgent.deleteFile",
       ]));
-    expect(composition.exposedCatalog.tools.some(({ name }) => name === "codeAgent.createFile"))
+    expect(composition.toolBindings.bindings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        toolName: "codeAgent.createFile",
+        origins: ["workflow"],
+      }),
+    ]));
+    expect(composition.toolBindings.toolCatalog.tools.some(
+      ({ name }) => name === "codeAgent.createFile",
+    ))
       .toBe(false);
   });
 
@@ -188,7 +196,7 @@ describe("Helarc Host Run composition", () => {
     const runFixture = createTask("D:/workspace");
     const composition = await createHelarcActionComposition(runFixture.workspace, { enableShell: true });
 
-    expect(composition.exposedCatalog.tools.map(({ name }) => name))
+    expect(composition.toolBindings.toolCatalog.tools.map(({ name }) => name))
       .toContain("codeAgent.runCommand");
     expect(composition.registrations.registrations.map(({ actionName }) => actionName))
       .toContain("codeAgent.runCommand");

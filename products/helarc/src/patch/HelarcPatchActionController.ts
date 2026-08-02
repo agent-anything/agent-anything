@@ -171,6 +171,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
           kind: "tool" as const,
           name: action.actionName,
           input: action.input,
+          origin: "workflow" as const,
           modelItemId: modelItem.id,
         })]) as unknown as Extract<
           ControllerDecision<HelarcAgentOutput>,

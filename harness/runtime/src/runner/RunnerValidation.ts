@@ -10,8 +10,10 @@ import type { ControllerDecision } from "@agent-anything/runtime/controller";
 import { assertValidPlanLimits } from "@agent-anything/runtime/plan";
 import { snapshotRetryPolicy } from "@agent-anything/runtime/retry";
 import { snapshotResolvedRunPermissionConfig } from "@agent-anything/runtime/run";
-import { snapshotRunActionContext } from "@agent-anything/action-execution";
-import { createToolCatalogSnapshot } from "@agent-anything/tools";
+import {
+  assertToolActionBindingSnapshot,
+  snapshotRunActionContext,
+} from "@agent-anything/action-execution";
 import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
 
 export { snapshotAgent, snapshotRunInput };
@@ -67,10 +69,8 @@ export function snapshotRunConfig(
             identity,
             profile: permissions.permissionProfile,
           });
-    if (!isRecord(config.toolCatalog) || !Array.isArray(config.toolCatalog.tools)) {
-      throw new TypeError("RunConfig.toolCatalog must be a ToolCatalogSnapshot.");
-    }
-    const toolCatalog = createToolCatalogSnapshot(config.toolCatalog.tools);
+    assertToolActionBindingSnapshot(config.toolBindings);
+    const toolBindings = config.toolBindings;
 
     if (!isRecord(config.limits)) {
       throw new TypeError("RunConfig.limits must be a RunLimits object.");
@@ -140,7 +140,7 @@ export function snapshotRunConfig(
         identity,
         actionContext,
         permissions,
-        toolCatalog,
+        toolBindings,
         limits: Object.freeze({
           ...config.limits,
           plan: Object.freeze({ ...config.limits.plan }),
@@ -223,6 +223,7 @@ export function validateControllerDecision(
       ) ||
       typeof action.name !== "string" ||
       action.name.trim().length === 0 ||
+      (action.origin !== "model" && action.origin !== "workflow") ||
       typeof action.modelItemId !== "string" ||
       !modelItemIds.has(action.modelItemId)
     ) {

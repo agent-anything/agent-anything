@@ -19,7 +19,7 @@ import {
 } from "@agent-anything/action-execution";
 import type { InvocationInterruptionRef } from "@agent-anything/foundation";
 import type { ToolJsonObject, ToolResult } from "@agent-anything/tools";
-import { createToolCatalogSnapshot } from "@agent-anything/tools";
+import { createToolRegistrationSnapshot } from "@agent-anything/tools";
 import {
   executeProcess,
   type CapturedProcessOutput,
@@ -73,7 +73,7 @@ export async function createCodeAgentCommandActionCapability(
   });
   const now = input.now ?? (() => new Date().toISOString());
   const nowMs = input.nowMs ?? (() => Date.now());
-  const registrations = createActionRegistrationSnapshot([{
+  const actionRegistrations = createActionRegistrationSnapshot([{
     actionName: CODE_AGENT_RUN_COMMAND_ACTION,
     adapter: ADAPTER_DESCRIPTOR,
     executor: EXECUTOR_DESCRIPTOR,
@@ -81,8 +81,8 @@ export async function createCodeAgentCommandActionCapability(
   const adapter = createCommandActionAdapter(input, limits, termination, environment);
 
   return Object.freeze({
-    catalog: createCommandCatalog(),
-    registrations,
+    toolRegistrations: createCommandToolRegistrations(),
+    actionRegistrations,
     adapters: Object.freeze([Object.freeze({
       actionName: CODE_AGENT_RUN_COMMAND_ACTION,
       adapter,
@@ -93,7 +93,7 @@ export async function createCodeAgentCommandActionCapability(
   });
 }
 
-function createCommandCatalog() {
+function createCommandToolRegistrations() {
   const inputSchema: ToolJsonObject = {
     type: "object",
     additionalProperties: false,
@@ -107,9 +107,9 @@ function createCommandCatalog() {
       reason: { type: "string", minLength: 1 },
     },
   };
-  return createToolCatalogSnapshot([{
+  const descriptor = {
     name: CODE_AGENT_RUN_COMMAND_ACTION,
-    description: "Run one process inside a declared task workspace root.",
+    description: "Run one process inside a declared Run workspace root.",
     inputSchema,
     annotations: {
       title: "Run command",
@@ -119,6 +119,22 @@ function createCommandCatalog() {
       openWorldHint: true,
     },
     metadata: { capabilityOwner: "code-agent", schemaVersion: 1 },
+  };
+  return createToolRegistrationSnapshot([{
+    descriptor,
+    source: {
+      kind: "product",
+      sourceId: "helarc-code-agent",
+      sourceRevision: "1",
+      activationEpoch: null,
+      capabilityId: descriptor.name,
+    },
+    schema: {
+      dialect: "json-schema-2020-12",
+      translationVersion: "native-v1",
+    },
+    boundActionName: descriptor.name,
+    registrationVersion: "1",
   }]);
 }
 

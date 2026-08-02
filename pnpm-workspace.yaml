@@ -1,5 +1,10 @@
 packages:
-  - "harness/*"
+  - "harness/foundation"
+  - "harness/model-interaction"
+  - "harness/context"
+  - "harness/runtime"
+  - "harness/tools"
+  - "harness/safety/*"
   - "apps/*"
   - "products/*"
   - "packages/*"

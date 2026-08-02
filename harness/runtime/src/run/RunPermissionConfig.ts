@@ -258,7 +258,7 @@ function snapshotApprovalPolicy(policy: ApprovalPolicy): ApprovalPolicy {
   for (const field of [
     "sandboxApproval",
     "rules",
-    "mcpElicitations",
+    "remoteToolCalls",
     "requestPermissions",
     "skillApproval",
   ] as const) {

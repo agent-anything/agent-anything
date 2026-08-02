@@ -119,7 +119,10 @@ export function discoverPackageRoots(repoRoot, patterns) {
 
 export function classifyWorkspacePackage(repoRoot, packageRoot) {
   const path = display(repoRoot, packageRoot);
-  if (/^harness\/[^/]+$/.test(path)) return "harness";
+  if (
+    /^harness\/[^/]+$/.test(path) ||
+    /^harness\/(?:safety|integrations)\/[^/]+$/.test(path)
+  ) return "harness";
   if (/^packages\/[^/]+$/.test(path)) return "platform";
   if (/^products\/[^/]+$/.test(path)) return "product";
   if (/^apps\/[^/]+$/.test(path)) return "app";

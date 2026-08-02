@@ -1,6 +1,7 @@
 import type { ISODateTimeString, Metadata } from "../primitives/index.js";
 
 export type ActionKind = "internal" | "tool" | "permission_request";
+export type ActionOrigin = "model" | "workflow";
 
 export type ActionRejectedCode =
   | "action_invalid"
@@ -11,10 +12,12 @@ export interface ActionCandidate {
   readonly kind: ActionKind;
   readonly name: string;
   readonly input: unknown;
+  readonly origin: ActionOrigin;
   readonly modelItemId: string;
 }
 
 export interface ActionProvenance {
+  readonly origin: ActionOrigin;
   readonly modelItemId: string;
   readonly controllerIteration: number;
 }

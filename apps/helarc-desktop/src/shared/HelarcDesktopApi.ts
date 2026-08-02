@@ -144,9 +144,11 @@ export type HelarcApprovalReviewRequestSnapshot =
   | HelarcApprovalReviewRequestBase<"permissions", {
       readonly permissions: HelarcAdditionalPermissionsSnapshot;
     }>
-  | HelarcApprovalReviewRequestBase<"mcpToolCall", {
+  | HelarcApprovalReviewRequestBase<"remoteToolCall", {
+      readonly sourceKind: "mcp" | "plugin" | "remote";
+      readonly sourceDisplayName: string;
       readonly serverDisplayName: string;
-      readonly toolName: string;
+      readonly toolDisplayName: string;
     }>
   | HelarcApprovalReviewRequestBase<"skill", {
       readonly skillDisplayName: string;

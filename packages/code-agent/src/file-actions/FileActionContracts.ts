@@ -5,7 +5,7 @@ import type {
   FileBaseline,
 } from "@agent-anything/action-execution";
 import type { RunWorkspace } from "@agent-anything/foundation";
-import type { ToolCatalogSnapshot } from "@agent-anything/tools";
+import type { ToolRegistrationSnapshot } from "@agent-anything/tools";
 import type { CodeAgentFileLimits } from "../filesystem/FileSystemContracts.js";
 
 export const CODE_AGENT_LIST_FILES_ACTION = "codeAgent.listFiles";
@@ -30,8 +30,8 @@ export interface CreateCodeAgentFileActionCapabilityInput {
 }
 
 export interface CodeAgentFileActionCapability {
-  readonly catalog: ToolCatalogSnapshot;
-  readonly registrations: ActionRegistrationSnapshot;
+  readonly toolRegistrations: ToolRegistrationSnapshot;
+  readonly actionRegistrations: ActionRegistrationSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
   readonly executors: readonly ActionExecutor[];
 }

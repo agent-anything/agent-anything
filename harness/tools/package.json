@@ -1,0 +1,48 @@
+{
+  "name": "@agent-anything/tools",
+  "version": "0.0.0",
+  "description": "Declarative Tool registration, selection, catalog, and result contracts for Agent Harness.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./catalog": {
+      "types": "./src/catalog/index.ts",
+      "import": "./dist/catalog/index.js"
+    },
+    "./registration": {
+      "types": "./src/registration/index.ts",
+      "import": "./dist/registration/index.js"
+    },
+    "./selection": {
+      "types": "./src/selection/index.ts",
+      "import": "./dist/selection/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "layer": "harness",
+      "component": "tools"
+    }
+  },
+  "license": "Apache-2.0",
+  "private": true,
+  "dependencies": {
+    "@agent-anything/foundation": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1"
+  }
+}

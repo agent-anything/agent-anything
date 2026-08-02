@@ -2,6 +2,7 @@ export type {
   Action,
   ActionCandidate,
   ActionKind,
+  ActionOrigin,
   ActionProvenance,
   ActionRejectedCode,
   ObservationBase,

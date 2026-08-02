@@ -290,7 +290,7 @@ function checkArchitectureSource(file, text, isTestOnly) {
     return;
   }
   const isGateway = normalized(file).endsWith(
-    "/packages/action-execution/src/SandboxExecutionGateway.ts",
+    "/harness/safety/action-execution/src/SandboxExecutionGateway.ts",
   );
   if (!isGateway && /\b(?:actionExecutor|executor|registered\.executor)\.execute\s*\(/i.test(text)) {
     report("action_executor_dispatch", { file, message: "Invokes an ActionExecutor outside SandboxExecutionGateway." });

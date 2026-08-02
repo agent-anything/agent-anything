@@ -8,26 +8,36 @@ import type {
 import type { Metadata } from "@agent-anything/foundation";
 import type {
   ToolAnnotations,
-  ToolCatalogSnapshot,
   ToolJsonObject,
+  ToolRegistrationSnapshot,
   ToolResult,
+  ToolSchemaIdentity,
+  ToolSourceRef,
 } from "@agent-anything/tools";
 
 export interface TrustedRemoteActionRegistration {
+  readonly localToolName: string;
   readonly actionName: string;
+  readonly source: ToolSourceRef & {
+    readonly kind: "mcp" | "plugin" | "remote";
+  };
+  readonly sourceDisplayName: string;
   readonly server: CanonicalRemoteServerIdentity;
   readonly serverDisplayName: string;
   readonly toolName: string;
   readonly toolDisplayName: string;
   readonly description?: string;
   readonly inputSchema: ToolJsonObject;
+  readonly schema: ToolSchemaIdentity;
   readonly annotations?: ToolAnnotations;
+  readonly registrationVersion: string;
   readonly supportsSessionAuthority: boolean;
   readonly timeoutMs: number | null;
 }
 
 export interface RemoteActionRegistrationResolver {
   resolve(
+    source: TrustedRemoteActionRegistration["source"],
     serverId: string,
     toolName: string,
   ): Promise<TrustedRemoteActionRegistration | null>;
@@ -36,6 +46,7 @@ export interface RemoteActionRegistrationResolver {
 export interface RemoteActionInvokeInput {
   readonly actionId: string;
   readonly actionName: string;
+  readonly source: TrustedRemoteActionRegistration["source"];
   readonly serverId: string;
   readonly toolName: string;
   readonly input: SerializableValue;
@@ -54,14 +65,15 @@ export interface CreateRemoteActionCapabilityInput {
 }
 
 export interface RemoteActionCapability {
-  readonly catalog: ToolCatalogSnapshot;
-  readonly registrations: ActionRegistrationSnapshot;
+  readonly toolRegistrations: ToolRegistrationSnapshot;
+  readonly actionRegistrations: ActionRegistrationSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
   readonly executors: readonly ActionExecutor[];
 }
 
 export interface PreparedRemoteActionInvocationPayload {
   readonly actionName: string;
+  readonly source: TrustedRemoteActionRegistration["source"];
   readonly serverId: string;
   readonly registrationFingerprint: string;
   readonly transport: CanonicalRemoteServerIdentity["transport"];
@@ -72,6 +84,9 @@ export interface PreparedRemoteActionInvocationPayload {
 }
 
 export interface RemoteActionResultMetadata extends Metadata {
+  readonly remoteSourceKind: TrustedRemoteActionRegistration["source"]["kind"];
+  readonly remoteSourceId: string;
+  readonly remoteSourceCapabilityId: string;
   readonly remoteServerId: string;
   readonly remoteToolName: string;
 }

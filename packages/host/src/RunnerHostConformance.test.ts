@@ -32,6 +32,7 @@ import {
   createRunCancellationController,
   type ResolvedRunPermissionConfig,
 } from "@agent-anything/runtime/run";
+import { createEmptyToolActionBindingSnapshot } from "@agent-anything/action-execution";
 
 interface ConformanceOutput {
   readonly summary: string;
@@ -498,10 +499,7 @@ function createHostInput(input: {
       },
       actionContext: null,
       permissions: createTestPermissionConfig(),
-      toolCatalog: {
-        schemaVersion: 1,
-        tools: [],
-      },
+      toolBindings: createEmptyToolActionBindingSnapshot(),
       limits: {
         maxIterations: 5,
         maxActions: 5,
@@ -629,11 +627,12 @@ function finalDecision(
 
 function actionsDecision(
   input: ControllerInput,
-  candidates: readonly Omit<ActionCandidate, "modelItemId">[],
+  candidates: readonly Omit<ActionCandidate, "modelItemId" | "origin">[],
 ): ControllerDecision {
   const model = modelItem(input, { action: "actions" });
   const actions = candidates.map((candidate) => ({
     ...candidate,
+    origin: "model" as const,
     modelItemId: model.id,
   })) as [ActionCandidate, ...ActionCandidate[]];
   return {

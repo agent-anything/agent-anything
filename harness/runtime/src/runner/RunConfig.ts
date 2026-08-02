@@ -10,8 +10,11 @@ import type {
   RunCancellationController,
 } from "@agent-anything/runtime/run";
 import type { ResolvedRunPermissionConfig } from "@agent-anything/runtime/run";
-import type { RunActionContext, RunActionContextInput } from "@agent-anything/action-execution";
-import type { ToolCatalogSnapshot } from "@agent-anything/tools";
+import type {
+  RunActionContext,
+  RunActionContextInput,
+  ToolActionBindingSnapshot,
+} from "@agent-anything/action-execution";
 
 export type RunInfrastructureRequirement = "optional" | "required";
 
@@ -34,7 +37,7 @@ export interface RunConfig {
   readonly identity: IdentityRef;
   readonly actionContext: RunActionContextInput | null;
   readonly permissions: ResolvedRunPermissionConfig;
-  readonly toolCatalog: ToolCatalogSnapshot;
+  readonly toolBindings: ToolActionBindingSnapshot;
   readonly limits: RunLimits;
   readonly audit: RunInfrastructureRequirement;
   readonly telemetry: RunInfrastructureRequirement;

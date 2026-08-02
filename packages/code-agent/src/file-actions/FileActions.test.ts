@@ -11,6 +11,8 @@ import {
   createPreparedActionInvocation,
   createSandboxExecutionGateway,
   createTargetStateAssertions,
+  createToolActionBindingSnapshot,
+  type ToolActionBindingSnapshot,
 } from "@agent-anything/action-execution";
 import {
   type Controller,
@@ -29,7 +31,7 @@ import { EvidenceBuilder } from "@agent-anything/context/evidence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
 import { FakeEvidencePersistencePort } from "@agent-anything/testing";
-import type { ToolCatalogSnapshot } from "@agent-anything/tools";
+import { createToolSelectionSnapshot } from "@agent-anything/tools";
 import { describe, expect, it } from "vitest";
 import { acceptPatch, createPatchProposal } from "../patch/index.js";
 import {
@@ -39,6 +41,7 @@ import {
   CODE_AGENT_READ_FILE_ACTION,
   CODE_AGENT_SEARCH_FILES_ACTION,
   CODE_AGENT_UPDATE_FILE_ACTION,
+  type CodeAgentFileActionName,
   createAcceptedPatchFileAction,
   createCodeAgentCanonicalWorkspaceRoots,
   createCodeAgentFileActionCapability,
@@ -51,17 +54,24 @@ describe("code-agent file Actions", () => {
     const fixture = await createFixture();
     const capability = createCodeAgentFileActionCapability({ workspace: fixture.scope });
 
-    expect(capability.catalog.tools.map(({ name }) => name)).toEqual([
+    expect(capability.toolRegistrations.registrations.map(
+      ({ descriptor }) => descriptor.name,
+    )).toEqual([
+      CODE_AGENT_CREATE_FILE_ACTION,
+      CODE_AGENT_DELETE_FILE_ACTION,
       CODE_AGENT_LIST_FILES_ACTION,
       CODE_AGENT_READ_FILE_ACTION,
       CODE_AGENT_SEARCH_FILES_ACTION,
-      CODE_AGENT_CREATE_FILE_ACTION,
       CODE_AGENT_UPDATE_FILE_ACTION,
-      CODE_AGENT_DELETE_FILE_ACTION,
     ]);
-    expect(capability.catalog.tools.every((tool) => !("execute" in tool))).toBe(true);
-    expect(capability.registrations.registrations.map(({ actionName }) => actionName))
-      .toEqual(capability.catalog.tools.map(({ name }) => name));
+    expect(capability.toolRegistrations.registrations.every(
+      ({ descriptor }) => !("execute" in descriptor),
+    )).toBe(true);
+    expect(capability.actionRegistrations.registrations.map(
+      ({ actionName }) => actionName,
+    )).toEqual(capability.toolRegistrations.registrations.map(
+      ({ descriptor }) => descriptor.name,
+    ));
     expect(capability.executors).toHaveLength(1);
   });
 
@@ -246,7 +256,7 @@ async function createFixture(): Promise<Fixture> {
 
 async function runFileAction(
   fixture: Fixture,
-  actionName: string,
+  actionName: CodeAgentFileActionName,
   input: Record<string, unknown>,
   limits?: Parameters<typeof createCodeAgentFileActionCapability>[0]["limits"],
 ): Promise<RunResult<{ summary: string }>> {
@@ -255,20 +265,34 @@ async function runFileAction(
     limits,
     now: () => NOW,
   });
+  const origin = (
+    actionName === CODE_AGENT_CREATE_FILE_ACTION ||
+    actionName === CODE_AGENT_UPDATE_FILE_ACTION ||
+    actionName === CODE_AGENT_DELETE_FILE_ACTION
+  ) ? "workflow" as const : "model" as const;
+  const selection = createToolSelectionSnapshot(
+    capability.toolRegistrations,
+    [{ toolName: actionName, origins: [origin] }],
+  );
+  const toolBindings = createToolActionBindingSnapshot(
+    selection,
+    capability.actionRegistrations,
+  );
   const pipeline = new ActionEnforcementPipeline({
-    registrations: capability.registrations,
+    registrations: capability.actionRegistrations,
+    toolBindings,
     adapters: capability.adapters,
     policyPort: createAllowAllActionPolicyPort(),
     now: () => NOW,
   });
   const gateway = createSandboxExecutionGateway({
-    registrations: capability.registrations,
+    registrations: capability.actionRegistrations,
     executors: capability.executors,
     limits: { maxResultBytes: 2_000_000 },
     now: () => NOW,
   });
   const runId = `run_${actionName.replaceAll(".", "_")}`;
-  const controller = new ScriptedController(actionName, input);
+  const controller = new ScriptedController(actionName, input, origin);
   const runner = new Runner({
     controller,
     actionEnforcementPipeline: pipeline,
@@ -285,20 +309,30 @@ async function runFileAction(
       conversationItems: [],
       metadata: {},
     },
-    await runConfig(fixture, runId, capability.catalog),
+    await runConfig(fixture, runId, toolBindings),
   );
 }
 
 class ScriptedController implements Controller<unknown> {
   private iteration = 0;
-  constructor(private readonly actionName: string, private readonly input: unknown) {}
+  constructor(
+    private readonly actionName: string,
+    private readonly input: unknown,
+    private readonly origin: "model" | "workflow",
+  ) {}
 
   async next(): Promise<ControllerDecision<unknown>> {
     this.iteration += 1;
     if (this.iteration === 1) {
       return {
         kind: "actions",
-        actions: [{ kind: "tool", name: this.actionName, input: this.input, modelItemId: "model_1" }],
+        actions: [{
+          kind: "tool",
+          name: this.actionName,
+          input: this.input,
+          origin: this.origin,
+          modelItemId: "model_1",
+        }],
         modelItems: [{ id: "model_1", kind: "assistant", content: {}, metadata: {} }],
       };
     }
@@ -340,7 +374,7 @@ function task(fixture: Fixture): AgentTask {
 async function runConfig(
   fixture: Fixture,
   runId: string,
-  toolCatalog: ToolCatalogSnapshot,
+  toolBindings: ToolActionBindingSnapshot,
 ): Promise<RunConfig> {
   const actionContext = await actionPreparationContext(fixture);
   const managedConstraints: ManagedPermissionConstraints = {
@@ -354,7 +388,7 @@ async function runConfig(
     workspace: fixture.scope,
     identity: { id: "user_1", kind: "user", displayName: "Test User", metadata: {} },
     actionContext,
-    toolCatalog,
+    toolBindings,
     permissions: {
       permissionProfile: resolvePermissionProfile({
         profileId: ":danger-full-access",

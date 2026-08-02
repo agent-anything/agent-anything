@@ -16,8 +16,11 @@ import {
   type TargetStateAssertion,
 } from "@agent-anything/action-execution";
 import type { InvocationInterruptionRef } from "@agent-anything/foundation";
-import type { ToolResult } from "@agent-anything/tools";
-import { createToolCatalogSnapshot } from "@agent-anything/tools";
+import {
+  createToolRegistrationSnapshot,
+  createToolSourceRef,
+  type ToolResult,
+} from "@agent-anything/tools";
 import {
   type CreateRemoteActionCapabilityInput,
   type PreparedRemoteActionInvocationPayload,
@@ -43,26 +46,19 @@ export function createRemoteActionCapability(
 ): RemoteActionCapability {
   const registration = normalizeRegistration(input.registration);
   const resolver = input.registrationResolver ?? staticResolver(registration);
-  const registrations = createActionRegistrationSnapshot([{
+  const actionRegistrations = createActionRegistrationSnapshot([{
     actionName: registration.actionName,
     adapter: ADAPTER_DESCRIPTOR,
     executor: EXECUTOR_DESCRIPTOR,
   }]);
+  const toolRegistrations = createToolRegistrationSnapshot([
+    toolRegistrationInput(registration),
+  ]);
   const adapter = createRemoteActionAdapter(registration, resolver);
 
   const capability: RemoteActionCapability = {
-    catalog: createToolCatalogSnapshot([{
-      name: registration.actionName,
-      description: registration.description,
-      inputSchema: registration.inputSchema,
-      annotations: registration.annotations,
-      metadata: {
-        capabilityOwner: "extensions",
-        remoteServerId: registration.server.serverId,
-        remoteToolName: registration.toolName,
-      },
-    }]),
-    registrations,
+    toolRegistrations,
+    actionRegistrations,
     adapters: Object.freeze([Object.freeze({ actionName: registration.actionName, adapter })]),
     executors: Object.freeze([
       createRemoteActionExecutor(registration, resolver, input.invokePort, input.now),
@@ -84,7 +80,12 @@ function createRemoteActionAdapter(
         if (action.actionName !== expected.actionName) {
           return rejected("Remote Action name does not match its trusted registration.");
         }
-        const current = await resolveCurrent(resolver, expected.server.serverId, expected.toolName);
+        const current = await resolveCurrent(
+          resolver,
+          expected.source,
+          expected.server.serverId,
+          expected.toolName,
+        );
         if (!sameAuthorityRegistration(current, expected)) {
           return rejected("Remote Action registration changed before preparation.");
         }
@@ -111,15 +112,28 @@ function createRemoteActionAdapter(
       try {
         const payload = readPayload(invocation);
         const assertion = assertions.find(
-          (candidate): candidate is Extract<TargetStateAssertion, { kind: "remote_server_identity" }> =>
-            candidate.kind === "remote_server_identity",
+          (candidate): candidate is Extract<TargetStateAssertion, { kind: "remote_tool_identity" }> =>
+            candidate.kind === "remote_tool_identity",
         );
         if (assertion === undefined) {
-          return invalidated("remote_registration_assertion_missing", "Remote server assertion is missing.");
+          return invalidated(
+            "remote_registration_assertion_missing",
+            "Remote Tool identity assertion is missing.",
+          );
         }
-        const current = await resolveCurrent(resolver, payload.serverId, payload.toolName);
+        const current = await resolveCurrent(
+          resolver,
+          payload.source,
+          payload.serverId,
+          payload.toolName,
+        );
+        const currentTarget = createCanonicalRemoteToolIdentity({
+          source: current.source,
+          server: current.server,
+          toolName: current.toolName,
+        });
         if (!sameAuthorityRegistration(current, expected) ||
-          !sameServer(current.server, assertion.expected) ||
+          !sameRemoteTool(currentTarget, assertion.expected) ||
           !samePayloadRegistration(payload, current)) {
           return invalidated(
             "remote_registration_changed",
@@ -146,11 +160,13 @@ async function preparedData(
   argumentsDigest: string,
 ): Promise<ActionAdapterPreparedData> {
   const target = createCanonicalRemoteToolIdentity({
+    source: registration.source,
     server: registration.server,
     toolName: registration.toolName,
   });
   const payload: PreparedRemoteActionInvocationPayload = {
     actionName: registration.actionName,
+    source: registration.source,
     serverId: registration.server.serverId,
     registrationFingerprint: registration.server.registrationFingerprint,
     transport: registration.server.transport,
@@ -181,12 +197,21 @@ async function preparedData(
     },
     effectSet: effects,
     requestedPermissions: null,
-    targetAssertions: [{ kind: "remote_server_identity", expected: registration.server }],
-    approvalCategory: "mcpToolCall",
+    targetAssertions: [{ kind: "remote_tool_identity", expected: target }],
+    approvalCategory: "remoteToolCall",
     approvalPayload: {
-      serverId: registration.server.serverId,
-      serverDisplayName: registration.serverDisplayName,
-      toolName: registration.toolName,
+      source: {
+        ...registration.source,
+        displayName: registration.sourceDisplayName,
+      },
+      server: {
+        ...registration.server,
+        displayName: registration.serverDisplayName,
+      },
+      tool: {
+        name: registration.toolName,
+        displayName: registration.toolDisplayName,
+      },
       safeArguments: {},
       annotations: {
         readOnlyHint: registration.annotations?.readOnlyHint ?? null,
@@ -197,12 +222,14 @@ async function preparedData(
       supportsSessionAuthority: registration.supportsSessionAuthority,
     },
     applicabilityKeys: [{
-      category: "mcpToolCall",
-      value: `${registration.server.serverId}:${registration.server.registrationFingerprint}:${registration.toolName}`,
+      category: "remoteToolCall",
+      value: remoteApplicabilityKey(registration),
     }],
     safeSummary: {
       kind: "remote_tool",
       headline: "Invoke remote tool",
+      sourceKind: registration.source.kind,
+      sourceDisplayName: registration.sourceDisplayName,
       serverDisplayName: registration.serverDisplayName,
       toolDisplayName: registration.toolDisplayName,
     },
@@ -234,7 +261,12 @@ function createRemoteActionExecutor(
         payload = readPayload(invocation);
         const beforeCall = interruptionResult(payload, context, "none");
         if (beforeCall !== null) return beforeCall;
-        const current = await resolveCurrent(resolver, payload.serverId, payload.toolName);
+        const current = await resolveCurrent(
+          resolver,
+          payload.source,
+          payload.serverId,
+          payload.toolName,
+        );
         if (!sameAuthorityRegistration(current, expected) ||
           !samePayloadRegistration(payload, current)) {
           throw new RemoteActionError(
@@ -248,6 +280,7 @@ function createRemoteActionExecutor(
         const result = await invokePort.invoke({
           actionId: context.attempt.actionId,
           actionName: payload.actionName,
+          source: payload.source,
           serverId: payload.serverId,
           toolName: payload.toolName,
           input: payload.input,
@@ -286,9 +319,26 @@ function createRemoteActionExecutor(
 function normalizeRegistration(
   input: TrustedRemoteActionRegistration,
 ): TrustedRemoteActionRegistration {
+  const source = createToolSourceRef(input.source);
+  if (
+    source.kind !== "mcp" &&
+    source.kind !== "plugin" &&
+    source.kind !== "remote"
+  ) {
+    throw new TypeError("Remote Action source kind must be MCP, Plugin, or remote.");
+  }
   const server = createCanonicalRemoteServerIdentity(input.server);
-  if (input.actionName.length === 0 || input.toolName.length === 0 ||
-    input.serverDisplayName.length === 0 || input.toolDisplayName.length === 0) {
+  if (
+    input.localToolName.length === 0 ||
+    input.actionName.length === 0 ||
+    input.toolName.length === 0 ||
+    input.sourceDisplayName.length === 0 ||
+    input.serverDisplayName.length === 0 ||
+    input.toolDisplayName.length === 0 ||
+    input.schema.dialect.length === 0 ||
+    input.schema.translationVersion.length === 0 ||
+    input.registrationVersion.length === 0
+  ) {
     throw new TypeError("Remote Action registration names must not be empty.");
   }
   if (input.timeoutMs !== null &&
@@ -297,7 +347,9 @@ function normalizeRegistration(
   }
   return Object.freeze({
     ...input,
+    source: source as TrustedRemoteActionRegistration["source"],
     server,
+    schema: Object.freeze({ ...input.schema }),
     inputSchema: Object.freeze({ ...input.inputSchema }),
     annotations: input.annotations === undefined
       ? undefined
@@ -309,8 +361,14 @@ function staticResolver(
   registration: TrustedRemoteActionRegistration,
 ): RemoteActionRegistrationResolver {
   return Object.freeze({
-    async resolve(serverId: string, toolName: string) {
-      return serverId === registration.server.serverId && toolName === registration.toolName
+    async resolve(
+      source: TrustedRemoteActionRegistration["source"],
+      serverId: string,
+      toolName: string,
+    ) {
+      return sameSource(source, registration.source) &&
+        serverId === registration.server.serverId &&
+        toolName === registration.toolName
         ? registration
         : null;
     },
@@ -319,14 +377,22 @@ function staticResolver(
 
 async function resolveCurrent(
   resolver: RemoteActionRegistrationResolver,
+  source: TrustedRemoteActionRegistration["source"],
   serverId: string,
   toolName: string,
 ): Promise<TrustedRemoteActionRegistration> {
-  const registration = await resolver.resolve(serverId, toolName);
+  const registration = await resolver.resolve(source, serverId, toolName);
   if (registration === null) {
     throw new RemoteActionError("tool_remote_unavailable", "Remote Action registration is unavailable.");
   }
-  return normalizeRegistration(registration);
+  const normalized = normalizeRegistration(registration);
+  if (!sameSource(source, normalized.source)) {
+    throw new RemoteActionError(
+      "tool_remote_registration_changed",
+      "Remote Action source identity changed.",
+    );
+  }
+  return normalized;
 }
 
 function readPayload(invocation: PreparedActionInvocation): PreparedRemoteActionInvocationPayload {
@@ -336,9 +402,17 @@ function readPayload(invocation: PreparedActionInvocation): PreparedRemoteAction
     throw new TypeError("Prepared remote invocation executor identity is invalid.");
   }
   const value = strictRecord(invocation.payload, new Set([
-    "actionName", "serverId", "registrationFingerprint", "transport", "endpoint",
+    "actionName", "source", "serverId", "registrationFingerprint", "transport", "endpoint",
     "toolName", "input", "timeoutMs",
   ]));
+  const source = createToolSourceRef(value.source as never);
+  if (
+    source.kind !== "mcp" &&
+    source.kind !== "plugin" &&
+    source.kind !== "remote"
+  ) {
+    throw new TypeError("Prepared remote source kind is invalid.");
+  }
   const transport = value.transport;
   if (transport !== "stdio" && transport !== "http" && transport !== "https" &&
     transport !== "websocket") {
@@ -353,6 +427,7 @@ function readPayload(invocation: PreparedActionInvocation): PreparedRemoteAction
   const timeoutMs = value.timeoutMs === null ? null : positiveInteger(value.timeoutMs, "timeoutMs");
   return Object.freeze({
     actionName: requiredString(value.actionName, "actionName"),
+    source: source as PreparedRemoteActionInvocationPayload["source"],
     serverId: server.serverId,
     registrationFingerprint: server.registrationFingerprint,
     transport: server.transport,
@@ -388,8 +463,12 @@ function sameAuthorityRegistration(
   actual: TrustedRemoteActionRegistration,
   expected: TrustedRemoteActionRegistration,
 ): boolean {
-  return actual.actionName === expected.actionName &&
-    actual.toolName === expected.toolName &&
+  return registrationFingerprint(actual) === registrationFingerprint(expected) &&
+    actual.sourceDisplayName === expected.sourceDisplayName &&
+    actual.serverDisplayName === expected.serverDisplayName &&
+    actual.toolDisplayName === expected.toolDisplayName &&
+    actual.supportsSessionAuthority === expected.supportsSessionAuthority &&
+    actual.timeoutMs === expected.timeoutMs &&
     sameServer(actual.server, expected.server);
 }
 
@@ -398,6 +477,7 @@ function samePayloadRegistration(
   registration: TrustedRemoteActionRegistration,
 ): boolean {
   return payload.actionName === registration.actionName &&
+    sameSource(payload.source, registration.source) &&
     payload.serverId === registration.server.serverId &&
     payload.registrationFingerprint === registration.server.registrationFingerprint &&
     payload.transport === registration.server.transport &&
@@ -416,6 +496,26 @@ function sameServer(
     sameEndpoint(left.endpoint, right.endpoint);
 }
 
+function sameRemoteTool(
+  left: ReturnType<typeof createCanonicalRemoteToolIdentity>,
+  right: ReturnType<typeof createCanonicalRemoteToolIdentity>,
+): boolean {
+  return sameSource(left.source, right.source) &&
+    sameServer(left.server, right.server) &&
+    left.toolName === right.toolName;
+}
+
+function sameSource(
+  left: TrustedRemoteActionRegistration["source"],
+  right: TrustedRemoteActionRegistration["source"],
+): boolean {
+  return left.kind === right.kind &&
+    left.sourceId === right.sourceId &&
+    left.sourceRevision === right.sourceRevision &&
+    left.activationEpoch === right.activationEpoch &&
+    left.capabilityId === right.capabilityId;
+}
+
 function sameEndpoint(
   left: TrustedRemoteActionRegistration["server"]["endpoint"],
   right: TrustedRemoteActionRegistration["server"]["endpoint"],
@@ -423,6 +523,54 @@ function sameEndpoint(
   if (left === null || right === null) return left === right;
   return left.transport === right.transport && left.host === right.host &&
     left.port === right.port && left.applicationProtocol === right.applicationProtocol;
+}
+
+function registrationFingerprint(
+  registration: TrustedRemoteActionRegistration,
+): string {
+  return createToolRegistrationSnapshot([
+    toolRegistrationInput(registration),
+  ]).registrations[0]!.registrationFingerprint;
+}
+
+function toolRegistrationInput(
+  registration: TrustedRemoteActionRegistration,
+) {
+  return {
+    descriptor: {
+      name: registration.localToolName,
+      description: registration.description,
+      inputSchema: registration.inputSchema,
+      annotations: registration.annotations,
+      metadata: {
+        capabilityOwner: "extensions",
+        remoteSourceKind: registration.source.kind,
+        remoteSourceId: registration.source.sourceId,
+        remoteServerId: registration.server.serverId,
+        remoteToolName: registration.toolName,
+      },
+    },
+    source: registration.source,
+    schema: registration.schema,
+    boundActionName: registration.actionName,
+    registrationVersion: registration.registrationVersion,
+  };
+}
+
+function remoteApplicabilityKey(
+  registration: TrustedRemoteActionRegistration,
+): string {
+  const source = registration.source;
+  return [
+    source.kind,
+    source.sourceId,
+    source.sourceRevision ?? "",
+    source.activationEpoch ?? "",
+    source.capabilityId,
+    registration.server.serverId,
+    registration.server.registrationFingerprint,
+    registration.toolName,
+  ].join(":");
 }
 
 function failedResult(
@@ -444,6 +592,9 @@ function failedResult(
     startedAt,
     finishedAt,
     metadata: payload === null ? {} : {
+      remoteSourceKind: payload.source.kind,
+      remoteSourceId: payload.source.sourceId,
+      remoteSourceCapabilityId: payload.source.capabilityId,
       remoteServerId: payload.serverId,
       remoteToolName: payload.toolName,
     },
@@ -505,6 +656,9 @@ function remoteMetadata(
   payload: PreparedRemoteActionInvocationPayload | null,
 ): Readonly<Record<string, unknown>> {
   return payload === null ? {} : {
+    remoteSourceKind: payload.source.kind,
+    remoteSourceId: payload.source.sourceId,
+    remoteSourceCapabilityId: payload.source.capabilityId,
     remoteServerId: payload.serverId,
     remoteToolName: payload.toolName,
   };

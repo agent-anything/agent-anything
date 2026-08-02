@@ -330,13 +330,15 @@ function projectApprovalRequest(
           permissions: projectAdditionalPermissions(request.payload.permissions) ?? {},
         },
       };
-    case "mcpToolCall":
+    case "remoteToolCall":
       return {
         ...base,
         category: request.category,
         payload: {
-          serverDisplayName: request.payload.serverDisplayName,
-          toolName: request.payload.toolName,
+          sourceKind: request.payload.source.kind,
+          sourceDisplayName: request.payload.source.displayName,
+          serverDisplayName: request.payload.server.displayName,
+          toolDisplayName: request.payload.tool.displayName,
         },
       };
     case "skill":

@@ -306,6 +306,19 @@ export class RunExecution<TOutput> {
         {},
       ));
     }
+    if (
+      this.dependencies.actionEnforcementPipeline !== undefined &&
+      this.dependencies.actionEnforcementPipeline.toolBindingSnapshotId !==
+        this.config.toolBindings.snapshotId
+    ) {
+      return this.createInvalidConfigResult(runtimeError(
+        "runtime",
+        "runtime_invalid_options",
+        "RunConfig Tool bindings do not match ActionEnforcementPipeline composition.",
+        false,
+        {},
+      ));
+    }
 
     const startedAt = this.now();
     this.startedAtMs = Date.parse(startedAt);
@@ -595,7 +608,8 @@ export class RunExecution<TOutput> {
       agent: this.agent,
       task: this.input.task,
       conversationItems: this.input.conversationItems,
-      toolCatalog: this.config.toolCatalog,
+      toolCatalog: this.config.toolBindings.toolCatalog,
+      toolSelectionId: this.config.toolBindings.toolSelectionId,
       context: projectContext(this.state.context),
       plan: this.state.plan === null ? null : projectPlan(this.state.plan),
       permission: projectPermissionContext(
@@ -627,6 +641,7 @@ export class RunExecution<TOutput> {
         name: candidate.name,
         input: candidate.input,
         provenance: Object.freeze({
+          origin: candidate.origin,
           modelItemId: candidate.modelItemId,
           controllerIteration: iteration,
         }),

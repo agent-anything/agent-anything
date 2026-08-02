@@ -30,6 +30,7 @@ export interface ControllerInput<TOutput = unknown> {
   readonly task: AgentTask;
   readonly conversationItems: readonly RunInputItem[];
   readonly toolCatalog: ToolCatalogSnapshot;
+  readonly toolSelectionId: string;
   readonly context: ContextProjection;
   readonly plan: PlanProjection | null;
   readonly permission: PermissionContextProjection;

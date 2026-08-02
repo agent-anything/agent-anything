@@ -4,7 +4,8 @@ import type {
 } from "@agent-anything/runtime/controller";
 import type { ProviderResponse } from "@agent-anything/model-interaction";
 import {
-  createToolCatalogSnapshot,
+  createToolRegistrationSnapshot,
+  createToolSelectionSnapshot,
   type ToolDescriptor,
 } from "@agent-anything/tools";
 import {
@@ -115,6 +116,31 @@ function createProtocolEvalControllerInput(
   fixture: HelarcProtocolEvalFixture,
 ): ControllerInput<HelarcAgentOutput> {
   const tools = toolDefinitionsForMode(fixture.mode);
+  const registrations = createToolRegistrationSnapshot(
+    tools.map((descriptor) => ({
+      descriptor,
+      source: {
+        kind: "product",
+        sourceId: "helarc-protocol-eval",
+        sourceRevision: "1",
+        activationEpoch: null,
+        capabilityId: descriptor.name,
+      },
+      schema: {
+        dialect: "json-schema",
+        translationVersion: "1",
+      },
+      boundActionName: descriptor.name,
+      registrationVersion: "1",
+    })),
+  );
+  const selection = createToolSelectionSnapshot(
+    registrations,
+    registrations.registrations.map((registration) => ({
+      toolName: registration.descriptor.name,
+      origins: ["model"],
+    })),
+  );
   return {
     runId: `run_${fixture.id}`,
     iteration: 1,
@@ -137,7 +163,8 @@ function createProtocolEvalControllerInput(
       metadata: {},
     },
     conversationItems: [],
-    toolCatalog: createToolCatalogSnapshot(tools),
+    toolSelectionId: selection.selectionId,
+    toolCatalog: selection.modelCatalog,
     context: {
       messages: [],
       observations: [],

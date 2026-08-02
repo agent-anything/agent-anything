@@ -10,6 +10,8 @@ import {
   createPreparedActionInvocation,
   createSandboxExecutionGateway,
   createTargetStateAssertions,
+  createToolActionBindingSnapshot,
+  type ToolActionBindingSnapshot,
 } from "@agent-anything/action-execution";
 import {
   type Controller,
@@ -28,7 +30,7 @@ import { EvidenceBuilder } from "@agent-anything/context/evidence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
 import { FakeEvidencePersistencePort } from "@agent-anything/testing";
-import type { ToolCatalogSnapshot } from "@agent-anything/tools";
+import { createToolSelectionSnapshot } from "@agent-anything/tools";
 import { describe, expect, it } from "vitest";
 import { createCodeAgentCanonicalWorkspaceRoots } from "../file-actions/index.js";
 import {
@@ -66,7 +68,8 @@ describe("code-agent command Action", () => {
       environment: { ACTION_TEST: "trusted" },
       environmentPolicyId: "test.command.environment",
     });
-    expect(capability.catalog.tools[0]).not.toHaveProperty("execute");
+    expect(capability.toolRegistrations.registrations[0]?.descriptor)
+      .not.toHaveProperty("execute");
     const adapter = capability.adapters[0]!.adapter;
     const context = await preparationContext(fixture);
 
@@ -173,14 +176,23 @@ async function runCommand(
     workspace: fixture.scope,
     now: () => NOW,
   });
+  const selection = createToolSelectionSnapshot(
+    capability.toolRegistrations,
+    [{ toolName: CODE_AGENT_RUN_COMMAND_ACTION, origins: ["model"] }],
+  );
+  const toolBindings = createToolActionBindingSnapshot(
+    selection,
+    capability.actionRegistrations,
+  );
   const pipeline = new ActionEnforcementPipeline({
-    registrations: capability.registrations,
+    registrations: capability.actionRegistrations,
+    toolBindings,
     adapters: capability.adapters,
     policyPort: createAllowAllActionPolicyPort(),
     now: () => NOW,
   });
   const gateway = createSandboxExecutionGateway({
-    registrations: capability.registrations,
+    registrations: capability.actionRegistrations,
     executors: capability.executors,
     limits: { maxResultBytes: 2_000_000 },
     now: () => NOW,
@@ -201,7 +213,7 @@ async function runCommand(
       conversationItems: [],
       metadata: {},
     },
-    await runConfig(fixture, cancellation, capability.catalog),
+    await runConfig(fixture, cancellation, toolBindings),
   );
 }
 
@@ -217,6 +229,7 @@ class ScriptedController implements Controller<unknown> {
             kind: "tool",
             name: CODE_AGENT_RUN_COMMAND_ACTION,
             input: this.input,
+            origin: "model",
             modelItemId: "model_command",
           }],
           modelItems: [{ id: "model_command", kind: "assistant", content: {}, metadata: {} }],
@@ -259,7 +272,7 @@ function task(fixture: Fixture): AgentTask {
 async function runConfig(
   fixture: Fixture,
   cancellation: ReturnType<typeof createRunCancellationController>,
-  toolCatalog: ToolCatalogSnapshot,
+  toolBindings: ToolActionBindingSnapshot,
 ): Promise<RunConfig> {
   const actionContext = await preparationContext(fixture);
   const managedConstraints: ManagedPermissionConstraints = {
@@ -273,7 +286,7 @@ async function runConfig(
     workspace: fixture.scope,
     identity: { id: "user_command", kind: "user", displayName: "Test User", metadata: {} },
     actionContext,
-    toolCatalog,
+    toolBindings,
     permissions: {
       permissionProfile: resolvePermissionProfile({
         profileId: ":danger-full-access",

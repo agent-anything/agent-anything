@@ -665,7 +665,7 @@ export function ApprovalPromptPanel({
   return (
     <div className="permission-panel">
       <ShieldCheck size={24} aria-hidden="true" />
-      <strong>{approvalCategoryLabel(request.category)}</strong>
+      <strong>{approvalCategoryLabel(request)}</strong>
       <span>{request.reason}</span>
       <code>{approvalRequestSummary(request)}</code>
       <div className="permission-meta">
@@ -1087,13 +1087,16 @@ function getHelarcApi() {
 }
 
 function approvalCategoryLabel(
-  category: PendingApprovalView["request"]["category"],
+  request: PendingApprovalView["request"],
 ): string {
-  switch (category) {
+  switch (request.category) {
     case "commandExecution": return "Command execution";
     case "fileChange": return "File change";
     case "permissions": return "Additional permissions";
-    case "mcpToolCall": return "MCP tool call";
+    case "remoteToolCall":
+      return request.payload.sourceKind === "mcp"
+        ? "MCP tool call"
+        : "Remote tool call";
     case "skill": return "Skill action";
     case "networkAccess": return "Network access";
   }
@@ -1119,8 +1122,8 @@ function approvalRequestSummary(
         network,
       ].filter((value): value is string => value !== null).join(", ") || "Permission expansion";
     }
-    case "mcpToolCall":
-      return `${request.payload.serverDisplayName}: ${request.payload.toolName}`;
+    case "remoteToolCall":
+      return `${request.payload.sourceDisplayName} / ${request.payload.serverDisplayName}: ${request.payload.toolDisplayName}`;
     case "skill":
       return `${request.payload.skillDisplayName}: ${request.payload.action}`;
     case "networkAccess":
@@ -1151,7 +1154,7 @@ function defaultGrantedPermissions(
       return request.payload.permissions;
     case "skill":
       return request.payload.requiredPermissions;
-    case "mcpToolCall":
+    case "remoteToolCall":
     case "networkAccess":
       return null;
   }

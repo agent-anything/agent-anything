@@ -626,6 +626,7 @@ function validateActions(
       kind,
       name: nonEmptyDecisionText(action.name),
       input: action.input,
+      origin: "model" as const,
       modelItemId,
     });
   });

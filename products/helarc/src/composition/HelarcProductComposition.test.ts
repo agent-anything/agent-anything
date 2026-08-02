@@ -39,7 +39,7 @@ describe("HelarcProductComposition", () => {
       toolMode: "read-only",
     });
 
-    expect(composition.actions.exposedCatalog.tools.map(({ name }) => name)).toEqual([
+    expect(composition.actions.toolBindings.toolCatalog.tools.map(({ name }) => name)).toEqual([
       "codeAgent.listFiles",
       "codeAgent.readFile",
       "codeAgent.searchFiles",

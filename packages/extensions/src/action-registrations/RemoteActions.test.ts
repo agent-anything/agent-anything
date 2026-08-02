@@ -7,6 +7,8 @@ import {
   createPreparedActionInvocation,
   createSandboxExecutionGateway,
   createTargetStateAssertions,
+  createToolActionBindingSnapshot,
+  type ToolActionBindingSnapshot,
 } from "@agent-anything/action-execution";
 import {
   type Controller,
@@ -21,7 +23,7 @@ import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } fro
 import type { ApprovalReviewerPort } from "@agent-anything/permission";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
 import { FakeEvidencePersistencePort } from "@agent-anything/testing";
-import { createToolCatalogSnapshot } from "@agent-anything/tools";
+import { createToolSelectionSnapshot } from "@agent-anything/tools";
 import { describe, expect, it, vi } from "vitest";
 import { createMcpActionCapability } from "../mcp/index.js";
 import { createRemoteToolActionCapability } from "../remote-tools/index.js";
@@ -33,7 +35,6 @@ import type {
 
 const NOW = "2026-07-16T00:00:00.000Z";
 const SERVER_FINGERPRINT = `sha256:${"a".repeat(64)}`;
-const CHANGED_FINGERPRINT = `sha256:${"b".repeat(64)}`;
 
 describe("canonical remote Actions", () => {
   it("derives remote and network effects from trusted registration, never annotations", async () => {
@@ -62,13 +63,28 @@ describe("canonical remote Actions", () => {
         expect.objectContaining({ kind: "network", operation: "connect" }),
       ]),
     });
-    expect(prepared.data.approvalCategory).toBe("mcpToolCall");
+    expect(prepared.data.approvalCategory).toBe("remoteToolCall");
     expect(prepared.data.approvalPayload).toMatchObject({
+      source: {
+        kind: "mcp",
+        sourceId: "mcp_server",
+        sourceRevision: "server-revision-1",
+        activationEpoch: 1,
+        capabilityId: "status",
+      },
+      server: {
+        serverId: "mcp_server",
+        displayName: "MCP Server",
+      },
+      tool: {
+        name: "status",
+        displayName: "Status",
+      },
       annotations: { readOnlyHint: true, destructiveHint: false },
     });
   });
 
-  it("invalidates endpoint or registration-fingerprint changes before dispatch", async () => {
+  it("invalidates source activation changes before dispatch", async () => {
     const initial = httpRegistration();
     let current = initial;
     const resolver: RemoteActionRegistrationResolver = {
@@ -88,7 +104,7 @@ describe("canonical remote Actions", () => {
     if (prepared.status !== "prepared") throw new Error(JSON.stringify(prepared));
 
     current = httpRegistration({
-      server: { ...initial.server, registrationFingerprint: CHANGED_FINGERPRINT },
+      source: { ...initial.source, activationEpoch: 2 },
     });
     await expect(adapter.revalidate(
       createPreparedActionInvocation(prepared.data.preparedInvocation),
@@ -133,7 +149,7 @@ describe("canonical remote Actions", () => {
       connectionPort: { callTool },
       now: () => NOW,
     });
-    const result = await runRemoteAction(capability, registration.actionName, { query: "status" });
+    const result = await runRemoteAction(capability, registration.localToolName, { query: "status" });
 
     expect(result.status).toBe("succeeded");
     expect(toolResultOf(result)).toMatchObject({
@@ -181,8 +197,18 @@ describe("canonical remote Actions", () => {
       kind: "effects",
       values: [expect.objectContaining({ kind: "remote_tool" })],
     });
+    expect(prepared.data).toMatchObject({
+      approvalCategory: "remoteToolCall",
+      approvalPayload: {
+        source: {
+          kind: "remote",
+          sourceId: "remote_node",
+          capabilityId: "read",
+        },
+      },
+    });
 
-    const result = await runRemoteAction(capability, registration.actionName, { path: "README.md" });
+    const result = await runRemoteAction(capability, registration.localToolName, { path: "README.md" });
     expect(toolResultOf(result)).toMatchObject({ output: { answer: "remote-ok" } });
     expect(call).toHaveBeenCalledWith(expect.objectContaining({ metadata: {} }));
   });
@@ -192,7 +218,16 @@ function httpRegistration(
   overrides: Partial<TrustedRemoteActionRegistration> = {},
 ): TrustedRemoteActionRegistration {
   return {
-    actionName: "mcp.status",
+    localToolName: "mcp.status",
+    actionName: "remote.invoke.mcp.status",
+    source: {
+      kind: "mcp",
+      sourceId: "mcp_server",
+      sourceRevision: "server-revision-1",
+      activationEpoch: 1,
+      capabilityId: "status",
+    },
+    sourceDisplayName: "MCP Server",
     server: {
       serverId: "mcp_server",
       registrationFingerprint: SERVER_FINGERPRINT,
@@ -209,7 +244,12 @@ function httpRegistration(
     toolDisplayName: "Status",
     description: "Read remote status.",
     inputSchema: { type: "object" },
+    schema: {
+      dialect: "json-schema-2020-12",
+      translationVersion: "native-v1",
+    },
     annotations: {},
+    registrationVersion: "1",
     supportsSessionAuthority: true,
     timeoutMs: 1_000,
     ...overrides,
@@ -218,7 +258,16 @@ function httpRegistration(
 
 function stdioRegistration(): TrustedRemoteActionRegistration {
   return {
-    actionName: "remote.read",
+    localToolName: "remote.read",
+    actionName: "remote.invoke.read",
+    source: {
+      kind: "remote",
+      sourceId: "remote_node",
+      sourceRevision: "node-revision-1",
+      activationEpoch: 1,
+      capabilityId: "read",
+    },
+    sourceDisplayName: "Remote Node",
     server: {
       serverId: "remote_node",
       registrationFingerprint: SERVER_FINGERPRINT,
@@ -229,7 +278,12 @@ function stdioRegistration(): TrustedRemoteActionRegistration {
     toolName: "read",
     toolDisplayName: "Read",
     inputSchema: { type: "object" },
+    schema: {
+      dialect: "json-schema-2020-12",
+      translationVersion: "native-v1",
+    },
     annotations: { readOnlyHint: true },
+    registrationVersion: "1",
     supportsSessionAuthority: false,
     timeoutMs: null,
   };
@@ -237,23 +291,32 @@ function stdioRegistration(): TrustedRemoteActionRegistration {
 
 async function runRemoteAction(
   capability: RemoteActionCapability,
-  actionName: string,
+  localToolName: string,
   input: unknown,
 ): Promise<RunResult<{ summary: string }>> {
+  const toolSelection = createToolSelectionSnapshot(
+    capability.toolRegistrations,
+    [{ toolName: localToolName, origins: ["model"] }],
+  );
+  const toolBindings = createToolActionBindingSnapshot(
+    toolSelection,
+    capability.actionRegistrations,
+  );
   const pipeline = new ActionEnforcementPipeline({
-    registrations: capability.registrations,
+    registrations: capability.actionRegistrations,
+    toolBindings,
     adapters: capability.adapters,
     policyPort: createAllowAllActionPolicyPort(),
     now: () => NOW,
   });
   const gateway = createSandboxExecutionGateway({
-    registrations: capability.registrations,
+    registrations: capability.actionRegistrations,
     executors: capability.executors,
     limits: { maxResultBytes: 1_000_000 },
     now: () => NOW,
   });
   const runner = new Runner({
-    controller: new ScriptedController(actionName, input),
+    controller: new ScriptedController(localToolName, input),
     actionEnforcementPipeline: pipeline,
     sandboxExecutionGateway: gateway,
     evidenceBuilder: new EvidenceBuilder(),
@@ -261,9 +324,9 @@ async function runRemoteAction(
     now: () => NOW,
   });
   return runner.run(
-    agent(actionName),
-    { runId: `run_${actionName.replaceAll(".", "_")}`, task: task(), conversationItems: [], metadata: {} },
-    await runConfig(actionName),
+    agent(),
+    { runId: `run_${localToolName.replaceAll(".", "_")}`, task: task(), conversationItems: [], metadata: {} },
+    await runConfig(localToolName, toolBindings),
   );
 }
 
@@ -275,7 +338,13 @@ class ScriptedController implements Controller<unknown> {
     return this.iteration === 1
       ? {
           kind: "actions",
-          actions: [{ kind: "tool", name: this.actionName, input: this.input, modelItemId: "model_1" }],
+          actions: [{
+            kind: "tool",
+            name: this.actionName,
+            input: this.input,
+            origin: "model",
+            modelItemId: "model_1",
+          }],
           modelItems: [{ id: "model_1", kind: "assistant", content: {}, metadata: {} }],
         }
       : {
@@ -286,7 +355,7 @@ class ScriptedController implements Controller<unknown> {
   }
 }
 
-function agent(actionName: string): Agent<{ summary: string }> {
+function agent(): Agent<{ summary: string }> {
   return {
     id: "remote_test_agent",
     name: "Remote Test Agent",
@@ -325,8 +394,11 @@ function workspace() {
   };
 }
 
-async function runConfig(actionName: string): Promise<RunConfig> {
-  const runId = `run_${actionName.replaceAll(".", "_")}`;
+async function runConfig(
+  localToolName: string,
+  toolBindings: ToolActionBindingSnapshot,
+): Promise<RunConfig> {
+  const runId = `run_${localToolName.replaceAll(".", "_")}`;
   const managedConstraints: ManagedPermissionConstraints = {
     constraintSetId: "test-disabled",
     selectableProfiles: { allowedProfileIds: null, deniedProfileIds: [] },
@@ -357,12 +429,7 @@ async function runConfig(actionName: string): Promise<RunConfig> {
     workspace: { primary: workspace(), additional: [] },
     identity: { id: "user_remote", kind: "user", displayName: "Test User", metadata: {} },
     actionContext: await preparationContext(),
-    toolCatalog: createToolCatalogSnapshot([{
-      name: actionName,
-      inputSchema: {},
-      annotations: {},
-      metadata: {},
-    }]),
+    toolBindings,
     permissions: {
       permissionProfile: resolvePermissionProfile({
         profileId: ":danger-full-access",

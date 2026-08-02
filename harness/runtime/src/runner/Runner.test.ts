@@ -5,9 +5,14 @@ import type {
   TelemetryPort,
   TelemetryRecord,
 } from "@agent-anything/observability";
-import type { ToolResult } from "@agent-anything/tools";
+import {
+  createToolRegistrationSnapshot,
+  createToolSelectionSnapshot,
+  type ToolResult,
+} from "@agent-anything/tools";
 import { EvidenceBuilder } from "@agent-anything/context/evidence";
 import type { Agent } from "@agent-anything/foundation/agent";
+import type { ActionCandidate } from "@agent-anything/foundation/action";
 import type { RunInput } from "@agent-anything/foundation/run";
 import {
   ControllerError,
@@ -33,9 +38,16 @@ import type {
   ActionPolicyPort,
   ManagedPermissionConstraints,
 } from "@agent-anything/governance";
-import type { ActionAdapterPreparedData } from "@agent-anything/action-execution";
+import type {
+  ActionAdapterPreparedData,
+  ActionRegistrationSnapshot,
+} from "@agent-anything/action-execution";
 import { ActionEnforcementPipeline } from "@agent-anything/action-execution";
-import { createActionRegistrationSnapshot } from "@agent-anything/action-execution";
+import {
+  createActionRegistrationSnapshot,
+  createEmptyToolActionBindingSnapshot,
+  createToolActionBindingSnapshot,
+} from "@agent-anything/action-execution";
 import {
   assertActionExecutorDispatchContext,
   createActionEffectSet,
@@ -1252,6 +1264,7 @@ describe("Runner external Action approval attachment", () => {
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
         permissions: createDisabledReviewPermissionConfig(reviewer),
         audit: "required",
       }),
@@ -1313,6 +1326,7 @@ describe("Runner external Action approval attachment", () => {
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
         permissions: createReviewPermissionConfig(reviewer),
       }),
     );
@@ -1372,6 +1386,7 @@ describe("Runner external Action approval attachment", () => {
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
         audit: "required",
       }),
     );
@@ -1418,6 +1433,7 @@ describe("Runner external Action approval attachment", () => {
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
         audit: "required",
         cancellation,
       }),
@@ -1466,6 +1482,7 @@ describe("Runner sandbox denial escalation", () => {
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
         permissions: createReviewPermissionConfig(reviewer),
       }),
     );
@@ -1509,7 +1526,10 @@ describe("Runner sandbox denial escalation", () => {
     }).run(
       createAgent(),
       createRunInput(),
-      createRunConfig({ actionContext: externalActionContext() }),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
+      }),
     );
 
     expect(result.status).toBe("succeeded");
@@ -1554,6 +1574,7 @@ describe("Runner sandbox denial escalation", () => {
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
         permissions: createReviewPermissionConfig(reviewer),
       }),
     );
@@ -1600,6 +1621,7 @@ describe("Runner sandbox denial escalation", () => {
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
         permissions: createReviewPermissionConfig(reviewer),
       }),
     );
@@ -1637,7 +1659,10 @@ describe("Runner sandbox denial escalation", () => {
       }).run(
         createAgent(),
         createRunInput(),
-        createRunConfig({ actionContext: externalActionContext() }),
+        createRunConfig({
+          actionContext: externalActionContext(),
+          toolBindings: fixture.toolBindings,
+        }),
       );
 
       expect(result.status).toBe("succeeded");
@@ -1667,7 +1692,10 @@ describe("Runner sandbox denial escalation", () => {
     }).run(
       createAgent(),
       createRunInput(),
-      createRunConfig({ actionContext: externalActionContext() }),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
+      }),
     );
 
     expect(result.status).toBe("succeeded");
@@ -1703,7 +1731,10 @@ describe("Runner sandbox denial escalation", () => {
     }).run(
       createAgent(),
       createRunInput(),
-      createRunConfig({ actionContext: externalActionContext() }),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
+      }),
     );
 
     expect(result.status).toBe("succeeded");
@@ -1736,7 +1767,11 @@ describe("Runner sandbox denial escalation", () => {
     }).run(
       createAgent(),
       createRunInput(),
-      createRunConfig({ actionContext: externalActionContext(), cancellation }),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
+        cancellation,
+      }),
     );
 
     expect(result).toMatchObject({
@@ -1769,6 +1804,7 @@ describe("Runner sandbox denial escalation", () => {
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
         audit: "required",
       }),
     );
@@ -1794,6 +1830,7 @@ describe("Runner sandbox denial escalation", () => {
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
         telemetry: "required",
       }),
     );
@@ -1827,6 +1864,7 @@ describe("Runner sandbox denial escalation", () => {
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
         audit: "required",
       }),
     );
@@ -2817,6 +2855,7 @@ describe("Runner external Action result settlement", () => {
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
         permissions: createDisabledReviewPermissionConfig(createApprovalReviewer(() => {
           throw new Error("Allowed Action must not request review.");
         })),
@@ -2871,6 +2910,7 @@ describe("Runner external Action result settlement", () => {
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
         permissions: createDisabledReviewPermissionConfig(createApprovalReviewer(() => {
           throw new Error("Allowed Action must not request review.");
         })),
@@ -2910,6 +2950,7 @@ describe("Runner external Action result settlement", () => {
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
         permissions: createDisabledReviewPermissionConfig(createApprovalReviewer(() => {
           throw new Error("Review must not start.");
         })),
@@ -2944,6 +2985,7 @@ describe("Runner external Action result settlement", () => {
       createRunInput(),
       createRunConfig({
         actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
         permissions: createDisabledReviewPermissionConfig(createApprovalReviewer(() => {
           throw new Error("Allowed Action must not request review.");
         })),
@@ -3039,7 +3081,7 @@ function createRunConfig(
     readonly permissions?: ResolvedRunPermissionConfig;
     readonly actionContext?: RunConfig["actionContext"];
     readonly workspace?: RunConfig["workspace"];
-    readonly toolCatalog?: RunConfig["toolCatalog"];
+    readonly toolBindings?: RunConfig["toolBindings"];
   } = {},
 ): RunConfig {
   const runId = overrides.runId ?? "run_001";
@@ -3066,10 +3108,8 @@ function createRunConfig(
     },
     actionContext: overrides.actionContext ?? null,
     permissions: overrides.permissions ?? createTestPermissionConfig(),
-    toolCatalog: overrides.toolCatalog ?? {
-      schemaVersion: 1,
-      tools: [],
-    },
+    toolBindings:
+      overrides.toolBindings ?? createEmptyToolActionBindingSnapshot(),
     limits: {
       maxIterations: 4,
       maxActions: 8,
@@ -3216,12 +3256,14 @@ function createExternalActionPipeline(
     },
   };
   const registrations = createActionRegistrationSnapshot([{
-      actionName: "test.external",
-      adapter: adapterDescriptor,
-      executor: executorDescriptor,
-    }]);
+    actionName: "test.external",
+    adapter: adapterDescriptor,
+    executor: executorDescriptor,
+  }]);
+  const toolBindings = createExternalToolBindings(registrations);
   const pipeline = new ActionEnforcementPipeline({
     registrations,
+    toolBindings,
     adapters: [{
       actionName: "test.external",
       adapter: {
@@ -3267,6 +3309,7 @@ function createExternalActionPipeline(
   return {
     pipeline,
     gateway,
+    toolBindings,
     prepareCalls: () => prepareCallCount,
     policyCalls: () => policyCallCount,
     revalidationCalls: () => revalidationCallCount,
@@ -3302,6 +3345,7 @@ function createEscalatingExternalActionFixture(
     adapter: adapterDescriptor,
     executor: executorDescriptor,
   }]);
+  const toolBindings = createExternalToolBindings(registrations);
   const data: ActionAdapterPreparedData = {
     operation: {
       kind: "skill",
@@ -3344,6 +3388,7 @@ function createEscalatingExternalActionFixture(
   };
   const pipeline = new ActionEnforcementPipeline({
     registrations,
+    toolBindings,
     adapters: [{
       actionName: "test.external",
       adapter: {
@@ -3470,6 +3515,7 @@ function createEscalatingExternalActionFixture(
   return {
     pipeline,
     gateway,
+    toolBindings,
     providerCalls: () => providerCallCount,
     reconciliationCalls: () => reconciliationCallCount,
     revalidationCalls: () => revalidationCallCount,
@@ -3551,9 +3597,43 @@ function actionsDecision(
 ): ControllerDecision<unknown> {
   return {
     kind: "actions",
-    actions,
+    actions: actions.map((action) => ({
+      ...action,
+      origin: "model" as const,
+    })) as [ActionCandidate, ...ActionCandidate[]],
     modelItems: [modelItem("model_1", { actions: actions.map((action) => action.name) })],
   };
+}
+
+function createExternalToolBindings(
+  registrations: ActionRegistrationSnapshot,
+): RunConfig["toolBindings"] {
+  const toolRegistrations = createToolRegistrationSnapshot([{
+    descriptor: {
+      name: "test.external",
+      inputSchema: {},
+      annotations: {},
+      metadata: {},
+    },
+    source: {
+      kind: "harness",
+      sourceId: "runtime-tests",
+      sourceRevision: "1",
+      activationEpoch: 1,
+      capabilityId: "test.external",
+    },
+    schema: {
+      dialect: "test",
+      translationVersion: "1",
+    },
+    boundActionName: "test.external",
+    registrationVersion: "1",
+  }]);
+  const selection = createToolSelectionSnapshot(toolRegistrations, [{
+    toolName: "test.external",
+    origins: ["model"],
+  }]);
+  return createToolActionBindingSnapshot(selection, registrations);
 }
 
 function modelItem(id: string, content: unknown) {

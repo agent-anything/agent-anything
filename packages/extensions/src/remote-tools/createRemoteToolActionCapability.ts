@@ -46,6 +46,9 @@ export function createRemoteToolActionCapability(
           toolName: invocation.actionName,
           metadata: {
             ...result.toolResult.metadata,
+            remoteSourceKind: invocation.source.kind,
+            remoteSourceId: invocation.source.sourceId,
+            remoteSourceCapabilityId: invocation.source.capabilityId,
             remoteServerId: invocation.serverId,
             remoteToolName: invocation.toolName,
           },
