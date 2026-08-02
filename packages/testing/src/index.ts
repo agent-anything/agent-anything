@@ -9,14 +9,6 @@ export {
   type FakeAuditPortHandler,
 } from "./FakeAuditPort.js";
 export {
-  FakeIdentityProvider,
-  type FakeIdentityProviderHandler,
-} from "./FakeIdentityProvider.js";
-export {
   FakeTelemetryPort,
   type FakeTelemetryPortHandler,
 } from "./FakeTelemetryPort.js";
-export {
-  FakeWorkspaceResolver,
-  type FakeWorkspaceResolverHandler,
-} from "./FakeWorkspaceResolver.js";

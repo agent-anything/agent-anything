@@ -18,6 +18,7 @@ import {
   createBuiltInHelarcTaskTemplates,
   createHelarcRunProjection,
   deriveHelarcPersistedRunStatus,
+  projectHelarcRunWorkspaceContext,
   reduceHelarcRunProjection,
   type HelarcPatchReviewDecisionSubmission,
   type HelarcPendingPatchReviewProjection,
@@ -26,6 +27,8 @@ import {
   type HelarcRunProjectionUpdate,
   type HelarcProductResult,
   type HelarcRunProgressCommit,
+  type HelarcRunPermissionPreset,
+  type HelarcRunProviderRef,
   type HelarcRunStartCommit,
   type HelarcRunTerminalCommit,
   type HelarcTaskInputError,
@@ -34,10 +37,12 @@ import {
   type HelarcMessage,
   type HelarcPersistedRunStatus,
   type HelarcThreadRecord,
+  type HelarcThreadWorkspaceContext,
   type HelarcWorkContextError,
   type HelarcPersistedRun,
   type HelarcWorkspaceProfile,
 } from "@agent-anything/helarc";
+import type { RunWorkspace } from "@agent-anything/foundation";
 import type {
   ApprovalDecisionSubmission,
   ApprovalSubmissionReceipt,
@@ -46,6 +51,8 @@ import type { Provider } from "@agent-anything/providers";
 import { basename, isAbsolute, normalize } from "node:path";
 import type { ProviderCredentialStoreError } from "./provider/ProviderCredentialStore.js";
 import {
+  createHelarcDesktopIdentityResolver,
+  createHelarcDesktopWorkspaceResolver,
   createHelarcPatchReviewBridge,
   prepareHelarcHostRun,
   prepareHelarcRunStart,
@@ -451,21 +458,6 @@ export class HelarcMainController {
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
 
-    const startCommitResult = this.createInitialRunStartCommit({
-      sequenceNumber,
-      taskId,
-      taskText: preparedStart.prepared.task.input.prompt,
-      runId: `helarc-run-${sequenceNumber}`,
-      startedAt,
-    });
-    if (!startCommitResult.ok) {
-      const error = this.setError(
-        startCommitResult.error.code as HelarcMainErrorCode,
-        startCommitResult.error.message,
-      );
-      return { ok: false, error, snapshot: this.getSnapshot() };
-    }
-
     const token = Symbol(runId);
     this.activeRunSlot = { kind: "reserved", token, threadId, runId };
     this.acceptedTask = null;
@@ -479,10 +471,20 @@ export class HelarcMainController {
     const patchReviewBridge = this.createPatchReviewBridge(runId);
     let startCommitted = false;
     try {
-        const preparedHostRun = await prepareHelarcHostRun({
-          task: preparedStart.prepared.task,
-          workspace: preparedStart.prepared.runWorkspace,
-          runId,
+      const threadWorkspace = preparedStart.prepared.workspace;
+      const preparedHostRun = await prepareHelarcHostRun({
+        task: preparedStart.prepared.task,
+        workspaceResolver: createHelarcDesktopWorkspaceResolver(threadWorkspace),
+        workspaceSelection: {
+          kind: "references",
+          primaryRef: threadWorkspace.primary.profileId,
+          additionalRefs: threadWorkspace.additional.map(
+            (workspace) => workspace.profileId,
+          ),
+        },
+        identityResolver: createHelarcDesktopIdentityResolver(),
+        identitySelection: { kind: "anonymous" },
+        runId,
         sessionId: threadId,
         cancellation,
         provider: providerInstance,
@@ -493,6 +495,20 @@ export class HelarcMainController {
         persistentPolicyAmendments: this.policyAmendmentStore,
         patchReviewBridge,
       });
+      const startCommitResult = this.createInitialRunStartCommit({
+        sequenceNumber,
+        taskId,
+        taskText: preparedStart.prepared.task.input.prompt,
+        runId,
+        startedAt,
+        threadWorkspace,
+        runWorkspace: preparedHostRun.workspace,
+        provider: preparedStart.prepared.provider,
+        permissionPreset: preparedStart.prepared.run.permissionPreset,
+      });
+      if (!startCommitResult.ok) {
+        throw new TypeError(startCommitResult.error.message);
+      }
       let committed: Awaited<ReturnType<HelarcThreadStore["commitRunStart"]>>;
       try {
         committed = await this.threadStore.commitRunStart(startCommitResult.commit);
@@ -630,10 +646,11 @@ export class HelarcMainController {
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
     this.currentThreadRecord = record;
+    const primaryWorkspace = record.thread.workspace.primary;
     this.selectedWorkspace = {
-      id: record.thread.workspace.profileId ?? "workspace",
-      name: record.thread.workspace.displayName,
-      path: record.thread.workspace.path,
+      id: primaryWorkspace.profileId,
+      name: primaryWorkspace.displayName,
+      path: primaryWorkspace.path,
     };
     this.inactiveStatus = "workspace_selected";
     this.lastError = null;
@@ -850,30 +867,18 @@ export class HelarcMainController {
     taskText: string;
     runId: string;
     startedAt: string;
+    threadWorkspace: HelarcThreadWorkspaceContext;
+    runWorkspace: RunWorkspace;
+    provider: HelarcRunProviderRef;
+    permissionPreset: HelarcRunPermissionPreset;
   }): { ok: true; commit: HelarcRunStartCommit } | { ok: false; error: HelarcWorkContextError } {
-    if (!this.selectedWorkspace || !this.provider.configured) {
-      return {
-        ok: false,
-        error: {
-          code: "thread_workspace_invalid",
-          message: "Thread workspace context is unavailable.",
-        },
-      };
-    }
-
     const threadId = `helarc-thread-${input.sequenceNumber}`;
     const conversationId = `helarc-conversation-${input.sequenceNumber}`;
     const messageId = `helarc-message-${input.sequenceNumber}`;
 
     const threadResult = createHelarcThread({
       id: threadId,
-      workspace: {
-        profileId: this.selectedWorkspace.id.startsWith("workspace:")
-          ? this.selectedWorkspace.id
-          : null,
-        displayName: this.selectedWorkspace.name,
-        path: this.selectedWorkspace.path,
-      },
+      workspace: input.threadWorkspace,
       title: createThreadTitle(input.taskText),
       status: "open",
       createdAt: input.startedAt,
@@ -919,14 +924,12 @@ export class HelarcMainController {
       threadId,
       triggeringMessageId: messageId,
       triggerMessageRole: "user",
-      provider: {
-        profileId: this.provider.activeProfile.id,
-        providerKind: this.provider.activeProfile.providerKind,
-        displayName: this.provider.activeProfile.displayName,
-        endpointLabel: this.provider.activeProfile.endpointLabel,
-        model: this.provider.activeProfile.model,
-      },
-      permissionPreset: "ask_for_approval",
+      workspace: projectHelarcRunWorkspaceContext({
+        workspace: input.runWorkspace,
+        threadWorkspace: input.threadWorkspace,
+      }),
+      provider: input.provider,
+      permissionPreset: input.permissionPreset,
       startedAt: input.startedAt,
       metadata: {
         product: "helarc",
@@ -1262,14 +1265,15 @@ function createActiveThreadSnapshot(record: HelarcThreadRecord | null): HelarcAc
       : [];
   });
 
+  const primaryWorkspace = record.thread.workspace.primary;
   return {
     id: record.thread.id,
     title: record.thread.title,
     status: record.thread.status,
     workspace: {
-      id: record.thread.workspace.profileId ?? "workspace",
-      name: record.thread.workspace.displayName,
-      path: record.thread.workspace.path,
+      id: primaryWorkspace.profileId,
+      name: primaryWorkspace.displayName,
+      path: primaryWorkspace.path,
     },
     activeConversationId: record.thread.activeConversationId,
     messages,
@@ -1285,14 +1289,15 @@ function createActiveThreadSnapshot(record: HelarcThreadRecord | null): HelarcAc
 }
 
 function createThreadSummarySnapshot(summary: HelarcThreadSummary): HelarcThreadSummarySnapshot {
+  const primaryWorkspace = summary.workspace.primary;
   return {
     id: summary.id,
     title: summary.title,
     status: summary.status,
     workspace: {
-      id: summary.workspace.profileId ?? "workspace",
-      name: summary.workspace.displayName,
-      path: summary.workspace.path,
+      id: primaryWorkspace.profileId,
+      name: primaryWorkspace.displayName,
+      path: primaryWorkspace.path,
     },
     createdAt: summary.createdAt,
     updatedAt: summary.updatedAt,
@@ -1301,14 +1306,15 @@ function createThreadSummarySnapshot(summary: HelarcThreadSummary): HelarcThread
 }
 
 function createThreadSummarySnapshotFromRecord(record: HelarcThreadRecord): HelarcThreadSummarySnapshot {
+  const primaryWorkspace = record.thread.workspace.primary;
   return {
     id: record.thread.id,
     title: record.thread.title,
     status: record.thread.status,
     workspace: {
-      id: record.thread.workspace.profileId ?? "workspace",
-      name: record.thread.workspace.displayName,
-      path: record.thread.workspace.path,
+      id: primaryWorkspace.profileId,
+      name: primaryWorkspace.displayName,
+      path: primaryWorkspace.path,
     },
     createdAt: record.thread.createdAt,
     updatedAt: record.thread.updatedAt,

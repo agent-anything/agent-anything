@@ -1,4 +1,4 @@
-import type { IdentityRef, WorkspaceContext } from "@agent-anything/foundation";
+import type { IdentityRef, RunWorkspace } from "@agent-anything/foundation";
 import {
   createAuditRecord,
   createTelemetryRecord,
@@ -14,7 +14,7 @@ import type { RuntimeError } from "@agent-anything/foundation";
 interface SandboxAttemptRecordInput {
   readonly attempt: SandboxAttempt;
   readonly taskId: string;
-  readonly workspace: WorkspaceContext;
+  readonly workspace: RunWorkspace | null;
   readonly identity: IdentityRef;
   readonly timestamp: ISODateTimeString;
   readonly auditRequirement: RunInfrastructureRequirement;
@@ -70,7 +70,7 @@ async function recordAudit(
       eventName: `sandbox.attempt.${phase}`,
       timestamp: input.timestamp,
       actorRef: input.identity.id,
-      workspaceId: input.workspace.id,
+      workspaceId: input.workspace?.primary.id ?? null,
       subject: { kind: input.identity.kind, id: input.identity.id, metadata: {} },
       action: `sandbox.attempt.${phase}`,
       target: {

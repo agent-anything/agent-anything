@@ -1,4 +1,4 @@
-import type { AgentTask, RunWorkspace } from "@agent-anything/foundation";
+import type { AgentTask } from "@agent-anything/foundation";
 import {
   createHelarcRunInput,
   createHelarcTask,
@@ -11,13 +11,13 @@ import {
   type HelarcRunContractErrorCode,
   type HelarcRunPermissionPreset,
   type HelarcRunProviderRef,
-  type HelarcRunWorkspaceRef,
   type HelarcTaskInput,
   type HelarcTaskInputErrorCode,
   type HelarcTaskTemplate,
   type HelarcTaskTemplateErrorCode,
   type HelarcWorkspaceProfile,
   type HelarcWorkspaceProfileErrorCode,
+  type HelarcThreadWorkspaceContext,
 } from "@agent-anything/helarc";
 
 export interface PrepareHelarcRunStartInput {
@@ -26,6 +26,7 @@ export interface PrepareHelarcRunStartInput {
   taskText: string;
   taskTemplateId?: string | null;
   workspaceProfileId: string;
+  additionalWorkspaceProfileIds?: readonly string[];
   providerProfileId: string;
   workspaceProfiles: readonly HelarcWorkspaceProfile[];
   providerProfiles: readonly HelarcProviderProfile[];
@@ -38,8 +39,7 @@ export interface PrepareHelarcRunStartInput {
 export interface PreparedHelarcRunStart {
   run: HelarcRunInput;
   task: AgentTask<HelarcTaskInput>;
-  runWorkspace: RunWorkspace;
-  workspace: HelarcRunWorkspaceRef;
+  workspace: HelarcThreadWorkspaceContext;
   provider: HelarcRunProviderRef;
 }
 
@@ -77,6 +77,28 @@ export function prepareHelarcRunStart(
       workspaceResult.error.message,
     );
   }
+  const additionalWorkspaceResults = (
+    input.additionalWorkspaceProfileIds ?? []
+  ).map((profileId) =>
+    selectHelarcWorkspaceProfile(input.workspaceProfiles, profileId)
+  );
+  const failedAdditionalWorkspace = additionalWorkspaceResults.find(
+    (result) => !result.ok,
+  );
+  if (failedAdditionalWorkspace && !failedAdditionalWorkspace.ok) {
+    return reject(
+      failedAdditionalWorkspace.error.code,
+      failedAdditionalWorkspace.error.message,
+    );
+  }
+  const additionalWorkspaceProfiles = additionalWorkspaceResults.map(
+    (result) => {
+      if (!result.ok) {
+        throw new Error("Unreachable invalid additional Workspace result.");
+      }
+      return result.profile;
+    },
+  );
 
   const providerResult = selectHelarcProviderProfile(
     input.providerProfiles,
@@ -94,6 +116,9 @@ export function prepareHelarcRunStart(
     runId: input.runId,
     taskText: templateResult.taskText,
     workspaceProfileId: workspaceResult.profile.id,
+    additionalWorkspaceProfileIds: additionalWorkspaceProfiles.map(
+      (profile) => profile.id,
+    ),
     providerProfileId: providerResult.activeProfile.id,
     taskTemplateId,
     permissionPreset: input.permissionPreset,
@@ -107,11 +132,6 @@ export function prepareHelarcRunStart(
   const taskResult = createHelarcTask({
     taskId: input.taskId,
     prompt: runResult.input.taskText,
-    workspace: {
-      id: workspaceResult.profile.id,
-      name: workspaceResult.profile.displayName,
-      rootRef: workspaceResult.profile.path,
-    },
     createdAt: input.createdAt,
     metadata: {
       ...(input.metadata ?? {}),
@@ -127,13 +147,11 @@ export function prepareHelarcRunStart(
   return {
     ok: true,
     prepared: {
-        run: runResult.input,
-        task: taskResult.task,
-        runWorkspace: taskResult.workspace,
-        workspace: {
-        profileId: workspaceResult.profile.id,
-        displayName: workspaceResult.profile.displayName,
-        path: workspaceResult.profile.path,
+      run: runResult.input,
+      task: taskResult.task,
+      workspace: {
+        primary: toThreadWorkspaceRef(workspaceResult.profile),
+        additional: additionalWorkspaceProfiles.map(toThreadWorkspaceRef),
       },
       provider: {
         profileId: providerResult.activeProfile.id,
@@ -143,6 +161,16 @@ export function prepareHelarcRunStart(
         model: providerResult.activeProfile.model,
       },
     },
+  };
+}
+
+function toThreadWorkspaceRef(
+  profile: HelarcWorkspaceProfile,
+): HelarcThreadWorkspaceContext["primary"] {
+  return {
+    profileId: profile.id,
+    displayName: profile.displayName,
+    path: profile.path,
   };
 }
 

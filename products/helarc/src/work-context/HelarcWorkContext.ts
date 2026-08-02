@@ -3,6 +3,7 @@ import type {
   HostTerminalRunProjection,
 } from "@agent-anything/host";
 import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
+import type { RunWorkspace } from "@agent-anything/foundation";
 import type {
   HelarcProductResult,
 } from "../composition/HelarcProductResult.js";
@@ -41,14 +42,19 @@ export type HelarcArtifactKind =
   | "error-report";
 
 export interface HelarcThreadWorkspaceRef {
-  profileId: string | null;
-  displayName: string;
-  path: string;
+  readonly profileId: string;
+  readonly displayName: string;
+  readonly path: string;
+}
+
+export interface HelarcThreadWorkspaceContext {
+  readonly primary: HelarcThreadWorkspaceRef;
+  readonly additional: readonly HelarcThreadWorkspaceRef[];
 }
 
 export interface CreateHelarcThreadInput {
   id: string;
-  workspace: HelarcThreadWorkspaceRef;
+  workspace: HelarcThreadWorkspaceContext;
   title: string;
   status?: HelarcThreadStatus;
   createdAt: ISODateTimeString;
@@ -60,7 +66,7 @@ export interface CreateHelarcThreadInput {
 
 export interface HelarcThread {
   id: string;
-  workspace: HelarcThreadWorkspaceRef;
+  workspace: HelarcThreadWorkspaceContext;
   title: string;
   status: HelarcThreadStatus;
   createdAt: ISODateTimeString;
@@ -120,6 +126,17 @@ export interface HelarcRunProviderContext {
   model: string;
 }
 
+export interface HelarcRunWorkspaceRef {
+  readonly workspaceId: string;
+  readonly profileId: string;
+  readonly displayName: string;
+}
+
+export interface HelarcRunWorkspaceContext {
+  readonly primary: HelarcRunWorkspaceRef;
+  readonly additional: readonly HelarcRunWorkspaceRef[];
+}
+
 export interface CreateHelarcPersistedRunInput {
   id: string;
   taskId: string;
@@ -127,6 +144,7 @@ export interface CreateHelarcPersistedRunInput {
   threadId: string;
   triggeringMessageId: string;
   triggerMessageRole: HelarcRunTriggerMessageRole;
+  workspace: HelarcRunWorkspaceContext;
   provider?: HelarcRunProviderContext | null;
   permissionPreset?: HelarcRunPermissionPreset;
   startedAt: ISODateTimeString;
@@ -151,6 +169,7 @@ export interface HelarcPersistedRun {
   threadId: string;
   triggeringMessageId: string;
   triggerMessageRole: HelarcRunTriggerMessageRole;
+  workspace: HelarcRunWorkspaceContext;
   provider: HelarcRunProviderContext | null;
   permissionPreset: HelarcRunPermissionPreset;
   startedAt: ISODateTimeString;
@@ -227,6 +246,7 @@ export type HelarcWorkContextErrorCode =
   | "run_thread_id_required"
   | "run_triggering_message_id_required"
   | "run_trigger_message_role_invalid"
+  | "run_workspace_invalid"
   | "run_provider_invalid"
   | "run_permission_preset_invalid"
   | "run_timestamp_invalid"
@@ -445,6 +465,11 @@ export function createHelarcPersistedRun(
     return reject("run_trigger_message_role_invalid", "Run trigger message role is invalid.");
   }
 
+  const workspace = normalizeRunWorkspace(input.workspace);
+  if (!workspace.ok) {
+    return workspace;
+  }
+
   const provider = normalizeProvider(input.provider ?? null);
   if (!provider.ok) {
     return provider;
@@ -468,6 +493,7 @@ export function createHelarcPersistedRun(
       threadId,
       triggeringMessageId,
       triggerMessageRole: input.triggerMessageRole,
+      workspace: workspace.workspace,
       provider: provider.provider,
       permissionPreset,
       startedAt: input.startedAt,
@@ -489,6 +515,43 @@ export function deriveHelarcPersistedRunStatus(run: HelarcPersistedRun): HelarcP
   return productStatus === "rejected" || productStatus === "blocked" || productStatus === "failed"
     ? productStatus
     : "completed";
+}
+
+export function projectHelarcRunWorkspaceContext(input: {
+  readonly workspace: RunWorkspace;
+  readonly threadWorkspace: HelarcThreadWorkspaceContext;
+}): HelarcRunWorkspaceContext {
+  if (
+    input.workspace.additional.length !==
+    input.threadWorkspace.additional.length
+  ) {
+    throw new TypeError(
+      "Resolved Run Workspace does not match the Thread Workspace selection.",
+    );
+  }
+
+  return Object.freeze({
+    primary: projectHelarcRunWorkspaceRef(
+      input.workspace.primary.id,
+      input.workspace.primary.name,
+      input.threadWorkspace.primary.profileId,
+    ),
+    additional: Object.freeze(input.workspace.additional.map(
+      (workspace, index) => {
+        const threadRef = input.threadWorkspace.additional[index];
+        if (threadRef === undefined) {
+          throw new TypeError(
+            "Resolved additional Workspace has no matching Thread reference.",
+          );
+        }
+        return projectHelarcRunWorkspaceRef(
+          workspace.id,
+          workspace.name,
+          threadRef.profileId,
+        );
+      },
+    )),
+  });
 }
 
 export function createHelarcArtifact(input: CreateHelarcArtifactInput): CreateHelarcArtifactResult {
@@ -544,6 +607,7 @@ function normalizeHelarcRunRecord(input: HelarcPersistedRun): CreateHelarcPersis
     threadId: input.threadId,
     triggeringMessageId: input.triggeringMessageId,
     triggerMessageRole: input.triggerMessageRole,
+    workspace: input.workspace,
     provider: input.provider,
     permissionPreset: input.permissionPreset,
     startedAt: input.startedAt,
@@ -792,22 +856,129 @@ function validateThreadRecordRelationships(
 }
 
 function normalizeWorkspace(
-  workspace: HelarcThreadWorkspaceRef,
-): { ok: true; workspace: HelarcThreadWorkspaceRef } | { ok: false; error: HelarcWorkContextError } {
-  const displayName = normalizeRequiredString(workspace.displayName);
-  const path = normalizeRequiredString(workspace.path);
-  if (!displayName || !path) {
+  workspace: HelarcThreadWorkspaceContext,
+): { ok: true; workspace: HelarcThreadWorkspaceContext } |
+  { ok: false; error: HelarcWorkContextError } {
+  if (
+    workspace === null ||
+    typeof workspace !== "object" ||
+    !Array.isArray(workspace.additional)
+  ) {
     return reject("thread_workspace_invalid", "Thread workspace reference is invalid.");
+  }
+
+  const primary = normalizeThreadWorkspaceRef(workspace.primary);
+  if (primary === null) {
+    return reject("thread_workspace_invalid", "Thread primary Workspace reference is invalid.");
+  }
+  const additional: HelarcThreadWorkspaceRef[] = [];
+  const profileIds = new Set([primary.profileId]);
+  for (const candidate of workspace.additional) {
+    const normalized = normalizeThreadWorkspaceRef(candidate);
+    if (normalized === null || profileIds.has(normalized.profileId)) {
+      return reject(
+        "thread_workspace_invalid",
+        "Thread additional Workspace references are invalid or duplicated.",
+      );
+    }
+    profileIds.add(normalized.profileId);
+    additional.push(normalized);
   }
 
   return {
     ok: true,
     workspace: {
-      profileId: normalizeNullableString(workspace.profileId),
-      displayName,
-      path,
+      primary,
+      additional,
     },
   };
+}
+
+function normalizeThreadWorkspaceRef(
+  workspace: HelarcThreadWorkspaceRef,
+): HelarcThreadWorkspaceRef | null {
+  if (workspace === null || typeof workspace !== "object") {
+    return null;
+  }
+  const profileId = normalizeRequiredString(workspace.profileId);
+  const displayName = normalizeRequiredString(workspace.displayName);
+  const path = normalizeRequiredString(workspace.path);
+  return profileId && displayName && path
+    ? { profileId, displayName, path }
+    : null;
+}
+
+function normalizeRunWorkspace(
+  workspace: HelarcRunWorkspaceContext,
+): { ok: true; workspace: HelarcRunWorkspaceContext } |
+  { ok: false; error: HelarcWorkContextError } {
+  if (
+    workspace === null ||
+    typeof workspace !== "object" ||
+    !Array.isArray(workspace.additional)
+  ) {
+    return reject("run_workspace_invalid", "Run Workspace context is invalid.");
+  }
+  const primary = normalizeRunWorkspaceRef(workspace.primary);
+  if (primary === null) {
+    return reject("run_workspace_invalid", "Run primary Workspace context is invalid.");
+  }
+  const additional: HelarcRunWorkspaceRef[] = [];
+  const workspaceIds = new Set([primary.workspaceId]);
+  const profileIds = new Set([primary.profileId]);
+  for (const candidate of workspace.additional) {
+    const normalized = normalizeRunWorkspaceRef(candidate);
+    if (
+      normalized === null ||
+      workspaceIds.has(normalized.workspaceId) ||
+      profileIds.has(normalized.profileId)
+    ) {
+      return reject(
+        "run_workspace_invalid",
+        "Run additional Workspace contexts are invalid or duplicated.",
+      );
+    }
+    workspaceIds.add(normalized.workspaceId);
+    profileIds.add(normalized.profileId);
+    additional.push(normalized);
+  }
+  return {
+    ok: true,
+    workspace: {
+      primary,
+      additional,
+    },
+  };
+}
+
+function normalizeRunWorkspaceRef(
+  workspace: HelarcRunWorkspaceRef,
+): HelarcRunWorkspaceRef | null {
+  if (workspace === null || typeof workspace !== "object") {
+    return null;
+  }
+  const workspaceId = normalizeRequiredString(workspace.workspaceId);
+  const profileId = normalizeRequiredString(workspace.profileId);
+  const displayName = normalizeRequiredString(workspace.displayName);
+  return workspaceId && profileId && displayName
+    ? { workspaceId, profileId, displayName }
+    : null;
+}
+
+function projectHelarcRunWorkspaceRef(
+  workspaceId: string,
+  displayName: string,
+  profileId: string,
+): HelarcRunWorkspaceRef {
+  const normalized = normalizeRunWorkspaceRef({
+    workspaceId,
+    profileId,
+    displayName,
+  });
+  if (normalized === null) {
+    throw new TypeError("Resolved Run Workspace identity is invalid.");
+  }
+  return Object.freeze(normalized);
 }
 
 function normalizeProvider(

@@ -16,9 +16,14 @@ import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,
   createHostRuntime,
+  resolveHostRunContext,
   type HostActiveRun,
+  type HostIdentityResolver,
+  type HostIdentitySelection,
   type HostRunStartFailure,
   type HostTerminalRunProjection,
+  type HostWorkspaceResolver,
+  type HostWorkspaceSelection,
   type UserApprovalReviewBridge,
 } from "@agent-anything/host";
 import {
@@ -51,6 +56,7 @@ import {
   listRunWorkspaces,
   type AgentTask,
   type ArtifactRef,
+  type IdentityRef,
   type ISODateTimeString,
   type RunWorkspace,
   type WorkspaceContext,
@@ -62,7 +68,10 @@ export interface PrepareHelarcHostRunInput {
   readonly sessionId: string;
   readonly runId: string;
   readonly task: AgentTask<HelarcTaskInput>;
-  readonly workspace: RunWorkspace;
+  readonly workspaceResolver: HostWorkspaceResolver;
+  readonly workspaceSelection: HostWorkspaceSelection;
+  readonly identityResolver: HostIdentityResolver;
+  readonly identitySelection: HostIdentitySelection;
   readonly provider: Provider;
   readonly cancellation: RunCancellationController;
   readonly toolMode: HelarcToolMode;
@@ -107,6 +116,8 @@ export interface HelarcHostRunComposition {
 export interface PreparedHelarcHostRun {
   readonly sessionId: string;
   readonly runId: string;
+  readonly workspace: RunWorkspace;
+  readonly identity: IdentityRef;
   start(): HelarcHostRunComposition;
 }
 
@@ -122,8 +133,23 @@ export interface HelarcHostActiveRun extends HostActiveRun<HelarcAgentOutput> {
 export async function prepareHelarcHostRun(
   input: PrepareHelarcHostRunInput,
 ): Promise<PreparedHelarcHostRun> {
-  const workspace = input.workspace.primary;
-  const workspaceRoots = resolvePermissionWorkspaceRoots(input.workspace);
+  const runContext = await resolveHostRunContext({
+    sessionId: input.sessionId,
+    runId: input.runId,
+    taskId: input.task.id,
+    metadata: { product: "helarc" },
+    workspaceResolver: input.workspaceResolver,
+    identityResolver: input.identityResolver,
+    workspaceSelection: input.workspaceSelection,
+    identitySelection: input.identitySelection,
+    workspaceRequirement: "required",
+  });
+  if (runContext.workspace === null) {
+    throw new TypeError("Helarc requires a resolved Run Workspace.");
+  }
+  const runWorkspace = runContext.workspace;
+  const workspace = runWorkspace.primary;
+  const workspaceRoots = resolvePermissionWorkspaceRoots(runWorkspace);
   const platform = workspaceRoots.some((root) => /^[A-Za-z]:[\\/]/.test(root.path))
     ? "win32" as const
     : "posix" as const;
@@ -133,7 +159,7 @@ export async function prepareHelarcHostRun(
   assertPatchReviewBridge(input.runId, input.patchReviewBridge);
 
   const canonicalRoots = await createCodeAgentCanonicalWorkspaceRoots({
-    workspace: input.workspace,
+    workspace: runWorkspace,
     platform,
   });
   const permissions = await createHelarcHostPermissionComposition({
@@ -158,7 +184,7 @@ export async function prepareHelarcHostRun(
   const product = await createHelarcProductComposition({
     runId: input.runId,
     task: input.task,
-    workspace: input.workspace,
+    workspace: runWorkspace,
     provider: input.provider,
     toolMode: input.toolMode,
     commandLimits: input.commandLimits,
@@ -220,20 +246,18 @@ export async function prepareHelarcHostRun(
       metadata: runMetadata,
     },
     runConfig: {
-      workspace: input.workspace,
-      identity: {
-        id: input.sessionId,
-        kind: "anonymous",
-        displayName: "Helarc user",
-        metadata: { product: "helarc" },
-      },
+      workspace: runWorkspace,
+      identity: runContext.identity,
       actionContext: {
         workspace: {
           workspaceId: workspace.id,
           trustState: workspace.trustState,
           roots: canonicalRoots,
         },
-        actor: { identityId: input.sessionId, kind: "anonymous" },
+        actor: {
+          identityId: runContext.identity.id,
+          kind: runContext.identity.kind,
+        },
         environment: {
           environmentId: permissions.permissions.permissionProfile.environmentId,
           platform,
@@ -314,6 +338,8 @@ export async function prepareHelarcHostRun(
   return Object.freeze({
     sessionId: input.sessionId,
     runId: input.runId,
+    workspace: runWorkspace,
+    identity: runContext.identity,
     start(): HelarcHostRunComposition {
       if (started) {
         throw new Error("Prepared Helarc Host Run can be started only once.");

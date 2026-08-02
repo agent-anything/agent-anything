@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FakeAuditPort } from "./FakeAuditPort.js";
-import { FakeIdentityProvider } from "./FakeIdentityProvider.js";
 import { FakeTelemetryPort } from "./FakeTelemetryPort.js";
-import { FakeWorkspaceResolver } from "./FakeWorkspaceResolver.js";
 
 describe("testing fake ports", () => {
   it("records audit and telemetry records", async () => {
@@ -34,37 +32,5 @@ describe("testing fake ports", () => {
 
     expect(auditPort.records).toHaveLength(1);
     expect(telemetryPort.records).toHaveLength(1);
-  });
-
-  it("resolves fixed workspace and identity contexts", async () => {
-    const workspaceResolver = new FakeWorkspaceResolver({
-      id: "workspace_001",
-      kind: "local",
-      rootPath: "D:/projects/agent-anything",
-      metadata: {},
-    });
-    const identityProvider = new FakeIdentityProvider({
-      id: "identity_001",
-      kind: "user",
-      displayName: "Test User",
-      metadata: {},
-    });
-
-    await expect(workspaceResolver.resolve({
-      taskId: "task_001",
-      metadata: {},
-    })).resolves.toMatchObject({
-      id: "workspace_001",
-    });
-    await expect(identityProvider.resolve({
-      taskId: "task_001",
-      workspace: null,
-      metadata: {},
-    })).resolves.toMatchObject({
-      id: "identity_001",
-    });
-
-    expect(workspaceResolver.requests).toHaveLength(1);
-    expect(identityProvider.requests).toHaveLength(1);
   });
 });

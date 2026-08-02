@@ -51,10 +51,20 @@ export {
   reduceHostRunProjection,
 } from "./HostRunProjectionReducer.js";
 export {
-  createHostIdentityProvider,
-  createHostWorkspaceResolver,
-  type CreateHostIdentityProviderInput,
-  type CreateHostWorkspaceResolverInput,
+  createStaticHostIdentityResolver,
+  createStaticHostWorkspaceResolver,
+  HostContextResolutionError,
+  resolveHostRunContext,
+  type HostContextResolutionErrorCode,
+  type HostIdentityResolutionInput,
+  type HostIdentityResolver,
+  type HostIdentitySelection,
+  type HostWorkspaceRequirement,
+  type HostWorkspaceResolutionInput,
+  type HostWorkspaceResolver,
+  type HostWorkspaceSelection,
+  type ResolvedHostRunContext,
+  type ResolveHostRunContextInput,
 } from "./HostContext.js";
 export type {
   CreateUserApprovalReviewBridgeInput,

@@ -87,16 +87,22 @@ function createTask(workspaceRoot: string) {
   const result = createHelarcTask({
     taskId: "helarc-composition-test-task",
     prompt: "Inspect the workspace.",
-    workspace: {
-      id: "workspace-1",
-      name: "Workspace",
-      rootRef: workspaceRoot,
-    },
   });
   if (!result.ok) throw new Error(result.error.message);
   return {
     task: result.task,
-    workspace: result.workspace,
+    workspace: {
+      primary: {
+        id: "workspace-1",
+        name: "Workspace",
+        rootRef: workspaceRoot,
+        trustState: "trusted" as const,
+        source: "test",
+        policyRefs: [],
+        metadata: {},
+      },
+      additional: [],
+    },
   };
 }
 

@@ -148,6 +148,32 @@ describe("resolveWorkspacePath", () => {
     });
   });
 
+  it.each(currentPlatformAbsolutePaths())(
+    "rejects the supported absolute path form $requestedPath",
+    ({ requestedPath }) => {
+      expect(resolveWorkspacePath({
+        workspace: createCodeWorkspace(),
+        requestedPath,
+      })).toMatchObject({
+        status: "rejected",
+        error: {
+          code: "absolute_path_not_allowed",
+          requestedPath,
+        },
+      });
+    },
+  );
+
+  it("rejects traversal written with the portable forward-slash separator", () => {
+    expect(resolveWorkspacePath({
+      workspace: createCodeWorkspace(),
+      requestedPath: "../outside.txt",
+    })).toMatchObject({
+      status: "rejected",
+      error: { code: "path_outside_workspace" },
+    });
+  });
+
   it("rejects traversal outside the selected Workspace", () => {
     expect(resolveWorkspacePath({
       workspace: createCodeWorkspace(),
@@ -195,4 +221,17 @@ function createWorkspace(
     metadata: {},
     ...overrides,
   };
+}
+
+function currentPlatformAbsolutePaths(): Array<{ requestedPath: string }> {
+  return process.platform === "win32"
+    ? [
+        { requestedPath: "C:\\outside.txt" },
+        { requestedPath: "\\\\server\\share\\outside.txt" },
+        { requestedPath: "\\outside.txt" },
+      ]
+    : [
+        { requestedPath: "/outside.txt" },
+        { requestedPath: "//server/share/outside.txt" },
+      ];
 }

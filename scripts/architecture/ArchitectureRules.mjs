@@ -8,7 +8,6 @@ export const PLATFORM_PRODUCTION_DEPENDENCIES = Object.freeze({
   "@agent-anything/storage": ["@agent-anything/evidence", "@agent-anything/foundation"],
   "@agent-anything/testing": [
     "@agent-anything/foundation",
-    "@agent-anything/governance",
     "@agent-anything/observability",
     "@agent-anything/permission",
     "@agent-anything/providers",

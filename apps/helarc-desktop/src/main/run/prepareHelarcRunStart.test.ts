@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { prepareHelarcRunStart } from "./prepareHelarcRunStart.js";
 
 describe("prepareHelarcRunStart", () => {
-  it("prepares manual task text into run and platform task contracts", () => {
+  it("prepares manual task text into Run, Task, and Thread Workspace contracts", () => {
     const result = prepareHelarcRunStart({
       ...input(),
       taskText: " Inspect workspace ",
@@ -31,17 +31,13 @@ describe("prepareHelarcRunStart", () => {
             taskTemplateId: null,
           },
         },
-        runWorkspace: {
+        workspace: {
           primary: {
-            id: "workspace-1",
-            rootRef: "D:\\projects\\agent-anything",
+            profileId: "workspace-1",
+            displayName: "agent-anything",
+            path: "D:\\projects\\agent-anything",
           },
           additional: [],
-        },
-        workspace: {
-          profileId: "workspace-1",
-          displayName: "agent-anything",
-          path: "D:\\projects\\agent-anything",
         },
         provider: {
           profileId: "provider-1",
@@ -107,6 +103,27 @@ describe("prepareHelarcRunStart", () => {
     });
   });
 
+  it("retains additional Workspace profiles without changing the primary", () => {
+    const result = prepareHelarcRunStart({
+      ...input(),
+      additionalWorkspaceProfileIds: ["workspace-docs"],
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      prepared: {
+        run: {
+          workspaceProfileId: "workspace-1",
+          additionalWorkspaceProfileIds: ["workspace-docs"],
+        },
+        workspace: {
+          primary: { profileId: "workspace-1" },
+          additional: [{ profileId: "workspace-docs" }],
+        },
+      },
+    });
+  });
+
   it("rejects stale workspace, provider, and template references", () => {
     expect(prepareHelarcRunStart({
       ...input(),
@@ -158,6 +175,13 @@ function input() {
         id: "workspace-1",
         displayName: "agent-anything",
         path: "D:\\projects\\agent-anything",
+        lastOpenedAt: "2026-07-04T00:00:00.000Z",
+        trustState: "trusted" as const,
+      },
+      {
+        id: "workspace-docs",
+        displayName: "agent-anything-docs",
+        path: "D:\\projects\\agent-anything-docs",
         lastOpenedAt: "2026-07-04T00:00:00.000Z",
         trustState: "trusted" as const,
       },

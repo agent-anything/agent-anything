@@ -10,7 +10,7 @@ import type {
   IdentityRef,
   ISODateTimeString,
   Metadata,
-  WorkspaceContext,
+  RunWorkspace,
 } from "@agent-anything/foundation";
 import type { RunCounters } from "@agent-anything/agent-core/run";
 import type { RuntimeError, RuntimeErrorOwner } from "@agent-anything/foundation";
@@ -26,7 +26,7 @@ export interface RecordRunnerLifecycleInput {
   readonly timestamp: ISODateTimeString;
   readonly counters: RunCounters;
   readonly itemCount: number;
-  readonly workspace: WorkspaceContext;
+  readonly workspace: RunWorkspace | null;
   readonly identity: IdentityRef;
   readonly auditRequirement: RunInfrastructureRequirement;
   readonly telemetryRequirement: RunInfrastructureRequirement;
@@ -96,7 +96,7 @@ async function recordAudit(
         eventName: `run.${input.phase}`,
         timestamp: input.timestamp,
         actorRef: input.identity.id,
-        workspaceId: input.workspace.id,
+        workspaceId: input.workspace?.primary.id ?? null,
         subject: {
           kind: input.identity.kind,
           id: input.identity.id,

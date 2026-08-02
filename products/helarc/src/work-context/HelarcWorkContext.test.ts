@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { RunWorkspace } from "@agent-anything/foundation";
 import {
   createHelarcArtifact,
   createHelarcConversation,
@@ -7,6 +8,7 @@ import {
   createHelarcThread,
   deriveHelarcPersistedRunStatus,
   normalizeHelarcThreadRecord,
+  projectHelarcRunWorkspaceContext,
   type HelarcPersistedRun,
   type HelarcThreadRecord,
 } from "./HelarcWorkContext.js";
@@ -19,9 +21,16 @@ describe("Helarc work context domain", () => {
     expect(createHelarcThread({
       id: " thread-1 ",
       workspace: {
-        profileId: " workspace-1 ",
-        displayName: " AgentAnything ",
-        path: " D:/projects/agent-anything ",
+        primary: {
+          profileId: " workspace-1 ",
+          displayName: " AgentAnything ",
+          path: " D:/projects/agent-anything ",
+        },
+        additional: [{
+          profileId: " workspace-docs ",
+          displayName: " Docs ",
+          path: " D:/projects/agent-anything-docs ",
+        }],
       },
       title: " Implement Phase17 ",
       createdAt: NOW,
@@ -66,6 +75,7 @@ describe("Helarc work context domain", () => {
       threadId: " thread-1 ",
       triggeringMessageId: " message-1 ",
       triggerMessageRole: "user",
+      workspace: runWorkspace(),
       provider: {
         profileId: " provider-1 ",
         providerKind: "ollama",
@@ -86,6 +96,16 @@ describe("Helarc work context domain", () => {
         lastProgress: null,
         terminal: null,
         artifactIds: [],
+        workspace: {
+          primary: {
+            workspaceId: "workspace-1",
+            profileId: "workspace-1",
+          },
+          additional: [{
+            workspaceId: "workspace-docs",
+            profileId: "workspace-docs",
+          }],
+        },
       },
     });
 
@@ -112,6 +132,7 @@ describe("Helarc work context domain", () => {
       threadId: "thread-1",
       triggeringMessageId: "message-1",
       triggerMessageRole: "assistant" as never,
+      workspace: runWorkspace(),
       startedAt: NOW,
     })).toMatchObject({ ok: false, error: { code: "run_trigger_message_role_invalid" } });
 
@@ -122,6 +143,7 @@ describe("Helarc work context domain", () => {
       threadId: "thread-1",
       triggeringMessageId: "message-1",
       triggerMessageRole: "user",
+      workspace: runWorkspace(),
       startedAt: NOW,
     })).toMatchObject({ ok: false, error: { code: "run_task_id_required" } });
   });
@@ -138,6 +160,30 @@ describe("Helarc work context domain", () => {
 
     const failed = terminalRun("failed", "failed");
     expect(deriveHelarcPersistedRunStatus(failed)).toBe("failed");
+  });
+
+  it("projects primary and additional Run Workspace identities without root paths", () => {
+    const workspace: RunWorkspace = {
+      primary: workspaceContext(
+        "workspace-1",
+        "AgentAnything",
+        "D:/projects/agent-anything",
+      ),
+      additional: [workspaceContext(
+        "workspace-docs",
+        "Docs",
+        "D:/projects/agent-anything-docs",
+      )],
+    };
+
+    const projected = projectHelarcRunWorkspaceContext({
+      workspace,
+      threadWorkspace: threadWorkspace(),
+    });
+
+    expect(projected).toEqual(runWorkspace());
+    expect(JSON.stringify(projected)).not.toContain("D:/projects");
+    expect(Object.isFrozen(projected.additional)).toBe(true);
   });
 
   it("normalizes a coherent durable Thread record", () => {
@@ -184,11 +230,7 @@ function createRecord(): HelarcThreadRecord {
   return {
     thread: {
       id: "thread-1",
-      workspace: {
-        profileId: "workspace-1",
-        displayName: "AgentAnything",
-        path: "D:/projects/agent-anything",
-      },
+      workspace: threadWorkspace(),
       title: "Implement Phase17",
       status: "open",
       createdAt: NOW,
@@ -229,6 +271,7 @@ function initialRun(): HelarcPersistedRun {
     threadId: "thread-1",
     triggeringMessageId: "message-1",
     triggerMessageRole: "user",
+    workspace: runWorkspace(),
     provider: null,
     permissionPreset: "ask_for_approval",
     startedAt: NOW,
@@ -237,6 +280,52 @@ function initialRun(): HelarcPersistedRun {
     lastProgress: null,
     terminal: null,
     artifactIds: [],
+    metadata: {},
+  };
+}
+
+function threadWorkspace() {
+  return {
+    primary: {
+      profileId: "workspace-1",
+      displayName: "AgentAnything",
+      path: "D:/projects/agent-anything",
+    },
+    additional: [{
+      profileId: "workspace-docs",
+      displayName: "Docs",
+      path: "D:/projects/agent-anything-docs",
+    }],
+  };
+}
+
+function runWorkspace() {
+  return {
+    primary: {
+      workspaceId: "workspace-1",
+      profileId: "workspace-1",
+      displayName: "AgentAnything",
+    },
+    additional: [{
+      workspaceId: "workspace-docs",
+      profileId: "workspace-docs",
+      displayName: "Docs",
+    }],
+  };
+}
+
+function workspaceContext(
+  id: string,
+  name: string,
+  rootRef: string,
+) {
+  return {
+    id,
+    name,
+    rootRef,
+    trustState: "trusted" as const,
+    source: "test",
+    policyRefs: [],
     metadata: {},
   };
 }

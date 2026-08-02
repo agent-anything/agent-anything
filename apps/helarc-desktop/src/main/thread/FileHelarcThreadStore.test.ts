@@ -244,9 +244,12 @@ function startCommit(id: string, timestamp = STARTED_AT): HelarcRunStartCommit {
       thread: {
         id: `thread-${id}`,
         workspace: {
-          profileId: "workspace-1",
-          displayName: "AgentAnything",
-          path: "D:/projects/agent-anything",
+          primary: {
+            profileId: "workspace-1",
+            displayName: "AgentAnything",
+            path: "D:/projects/agent-anything",
+          },
+          additional: [],
         },
         title: `Thread ${id}`,
         status: "open",
@@ -283,6 +286,14 @@ function startCommit(id: string, timestamp = STARTED_AT): HelarcRunStartCommit {
       threadId: `thread-${id}`,
       triggeringMessageId: `message-${id}`,
       triggerMessageRole: "user",
+      workspace: {
+        primary: {
+          workspaceId: "workspace-1",
+          profileId: "workspace-1",
+          displayName: "AgentAnything",
+        },
+        additional: [],
+      },
       provider: null,
       permissionPreset: "ask_for_approval",
       startedAt: timestamp,

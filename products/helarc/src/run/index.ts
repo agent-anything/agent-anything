@@ -6,7 +6,6 @@ export type {
   HelarcRunInput,
   HelarcRunPermissionPreset,
   HelarcRunProviderRef,
-  HelarcRunWorkspaceRef,
 } from "./HelarcRun.js";
 export type {
   HelarcProductActivityProjectionUpdate,

@@ -1175,6 +1175,25 @@ describe("Runner", () => {
     expect(Object.isFrozen(controller.calls[0]?.workspace.additional)).toBe(true);
   });
 
+  it("runs without a Workspace when the selected capabilities require no roots", async () => {
+    const controller = new ScriptedController([finalDecision("No Workspace required")]);
+
+    const result = await createRunner(controller).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        workspace: null,
+        permissions: createTestPermissionConfig([]),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      finalOutput: { summary: "No Workspace required" },
+    });
+    expect(controller.calls[0]?.workspace).toBeNull();
+  });
+
 });
 
 describe("Runner external Action approval attachment", () => {
@@ -3019,18 +3038,20 @@ function createRunConfig(
 ): RunConfig {
   const runId = overrides.runId ?? "run_001";
   return {
-    workspace: overrides.workspace ?? {
-      primary: {
-        id: "workspace_001",
-        name: "Test workspace",
-        rootRef: "workspace://root",
-        trustState: "trusted",
-        source: "test",
-        policyRefs: [],
-        metadata: {},
-      },
-      additional: [],
-    },
+    workspace: overrides.workspace === undefined
+      ? {
+          primary: {
+            id: "workspace_001",
+            name: "Test workspace",
+            rootRef: "workspace://root",
+            trustState: "trusted",
+            source: "test",
+            policyRefs: [],
+            metadata: {},
+          },
+          additional: [],
+        }
+      : overrides.workspace,
     identity: {
       id: "user_001",
       kind: "user",
@@ -3091,7 +3112,11 @@ function createTestRetryConfiguration(): RunConfig["retry"] {
   };
 }
 
-function createTestPermissionConfig(): ResolvedRunPermissionConfig {
+function createTestPermissionConfig(
+  workspaceRoots: readonly { rootId: string; path: string }[] = [
+    { rootId: "workspace_001", path: "C:/workspace" },
+  ],
+): ResolvedRunPermissionConfig {
   const managedConstraints: ManagedPermissionConstraints = {
     constraintSetId: "test-managed",
     selectableProfiles: { allowedProfileIds: null, deniedProfileIds: [] },
@@ -3106,7 +3131,7 @@ function createTestPermissionConfig(): ResolvedRunPermissionConfig {
       environment: {
         environmentId: "test-local",
         platform: "win32",
-        workspaceRoots: [{ rootId: "workspace_001", path: "C:/workspace" }],
+        workspaceRoots,
       },
       managedConstraints,
     }),

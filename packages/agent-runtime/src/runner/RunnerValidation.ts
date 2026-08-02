@@ -36,21 +36,37 @@ export function snapshotRunConfig(
     if (!isRecord(config)) {
       throw new TypeError("RunConfig must be an object.");
     }
-    const workspace = snapshotRunWorkspace(config.workspace);
+    const workspace = config.workspace === null
+      ? null
+      : snapshotRunWorkspace(config.workspace);
     const identity = snapshotIdentityRef(config.identity);
     const permissions = snapshotResolvedRunPermissionConfig({
       permissions: config.permissions,
-      workspace: workspace.primary,
+      workspace,
       identity,
     });
+    if (
+      workspace === null &&
+      permissions.permissionProfile.workspaceRoots.length > 0
+    ) {
+      throw new TypeError(
+        "A Run without Workspace context cannot carry Permission workspace roots.",
+      );
+    }
     const actionContext = config.actionContext === null
       ? null
-      : snapshotRunActionContext({
-          context: config.actionContext,
-          workspace: workspace.primary,
-          identity,
-          profile: permissions.permissionProfile,
-        });
+      : workspace === null
+        ? (() => {
+            throw new TypeError(
+              "A Run without Workspace context cannot carry an Action context.",
+            );
+          })()
+        : snapshotRunActionContext({
+            context: config.actionContext,
+            workspace,
+            identity,
+            profile: permissions.permissionProfile,
+          });
     if (!isRecord(config.toolCatalog) || !Array.isArray(config.toolCatalog.tools)) {
       throw new TypeError("RunConfig.toolCatalog must be a ToolCatalogSnapshot.");
     }

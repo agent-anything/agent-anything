@@ -34,11 +34,9 @@ export type {
   HelarcTaskInput,
   HelarcTaskInputError,
   HelarcTaskInputErrorCode,
-  TrustedHelarcWorkspaceSelection,
 } from "./task/index.js";
 export {
   createHelarcTask,
-  createTrustedHelarcRunWorkspace,
   DEFAULT_HELARC_TASK_PROMPT_MAX_LENGTH,
   HELARC_TASK_KIND,
 } from "./task/index.js";
@@ -112,6 +110,8 @@ export type {
   HelarcPersistedRun,
   HelarcRunProgressRecord,
   HelarcRunProviderContext,
+  HelarcRunWorkspaceContext,
+  HelarcRunWorkspaceRef,
   HelarcRunStartCommit,
   HelarcRunStartTarget,
   HelarcRunTerminalCommit,
@@ -123,6 +123,7 @@ export type {
   HelarcThread,
   HelarcThreadRecord,
   HelarcThreadStatus,
+  HelarcThreadWorkspaceContext,
   HelarcThreadWorkspaceRef,
   HelarcWorkContextError,
   HelarcWorkContextErrorCode,
@@ -165,6 +166,7 @@ export {
   normalizeHelarcThreadAggregate,
   deriveHelarcPersistedRunStatus,
   normalizeHelarcThreadRecord,
+  projectHelarcRunWorkspaceContext,
 } from "./work-context/index.js";
 export type {
   CreateHelarcRunInput,
@@ -174,7 +176,6 @@ export type {
   HelarcRunInput,
   HelarcRunPermissionPreset,
   HelarcRunProviderRef,
-  HelarcRunWorkspaceRef,
 } from "./run/index.js";
 export {
   createHelarcRunInput,

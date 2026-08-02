@@ -47,7 +47,7 @@ export interface RunPermissionGrant {
 export interface SessionAuthorityContext {
   readonly hostSessionId: string;
   readonly authorityContextKey: string;
-  readonly workspaceId: string;
+  readonly workspaceId: string | null;
   readonly identityId: string | null;
   readonly environmentId: string;
 }

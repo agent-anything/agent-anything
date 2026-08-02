@@ -1,4 +1,4 @@
-import type { IdentityRef, WorkspaceContext } from "@agent-anything/foundation";
+import type { IdentityRef, RunWorkspace } from "@agent-anything/foundation";
 import type { ResolvedPermissionProfile } from "@agent-anything/permission";
 import {
   createCanonicalActorIdentity,
@@ -25,7 +25,7 @@ export interface RunActionContext {
 
 export function snapshotRunActionContext(input: {
   readonly context: RunActionContextInput | RunActionContext;
-  readonly workspace: WorkspaceContext;
+  readonly workspace: RunWorkspace;
   readonly identity: IdentityRef;
   readonly profile: ResolvedPermissionProfile;
 }): RunActionContext {
@@ -50,8 +50,8 @@ export function snapshotRunActionContext(input: {
   const actor = createCanonicalActorIdentity(context.actor);
   const environment = createCanonicalEnvironmentIdentity(context.environment);
 
-  if (workspace.workspaceId !== input.workspace.id ||
-    workspace.trustState !== input.workspace.trustState) {
+  if (workspace.workspaceId !== input.workspace.primary.id ||
+    workspace.trustState !== input.workspace.primary.trustState) {
     throw new TypeError("Action context workspace identity does not match RunConfig.workspace.");
   }
   if (actor.identityId !== input.identity.id || actor.kind !== input.identity.kind) {

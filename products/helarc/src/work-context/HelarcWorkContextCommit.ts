@@ -179,6 +179,7 @@ export async function applyHelarcRunStartCommit(
       thread.id !== commit.threadId || thread.latestRunId !== null ||
       thread.activeConversationId !== conversation.id || conversation.threadId !== thread.id ||
       conversation.messageIds.length !== 0 || commit.triggeringMessage.conversationId !== conversation.id ||
+      !sameRunWorkspaceSelection(thread.workspace, commit.run.workspace) ||
       commit.committedAt < thread.createdAt || commit.committedAt < thread.updatedAt ||
       commit.committedAt < conversation.createdAt || commit.committedAt < conversation.updatedAt ||
       commit.committedAt < commit.triggeringMessage.createdAt
@@ -214,6 +215,10 @@ export async function applyHelarcRunStartCommit(
       aggregate.record.thread.id !== commit.threadId || conversation === undefined ||
       conversation.id !== aggregate.record.thread.activeConversationId ||
       commit.triggeringMessage.conversationId !== conversation.id ||
+      !sameRunWorkspaceSelection(
+        aggregate.record.thread.workspace,
+        commit.run.workspace,
+      ) ||
       commit.committedAt < aggregate.record.thread.updatedAt ||
       commit.committedAt < conversation.updatedAt ||
       commit.committedAt < commit.triggeringMessage.createdAt
@@ -460,6 +465,20 @@ function isValidAssistantMessage(
     message.relatedArtifactIds.length === artifactIds.length &&
     message.relatedArtifactIds.every((id, index) => id === artifactIds[index]) &&
     !record.messages.some((existing) => existing.id === message.id);
+}
+
+function sameRunWorkspaceSelection(
+  threadWorkspace: HelarcThread["workspace"],
+  runWorkspace: HelarcPersistedRun["workspace"],
+): boolean {
+  return (
+    threadWorkspace.primary.profileId === runWorkspace.primary.profileId &&
+    threadWorkspace.additional.length === runWorkspace.additional.length &&
+    threadWorkspace.additional.every(
+      (workspace, index) =>
+        workspace.profileId === runWorkspace.additional[index]?.profileId,
+    )
+  );
 }
 
 function isValidLedger(

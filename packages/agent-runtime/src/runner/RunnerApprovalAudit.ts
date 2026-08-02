@@ -9,7 +9,7 @@ import type {
 import type {
   IdentityRef,
   ISODateTimeString,
-  WorkspaceContext,
+  RunWorkspace,
 } from "@agent-anything/foundation";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
 import type { RuntimeError } from "@agent-anything/foundation";
@@ -18,7 +18,7 @@ interface ApprovalAuditBaseInput {
   readonly request: ApprovalRequest;
   readonly pendingVersion: number;
   readonly taskId: string;
-  readonly workspace: WorkspaceContext;
+  readonly workspace: RunWorkspace | null;
   readonly identity: IdentityRef;
   readonly timestamp: ISODateTimeString;
   readonly requirement: RunInfrastructureRequirement;
@@ -56,7 +56,7 @@ async function recordApprovalAudit(
         eventName: `approval.${phase}`,
         timestamp: input.timestamp,
         actorRef: input.identity.id,
-        workspaceId: input.workspace.id,
+        workspaceId: input.workspace?.primary.id ?? null,
         subject: {
           kind: input.identity.kind,
           id: input.identity.id,

@@ -10,7 +10,7 @@ import type {
   IdentityRef,
   ISODateTimeString,
   Metadata,
-  WorkspaceContext,
+  RunWorkspace,
 } from "@agent-anything/foundation";
 import type { ApprovalRecordSummary } from "@agent-anything/agent-core/run";
 import type { ApprovalCounters } from "@agent-anything/agent-core/run";
@@ -21,7 +21,7 @@ export interface RecordApprovalResolutionInput {
   readonly runId: string;
   readonly summary: ApprovalRecordSummary;
   readonly taskId: string;
-  readonly workspace: WorkspaceContext;
+  readonly workspace: RunWorkspace | null;
   readonly identity: IdentityRef;
   readonly timestamp: ISODateTimeString;
   readonly counters: ApprovalCounters;
@@ -65,7 +65,7 @@ async function recordAudit(
         eventName: "approval.resolved",
         timestamp: input.timestamp,
         actorRef: input.identity.id,
-        workspaceId: input.workspace.id,
+        workspaceId: input.workspace?.primary.id ?? null,
         subject: {
           kind: input.identity.kind,
           id: input.identity.id,

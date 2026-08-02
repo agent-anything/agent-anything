@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { RunWorkspace } from "@agent-anything/foundation";
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
 import { resolvePermissionProfile } from "@agent-anything/permission";
 import { snapshotRunActionContext, type RunActionContextInput } from "./RunActionContext.js";
@@ -106,15 +107,18 @@ function actionContext(): RunActionContextInput {
   };
 }
 
-function workspace() {
+function workspace(): RunWorkspace {
   return {
-    id: "workspace-1",
-    name: "Workspace",
-    rootRef: "workspace://root-1",
-    trustState: "trusted" as const,
-    source: "test",
-    policyRefs: [],
-    metadata: {},
+    primary: {
+      id: "workspace-1",
+      name: "Workspace",
+      rootRef: "workspace://root-1",
+      trustState: "trusted",
+      source: "test",
+      policyRefs: [],
+      metadata: {},
+    },
+    additional: [],
   };
 }
 

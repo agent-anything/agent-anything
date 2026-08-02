@@ -18,11 +18,14 @@ export type {
   HelarcPersistedRunStatus,
   HelarcRunProgressRecord,
   HelarcRunProviderContext,
+  HelarcRunWorkspaceContext,
+  HelarcRunWorkspaceRef,
   HelarcRunTerminalRecord,
   HelarcRunTriggerMessageRole,
   HelarcThread,
   HelarcThreadRecord,
   HelarcThreadStatus,
+  HelarcThreadWorkspaceContext,
   HelarcThreadWorkspaceRef,
   HelarcWorkContextError,
   HelarcWorkContextErrorCode,
@@ -38,6 +41,7 @@ export {
   createHelarcThread,
   deriveHelarcPersistedRunStatus,
   normalizeHelarcThreadRecord,
+  projectHelarcRunWorkspaceContext,
 } from "./HelarcWorkContext.js";
 export type {
   HelarcCommitKind,

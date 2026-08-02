@@ -2,14 +2,25 @@ import {
   createRunCancellationController,
 } from "@agent-anything/agent-core/run";
 import type { ContextProjection } from "@agent-anything/agent-core/context";
-import { createUserApprovalReviewBridge } from "@agent-anything/host";
+import {
+  createStaticHostIdentityResolver,
+  createStaticHostWorkspaceResolver,
+  createUserApprovalReviewBridge,
+  type HostIdentityResolver,
+  type HostIdentitySelection,
+  type HostWorkspaceResolver,
+  type HostWorkspaceSelection,
+} from "@agent-anything/host";
 import type { ApprovalReviewInput } from "@agent-anything/permission";
 import type {
   Provider,
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/providers";
-import type { InvocationInterruptionContext } from "@agent-anything/foundation";
+import type {
+  InvocationInterruptionContext,
+  RunWorkspace,
+} from "@agent-anything/foundation";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -33,7 +44,16 @@ type RunHelarcTestInput = Omit<
   | "toolMode"
   | "permissionPreset"
   | "patchReviewBridge"
+  | "workspaceResolver"
+  | "workspaceSelection"
+  | "identityResolver"
+  | "identitySelection"
 > & {
+  readonly workspace: RunWorkspace;
+  readonly workspaceResolver?: HostWorkspaceResolver;
+  readonly workspaceSelection?: HostWorkspaceSelection;
+  readonly identityResolver?: HostIdentityResolver;
+  readonly identitySelection?: HostIdentitySelection;
   readonly sessionId?: string;
   readonly runId?: string;
   readonly cancellation?: PrepareHelarcHostRunInput["cancellation"];
@@ -66,12 +86,35 @@ async function prepareTestHostRun(input: RunHelarcTestInput) {
         },
       })
     : input.userApprovalBridge;
+  const {
+    workspace,
+    workspaceResolver,
+    workspaceSelection,
+    identityResolver,
+    identitySelection,
+    enableShell,
+    ...hostInput
+  } = input;
   return prepareHelarcHostRun({
-    ...input,
+    ...hostInput,
+    workspaceResolver: workspaceResolver ??
+      createStaticHostWorkspaceResolver(workspace),
+    workspaceSelection: workspaceSelection ?? {
+      kind: "references",
+      primaryRef: workspace.primary.id,
+      additionalRefs: workspace.additional.map((candidate) => candidate.id),
+    },
+    identityResolver: identityResolver ?? createStaticHostIdentityResolver({
+      id: "test-anonymous",
+      kind: "anonymous",
+      displayName: "Test user",
+      metadata: {},
+    }),
+    identitySelection: identitySelection ?? { kind: "anonymous" },
     runId,
     sessionId: input.sessionId ?? runId,
     cancellation: input.cancellation ?? createRunCancellationController({ runId }),
-    toolMode: input.enableShell ? "shell-enabled" : "read-only",
+    toolMode: enableShell ? "shell-enabled" : "read-only",
     permissionPreset,
     userApprovalBridge,
     patchReviewBridge: input.patchReviewBridge ?? createHelarcPatchReviewBridge({ runId }),
@@ -101,6 +144,25 @@ describe("Helarc Host Run composition", () => {
       product: { status: "completed" },
     });
     expect(provider.requests).toHaveLength(1);
+  });
+
+  it("fails Host Workspace acquisition before a Runner can start", async () => {
+    const provider = new ScriptedProvider([
+      { action: "complete", summary: "Must not run." },
+    ]);
+
+    await expect(prepareTestHostRun({
+      ...createTask("D:/missing-workspace"),
+      provider,
+      workspaceResolver: {
+        async resolve() {
+          throw new Error("Workspace unavailable.");
+        },
+      },
+    })).rejects.toMatchObject({
+      code: "host_workspace_resolution_failed",
+    });
+    expect(provider.requests).toHaveLength(0);
   });
 
   it("exposes only read-only Actions while retaining trusted mutation registrations", async () => {
@@ -881,11 +943,6 @@ function createTask(workspaceRoot: string) {
     taskId: "helarc-task-1",
     prompt: "Inspect the workspace.",
     createdAt: "2026-06-28T00:00:00.000Z",
-    workspace: {
-      id: "workspace",
-      name: "workspace",
-      rootRef: workspaceRoot,
-    },
   });
 
   if (!result.ok) {
@@ -894,7 +951,18 @@ function createTask(workspaceRoot: string) {
 
   return {
     task: result.task,
-    workspace: result.workspace,
+    workspace: {
+      primary: {
+        id: "workspace",
+        name: "workspace",
+        rootRef: workspaceRoot,
+        trustState: "trusted" as const,
+        source: "test",
+        policyRefs: [],
+        metadata: {},
+      },
+      additional: [],
+    },
   };
 }
 

@@ -8,6 +8,7 @@ export interface CreateHelarcRunInput {
   runId: string;
   taskText: string;
   workspaceProfileId: string;
+  additionalWorkspaceProfileIds?: readonly string[];
   providerProfileId: string;
   taskTemplateId?: string | null;
   permissionPreset?: HelarcRunPermissionPreset;
@@ -19,17 +20,12 @@ export interface HelarcRunInput {
   runId: string;
   taskText: string;
   workspaceProfileId: string;
+  additionalWorkspaceProfileIds: readonly string[];
   providerProfileId: string;
   taskTemplateId: string | null;
   permissionPreset: HelarcRunPermissionPreset;
   createdAt: ISODateTimeString;
   metadata: Metadata;
-}
-
-export interface HelarcRunWorkspaceRef {
-  profileId: string;
-  displayName: string;
-  path: string;
 }
 
 export interface HelarcRunProviderRef {
@@ -44,6 +40,7 @@ export type HelarcRunContractErrorCode =
   | "run_id_required"
   | "run_task_text_required"
   | "run_workspace_profile_id_required"
+  | "run_workspace_profile_ids_invalid"
   | "run_provider_profile_id_required"
   | "run_created_at_invalid"
   | "run_permission_preset_invalid";
@@ -78,6 +75,17 @@ export function createHelarcRunInput(
     );
   }
 
+  const additionalWorkspaceProfileIds = normalizeAdditionalWorkspaceProfileIds(
+    input.additionalWorkspaceProfileIds ?? [],
+    workspaceProfileId,
+  );
+  if (additionalWorkspaceProfileIds === null) {
+    return reject(
+      "run_workspace_profile_ids_invalid",
+      "Additional Workspace profile ids must be non-empty and unique.",
+    );
+  }
+
   const providerProfileId = input.providerProfileId.trim();
   if (providerProfileId.length === 0) {
     return reject(
@@ -104,6 +112,7 @@ export function createHelarcRunInput(
       runId,
       taskText,
       workspaceProfileId,
+      additionalWorkspaceProfileIds,
       providerProfileId,
       taskTemplateId: normalizeNullableString(input.taskTemplateId ?? null),
       permissionPreset,
@@ -111,6 +120,26 @@ export function createHelarcRunInput(
       metadata: input.metadata ?? {},
     },
   };
+}
+
+function normalizeAdditionalWorkspaceProfileIds(
+  values: readonly string[],
+  primaryProfileId: string,
+): readonly string[] | null {
+  if (!Array.isArray(values)) {
+    return null;
+  }
+  const unique = new Set([primaryProfileId]);
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    if (normalized.length === 0 || unique.has(normalized)) {
+      return null;
+    }
+    unique.add(normalized);
+    result.push(normalized);
+  }
+  return Object.freeze(result);
 }
 
 function isPermissionPreset(value: unknown): value is HelarcRunPermissionPreset {

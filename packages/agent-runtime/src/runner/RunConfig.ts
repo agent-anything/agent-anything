@@ -30,7 +30,7 @@ export interface ResolvedRunRetryConfiguration {
 }
 
 export interface RunConfig {
-  readonly workspace: RunWorkspace;
+  readonly workspace: RunWorkspace | null;
   readonly identity: IdentityRef;
   readonly actionContext: RunActionContextInput | null;
   readonly permissions: ResolvedRunPermissionConfig;

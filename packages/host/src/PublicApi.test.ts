@@ -13,17 +13,19 @@ describe("Host public API", () => {
     expectTypeOf<UserApprovalReviewBridge>().toBeObject();
     expect(Object.keys(hostApi).sort()).toEqual([
       "HOST_RETRY_EVENT_LIMIT",
-      "createHostIdentityProvider",
+      "HostContextResolutionError",
       "createHostRunProjection",
       "createHostRunProjectionStore",
       "createHostRuntime",
       "createHostTerminalRunProjection",
-      "createHostWorkspaceResolver",
       "createInMemoryHostPolicyAmendmentStore",
       "createInMemoryHostSessionAuthorityStore",
+      "createStaticHostIdentityResolver",
+      "createStaticHostWorkspaceResolver",
       "createUserApprovalReviewBridge",
       "projectRuntimeEventForHost",
       "reduceHostRunProjection",
+      "resolveHostRunContext",
       "resolveHostRunPermissionConfig",
       "snapshotHostCancellation",
     ]);

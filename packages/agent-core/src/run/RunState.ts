@@ -1,9 +1,11 @@
 import type {
   ArtifactRef,
   EvidenceRef,
+  IdentityRef,
   ISODateTimeString,
   Metadata,
   RunLifecycleStatus,
+  RunWorkspace,
   RuntimeError,
 } from "@agent-anything/foundation";
 import type { Context } from "../context/Context.js";
@@ -27,6 +29,8 @@ interface RunStateBase<TOutput> {
   readonly taskId: string;
   readonly startingAgentId: string;
   readonly activeAgentId: string;
+  readonly workspace: RunWorkspace | null;
+  readonly identity: IdentityRef;
   readonly startedAt: ISODateTimeString;
   readonly context: Context;
   readonly plan: Plan | null;

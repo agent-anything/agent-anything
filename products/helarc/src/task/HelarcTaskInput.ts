@@ -2,8 +2,6 @@ import type {
   AgentTask,
   ISODateTimeString,
   Metadata,
-  RunWorkspace,
-  WorkspaceContext,
 } from "@agent-anything/foundation";
 
 export const HELARC_TASK_KIND = "helarc.code-task";
@@ -13,17 +11,9 @@ export interface HelarcTaskInput {
   prompt: string;
 }
 
-export interface TrustedHelarcWorkspaceSelection {
-  id: string;
-  name: string;
-  rootRef: string;
-  metadata?: Metadata;
-}
-
 export interface CreateHelarcTaskInput {
   taskId: string;
   prompt: string;
-  workspace: TrustedHelarcWorkspaceSelection;
   createdAt: ISODateTimeString;
   metadata?: Metadata;
   promptMaxLength?: number;
@@ -31,10 +21,7 @@ export interface CreateHelarcTaskInput {
 
 export type HelarcTaskInputErrorCode =
   | "task_prompt_required"
-  | "task_prompt_too_long"
-  | "workspace_id_required"
-  | "workspace_name_required"
-  | "workspace_root_required";
+  | "task_prompt_too_long";
 
 export interface HelarcTaskInputError {
   code: HelarcTaskInputErrorCode;
@@ -42,7 +29,7 @@ export interface HelarcTaskInputError {
 }
 
 export type CreateHelarcTaskResult =
-  | { ok: true; task: AgentTask<HelarcTaskInput>; workspace: RunWorkspace }
+  | { ok: true; task: AgentTask<HelarcTaskInput> }
   | { ok: false; error: HelarcTaskInputError };
 
 export function createHelarcTask(
@@ -51,11 +38,6 @@ export function createHelarcTask(
   const promptResult = normalizePrompt(input.prompt, input.promptMaxLength);
   if (!promptResult.ok) {
     return promptResult;
-  }
-
-  const workspaceResult = createTrustedHelarcRunWorkspace(input.workspace);
-  if (!workspaceResult.ok) {
-    return workspaceResult;
   }
 
   const task: AgentTask<HelarcTaskInput> = {
@@ -69,47 +51,6 @@ export function createHelarcTask(
   return {
     ok: true,
     task,
-    workspace: workspaceResult.workspace,
-  };
-}
-
-export function createTrustedHelarcRunWorkspace(
-  workspace: TrustedHelarcWorkspaceSelection,
-):
-  | { ok: true; workspace: RunWorkspace; workspaceContext: WorkspaceContext }
-  | { ok: false; error: HelarcTaskInputError } {
-  const id = workspace.id.trim();
-  if (id.length === 0) {
-    return reject("workspace_id_required", "Workspace id is required.");
-  }
-
-  const name = workspace.name.trim();
-  if (name.length === 0) {
-    return reject("workspace_name_required", "Workspace name is required.");
-  }
-
-  const rootRef = workspace.rootRef.trim();
-  if (rootRef.length === 0) {
-    return reject("workspace_root_required", "Workspace root is required.");
-  }
-
-  const workspaceContext: WorkspaceContext = {
-    id,
-    name,
-    rootRef,
-    trustState: "trusted",
-    source: "helarc-desktop",
-    policyRefs: [],
-    metadata: workspace.metadata ?? {},
-  };
-
-  return {
-    ok: true,
-    workspaceContext,
-    workspace: {
-      primary: workspaceContext,
-      additional: [],
-    },
   };
 }
 

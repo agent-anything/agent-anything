@@ -203,9 +203,16 @@ function startCommit(): HelarcRunStartCommit {
       thread: {
         id: "thread-1",
         workspace: {
-          profileId: "workspace-1",
-          displayName: "AgentAnything",
-          path: "D:/projects/agent-anything",
+          primary: {
+            profileId: "workspace-1",
+            displayName: "AgentAnything",
+            path: "D:/projects/agent-anything",
+          },
+          additional: [{
+            profileId: "workspace-docs",
+            displayName: "Docs",
+            path: "D:/projects/agent-anything-docs",
+          }],
         },
         title: "Phase17",
         status: "open",
@@ -242,6 +249,18 @@ function startCommit(): HelarcRunStartCommit {
       threadId: "thread-1",
       triggeringMessageId: "message-1",
       triggerMessageRole: "user",
+      workspace: {
+        primary: {
+          workspaceId: "workspace-1",
+          profileId: "workspace-1",
+          displayName: "AgentAnything",
+        },
+        additional: [{
+          workspaceId: "workspace-docs",
+          profileId: "workspace-docs",
+          displayName: "Docs",
+        }],
+      },
       provider: null,
       permissionPreset: "ask_for_approval",
       startedAt: STARTED_AT,

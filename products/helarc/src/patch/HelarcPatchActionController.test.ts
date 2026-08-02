@@ -147,12 +147,22 @@ async function createFixture() {
   const taskResult = createHelarcTask({
     taskId: "task-1",
     prompt: "Update file",
-    workspace: { id: "workspace-1", name: "Workspace", rootRef: root },
   });
   if (!taskResult.ok) throw new Error(taskResult.error.message);
   return {
     task: taskResult.task,
-    workspace: taskResult.workspace,
+    workspace: {
+      primary: {
+        id: "workspace-1",
+        name: "Workspace",
+        rootRef: root,
+        trustState: "trusted" as const,
+        source: "test",
+        policyRefs: [],
+        metadata: {},
+      },
+      additional: [],
+    },
   };
 }
 

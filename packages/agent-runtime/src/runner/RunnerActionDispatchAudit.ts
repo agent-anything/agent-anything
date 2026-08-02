@@ -5,7 +5,7 @@ import {
 import type {
   IdentityRef,
   ISODateTimeString,
-  WorkspaceContext,
+  RunWorkspace,
 } from "@agent-anything/foundation";
 import type { ActionDispatchPlan } from "@agent-anything/action-execution";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
@@ -14,7 +14,7 @@ import type { RuntimeError } from "@agent-anything/foundation";
 export async function recordActionDispatchAuthorizationAudit(input: {
   readonly plan: ActionDispatchPlan;
   readonly taskId: string;
-  readonly workspace: WorkspaceContext;
+  readonly workspace: RunWorkspace | null;
   readonly identity: IdentityRef;
   readonly timestamp: ISODateTimeString;
   readonly requirement: RunInfrastructureRequirement;
@@ -35,7 +35,7 @@ export async function recordActionDispatchAuthorizationAudit(input: {
         eventName: "action.dispatch_authorized",
         timestamp: input.timestamp,
         actorRef: input.identity.id,
-        workspaceId: input.workspace.id,
+        workspaceId: input.workspace?.primary.id ?? null,
         subject: {
           kind: input.identity.kind,
           id: input.identity.id,

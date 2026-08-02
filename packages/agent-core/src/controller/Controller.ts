@@ -29,7 +29,7 @@ export interface ControllerInput<TOutput = unknown> {
   readonly conversationItems: readonly RunInputItem[];
   readonly toolCatalog: ToolCatalogSnapshot;
   readonly context: ContextProjection;
-  readonly workspace: RunWorkspace;
+  readonly workspace: RunWorkspace | null;
   readonly identity: IdentityRef;
   readonly metadata: Metadata;
 }

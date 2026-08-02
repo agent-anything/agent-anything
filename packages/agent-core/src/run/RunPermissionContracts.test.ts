@@ -10,7 +10,10 @@ import {
   type SessionAuthorityPort,
   type SessionAuthorityRecord,
 } from "@agent-anything/permission";
-import type { InvocationInterruptionContext } from "@agent-anything/foundation";
+import type {
+  InvocationInterruptionContext,
+  RunWorkspace,
+} from "@agent-anything/foundation";
 import { describe, expect, it } from "vitest";
 import {
   deriveApprovalReviewDeadline,
@@ -363,15 +366,18 @@ function managedConstraints(): ManagedPermissionConstraints {
   };
 }
 
-function workspace() {
+function workspace(): RunWorkspace {
   return {
-    id: "workspace.test",
-    name: "Test workspace",
-    rootRef: "/work/repo",
-    trustState: "trusted" as const,
-    source: "test",
-    policyRefs: [],
-    metadata: {},
+    primary: {
+      id: "workspace.test",
+      name: "Test workspace",
+      rootRef: "/work/repo",
+      trustState: "trusted",
+      source: "test",
+      policyRefs: [],
+      metadata: {},
+    },
+    additional: [],
   };
 }
 

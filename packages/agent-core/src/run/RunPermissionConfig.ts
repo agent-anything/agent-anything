@@ -23,7 +23,7 @@ import {
 import type {
   IdentityRef,
   ISODateTimeString,
-  WorkspaceContext,
+  RunWorkspace,
 } from "@agent-anything/foundation";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -68,7 +68,7 @@ export interface ResolvedRunPermissionConfig {
 
 export interface SnapshotResolvedRunPermissionConfigInput {
   readonly permissions: ResolvedRunPermissionConfig;
-  readonly workspace: WorkspaceContext;
+  readonly workspace: RunWorkspace | null;
   readonly identity: IdentityRef;
 }
 
@@ -559,7 +559,7 @@ function snapshotSessionAuthority(input: {
   readonly config: ResolvedSessionAuthorityConfig | null;
   readonly profile: ResolvedPermissionProfile;
   readonly managedConstraints: ManagedPermissionConstraints;
-  readonly workspace: WorkspaceContext;
+  readonly workspace: RunWorkspace | null;
   readonly identity: IdentityRef;
 }): ResolvedSessionAuthorityConfig | null {
   if (input.config === null) return null;
@@ -570,11 +570,12 @@ function snapshotSessionAuthority(input: {
     throw new TypeError("Resolved Session authority requires a valid port.");
   }
   const context = snapshotSessionAuthorityContext(config.context);
+  const expectedWorkspaceId = input.workspace?.primary.id ?? null;
   const expectedIdentityId = input.identity.kind === "anonymous"
     ? null
     : input.identity.id;
   if (
-    context.workspaceId !== input.workspace.id ||
+    context.workspaceId !== expectedWorkspaceId ||
     context.identityId !== expectedIdentityId ||
     context.environmentId !== input.profile.environmentId
   ) {
@@ -631,7 +632,9 @@ function snapshotSessionAuthorityContext(
     context.authorityContextKey,
     "SessionAuthorityContext.authorityContextKey",
   );
-  assertNonEmpty(context.workspaceId, "SessionAuthorityContext.workspaceId");
+  if (context.workspaceId !== null) {
+    assertNonEmpty(context.workspaceId, "SessionAuthorityContext.workspaceId");
+  }
   if (context.identityId !== null) {
     assertNonEmpty(context.identityId, "SessionAuthorityContext.identityId");
   }

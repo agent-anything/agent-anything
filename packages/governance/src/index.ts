@@ -19,18 +19,6 @@ export {
   type NetworkPolicyRule,
 } from "./policy/index.js";
 export type {
-  CreateDefaultWorkspaceResolverInput,
-  ResolveWorkspaceInput,
-  WorkspaceResolver,
-} from "./workspace/index.js";
-export { createDefaultWorkspaceResolver } from "./workspace/index.js";
-export type {
-  CreateAnonymousIdentityProviderInput,
-  IdentityProvider,
-  ResolveIdentityInput,
-} from "./identity/index.js";
-export { createAnonymousIdentityProvider } from "./identity/index.js";
-export type {
   ManagedFileSystemConstraint,
   ManagedFileSystemMaximumAccess,
   ManagedFileSystemTarget,

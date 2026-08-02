@@ -1,4 +1,8 @@
 export {
+  createHelarcDesktopIdentityResolver,
+  createHelarcDesktopWorkspaceResolver,
+} from "./HelarcHostContext.js";
+export {
   createHelarcPatchReviewBridge,
   type CreateHelarcPatchReviewBridgeInput,
 } from "./HelarcPatchReviewBridge.js";

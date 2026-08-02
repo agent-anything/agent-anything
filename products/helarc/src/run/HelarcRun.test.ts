@@ -22,6 +22,7 @@ describe("HelarcRun", () => {
         runId: "run-1",
         taskText: "Inspect workspace",
         workspaceProfileId: "workspace-1",
+        additionalWorkspaceProfileIds: [],
         providerProfileId: "provider-1",
         taskTemplateId: "template-1",
         permissionPreset: "full_access",
