@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApprovalReviewInput } from "@agent-anything/permission";
-import type { RuntimeEvent, RuntimeEventName } from "@agent-anything/agent-core/events";
+import {
+  RUNTIME_EVENT_SCHEMA_VERSION,
+  snapshotRuntimeEventPayload,
+  type RuntimeEvent,
+  type RuntimeEventName,
+  type RuntimeEventPayloadMap,
+} from "@agent-anything/observability/events";
 import {
   createFailedRunResult,
   createSucceededRunResult,
@@ -24,11 +30,10 @@ describe("HostRunProjectionReducer", () => {
   it("projects start, user approval submission, resolution, and terminal result in order", () => {
     let projection = initialProjection();
     projection = apply(projection, runtimeUpdate(1, "run.started", {
-      runId: "run-1",
-      agentId: "agent-private",
+      status: "running",
+      activeAgentId: "agent-1",
     }));
     projection = apply(projection, runtimeUpdate(2, "approval.requested", {
-      runId: "run-1",
       requestId: "approval-1",
       actionId: "action-1",
       actionFingerprint: sha("a"),
@@ -78,14 +83,14 @@ describe("HostRunProjectionReducer", () => {
     expect(Object.isFrozen(projection.approval)).toBe(true);
 
     projection = apply(projection, runtimeUpdate(5, "approval.resolved", {
-      runId: "run-1",
       requestId: "approval-1",
       actionId: "action-1",
+      actionFingerprint: sha("a"),
       pendingVersion: 1,
       reviewer: "user",
-      resolutionKind: "decided",
+      resolutionKind: "decision",
       decisionKind: "accept",
-      applicationKind: "action_authority",
+      applicationKind: "applied",
       code: null,
       authorityRecordIds: [],
     }));
@@ -128,21 +133,20 @@ describe("HostRunProjectionReducer", () => {
   it("keeps a complete bounded Plan projection and rejects version regression", () => {
     let projection = apply(
       initialProjection(),
-      runtimeUpdate(1, "run.started", { runId: "run-1" }),
+      runtimeUpdate(1, "run.started", {
+        status: "running",
+        activeAgentId: "agent-1",
+      }),
     );
     projection = apply(projection, runtimeUpdate(2, "plan.created", {
-      runId: "run-1",
       plan: {
         id: "plan-1",
         version: 1,
         status: "active",
         steps: [{ step: "Inspect files", status: "in_progress" }],
-        explanation: "private explanation",
-        metadata: { prompt: "private prompt" },
       },
     }));
     projection = apply(projection, runtimeUpdate(3, "plan.updated", {
-      runId: "run-1",
       previousVersion: 1,
       transition: "updated",
       plan: {
@@ -170,8 +174,7 @@ describe("HostRunProjectionReducer", () => {
     const regression = reduceHostRunProjection(
       projection,
       runtimeUpdate(4, "plan.updated", {
-        runId: "run-1",
-        previousVersion: 0,
+        previousVersion: 1,
         transition: "updated",
         plan: {
           id: "plan-1",
@@ -191,22 +194,21 @@ describe("HostRunProjectionReducer", () => {
   it("retains bounded Retry progress and honest disabled-enforcement outcome", () => {
     let projection = apply(
       initialProjection(),
-      runtimeUpdate(1, "run.started", { runId: "run-1" }),
+      runtimeUpdate(1, "run.started", {
+        status: "running",
+        activeAgentId: "agent-1",
+      }),
     );
 
     for (let index = 1; index <= HOST_RETRY_EVENT_LIMIT + 2; index += 1) {
       projection = apply(projection, runtimeUpdate(index + 1, "retry.attempt.started", {
-        type: "retry_attempt_started",
-        runId: "run-1",
         operationId: `operation-${index}`,
         owner: "provider_request",
-        occurredAt: now,
         attemptId: `attempt-${index}`,
         budgetId: `budget-${index}`,
         attemptNumber: index,
         budgetAttemptNumber: 1,
         maxBudgetAttempts: 1,
-        rawProviderError: "private retry details",
       }));
     }
 
@@ -219,22 +221,18 @@ describe("HostRunProjectionReducer", () => {
 
     const startedSequence = HOST_RETRY_EVENT_LIMIT + 4;
     projection = apply(projection, runtimeUpdate(startedSequence, "sandbox.attempt.started", {
-      runId: "run-1",
       actionId: "action-1",
       attemptId: "sandbox-attempt-1",
       ordinal: 1,
       enforcement: "disabled",
-      policyEnvelope: { secret: true },
     }));
     projection = apply(projection, runtimeUpdate(startedSequence + 1, "sandbox.attempt.resolved", {
-      runId: "run-1",
       actionId: "action-1",
       attemptId: "sandbox-attempt-1",
       ordinal: 1,
       enforcement: "disabled",
       outcome: "executed",
       code: null,
-      enforcementEvidence: { providerId: "private" },
     }));
 
     expect(projection.enforcement).toEqual({
@@ -293,16 +291,19 @@ describe("HostRunProjectionReducer", () => {
 
   it("rejects stale, cross-Run, and post-terminal updates without mutation", () => {
     const initial = initialProjection();
-    const started = apply(initial, runtimeUpdate(1, "run.started", { runId: "run-1" }));
+    const started = apply(initial, runtimeUpdate(1, "run.started", {
+      status: "running",
+      activeAgentId: "agent-1",
+    }));
 
     expect(reduceHostRunProjection(
       started,
-      runtimeUpdate(1, "task.started", { runId: "run-1" }),
+      runtimeUpdate(1, "controller.started", { iteration: 1 }),
     )).toMatchObject({ status: "rejected", code: "stale_sequence" });
-    expect(reduceHostRunProjection(started, {
-      ...runtimeUpdate(2, "task.started", { runId: "run-2" }),
-      runId: "run-2",
-    })).toMatchObject({ status: "rejected", code: "run_identity_mismatch" });
+    expect(reduceHostRunProjection(
+      started,
+      runtimeUpdate(2, "controller.started", { iteration: 1 }, "run-2"),
+    )).toMatchObject({ status: "rejected", code: "run_identity_mismatch" });
 
     const terminal = createHostTerminalRunProjection({
       runResult: createSucceededRunResult(
@@ -320,7 +321,7 @@ describe("HostRunProjectionReducer", () => {
     });
     const postTerminal = reduceHostRunProjection(
       completed,
-      runtimeUpdate(3, "task.completed", { runId: "run-1" }),
+      runtimeUpdate(3, "controller.started", { iteration: 2 }),
     );
     expect(postTerminal).toMatchObject({
       status: "rejected",
@@ -345,7 +346,10 @@ describe("HostRunProjectionReducer", () => {
     });
     store.subscribe(delivered);
 
-    const result = store.apply(runtimeUpdate(1, "run.started", { runId: "run-1" }));
+    const result = store.apply(runtimeUpdate(1, "run.started", {
+      status: "running",
+      activeAgentId: "agent-1",
+    }));
 
     expect(result).toMatchObject({ status: "applied", projection: { status: "running" } });
     expect(onListenerFailure).toHaveBeenCalledWith({
@@ -356,7 +360,7 @@ describe("HostRunProjectionReducer", () => {
     expect(delivered).toHaveBeenCalledWith(store.getProjection());
     expect(store.getProjection().status).toBe("running");
 
-    store.apply(runtimeUpdate(1, "task.started", { runId: "run-1" }));
+    store.apply(runtimeUpdate(1, "controller.started", { iteration: 1 }));
     expect(delivered).toHaveBeenCalledTimes(1);
   });
 });
@@ -380,24 +384,27 @@ function apply(
   return result.projection;
 }
 
-function runtimeUpdate(
+function runtimeUpdate<TName extends RuntimeEventName>(
   sequence: number,
-  name: RuntimeEventName,
-  payload: Record<string, unknown>,
+  name: TName,
+  payload: RuntimeEventPayloadMap[TName],
+  eventRunId = "run-1",
 ): HostRunProjectionUpdate {
   return {
     kind: "runtime_event",
-    runId: "run-1",
+    runId: eventRunId,
     sequence,
     occurredAt: now,
     event: {
+      schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
       id: `event-${sequence}`,
+      runId: eventRunId,
       name,
       taskId: "task-1",
       sequence,
-      timestamp: now,
-      payload,
-    } as RuntimeEvent,
+      occurredAt: now,
+      payload: snapshotRuntimeEventPayload(name, payload),
+    } as unknown as RuntimeEvent,
   };
 }
 

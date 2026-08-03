@@ -6,7 +6,10 @@ import {
   type SandboxProvider,
 } from "@agent-anything/action-execution";
 import type { RunResult } from "@agent-anything/runtime/run";
-import { RuntimeEventEmitter } from "@agent-anything/agent-core/events";
+import type {
+  RuntimeEvent,
+  RuntimeEventPublisher,
+} from "@agent-anything/observability/events";
 import type {
   ApprovalReviewerBinding,
   RunCancellationController,
@@ -207,9 +210,10 @@ export async function prepareHelarcHostRun(
     limits: { maxResultBytes: 2 * 1024 * 1024 },
     now: input.now,
   });
-  const runtimeEvents = new RuntimeEventEmitter();
-  runtimeEvents.subscribe((event) => {
-    product.recordRuntimeEvent(event);
+  const productRuntimeEventPublisher: RuntimeEventPublisher = Object.freeze({
+    publish(event: RuntimeEvent) {
+      product.recordRuntimeEvent(event);
+    },
   });
   const runMetadata = Object.freeze({
     ...product.runMetadata,
@@ -222,7 +226,7 @@ export async function prepareHelarcHostRun(
     evidenceBuilder: new EvidenceBuilder(),
     evidencePersistence:
       input.evidencePersistence ?? new InMemoryHelarcEvidencePersistence(input.now),
-    eventEmitter: runtimeEvents,
+    runtimeEventPublisher: productRuntimeEventPublisher,
     now: input.now,
   });
   const runtime = createHostRuntime({ runner, now: input.now });

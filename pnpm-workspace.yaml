@@ -2,6 +2,7 @@ packages:
   - "harness/foundation"
   - "harness/model-interaction"
   - "harness/context"
+  - "harness/observability"
   - "harness/runtime"
   - "harness/tools"
   - "harness/safety/*"

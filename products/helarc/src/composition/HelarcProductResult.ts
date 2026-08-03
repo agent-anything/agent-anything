@@ -1,4 +1,4 @@
-import type { RuntimeEvent } from "@agent-anything/agent-core/events";
+import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { RunResult } from "@agent-anything/runtime/run";
 import type {
   AgentTask,
@@ -11,6 +11,7 @@ import { CODE_AGENT_RUN_COMMAND_ACTION } from "@agent-anything/code-agent/comman
 import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import type { HelarcPatchOutcome } from "../patch/HelarcPatchActionController.js";
+import type { HelarcControllerTraceProjection } from "../run/HelarcControllerTraceProjection.js";
 
 export type HelarcProductStatus =
   | "completed"
@@ -90,18 +91,54 @@ export function projectHelarcProductResult(
 
 export function mapRuntimeEventToHelarcActivity(
   event: RuntimeEvent,
+  controllerTrace: HelarcControllerTraceProjection | null = null,
 ): HelarcActivityItem {
   const projectedEvent = projectRuntimeEventForHost(event);
   const payload = isRecord(projectedEvent.payload) ? projectedEvent.payload : {};
+  const metadata = Object.freeze({
+    ...payload,
+    ...controllerTraceMetadata(controllerTrace),
+  });
   return Object.freeze({
     id: projectedEvent.id,
     sequence: projectedEvent.sequence,
-    timestamp: projectedEvent.timestamp,
+    timestamp: projectedEvent.occurredAt,
     kind: projectedEvent.name,
-    title: titleForEvent(projectedEvent.name, payload),
-    detail: detailForEvent(projectedEvent.name, payload),
-    metadata: Object.freeze({ ...payload }),
+    title: titleForEvent(projectedEvent.name, metadata),
+    detail: detailForEvent(projectedEvent.name, metadata),
+    metadata,
   });
+}
+
+function controllerTraceMetadata(
+  trace: HelarcControllerTraceProjection | null,
+): Metadata {
+  if (trace === null) return {};
+  return {
+    ...(trace.source === null ? {} : { source: trace.source }),
+    ...(trace.controllerAction === null
+      ? {}
+      : { controllerAction: trace.controllerAction }),
+    ...(trace.promptArchitectureVersion === null
+      ? {}
+      : { promptArchitectureVersion: trace.promptArchitectureVersion }),
+    ...(trace.actionContractVersion === null
+      ? {}
+      : { actionContractVersion: trace.actionContractVersion }),
+    ...(trace.toolCatalogVersion === null
+      ? {}
+      : { toolCatalogVersion: trace.toolCatalogVersion }),
+    ...(trace.exposedToolNames.length === 0
+      ? {}
+      : { exposedToolNames: trace.exposedToolNames }),
+    ...(trace.requestedToolName === null
+      ? {}
+      : { requestedToolName: trace.requestedToolName }),
+    ...(trace.patchOperation === null
+      ? {}
+      : { patchOperation: trace.patchOperation }),
+    ...(trace.patchPath === null ? {} : { patchPath: trace.patchPath }),
+  };
 }
 
 function createEnforcementSummary(

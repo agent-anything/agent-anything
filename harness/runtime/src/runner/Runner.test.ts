@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   AuditPort,
   ObservabilityRecordContext,
+  RuntimeEvent,
   TelemetryPort,
   TelemetryRecord,
 } from "@agent-anything/observability";
@@ -21,7 +22,6 @@ import {
   type ControllerDecision,
   type ControllerInput,
 } from "../controller/index.js";
-import { RuntimeEventEmitter, type RuntimeEvent } from "@agent-anything/agent-core/events";
 import { createRunCancellationController } from "@agent-anything/runtime/run";
 import type { RunConfig } from "./RunConfig.js";
 import { Runner } from "./Runner.js";
@@ -58,6 +58,7 @@ import type { ResolvedRunPermissionConfig } from "@agent-anything/runtime/run";
 import {
   FakeApprovalReviewer,
   FakeEvidencePersistencePort,
+  FakeRuntimeEventPublisher,
 } from "@agent-anything/testing";
 import type {
   AdditionalPermissions,
@@ -146,7 +147,7 @@ describe("Runner", () => {
 
   it("commits safe Retry RunItems before their Runtime notifications", async () => {
     const runtimeEvents: RuntimeEvent[] = [];
-    const eventEmitter = new RuntimeEventEmitter();
+    const eventEmitter = new FakeRuntimeEventPublisher();
     eventEmitter.subscribe((event) => runtimeEvents.push(event));
     const controller = new ScriptedController([
       async (_input, context) => {
@@ -195,7 +196,10 @@ describe("Runner", () => {
       },
     };
 
-    const result = await createRunner(controller, { eventEmitter }).run(
+    const result = await createRunner(
+      controller,
+      { runtimeEventPublisher: eventEmitter },
+    ).run(
       createAgent(),
       createRunInput(),
       createRunConfig({ retry }),
@@ -224,7 +228,7 @@ describe("Runner", () => {
 
   it("commits update_plan, exposes it to the next turn, and abandons an active Plan on success", async () => {
     const runtimeEvents: RuntimeEvent[] = [];
-    const eventEmitter = new RuntimeEventEmitter();
+    const eventEmitter = new FakeRuntimeEventPublisher();
     eventEmitter.subscribe((event) => runtimeEvents.push(event));
     const controller = new ScriptedController([
       actionsDecision([
@@ -241,7 +245,10 @@ describe("Runner", () => {
       finalDecision("Finished"),
     ]);
 
-    const result = await createRunner(controller, { eventEmitter }).run(
+    const result = await createRunner(
+      controller,
+      { runtimeEventPublisher: eventEmitter },
+    ).run(
       createAgent(),
       createRunInput(),
       createRunConfig(),
@@ -275,14 +282,12 @@ describe("Runner", () => {
       {
         name: "plan.created",
         payload: {
-          runId: "run_001",
           plan: { id: "run_001:plan:1", version: 1, status: "active" },
         },
       },
       {
         name: "plan.abandoned",
         payload: {
-          runId: "run_001",
           plan: { id: "run_001:plan:1", version: 2, status: "abandoned" },
           terminalStatus: "succeeded",
           reasonCode: null,
@@ -510,7 +515,7 @@ describe("Runner", () => {
     const controllerStarted = createDeferred<void>();
     const controllerResult = createDeferred<ControllerDecision<unknown>>();
     const appendedKinds: string[] = [];
-    const eventEmitter = new RuntimeEventEmitter();
+    const eventEmitter = new FakeRuntimeEventPublisher();
     eventEmitter.subscribe((event) => {
       if (event.name === "run.item.appended" && typeof event.payload.itemKind === "string") {
         appendedKinds.push(event.payload.itemKind);
@@ -523,7 +528,10 @@ describe("Runner", () => {
       },
     };
 
-    const run = createRunner(controller, { eventEmitter }).run(
+    const run = createRunner(
+      controller,
+      { runtimeEventPublisher: eventEmitter },
+    ).run(
       createAgent(),
       createRunInput(),
       createRunConfig({ cancellation }),
@@ -807,7 +815,7 @@ describe("Runner", () => {
   it("lets accepted cancellation win before terminal commit", async () => {
     const cancellation = createRunCancellationController({ runId: "run_001" });
     const events: RuntimeEvent[] = [];
-    const eventEmitter = new RuntimeEventEmitter();
+    const eventEmitter = new FakeRuntimeEventPublisher();
     eventEmitter.subscribe((event) => events.push(event));
     const finalizationStarted = createDeferred<void>();
     const releaseFinalization = createDeferred<void>();
@@ -827,7 +835,7 @@ describe("Runner", () => {
     };
     const run = createRunner(
       new ScriptedController([finalDecision("Must not commit")]),
-      { eventEmitter, telemetryPort },
+      { runtimeEventPublisher: eventEmitter, telemetryPort },
     ).run(
       createAgent(),
       createRunInput(),
@@ -903,11 +911,11 @@ describe("Runner", () => {
   it("does not rewrite a terminal result when cancellation is requested later", async () => {
     const cancellation = createRunCancellationController({ runId: "run_001" });
     const events: RuntimeEvent[] = [];
-    const eventEmitter = new RuntimeEventEmitter();
+    const eventEmitter = new FakeRuntimeEventPublisher();
     eventEmitter.subscribe((event) => events.push(event));
     const result = await createRunner(
       new ScriptedController([finalDecision("Committed")]),
-      { eventEmitter },
+      { runtimeEventPublisher: eventEmitter },
     ).run(
       createAgent(),
       createRunInput(),
@@ -1019,32 +1027,58 @@ describe("Runner", () => {
 
   it("publishes committed item notifications and ignores subscriber failures", async () => {
     const events: RuntimeEvent[] = [];
-    const emitter = new RuntimeEventEmitter();
+    const emitter = new FakeRuntimeEventPublisher();
     emitter.subscribe((event) => events.push(event));
     const result = await createRunner(
       new ScriptedController([finalDecision("Done")]),
-      { eventEmitter: emitter },
+      { runtimeEventPublisher: emitter },
     ).run(createAgent(), createRunInput(), createRunConfig());
     const itemEvents = events.filter((event) => event.name === "run.item.appended");
 
     expect(itemEvents.map((event) => event.payload)).toEqual(
       result.items.map((item) => ({
-        runId: item.runId,
         itemId: item.id,
         itemKind: item.kind,
         itemSequence: item.sequence,
       })),
     );
+    expect(itemEvents.every((event) => event.runId === result.runId)).toBe(true);
 
-    const throwingEmitter = new RuntimeEventEmitter();
+    const throwingEmitter = new FakeRuntimeEventPublisher();
     throwingEmitter.subscribe(() => {
       throw new Error("Renderer listener failed.");
     });
     const unaffected = await createRunner(
       new ScriptedController([finalDecision("Still done")]),
-      { eventEmitter: throwingEmitter },
+      { runtimeEventPublisher: throwingEmitter },
     ).run(createAgent(), createRunInput(), createRunConfig());
     expect(unaffected.status).toBe("succeeded");
+  });
+
+  it("fans the same Run-local event snapshots to invocation and configured publishers", async () => {
+    const configured = new FakeRuntimeEventPublisher();
+    const invocation = new FakeRuntimeEventPublisher();
+    const result = await createRunner(
+      new ScriptedController([finalDecision("Done")]),
+      { runtimeEventPublisher: configured },
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(),
+      { runtimeEventPublisher: invocation },
+    );
+    const configuredEvents = configured.events();
+    const invocationEvents = invocation.events();
+
+    expect(result.status).toBe("succeeded");
+    expect(configuredEvents).toHaveLength(invocationEvents.length);
+    expect(configuredEvents.length).toBeGreaterThan(0);
+    for (let index = 0; index < configuredEvents.length; index += 1) {
+      expect(configuredEvents[index]).toBe(invocationEvents[index]);
+      expect(configuredEvents[index]?.sequence).toBe(index + 1);
+      expect(configuredEvents[index]?.runId).toBe(result.runId);
+      expect(configuredEvents[index]?.taskId).toBe(result.taskId);
+    }
   });
 
   it("maps invalid RunConfig to runtime_invalid_options without invoking Controller", async () => {
@@ -1897,7 +1931,7 @@ describe("Runner approval lifecycle", () => {
   it("publishes approval history only after required audit and telemetry gates", async () => {
     const order: string[] = [];
     const safeOutputs: unknown[] = [];
-    const eventEmitter = new RuntimeEventEmitter();
+    const eventEmitter = new FakeRuntimeEventPublisher();
     eventEmitter.subscribe((event) => {
       if (event.name === "approval.requested" || event.name === "approval.resolved") {
         order.push(`event:${event.name}`);
@@ -1937,7 +1971,7 @@ describe("Runner approval lifecycle", () => {
         permissionRequestDecision(),
         finalDecision("Declined safely"),
       ]),
-      { eventEmitter, auditPort, telemetryPort },
+      { runtimeEventPublisher: eventEmitter, auditPort, telemetryPort },
     ).run(
       createAgent(),
       createRunInput(),
@@ -2216,11 +2250,11 @@ describe("Runner approval lifecycle", () => {
           return lateReview.promise;
         });
         const events: RuntimeEvent[] = [];
-        const eventEmitter = new RuntimeEventEmitter();
+        const eventEmitter = new FakeRuntimeEventPublisher();
         eventEmitter.subscribe((event) => events.push(event));
         const running = createRunner(
           new ScriptedController([permissionRequestDecision()]),
-          { eventEmitter },
+          { runtimeEventPublisher: eventEmitter },
         ).run(
           createAgent(),
           createRunInput(),
@@ -2370,7 +2404,7 @@ describe("Runner approval lifecycle", () => {
 
   it("preserves applied Session authority when required resolution audit fails", async () => {
     const events: RuntimeEvent[] = [];
-    const eventEmitter = new RuntimeEventEmitter();
+    const eventEmitter = new FakeRuntimeEventPublisher();
     eventEmitter.subscribe((event) => events.push(event));
     const auditPort: AuditPort = {
       async record(record) {
@@ -2391,7 +2425,10 @@ describe("Runner approval lifecycle", () => {
       finalDecision("Must not run"),
     ]);
 
-    const result = await createRunner(controller, { eventEmitter, auditPort }).run(
+    const result = await createRunner(
+      controller,
+      { runtimeEventPublisher: eventEmitter, auditPort },
+    ).run(
       createAgent(),
       createRunInput(),
       createRunConfig({
@@ -2417,7 +2454,7 @@ describe("Runner approval lifecycle", () => {
 
   it("preserves applied Session authority when required resolution telemetry fails", async () => {
     const events: RuntimeEvent[] = [];
-    const eventEmitter = new RuntimeEventEmitter();
+    const eventEmitter = new FakeRuntimeEventPublisher();
     eventEmitter.subscribe((event) => events.push(event));
     const telemetryPort: TelemetryPort = {
       async record(record) {
@@ -2436,7 +2473,7 @@ describe("Runner approval lifecycle", () => {
 
     const result = await createRunner(
       new ScriptedController([permissionRequestDecision()]),
-      { eventEmitter, telemetryPort },
+      { runtimeEventPublisher: eventEmitter, telemetryPort },
     ).run(
       createAgent(),
       createRunInput(),
@@ -2836,7 +2873,7 @@ describe("Runner external Action result settlement", () => {
   it("uses trusted registrations as the canonical allowlist and publishes settlement", async () => {
     const fixture = createExternalActionPipeline("allowed");
     const events: RuntimeEvent[] = [];
-    const eventEmitter = new RuntimeEventEmitter();
+    const eventEmitter = new FakeRuntimeEventPublisher();
     eventEmitter.subscribe((event) => events.push(event));
     const result = await createRunner(new ScriptedController([
       actionsDecision([{
@@ -2849,7 +2886,7 @@ describe("Runner external Action result settlement", () => {
     ]), {
       actionEnforcementPipeline: fixture.pipeline,
       sandboxExecutionGateway: fixture.gateway,
-      eventEmitter,
+      runtimeEventPublisher: eventEmitter,
     }).run(
       createAgent(),
       createRunInput(),

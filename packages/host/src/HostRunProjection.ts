@@ -9,7 +9,10 @@ import type {
   RuntimeErrorOwner,
 } from "@agent-anything/foundation";
 import type { SandboxEnforcement } from "@agent-anything/action-execution";
-import type { RuntimeEvent, RuntimeEventName } from "@agent-anything/agent-core/events";
+import type {
+  RuntimeEvent,
+  RuntimeEventName,
+} from "@agent-anything/observability/events";
 import type { PlanProjection } from "@agent-anything/runtime/plan";
 import type {
   RunCancellationSummary,

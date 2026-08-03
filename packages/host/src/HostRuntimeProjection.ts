@@ -1,42 +1,28 @@
 import type { Metadata } from "@agent-anything/foundation";
-import type { RuntimeEvent, RuntimeEventName } from "@agent-anything/agent-core/events";
+import type {
+  RuntimeEvent,
+  RuntimeEventName,
+} from "@agent-anything/observability/events";
 
 const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
-  "run.started": ["runId", "status"],
-  "run.item.appended": ["runId", "itemId", "itemKind", "itemSequence"],
+  "run.started": ["status"],
+  "run.item.appended": ["itemId", "itemKind", "itemSequence"],
   "run.completed": terminalFields(),
   "run.blocked": terminalFields(),
   "run.failed": terminalFields(),
   "run.cancelled": terminalFields(),
-  "controller.started": ["runId", "iteration"],
+  "controller.started": ["iteration"],
   "controller.finished": [
-    "runId",
     "iteration",
     "status",
     "code",
     "decisionKind",
-    "controllerAction",
-    "promptArchitectureVersion",
-    "actionContractVersion",
-    "toolCatalogVersion",
-    "exposedToolNames",
-    "requestedToolName",
-    "patchOperation",
-    "patchPath",
   ],
-  "task.started": ["runId", "taskId"],
-  "task.completed": ["runId", "taskId", "status", "durationMs"],
-  "task.failed": ["runId", "taskId", "status", "code", "durationMs"],
-  "loop.iteration.started": ["runId", "iteration"],
-  "loop.iteration.finished": ["runId", "iteration", "status", "durationMs"],
-  "planner.started": ["runId", "iteration"],
-  "planner.finished": ["runId", "iteration", "status", "code", "durationMs"],
-  "plan.created": ["runId", "plan"],
-  "plan.updated": ["runId", "plan", "previousVersion", "transition"],
-  "plan.completed": ["runId", "plan"],
-  "plan.abandoned": ["runId", "plan", "terminalStatus", "reasonCode"],
+  "plan.created": ["plan"],
+  "plan.updated": ["plan", "previousVersion", "transition"],
+  "plan.completed": ["plan"],
+  "plan.abandoned": ["plan", "terminalStatus", "reasonCode"],
   "action.prepared": [
-    "runId",
     "actionId",
     "actionFingerprint",
     "category",
@@ -44,7 +30,6 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "targetAssertionCount",
   ],
   "action.assessed": [
-    "runId",
     "actionId",
     "actionFingerprint",
     "status",
@@ -52,7 +37,6 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "code",
   ],
   "action.invalidated": [
-    "runId",
     "actionId",
     "actionFingerprint",
     "phase",
@@ -60,7 +44,6 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "code",
   ],
   "approval.requested": [
-    "runId",
     "requestId",
     "actionId",
     "pendingVersion",
@@ -70,7 +53,6 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "reviewOperationId",
   ],
   "approval.resolved": [
-    "runId",
     "requestId",
     "actionId",
     "pendingVersion",
@@ -82,14 +64,12 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "authorityRecordIds",
   ],
   "sandbox.attempt.started": [
-    "runId",
     "actionId",
     "attemptId",
     "ordinal",
     "enforcement",
   ],
   "sandbox.attempt.resolved": [
-    "runId",
     "actionId",
     "attemptId",
     "ordinal",
@@ -98,16 +78,14 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "code",
   ],
   "sandbox.escalation.proposed": [
-    "runId",
     "actionId",
     "previousAttemptId",
     "previousActionFingerprint",
     "nextActionFingerprint",
     "deniedEffectKind",
   ],
-  "tool.started": ["runId", "actionId", "toolName"],
+  "tool.started": ["actionId", "toolName"],
   "tool.finished": [
-    "runId",
     "actionId",
     "toolName",
     "status",
@@ -115,9 +93,9 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "toolResultStatus",
     "durationMs",
   ],
-  "observation.created": ["runId", "actionId", "observationId", "status", "code"],
-  "context.updated": ["runId", "observationId"],
-  "evidence.created": ["runId", "actionId", "evidenceId", "evidenceRefs"],
+  "observation.created": ["actionId", "observationId", "status", "code"],
+  "context.updated": ["observationId"],
+  "evidence.created": ["actionId", "evidenceId"],
   "retry.attempt.started": retryFields([
     "attemptId",
     "budgetId",
@@ -177,7 +155,9 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
 };
 
 export function projectRuntimeEventForHost(event: RuntimeEvent): RuntimeEvent {
-  const source = isRecord(event.payload) ? event.payload : {};
+  const source: Metadata = isRecord(event.payload)
+    ? event.payload as unknown as Metadata
+    : {};
   const payload: Metadata = {};
 
   for (const field of lifecycleFields[event.name]) {
@@ -188,21 +168,23 @@ export function projectRuntimeEventForHost(event: RuntimeEvent): RuntimeEvent {
   }
 
   return Object.freeze({
+    schemaVersion: event.schemaVersion,
     id: event.id,
+    runId: event.runId,
     name: event.name,
     taskId: event.taskId,
     sequence: event.sequence,
-    timestamp: event.timestamp,
+    occurredAt: event.occurredAt,
     payload: Object.freeze(payload),
-  });
+  }) as unknown as RuntimeEvent;
 }
 
 function terminalFields(): readonly string[] {
   return [
-    "runId",
     "status",
     "code",
     "durationMs",
+    "itemCount",
     "evidenceCount",
     "artifactCount",
     "errorCodes",
@@ -210,7 +192,7 @@ function terminalFields(): readonly string[] {
 }
 
 function retryFields(fields: readonly string[]): readonly string[] {
-  return ["type", "runId", "operationId", "owner", "occurredAt", ...fields];
+  return ["operationId", "owner", ...fields];
 }
 
 function projectField(field: string, value: unknown): unknown {
@@ -271,12 +253,12 @@ function projectCancellationAttribution(value: unknown): Metadata | undefined {
     return undefined;
   }
   const attribution: Metadata = {};
-  for (const field of ["requestId", "runId", "operation", "observedAt"] as const) {
+  for (const field of ["requestId", "operation", "observedAt"] as const) {
     if (typeof value[field] === "string" && value[field].length > 0) {
       attribution[field] = value[field];
     }
   }
-  return Object.keys(attribution).length === 4
+  return Object.keys(attribution).length === 3
     ? Object.freeze(attribution)
     : undefined;
 }

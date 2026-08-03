@@ -1,5 +1,5 @@
 import type { Agent, RunInput } from "@agent-anything/foundation";
-import type { RuntimeEventPublisher } from "@agent-anything/agent-core/events";
+import type { RuntimeEventPublisher } from "@agent-anything/observability";
 import type { RunResult } from "@agent-anything/runtime/run";
 import { createSystemRetryExecutor } from "../retry/createSystemRetryExecutor.js";
 import { RunExecution } from "./RunExecution.js";
@@ -36,39 +36,29 @@ export class Runner {
     config: RunConfig,
     options: RunInvocationOptions = {},
   ): Promise<RunResult<TOutput>> {
-    const eventEmitter = combineRuntimeEventPublishers(
-      this.dependencies.eventEmitter,
-      options.runtimeEventPublisher,
-    );
     return new RunExecution<TOutput>(
-      eventEmitter === this.dependencies.eventEmitter
-        ? this.dependencies
-        : Object.freeze({ ...this.dependencies, eventEmitter }),
+      this.dependencies,
       agent,
       input,
       config,
+      runtimeEventPublishers(
+        this.dependencies.runtimeEventPublisher,
+        options.runtimeEventPublisher,
+      ),
     ).run();
   }
 }
 
-function combineRuntimeEventPublishers(
+function runtimeEventPublishers(
   configured: RuntimeEventPublisher | undefined,
   invocation: RuntimeEventPublisher | undefined,
-): RuntimeEventPublisher | undefined {
-  if (configured === undefined) return invocation;
-  if (invocation === undefined || invocation === configured) return configured;
-
-  return Object.freeze({
-    emit(input: Parameters<RuntimeEventPublisher["emit"]>[0]) {
-      for (const publisher of [invocation, configured]) {
-        try {
-          publisher.emit(input);
-        } catch {
-          // Runtime notifications are non-authoritative and publisher-local.
-        }
-      }
-    },
-  });
+): readonly RuntimeEventPublisher[] {
+  return Object.freeze(
+    [invocation, configured].filter(
+      (publisher, index, publishers): publisher is RuntimeEventPublisher =>
+        publisher !== undefined && publishers.indexOf(publisher) === index,
+    ),
+  );
 }
 
 function createDefaultIdentity(input: CreateRunnerIdentityInput): string {

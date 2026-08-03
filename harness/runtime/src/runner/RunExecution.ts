@@ -11,7 +11,13 @@ import type {
   RunInput,
   RuntimeError,
 } from "@agent-anything/foundation";
-import type { ObservabilityRecordContext } from "@agent-anything/observability";
+import {
+  RuntimeEventStream,
+  type ObservabilityRecordContext,
+  type RuntimeEventName,
+  type RuntimeEventPayloadMap,
+  type RuntimeEventPublisher,
+} from "@agent-anything/observability";
 import type { AppliedPolicyAmendmentRecord } from "@agent-anything/governance";
 import {
   createApprovalRequest,
@@ -50,7 +56,6 @@ import {
   projectContext,
   type Context,
 } from "@agent-anything/context/context";
-import type { RuntimeEventName } from "@agent-anything/agent-core/events";
 import {
   abandonPlan,
   applyPlanUpdate,
@@ -262,6 +267,7 @@ export class RunExecution<TOutput> {
   private state!: RunState<TOutput>;
   private startedAtMs = 0;
   private terminalResult: RunResult<TOutput> | null = null;
+  private eventStream!: RuntimeEventStream;
   private cancellationListener: (() => void) | null = null;
   private activeOperation: ActiveOperation | null = null;
 
@@ -270,6 +276,7 @@ export class RunExecution<TOutput> {
     private readonly rawAgent: Agent<TOutput>,
     private readonly rawInput: RunInput,
     private readonly rawConfig: RunConfig,
+    private readonly runtimeEventPublishers: readonly RuntimeEventPublisher[],
   ) {}
 
   async run(): Promise<RunResult<TOutput>> {
@@ -284,6 +291,21 @@ export class RunExecution<TOutput> {
   private async runInternal(): Promise<RunResult<TOutput>> {
     this.agent = snapshotAgent(this.rawAgent);
     this.input = snapshotRunInput(this.rawInput);
+    this.eventStream = new RuntimeEventStream({
+      runId: this.input.runId,
+      taskId: this.input.task.id,
+      now: this.dependencies.now,
+      createEventId: ({ runId, sequence }) => {
+        const id = this.dependencies.createId({
+          kind: "runtime_event",
+          runId,
+          sequence,
+        });
+        assertNonEmpty(id, "runtime_event id");
+        return id;
+      },
+      publishers: this.runtimeEventPublishers,
+    });
 
     const config = snapshotRunConfig(this.rawConfig, this.input.runId);
     if (!config.valid) {
@@ -369,8 +391,8 @@ export class RunExecution<TOutput> {
       cancellationRequest: null,
     }));
     this.emit("run.started", {
-      runId: this.state.runId,
-      agentId: this.state.activeAgentId,
+      status: "running",
+      activeAgentId: this.state.activeAgentId,
     });
 
     const startErrors = await this.recordLifecycle("started", "succeeded");
@@ -405,7 +427,7 @@ export class RunExecution<TOutput> {
         }),
       }));
       const iteration = this.state.counters.iterations;
-      this.emit("controller.started", { runId: this.state.runId, iteration });
+      this.emit("controller.started", { iteration });
 
       let decision: ControllerDecision<unknown>;
       try {
@@ -427,10 +449,10 @@ export class RunExecution<TOutput> {
       } catch (error) {
         if (error instanceof OperationSettlementTimeoutError) {
           this.emit("controller.finished", {
-            runId: this.state.runId,
             iteration,
             status: "failed",
             code: "runtime_cancellation_settlement_timeout",
+            decisionKind: null,
           });
           return this.fail(
             cancellationSettlementRuntimeError(error),
@@ -442,10 +464,10 @@ export class RunExecution<TOutput> {
           error.operationSettlement === "settled_failure"
         ) {
           this.emit("controller.finished", {
-            runId: this.state.runId,
             iteration,
             status: "failed",
             code: error.runtimeError.code,
+            decisionKind: null,
           });
           return this.fail(
             error.runtimeError,
@@ -454,28 +476,30 @@ export class RunExecution<TOutput> {
         }
         if (this.cancellationRequest() !== null) {
           this.emit("controller.finished", {
-            runId: this.state.runId,
             iteration,
             status: "cancelled",
+            code: null,
+            decisionKind: null,
           });
           return this.cancelRun();
         }
 
         const runtimeError = controllerRuntimeError(error);
         this.emit("controller.finished", {
-          runId: this.state.runId,
           iteration,
           status: "failed",
           code: runtimeError.code,
+          decisionKind: null,
         });
         return this.fail(runtimeError, failureCode(runtimeError));
       }
 
       if (this.cancellationRequest() !== null) {
         this.emit("controller.finished", {
-          runId: this.state.runId,
           iteration,
           status: "cancelled",
+          code: null,
+          decisionKind: null,
         });
         return this.cancelRun();
       }
@@ -483,10 +507,10 @@ export class RunExecution<TOutput> {
       const controllerDurationError = this.checkDurationLimit();
       if (controllerDurationError !== null) {
         this.emit("controller.finished", {
-          runId: this.state.runId,
           iteration,
           status: "failed",
           code: controllerDurationError.code,
+          decisionKind: null,
         });
         return this.fail(controllerDurationError);
       }
@@ -500,10 +524,10 @@ export class RunExecution<TOutput> {
           false,
         );
         this.emit("controller.finished", {
-          runId: this.state.runId,
           iteration,
           status: "failed",
           code: error.code,
+          decisionKind: null,
         });
         return this.fail(error, "model_output_invalid");
       }
@@ -519,9 +543,9 @@ export class RunExecution<TOutput> {
         })),
       );
       this.emit("controller.finished", {
-        runId: this.state.runId,
         iteration,
         status: "succeeded",
+        code: null,
         decisionKind: decision.kind,
       });
 
@@ -1064,7 +1088,6 @@ export class RunExecution<TOutput> {
     item: ApprovalRequestedRunItem,
   ): void {
     this.emit("approval.requested", {
-      runId: item.runId,
       requestId: item.request.requestId,
       actionId: item.request.actionId,
       actionFingerprint: item.request.actionFingerprint,
@@ -1688,7 +1711,6 @@ export class RunExecution<TOutput> {
     summary: ReturnType<typeof createApprovalRecordSummary>,
   ): void {
     this.emit("approval.resolved", {
-      runId: this.state.runId,
       requestId: summary.requestId,
       actionId: summary.actionId,
       actionFingerprint: summary.actionFingerprint,
@@ -1765,7 +1787,6 @@ export class RunExecution<TOutput> {
     }
 
     this.emit("tool.started", {
-      runId: this.state.runId,
       actionId: action.id,
       toolName: action.name,
     });
@@ -2055,7 +2076,7 @@ export class RunExecution<TOutput> {
       kind: "action_prepared" as const,
       prepared: summary,
     })]);
-    this.emit("action.prepared", { runId: this.state.runId, ...summary });
+    this.emit("action.prepared", summary);
   }
 
   private recordActionAssessed(
@@ -2089,7 +2110,7 @@ export class RunExecution<TOutput> {
       kind: "action_assessed" as const,
       assessment: summary,
     })]);
-    this.emit("action.assessed", { runId: this.state.runId, ...summary });
+    this.emit("action.assessed", summary);
   }
 
   private recordActionInvalidated(
@@ -2111,7 +2132,7 @@ export class RunExecution<TOutput> {
       kind: "action_invalidated" as const,
       invalidation: summary,
     })]);
-    this.emit("action.invalidated", { runId: this.state.runId, ...summary });
+    this.emit("action.invalidated", summary);
   }
 
   private commitActionAssessment(
@@ -2354,7 +2375,6 @@ export class RunExecution<TOutput> {
       }),
     ], {});
     this.emit("sandbox.attempt.started", {
-      runId: sandboxAttempt.runId,
       actionId: sandboxAttempt.actionId,
       attemptId: sandboxAttempt.id,
       ordinal: sandboxAttempt.ordinal,
@@ -2398,7 +2418,6 @@ export class RunExecution<TOutput> {
       }),
     ], {});
     this.emit("sandbox.attempt.resolved", {
-      runId: sandboxAttempt.runId,
       actionId: sandboxAttempt.actionId,
       attemptId: sandboxAttempt.id,
       ordinal: sandboxAttempt.ordinal,
@@ -2709,7 +2728,6 @@ export class RunExecution<TOutput> {
       this.publishObservationNotifications(observation, evidenceRefs);
     }
     this.emit("tool.finished", {
-      runId: this.state.runId,
       actionId: action.id,
       toolName: execution.toolResult.toolName,
       status: outcome.status,
@@ -2756,6 +2774,12 @@ export class RunExecution<TOutput> {
     }
     if (escalation.status === "eligible") {
       const proposal = escalation.proposal;
+      const deniedEffectKind = execution.denial.deniedEffect.kind;
+      if (deniedEffectKind !== "file_system" && deniedEffectKind !== "network") {
+        throw new Error(
+          "Sandbox escalation can only be proposed for file-system or network effects.",
+        );
+      }
       this.commitSettledToolState([
         (base) => Object.freeze({
           ...base,
@@ -2764,16 +2788,15 @@ export class RunExecution<TOutput> {
           actionId: action.id,
           previousActionFingerprint: proposal.previousActionFingerprint,
           nextActionFingerprint: proposal.prepared.actionFingerprint,
-          deniedEffectKind: execution.denial.deniedEffect.kind as "file_system" | "network",
+          deniedEffectKind,
         }),
       ], {});
       this.emit("sandbox.escalation.proposed", {
-        runId: this.state.runId,
         actionId: action.id,
         previousAttemptId: proposal.previousAttemptId,
         previousActionFingerprint: proposal.previousActionFingerprint,
         nextActionFingerprint: proposal.prepared.actionFingerprint,
-        deniedEffectKind: execution.denial.deniedEffect.kind,
+        deniedEffectKind,
       });
       return this.assessPreparedExternalAction(action, proposal.prepared, 2);
     }
@@ -2997,22 +3020,18 @@ export class RunExecution<TOutput> {
   ): void {
     const outcome = observationNotificationOutcome(observation);
     this.emit("observation.created", {
-      runId: this.state.runId,
       actionId: observation.actionId,
       observationId: observation.id,
       status: outcome.status,
       code: outcome.code,
     });
     this.emit("context.updated", {
-      runId: this.state.runId,
       observationId: observation.id,
     });
     for (const evidenceId of evidenceRefs) {
       this.emit("evidence.created", {
-        runId: this.state.runId,
         actionId: observation.actionId,
         evidenceId,
-        evidenceRefs,
       });
     }
   }
@@ -3282,11 +3301,40 @@ export class RunExecution<TOutput> {
     }
 
     this.publishItems(items);
-    this.emit(terminalEventName(candidate.status), {
-      runId: this.state.runId,
-      status: candidate.status,
-      code: candidate.status === "succeeded" ? null : this.state.code,
-    });
+    const terminalEventSummary = {
+      durationMs: Math.max(0, completedAtMs - this.startedAtMs),
+      itemCount: this.state.items.length,
+      evidenceCount: this.state.evidenceRefs.length,
+      artifactCount: this.state.artifactRefs.length,
+      errorCodes: Object.freeze(
+        [...new Set(this.state.errors.map((error) => error.code))],
+      ),
+    };
+    if (candidate.status === "succeeded") {
+      this.emit("run.completed", {
+        status: "succeeded",
+        code: null,
+        ...terminalEventSummary,
+      });
+    } else if (candidate.status === "blocked") {
+      this.emit("run.blocked", {
+        status: "blocked",
+        code: candidate.code,
+        ...terminalEventSummary,
+      });
+    } else if (candidate.status === "failed") {
+      this.emit("run.failed", {
+        status: "failed",
+        code: candidate.code,
+        ...terminalEventSummary,
+      });
+    } else {
+      this.emit("run.cancelled", {
+        status: "cancelled",
+        code: "runtime_cancelled",
+        ...terminalEventSummary,
+      });
+    }
     this.terminalResult = this.createResult();
     return this.terminalResult;
   }
@@ -3527,7 +3575,94 @@ export class RunExecution<TOutput> {
       items: Object.freeze([...this.state.items, ...items]),
     }));
     this.publishItems(items);
-    this.emit(retryRuntimeEventName(retry.type), { ...retry }, retry.occurredAt);
+    this.emitRetryEvent(retry);
+  }
+
+  private emitRetryEvent(retry: RetryEvent): void {
+    const base = {
+      operationId: retry.operationId,
+      owner: retry.owner,
+    };
+    switch (retry.type) {
+      case "retry_attempt_started":
+        this.emit("retry.attempt.started", {
+          ...base,
+          attemptId: retry.attemptId,
+          budgetId: retry.budgetId,
+          attemptNumber: retry.attemptNumber,
+          budgetAttemptNumber: retry.budgetAttemptNumber,
+          maxBudgetAttempts: retry.maxBudgetAttempts,
+        }, retry.occurredAt);
+        return;
+      case "retry_attempt_finished":
+        this.emit("retry.attempt.finished", {
+          ...base,
+          attemptId: retry.attemptId,
+          budgetId: retry.budgetId,
+          attemptNumber: retry.attemptNumber,
+          budgetAttemptNumber: retry.budgetAttemptNumber,
+          durationMs: retry.durationMs,
+          outcome: retry.outcome,
+          failureCategory: retry.failureCategory ?? null,
+          failureCode: retry.failureCode ?? null,
+          next: retry.next,
+        }, retry.occurredAt);
+        return;
+      case "retry_scheduled":
+        this.emit("retry.scheduled", {
+          ...base,
+          afterAttemptId: retry.afterAttemptId,
+          budgetId: retry.budgetId,
+          retryNumber: retry.retryNumber,
+          nextAttemptNumber: retry.nextAttemptNumber,
+          nextBudgetAttemptNumber: retry.nextBudgetAttemptNumber,
+          delayMs: retry.delayMs,
+          delaySource: retry.delaySource,
+          nextAttemptAt: retry.nextAttemptAt,
+          failureCategory: retry.failureCategory,
+          failureCode: retry.failureCode,
+        }, retry.occurredAt);
+        return;
+      case "retry_fallback_selected":
+        this.emit("retry.fallback.selected", {
+          ...base,
+          fromLegId: retry.fromLegId,
+          toLegId: retry.toLegId,
+          fromBudgetId: retry.fromBudgetId,
+          toBudgetId: retry.toBudgetId,
+          fromTransport: retry.fromTransport,
+          toTransport: retry.toTransport,
+          fallbackNumber: retry.fallbackNumber,
+          reasonCode: retry.reasonCode,
+          nextAttemptNumber: retry.nextAttemptNumber,
+        }, retry.occurredAt);
+        return;
+      case "retry_exhausted":
+        this.emit("retry.exhausted", {
+          ...base,
+          finalBudgetId: retry.finalBudgetId,
+          reason: retry.reason,
+          totalAttempts: retry.totalAttempts,
+          totalRetryDelayMs: retry.totalRetryDelayMs,
+          lastFailureCategory: retry.lastFailureCategory,
+          lastFailureCode: retry.lastFailureCode,
+        }, retry.occurredAt);
+        return;
+      case "retry_cancelled":
+        this.emit("retry.cancelled", {
+          ...base,
+          phase: retry.phase,
+          budgetId: retry.budgetId,
+          attemptId: retry.attemptId,
+          attemptNumber: retry.attemptNumber,
+          attribution: {
+            requestId: retry.attribution.requestId,
+            operation: retry.attribution.operation,
+            observedAt: retry.attribution.observedAt,
+          },
+        }, retry.occurredAt);
+        return;
+    }
   }
 
   private materializeItems(
@@ -3550,7 +3685,6 @@ export class RunExecution<TOutput> {
   private publishItems(items: readonly RunItem<TOutput>[]): void {
     for (const item of items) {
       this.emit("run.item.appended", {
-        runId: item.runId,
         itemId: item.id,
         itemKind: item.kind,
         itemSequence: item.sequence,
@@ -3563,13 +3697,11 @@ export class RunExecution<TOutput> {
     switch (item.kind) {
       case "plan_created":
         this.emit("plan.created", {
-          runId: item.runId,
           plan: item.plan,
         });
         return;
       case "plan_updated":
         this.emit("plan.updated", {
-          runId: item.runId,
           plan: item.plan,
           previousVersion: item.previousVersion,
           transition: item.transition,
@@ -3577,13 +3709,11 @@ export class RunExecution<TOutput> {
         return;
       case "plan_completed":
         this.emit("plan.completed", {
-          runId: item.runId,
           plan: item.plan,
         });
         return;
       case "plan_abandoned":
         this.emit("plan.abandoned", {
-          runId: item.runId,
           plan: item.plan,
           terminalStatus: item.terminalStatus,
           reasonCode: item.reasonCode,
@@ -3740,18 +3870,13 @@ export class RunExecution<TOutput> {
     return value;
   }
 
-  private emit(
-    name: RuntimeEventName,
-    payload: Metadata,
-    timestamp?: ISODateTimeString,
+  private emit<TName extends RuntimeEventName>(
+    name: TName,
+    payload: RuntimeEventPayloadMap[TName],
+    occurredAt?: ISODateTimeString,
   ): void {
     try {
-      this.dependencies.eventEmitter?.emit({
-        name,
-        taskId: this.input.task.id,
-        payload,
-        timestamp: timestamp ?? this.now(),
-      });
+      this.eventStream.emit(name, payload, occurredAt ?? this.now());
     } catch {
       // Runtime notifications are non-authoritative; RunState remains the source of truth.
     }
@@ -3916,7 +4041,10 @@ function observationDraft<TOutput>(observation: Observation): RunItemDraft<TOutp
 
 function observationNotificationOutcome(
   observation: Observation,
-): { readonly status: string; readonly code: string | null } {
+): Pick<
+  RuntimeEventPayloadMap["observation.created"],
+  "status" | "code"
+> {
   switch (observation.kind) {
     case "tool_result":
       return {
@@ -4129,26 +4257,6 @@ function auditOutcome(
   status: TerminalCandidate<unknown>["status"],
 ): "succeeded" | "failed" | "blocked" | "cancelled" {
   return status;
-}
-
-function terminalEventName(status: TerminalCandidate<unknown>["status"]): RuntimeEventName {
-  switch (status) {
-    case "succeeded": return "run.completed";
-    case "blocked": return "run.blocked";
-    case "failed": return "run.failed";
-    case "cancelled": return "run.cancelled";
-  }
-}
-
-function retryRuntimeEventName(type: RetryEvent["type"]): RuntimeEventName {
-  switch (type) {
-    case "retry_attempt_started": return "retry.attempt.started";
-    case "retry_attempt_finished": return "retry.attempt.finished";
-    case "retry_scheduled": return "retry.scheduled";
-    case "retry_fallback_selected": return "retry.fallback.selected";
-    case "retry_exhausted": return "retry.exhausted";
-    case "retry_cancelled": return "retry.cancelled";
-  }
 }
 
 function assertStateTransition<TOutput>(

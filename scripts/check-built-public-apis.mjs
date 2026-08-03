@@ -35,13 +35,9 @@ const packageExportKeys = {
     "./policy",
   ],
   "harness/safety/permission": [".", "./approval", "./authority", "./profile"],
-  "packages/observability": [".", "./audit", "./redaction", "./telemetry"],
+  "harness/observability": [".", "./audit", "./events", "./redaction", "./telemetry"],
   "harness/model-interaction": ["."],
   "packages/testing": ["."],
-  "packages/agent-core": [
-    ".",
-    "./events",
-  ],
   "harness/safety/action-execution": ["."],
   "harness/runtime": [".", "./controller", "./plan", "./retry", "./run"],
   "packages/host": ["."],
@@ -225,10 +221,13 @@ const expectedLowerValueExports = {
     "validateSessionAuthorityRecord",
   ],
   "@agent-anything/observability": [
+    "RUNTIME_EVENT_SCHEMA_VERSION",
     "Redactor",
+    "RuntimeEventStream",
     "createAuditRecord",
     "createTelemetryRecord",
     "defaultRedactionRules",
+    "snapshotRuntimeEventPayload",
   ],
   "@agent-anything/observability/audit": ["createAuditRecord"],
   "@agent-anything/observability/telemetry": ["createTelemetryRecord"],
@@ -242,20 +241,21 @@ const expectedLowerValueExports = {
     "FakeAuditPort",
     "FakeEvidencePersistencePort",
     "FakeProvider",
+    "FakeRuntimeEventPublisher",
     "FakeTelemetryPort",
   ],
 };
 
 const expectedValueExports = {
-  "@agent-anything/agent-core": [],
+  "@agent-anything/observability/events": [
+    "RUNTIME_EVENT_SCHEMA_VERSION",
+    "RuntimeEventStream",
+    "snapshotRuntimeEventPayload",
+  ],
   "@agent-anything/runtime/controller": [
     "ControllerError",
     "ProviderBackedController",
     "StructuredOutputError",
-  ],
-  "@agent-anything/agent-core/events": [
-    "RuntimeEventEmitter",
-    "RuntimeEventRecorder",
   ],
   "@agent-anything/runtime/plan": [
     "abandonPlan",
@@ -539,6 +539,8 @@ const removedOrPrivateSpecifiers = [
   "@agent-anything/providers",
   "@agent-anything/evidence",
   "@agent-anything/storage",
+  "@agent-anything/agent-core",
+  "@agent-anything/agent-core/events",
   "@agent-anything/agent-core/context",
   "@agent-anything/agent-core/action",
   "@agent-anything/agent-core/agent",

@@ -35,3 +35,19 @@ export {
   defaultRedactionRules,
   Redactor,
 } from "./redaction/index.js";
+export {
+  RUNTIME_EVENT_SCHEMA_VERSION,
+  RuntimeEventStream,
+  snapshotRuntimeEventPayload,
+} from "./events/index.js";
+export type {
+  CreateRuntimeEventStreamInput,
+  RuntimeEvent,
+  RuntimeEventEnvelope,
+  RuntimeEventIdentityFactory,
+  RuntimeEventIdentityInput,
+  RuntimeEventName,
+  RuntimeEventPayloadMap,
+  RuntimeEventPublisher,
+  RuntimeEventSubscriber,
+} from "./events/index.js";

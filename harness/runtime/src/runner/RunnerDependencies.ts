@@ -1,13 +1,16 @@
 import type { EvidenceBuilderPort } from "@agent-anything/context/evidence";
 import type { EvidencePersistencePort } from "@agent-anything/context/persistence";
-import type { AuditPort, TelemetryPort } from "@agent-anything/observability";
+import type {
+  AuditPort,
+  RuntimeEventPublisher,
+  TelemetryPort,
+} from "@agent-anything/observability";
 import type { ISODateTimeString } from "@agent-anything/foundation";
 import type {
   ActionEnforcementPipeline,
   SandboxExecutionGateway,
 } from "@agent-anything/action-execution";
 import type { Controller } from "@agent-anything/runtime/controller";
-import type { RuntimeEventPublisher } from "@agent-anything/agent-core/events";
 import type { RetryExecutor } from "../retry/RetryExecutor.js";
 
 export type RunnerIdentityKind =
@@ -22,7 +25,8 @@ export type RunnerIdentityKind =
   | "action_authority"
   | "run_permission_grant"
   | "session_authority_record"
-  | "policy_amendment_record";
+  | "policy_amendment_record"
+  | "runtime_event";
 
 export interface CreateRunnerIdentityInput {
   readonly kind: RunnerIdentityKind;
@@ -34,7 +38,7 @@ export type CreateRunnerIdentity = (input: CreateRunnerIdentityInput) => string;
 
 export interface RunnerDependencies {
   readonly controller: Controller<unknown>;
-  readonly eventEmitter?: RuntimeEventPublisher;
+  readonly runtimeEventPublisher?: RuntimeEventPublisher;
   readonly auditPort?: AuditPort;
   readonly telemetryPort?: TelemetryPort;
   readonly actionEnforcementPipeline?: ActionEnforcementPipeline;

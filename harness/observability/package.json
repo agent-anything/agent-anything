@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/observability",
   "version": "0.0.0",
-  "description": "Audit, telemetry, and redaction contracts for AgentAnything platform packages.",
+  "description": "Typed RuntimeEvents, audit, telemetry, and redaction contracts for Agent Harness.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -21,6 +21,10 @@
     "./redaction": {
       "types": "./src/redaction/index.ts",
       "import": "./dist/redaction/index.js"
+    },
+    "./events": {
+      "types": "./src/events/index.ts",
+      "import": "./dist/events/index.js"
     }
   },
   "files": [
@@ -30,6 +34,12 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "layer": "harness",
+      "component": "observability"
+    }
   },
   "license": "Apache-2.0",
   "private": true,

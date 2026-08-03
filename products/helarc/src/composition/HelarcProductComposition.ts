@@ -7,7 +7,7 @@ import type {
   Controller,
   RunResult,
 } from "@agent-anything/runtime";
-import type { RuntimeEvent } from "@agent-anything/agent-core/events";
+import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type {
   Agent,
   AgentTask,
@@ -32,8 +32,9 @@ import {
   HELARC_TOOL_CATALOG_METADATA_KEY,
 } from "../controller/HelarcToolCatalog.js";
 import {
-  enrichRuntimeEventWithControllerTrace,
   HelarcTracingController,
+  projectHelarcControllerTraceForEvent,
+  type HelarcControllerTraceProjection,
 } from "../run/HelarcControllerTraceProjection.js";
 import { HelarcPatchActionController } from "../patch/HelarcPatchActionController.js";
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
@@ -98,7 +99,10 @@ export async function createHelarcProductComposition(
     commandLimits: input.commandLimits,
   });
   const retryClock = createHelarcRetryClock(input.now);
-  const controllerTraceByIteration = new Map<number, Metadata>();
+  const controllerTraceByIteration = new Map<
+    number,
+    HelarcControllerTraceProjection
+  >();
   let productProjection = createHelarcProductRunProjection(input.runId);
   let productSequence = 0;
   const productListeners = new Set<HelarcProductRunProjectionListener>();
@@ -183,10 +187,13 @@ export async function createHelarcProductComposition(
       };
     },
     recordRuntimeEvent(event: RuntimeEvent) {
-      const projected = enrichRuntimeEventWithControllerTrace(event, controllerTraceByIteration);
-      const activity = mapRuntimeEventToHelarcActivity(projected);
+      const controllerTrace = projectHelarcControllerTraceForEvent(
+        event,
+        controllerTraceByIteration,
+      );
+      const activity = mapRuntimeEventToHelarcActivity(event, controllerTrace);
       publishProductUpdate({ kind: "activity_appended", activity });
-      return Object.freeze({ event: projected, activity });
+      return Object.freeze({ event, activity });
     },
     projectResult(
       runResult: RunResult<HelarcAgentOutput>,

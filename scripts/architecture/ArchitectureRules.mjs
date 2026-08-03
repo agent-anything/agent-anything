@@ -1,5 +1,4 @@
 export const PLATFORM_PRODUCTION_DEPENDENCIES = Object.freeze({
-  "@agent-anything/observability": ["@agent-anything/context", "@agent-anything/foundation"],
   "@agent-anything/testing": [
     "@agent-anything/context",
     "@agent-anything/foundation",
@@ -7,10 +6,9 @@ export const PLATFORM_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/permission",
     "@agent-anything/model-interaction",
   ],
-  "@agent-anything/agent-core": ["@agent-anything/foundation"],
   "@agent-anything/host": [
     "@agent-anything/action-execution",
-    "@agent-anything/agent-core",
+    "@agent-anything/observability",
     "@agent-anything/runtime",
     "@agent-anything/foundation",
     "@agent-anything/governance",
@@ -45,12 +43,17 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/permission",
     "@agent-anything/tools",
   ],
+  "@agent-anything/observability": [
+    "@agent-anything/context",
+    "@agent-anything/foundation",
+  ],
   "@agent-anything/runtime": [
     "@agent-anything/action-execution",
     "@agent-anything/context",
     "@agent-anything/foundation",
     "@agent-anything/governance",
     "@agent-anything/model-interaction",
+    "@agent-anything/observability",
     "@agent-anything/permission",
     "@agent-anything/tools",
   ],
@@ -75,12 +78,7 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
   ],
 });
 export const HARNESS_PACKAGE_NAMES = Object.freeze(Object.keys(HARNESS_PRODUCTION_DEPENDENCIES));
-export const PHASE_19_HARNESS_MIGRATION_DEPENDENCIES = Object.freeze({
-  "@agent-anything/runtime": Object.freeze([
-    "@agent-anything/agent-core",
-    "@agent-anything/observability",
-  ]),
-});
+export const PHASE_19_HARNESS_MIGRATION_DEPENDENCIES = Object.freeze({});
 export const PHASE_19_HARNESS_TEST_DEPENDENCIES = Object.freeze({
   "@agent-anything/runtime": Object.freeze([
     "@agent-anything/testing",

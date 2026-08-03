@@ -16,7 +16,7 @@ import type {
   ControllerDecision,
   ControllerInput,
 } from "@agent-anything/runtime/controller";
-import { RuntimeEventEmitter } from "@agent-anything/agent-core/events";
+import { FakeRuntimeEventPublisher } from "@agent-anything/testing";
 import {
   createRunCancellationController,
   type ResolvedRunPermissionConfig,
@@ -292,17 +292,19 @@ describe("HostRuntime", () => {
 
   it("isolates a failing global event publisher from invocation projection", async () => {
     const controller = new DeferredController();
-    const globalEvents = new RuntimeEventEmitter();
+    const globalEvents = new FakeRuntimeEventPublisher();
     const observed: string[] = [];
     globalEvents.subscribe((event) => {
       observed.push(event.name);
-      event.payload.runId = "mutated-by-global-observer";
+      Object.defineProperty(event.payload, "productTrace", {
+        value: "mutated-by-global-observer",
+      });
       throw new Error("global observer failed");
     });
     const runtime = createHostRuntime({
       runner: new Runner({
         controller,
-        eventEmitter: globalEvents,
+        runtimeEventPublisher: globalEvents,
         now: () => now,
       }),
       now: () => now,

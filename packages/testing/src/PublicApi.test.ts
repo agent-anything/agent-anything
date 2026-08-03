@@ -8,6 +8,7 @@ describe("Testing public API", () => {
       "FakeAuditPort",
       "FakeEvidencePersistencePort",
       "FakeProvider",
+      "FakeRuntimeEventPublisher",
       "FakeTelemetryPort",
     ]);
   });

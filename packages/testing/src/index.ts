@@ -16,3 +16,4 @@ export {
   FakeEvidencePersistencePort,
   type FakeEvidencePersistenceHandler,
 } from "./FakeEvidencePersistencePort.js";
+export { FakeRuntimeEventPublisher } from "./FakeRuntimeEventPublisher.js";

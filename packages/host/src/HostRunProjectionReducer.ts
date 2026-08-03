@@ -4,7 +4,7 @@ import {
   type ApprovalReviewInput,
 } from "@agent-anything/permission";
 import type { Metadata } from "@agent-anything/foundation";
-import type { RuntimeEvent } from "@agent-anything/agent-core/events";
+import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { PlanProjection, PlanStepStatus } from "@agent-anything/runtime/plan";
 import { projectRuntimeEventForHost } from "./HostRuntimeProjection.js";
 import {
@@ -150,13 +150,12 @@ function applyRuntimeEvent(
   candidate: RuntimeEvent,
 ): HostRunProjectionReduction {
   const event = projectRuntimeEventForHost(candidate);
-  if (event.taskId !== current.taskId) {
+  if (event.runId !== current.runId || event.taskId !== current.taskId) {
     return rejected(current, "run_identity_mismatch");
   }
-  const payload = isRecord(event.payload) ? event.payload : {};
-  if (typeof payload.runId === "string" && payload.runId !== current.runId) {
-    return rejected(current, "run_identity_mismatch");
-  }
+  const payload: Metadata = isRecord(event.payload)
+    ? event.payload as unknown as Metadata
+    : {};
 
   switch (event.name) {
     case "run.started":
@@ -179,7 +178,7 @@ function applyRuntimeEvent(
     case "retry.exhausted":
     case "retry.cancelled":
       return applied(current, sequence, {
-        retry: appendRetry(current.retry, event.name, payload, event.timestamp),
+        retry: appendRetry(current.retry, event.name, payload, event.occurredAt),
       });
     case "sandbox.attempt.started":
       return applySandboxStarted(current, sequence, payload);
@@ -356,9 +355,9 @@ function appendRetry(
   current: HostRetryProjection | null,
   event: HostRetryEventName,
   payload: Metadata,
-  timestamp: string,
+  occurredAt: string,
 ): HostRetryProjection {
-  const projection = retryEvent(event, payload, timestamp);
+  const projection = retryEvent(event, payload, occurredAt);
   const prior = current ?? Object.freeze({
     attemptCount: 0,
     scheduledCount: 0,
@@ -384,14 +383,14 @@ function appendRetry(
 function retryEvent(
   event: HostRetryEventName,
   payload: Metadata,
-  timestamp: string,
+  occurredAt: string,
 ): HostRetryEventProjection {
   const owner = readRetryOwner(payload.owner);
   return Object.freeze({
     event,
     operationId: readString(payload.operationId),
     owner,
-    occurredAt: isDateTime(payload.occurredAt) ? payload.occurredAt : timestamp,
+    occurredAt,
     attemptNumber: readNullablePositiveInteger(
       payload.attemptNumber ?? payload.nextAttemptNumber,
     ),
@@ -408,14 +407,14 @@ function approvalFromRuntimeEvent(
   payload: Metadata,
 ): HostPendingApprovalProjection {
   return Object.freeze({
-    runId: readString(payload.runId),
+    runId: event.runId,
     requestId: readString(payload.requestId),
     actionId: readString(payload.actionId),
     category: readApprovalCategory(payload.category),
     pendingVersion: readPositiveInteger(payload.pendingVersion),
     reviewer: readReviewer(payload.reviewer),
     phase: "reviewing" as const,
-    requestedAt: event.timestamp,
+    requestedAt: event.occurredAt,
     review: null,
   });
 }

@@ -1,18 +1,32 @@
+import type { Metadata } from "@agent-anything/foundation";
+import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type {
   Controller,
-} from "@agent-anything/runtime/controller";
-import type { RuntimeEvent } from "@agent-anything/agent-core/events";
-import type {
   ControllerCallContext,
   ControllerDecision,
   ControllerInput,
 } from "@agent-anything/runtime/controller";
-import type { Metadata } from "@agent-anything/foundation";
+
+export interface HelarcControllerTraceProjection {
+  readonly iteration: number;
+  readonly source: string | null;
+  readonly controllerAction: string | null;
+  readonly promptArchitectureVersion: string | null;
+  readonly actionContractVersion: string | null;
+  readonly toolCatalogVersion: string | null;
+  readonly exposedToolNames: readonly string[];
+  readonly requestedToolName: string | null;
+  readonly patchOperation: string | null;
+  readonly patchPath: string | null;
+}
 
 export class HelarcTracingController<TOutput = unknown> implements Controller<TOutput> {
   constructor(
     private readonly inner: Controller<TOutput>,
-    private readonly traceByIteration: Map<number, Metadata>,
+    private readonly traceByIteration: Map<
+      number,
+      HelarcControllerTraceProjection
+    >,
   ) {}
 
   async next(
@@ -21,77 +35,48 @@ export class HelarcTracingController<TOutput = unknown> implements Controller<TO
   ): Promise<ControllerDecision<TOutput>> {
     const decision = await this.inner.next(input, context);
     const metadata = decision.modelItems[0]?.metadata ?? {};
-    this.traceByIteration.set(input.iteration, selectControllerTraceMetadata(metadata));
+    this.traceByIteration.set(
+      input.iteration,
+      createHelarcControllerTraceProjection(input.iteration, metadata),
+    );
     return decision;
   }
 }
 
-export function enrichRuntimeEventWithControllerTrace(
+export function projectHelarcControllerTraceForEvent(
   event: RuntimeEvent,
-  traceByIteration: ReadonlyMap<number, Metadata>,
-): RuntimeEvent {
-  if (event.name !== "controller.finished" || !isRecord(event.payload)) {
-    return event;
+  traceByIteration: ReadonlyMap<number, HelarcControllerTraceProjection>,
+): HelarcControllerTraceProjection | null {
+  if (event.name !== "controller.finished") {
+    return null;
   }
-
-  const iteration = readTraceNumber(event.payload.iteration);
-  const trace = iteration === null ? undefined : traceByIteration.get(iteration);
-  if (!trace) {
-    return event;
-  }
-
-  return {
-    ...event,
-    payload: { ...event.payload, ...trace },
-  };
+  return traceByIteration.get(event.payload.iteration) ?? null;
 }
 
-function selectControllerTraceMetadata(source: Metadata): Metadata {
-  const metadata: Metadata = {};
-
-  copyString(metadata, source, "source");
-  copyString(metadata, source, "controllerAction");
-  copyString(metadata, source, "promptArchitectureVersion");
-  copyString(metadata, source, "actionContractVersion");
-  copyString(metadata, source, "toolCatalogVersion");
-  copyStringArray(metadata, source, "exposedToolNames");
-  copyString(metadata, source, "requestedToolName");
-  copyString(metadata, source, "patchOperation");
-  copyString(metadata, source, "patchPath");
-
-  return Object.freeze(metadata);
-}
-
-function copyString(target: Metadata, source: Metadata, key: string): void {
-  const value = readTraceString(source[key]);
-  if (value) {
-    target[key] = value;
-  }
-}
-
-function copyStringArray(target: Metadata, source: Metadata, key: string): void {
-  const value = readTraceStringArray(source[key]);
-  if (value.length > 0) {
-    target[key] = value;
-  }
+function createHelarcControllerTraceProjection(
+  iteration: number,
+  source: Metadata,
+): HelarcControllerTraceProjection {
+  return Object.freeze({
+    iteration,
+    source: readTraceString(source.source),
+    controllerAction: readTraceString(source.controllerAction),
+    promptArchitectureVersion: readTraceString(source.promptArchitectureVersion),
+    actionContractVersion: readTraceString(source.actionContractVersion),
+    toolCatalogVersion: readTraceString(source.toolCatalogVersion),
+    exposedToolNames: Object.freeze(readTraceStringArray(source.exposedToolNames)),
+    requestedToolName: readTraceString(source.requestedToolName),
+    patchOperation: readTraceString(source.patchOperation),
+    patchPath: readTraceString(source.patchPath),
+  });
 }
 
 function readTraceString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function readTraceNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isInteger(value) && value > 0
-    ? value
-    : null;
-}
-
 function readTraceStringArray(value: unknown): string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string")
     ? [...value]
     : [];
-}
-
-function isRecord(value: unknown): value is Metadata {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -8,7 +8,10 @@ import {
   type ApprovalDecisionSubmission,
   type ApprovalSubmissionReceipt,
 } from "@agent-anything/permission";
-import { RuntimeEventEmitter } from "@agent-anything/agent-core/events";
+import type {
+  RuntimeEvent,
+  RuntimeEventPublisher,
+} from "@agent-anything/observability/events";
 import {
   toRunCancellationSummary,
   type RunCancellationRequestInput,
@@ -140,7 +143,6 @@ function startHostRun<TOutput>(
     }),
     ...(onListenerFailure === undefined ? {} : { onListenerFailure }),
   });
-  const runtimeEvents = new RuntimeEventEmitter();
   let hostSequence = 0;
   let invocationState: HostInvocationState = "active";
 
@@ -148,14 +150,17 @@ function startHostRun<TOutput>(
     hostSequence += 1;
     return hostSequence;
   };
-  const unsubscribeRuntimeEvents = runtimeEvents.subscribe((event) => {
-    store.apply({
-      kind: "runtime_event",
-      runId,
-      sequence: nextSequence(),
-      occurredAt: event.timestamp,
-      event,
-    });
+  const runtimeEventPublisher: RuntimeEventPublisher = Object.freeze({
+    publish(event: RuntimeEvent) {
+      if (invocationState !== "active") return;
+      store.apply({
+        kind: "runtime_event",
+        runId,
+        sequence: nextSequence(),
+        occurredAt: event.occurredAt,
+        event,
+      });
+    },
   });
   const userApprovalReviewBridge = input.userApprovalReviewBridge ?? null;
   const unsubscribeApprovalReview = userApprovalReviewBridge?.subscribe((review) => {
@@ -178,7 +183,7 @@ function startHostRun<TOutput>(
       input.agent,
       input.runInput,
       input.runConfig,
-      { runtimeEventPublisher: runtimeEvents },
+      { runtimeEventPublisher },
     );
   } catch {
     invocation = Promise.reject(new Error("Runner invocation failed to start."));
@@ -202,7 +207,6 @@ function startHostRun<TOutput>(
         throw new Error(`Host terminal projection was rejected: ${reduction.code}.`);
       }
       invocationState = "settled";
-      unsubscribeRuntimeEvents();
       unsubscribeApprovalReview();
       return Object.freeze({
         kind: "run_result" as const,
@@ -215,7 +219,6 @@ function startHostRun<TOutput>(
     },
     () => {
       invocationState = "start_failed";
-      unsubscribeRuntimeEvents();
       unsubscribeApprovalReview();
       return Object.freeze({
         kind: "start_failure" as const,

@@ -1,21 +1,27 @@
 import type { Controller } from "@agent-anything/runtime/controller";
-import type { RuntimeEvent } from "@agent-anything/agent-core/events";
+import {
+  RUNTIME_EVENT_SCHEMA_VERSION,
+  snapshotRuntimeEventPayload,
+  type RuntimeEvent,
+  type RuntimeEventName,
+  type RuntimeEventPayloadMap,
+} from "@agent-anything/observability/events";
 import type {
   ControllerCallContext,
   ControllerDecision,
   ControllerInput,
 } from "@agent-anything/runtime/controller";
 import { createRunCancellationController } from "@agent-anything/runtime/run";
-import type { Metadata } from "@agent-anything/foundation";
 import { describe, expect, it } from "vitest";
 import {
-  enrichRuntimeEventWithControllerTrace,
   HelarcTracingController,
+  projectHelarcControllerTraceForEvent,
+  type HelarcControllerTraceProjection,
 } from "./HelarcControllerTraceProjection.js";
 
 describe("Helarc controller trace projection", () => {
   it("records allowlisted controller trace metadata by iteration", async () => {
-    const traceByIteration = new Map<number, Metadata>();
+    const traceByIteration = new Map<number, HelarcControllerTraceProjection>();
     const controller = new HelarcTracingController(new FakeController({
       kind: "final_output",
       output: { kind: "propose", summary: "Create file." },
@@ -40,41 +46,67 @@ describe("Helarc controller trace projection", () => {
     await controller.next(createControllerInput(), controllerCallContext());
 
     expect(traceByIteration.get(1)).toEqual({
+      iteration: 1,
       source: "helarc-controller",
       controllerAction: "propose",
       promptArchitectureVersion: "helarc-prompt-v1",
       actionContractVersion: "helarc-action-v1",
       toolCatalogVersion: "helarc-tool-catalog-v1",
       exposedToolNames: ["codeAgent.readFile"],
+      requestedToolName: null,
       patchOperation: "create",
       patchPath: "empty.txt",
     });
   });
 
-  it("enriches only the matching controller.finished event", () => {
-    const traceByIteration = new Map<number, Metadata>([[1, {
+  it("correlates Product trace without decorating the RuntimeEvent", () => {
+    const trace = Object.freeze({
+      iteration: 1,
+      source: null,
       controllerAction: "call_tool",
+      promptArchitectureVersion: null,
+      actionContractVersion: null,
+      toolCatalogVersion: null,
+      exposedToolNames: Object.freeze([]),
       requestedToolName: "codeAgent.readFile",
-    }]]);
-
-    expect(enrichRuntimeEventWithControllerTrace(runtimeEvent(
+      patchOperation: null,
+      patchPath: null,
+    });
+    const traceByIteration = new Map<number, HelarcControllerTraceProjection>([
+      [1, trace],
+    ]);
+    const event = runtimeEvent(
       "controller.finished",
-      { iteration: 1, status: "succeeded" },
-    ), traceByIteration).payload).toMatchObject({
+      {
+        iteration: 1,
+        status: "succeeded",
+        code: null,
+        decisionKind: "actions",
+      },
+    );
+
+    expect(projectHelarcControllerTraceForEvent(event, traceByIteration)).toBe(trace);
+    expect(event.payload).toEqual({
       iteration: 1,
       status: "succeeded",
-      controllerAction: "call_tool",
-      requestedToolName: "codeAgent.readFile",
+      code: null,
+      decisionKind: "actions",
     });
+    expect(Object.isFrozen(event.payload)).toBe(true);
 
-    expect(enrichRuntimeEventWithControllerTrace(runtimeEvent(
+    expect(projectHelarcControllerTraceForEvent(runtimeEvent(
       "run.item.appended",
-      { iteration: 1 },
-    ), traceByIteration).payload).toEqual({ iteration: 1 });
-    expect(enrichRuntimeEventWithControllerTrace(runtimeEvent(
+      { itemId: "item-1", itemKind: "model_output", itemSequence: 1 },
+    ), traceByIteration)).toBeNull();
+    expect(projectHelarcControllerTraceForEvent(runtimeEvent(
       "controller.finished",
-      { iteration: 2 },
-    ), traceByIteration).payload).toEqual({ iteration: 2 });
+      {
+        iteration: 2,
+        status: "succeeded",
+        code: null,
+        decisionKind: "final_output",
+      },
+    ), traceByIteration)).toBeNull();
   });
 });
 
@@ -164,13 +196,18 @@ function createControllerInput(): ControllerInput {
   };
 }
 
-function runtimeEvent(name: RuntimeEvent["name"], payload: Metadata): RuntimeEvent {
+function runtimeEvent<TName extends RuntimeEventName>(
+  name: TName,
+  payload: RuntimeEventPayloadMap[TName],
+): RuntimeEvent {
   return {
+    schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
     id: "event-1",
+    runId: "run-1",
     name,
     taskId: "task-1",
     sequence: 1,
-    timestamp: "2026-07-08T00:00:00.000Z",
-    payload,
-  };
+    occurredAt: "2026-07-08T00:00:00.000Z",
+    payload: snapshotRuntimeEventPayload(name, payload),
+  } as unknown as RuntimeEvent;
 }
