@@ -1,5 +1,8 @@
 import type { Agent, RunInput } from "@agent-anything/foundation";
-import type { RuntimeEventPublisher } from "@agent-anything/observability";
+import type {
+  RunTraceObserver,
+  RuntimeEventPublisher,
+} from "@agent-anything/observability";
 import type { RunResult } from "@agent-anything/runtime/run";
 import { createSystemRetryExecutor } from "../retry/createSystemRetryExecutor.js";
 import { RunExecution } from "./RunExecution.js";
@@ -45,6 +48,10 @@ export class Runner {
         this.dependencies.runtimeEventPublisher,
         options.runtimeEventPublisher,
       ),
+      runTraceObservers(
+        this.dependencies.runTraceObserver,
+        options.runTraceObserver,
+      ),
     ).run();
   }
 }
@@ -59,6 +66,28 @@ function runtimeEventPublishers(
         publisher !== undefined && publishers.indexOf(publisher) === index,
     ),
   );
+}
+
+function runTraceObservers(
+  configured: RunTraceObserver | undefined,
+  invocation: RunTraceObserver | undefined,
+): readonly RunTraceObserver[] {
+  const observers = [invocation, configured].filter(
+    (observer, index, candidates): observer is RunTraceObserver =>
+      observer !== undefined && candidates.indexOf(observer) === index,
+  );
+  for (const observer of observers) {
+    if (
+      typeof observer !== "object" ||
+      observer === null ||
+      typeof observer.observe !== "function"
+    ) {
+      throw new TypeError(
+        "RunTrace observer must implement observe(trace).",
+      );
+    }
+  }
+  return Object.freeze(observers);
 }
 
 function createDefaultIdentity(input: CreateRunnerIdentityInput): string {

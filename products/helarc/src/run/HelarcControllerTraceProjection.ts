@@ -1,5 +1,6 @@
 import type { Metadata } from "@agent-anything/foundation";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
+import { createControllerTurnTraceOperationId } from "@agent-anything/observability/tracing";
 import type {
   Controller,
   ControllerCallContext,
@@ -8,6 +9,8 @@ import type {
 } from "@agent-anything/runtime/controller";
 
 export interface HelarcControllerTraceProjection {
+  readonly runId: string;
+  readonly operationId: string;
   readonly iteration: number;
   readonly source: string | null;
   readonly controllerAction: string | null;
@@ -23,8 +26,8 @@ export interface HelarcControllerTraceProjection {
 export class HelarcTracingController<TOutput = unknown> implements Controller<TOutput> {
   constructor(
     private readonly inner: Controller<TOutput>,
-    private readonly traceByIteration: Map<
-      number,
+    private readonly traceByOperationId: Map<
+      string,
       HelarcControllerTraceProjection
     >,
   ) {}
@@ -35,9 +38,15 @@ export class HelarcTracingController<TOutput = unknown> implements Controller<TO
   ): Promise<ControllerDecision<TOutput>> {
     const decision = await this.inner.next(input, context);
     const metadata = decision.modelItems[0]?.metadata ?? {};
-    this.traceByIteration.set(
-      input.iteration,
-      createHelarcControllerTraceProjection(input.iteration, metadata),
+    const operationId = createControllerTurnTraceOperationId(input.iteration);
+    this.traceByOperationId.set(
+      operationId,
+      createHelarcControllerTraceProjection(
+        input.runId,
+        operationId,
+        input.iteration,
+        metadata,
+      ),
     );
     return decision;
   }
@@ -45,19 +54,29 @@ export class HelarcTracingController<TOutput = unknown> implements Controller<TO
 
 export function projectHelarcControllerTraceForEvent(
   event: RuntimeEvent,
-  traceByIteration: ReadonlyMap<number, HelarcControllerTraceProjection>,
+  traceByOperationId: ReadonlyMap<string, HelarcControllerTraceProjection>,
 ): HelarcControllerTraceProjection | null {
   if (event.name !== "controller.finished") {
     return null;
   }
-  return traceByIteration.get(event.payload.iteration) ?? null;
+  const operationId = createControllerTurnTraceOperationId(
+    event.payload.iteration,
+  );
+  const trace = traceByOperationId.get(operationId) ?? null;
+  return trace?.runId === event.runId && trace.operationId === operationId
+    ? trace
+    : null;
 }
 
 function createHelarcControllerTraceProjection(
+  runId: string,
+  operationId: string,
   iteration: number,
   source: Metadata,
 ): HelarcControllerTraceProjection {
   return Object.freeze({
+    runId,
+    operationId,
     iteration,
     source: readTraceString(source.source),
     controllerAction: readTraceString(source.controllerAction),

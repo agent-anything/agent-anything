@@ -3,6 +3,8 @@ import type {
   AuditPort,
   AuditRecord,
   ObservabilityRecordContext,
+  RunTrace,
+  RunTraceObserver,
   RuntimeEvent,
   TelemetryPort,
   TelemetryRecord,
@@ -148,6 +150,7 @@ describe("Runner", () => {
 
   it("commits safe Retry RunItems before their Runtime notifications", async () => {
     const runtimeEvents: RuntimeEvent[] = [];
+    const traces: RunTrace[] = [];
     const eventEmitter = new FakeRuntimeEventPublisher();
     eventEmitter.subscribe((event) => runtimeEvents.push(event));
     const controller = new ScriptedController([
@@ -199,12 +202,20 @@ describe("Runner", () => {
 
     const result = await createRunner(
       controller,
-      { runtimeEventPublisher: eventEmitter },
+      {
+        runtimeEventPublisher: eventEmitter,
+        runTraceObserver: {
+          observe(trace) {
+            traces.push(trace);
+          },
+        },
+      },
     ).run(
       createAgent(),
       createRunInput(),
       createRunConfig({ retry }),
     );
+    await Promise.resolve();
 
     expect(result.items.map((item) => item.kind)).toEqual([
       "retry_attempt_started",
@@ -225,6 +236,23 @@ describe("Runner", () => {
       expect(itemEventIndex).toBeGreaterThanOrEqual(0);
       expect(retryEventIndex).toBeGreaterThan(itemEventIndex);
     }
+    expect(traces.at(-1)).toMatchObject({
+      status: "complete",
+      issues: [],
+    });
+    expect(traces.at(-1)?.spans).toContainEqual(expect.objectContaining({
+      owner: "retry",
+      operation: "attempt",
+      operationId: "attempt_001",
+      status: "succeeded",
+      attributes: expect.objectContaining({
+        retryOperationId: "retry_001",
+        retryOwner: "provider_request",
+        attemptNumber: 1,
+        outcome: "succeeded",
+        reportedDurationMs: 10,
+      }),
+    }));
   });
 
   it("commits update_plan, exposes it to the next turn, and abandons an active Plan on success", async () => {
@@ -1138,6 +1166,99 @@ describe("Runner", () => {
     }
   });
 
+  it("assembles an optional complete RunTrace from the exact RunResult", async () => {
+    const traces: RunTrace[] = [];
+    const observer: RunTraceObserver = {
+      observe(trace) {
+        traces.push(trace);
+      },
+    };
+    const result = await createRunner(
+      new ScriptedController([finalDecision("Done")]),
+      { runTraceObserver: observer },
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(),
+      { runTraceObserver: observer },
+    );
+    await Promise.resolve();
+
+    const trace = traces.at(-1);
+    expect(result.status).toBe("succeeded");
+    expect(trace).toMatchObject({
+      runId: result.runId,
+      taskId: result.taskId,
+      status: "complete",
+      completedAt: "2026-07-13T00:00:00.000Z",
+      issues: [],
+    });
+    expect(trace?.spans[0]).toMatchObject({
+      owner: "runtime",
+      operation: "run",
+      status: "succeeded",
+      attributes: {
+        itemCount: result.items.length,
+        evidenceCount: result.evidenceRefs.length,
+        artifactCount: result.artifactRefs.length,
+      },
+    });
+    expect(trace?.spans).toContainEqual(expect.objectContaining({
+      owner: "controller",
+      operation: "turn",
+      operationId: "controller-turn:1",
+      status: "succeeded",
+    }));
+    expect(trace?.spans[0]?.links.filter((link) => link.kind === "run_item"))
+      .toHaveLength(result.items.length);
+    expect(Object.isFrozen(trace)).toBe(true);
+  });
+
+  it("isolates RunTrace construction and observer failures from execution", async () => {
+    const asyncObserver: RunTraceObserver = {
+      observe() {
+        return Promise.reject(new Error("Trace export failed."));
+      },
+    };
+    const syncObserver: RunTraceObserver = {
+      observe() {
+        throw new Error("Trace subscriber failed.");
+      },
+    };
+    const result = await createRunner(
+      new ScriptedController([finalDecision("Done")]),
+      {
+        runTraceObserver: syncObserver,
+        createId(input) {
+          if (input.kind === "run_trace") {
+            throw new Error("Trace identity unavailable.");
+          }
+          return `${input.runId}:${input.kind}:${input.sequence}`;
+        },
+      },
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(),
+      { runTraceObserver: asyncObserver },
+    );
+    await Promise.resolve();
+
+    expect(result.status).toBe("succeeded");
+
+    const observerFailureResult = await createRunner(
+      new ScriptedController([finalDecision("Still done")]),
+      { runTraceObserver: syncObserver },
+    ).run(
+      createAgent(),
+      createRunInput("run_trace_observer_failure"),
+      createRunConfig({ runId: "run_trace_observer_failure" }),
+      { runTraceObserver: asyncObserver },
+    );
+    await Promise.resolve();
+    expect(observerFailureResult.status).toBe("succeeded");
+  });
+
   it("maps invalid RunConfig to runtime_invalid_options without invoking Controller", async () => {
     const controller = new ScriptedController([finalDecision("Unused")]);
     const result = await createRunner(controller).run(
@@ -1733,6 +1854,8 @@ describe("Runner sandbox denial escalation", () => {
   it.each(["failed", "timeout", "partial"] as const)(
     "does not treat an ordinary %s ToolResult as sandbox escalation",
     async (toolResultStatus) => {
+      const traces: RunTrace[] = [];
+      const traceEvents = new FakeRuntimeEventPublisher();
       const fixture = createEscalatingExternalActionFixture({
         ordinaryToolResultStatus: toolResultStatus,
       });
@@ -1747,6 +1870,12 @@ describe("Runner sandbox denial escalation", () => {
       ]), {
         actionEnforcementPipeline: fixture.pipeline,
         sandboxExecutionGateway: fixture.gateway,
+        runtimeEventPublisher: traceEvents,
+        runTraceObserver: {
+          observe(trace) {
+            traces.push(trace);
+          },
+        },
       }).run(
         createAgent(),
         createRunInput(),
@@ -1755,6 +1884,7 @@ describe("Runner sandbox denial escalation", () => {
           toolBindings: fixture.toolBindings,
         }),
       );
+      await Promise.resolve();
 
       expect(result.status).toBe("succeeded");
       expect(fixture.providerCalls()).toBe(1);
@@ -1765,6 +1895,18 @@ describe("Runner sandbox denial escalation", () => {
         observation: expect.objectContaining({
           kind: "tool_result",
           result: expect.objectContaining({ status: toolResultStatus }),
+        }),
+      }));
+      expect(traces.at(-1)).toMatchObject({
+        status: "complete",
+        issues: [],
+      });
+      expect(traces.at(-1)?.spans).toContainEqual(expect.objectContaining({
+        owner: "action",
+        operation: "processing",
+        status: toolResultStatus === "partial" ? "succeeded" : "failed",
+        attributes: expect.objectContaining({
+          outcomeStatus: toolResultStatus,
         }),
       }));
     },

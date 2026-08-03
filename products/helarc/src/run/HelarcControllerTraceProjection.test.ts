@@ -6,6 +6,7 @@ import {
   type RuntimeEventName,
   type RuntimeEventPayloadMap,
 } from "@agent-anything/observability/events";
+import { createControllerTurnTraceOperationId } from "@agent-anything/observability/tracing";
 import type {
   ControllerCallContext,
   ControllerDecision,
@@ -20,8 +21,8 @@ import {
 } from "./HelarcControllerTraceProjection.js";
 
 describe("Helarc controller trace projection", () => {
-  it("records allowlisted controller trace metadata by iteration", async () => {
-    const traceByIteration = new Map<number, HelarcControllerTraceProjection>();
+  it("records allowlisted controller trace metadata by Run and operation", async () => {
+    const traceByOperationId = new Map<string, HelarcControllerTraceProjection>();
     const controller = new HelarcTracingController(new FakeController({
       kind: "final_output",
       output: { kind: "propose", summary: "Create file." },
@@ -41,11 +42,13 @@ describe("Helarc controller trace projection", () => {
           rawPrompt: "secret",
         },
       }],
-    }), traceByIteration);
+    }), traceByOperationId);
 
     await controller.next(createControllerInput(), controllerCallContext());
 
-    expect(traceByIteration.get(1)).toEqual({
+    expect(traceByOperationId.get("controller-turn:1")).toEqual({
+      runId: "run-1",
+      operationId: "controller-turn:1",
       iteration: 1,
       source: "helarc-controller",
       controllerAction: "propose",
@@ -61,6 +64,8 @@ describe("Helarc controller trace projection", () => {
 
   it("correlates Product trace without decorating the RuntimeEvent", () => {
     const trace = Object.freeze({
+      runId: "run-1",
+      operationId: "controller-turn:1",
       iteration: 1,
       source: null,
       controllerAction: "call_tool",
@@ -72,8 +77,8 @@ describe("Helarc controller trace projection", () => {
       patchOperation: null,
       patchPath: null,
     });
-    const traceByIteration = new Map<number, HelarcControllerTraceProjection>([
-      [1, trace],
+    const traceByOperationId = new Map<string, HelarcControllerTraceProjection>([
+      [createControllerTurnTraceOperationId(1), trace],
     ]);
     const event = runtimeEvent(
       "controller.finished",
@@ -85,7 +90,7 @@ describe("Helarc controller trace projection", () => {
       },
     );
 
-    expect(projectHelarcControllerTraceForEvent(event, traceByIteration)).toBe(trace);
+    expect(projectHelarcControllerTraceForEvent(event, traceByOperationId)).toBe(trace);
     expect(event.payload).toEqual({
       iteration: 1,
       status: "succeeded",
@@ -97,7 +102,7 @@ describe("Helarc controller trace projection", () => {
     expect(projectHelarcControllerTraceForEvent(runtimeEvent(
       "run.item.appended",
       { itemId: "item-1", itemKind: "model_output", itemSequence: 1 },
-    ), traceByIteration)).toBeNull();
+    ), traceByOperationId)).toBeNull();
     expect(projectHelarcControllerTraceForEvent(runtimeEvent(
       "controller.finished",
       {
@@ -106,7 +111,17 @@ describe("Helarc controller trace projection", () => {
         code: null,
         decisionKind: "final_output",
       },
-    ), traceByIteration)).toBeNull();
+    ), traceByOperationId)).toBeNull();
+    expect(projectHelarcControllerTraceForEvent(runtimeEvent(
+      "controller.finished",
+      {
+        iteration: 1,
+        status: "succeeded",
+        code: null,
+        decisionKind: "actions",
+      },
+      "another-run",
+    ), traceByOperationId)).toBeNull();
   });
 });
 
@@ -199,11 +214,12 @@ function createControllerInput(): ControllerInput {
 function runtimeEvent<TName extends RuntimeEventName>(
   name: TName,
   payload: RuntimeEventPayloadMap[TName],
+  runId = "run-1",
 ): RuntimeEvent {
   return {
     schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
     id: "event-1",
-    runId: "run-1",
+    runId,
     name,
     taskId: "task-1",
     sequence: 1,

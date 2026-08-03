@@ -4,9 +4,10 @@ import * as audit from "./audit/index.js";
 import * as events from "./events/index.js";
 import * as redaction from "./redaction/index.js";
 import * as telemetry from "./telemetry/index.js";
+import * as tracing from "./tracing/index.js";
 
 describe("Observability public API", () => {
-  it("exposes distinct event, audit, telemetry, and redaction surfaces", () => {
+  it("exposes distinct event, audit, telemetry, tracing, and redaction surfaces", () => {
     expect(Object.keys(audit).sort()).toEqual([
       "AUDIT_RECORD_SCHEMA_VERSION",
       "createAuditRecord",
@@ -21,12 +22,18 @@ describe("Observability public API", () => {
       "createTelemetryRecord",
     ]);
     expect(Object.keys(redaction).sort()).toEqual(["Redactor", "defaultRedactionRules"]);
+    expect(Object.keys(tracing).sort()).toEqual([
+      "RUN_TRACE_SCHEMA_VERSION",
+      "RunTraceAssembler",
+      "createControllerTurnTraceOperationId",
+    ]);
     expect(Object.keys(api).sort()).toEqual([
       ...new Set([
         ...Object.keys(audit),
         ...Object.keys(events),
         ...Object.keys(telemetry),
         ...Object.keys(redaction),
+        ...Object.keys(tracing),
       ]),
     ].sort());
   });

@@ -14,6 +14,8 @@ import type {
 import {
   RuntimeEventStream,
   type ObservabilityRecordContext,
+  type RunTraceAssembler,
+  type RunTraceObserver,
   type RuntimeEventName,
   type RuntimeEventPayloadMap,
   type RuntimeEventPublisher,
@@ -175,6 +177,10 @@ import {
   recordSandboxAttemptStarted,
 } from "./RunnerSandboxAttemptObservability.js";
 import {
+  completeRunnerTrace,
+  createRunnerTraceAssembler,
+} from "./RunnerTracing.js";
+import {
   classifyToolResult,
   settleToolResultEvidence,
   type ToolResultClassification,
@@ -268,6 +274,7 @@ export class RunExecution<TOutput> {
   private startedAtMs = 0;
   private terminalResult: RunResult<TOutput> | null = null;
   private eventStream!: RuntimeEventStream;
+  private traceAssembler: RunTraceAssembler | null = null;
   private cancellationListener: (() => void) | null = null;
   private activeOperation: ActiveOperation | null = null;
 
@@ -277,11 +284,14 @@ export class RunExecution<TOutput> {
     private readonly rawInput: RunInput,
     private readonly rawConfig: RunConfig,
     private readonly runtimeEventPublishers: readonly RuntimeEventPublisher[],
+    private readonly runTraceObservers: readonly RunTraceObserver[],
   ) {}
 
   async run(): Promise<RunResult<TOutput>> {
     try {
-      return await this.runInternal();
+      const result = await this.runInternal();
+      completeRunnerTrace(this.traceAssembler, result);
+      return result;
     } finally {
       this.disposeCancellationObservation();
       this.clearActiveOperation();
@@ -291,6 +301,12 @@ export class RunExecution<TOutput> {
   private async runInternal(): Promise<RunResult<TOutput>> {
     this.agent = snapshotAgent(this.rawAgent);
     this.input = snapshotRunInput(this.rawInput);
+    this.traceAssembler = createRunnerTraceAssembler({
+      runId: this.input.runId,
+      taskId: this.input.task.id,
+      observers: this.runTraceObservers,
+      createId: this.dependencies.createId,
+    });
     this.eventStream = new RuntimeEventStream({
       runId: this.input.runId,
       taskId: this.input.task.id,
@@ -304,7 +320,12 @@ export class RunExecution<TOutput> {
         assertNonEmpty(id, "runtime_event id");
         return id;
       },
-      publishers: this.runtimeEventPublishers,
+      publishers: this.traceAssembler === null
+        ? this.runtimeEventPublishers
+        : Object.freeze([
+            this.traceAssembler,
+            ...this.runtimeEventPublishers,
+          ]),
     });
 
     const config = snapshotRunConfig(this.rawConfig, this.input.runId);

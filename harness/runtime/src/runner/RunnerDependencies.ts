@@ -2,6 +2,7 @@ import type { EvidenceBuilderPort } from "@agent-anything/context/evidence";
 import type { EvidencePersistencePort } from "@agent-anything/context/persistence";
 import type {
   AuditPort,
+  RunTraceObserver,
   RuntimeEventPublisher,
   TelemetryPort,
 } from "@agent-anything/observability";
@@ -26,7 +27,9 @@ export type RunnerIdentityKind =
   | "run_permission_grant"
   | "session_authority_record"
   | "policy_amendment_record"
-  | "runtime_event";
+  | "runtime_event"
+  | "run_trace"
+  | "trace_span";
 
 export interface CreateRunnerIdentityInput {
   readonly kind: RunnerIdentityKind;
@@ -41,6 +44,7 @@ export interface RunnerDependencies {
   readonly runtimeEventPublisher?: RuntimeEventPublisher;
   readonly auditPort?: AuditPort;
   readonly telemetryPort?: TelemetryPort;
+  readonly runTraceObserver?: RunTraceObserver;
   readonly actionEnforcementPipeline?: ActionEnforcementPipeline;
   readonly sandboxExecutionGateway?: SandboxExecutionGateway;
   readonly evidenceBuilder?: EvidenceBuilderPort;
@@ -52,6 +56,7 @@ export interface RunnerDependencies {
 
 export interface RunInvocationOptions {
   readonly runtimeEventPublisher?: RuntimeEventPublisher;
+  readonly runTraceObserver?: RunTraceObserver;
 }
 
 export type ResolvedRunnerDependencies = Required<

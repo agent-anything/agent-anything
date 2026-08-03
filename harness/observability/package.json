@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/observability",
   "version": "0.0.0",
-  "description": "Typed RuntimeEvents, audit, telemetry, and redaction contracts for Agent Harness.",
+  "description": "Typed RuntimeEvents, audit, telemetry, tracing, and redaction contracts for Agent Harness.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -25,6 +25,10 @@
     "./events": {
       "types": "./src/events/index.ts",
       "import": "./dist/events/index.js"
+    },
+    "./tracing": {
+      "types": "./src/tracing/index.ts",
+      "import": "./dist/tracing/index.js"
     }
   },
   "files": [

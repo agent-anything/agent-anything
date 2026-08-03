@@ -99,8 +99,8 @@ export async function createHelarcProductComposition(
     commandLimits: input.commandLimits,
   });
   const retryClock = createHelarcRetryClock(input.now);
-  const controllerTraceByIteration = new Map<
-    number,
+  const controllerTraceByOperationId = new Map<
+    string,
     HelarcControllerTraceProjection
   >();
   let productProjection = createHelarcProductRunProjection(input.runId);
@@ -137,7 +137,7 @@ export async function createHelarcProductComposition(
       retryExecutor: createSystemRetryExecutor(retryClock),
       retryClock,
     }),
-    controllerTraceByIteration,
+    controllerTraceByOperationId,
   );
   const patchController = new HelarcPatchActionController({
     controller: providerController,
@@ -189,7 +189,7 @@ export async function createHelarcProductComposition(
     recordRuntimeEvent(event: RuntimeEvent) {
       const controllerTrace = projectHelarcControllerTraceForEvent(
         event,
-        controllerTraceByIteration,
+        controllerTraceByOperationId,
       );
       const activity = mapRuntimeEventToHelarcActivity(event, controllerTrace);
       publishProductUpdate({ kind: "activity_appended", activity });
