@@ -7,6 +7,5 @@ packages:
   - "harness/tools"
   - "harness/safety/*"
   - "harness/integrations/*"
-  - "apps/*"
-  - "products/*"
+  - "products/helarc/*"
   - "packages/*"

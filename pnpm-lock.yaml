@@ -18,41 +18,41 @@ importers:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@25.9.1)(lightningcss@1.32.0)
 
-  apps/helarc-desktop:
+  products/helarc/desktop:
     dependencies:
       '@agent-anything/action-execution':
         specifier: workspace:*
-        version: link:../../harness/safety/action-execution
-      '@agent-anything/code-agent':
+        version: link:../../../harness/safety/action-execution
+      '@agent-anything/helarc-code-agent':
         specifier: workspace:*
-        version: link:../../packages/code-agent
+        version: link:../code-agent
       '@agent-anything/context':
         specifier: workspace:*
-        version: link:../../harness/context
+        version: link:../../../harness/context
       '@agent-anything/foundation':
         specifier: workspace:*
-        version: link:../../harness/foundation
+        version: link:../../../harness/foundation
       '@agent-anything/governance':
         specifier: workspace:*
-        version: link:../../harness/safety/governance
+        version: link:../../../harness/safety/governance
       '@agent-anything/helarc':
         specifier: workspace:*
-        version: link:../../products/helarc
+        version: link:../product
       '@agent-anything/host':
         specifier: workspace:*
-        version: link:../../packages/host
+        version: link:../../../packages/host
       '@agent-anything/model-interaction':
         specifier: workspace:*
-        version: link:../../harness/model-interaction
+        version: link:../../../harness/model-interaction
       '@agent-anything/observability':
         specifier: workspace:*
-        version: link:../../harness/observability
+        version: link:../../../harness/observability
       '@agent-anything/permission':
         specifier: workspace:*
-        version: link:../../harness/safety/permission
+        version: link:../../../harness/safety/permission
       '@agent-anything/runtime':
         specifier: workspace:*
-        version: link:../../harness/runtime
+        version: link:../../../harness/runtime
       lucide-react:
         specifier: ^1.21.0
         version: 1.21.0(react@19.2.7)
@@ -248,33 +248,33 @@ importers:
         specifier: ^25.9.1
         version: 25.9.1
 
-  packages/code-agent:
+  products/helarc/code-agent:
     dependencies:
       '@agent-anything/action-execution':
         specifier: workspace:*
-        version: link:../../harness/safety/action-execution
+        version: link:../../../harness/safety/action-execution
       '@agent-anything/foundation':
         specifier: workspace:*
-        version: link:../../harness/foundation
+        version: link:../../../harness/foundation
       '@agent-anything/governance':
         specifier: workspace:*
-        version: link:../../harness/safety/governance
+        version: link:../../../harness/safety/governance
       '@agent-anything/tools':
         specifier: workspace:*
-        version: link:../../harness/tools
+        version: link:../../../harness/tools
     devDependencies:
       '@agent-anything/context':
         specifier: workspace:*
-        version: link:../../harness/context
+        version: link:../../../harness/context
       '@agent-anything/permission':
         specifier: workspace:*
-        version: link:../../harness/safety/permission
+        version: link:../../../harness/safety/permission
       '@agent-anything/runtime':
         specifier: workspace:*
-        version: link:../../harness/runtime
+        version: link:../../../harness/runtime
       '@agent-anything/testing':
         specifier: workspace:*
-        version: link:../testing
+        version: link:../../../packages/testing
       '@types/node':
         specifier: ^25.9.1
         version: 25.9.1
@@ -325,35 +325,35 @@ importers:
         specifier: workspace:*
         version: link:../../harness/safety/permission
 
-  products/helarc:
+  products/helarc/product:
     dependencies:
       '@agent-anything/action-execution':
         specifier: workspace:*
-        version: link:../../harness/safety/action-execution
-      '@agent-anything/code-agent':
+        version: link:../../../harness/safety/action-execution
+      '@agent-anything/helarc-code-agent':
         specifier: workspace:*
-        version: link:../../packages/code-agent
+        version: link:../code-agent
       '@agent-anything/foundation':
         specifier: workspace:*
-        version: link:../../harness/foundation
+        version: link:../../../harness/foundation
       '@agent-anything/governance':
         specifier: workspace:*
-        version: link:../../harness/safety/governance
+        version: link:../../../harness/safety/governance
       '@agent-anything/host':
         specifier: workspace:*
-        version: link:../../packages/host
+        version: link:../../../packages/host
       '@agent-anything/model-interaction':
         specifier: workspace:*
-        version: link:../../harness/model-interaction
+        version: link:../../../harness/model-interaction
       '@agent-anything/observability':
         specifier: workspace:*
-        version: link:../../harness/observability
+        version: link:../../../harness/observability
       '@agent-anything/runtime':
         specifier: workspace:*
-        version: link:../../harness/runtime
+        version: link:../../../harness/runtime
       '@agent-anything/tools':
         specifier: workspace:*
-        version: link:../../harness/tools
+        version: link:../../../harness/tools
     devDependencies:
       '@types/node':
         specifier: ^25.9.1

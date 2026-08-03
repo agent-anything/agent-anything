@@ -14,12 +14,6 @@ export const PLATFORM_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/governance",
     "@agent-anything/permission",
   ],
-  "@agent-anything/code-agent": [
-    "@agent-anything/action-execution",
-    "@agent-anything/foundation",
-    "@agent-anything/governance",
-    "@agent-anything/tools",
-  ],
 });
 
 export const PLATFORM_PACKAGE_NAMES = Object.freeze(Object.keys(PLATFORM_PRODUCTION_DEPENDENCIES));
@@ -111,7 +105,17 @@ export function evaluateRepositoryDirection({ owner, imported }) {
   if (owner.kind === "product" && imported.kind === "app") {
     return [violation("repository_direction", `Product package must not depend on app package '${imported.name}'.`)];
   }
-  if (owner.kind === "product" && imported.kind === "product") {
+  if (
+    owner.kind === "product" &&
+    imported.kind === "product" &&
+    (
+      owner.productId === null ||
+      owner.productId === undefined ||
+      imported.productId === null ||
+      imported.productId === undefined ||
+      owner.productId !== imported.productId
+    )
+  ) {
     return [violation("repository_direction", `Product package must not depend on another product package '${imported.name}'.`)];
   }
   if (owner.kind === "app" && imported.kind === "app") {

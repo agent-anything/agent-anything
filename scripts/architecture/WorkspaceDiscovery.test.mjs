@@ -28,6 +28,29 @@ test("classifies Harness packages from the Harness repository root", () => {
   });
 });
 
+test("classifies explicit packages under one Product grouping", () => {
+  withWorkspace((root) => {
+    writeFileSync(
+      join(root, "pnpm-workspace.yaml"),
+      'packages:\n  - "products/helarc/*"\n',
+    );
+    createPackage(root, "products/helarc/product", "@test/helarc");
+    createPackage(root, "products/helarc/desktop", "@test/helarc-desktop");
+
+    assert.deepEqual(
+      discoverWorkspacePackages(root).map(({ kind, name, productId }) => ({
+        kind,
+        name,
+        productId,
+      })),
+      [
+        { kind: "product", name: "@test/helarc-desktop", productId: "helarc" },
+        { kind: "product", name: "@test/helarc", productId: "helarc" },
+      ],
+    );
+  });
+});
+
 test("rejects unsupported workspace patterns", () => {
   withWorkspace((root) => {
     writeFileSync(join(root, "pnpm-workspace.yaml"), 'packages:\n  - "packages/**"\n');

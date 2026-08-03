@@ -59,7 +59,13 @@ export function discoverWorkspacePackages(repoRoot) {
     }
 
     namesSeen.set(manifest.name, root);
-    packages.push({ root: normalizedRoot, name: manifest.name, kind, manifest });
+    packages.push({
+      root: normalizedRoot,
+      name: manifest.name,
+      kind,
+      productId: resolveProductId(repoRoot, root),
+      manifest,
+    });
   }
 
   if (issues.length > 0) {
@@ -124,9 +130,14 @@ export function classifyWorkspacePackage(repoRoot, packageRoot) {
     /^harness\/(?:safety|integrations)\/[^/]+$/.test(path)
   ) return "harness";
   if (/^packages\/[^/]+$/.test(path)) return "platform";
-  if (/^products\/[^/]+$/.test(path)) return "product";
+  if (/^products\/[^/]+\/[^/]+$/.test(path)) return "product";
   if (/^apps\/[^/]+$/.test(path)) return "app";
   throw new Error(`Workspace package location '${path}' is not a harness, transitional package, product, or app package.`);
+}
+
+function resolveProductId(repoRoot, packageRoot) {
+  const match = /^products\/([^/]+)\/[^/]+$/.exec(display(repoRoot, packageRoot));
+  return match?.[1] ?? null;
 }
 
 function issue(rule, file, message) {

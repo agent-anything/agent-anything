@@ -48,12 +48,12 @@ const packageExportKeys = {
   "harness/safety/action-execution": ["."],
   "harness/runtime": [".", "./controller", "./plan", "./retry", "./run"],
   "packages/host": ["."],
-  "packages/code-agent": [".", "./command", "./filesystem", "./patch", "./workspace"],
+  "products/helarc/code-agent": [".", "./command", "./filesystem", "./patch", "./workspace"],
   "harness/integrations/remote": [".", "./action", "./tools"],
   "harness/integrations/mcp": ["."],
   "harness/integrations/plugins": ["."],
   "harness/integrations/enterprise-storage": [".", "./evidence"],
-  "products/helarc": ["."],
+  "products/helarc/product": ["."],
 };
 
 for (const [packagePath, expectedKeys] of Object.entries(packageExportKeys)) {
@@ -422,7 +422,7 @@ const expectedValueExports = {
     "snapshotHostCancellation",
     "snapshotHostCommand",
   ],
-  "@agent-anything/code-agent": [
+  "@agent-anything/helarc-code-agent": [
     "CODE_AGENT_CREATE_FILE_ACTION",
     "CODE_AGENT_DELETE_FILE_ACTION",
     "CODE_AGENT_LIST_FILES_ACTION",
@@ -444,8 +444,8 @@ const expectedValueExports = {
     "rejectPatch",
     "resolveWorkspacePath",
   ],
-  "@agent-anything/code-agent/workspace": ["resolveWorkspacePath"],
-  "@agent-anything/code-agent/filesystem": [
+  "@agent-anything/helarc-code-agent/workspace": ["resolveWorkspacePath"],
+  "@agent-anything/helarc-code-agent/filesystem": [
     "CODE_AGENT_CREATE_FILE_ACTION",
     "CODE_AGENT_DELETE_FILE_ACTION",
     "CODE_AGENT_LIST_FILES_ACTION",
@@ -457,7 +457,7 @@ const expectedValueExports = {
     "createCodeAgentFileActionCapability",
     "defaultCodeAgentFileLimits",
   ],
-  "@agent-anything/code-agent/command": [
+  "@agent-anything/helarc-code-agent/command": [
     "CODE_AGENT_RUN_COMMAND_ACTION",
     "createCodeAgentCommandActionCapability",
     "defaultCodeAgentCommandLimits",
@@ -498,7 +498,7 @@ const expectedValueExports = {
     "selectHelarcTaskTemplate",
     "selectHelarcWorkspaceProfile",
   ],
-  "@agent-anything/code-agent/patch": [
+  "@agent-anything/helarc-code-agent/patch": [
     "PatchWorkflowError",
     "acceptPatch",
     "createPatchProposal",
@@ -584,8 +584,8 @@ const removedOrPrivateSpecifiers = [
   "@agent-anything/host/HostRuntime",
   "@agent-anything/governance/identity",
   "@agent-anything/governance/workspace",
-  "@agent-anything/code-agent/file-actions",
-  "@agent-anything/code-agent/command-actions",
+  "@agent-anything/helarc-code-agent/file-actions",
+  "@agent-anything/helarc-code-agent/command-actions",
 ];
 
 checkBuiltSurfaces(
@@ -603,7 +603,7 @@ checkBuiltSurfaces(
 checkBuiltSurfaces(
   expectedValueExports,
   removedOrPrivateSpecifiers,
-  join(repoRoot, "apps/helarc-desktop"),
+  join(repoRoot, "products/helarc/desktop"),
 );
 checkBuiltSurfaces(
   expectedRemoteIntegrationValueExports,

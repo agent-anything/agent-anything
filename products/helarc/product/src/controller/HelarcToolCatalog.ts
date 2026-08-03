@@ -1,0 +1,163 @@
+import type { ControllerInput } from "@agent-anything/runtime/controller";
+import {
+  CODE_AGENT_LIST_FILES_ACTION,
+  CODE_AGENT_READ_FILE_ACTION,
+  CODE_AGENT_SEARCH_FILES_ACTION,
+} from "@agent-anything/helarc-code-agent/filesystem";
+import { CODE_AGENT_RUN_COMMAND_ACTION } from "@agent-anything/helarc-code-agent/command";
+import type { Metadata } from "@agent-anything/foundation";
+import type { ToolAnnotations, ToolDescriptor } from "@agent-anything/tools";
+
+export type HelarcToolCatalogMode = "read-only" | "shell-enabled";
+
+export interface HelarcToolCatalogItem {
+  name: string;
+  purpose: string;
+  annotations: ToolAnnotations;
+  permission: string;
+}
+
+export interface HelarcToolDescriptorSummary {
+  name: string;
+  description?: string | null;
+  annotations: ToolAnnotations;
+}
+
+export interface HelarcToolCatalog {
+  mode: HelarcToolCatalogMode;
+  tools: HelarcToolCatalogItem[];
+}
+
+export interface HelarcToolCatalogMetadata {
+  mode: HelarcToolCatalogMode;
+}
+
+export const HELARC_TOOL_CATALOG_METADATA_KEY = "helarcToolCatalog";
+
+const HELARC_TOOL_ORDER = [
+  CODE_AGENT_LIST_FILES_ACTION,
+  CODE_AGENT_READ_FILE_ACTION,
+  CODE_AGENT_SEARCH_FILES_ACTION,
+  CODE_AGENT_RUN_COMMAND_ACTION,
+] as const;
+
+const HELARC_TOOL_PURPOSES: Record<string, string> = {
+  [CODE_AGENT_LIST_FILES_ACTION]: "List files inside a declared task workspace root.",
+  [CODE_AGENT_READ_FILE_ACTION]: "Read one file inside a declared task workspace root.",
+  [CODE_AGENT_SEARCH_FILES_ACTION]: "Search text across files inside a declared task workspace root.",
+  [CODE_AGENT_RUN_COMMAND_ACTION]: "Run a process inside a declared task workspace root.",
+};
+
+export function createHelarcToolCatalogFromDescriptors(input: {
+  mode: HelarcToolCatalogMode;
+  tools: readonly HelarcToolDescriptorSummary[];
+}): HelarcToolCatalog {
+  const byName = new Map(input.tools.map((tool) => [tool.name, tool]));
+  const tools = HELARC_TOOL_ORDER
+    .map((name) => byName.get(name))
+    .filter((tool): tool is HelarcToolDescriptorSummary => tool !== undefined)
+    .map((tool) => createCatalogItem(tool));
+
+  return {
+    mode: input.mode,
+    tools,
+  };
+}
+
+export function createDefaultHelarcToolCatalog(): HelarcToolCatalog {
+  return createHelarcToolCatalogFromDescriptors({
+    mode: "read-only",
+    tools: [
+      {
+        name: CODE_AGENT_LIST_FILES_ACTION,
+        description: HELARC_TOOL_PURPOSES[CODE_AGENT_LIST_FILES_ACTION],
+        annotations: { readOnlyHint: true },
+      },
+      {
+        name: CODE_AGENT_READ_FILE_ACTION,
+        description: HELARC_TOOL_PURPOSES[CODE_AGENT_READ_FILE_ACTION],
+        annotations: { readOnlyHint: true },
+      },
+      {
+        name: CODE_AGENT_SEARCH_FILES_ACTION,
+        description: HELARC_TOOL_PURPOSES[CODE_AGENT_SEARCH_FILES_ACTION],
+        annotations: { readOnlyHint: true },
+      },
+    ],
+  });
+}
+
+export function createHelarcToolCatalogMetadata(input: {
+  mode: HelarcToolCatalogMode;
+}): HelarcToolCatalogMetadata {
+  return {
+    mode: input.mode,
+  };
+}
+
+export function readHelarcToolCatalog(input: ControllerInput): HelarcToolCatalog {
+  const metadata = input.metadata[HELARC_TOOL_CATALOG_METADATA_KEY];
+  const catalogMetadata = parseHelarcToolCatalogMetadata(metadata);
+
+  return createHelarcToolCatalogFromDescriptors({
+    mode: catalogMetadata?.mode ?? inferCatalogMode(input.toolCatalog.tools),
+    tools: input.toolCatalog.tools,
+  });
+}
+
+export function buildHelarcToolCatalogText(catalog: HelarcToolCatalog): string {
+  const lines = [
+    `Active tool catalog (${catalog.mode}):`,
+    ...catalog.tools.map((tool) => (
+      `- ${tool.name}: ${tool.purpose} Permission: ${tool.permission}.`
+    )),
+  ];
+
+  if (catalog.mode === "read-only") {
+    lines.push("File creation, update, and deletion are not tool calls in read-only mode; use propose.");
+  }
+
+  if (catalog.mode === "shell-enabled") {
+    lines.push("Use codeAgent.runCommand only when command execution is necessary and cannot be represented as a patch proposal.");
+  }
+
+  return lines.join("\n");
+}
+
+function createCatalogItem(
+  tool: HelarcToolDescriptorSummary,
+): HelarcToolCatalogItem {
+  return {
+    name: tool.name,
+    purpose: tool.description ?? HELARC_TOOL_PURPOSES[tool.name] ?? "Execute the registered tool.",
+    annotations: tool.annotations,
+    permission: tool.name === CODE_AGENT_RUN_COMMAND_ACTION
+      ? "Assessed from the exact process action and current run authority"
+      : "Assessed from canonical filesystem effects and current run authority",
+  };
+}
+
+function parseHelarcToolCatalogMetadata(value: unknown): HelarcToolCatalogMetadata | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const mode = value.mode;
+  if (mode !== "read-only" && mode !== "shell-enabled") {
+    return null;
+  }
+
+  return { mode };
+}
+
+function inferCatalogMode(
+  tools: readonly Pick<ToolDescriptor, "name">[],
+): HelarcToolCatalogMode {
+  return tools.some((tool) => tool.name === CODE_AGENT_RUN_COMMAND_ACTION)
+    ? "shell-enabled"
+    : "read-only";
+}
+
+function isRecord(value: unknown): value is Metadata {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

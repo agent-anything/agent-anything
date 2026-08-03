@@ -37,6 +37,7 @@ for (const discovered of discoveredPackages) {
     root,
     name: packageJson.name,
     kind: discovered.kind,
+    productId: discovered.productId,
     exports: exportedSpecifiers(packageJson),
     dependencies: new Set(Object.keys(packageJson.dependencies ?? {})),
     devDependencies: new Set(Object.keys(packageJson.devDependencies ?? {})),
@@ -130,7 +131,7 @@ function checkPublicApiImport(file, owner, statement, specifier) {
   ]);
   const packageName = parseWorkspaceSpecifier(specifier).packageName;
 
-  if (specifier === "@agent-anything/code-agent" && owner.name !== packageName) {
+  if (specifier === "@agent-anything/helarc-code-agent" && owner.name !== packageName) {
     report("capability_root_import", { file, owner, imported: packageName, message: `Must import a focused capability subpath instead of '${specifier}'.` });
   }
 
@@ -276,9 +277,9 @@ function checkArchitectureSource(file, text, isTestOnly) {
     report("removed_session_ipc", { file, message: "Retains a removed Session-named IPC channel." });
   }
   if (
-    rel.startsWith("products/helarc/src/session-history/") ||
-    rel.startsWith("apps/helarc-desktop/src/main/session-history/") ||
-    rel === "apps/helarc-desktop/src/main/thread/HelarcThreadStore.ts"
+    rel.startsWith("products/helarc/product/src/session-history/") ||
+    rel.startsWith("products/helarc/desktop/src/main/session-history/") ||
+    rel === "products/helarc/desktop/src/main/thread/HelarcThreadStore.ts"
   ) {
     report("removed_history_path", { file, message: "Restores a removed legacy history source path." });
   }
@@ -304,9 +305,9 @@ function checkArchitectureSource(file, text, isTestOnly) {
 }
 
 function checkDesktopSafeSurface(rel, text) {
-  const isRenderer = rel.startsWith("apps/helarc-desktop/src/renderer/");
-  const isShared = rel.startsWith("apps/helarc-desktop/src/shared/");
-  const isPreload = rel.startsWith("apps/helarc-desktop/src/preload/");
+  const isRenderer = rel.startsWith("products/helarc/desktop/src/renderer/");
+  const isShared = rel.startsWith("products/helarc/desktop/src/shared/");
+  const isPreload = rel.startsWith("products/helarc/desktop/src/preload/");
   if (!isRenderer && !isShared && !isPreload) return;
 
   if (/["']@agent-anything\//.test(text)) {
@@ -336,13 +337,13 @@ function checkWorkspaceImport({ file, owner, imported, isTestOnly }) {
   const rel = display(file);
 
   if (
-    rel.startsWith("apps/helarc-desktop/src/renderer/") &&
+    rel.startsWith("products/helarc/desktop/src/renderer/") &&
     imported.packageName.startsWith("@agent-anything/")
   ) {
     report("desktop_renderer_workspace_import", { file, owner, imported: imported.packageName, message: "Renderer must consume workspace contracts through Desktop shared IPC." });
   }
   if (
-    rel.startsWith("apps/helarc-desktop/src/shared/") &&
+    rel.startsWith("products/helarc/desktop/src/shared/") &&
     imported.packageName.startsWith("@agent-anything/")
   ) {
     report("desktop_shared_workspace_import", { file, owner, imported: imported.packageName, message: "Desktop shared IPC must own its DTOs instead of importing workspace Contracts." });
@@ -400,22 +401,22 @@ function checkRelativeImport(file, owner, specifier) {
 
   const rel = display(file);
   const resolvedPath = normalized(resolved);
-  const desktopSource = normalized(resolve(repoRoot, "apps/helarc-desktop/src"));
+  const desktopSource = normalized(resolve(repoRoot, "products/helarc/desktop/src"));
   if (
-    rel.startsWith("apps/helarc-desktop/src/renderer/") &&
+    rel.startsWith("products/helarc/desktop/src/renderer/") &&
     !resolvedPath.startsWith(`${desktopSource}/renderer/`) &&
     !resolvedPath.startsWith(`${desktopSource}/shared/`)
   ) {
     report("desktop_renderer_relative_import", { file, owner, message: `Renderer relative import must remain in renderer or shared IPC: '${specifier}'.` });
   }
   if (
-    rel.startsWith("apps/helarc-desktop/src/shared/") &&
+    rel.startsWith("products/helarc/desktop/src/shared/") &&
     !resolvedPath.startsWith(`${desktopSource}/shared/`)
   ) {
     report("desktop_shared_relative_import", { file, owner, message: `Desktop shared IPC relative import leaves the shared surface: '${specifier}'.` });
   }
   if (
-    rel.startsWith("apps/helarc-desktop/src/preload/") &&
+    rel.startsWith("products/helarc/desktop/src/preload/") &&
     !resolvedPath.startsWith(`${desktopSource}/preload/`) &&
     !resolvedPath.startsWith(`${desktopSource}/shared/`)
   ) {
@@ -477,7 +478,7 @@ function checkPackageCycles() {
 function checkHelarcSourceCycles() {
   const helarc = packageByName.get("@agent-anything/helarc");
   if (!helarc) {
-    report("helarc_package_missing", { file: join(repoRoot, "products/helarc/package.json"), owner: "@agent-anything/helarc", message: "Required Helarc product package is missing." });
+    report("helarc_package_missing", { file: join(repoRoot, "products/helarc/product/package.json"), owner: "@agent-anything/helarc", message: "Required Helarc product package is missing." });
     return;
   }
 
