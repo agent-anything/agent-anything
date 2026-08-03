@@ -395,7 +395,7 @@ export class RunExecution<TOutput> {
       activeAgentId: this.state.activeAgentId,
     });
 
-    const startErrors = await this.recordLifecycle("started", "succeeded");
+    const startErrors = await this.recordLifecycle("started");
     if (startErrors.length > 0) {
       const cancellationRequest = this.cancellationRequest();
       if (cancellationRequest !== null) {
@@ -1689,7 +1689,7 @@ export class RunExecution<TOutput> {
         auditRequirement: this.config.audit,
         telemetryRequirement: this.config.telemetry,
         context: Object.freeze({
-          purpose: "finalization" as const,
+          purpose: "runtime" as const,
           signal: scope.context.signal,
           deadlineAt: scope.context.deadlineAt,
         }),
@@ -2367,7 +2367,7 @@ export class RunExecution<TOutput> {
         terminalResult: await this.fail(error, infrastructureFailureCode(error)),
       };
     }
-    this.commitSettledToolState([
+    this.commitAndPublishSettledToolState([
       (base) => Object.freeze({
         ...base,
         kind: "sandbox_attempt_started" as const,
@@ -2410,21 +2410,13 @@ export class RunExecution<TOutput> {
     }
 
     const resolution = sandboxAttemptResolution(sandboxAttempt, execution, this.now());
-    this.commitSettledToolState([
+    const resolutionItems = this.commitSettledToolState([
       (base) => Object.freeze({
         ...base,
         kind: "sandbox_attempt_resolved" as const,
         resolution,
       }),
     ], {});
-    this.emit("sandbox.attempt.resolved", {
-      actionId: sandboxAttempt.actionId,
-      attemptId: sandboxAttempt.id,
-      ordinal: sandboxAttempt.ordinal,
-      enforcement: sandboxAttempt.enforcement,
-      outcome: resolution.outcome,
-      code: resolution.code,
-    });
 
     let resolutionErrors: readonly RuntimeError[];
     try {
@@ -2452,6 +2444,7 @@ export class RunExecution<TOutput> {
       );
     } catch (error) {
       if (error instanceof OperationSettlementTimeoutError) {
+        this.publishSandboxAttemptResolution(resolutionItems, resolution);
         if (execution.status === "executed" && retainedToolOutcome !== null) {
           this.publishExternalToolOutcome(
             action,
@@ -2478,6 +2471,7 @@ export class RunExecution<TOutput> {
         { actionId: action.id, attemptId: sandboxAttempt.id },
       )]);
     }
+    this.publishSandboxAttemptResolution(resolutionItems, resolution);
     if (resolutionErrors.length > 0) {
       const error = resolutionErrors[0]!;
       if (execution.status === "executed" && retainedToolOutcome !== null) {
@@ -2550,6 +2544,21 @@ export class RunExecution<TOutput> {
       invalidatesBatch: true,
       terminalResult: await this.fail(execution.error, "sandbox_enforcement_failed"),
     };
+  }
+
+  private publishSandboxAttemptResolution(
+    items: readonly RunItem<TOutput>[],
+    resolution: SandboxAttemptResolutionSummary,
+  ): void {
+    this.publishItems(items);
+    this.emit("sandbox.attempt.resolved", {
+      actionId: resolution.actionId,
+      attemptId: resolution.attemptId,
+      ordinal: resolution.ordinal,
+      enforcement: resolution.enforcement,
+      outcome: resolution.outcome,
+      code: resolution.code,
+    }, resolution.settledAt);
   }
 
   private async settleExecutedActionResult(
@@ -2780,7 +2789,7 @@ export class RunExecution<TOutput> {
           "Sandbox escalation can only be proposed for file-system or network effects.",
         );
       }
-      this.commitSettledToolState([
+      this.commitAndPublishSettledToolState([
         (base) => Object.freeze({
           ...base,
           kind: "sandbox_escalation_proposed" as const,
@@ -3375,7 +3384,6 @@ export class RunExecution<TOutput> {
     try {
       finalizationErrors = await this.recordLifecycle(
         candidate.status,
-        auditOutcome(candidate.status),
         skipOwners,
         finalizationObservabilityContext(scope.context),
       );
@@ -3508,7 +3516,7 @@ export class RunExecution<TOutput> {
       readonly evidenceRefs?: readonly EvidenceRef[];
       readonly artifactRefs?: readonly ArtifactRef[];
     },
-  ): void {
+  ): readonly RunItem<TOutput>[] {
     if (this.state.status !== "running" && this.state.status !== "cancelling") {
       throw new Error(`Cannot commit a settled Tool outcome while Run is ${this.state.status}.`);
     }
@@ -3521,7 +3529,21 @@ export class RunExecution<TOutput> {
       artifactRefs: appendUnique(this.state.artifactRefs, update.artifactRefs ?? []),
       items: Object.freeze([...this.state.items, ...items]),
     }));
+    return items;
+  }
+
+  private commitAndPublishSettledToolState(
+    drafts: readonly RunItemDraft<TOutput>[],
+    update: {
+      readonly context?: Context;
+      readonly counters?: RunCounters;
+      readonly evidenceRefs?: readonly EvidenceRef[];
+      readonly artifactRefs?: readonly ArtifactRef[];
+    },
+  ): readonly RunItem<TOutput>[] {
+    const items = this.commitSettledToolState(drafts, update);
     this.publishItems(items);
+    return items;
   }
 
   private createRetryEventSink(
@@ -3884,14 +3906,12 @@ export class RunExecution<TOutput> {
 
   private async recordLifecycle(
     phase: "started" | "succeeded" | "blocked" | "failed" | "cancelled",
-    outcome: "succeeded" | "failed" | "blocked" | "cancelled",
     skipOwners: ReadonlySet<RuntimeError["owner"]> = new Set(),
     context: ObservabilityRecordContext = this.runtimeObservabilityContext(),
   ): Promise<RuntimeError[]> {
     const timestamp = this.now();
     return recordRunnerLifecycle({
       phase,
-      outcome,
       runId: this.state.runId,
       taskId: this.state.taskId,
       agentId: this.state.activeAgentId,
@@ -4236,7 +4256,7 @@ function infrastructureFailureCode(error: RuntimeError): RunFailureCode {
   return error.owner === "audit"
     ? "audit_required_failed"
     : error.owner === "telemetry"
-    ? "runtime_telemetry_required_failed"
+    ? "telemetry_required_failed"
     : failureCode(error);
 }
 
@@ -4251,12 +4271,6 @@ function asErrorTuple(
     throw new TypeError("At least one RuntimeError is required.");
   }
   return Object.freeze([...errors]) as unknown as readonly [RuntimeError, ...RuntimeError[]];
-}
-
-function auditOutcome(
-  status: TerminalCandidate<unknown>["status"],
-): "succeeded" | "failed" | "blocked" | "cancelled" {
-  return status;
 }
 
 function assertStateTransition<TOutput>(

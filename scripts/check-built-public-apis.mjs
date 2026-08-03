@@ -221,16 +221,24 @@ const expectedLowerValueExports = {
     "validateSessionAuthorityRecord",
   ],
   "@agent-anything/observability": [
+    "AUDIT_RECORD_SCHEMA_VERSION",
     "RUNTIME_EVENT_SCHEMA_VERSION",
     "Redactor",
     "RuntimeEventStream",
+    "TELEMETRY_RECORD_SCHEMA_VERSION",
     "createAuditRecord",
     "createTelemetryRecord",
     "defaultRedactionRules",
     "snapshotRuntimeEventPayload",
   ],
-  "@agent-anything/observability/audit": ["createAuditRecord"],
-  "@agent-anything/observability/telemetry": ["createTelemetryRecord"],
+  "@agent-anything/observability/audit": [
+    "AUDIT_RECORD_SCHEMA_VERSION",
+    "createAuditRecord",
+  ],
+  "@agent-anything/observability/telemetry": [
+    "TELEMETRY_RECORD_SCHEMA_VERSION",
+    "createTelemetryRecord",
+  ],
   "@agent-anything/observability/redaction": ["Redactor", "defaultRedactionRules"],
   "@agent-anything/model-interaction": [
     "createProviderAttemptInterruption",

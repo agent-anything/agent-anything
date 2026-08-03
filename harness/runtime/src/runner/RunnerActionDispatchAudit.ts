@@ -10,8 +10,9 @@ import type {
 import type { ActionDispatchPlan } from "@agent-anything/action-execution";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
 import type { RuntimeError } from "@agent-anything/foundation";
+import { settleRunnerRecordingGate } from "./RunnerRecordingGate.js";
 
-export async function recordActionDispatchAuthorizationAudit(input: {
+interface RecordActionDispatchAuthorizationAuditInput {
   readonly plan: ActionDispatchPlan;
   readonly taskId: string;
   readonly workspace: RunWorkspace | null;
@@ -20,7 +21,26 @@ export async function recordActionDispatchAuthorizationAudit(input: {
   readonly requirement: RunInfrastructureRequirement;
   readonly signal: AbortSignal;
   readonly port?: AuditPort;
-}): Promise<RuntimeError | null> {
+}
+
+export async function recordActionDispatchAuthorizationAudit(
+  input: RecordActionDispatchAuthorizationAuditInput,
+): Promise<RuntimeError | null> {
+  const errors = await settleRunnerRecordingGate({
+    purpose: "runtime",
+    signal: input.signal,
+    recorders: [{
+      owner: "audit",
+      requirement: input.requirement,
+      execute: () => recordAuthorizationAudit(input),
+    }],
+  });
+  return errors[0] ?? null;
+}
+
+async function recordAuthorizationAudit(
+  input: RecordActionDispatchAuthorizationAuditInput,
+): Promise<RuntimeError | null> {
   if (input.signal.aborted) throw input.signal.reason;
   if (input.port === undefined) {
     return input.requirement === "required"
@@ -31,25 +51,25 @@ export async function recordActionDispatchAuthorizationAudit(input: {
     await recordWithinSignal(
       () => input.port!.record(createAuditRecord({
         id: `${input.plan.runId}:audit:action:${input.plan.actionId}:${input.plan.attemptOrdinal}:authorized`,
+        runId: input.plan.runId,
         taskId: input.taskId,
         eventName: "action.dispatch_authorized",
         timestamp: input.timestamp,
-        actorRef: input.identity.id,
+        actor: {
+          kind: input.identity.kind,
+          id: input.identity.id,
+        },
         workspaceId: input.workspace?.primary.id ?? null,
         subject: {
           kind: input.identity.kind,
           id: input.identity.id,
-          metadata: {},
         },
         action: "action.dispatch_authorized",
         target: {
           kind: "action",
           id: input.plan.actionId,
-          metadata: {
-            runId: input.plan.runId,
-            actionName: input.plan.actionName,
-            actionFingerprint: input.plan.actionFingerprint,
-          },
+          actionName: input.plan.actionName,
+          actionFingerprint: input.plan.actionFingerprint,
         },
         outcome: "succeeded",
         payload: {
@@ -59,7 +79,6 @@ export async function recordActionDispatchAuthorizationAudit(input: {
           attemptOrdinal: input.plan.attemptOrdinal,
           dispatchPlanFingerprint: input.plan.dispatchPlanFingerprint,
         },
-        metadata: { source: "runner" },
       }), Object.freeze({
         purpose: "runtime" as const,
         signal: input.signal,

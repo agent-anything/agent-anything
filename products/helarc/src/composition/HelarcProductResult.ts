@@ -210,7 +210,11 @@ function safeProductErrorMessage(code: string): string {
   if (code.startsWith("sandbox_") || code.startsWith("tool_")) {
     return "The requested action could not be completed.";
   }
-  if (code.startsWith("storage_") || code.startsWith("audit_") || code.includes("telemetry")) {
+  if (
+    code.startsWith("storage_") ||
+    code.startsWith("audit_") ||
+    code.startsWith("telemetry_")
+  ) {
     return "Run finalization could not be completed.";
   }
   return "The run could not be completed.";

@@ -7,13 +7,19 @@ import * as telemetry from "./telemetry/index.js";
 
 describe("Observability public API", () => {
   it("exposes distinct event, audit, telemetry, and redaction surfaces", () => {
-    expect(Object.keys(audit).sort()).toEqual(["createAuditRecord"]);
+    expect(Object.keys(audit).sort()).toEqual([
+      "AUDIT_RECORD_SCHEMA_VERSION",
+      "createAuditRecord",
+    ]);
     expect(Object.keys(events).sort()).toEqual([
       "RUNTIME_EVENT_SCHEMA_VERSION",
       "RuntimeEventStream",
       "snapshotRuntimeEventPayload",
     ]);
-    expect(Object.keys(telemetry).sort()).toEqual(["createTelemetryRecord"]);
+    expect(Object.keys(telemetry).sort()).toEqual([
+      "TELEMETRY_RECORD_SCHEMA_VERSION",
+      "createTelemetryRecord",
+    ]);
     expect(Object.keys(redaction).sort()).toEqual(["Redactor", "defaultRedactionRules"]);
     expect(Object.keys(api).sort()).toEqual([
       ...new Set([

@@ -1,7 +1,6 @@
 import {
   createAuditRecord,
   createTelemetryRecord,
-  type AuditOutcome,
   type AuditPort,
   type ObservabilityRecordContext,
   type TelemetryPort,
@@ -15,10 +14,13 @@ import type {
 import type { RunCounters } from "@agent-anything/runtime/run";
 import type { RuntimeError, RuntimeErrorOwner } from "@agent-anything/foundation";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
+import {
+  settleRunnerRecordingGate,
+  type RunnerRecorder,
+} from "./RunnerRecordingGate.js";
 
 export interface RecordRunnerLifecycleInput {
   readonly phase: "started" | "succeeded" | "blocked" | "failed" | "cancelled";
-  readonly outcome: AuditOutcome;
   readonly runId: string;
   readonly taskId: string;
   readonly agentId: string;
@@ -36,18 +38,11 @@ export interface RecordRunnerLifecycleInput {
   readonly skipOwners?: ReadonlySet<RuntimeErrorOwner>;
 }
 
-interface LifecycleRecorder {
-  readonly owner: Extract<RuntimeErrorOwner, "audit" | "telemetry">;
-  readonly requirement: RunInfrastructureRequirement;
-  execute(): Promise<RuntimeError | null>;
-}
-
 export async function recordRunnerLifecycle(
   input: RecordRunnerLifecycleInput,
 ): Promise<RuntimeError[]> {
-  const errors: RuntimeError[] = [];
   const skipOwners = input.skipOwners ?? new Set<RuntimeErrorOwner>();
-  const recorders: LifecycleRecorder[] = [
+  const allRecorders = [
     {
       owner: "audit",
       requirement: input.auditRequirement,
@@ -58,25 +53,18 @@ export async function recordRunnerLifecycle(
       requirement: input.telemetryRequirement,
       execute: () => recordTelemetry(input),
     },
+  ] satisfies RunnerRecorder[];
+  const recorders = allRecorders.filter(
+    (recorder) => !skipOwners.has(recorder.owner),
+  );
+
+  return [
+    ...await settleRunnerRecordingGate({
+      purpose: input.context.purpose,
+      signal: input.context.signal,
+      recorders,
+    }),
   ];
-
-  if (input.context.purpose === "finalization") {
-    recorders.sort((left, right) => requirementRank(left) - requirementRank(right));
-  }
-
-  for (const recorder of recorders) {
-    if (skipOwners.has(recorder.owner)) {
-      continue;
-    }
-    const error = await recorder.execute();
-    if (error !== null) {
-      errors.push(error);
-    }
-    if (input.context.signal.aborted) {
-      break;
-    }
-  }
-  return errors;
 }
 
 async function recordAudit(
@@ -90,33 +78,10 @@ async function recordAudit(
 
   try {
     await recordWithinContext(
-      () => input.auditPort!.record(createAuditRecord({
-        id: `${input.runId}:audit:${input.phase}`,
-        taskId: input.taskId,
-        eventName: `run.${input.phase}`,
-        timestamp: input.timestamp,
-        actorRef: input.identity.id,
-        workspaceId: input.workspace?.primary.id ?? null,
-        subject: {
-          kind: input.identity.kind,
-          id: input.identity.id,
-          metadata: input.identity.metadata,
-        },
-        action: `runner.${input.phase}`,
-        target: {
-          kind: "run",
-          id: input.runId,
-          metadata: { taskId: input.taskId },
-        },
-        outcome: input.outcome,
-        payload: {
-          status: input.phase,
-          iterations: input.counters.iterations,
-          actions: input.counters.actions,
-          itemCount: input.itemCount,
-        },
-        metadata: { source: "runner" },
-      }), input.context),
+      () => input.auditPort!.record(
+        createRunnerLifecycleAuditRecord(input),
+        input.context,
+      ),
       input.context,
     );
     return null;
@@ -143,23 +108,10 @@ async function recordTelemetry(
 
   try {
     await recordWithinContext(
-      () => input.telemetryPort!.record(createTelemetryRecord({
-        id: `${input.runId}:telemetry:${input.phase}`,
-        taskId: input.taskId,
-        eventName: `runner.run.${input.phase}`,
-        timestamp: input.timestamp,
-        durationMs: Math.max(0, Date.parse(input.timestamp) - input.startedAtMs),
-        counters: {
-          iterations: input.counters.iterations,
-          actions: input.counters.actions,
-          items: input.itemCount,
-        },
-        dimensions: {
-          status: input.phase,
-          agentId: input.agentId,
-        },
-        metadata: { runId: input.runId },
-      }), input.context),
+      () => input.telemetryPort!.record(
+        createRunnerLifecycleTelemetryRecord(input),
+        input.context,
+      ),
       input.context,
     );
     return null;
@@ -172,6 +124,125 @@ async function recordTelemetry(
     return input.telemetryRequirement === "required"
       ? requiredTelemetryError("Required telemetry recording failed.", errorMetadata(error))
       : null;
+  }
+}
+
+function createRunnerLifecycleAuditRecord(input: RecordRunnerLifecycleInput) {
+  const base = {
+    id: `${input.runId}:audit:${input.phase}`,
+    runId: input.runId,
+    taskId: input.taskId,
+    timestamp: input.timestamp,
+    actor: {
+      kind: input.identity.kind,
+      id: input.identity.id,
+    },
+    workspaceId: input.workspace?.primary.id ?? null,
+    subject: {
+      kind: input.identity.kind,
+      id: input.identity.id,
+    },
+    target: {
+      kind: "run" as const,
+      id: input.runId,
+    },
+  };
+  const payload = {
+    activeAgentId: input.agentId,
+    iterations: input.counters.iterations,
+    actions: input.counters.actions,
+    itemCount: input.itemCount,
+  };
+  switch (input.phase) {
+    case "started":
+      return createAuditRecord({
+        ...base,
+        eventName: "run.started",
+        action: "runner.started",
+        outcome: "succeeded",
+        payload: { ...payload, status: "started" },
+      });
+    case "succeeded":
+      return createAuditRecord({
+        ...base,
+        eventName: "run.succeeded",
+        action: "runner.succeeded",
+        outcome: "succeeded",
+        payload: { ...payload, status: "succeeded" },
+      });
+    case "blocked":
+      return createAuditRecord({
+        ...base,
+        eventName: "run.blocked",
+        action: "runner.blocked",
+        outcome: "blocked",
+        payload: { ...payload, status: "blocked" },
+      });
+    case "failed":
+      return createAuditRecord({
+        ...base,
+        eventName: "run.failed",
+        action: "runner.failed",
+        outcome: "failed",
+        payload: { ...payload, status: "failed" },
+      });
+    case "cancelled":
+      return createAuditRecord({
+        ...base,
+        eventName: "run.cancelled",
+        action: "runner.cancelled",
+        outcome: "cancelled",
+        payload: { ...payload, status: "cancelled" },
+      });
+  }
+}
+
+function createRunnerLifecycleTelemetryRecord(
+  input: RecordRunnerLifecycleInput,
+) {
+  const base = {
+    id: `${input.runId}:telemetry:${input.phase}`,
+    runId: input.runId,
+    taskId: input.taskId,
+    timestamp: input.timestamp,
+    durationMs: Math.max(0, Date.parse(input.timestamp) - input.startedAtMs),
+    counters: {
+      iterations: input.counters.iterations,
+      actions: input.counters.actions,
+      items: input.itemCount,
+    },
+  };
+  switch (input.phase) {
+    case "started":
+      return createTelemetryRecord({
+        ...base,
+        eventName: "runner.run.started",
+        dimensions: { status: "started", agentId: input.agentId },
+      });
+    case "succeeded":
+      return createTelemetryRecord({
+        ...base,
+        eventName: "runner.run.succeeded",
+        dimensions: { status: "succeeded", agentId: input.agentId },
+      });
+    case "blocked":
+      return createTelemetryRecord({
+        ...base,
+        eventName: "runner.run.blocked",
+        dimensions: { status: "blocked", agentId: input.agentId },
+      });
+    case "failed":
+      return createTelemetryRecord({
+        ...base,
+        eventName: "runner.run.failed",
+        dimensions: { status: "failed", agentId: input.agentId },
+      });
+    case "cancelled":
+      return createTelemetryRecord({
+        ...base,
+        eventName: "runner.run.cancelled",
+        dimensions: { status: "cancelled", agentId: input.agentId },
+      });
   }
 }
 
@@ -219,10 +290,6 @@ class FinalizationDeadlineError extends Error {
   }
 }
 
-function requirementRank(recorder: LifecycleRecorder): number {
-  return recorder.requirement === "required" ? 0 : 1;
-}
-
 function requiredAuditError(message: string, metadata: Metadata = {}): RuntimeError {
   return runtimeError("audit", "audit_required_failed", message, metadata);
 }
@@ -239,7 +306,7 @@ function auditFinalizationTimeout(deadlineAt: ISODateTimeString | null): Runtime
 function requiredTelemetryError(message: string, metadata: Metadata = {}): RuntimeError {
   return runtimeError(
     "telemetry",
-    "runtime_telemetry_required_failed",
+    "telemetry_required_failed",
     message,
     metadata,
   );
@@ -250,7 +317,7 @@ function telemetryFinalizationTimeout(
 ): RuntimeError {
   return runtimeError(
     "telemetry",
-    "runtime_telemetry_finalization_timeout",
+    "telemetry_finalization_timeout",
     "Required telemetry recording exceeded the Run finalization deadline.",
     { deadlineAt },
   );

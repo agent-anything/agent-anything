@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   AuditPort,
+  AuditRecord,
   ObservabilityRecordContext,
   RuntimeEvent,
   TelemetryPort,
@@ -706,7 +707,7 @@ describe("Runner", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      code: "runtime_telemetry_required_failed",
+      code: "telemetry_required_failed",
       cancellation: {
         origin: "host",
         reasonCode: "host_requested",
@@ -720,7 +721,7 @@ describe("Runner", () => {
 
   it.each([
     ["audit", "audit_finalization_timeout"],
-    ["telemetry", "runtime_telemetry_finalization_timeout"],
+    ["telemetry", "telemetry_finalization_timeout"],
   ] as const)(
     "bounds an unresponsive required %s finalization recorder",
     async (owner, expectedCode) => {
@@ -900,11 +901,11 @@ describe("Runner", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      code: "runtime_telemetry_required_failed",
+      code: "telemetry_required_failed",
     });
     expect(result.items.find((item) => item.kind === "plan_abandoned")).toMatchObject({
       terminalStatus: "failed",
-      reasonCode: "runtime_telemetry_required_failed",
+      reasonCode: "telemetry_required_failed",
     });
   });
 
@@ -1016,13 +1017,69 @@ describe("Runner", () => {
     expect(optionalResult.status).toBe("succeeded");
     expect(telemetryResult).toMatchObject({
       status: "failed",
-      code: "runtime_telemetry_required_failed",
+      code: "telemetry_required_failed",
       errors: [{ owner: "telemetry" }],
     });
     expect(telemetryResult.items.map((item) => item.kind)).toEqual([
       "model_output",
       "run_failed",
     ]);
+  });
+
+  it("records immutable top-level Run and Task correlation without metadata bags", async () => {
+    const auditRecords: AuditRecord[] = [];
+    const telemetryRecords: TelemetryRecord[] = [];
+    const auditPort: AuditPort = {
+      async record(record) {
+        auditRecords.push(record);
+      },
+    };
+    const telemetryPort: TelemetryPort = {
+      async record(record) {
+        telemetryRecords.push(record);
+      },
+    };
+
+    const result = await createRunner(
+      new ScriptedController([finalDecision("Recorded")]),
+      { auditPort, telemetryPort },
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({ audit: "required", telemetry: "required" }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(auditRecords.map(({ eventName }) => eventName)).toEqual([
+      "run.started",
+      "run.succeeded",
+    ]);
+    expect(telemetryRecords.map(({ eventName }) => eventName)).toEqual([
+      "runner.run.started",
+      "runner.run.succeeded",
+    ]);
+    for (const record of auditRecords) {
+      expect(record).toMatchObject({
+        schemaVersion: 1,
+        runId: result.runId,
+        taskId: result.taskId,
+      });
+      expect(Object.hasOwn(record, "metadata")).toBe(false);
+      expect(Object.hasOwn(record.target, "metadata")).toBe(false);
+      expect(Object.isFrozen(record)).toBe(true);
+      expect(Object.isFrozen(record.payload)).toBe(true);
+    }
+    for (const record of telemetryRecords) {
+      expect(record).toMatchObject({
+        schemaVersion: 1,
+        runId: result.runId,
+        taskId: result.taskId,
+      });
+      expect(Object.hasOwn(record, "metadata")).toBe(false);
+      expect(Object.isFrozen(record)).toBe(true);
+      expect(Object.isFrozen(record.counters)).toBe(true);
+      expect(Object.isFrozen(record.dimensions)).toBe(true);
+    }
   });
 
   it("publishes committed item notifications and ignores subscriber failures", async () => {
@@ -1871,11 +1928,230 @@ describe("Runner sandbox denial escalation", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      code: "runtime_telemetry_required_failed",
-      errors: [{ owner: "telemetry", code: "runtime_telemetry_required_failed" }],
+      code: "telemetry_required_failed",
+      errors: [{ owner: "telemetry", code: "telemetry_required_failed" }],
     });
     expect(fixture.providerCalls()).toBe(0);
     expect(result.items.some(({ kind }) => kind === "sandbox_attempt_started")).toBe(false);
+  });
+
+  it("does not start an external effect until required attempt-start records settle", async () => {
+    const fixture = createEscalatingExternalActionFixture({
+      ordinaryToolResultStatus: "partial",
+    });
+    const recordingStarted = createDeferred<void>();
+    const releaseRecording = createDeferred<void>();
+    const auditPort: AuditPort = {
+      async record(record) {
+        if (record.eventName === "sandbox.attempt.started") {
+          recordingStarted.resolve();
+          await releaseRecording.promise;
+        }
+      },
+    };
+    const run = createRunner(new ScriptedController([
+      actionsDecision([
+        { kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" },
+      ]),
+      finalDecision("Recorded"),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+      auditPort,
+    }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
+        audit: "required",
+      }),
+    );
+
+    await recordingStarted.promise;
+    expect(fixture.providerCalls()).toBe(0);
+
+    releaseRecording.resolve();
+    const result = await run;
+
+    expect(result.status).toBe("succeeded");
+    expect(fixture.providerCalls()).toBe(1);
+  });
+
+  it("publishes settled effect history only after the required result gate", async () => {
+    const fixture = createEscalatingExternalActionFixture({
+      ordinaryToolResultStatus: "partial",
+    });
+    const order: string[] = [];
+    const recordingStarted = createDeferred<void>();
+    const releaseRecording = createDeferred<void>();
+    const publisher = new FakeRuntimeEventPublisher();
+    publisher.subscribe((event) => {
+      if (
+        event.name === "run.item.appended" &&
+        event.payload.itemKind === "sandbox_attempt_resolved"
+      ) {
+        order.push("event:item:attempt-resolved");
+      }
+      if (event.name === "sandbox.attempt.resolved") {
+        order.push("event:attempt-resolved");
+      }
+      if (event.name === "tool.finished") {
+        order.push("event:tool-finished");
+      }
+    });
+    const auditPort: AuditPort = {
+      async record(record) {
+        if (record.eventName === "sandbox.attempt.resolved") {
+          order.push("audit:result-started");
+          recordingStarted.resolve();
+          await releaseRecording.promise;
+          order.push("audit:result-settled");
+        }
+      },
+    };
+    const controller = new ScriptedController([
+      actionsDecision([
+        { kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" },
+      ]),
+      () => {
+        order.push("controller:continued");
+        return finalDecision("Recorded");
+      },
+    ]);
+    const run = createRunner(controller, {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+      auditPort,
+      runtimeEventPublisher: publisher,
+    }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
+        audit: "required",
+      }),
+    );
+
+    await recordingStarted.promise;
+    expect(controller.calls).toHaveLength(1);
+    expect(order).not.toContain("event:item:attempt-resolved");
+    expect(order).not.toContain("event:attempt-resolved");
+    expect(order).not.toContain("event:tool-finished");
+
+    releaseRecording.resolve();
+    const result = await run;
+
+    expect(result.status).toBe("succeeded");
+    expect(order.indexOf("audit:result-settled"))
+      .toBeLessThan(order.indexOf("event:item:attempt-resolved"));
+    expect(order.indexOf("event:item:attempt-resolved"))
+      .toBeLessThan(order.indexOf("event:attempt-resolved"));
+    expect(order.indexOf("event:attempt-resolved"))
+      .toBeLessThan(order.indexOf("event:tool-finished"));
+    expect(order.indexOf("event:tool-finished"))
+      .toBeLessThan(order.indexOf("controller:continued"));
+  });
+
+  it("does not let optional result recording become an execution gate", async () => {
+    const fixture = createEscalatingExternalActionFixture({
+      ordinaryToolResultStatus: "partial",
+    });
+    const optionalRecordingStarted = createDeferred<void>();
+    const auditPort: AuditPort = {
+      async record(record) {
+        if (record.eventName === "sandbox.attempt.resolved") {
+          optionalRecordingStarted.resolve();
+          await new Promise<void>(() => {});
+        }
+      },
+    };
+    const run = createRunner(new ScriptedController([
+      actionsDecision([
+        { kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" },
+      ]),
+      finalDecision("Optional recording did not block"),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+      auditPort,
+    }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
+        audit: "optional",
+      }),
+    );
+
+    await optionalRecordingStarted.promise;
+    const result = await run;
+
+    expect(result.status).toBe("succeeded");
+    expect(fixture.providerCalls()).toBe(1);
+  });
+
+  it("settles required result recording before accepted cancellation terminalizes", async () => {
+    const fixture = createEscalatingExternalActionFixture({
+      ordinaryToolResultStatus: "partial",
+    });
+    const cancellation = createRunCancellationController({ runId: "run_001" });
+    const recordingStarted = createDeferred<void>();
+    const releaseRecording = createDeferred<void>();
+    const eventNames: string[] = [];
+    const publisher = new FakeRuntimeEventPublisher();
+    publisher.subscribe((event) => eventNames.push(event.name));
+    const auditPort: AuditPort = {
+      async record(record) {
+        if (record.eventName === "sandbox.attempt.resolved") {
+          recordingStarted.resolve();
+          await releaseRecording.promise;
+        }
+      },
+    };
+    const controller = new ScriptedController([
+      actionsDecision([
+        { kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" },
+      ]),
+      finalDecision("Must not continue"),
+    ]);
+    const run = createRunner(controller, {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+      auditPort,
+      runtimeEventPublisher: publisher,
+    }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
+        audit: "required",
+        cancellation,
+      }),
+    );
+
+    await recordingStarted.promise;
+    cancellation.requestCancellation({
+      origin: "user",
+      reasonCode: "user_requested",
+    });
+    expect(eventNames).not.toContain("sandbox.attempt.resolved");
+
+    releaseRecording.resolve();
+    const result = await run;
+
+    expect(result.status).toBe("cancelled");
+    expect(fixture.providerCalls()).toBe(1);
+    expect(controller.calls).toHaveLength(1);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "sandbox_attempt_resolved",
+      resolution: expect.objectContaining({ outcome: "executed" }),
+    }));
+    expect(eventNames.indexOf("sandbox.attempt.resolved"))
+      .toBeLessThan(eventNames.indexOf("run.cancelled"));
   });
 
   it("retains settled attempt history when required result Audit fails", async () => {
@@ -1924,6 +2200,61 @@ describe("Runner sandbox denial escalation", () => {
         result: expect.objectContaining({ status: "failed" }),
       }),
     }));
+  });
+
+  it("retains settled attempt history when required result Telemetry fails", async () => {
+    const fixture = createEscalatingExternalActionFixture({
+      ordinaryToolResultStatus: "partial",
+    });
+    const publisher = new FakeRuntimeEventPublisher();
+    const events: RuntimeEvent[] = [];
+    publisher.subscribe((event) => events.push(event));
+    const telemetryPort: TelemetryPort = {
+      async record(record) {
+        if (record.eventName === "runner.sandbox.attempt.resolved") {
+          throw new Error("Attempt-result Telemetry unavailable.");
+        }
+      },
+    };
+    const result = await createRunner(new ScriptedController([
+      actionsDecision([
+        { kind: "tool", name: "test.external", input: {}, modelItemId: "model_1" },
+      ]),
+    ]), {
+      actionEnforcementPipeline: fixture.pipeline,
+      sandboxExecutionGateway: fixture.gateway,
+      telemetryPort,
+      runtimeEventPublisher: publisher,
+    }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig({
+        actionContext: externalActionContext(),
+        toolBindings: fixture.toolBindings,
+        telemetry: "required",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "telemetry_required_failed",
+      errors: [{ owner: "telemetry", code: "telemetry_required_failed" }],
+    });
+    expect(fixture.providerCalls()).toBe(1);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "sandbox_attempt_resolved",
+      resolution: expect.objectContaining({ outcome: "executed" }),
+    }));
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: "observation",
+      observation: expect.objectContaining({
+        kind: "tool_result",
+        result: expect.objectContaining({ status: "partial" }),
+      }),
+    }));
+    expect(events.filter(({ name }) => name === "sandbox.attempt.resolved"))
+      .toHaveLength(1);
+    expect(events.filter(({ name }) => name === "tool.finished")).toHaveLength(1);
   });
 });
 
@@ -2485,7 +2816,7 @@ describe("Runner approval lifecycle", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      code: "runtime_telemetry_required_failed",
+      code: "telemetry_required_failed",
       errors: [{ owner: "telemetry" }],
     });
     expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({

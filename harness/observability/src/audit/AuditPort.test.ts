@@ -1,92 +1,151 @@
 import { describe, expect, it } from "vitest";
 import type { ObservabilityRecordContext } from "../ObservabilityRecordContext.js";
 import type { AuditPort } from "./AuditPort.js";
-import type { AuditRecord } from "./AuditRecord.js";
+import type {
+  AuditRecord,
+  CreateAuditRecordInput,
+} from "./AuditRecord.js";
+import {
+  AUDIT_RECORD_SCHEMA_VERSION,
+} from "./AuditRecord.js";
 import { createAuditRecord } from "./createAuditRecord.js";
 
 describe("AuditPort", () => {
-  it("creates structured audit records", () => {
-    const record = createAuditRecord({
+  it("creates a versioned immutable Run-scoped record", () => {
+    const optionIds = ["accept", "decline"];
+    const input = {
       id: "audit_001",
+      runId: "run_001",
       taskId: "task_001",
-      eventName: "tool.finished",
+      eventName: "approval.requested",
       timestamp: "2026-06-12T00:00:00.000Z",
-      actorRef: "user_001",
+      actor: { kind: "user", id: "user_001" },
       workspaceId: "workspace_001",
-      subject: {
-        kind: "user",
-        id: "user_001",
-        metadata: {},
-      },
-      action: "tool.execute",
+      subject: { kind: "user", id: "user_001" },
+      action: "approval.requested",
       target: {
-        kind: "tool",
-        id: "net.lookupDns",
-        metadata: {},
+        kind: "approval_request",
+        id: "approval_001",
+        actionId: "action_001",
+        category: "fileChange",
       },
       outcome: "succeeded",
       payload: {
-        evidenceRefs: ["evidence_001"],
+        pendingVersion: 1,
+        optionIds,
+        undeclaredSecret: "must-not-cross",
+      },
+    } as unknown as CreateAuditRecordInput<"approval.requested">;
+
+    const record = createAuditRecord(input);
+    optionIds.push("cancel");
+
+    expect(record).toEqual({
+      schemaVersion: AUDIT_RECORD_SCHEMA_VERSION,
+      id: "audit_001",
+      runId: "run_001",
+      taskId: "task_001",
+      eventName: "approval.requested",
+      timestamp: "2026-06-12T00:00:00.000Z",
+      actor: { kind: "user", id: "user_001" },
+      workspaceId: "workspace_001",
+      subject: { kind: "user", id: "user_001" },
+      action: "approval.requested",
+      target: {
+        kind: "approval_request",
+        id: "approval_001",
+        actionId: "action_001",
+        category: "fileChange",
+      },
+      outcome: "succeeded",
+      payload: {
+        pendingVersion: 1,
+        optionIds: ["accept", "decline"],
       },
     });
-
-    expect(record).toMatchObject({
-      id: "audit_001",
-      actorRef: "user_001",
-      workspaceId: "workspace_001",
-      outcome: "succeeded",
-      metadata: {},
-    });
+    expect(Object.isFrozen(record)).toBe(true);
+    expect(Object.isFrozen(record.actor)).toBe(true);
+    expect(Object.isFrozen(record.target)).toBe(true);
+    expect(Object.isFrozen(record.payload)).toBe(true);
+    expect(Object.isFrozen(record.payload.optionIds)).toBe(true);
   });
 
-  it("records entries through fake audit port", async () => {
+  it("rejects contradictory Run target correlation", () => {
+    expect(() => createAuditRecord({
+      id: "audit_001",
+      runId: "run_001",
+      taskId: "task_001",
+      eventName: "run.failed",
+      timestamp: "2026-06-12T00:00:00.000Z",
+      actor: { kind: "service", id: "service_001" },
+      workspaceId: null,
+      subject: { kind: "service", id: "service_001" },
+      action: "runner.failed",
+      target: { kind: "run", id: "run_other" },
+      outcome: "failed",
+      payload: {
+        status: "failed",
+        activeAgentId: "agent_001",
+        iterations: 1,
+        actions: 0,
+        itemCount: 2,
+      },
+    })).toThrow("must match AuditRecord.runId");
+  });
+
+  it("records entries through an AuditPort without rebuilding them", async () => {
     const port = new FakeAuditPort();
     const record = createAuditRecord({
       id: "audit_001",
+      runId: "run_001",
       taskId: "task_001",
-      eventName: "task.completed",
+      eventName: "run.succeeded",
       timestamp: "2026-06-12T00:00:00.000Z",
-      subject: {
-        kind: "system",
-        id: "system",
-        metadata: {},
-      },
-      action: "runtime.complete",
-      target: {
-        kind: "task",
-        id: "task_001",
-        metadata: {},
-      },
+      actor: { kind: "anonymous", id: "anonymous" },
+      workspaceId: null,
+      subject: { kind: "anonymous", id: "anonymous" },
+      action: "runner.succeeded",
+      target: { kind: "run", id: "run_001" },
       outcome: "succeeded",
+      payload: {
+        status: "succeeded",
+        activeAgentId: "agent_001",
+        iterations: 1,
+        actions: 0,
+        itemCount: 2,
+      },
     });
 
     await port.record(record, runtimeContext());
 
     expect(port.records).toEqual([record]);
+    expect(port.records[0]).toBe(record);
   });
 
-  it("can simulate audit port failure", async () => {
+  it("keeps sink failure as a rejected port operation", async () => {
     const port = new FakeAuditPort(() => {
       throw new Error("Audit storage failed.");
     });
 
     await expect(port.record(createAuditRecord({
       id: "audit_001",
+      runId: "run_001",
       taskId: "task_001",
-      eventName: "task.failed",
+      eventName: "run.failed",
       timestamp: "2026-06-12T00:00:00.000Z",
-      subject: {
-        kind: "system",
-        id: "system",
-        metadata: {},
-      },
-      action: "runtime.fail",
-      target: {
-        kind: "task",
-        id: "task_001",
-        metadata: {},
-      },
+      actor: { kind: "service", id: "service_001" },
+      workspaceId: null,
+      subject: { kind: "service", id: "service_001" },
+      action: "runner.failed",
+      target: { kind: "run", id: "run_001" },
       outcome: "failed",
+      payload: {
+        status: "failed",
+        activeAgentId: "agent_001",
+        iterations: 1,
+        actions: 1,
+        itemCount: 3,
+      },
     }), runtimeContext())).rejects.toThrow("Audit storage failed.");
   });
 });

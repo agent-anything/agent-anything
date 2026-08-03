@@ -1,6 +1,7 @@
 import {
   createAuditRecord,
   createTelemetryRecord,
+  type AuditApprovalResolvedPayload,
   type AuditOutcome,
   type AuditPort,
   type ObservabilityRecordContext,
@@ -16,6 +17,10 @@ import type { ApprovalRecordSummary } from "@agent-anything/runtime/run";
 import type { ApprovalCounters } from "@agent-anything/runtime/run";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
 import type { RuntimeError, RuntimeErrorOwner } from "@agent-anything/foundation";
+import {
+  settleRunnerRecordingGate,
+  type RunnerRecorder,
+} from "./RunnerRecordingGate.js";
 
 export interface RecordApprovalResolutionInput {
   readonly runId: string;
@@ -36,17 +41,29 @@ export interface RecordApprovalResolutionInput {
 export async function recordApprovalResolution(
   input: RecordApprovalResolutionInput,
 ): Promise<RuntimeError[]> {
-  const errors: RuntimeError[] = [];
   const skipOwners = input.skipOwners ?? new Set<RuntimeErrorOwner>();
-  if (!skipOwners.has("audit")) {
-    const error = await recordAudit(input);
-    if (error !== null) errors.push(error);
-  }
-  if (!skipOwners.has("telemetry")) {
-    const error = await recordTelemetry(input);
-    if (error !== null) errors.push(error);
-  }
-  return errors;
+  const allRecorders = [
+    {
+      owner: "audit",
+      requirement: input.auditRequirement,
+      execute: () => recordAudit(input),
+    },
+    {
+      owner: "telemetry",
+      requirement: input.telemetryRequirement,
+      execute: () => recordTelemetry(input),
+    },
+  ] satisfies RunnerRecorder[];
+  const recorders = allRecorders.filter(
+    (recorder) => !skipOwners.has(recorder.owner),
+  );
+  return [
+    ...await settleRunnerRecordingGate({
+      purpose: input.context.purpose,
+      signal: input.context.signal,
+      recorders,
+    }),
+  ];
 }
 
 async function recordAudit(
@@ -61,35 +78,35 @@ async function recordAudit(
     await recordWithinContext(
       () => input.auditPort!.record(createAuditRecord({
         id: `${input.summary.requestId}:audit:approval:resolved`,
+        runId: input.runId,
         taskId: input.taskId,
         eventName: "approval.resolved",
         timestamp: input.timestamp,
-        actorRef: input.identity.id,
+        actor: {
+          kind: input.identity.kind,
+          id: input.identity.id,
+        },
         workspaceId: input.workspace?.primary.id ?? null,
         subject: {
           kind: input.identity.kind,
           id: input.identity.id,
-          metadata: {},
         },
         action: "approval.resolved",
         target: {
           kind: "approval_request",
           id: input.summary.requestId,
-          metadata: {
-            runId: input.runId,
-            actionId: input.summary.actionId,
-          },
+          actionId: input.summary.actionId,
+          category: null,
         },
         outcome: auditOutcome(input.summary),
         payload: safeResolutionPayload(input.summary),
-        metadata: { source: "runner" },
       }), input.context),
       input.context,
     );
     return null;
   } catch (error) {
     if (input.auditRequirement !== "required") return null;
-    return input.context.signal.aborted
+    return input.context.purpose === "finalization" && input.context.signal.aborted
       ? runtimeError(
           "audit",
           "audit_finalization_timeout",
@@ -115,9 +132,11 @@ async function recordTelemetry(
     await recordWithinContext(
       () => input.telemetryPort!.record(createTelemetryRecord({
         id: `${input.summary.requestId}:telemetry:approval:resolved`,
+        runId: input.runId,
         taskId: input.taskId,
         eventName: "runner.approval.resolved",
         timestamp: input.timestamp,
+        durationMs: null,
         counters: {
           requests: input.counters.totalRequests,
           consecutiveDeclines: input.counters.consecutiveDeclines,
@@ -131,21 +150,16 @@ async function recordTelemetry(
           applicationKind: input.summary.applicationKind,
           code: input.summary.code,
         },
-        metadata: {
-          runId: input.runId,
-          requestId: input.summary.requestId,
-          actionId: input.summary.actionId,
-        },
       }), input.context),
       input.context,
     );
     return null;
   } catch (error) {
     if (input.telemetryRequirement !== "required") return null;
-    return input.context.signal.aborted
+    return input.context.purpose === "finalization" && input.context.signal.aborted
       ? runtimeError(
           "telemetry",
-          "runtime_telemetry_finalization_timeout",
+          "telemetry_finalization_timeout",
           "Required approval resolution telemetry exceeded its settlement deadline.",
           { deadlineAt: input.context.deadlineAt },
         )
@@ -194,7 +208,9 @@ function auditOutcome(summary: ApprovalRecordSummary): AuditOutcome {
   return "succeeded";
 }
 
-function safeResolutionPayload(summary: ApprovalRecordSummary): Metadata {
+function safeResolutionPayload(
+  summary: ApprovalRecordSummary,
+): AuditApprovalResolvedPayload {
   return {
     pendingVersion: summary.pendingVersion,
     reviewer: summary.reviewer,
@@ -202,7 +218,7 @@ function safeResolutionPayload(summary: ApprovalRecordSummary): Metadata {
     decisionKind: summary.decisionKind,
     applicationKind: summary.applicationKind,
     code: summary.code,
-    authorityRecordIds: [...summary.authorityRecordIds],
+    authorityRecordIds: Object.freeze([...summary.authorityRecordIds]),
   };
 }
 
@@ -211,7 +227,7 @@ function requiredAuditError(message: string, metadata: Metadata = {}): RuntimeEr
 }
 
 function requiredTelemetryError(message: string, metadata: Metadata = {}): RuntimeError {
-  return runtimeError("telemetry", "runtime_telemetry_required_failed", message, metadata);
+  return runtimeError("telemetry", "telemetry_required_failed", message, metadata);
 }
 
 function runtimeError(

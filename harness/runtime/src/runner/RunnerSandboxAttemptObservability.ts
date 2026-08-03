@@ -2,6 +2,8 @@ import type { IdentityRef, RunWorkspace } from "@agent-anything/foundation";
 import {
   createAuditRecord,
   createTelemetryRecord,
+  type AuditSandboxAttemptResolvedPayload,
+  type AuditSandboxAttemptStartedPayload,
   type AuditPort,
   type TelemetryPort,
 } from "@agent-anything/observability";
@@ -10,6 +12,10 @@ import type { SandboxAttempt } from "@agent-anything/action-execution";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
 import type { SandboxAttemptResolutionSummary } from "@agent-anything/runtime/run";
 import type { RuntimeError } from "@agent-anything/foundation";
+import {
+  settleRunnerRecordingGate,
+  type RunnerRecorder,
+} from "./RunnerRecordingGate.js";
 
 interface SandboxAttemptRecordInput {
   readonly attempt: SandboxAttempt;
@@ -44,13 +50,23 @@ async function recordAttempt(
   resolution: SandboxAttemptResolutionSummary | null,
 ): Promise<readonly RuntimeError[]> {
   if (input.signal.aborted) throw input.signal.reason;
-  const errors: RuntimeError[] = [];
-  const auditError = await recordAudit(input, phase, resolution);
-  if (auditError !== null) errors.push(auditError);
-  if (input.signal.aborted) throw input.signal.reason;
-  const telemetryError = await recordTelemetry(input, phase, resolution);
-  if (telemetryError !== null) errors.push(telemetryError);
-  return Object.freeze(errors);
+  const recorders: RunnerRecorder[] = [
+    {
+      owner: "audit",
+      requirement: input.auditRequirement,
+      execute: () => recordAudit(input, phase, resolution),
+    },
+    {
+      owner: "telemetry",
+      requirement: input.telemetryRequirement,
+      execute: () => recordTelemetry(input, phase, resolution),
+    },
+  ];
+  return settleRunnerRecordingGate({
+    purpose: "runtime",
+    signal: input.signal,
+    recorders,
+  });
 }
 
 async function recordAudit(
@@ -64,35 +80,14 @@ async function recordAudit(
       : null;
   }
   try {
-    await recordWithinSignal(() => input.auditPort!.record(createAuditRecord({
-      id: `${input.attempt.id}:audit:${phase}`,
-      taskId: input.taskId,
-      eventName: `sandbox.attempt.${phase}`,
-      timestamp: input.timestamp,
-      actorRef: input.identity.id,
-      workspaceId: input.workspace?.primary.id ?? null,
-      subject: { kind: input.identity.kind, id: input.identity.id, metadata: {} },
-      action: `sandbox.attempt.${phase}`,
-      target: {
-        kind: "sandbox_attempt",
-        id: input.attempt.id,
-        metadata: {
-          runId: input.attempt.runId,
-          actionId: input.attempt.actionId,
-        },
-      },
-      outcome: resolution === null
-        ? "succeeded"
-        : resolution.outcome === "executed"
-        ? "succeeded"
-        : "failed",
-      payload: safePayload(input.attempt, resolution),
-      metadata: { source: "runner" },
-    }), Object.freeze({
+    await recordWithinSignal(() => input.auditPort!.record(
+      createSandboxAttemptAuditRecord(input, phase, resolution),
+      Object.freeze({
       purpose: "runtime" as const,
       signal: input.signal,
       deadlineAt: null,
-    })), input.signal);
+      }),
+    ), input.signal);
     return null;
   } catch (error) {
     if (input.signal.aborted) throw input.signal.reason;
@@ -116,45 +111,27 @@ async function recordTelemetry(
     return input.telemetryRequirement === "required"
       ? requiredError(
           "telemetry",
-          "runtime_telemetry_required_failed",
+          "telemetry_required_failed",
           `Required sandbox attempt ${phase} TelemetryPort is unavailable.`,
         )
       : null;
   }
   try {
-    await recordWithinSignal(() => input.telemetryPort!.record(createTelemetryRecord({
-      id: `${input.attempt.id}:telemetry:${phase}`,
-      taskId: input.taskId,
-      eventName: `runner.sandbox.attempt.${phase}`,
-      timestamp: input.timestamp,
-      durationMs: phase === "started"
-        ? 0
-        : Math.max(0, Date.parse(input.timestamp) - Date.parse(input.attempt.startedAt)),
-      counters: {
-        ordinal: input.attempt.ordinal,
-      },
-      dimensions: {
-        phase,
-        enforcement: input.attempt.enforcement,
-        outcome: resolution?.outcome ?? "started",
-      },
-      metadata: {
-        runId: input.attempt.runId,
-        actionId: input.attempt.actionId,
-        attemptId: input.attempt.id,
-      },
-    }), Object.freeze({
-      purpose: "runtime" as const,
-      signal: input.signal,
-      deadlineAt: null,
-    })), input.signal);
+    await recordWithinSignal(() => input.telemetryPort!.record(
+      createSandboxAttemptTelemetryRecord(input, phase, resolution),
+      Object.freeze({
+        purpose: "runtime" as const,
+        signal: input.signal,
+        deadlineAt: null,
+      }),
+    ), input.signal);
     return null;
   } catch (error) {
     if (input.signal.aborted) throw input.signal.reason;
     return input.telemetryRequirement === "required"
       ? requiredError(
           "telemetry",
-          "runtime_telemetry_required_failed",
+          "telemetry_required_failed",
           `Required sandbox attempt ${phase} Telemetry failed.`,
           error,
         )
@@ -162,10 +139,104 @@ async function recordTelemetry(
   }
 }
 
-function safePayload(
-  attempt: SandboxAttempt,
+function createSandboxAttemptAuditRecord(
+  input: SandboxAttemptRecordInput,
+  phase: "started" | "resolved",
   resolution: SandboxAttemptResolutionSummary | null,
 ) {
+  const base = {
+    id: `${input.attempt.id}:audit:${phase}`,
+    runId: input.attempt.runId,
+    taskId: input.taskId,
+    timestamp: input.timestamp,
+    actor: {
+      kind: input.identity.kind,
+      id: input.identity.id,
+    },
+    workspaceId: input.workspace?.primary.id ?? null,
+    subject: { kind: input.identity.kind, id: input.identity.id },
+    target: {
+      kind: "sandbox_attempt" as const,
+      id: input.attempt.id,
+      actionId: input.attempt.actionId,
+    },
+  };
+  if (phase === "started") {
+    if (resolution !== null) {
+      throw new TypeError("Started Sandbox Audit cannot carry a resolution.");
+    }
+    return createAuditRecord({
+      ...base,
+      eventName: "sandbox.attempt.started",
+      action: "sandbox.attempt.started",
+      outcome: "succeeded",
+      payload: safeStartedPayload(input.attempt),
+    });
+  }
+  if (resolution === null) {
+    throw new TypeError("Resolved Sandbox Audit requires a resolution.");
+  }
+  return createAuditRecord({
+    ...base,
+    eventName: "sandbox.attempt.resolved",
+    action: "sandbox.attempt.resolved",
+    outcome: resolution.outcome === "executed"
+      ? "succeeded"
+      : resolution.outcome === "interrupted"
+      ? "cancelled"
+      : "failed",
+    payload: safeResolvedPayload(input.attempt, resolution),
+  });
+}
+
+function createSandboxAttemptTelemetryRecord(
+  input: SandboxAttemptRecordInput,
+  phase: "started" | "resolved",
+  resolution: SandboxAttemptResolutionSummary | null,
+) {
+  const base = {
+    id: `${input.attempt.id}:telemetry:${phase}`,
+    runId: input.attempt.runId,
+    taskId: input.taskId,
+    timestamp: input.timestamp,
+    counters: { ordinal: input.attempt.ordinal },
+  };
+  if (phase === "started") {
+    if (resolution !== null) {
+      throw new TypeError("Started Sandbox Telemetry cannot carry a resolution.");
+    }
+    return createTelemetryRecord({
+      ...base,
+      eventName: "runner.sandbox.attempt.started",
+      durationMs: 0,
+      dimensions: {
+        phase: "started",
+        enforcement: input.attempt.enforcement,
+        outcome: "started",
+      },
+    });
+  }
+  if (resolution === null) {
+    throw new TypeError("Resolved Sandbox Telemetry requires a resolution.");
+  }
+  return createTelemetryRecord({
+    ...base,
+    eventName: "runner.sandbox.attempt.resolved",
+    durationMs: Math.max(
+      0,
+      Date.parse(input.timestamp) - Date.parse(input.attempt.startedAt),
+    ),
+    dimensions: {
+      phase: "resolved",
+      enforcement: input.attempt.enforcement,
+      outcome: resolution.outcome,
+    },
+  });
+}
+
+function safeStartedPayload(
+  attempt: SandboxAttempt,
+): AuditSandboxAttemptStartedPayload {
   return {
     actionFingerprint: attempt.actionFingerprint,
     ordinal: attempt.ordinal,
@@ -173,13 +244,18 @@ function safePayload(
     policyId: attempt.policyId,
     authoritySnapshotId: attempt.authoritySnapshotId,
     dispatchPlanFingerprint: attempt.dispatchPlanFingerprint,
-    ...(resolution === null
-      ? {}
-      : {
-          outcome: resolution.outcome,
-          code: resolution.code,
-          effectState: resolution.effectState,
-        }),
+  };
+}
+
+function safeResolvedPayload(
+  attempt: SandboxAttempt,
+  resolution: SandboxAttemptResolutionSummary,
+): AuditSandboxAttemptResolvedPayload {
+  return {
+    ...safeStartedPayload(attempt),
+    outcome: resolution.outcome,
+    code: resolution.code,
+    effectState: resolution.effectState,
   };
 }
 

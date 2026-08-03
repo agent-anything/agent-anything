@@ -38,8 +38,8 @@ export type RunFailureCode =
   | "storage_write_failed"
   | "audit_required_failed"
   | "audit_finalization_timeout"
-  | "runtime_telemetry_required_failed"
-  | "runtime_telemetry_finalization_timeout";
+  | "telemetry_required_failed"
+  | "telemetry_finalization_timeout";
 
 export type RunCancelledCode = "runtime_cancelled";
 
