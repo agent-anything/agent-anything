@@ -504,7 +504,23 @@ const expectedMcpValueExports = {
 };
 
 const expectedPluginValueExports = {
-  "@agent-anything/plugins": ["PluginRegistry", "PluginRegistryError"],
+  "@agent-anything/plugins": [
+    "PluginActivationContractError",
+    "PluginAdmissionValidationError",
+    "PluginManifestValidationError",
+    "PluginRegistry",
+    "PluginRegistryError",
+    "createPluginAdmissionSnapshot",
+    "createPluginContributionSourceRef",
+    "createPluginManifestSnapshot",
+    "createPluginOwnerActivationRequest",
+    "createPluginOwnerDeactivationRequest",
+    "findPluginContributionAdmission",
+    "settlePluginOwnerActivationResult",
+    "settlePluginOwnerDeactivationResult",
+    "snapshotPluginManifestEnvironment",
+    "validatePluginManifest",
+  ],
 };
 
 const expectedEnterpriseStorageValueExports = {

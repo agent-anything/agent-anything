@@ -67,6 +67,7 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
   ],
   "@agent-anything/plugins": [
     "@agent-anything/foundation",
+    "semver",
   ],
   "@agent-anything/enterprise-storage": [
     "@agent-anything/context",
