@@ -4,12 +4,18 @@ import type {
   TrustedRemoteActionRegistration,
 } from "@agent-anything/remote-integrations/action";
 import { createRemoteActionCapability } from "@agent-anything/remote-integrations/action";
-import type { McpConnectionPort } from "./McpConnectionPort.js";
+import type { McpActivationResolver } from "./McpLifecycle.js";
+import type {
+  McpActivationLookup,
+  McpActivationSnapshot,
+} from "./McpLifecycle.js";
+import type { McpToolOperationPort } from "./McpToolOperationPort.js";
 
 export interface CreateMcpActionCapabilityInput {
   readonly registration: TrustedRemoteActionRegistration;
   readonly registrationResolver?: RemoteActionRegistrationResolver;
-  readonly connectionPort: McpConnectionPort;
+  readonly activationResolver: McpActivationResolver;
+  readonly operationPort: McpToolOperationPort;
   readonly now?: () => string;
 }
 
@@ -18,6 +24,18 @@ export function createMcpActionCapability(
 ): RemoteActionCapability {
   if (input.registration.source.kind !== "mcp") {
     throw new TypeError("MCP Action capability requires MCP Tool source provenance.");
+  }
+  const initialLookup = activationLookup(input.registration);
+  const initialActivation = input.activationResolver.resolveActivation(
+    initialLookup,
+  );
+  if (
+    initialActivation === null ||
+    !matchesActivation(initialActivation, initialLookup)
+  ) {
+    throw new TypeError(
+      "MCP Action capability requires a current validated activation.",
+    );
   }
   const now = input.now ?? (() => new Date().toISOString());
   return createRemoteActionCapability({
@@ -28,8 +46,33 @@ export function createMcpActionCapability(
       async invoke(invocation) {
         const startedAt = now();
         try {
-          const result = await input.connectionPort.callTool({
+          const sourceRevision = invocation.source.sourceRevision;
+          const activationEpoch = invocation.source.activationEpoch;
+          if (sourceRevision === null || activationEpoch === null) {
+            throw codedError(
+              "tool_mcp_activation_invalid",
+              "MCP invocation does not identify an activation epoch.",
+            );
+          }
+          const lookup = {
             serverId: invocation.serverId,
+            registrationFingerprint: sourceRevision,
+            activationEpoch,
+          };
+          const activation = input.activationResolver.resolveActivation(lookup);
+          if (
+            activation === null ||
+            !matchesActivation(activation, lookup) ||
+            activation.registrationFingerprint !==
+              input.registration.server.registrationFingerprint
+          ) {
+            throw codedError(
+              "tool_mcp_activation_stale",
+              "MCP activation is unavailable or stale.",
+            );
+          }
+          const result = await input.operationPort.callTool({
+            activation,
             toolName: invocation.toolName,
             toolCallId: invocation.actionId,
             input: invocation.input,
@@ -62,6 +105,11 @@ export function createMcpActionCapability(
               remoteSourceCapabilityId: invocation.source.capabilityId,
               mcpServerId: invocation.serverId,
               mcpToolName: invocation.toolName,
+              mcpRegistrationFingerprint:
+                activation.registrationFingerprint,
+              mcpTransportBindingFingerprint:
+                activation.transportBindingFingerprint,
+              mcpActivationEpoch: activation.activationEpoch,
             },
           };
         } catch (error) {
@@ -71,6 +119,37 @@ export function createMcpActionCapability(
       },
     },
   });
+}
+
+function activationLookup(
+  registration: TrustedRemoteActionRegistration,
+): McpActivationLookup {
+  const sourceRevision = registration.source.sourceRevision;
+  const activationEpoch = registration.source.activationEpoch;
+  if (
+    registration.source.sourceId !== registration.server.serverId ||
+    sourceRevision === null ||
+    sourceRevision !== registration.server.registrationFingerprint ||
+    activationEpoch === null
+  ) {
+    throw new TypeError(
+      "MCP Action capability requires exact server, registration, and activation provenance.",
+    );
+  }
+  return Object.freeze({
+    serverId: registration.server.serverId,
+    registrationFingerprint: sourceRevision,
+    activationEpoch,
+  });
+}
+
+function matchesActivation(
+  activation: McpActivationSnapshot,
+  lookup: McpActivationLookup,
+): boolean {
+  return activation.serverId === lookup.serverId &&
+    activation.registrationFingerprint === lookup.registrationFingerprint &&
+    activation.activationEpoch === lookup.activationEpoch;
 }
 
 function codedError(code: string, message: string): Error & { readonly code: string } {

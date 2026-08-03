@@ -490,7 +490,14 @@ const expectedRemoteIntegrationValueExports = {
 };
 
 const expectedMcpValueExports = {
-  "@agent-anything/mcp": ["McpRegistry", "createMcpActionCapability"],
+  "@agent-anything/mcp": [
+    "MCP_PROTOCOL_REVISION",
+    "McpActivationError",
+    "McpRegistrationError",
+    "McpRegistry",
+    "createMcpActionCapability",
+    "createMcpServerRegistration",
+  ],
 };
 
 const expectedPluginValueExports = {
@@ -564,7 +571,12 @@ checkBuiltSurfaces(
 );
 checkBuiltSurfaces(
   expectedMcpValueExports,
-  [],
+  [
+    "@agent-anything/mcp/McpConnectionPort",
+    "@agent-anything/mcp/McpServerRegistration",
+    "@agent-anything/mcp/McpToolOperationPort",
+    "@agent-anything/mcp/McpToolRegistration",
+  ],
   join(repoRoot, "harness/integrations/mcp"),
 );
 checkBuiltSurfaces(
