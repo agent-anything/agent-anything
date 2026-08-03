@@ -22,11 +22,6 @@ export const PLATFORM_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/governance",
     "@agent-anything/tools",
   ],
-  "@agent-anything/extensions": [
-    "@agent-anything/action-execution",
-    "@agent-anything/foundation",
-    "@agent-anything/tools",
-  ],
 });
 
 export const PLATFORM_PACKAGE_NAMES = Object.freeze(Object.keys(PLATFORM_PRODUCTION_DEPENDENCIES));
@@ -58,6 +53,23 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/model-interaction",
     "@agent-anything/permission",
     "@agent-anything/tools",
+  ],
+  "@agent-anything/remote-integrations": [
+    "@agent-anything/action-execution",
+    "@agent-anything/foundation",
+    "@agent-anything/tools",
+  ],
+  "@agent-anything/mcp": [
+    "@agent-anything/foundation",
+    "@agent-anything/remote-integrations",
+    "@agent-anything/tools",
+  ],
+  "@agent-anything/plugins": [
+    "@agent-anything/foundation",
+  ],
+  "@agent-anything/enterprise-storage": [
+    "@agent-anything/context",
+    "@agent-anything/foundation",
   ],
 });
 export const HARNESS_PACKAGE_NAMES = Object.freeze(Object.keys(HARNESS_PRODUCTION_DEPENDENCIES));

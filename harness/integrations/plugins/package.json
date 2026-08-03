@@ -1,0 +1,33 @@
+{
+  "name": "@agent-anything/plugins",
+  "version": "0.0.0",
+  "description": "Plugin declaration, trust-admission, and contribution activation contracts for Agent Harness.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "layer": "harness",
+      "component": "integrations.plugins"
+    }
+  },
+  "dependencies": {
+    "@agent-anything/foundation": "workspace:*"
+  },
+  "license": "Apache-2.0",
+  "private": true
+}

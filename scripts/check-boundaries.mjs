@@ -130,10 +130,7 @@ function checkPublicApiImport(file, owner, statement, specifier) {
   ]);
   const packageName = parseWorkspaceSpecifier(specifier).packageName;
 
-  if (
-    (specifier === "@agent-anything/code-agent" || specifier === "@agent-anything/extensions") &&
-    owner.name !== packageName
-  ) {
+  if (specifier === "@agent-anything/code-agent" && owner.name !== packageName) {
     report("capability_root_import", { file, owner, imported: packageName, message: `Must import a focused capability subpath instead of '${specifier}'.` });
   }
 

@@ -19,18 +19,18 @@ import type { ControllerDecision } from "@agent-anything/runtime/controller";
 import { createRunCancellationController } from "@agent-anything/runtime/run";
 import { Runner, type RunConfig } from "@agent-anything/runtime";
 import { EvidenceBuilder } from "@agent-anything/context/evidence";
+import type { EvidencePersistencePort } from "@agent-anything/context/persistence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
 import type { ApprovalReviewerPort } from "@agent-anything/permission";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
-import { FakeEvidencePersistencePort } from "@agent-anything/testing";
 import { createToolSelectionSnapshot } from "@agent-anything/tools";
 import { describe, expect, it, vi } from "vitest";
-import { createMcpActionCapability } from "../mcp/index.js";
-import { createRemoteToolActionCapability } from "../remote-tools/index.js";
-import type {
-  RemoteActionCapability,
-  RemoteActionRegistrationResolver,
-  TrustedRemoteActionRegistration,
+import { createRemoteToolActionCapability } from "../tools/index.js";
+import {
+  createRemoteActionCapability,
+  type RemoteActionCapability,
+  type RemoteActionRegistrationResolver,
+  type TrustedRemoteActionRegistration,
 } from "./index.js";
 
 const NOW = "2026-07-16T00:00:00.000Z";
@@ -46,9 +46,9 @@ describe("canonical remote Actions", () => {
         openWorldHint: false,
       },
     });
-    const capability = createMcpActionCapability({
+    const capability = createRemoteActionCapability({
       registration,
-      connectionPort: { async callTool() { throw new Error("not executed"); } },
+      invokePort: { async invoke() { throw new Error("not executed"); } },
     });
     const prepared = await capability.adapters[0]!.adapter.prepare({
       actionName: registration.actionName,
@@ -90,10 +90,10 @@ describe("canonical remote Actions", () => {
     const resolver: RemoteActionRegistrationResolver = {
       async resolve() { return current; },
     };
-    const capability = createMcpActionCapability({
+    const capability = createRemoteActionCapability({
       registration: initial,
       registrationResolver: resolver,
-      connectionPort: { async callTool() { throw new Error("not executed"); } },
+      invokePort: { async invoke() { throw new Error("not executed"); } },
     });
     const context = await preparationContext();
     const adapter = capability.adapters[0]!.adapter;
@@ -118,10 +118,10 @@ describe("canonical remote Actions", () => {
 
   it("rejects unavailable trusted registration instead of falling back to Tool metadata", async () => {
     const registration = httpRegistration();
-    const capability = createMcpActionCapability({
+    const capability = createRemoteActionCapability({
       registration,
       registrationResolver: { async resolve() { return null; } },
-      connectionPort: { async callTool() { throw new Error("not executed"); } },
+      invokePort: { async invoke() { throw new Error("not executed"); } },
     });
     await expect(capability.adapters[0]!.adapter.prepare({
       actionName: registration.actionName,
@@ -132,21 +132,25 @@ describe("canonical remote Actions", () => {
     });
   });
 
-  it("runs MCP through the enforcement pipeline, approval, and gateway", async () => {
+  it("runs an HTTP remote Action through enforcement, approval, and gateway", async () => {
     const registration = httpRegistration();
-    const callTool = vi.fn(async (input: {
+    const invoke = vi.fn(async (input: {
+      actionId: string;
+      actionName: string;
       serverId: string;
       toolName: string;
-      toolCallId: string;
     }) => ({
-      toolCallId: input.toolCallId,
-      toolName: input.toolName,
-      output: { answer: "mcp-ok" },
+      toolCallId: input.actionId,
+      toolName: input.actionName,
+      status: "succeeded" as const,
+      output: { answer: "remote-http-ok" },
+      startedAt: NOW,
+      finishedAt: NOW,
       metadata: {},
     }));
-    const capability = createMcpActionCapability({
+    const capability = createRemoteActionCapability({
       registration,
-      connectionPort: { callTool },
+      invokePort: { invoke },
       now: () => NOW,
     });
     const result = await runRemoteAction(capability, registration.localToolName, { query: "status" });
@@ -154,13 +158,12 @@ describe("canonical remote Actions", () => {
     expect(result.status).toBe("succeeded");
     expect(toolResultOf(result)).toMatchObject({
       status: "succeeded",
-      output: { answer: "mcp-ok" },
+      output: { answer: "remote-http-ok" },
     });
-    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
       serverId: registration.server.serverId,
       toolName: registration.toolName,
       timeoutMs: registration.timeoutMs,
-      metadata: {},
     }));
   });
 
@@ -320,7 +323,7 @@ async function runRemoteAction(
     actionEnforcementPipeline: pipeline,
     sandboxExecutionGateway: gateway,
     evidenceBuilder: new EvidenceBuilder(),
-    evidencePersistence: new FakeEvidencePersistencePort(),
+    evidencePersistence: createEvidencePersistence(),
     now: () => NOW,
   });
   return runner.run(
@@ -495,7 +498,7 @@ async function runConfig(
 
 async function preparationContext() {
   const rootFingerprint = await createCanonicalSha256Digest(
-    "agent-anything.extensions.remote-test-root.v1",
+    "agent-anything.remote-integrations.remote-test-root.v1",
     { path: process.cwd() },
   );
   return Object.freeze({
@@ -515,7 +518,7 @@ async function preparationContext() {
       environmentId: "test-local",
       platform: platform(),
       configurationFingerprint: await createCanonicalSha256Digest(
-        "agent-anything.extensions.remote-test-environment.v1",
+        "agent-anything.remote-integrations.remote-test-environment.v1",
         { platform: platform() },
       ),
     }),
@@ -539,6 +542,23 @@ function retryPolicy() {
     },
     retryableCategories: [] as string[],
     serverDelay: { mode: "ignore" as const },
+  };
+}
+
+function createEvidencePersistence(): EvidencePersistencePort {
+  return {
+    async persistEvidence(evidence) {
+      return {
+        status: "stored",
+        artifact: {
+          storageId: `remote_test_${evidence.id}`,
+          evidenceRef: evidence.id,
+          artifactRef: `memory://remote-test/${evidence.id}`,
+          createdAt: NOW,
+          metadata: {},
+        },
+      };
+    },
   };
 }
 

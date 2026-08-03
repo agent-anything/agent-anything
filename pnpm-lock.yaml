@@ -96,6 +96,58 @@ importers:
 
   harness/foundation: {}
 
+  harness/integrations/enterprise-storage:
+    dependencies:
+      '@agent-anything/context':
+        specifier: workspace:*
+        version: link:../../context
+      '@agent-anything/foundation':
+        specifier: workspace:*
+        version: link:../../foundation
+
+  harness/integrations/mcp:
+    dependencies:
+      '@agent-anything/foundation':
+        specifier: workspace:*
+        version: link:../../foundation
+      '@agent-anything/remote-integrations':
+        specifier: workspace:*
+        version: link:../remote
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../../tools
+
+  harness/integrations/plugins:
+    dependencies:
+      '@agent-anything/foundation':
+        specifier: workspace:*
+        version: link:../../foundation
+
+  harness/integrations/remote:
+    dependencies:
+      '@agent-anything/action-execution':
+        specifier: workspace:*
+        version: link:../../safety/action-execution
+      '@agent-anything/foundation':
+        specifier: workspace:*
+        version: link:../../foundation
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../../tools
+    devDependencies:
+      '@agent-anything/context':
+        specifier: workspace:*
+        version: link:../../context
+      '@agent-anything/governance':
+        specifier: workspace:*
+        version: link:../../safety/governance
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../../safety/permission
+      '@agent-anything/runtime':
+        specifier: workspace:*
+        version: link:../../runtime
+
   harness/model-interaction:
     dependencies:
       '@agent-anything/foundation':
@@ -220,34 +272,6 @@ importers:
       '@types/node':
         specifier: ^25.9.1
         version: 25.9.1
-
-  packages/extensions:
-    dependencies:
-      '@agent-anything/action-execution':
-        specifier: workspace:*
-        version: link:../../harness/safety/action-execution
-      '@agent-anything/foundation':
-        specifier: workspace:*
-        version: link:../../harness/foundation
-      '@agent-anything/tools':
-        specifier: workspace:*
-        version: link:../../harness/tools
-    devDependencies:
-      '@agent-anything/context':
-        specifier: workspace:*
-        version: link:../../harness/context
-      '@agent-anything/governance':
-        specifier: workspace:*
-        version: link:../../harness/safety/governance
-      '@agent-anything/permission':
-        specifier: workspace:*
-        version: link:../../harness/safety/permission
-      '@agent-anything/runtime':
-        specifier: workspace:*
-        version: link:../../harness/runtime
-      '@agent-anything/testing':
-        specifier: workspace:*
-        version: link:../testing
 
   packages/host:
     dependencies:

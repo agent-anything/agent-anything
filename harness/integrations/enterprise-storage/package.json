@@ -1,0 +1,38 @@
+{
+  "name": "@agent-anything/enterprise-storage",
+  "version": "0.0.0",
+  "description": "Enterprise persistence adapters for owner-defined Agent Harness persistence ports.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./evidence": {
+      "types": "./src/evidence/index.ts",
+      "import": "./dist/evidence/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "layer": "harness",
+      "component": "integrations.enterprise-storage"
+    }
+  },
+  "dependencies": {
+    "@agent-anything/context": "workspace:*",
+    "@agent-anything/foundation": "workspace:*"
+  },
+  "license": "Apache-2.0",
+  "private": true
+}

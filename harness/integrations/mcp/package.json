@@ -1,0 +1,35 @@
+{
+  "name": "@agent-anything/mcp",
+  "version": "0.0.0",
+  "description": "MCP lifecycle, transport, discovery, and Harness primitive adaptation.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "layer": "harness",
+      "component": "integrations.mcp"
+    }
+  },
+  "dependencies": {
+    "@agent-anything/foundation": "workspace:*",
+    "@agent-anything/remote-integrations": "workspace:*",
+    "@agent-anything/tools": "workspace:*"
+  },
+  "license": "Apache-2.0",
+  "private": true
+}

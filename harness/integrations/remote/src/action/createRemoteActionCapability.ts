@@ -30,13 +30,13 @@ import {
 } from "./RemoteActionRegistration.js";
 
 const ADAPTER_DESCRIPTOR: ActionAdapterDescriptor = Object.freeze({
-  id: "extensions.remote-action.adapter",
+  id: "remote-integrations.remote-action.adapter",
   version: "1",
   inputSchemaVersion: "1",
 });
 
 const EXECUTOR_DESCRIPTOR: ActionExecutorDescriptor = Object.freeze({
-  id: "extensions.remote-action.executor",
+  id: "remote-integrations.remote-action.executor",
   version: "1",
   invocationContractVersion: "1",
 });
@@ -90,7 +90,7 @@ function createRemoteActionAdapter(
           return rejected("Remote Action registration changed before preparation.");
         }
         const argumentsDigest = await createCanonicalSha256Digest(
-          "agent-anything.extensions.remote-action-arguments.v1",
+          "agent-anything.remote-integrations.remote-action-arguments.v1",
           action.input,
         );
         const inputValue = action.input as SerializableValue;
@@ -543,7 +543,7 @@ function toolRegistrationInput(
       inputSchema: registration.inputSchema,
       annotations: registration.annotations,
       metadata: {
-        capabilityOwner: "extensions",
+        capabilityOwner: "remote-integrations",
         remoteSourceKind: registration.source.kind,
         remoteSourceId: registration.source.sourceId,
         remoteServerId: registration.server.serverId,

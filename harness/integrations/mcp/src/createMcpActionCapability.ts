@@ -2,8 +2,8 @@ import type {
   RemoteActionCapability,
   RemoteActionRegistrationResolver,
   TrustedRemoteActionRegistration,
-} from "../action-registrations/index.js";
-import { createRemoteActionCapability } from "../action-registrations/index.js";
+} from "@agent-anything/remote-integrations/action";
+import { createRemoteActionCapability } from "@agent-anything/remote-integrations/action";
 import type { McpConnectionPort } from "./McpConnectionPort.js";
 
 export interface CreateMcpActionCapabilityInput {

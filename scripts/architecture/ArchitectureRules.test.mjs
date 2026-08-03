@@ -90,7 +90,7 @@ test("the exact Phase 19 Harness migration bridges are accepted", () => {
 test("an unlisted Harness-to-transitional edge still fails closed", () => {
   const violations = evaluateRepositoryDirection({
     owner: { kind: "harness", name: "@agent-anything/runtime" },
-    imported: { kind: "platform", name: "@agent-anything/extensions" },
+    imported: { kind: "platform", name: "@agent-anything/code-agent" },
   });
   assert.equal(violations[0]?.rule, "repository_direction");
 });

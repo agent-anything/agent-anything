@@ -46,14 +46,10 @@ const packageExportKeys = {
   "harness/runtime": [".", "./controller", "./plan", "./retry", "./run"],
   "packages/host": ["."],
   "packages/code-agent": [".", "./command", "./filesystem", "./patch", "./workspace"],
-  "packages/extensions": [
-    ".",
-    "./enterprise-storage",
-    "./mcp",
-    "./plugins",
-    "./remote-actions",
-    "./remote-tools",
-  ],
+  "harness/integrations/remote": [".", "./action", "./tools"],
+  "harness/integrations/mcp": ["."],
+  "harness/integrations/plugins": ["."],
+  "harness/integrations/enterprise-storage": [".", "./evidence"],
   "products/helarc": ["."],
 };
 
@@ -484,20 +480,32 @@ const expectedValueExports = {
   ],
 };
 
-const expectedExtensionValueExports = {
-  "@agent-anything/extensions": [
-    "McpRegistry",
-    "PluginRegistry",
-    "PluginRegistryError",
-    "createMcpActionCapability",
+const expectedRemoteIntegrationValueExports = {
+  "@agent-anything/remote-integrations": [
     "createRemoteActionCapability",
     "createRemoteToolActionCapability",
   ],
-  "@agent-anything/extensions/remote-tools": ["createRemoteToolActionCapability"],
-  "@agent-anything/extensions/remote-actions": ["createRemoteActionCapability"],
-  "@agent-anything/extensions/mcp": ["McpRegistry", "createMcpActionCapability"],
-  "@agent-anything/extensions/plugins": ["PluginRegistry", "PluginRegistryError"],
-  "@agent-anything/extensions/enterprise-storage": [],
+  "@agent-anything/remote-integrations/action": ["createRemoteActionCapability"],
+  "@agent-anything/remote-integrations/tools": ["createRemoteToolActionCapability"],
+};
+
+const expectedMcpValueExports = {
+  "@agent-anything/mcp": ["McpRegistry", "createMcpActionCapability"],
+};
+
+const expectedPluginValueExports = {
+  "@agent-anything/plugins": ["PluginRegistry", "PluginRegistryError"],
+};
+
+const expectedEnterpriseStorageValueExports = {
+  "@agent-anything/enterprise-storage": [
+    "EnterpriseEvidencePersistenceAdapter",
+    "createEnterpriseEvidencePersistenceAdapter",
+  ],
+  "@agent-anything/enterprise-storage/evidence": [
+    "EnterpriseEvidencePersistenceAdapter",
+    "createEnterpriseEvidencePersistenceAdapter",
+  ],
 };
 
 const removedOrPrivateSpecifiers = [
@@ -542,12 +550,34 @@ checkBuiltSurfaces(
   join(repoRoot, "apps/helarc-desktop"),
 );
 checkBuiltSurfaces(
-  expectedExtensionValueExports,
+  expectedRemoteIntegrationValueExports,
   [
+    "@agent-anything/extensions",
     "@agent-anything/extensions/action-registrations",
-    "@agent-anything/extensions/RemoteActionRegistration",
+    "@agent-anything/extensions/enterprise-storage",
+    "@agent-anything/extensions/mcp",
+    "@agent-anything/extensions/plugins",
+    "@agent-anything/extensions/remote-actions",
+    "@agent-anything/extensions/remote-tools",
   ],
-  join(repoRoot, "packages/extensions"),
+  join(repoRoot, "harness/integrations/remote"),
+);
+checkBuiltSurfaces(
+  expectedMcpValueExports,
+  [],
+  join(repoRoot, "harness/integrations/mcp"),
+);
+checkBuiltSurfaces(
+  expectedPluginValueExports,
+  [],
+  join(repoRoot, "harness/integrations/plugins"),
+);
+checkBuiltSurfaces(
+  expectedEnterpriseStorageValueExports,
+  [
+    "@agent-anything/enterprise-storage/EnterpriseStoragePort",
+  ],
+  join(repoRoot, "harness/integrations/enterprise-storage"),
 );
 
 console.log("Built public API check passed.");

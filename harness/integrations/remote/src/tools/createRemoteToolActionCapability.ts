@@ -2,8 +2,8 @@ import type {
   RemoteActionCapability,
   RemoteActionRegistrationResolver,
   TrustedRemoteActionRegistration,
-} from "../action-registrations/index.js";
-import { createRemoteActionCapability } from "../action-registrations/index.js";
+} from "../action/index.js";
+import { createRemoteActionCapability } from "../action/index.js";
 import type { RemoteToolPort } from "./RemoteToolPort.js";
 
 export interface CreateRemoteToolActionCapabilityInput {

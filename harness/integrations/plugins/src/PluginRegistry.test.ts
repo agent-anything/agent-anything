@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { FakePluginRegistry } from "../testing/index.js";
 import { PluginRegistry } from "./PluginRegistry.js";
 import type { PluginManifest } from "./PluginManifest.js";
 
@@ -155,18 +154,6 @@ describe("PluginRegistry", () => {
     expect(registry.listContributions()).toHaveLength(2);
   });
 
-  it("fake plugin registry records manifests", async () => {
-    const registry = new FakePluginRegistry();
-
-    await registry.register(createManifest());
-
-    expect(registry.listManifests()).toHaveLength(1);
-    expect(registry.listContributionsByKind("mcpServer")).toMatchObject([
-      {
-        id: "mcp.network",
-      },
-    ]);
-  });
 });
 
 function createManifest(
