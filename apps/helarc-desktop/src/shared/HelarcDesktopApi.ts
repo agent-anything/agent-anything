@@ -1,3 +1,8 @@
+import type {
+  HelarcProductCommandKind,
+  HelarcProductCommandRejectionCode,
+} from "./HelarcDesktopCommand.js";
+
 export interface HelarcWorkspaceSnapshot {
   id: string;
   name: string;
@@ -170,6 +175,7 @@ export interface HelarcPendingApprovalSnapshot {
 }
 
 export interface HelarcSubmitApprovalDecisionInput {
+  readonly commandId: string;
   readonly submissionId: string;
   readonly runId: string;
   readonly requestId: string;
@@ -370,6 +376,7 @@ export interface HelarcMainSnapshot {
 }
 
 export interface HelarcStartRunInput {
+  commandId: string;
   taskText: string;
 }
 
@@ -377,11 +384,14 @@ export type HelarcStartRunResult =
   | { ok: true; taskId: string; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
-export type HelarcCancelRunResult =
-  | { ok: true; snapshot: HelarcMainSnapshot }
-  | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
+export interface HelarcCancelRunInput {
+  readonly commandId: string;
+  readonly runId: string;
+  readonly reason: string | null;
+}
 
 export interface HelarcResolvePatchReviewInput {
+  commandId: string;
   submissionId: string;
   runId: string;
   proposalId: string;
@@ -396,6 +406,7 @@ export type HelarcResolvePatchReviewResult =
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
 export interface HelarcOpenThreadInput {
+  commandId: string;
   threadId: string;
 }
 
@@ -404,10 +415,12 @@ export type HelarcOpenThreadResult =
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
 export interface HelarcSelectWorkspaceProfileInput {
+  commandId: string;
   profileId: string;
 }
 
 export interface HelarcSaveProviderConfigInput {
+  commandId: string;
   providerKind: HelarcProviderKind;
   displayName: string;
   baseUrl: string;
@@ -417,19 +430,141 @@ export interface HelarcSaveProviderConfigInput {
   apiKey: string;
 }
 
+export interface HelarcChooseWorkspaceInput {
+  readonly commandId: string;
+}
+
+export interface HelarcProductCommandResultMap {
+  readonly "workspace.choose": HelarcMainSnapshot;
+  readonly "workspace.select": HelarcMainSnapshot;
+  readonly "provider.save": HelarcMainSnapshot;
+  readonly "run.start": HelarcStartRunResult;
+  readonly "patch_review.submit": HelarcResolvePatchReviewResult;
+  readonly "thread.open": HelarcOpenThreadResult;
+}
+
+export type HelarcProductCommandHandledReceipt<
+  TKind extends HelarcProductCommandKind,
+> = TKind extends HelarcProductCommandKind
+  ? {
+      readonly version: 1;
+      readonly commandId: string;
+      readonly kind: TKind;
+      readonly status: "handled";
+      readonly result: HelarcProductCommandResultMap[TKind];
+    }
+  : never;
+
+export interface HelarcProductCommandRejectedReceipt {
+  readonly version: 1;
+  readonly commandId: string;
+  readonly kind: HelarcProductCommandKind | null;
+  readonly status: "rejected";
+  readonly code: HelarcProductCommandRejectionCode;
+}
+
+export type HelarcProductCommandReceipt<
+  TKind extends HelarcProductCommandKind,
+> =
+  | HelarcProductCommandHandledReceipt<TKind>
+  | HelarcProductCommandRejectedReceipt;
+
+export interface HelarcCancellationSummarySnapshot {
+  readonly requestId: string;
+  readonly origin: "user" | "host" | "approval" | "parent_run" | "runner";
+  readonly reasonCode:
+    | "user_requested"
+    | "host_requested"
+    | "host_shutdown"
+    | "approval_cancelled"
+    | "parent_run_cancelled"
+    | "runner_shutdown";
+  readonly requestedAt: string;
+}
+
+export type HelarcRunCancellationReceipt =
+  | {
+      readonly status: "accepted" | "already_requested";
+      readonly cancellation: HelarcCancellationSummarySnapshot;
+    }
+  | {
+      readonly status: "run_settled" | "start_failed";
+      readonly cancellation: HelarcCancellationSummarySnapshot | null;
+    };
+
+interface HelarcHostCommandReceiptBase<TKind extends "run.cancel" | "approval.submit"> {
+  readonly version: 1;
+  readonly commandId: string;
+  readonly runId: string;
+  readonly kind: TKind;
+}
+
+export interface HelarcRunCancellationCommandReceipt
+  extends HelarcHostCommandReceiptBase<"run.cancel"> {
+  readonly status: "handled";
+  readonly result: HelarcRunCancellationReceipt;
+}
+
+export interface HelarcApprovalSubmissionCommandReceipt
+  extends HelarcHostCommandReceiptBase<"approval.submit"> {
+  readonly status: "handled";
+  readonly result: HelarcApprovalSubmissionReceipt;
+}
+
+export interface HelarcHostCommandRejectedReceipt {
+  readonly version: 1;
+  readonly commandId: string;
+  readonly runId: string;
+  readonly kind: "run.cancel" | "approval.submit" | null;
+  readonly status: "rejected";
+  readonly code: HelarcHostCommandRejectionCode;
+}
+
+export type HelarcHostCommandRejectionCode =
+  | "host_command_invalid"
+  | "host_command_version_unsupported"
+  | "host_command_kind_unsupported"
+  | "host_command_kind_mismatch"
+  | "host_command_id_conflict"
+  | "host_command_ledger_full"
+  | "host_command_run_not_active"
+  | "host_command_failed";
+
+export type HelarcHostCommandReceipt =
+  | HelarcRunCancellationCommandReceipt
+  | HelarcApprovalSubmissionCommandReceipt
+  | HelarcHostCommandRejectedReceipt;
+
+export interface HelarcHostCommandResponse {
+  readonly receipt: HelarcHostCommandReceipt;
+  readonly snapshot: HelarcMainSnapshot;
+}
+
 export interface HelarcDesktopApi {
-  readonly bridgeVersion: 4;
+  readonly bridgeVersion: 5;
   readonly productId: "helarc";
-  chooseWorkspace(): Promise<HelarcMainSnapshot>;
+  chooseWorkspace(
+    input: HelarcChooseWorkspaceInput,
+  ): Promise<HelarcProductCommandReceipt<"workspace.choose">>;
   getSnapshot(): Promise<HelarcMainSnapshot>;
-  saveProviderConfig(input: HelarcSaveProviderConfigInput): Promise<HelarcMainSnapshot>;
-  selectWorkspaceProfile(input: HelarcSelectWorkspaceProfileInput): Promise<HelarcMainSnapshot>;
-  startRun(input: HelarcStartRunInput): Promise<HelarcStartRunResult>;
-  cancelRun(): Promise<HelarcCancelRunResult>;
+  saveProviderConfig(
+    input: HelarcSaveProviderConfigInput,
+  ): Promise<HelarcProductCommandReceipt<"provider.save">>;
+  selectWorkspaceProfile(
+    input: HelarcSelectWorkspaceProfileInput,
+  ): Promise<HelarcProductCommandReceipt<"workspace.select">>;
+  startRun(
+    input: HelarcStartRunInput,
+  ): Promise<HelarcProductCommandReceipt<"run.start">>;
+  cancelRun(input: HelarcCancelRunInput): Promise<HelarcHostCommandResponse>;
   submitApprovalDecision(
     input: HelarcSubmitApprovalDecisionInput,
-  ): Promise<HelarcApprovalSubmissionReceipt>;
-  resolvePatchReview(input: HelarcResolvePatchReviewInput): Promise<HelarcResolvePatchReviewResult>;
-  openThread(input: HelarcOpenThreadInput): Promise<HelarcOpenThreadResult>;
+  ): Promise<HelarcHostCommandResponse>;
+  resolvePatchReview(
+    input: HelarcResolvePatchReviewInput,
+  ): Promise<HelarcProductCommandReceipt<"patch_review.submit">>;
+  openThread(
+    input: HelarcOpenThreadInput,
+  ): Promise<HelarcProductCommandReceipt<"thread.open">>;
   subscribeSnapshot(listener: (snapshot: HelarcMainSnapshot) => void): () => void;
 }

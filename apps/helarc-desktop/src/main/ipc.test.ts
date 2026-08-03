@@ -1,5 +1,8 @@
 import type { BrowserWindow } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  HELARC_PRODUCT_COMMAND_VERSION,
+} from "../shared/HelarcDesktopCommand.js";
 import type {
   HelarcMainController,
   HelarcMainSnapshot,
@@ -32,153 +35,218 @@ describe("Helarc IPC", () => {
     electron.showOpenDialog.mockReset();
   });
 
-  it("registers every renderer command and revalidates execution payloads in main", async () => {
-    const snapshot = mainSnapshot();
-    const startRun = vi.fn(async () => ({
-      ok: true as const,
-      taskId: "task-1",
-      snapshot,
-      privateState: PRIVATE_RESULT,
-    }));
-    const cancelRun = vi.fn(() => ({
-      ok: true as const,
-      snapshot,
-      privateState: PRIVATE_RESULT,
-    }));
-    const submitApprovalDecision = vi.fn(() => ({
-      status: "accepted_for_resolution" as const,
-      submissionId: "submission-1",
-      runId: "run-1",
-      requestId: "request-1",
-      pendingVersion: 2,
-      privateAuthority: PRIVATE_RESULT,
-    }));
-    const resolvePatchReview = vi.fn(() => ({
-      ok: true as const,
-      snapshot,
-      privateState: PRIVATE_RESULT,
-    }));
-    const controller = {
-      subscribeSnapshot: vi.fn(() => () => undefined),
-      getSnapshot: vi.fn(() => snapshot),
-      openThread: vi.fn(),
-      selectWorkspacePath: vi.fn(),
-      failWorkspaceSelection: vi.fn(),
-      setWorkspaceProfiles: vi.fn(),
-      selectWorkspaceProfile: vi.fn(),
-      configureProvider: vi.fn(),
-      startRun,
-      cancelRun,
-      submitApprovalDecision,
-      resolvePatchReview,
-    } as unknown as HelarcMainController;
-    const window = {
-      isDestroyed: vi.fn(() => false),
-      once: vi.fn(),
-      webContents: { send: vi.fn() },
-    } as unknown as BrowserWindow;
+  it("revalidates Product envelopes and replays an exact asynchronous start once", async () => {
+    const current = mainSnapshot();
+    const running = mainSnapshot("running");
+    const startGate = deferred<void>();
+    const startRun = vi.fn(async () => {
+      await startGate.promise;
+      return {
+        ok: true as const,
+        taskId: "task-1",
+        snapshot: running,
+        privateState: PRIVATE_RESULT,
+      };
+    });
+    const controller = controllerDouble(current, { startRun });
+    const window = windowDouble();
 
     registerHelarcIpc({ window, controller });
+    const handler = requiredHandler(HELARC_IPC_CHANNELS.startRun);
+    const command = {
+      version: HELARC_PRODUCT_COMMAND_VERSION,
+      commandId: "product-start-1",
+      kind: "run.start",
+      payload: { taskText: "Inspect files" },
+    };
 
-    const commandChannels = Object.values(HELARC_IPC_CHANNELS).filter(
-      (channel) => channel !== HELARC_IPC_CHANNELS.snapshotUpdated,
-    );
-    expect([...electron.handlers.keys()].sort()).toEqual([...commandChannels].sort());
+    const first = handler({}, command) as Promise<unknown>;
+    const duplicate = handler({}, command) as Promise<unknown>;
+    await Promise.resolve();
+    expect(startRun).toHaveBeenCalledOnce();
+    startGate.resolve();
+    const firstReceipt = await first;
+    const duplicateReceipt = await duplicate;
 
-    const startResult = await electron.handlers.get(HELARC_IPC_CHANNELS.startRun)?.(
-      {},
-      { taskText: 42 },
-    );
-    const cancelResult = await electron.handlers.get(HELARC_IPC_CHANNELS.cancelRun)?.({});
-    const approvalResult = await electron.handlers.get(
-      HELARC_IPC_CHANNELS.submitApprovalDecision,
-    )?.({}, {
-      submissionId: "submission-1",
-      runId: "run-1",
-      requestId: "request-1",
-      pendingVersion: "2",
-      optionId: "grant",
-      grantedPermissions: {
-        fileSystem: { read: ["src", 42], write: ["dist"] },
-        network: { enabled: true, domains: ["example.com", false] },
-      },
-      reason: 42,
-      trustedReviewer: { secret: true },
+    expect(duplicateReceipt).toBe(firstReceipt);
+    expect(firstReceipt).toMatchObject({
+      version: 1,
+      commandId: "product-start-1",
+      kind: "run.start",
+      status: "handled",
+      result: { ok: true, taskId: "task-1", snapshot: { status: "running" } },
     });
-    const patchResult = await electron.handlers.get(
-      HELARC_IPC_CHANNELS.resolvePatchReview,
-    )?.({}, {
-      submissionId: "patch-1",
-      runId: "run-1",
-      proposalId: "proposal-1",
-      reviewId: "review-1",
-      pendingVersion: "2",
-      decision: "unexpected",
-      reason: 42,
-      canonicalAction: { secret: true },
-    });
+    expect(JSON.stringify(firstReceipt)).not.toContain(PRIVATE_RESULT);
 
-    expect(startRun).toHaveBeenCalledWith({ taskText: "" });
-    expect(cancelRun).toHaveBeenCalledOnce();
-    expect(submitApprovalDecision).toHaveBeenCalledWith({
-      submissionId: "submission-1",
-      runId: "run-1",
-      requestId: "request-1",
-      pendingVersion: 2,
-      optionId: "grant",
-      grantedPermissions: {
-        fileSystem: { read: ["src"], write: ["dist"] },
-        network: { enabled: true, domains: ["example.com"] },
-      },
-      reason: null,
+    await expect(handler({}, {
+      ...command,
+      commandId: "product-start-invalid",
+      payload: { taskText: 42 },
+    })).resolves.toMatchObject({
+      status: "rejected",
+      code: "helarc_product_command_invalid",
     });
-    expect(JSON.stringify([startResult, cancelResult, approvalResult, patchResult]))
-      .not.toContain(PRIVATE_RESULT);
-    expect(resolvePatchReview).toHaveBeenCalledWith({
-      submissionId: "patch-1",
-      runId: "run-1",
-      proposalId: "proposal-1",
-      reviewId: "review-1",
-      pendingVersion: 0,
-      decision: "rejected",
-      reason: null,
-    });
+    expect(startRun).toHaveBeenCalledOnce();
   });
 
-  it("registers safe Thread opening and validates its payload in main", async () => {
+  it("keeps queries outside command ledgers and disconnect stops delivery only", async () => {
     const snapshot = mainSnapshot();
-    const openThread = vi.fn(async () => ({
-      ok: true as const,
-      snapshot,
-      privateState: PRIVATE_RESULT,
-    }));
-    const controller = {
-      subscribeSnapshot: vi.fn(() => () => undefined),
-      getSnapshot: vi.fn(() => snapshot),
-      openThread,
-    } as unknown as HelarcMainController;
-    const window = {
-      isDestroyed: vi.fn(() => false),
-      once: vi.fn(),
-      webContents: { send: vi.fn() },
-    } as unknown as BrowserWindow;
+    const unsubscribe = vi.fn();
+    let publish = (_value: HelarcMainSnapshot): void => {
+      throw new Error("Snapshot subscriber was not registered.");
+    };
+    const subscribeSnapshot = vi.fn((listener: (value: HelarcMainSnapshot) => void) => {
+      publish = listener;
+      return unsubscribe;
+    });
+    const controller = controllerDouble(snapshot, {
+      subscribeSnapshot,
+      dispatchHostCommand: vi.fn(),
+      startRun: vi.fn(),
+    });
+    const closedListeners: Array<() => void> = [];
+    const window = windowDouble({
+      once: vi.fn((_event: string, listener: () => void) => {
+        closedListeners.push(listener);
+      }),
+    });
 
     registerHelarcIpc({ window, controller });
-    const handler = electron.handlers.get(HELARC_IPC_CHANNELS.openThread);
-    expect(handler).toBeTypeOf("function");
+    const getSnapshot = requiredHandler(HELARC_IPC_CHANNELS.getSnapshot);
 
-    const result = await handler?.({}, { threadId: "helarc-thread-1" });
-    await handler?.({}, { threadId: 42 });
+    expect(getSnapshot({})).toEqual(snapshot);
+    expect(getSnapshot({})).toEqual(snapshot);
+    publish(snapshot);
+    expect(window.webContents.send).toHaveBeenCalledOnce();
+    closedListeners[0]?.();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(controller.dispatchHostCommand).not.toHaveBeenCalled();
+    expect(controller.startRun).not.toHaveBeenCalled();
+  });
 
-    expect(openThread).toHaveBeenNthCalledWith(1, "helarc-thread-1");
-    expect(openThread).toHaveBeenNthCalledWith(2, "");
-    expect(JSON.stringify(result)).not.toContain(PRIVATE_RESULT);
+  it("passes exact Host envelopes to the trusted dispatcher and returns only safe receipt fields", async () => {
+    const snapshot = mainSnapshot("cancelling");
+    const dispatchHostCommand = vi.fn((candidate: unknown, expectedKind: string) => {
+      const command = candidate as Record<string, unknown>;
+      expect(expectedKind).toBe("run.cancel");
+      return {
+        version: 1,
+        commandId: command.commandId,
+        runId: command.runId,
+        kind: "run.cancel",
+        status: "handled",
+        result: {
+          status: "accepted",
+          cancellation: {
+            requestId: "cancel-1",
+            origin: "user",
+            reasonCode: "user_requested",
+            requestedAt: "2026-08-03T00:00:00.000Z",
+          },
+          privateAuthority: PRIVATE_RESULT,
+        },
+        projection: { privateProjection: PRIVATE_RESULT },
+        privateControl: PRIVATE_RESULT,
+      };
+    });
+    const controller = controllerDouble(snapshot, { dispatchHostCommand });
+    registerHelarcIpc({ window: windowDouble(), controller });
+    const handler = requiredHandler(HELARC_IPC_CHANNELS.cancelRun);
+    const command = {
+      version: 1,
+      commandId: "host-cancel-1",
+      runId: "run-1",
+      kind: "run.cancel",
+      payload: { reason: "Stop this Run." },
+    };
+
+    const response = await handler({}, command);
+
+    expect(dispatchHostCommand).toHaveBeenCalledWith(command, "run.cancel");
+    expect(response).toMatchObject({
+      receipt: {
+        commandId: "host-cancel-1",
+        runId: "run-1",
+        status: "handled",
+        result: {
+          status: "accepted",
+          cancellation: {
+            origin: "user",
+            reasonCode: "user_requested",
+          },
+        },
+      },
+      snapshot: { status: "cancelling" },
+    });
+    expect(JSON.stringify(response)).not.toContain(PRIVATE_RESULT);
+  });
+
+  it("rejects malformed Thread commands instead of coercing them into navigation", async () => {
+    const openThread = vi.fn();
+    const controller = controllerDouble(mainSnapshot(), { openThread });
+    registerHelarcIpc({ window: windowDouble(), controller });
+    const handler = requiredHandler(HELARC_IPC_CHANNELS.openThread);
+
+    await expect(handler({}, {
+      version: 1,
+      commandId: "thread-open-invalid",
+      kind: "thread.open",
+      payload: {
+        threadId: 42,
+        fallbackThreadId: "thread-1",
+      },
+    })).resolves.toMatchObject({
+      status: "rejected",
+      code: "helarc_product_command_invalid",
+    });
+    expect(openThread).not.toHaveBeenCalled();
   });
 });
 
-function mainSnapshot(): HelarcMainSnapshot {
+function requiredHandler(channel: string): (...args: unknown[]) => unknown {
+  const handler = electron.handlers.get(channel);
+  if (!handler) {
+    throw new Error(`Missing IPC handler '${channel}'.`);
+  }
+  return handler;
+}
+
+function controllerDouble(
+  snapshot: HelarcMainSnapshot,
+  overrides: Record<string, unknown> = {},
+): HelarcMainController {
   return {
-    status: "idle",
+    subscribeSnapshot: vi.fn(() => () => undefined),
+    getSnapshot: vi.fn(() => snapshot),
+    openThread: vi.fn(),
+    selectWorkspacePath: vi.fn(),
+    failWorkspaceSelection: vi.fn(),
+    setWorkspaceProfiles: vi.fn(),
+    selectWorkspaceProfile: vi.fn(),
+    configureProvider: vi.fn(),
+    startRun: vi.fn(),
+    dispatchHostCommand: vi.fn(),
+    resolvePatchReview: vi.fn(),
+    ...overrides,
+  } as unknown as HelarcMainController;
+}
+
+function windowDouble(
+  overrides: Record<string, unknown> = {},
+): BrowserWindow {
+  return {
+    isDestroyed: vi.fn(() => false),
+    once: vi.fn(),
+    webContents: { send: vi.fn() },
+    ...overrides,
+  } as unknown as BrowserWindow;
+}
+
+function mainSnapshot(
+  status: HelarcMainSnapshot["status"] = "idle",
+): HelarcMainSnapshot {
+  return {
+    status,
     workspace: null,
     workspaceProfiles: [],
     taskTemplates: [],
@@ -197,4 +265,12 @@ function mainSnapshot(): HelarcMainSnapshot {
     run: null,
     error: null,
   };
+}
+
+function deferred<TValue>() {
+  let resolve!: (value: TValue) => void;
+  const promise = new Promise<TValue>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }

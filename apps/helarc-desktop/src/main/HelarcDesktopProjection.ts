@@ -1,9 +1,11 @@
 import type { ApprovalReviewRequest, ApprovalSubmissionReceipt } from "@agent-anything/permission";
+import type { HostCommandReceipt } from "@agent-anything/host";
 import type { HelarcMainSnapshot as MainSnapshot } from "./HelarcMainController.js";
 import type {
   HelarcAdditionalPermissionsSnapshot,
   HelarcApprovalReviewRequestSnapshot,
   HelarcApprovalSubmissionReceipt,
+  HelarcHostCommandReceipt,
   HelarcMainSnapshot as DesktopSnapshot,
   HelarcProductPhaseSnapshot,
   HelarcRunSnapshot,
@@ -113,6 +115,73 @@ export function projectHelarcApprovalSubmissionReceipt(
         submissionId: receipt.submissionId,
         code: receipt.code,
       };
+}
+
+export function projectHelarcHostCommandReceipt(
+  receipt: HostCommandReceipt,
+): HelarcHostCommandReceipt {
+  if (receipt.status === "rejected") {
+    return {
+      version: receipt.version,
+      commandId: receipt.commandId,
+      runId: receipt.runId,
+      kind: receipt.kind,
+      status: receipt.status,
+      code: receipt.code,
+    };
+  }
+
+  if (receipt.kind === "approval.submit") {
+    return {
+      version: receipt.version,
+      commandId: receipt.commandId,
+      runId: receipt.runId,
+      kind: receipt.kind,
+      status: receipt.status,
+      result: projectHelarcApprovalSubmissionReceipt(receipt.result),
+    };
+  }
+
+  if (
+    receipt.result.status === "accepted" ||
+    receipt.result.status === "already_requested"
+  ) {
+    return {
+      version: receipt.version,
+      commandId: receipt.commandId,
+      runId: receipt.runId,
+      kind: receipt.kind,
+      status: receipt.status,
+      result: {
+        status: receipt.result.status,
+        cancellation: {
+          requestId: receipt.result.cancellation.requestId,
+          origin: receipt.result.cancellation.origin,
+          reasonCode: receipt.result.cancellation.reasonCode,
+          requestedAt: receipt.result.cancellation.requestedAt,
+        },
+      },
+    };
+  }
+
+  return {
+    version: receipt.version,
+    commandId: receipt.commandId,
+    runId: receipt.runId,
+    kind: receipt.kind,
+    status: receipt.status,
+    result: {
+      status: receipt.result.status,
+      cancellation: receipt.result.cancellation === null
+        ? null
+        : {
+            requestId: receipt.result.cancellation.requestId,
+            origin: receipt.result.cancellation.origin,
+            reasonCode: receipt.result.cancellation.reasonCode,
+            requestedAt: receipt.result.cancellation.requestedAt,
+          },
+    },
+  };
 }
 
 function projectProvider(snapshot: MainSnapshot["provider"]): DesktopSnapshot["provider"] {

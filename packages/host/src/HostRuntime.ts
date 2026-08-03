@@ -40,7 +40,7 @@ export interface HostRunStartInput<TOutput = unknown> {
   readonly agent: Agent<TOutput>;
   readonly runInput: RunInput;
   readonly runConfig: RunConfig;
-  readonly userApprovalReviewBridge?: UserApprovalReviewBridge | null;
+  readonly userApprovalReviewBridge: UserApprovalReviewBridge | null;
 }
 
 export interface HostRunResult<TOutput = unknown> {
@@ -162,7 +162,7 @@ function startHostRun<TOutput>(
       });
     },
   });
-  const userApprovalReviewBridge = input.userApprovalReviewBridge ?? null;
+  const userApprovalReviewBridge = input.userApprovalReviewBridge;
   const unsubscribeApprovalReview = userApprovalReviewBridge?.subscribe((review) => {
     if (review === null || invocationState !== "active") return;
     const reduction = store.apply({
@@ -348,8 +348,13 @@ function assertStartInput<TOutput>(input: HostRunStartInput<TOutput>): void {
 }
 
 function assertUserApprovalBinding<TOutput>(input: HostRunStartInput<TOutput>): void {
+  if (!Object.prototype.hasOwnProperty.call(input, "userApprovalReviewBridge")) {
+    throw new TypeError(
+      "Host Run must explicitly provide an approval review bridge or null.",
+    );
+  }
   const reviewer = input.runConfig.permissions.reviewer;
-  const bridge = input.userApprovalReviewBridge ?? null;
+  const bridge = input.userApprovalReviewBridge;
   if (reviewer?.kind === "user") {
     if (bridge === null) {
       throw new TypeError("Host user reviewer requires an explicit approval review bridge.");

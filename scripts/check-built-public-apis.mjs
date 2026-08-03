@@ -400,8 +400,12 @@ const expectedValueExports = {
     "toRunCancellationSummary",
   ],
   "@agent-anything/host": [
+    "HOST_COMMAND_REASON_MAX_LENGTH",
+    "HOST_COMMAND_RECEIPT_LIMIT",
+    "HOST_COMMAND_VERSION",
     "HOST_RETRY_EVENT_LIMIT",
     "HostContextResolutionError",
+    "createHostCommandDispatcher",
     "createHostRunProjection",
     "createHostRunProjectionStore",
     "createHostRuntime",
@@ -416,6 +420,7 @@ const expectedValueExports = {
     "resolveHostRunContext",
     "resolveHostRunPermissionConfig",
     "snapshotHostCancellation",
+    "snapshotHostCommand",
   ],
   "@agent-anything/code-agent": [
     "CODE_AGENT_CREATE_FILE_ACTION",

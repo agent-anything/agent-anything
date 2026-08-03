@@ -189,7 +189,11 @@ describe("HostRuntime", () => {
     const configuredBridge = createApprovalBridge("run-1");
     const otherBridge = createApprovalBridge("run-1");
     const configured = createUserReviewStartInput(configuredBridge);
+    const { userApprovalReviewBridge: _omitted, ...missingBridge } = configured;
 
+    expect(() => runtime.start(
+      missingBridge as HostRunStartInput<TestOutput>,
+    )).toThrow("must explicitly provide an approval review bridge or null");
     expect(() => runtime.start({
       ...configured,
       userApprovalReviewBridge: null,
@@ -366,6 +370,7 @@ function createStartInput(input: {
   return {
     sessionId: input.sessionId ?? "session-1",
     agent: input.agent ?? createAgent(),
+    userApprovalReviewBridge: null,
     runInput: {
       runId: "run-1",
       task: {

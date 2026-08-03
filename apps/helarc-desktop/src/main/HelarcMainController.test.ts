@@ -1,4 +1,5 @@
 import type { HelarcPatchReviewDecisionSubmission } from "@agent-anything/helarc";
+import { HOST_COMMAND_VERSION } from "@agent-anything/host";
 import type {
   ApprovalDecisionKind,
   ApprovalDecisionSubmission,
@@ -683,39 +684,50 @@ describe("HelarcMainController", () => {
     const decline = approvalSubmission(waitingSnapshot, "decline", {
       submissionId: "desktop-decline-1",
     });
-    expect(controller.submitApprovalDecision({
+    expect(dispatchApprovalCommand(controller, {
       ...decline,
       requestId: "stale-request",
-    })).toEqual({
-      status: "rejected",
-      submissionId: "desktop-decline-1",
-      code: "approval_not_pending",
+    }, "host-stale-request")).toMatchObject({
+      status: "handled",
+      kind: "approval.submit",
+      result: {
+        status: "rejected",
+        submissionId: "desktop-decline-1",
+        code: "approval_not_pending",
+      },
     });
-    expect(controller.submitApprovalDecision({
+    expect(dispatchApprovalCommand(controller, {
       ...decline,
       submissionId: "desktop-stale-version-1",
       pendingVersion: decline.pendingVersion + 1,
-    })).toEqual({
-      status: "rejected",
-      submissionId: "desktop-stale-version-1",
-      code: "approval_version_mismatch",
+    })).toMatchObject({
+      status: "handled",
+      result: {
+        status: "rejected",
+        submissionId: "desktop-stale-version-1",
+        code: "approval_version_mismatch",
+      },
     });
 
-    const receipt = controller.submitApprovalDecision(decline);
+    const receipt = dispatchApprovalCommand(controller, decline);
     expect(receipt).toMatchObject({
-      status: "accepted_for_resolution",
-      submissionId: "desktop-decline-1",
-      requestId: pending?.request.id,
-      pendingVersion: pending?.pendingVersion,
+      status: "handled",
+      kind: "approval.submit",
+      result: {
+        status: "accepted_for_resolution",
+        submissionId: "desktop-decline-1",
+        requestId: pending?.request.id,
+        pendingVersion: pending?.pendingVersion,
+      },
     });
-    expect(controller.submitApprovalDecision(decline)).toBe(receipt);
-    expect(controller.submitApprovalDecision({
+    expect(dispatchApprovalCommand(controller, decline)).toBe(receipt);
+    expect(dispatchApprovalCommand(controller, {
       ...decline,
       optionId: approvalSubmission(waitingSnapshot, "cancel").optionId,
-    })).toEqual({
+    })).toMatchObject({
       status: "rejected",
-      submissionId: "desktop-decline-1",
-      code: "approval_submission_invalid",
+      commandId: "host-approval-desktop-decline-1",
+      code: "host_command_id_conflict",
     });
     expect(controller.getSnapshot()).toMatchObject({
       status: "waiting_for_approval",
@@ -737,13 +749,12 @@ describe("HelarcMainController", () => {
       activeThread: { messages: [{ role: "user" }, { role: "assistant", content: "Run blocked." }] },
     });
     expect(JSON.stringify(blockedSnapshot.activeThread)).not.toContain("pendingApproval");
-    expect(controller.submitApprovalDecision({
+    expect(dispatchApprovalCommand(controller, {
       ...decline,
       submissionId: "desktop-late-1",
-    })).toEqual({
+    })).toMatchObject({
       status: "rejected",
-      submissionId: "desktop-late-1",
-      code: "approval_not_pending",
+      code: "host_command_run_not_active",
     });
     await expect(access(markerPath)).rejects.toThrow();
   });
@@ -777,12 +788,16 @@ describe("HelarcMainController", () => {
       controller,
       (snapshot) => snapshot.run?.platform.approval?.phase === "submitted_for_resolution",
     );
-    expect(controller.submitApprovalDecision(
+    expect(dispatchApprovalCommand(
+      controller,
       approvalSubmission(waitingSnapshot, "grantPermissions"),
     )).toMatchObject({
-      status: "accepted_for_resolution",
-      requestId: pendingApproval(waitingSnapshot).request.id,
-      pendingVersion: pendingApproval(waitingSnapshot).pendingVersion,
+      status: "handled",
+      result: {
+        status: "accepted_for_resolution",
+        requestId: pendingApproval(waitingSnapshot).request.id,
+        pendingVersion: pendingApproval(waitingSnapshot).pendingVersion,
+      },
     });
     expect(await submitted).toMatchObject({
       status: "waiting_for_approval",
@@ -829,32 +844,38 @@ describe("HelarcMainController", () => {
       submissionId: "desktop-after-cancel-1",
     });
 
-    expect(controller.cancelRun()).toMatchObject({
-      ok: true,
-      snapshot: {
+    expect(dispatchCancellationCommand(
+      controller,
+      pendingApproval(waitingSnapshot).request.runId,
+    )).toMatchObject({
+      status: "handled",
+      kind: "run.cancel",
+      result: { status: "accepted" },
+      projection: {
         status: "cancelling",
-        run: {
-          display: { status: "cancelling" },
-          platform: {
-            status: "cancelling",
-            approval: null,
-            cancellation: {
-              origin: "user",
-              reasonCode: "user_requested",
-            },
-          },
+        approval: null,
+        cancellation: {
+          origin: "user",
+          reasonCode: "user_requested",
         },
       },
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "cancelling",
+      run: { display: { status: "cancelling" } },
     });
     await expect(controller.startRun({ taskText: "Start another run" })).resolves.toMatchObject({
       ok: false,
       error: { code: "run_already_active" },
       snapshot: { status: "cancelling" },
     });
-    expect(controller.submitApprovalDecision(lateSubmission)).toEqual({
-      status: "rejected",
-      submissionId: "desktop-after-cancel-1",
-      code: "approval_not_pending",
+    expect(dispatchApprovalCommand(controller, lateSubmission)).toMatchObject({
+      status: "handled",
+      result: {
+        status: "rejected",
+        submissionId: "desktop-after-cancel-1",
+        code: "approval_not_pending",
+      },
     });
 
     const terminalSnapshot = await waitForSnapshot(
@@ -902,13 +923,17 @@ describe("HelarcMainController", () => {
     controller.startRun({ taskText: "Request then cancel" });
     const waitingSnapshot = await waiting;
 
-    expect(controller.submitApprovalDecision(
+    expect(dispatchApprovalCommand(
+      controller,
       approvalSubmission(waitingSnapshot, "cancel", {
         submissionId: "desktop-approval-cancel-1",
       }),
     )).toMatchObject({
-      status: "accepted_for_resolution",
-      submissionId: "desktop-approval-cancel-1",
+      status: "handled",
+      result: {
+        status: "accepted_for_resolution",
+        submissionId: "desktop-approval-cancel-1",
+      },
     });
 
     expect(await cancelled).toMatchObject({
@@ -984,7 +1009,7 @@ describe("HelarcMainController", () => {
   it("rejects approval submissions and cancellation without an active Run", () => {
     const controller = new HelarcMainController({ provider: new CompleteProvider() });
 
-    expect(controller.submitApprovalDecision({
+    expect(dispatchApprovalCommand(controller, {
       submissionId: "desktop-unknown-1",
       runId: "run-unknown",
       requestId: "unknown",
@@ -992,16 +1017,77 @@ describe("HelarcMainController", () => {
       optionId: "accept",
       grantedPermissions: null,
       reason: null,
-    })).toEqual({
+    })).toMatchObject({
       status: "rejected",
-      submissionId: "desktop-unknown-1",
-      code: "approval_not_pending",
+      code: "host_command_run_not_active",
     });
 
-    expect(controller.cancelRun()).toMatchObject({
-      ok: false,
-      error: { code: "run_not_active" },
+    expect(dispatchCancellationCommand(controller, "run-unknown")).toMatchObject({
+      status: "rejected",
+      code: "host_command_run_not_active",
     });
+  });
+
+  it("rejects a stale cancellation without touching a newer active Run", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-stale-cancel-"));
+    const controller = new HelarcMainController({
+      runtimeToolMode: "shell-enabled",
+      provider: new ScriptedProvider([
+        {
+          action: "complete",
+          summary: "First Run completed.",
+        },
+        {
+          action: "request_permissions",
+          rootId: "workspace",
+          permissions: { fileSystem: { write: ["marker.txt"] } },
+          reason: "Keep the second Run active.",
+        },
+      ]),
+    });
+    controller.selectWorkspacePath(workspaceRoot);
+
+    const firstCompleted = waitForSnapshot(
+      controller,
+      (snapshot) =>
+        snapshot.run?.platform.terminal?.status === "completed" &&
+        snapshot.threadSummaries[0]?.latestRun?.status === "completed",
+    );
+    await controller.startRun({ taskText: "Complete first" });
+    await firstCompleted;
+
+    const secondWaiting = waitForPendingApproval(controller);
+    await controller.startRun({ taskText: "Wait second" });
+    const secondSnapshot = await secondWaiting;
+    expect(secondSnapshot.run?.runId).toBe("helarc-run-2");
+
+    expect(dispatchCancellationCommand(
+      controller,
+      "helarc-run-1",
+      "host-stale-cancel-run-1",
+    )).toMatchObject({
+      status: "rejected",
+      runId: "helarc-run-1",
+      code: "host_command_run_not_active",
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "waiting_for_approval",
+      run: {
+        runId: "helarc-run-2",
+        display: { status: "waiting_for_approval" },
+      },
+    });
+
+    const secondCancelled = waitForActiveRunTerminal(controller, "cancelled");
+    expect(dispatchCancellationCommand(
+      controller,
+      "helarc-run-2",
+      "host-cancel-run-2",
+    )).toMatchObject({
+      status: "handled",
+      result: { status: "accepted" },
+    });
+    await secondCancelled;
   });
 
   it("correlates patch review decisions and applies accepted patches", async () => {
@@ -1127,14 +1213,13 @@ describe("HelarcMainController", () => {
       submissionId: "late-after-patch-cancel",
     });
 
-    expect(controller.cancelRun()).toMatchObject({
-      ok: true,
-      snapshot: {
-        status: "cancelling",
-        run: {
-          display: { status: "cancelling" },
-        },
-      },
+    expect(dispatchCancellationCommand(
+      controller,
+      pendingPatchReview(waitingSnapshot).runId,
+    )).toMatchObject({
+      status: "handled",
+      result: { status: "accepted" },
+      projection: { status: "cancelling" },
     });
     const cancelledSnapshot = await cancelled;
     expect(cancelledSnapshot).toMatchObject({
@@ -1539,6 +1624,37 @@ function approvalSubmission(
     reason: kind === "decline" ? "Declined in test." : null,
     ...overrides,
   };
+}
+
+function dispatchApprovalCommand(
+  controller: HelarcMainController,
+  submission: ApprovalDecisionSubmission,
+  commandId = `host-approval-${submission.submissionId}`,
+) {
+  const { runId, ...payload } = submission;
+  return controller.dispatchHostCommand({
+    version: HOST_COMMAND_VERSION,
+    commandId,
+    runId,
+    kind: "approval.submit",
+    payload,
+  }, "approval.submit");
+}
+
+function dispatchCancellationCommand(
+  controller: HelarcMainController,
+  runId: string,
+  commandId = `host-cancel-${runId}`,
+) {
+  return controller.dispatchHostCommand({
+    version: HOST_COMMAND_VERSION,
+    commandId,
+    runId,
+    kind: "run.cancel",
+    payload: {
+      reason: "Cancelled from Helarc desktop test.",
+    },
+  }, "run.cancel");
 }
 
 function patchSubmission(

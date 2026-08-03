@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type {
-  HelarcApprovalSubmissionReceipt,
   HelarcMainSnapshot,
   HelarcProviderKind,
   HelarcStartRunResult,
@@ -101,9 +100,14 @@ export function App() {
 
     setIsBusy(true);
     try {
-      setSnapshot(await api.chooseWorkspace());
-      setStartResult(null);
-      setSelectedThreadId(null);
+      const receipt = await api.chooseWorkspace({
+        commandId: createCommandId("workspace.choose"),
+      });
+      if (receipt.status === "handled") {
+        setSnapshot(receipt.result);
+        setStartResult(null);
+        setSelectedThreadId(null);
+      }
     } finally {
       setIsBusy(false);
     }
@@ -117,9 +121,15 @@ export function App() {
 
     setIsBusy(true);
     try {
-      setSnapshot(await api.selectWorkspaceProfile({ profileId }));
-      setStartResult(null);
-      setSelectedThreadId(null);
+      const receipt = await api.selectWorkspaceProfile({
+        commandId: createCommandId("workspace.select"),
+        profileId,
+      });
+      if (receipt.status === "handled") {
+        setSnapshot(receipt.result);
+        setStartResult(null);
+        setSelectedThreadId(null);
+      }
     } finally {
       setIsBusy(false);
     }
@@ -132,9 +142,14 @@ export function App() {
     }
     setIsBusy(true);
     try {
-      const result = await api.openThread({ threadId });
-      setSelectedThreadId(threadId);
-      setSnapshot(result.snapshot);
+      const receipt = await api.openThread({
+        commandId: createCommandId("thread.open"),
+        threadId,
+      });
+      if (receipt.status === "handled") {
+        setSelectedThreadId(threadId);
+        setSnapshot(receipt.result.snapshot);
+      }
     } finally {
       setIsBusy(false);
     }
@@ -149,9 +164,14 @@ export function App() {
 
     setIsBusy(true);
     try {
-      const result = await api.startRun({ taskText });
-      setStartResult(result);
-      setSnapshot(result.snapshot);
+      const receipt = await api.startRun({
+        commandId: createCommandId("run.start"),
+        taskText,
+      });
+      if (receipt.status === "handled") {
+        setStartResult(receipt.result);
+        setSnapshot(receipt.result.snapshot);
+      }
     } finally {
       setIsBusy(false);
     }
@@ -177,7 +197,8 @@ export function App() {
 
     setIsBusy(true);
     try {
-      const receipt: HelarcApprovalSubmissionReceipt = await api.submitApprovalDecision({
+      const response = await api.submitApprovalDecision({
+        commandId: createCommandId("approval.submit"),
         submissionId: `helarc-desktop-${crypto.randomUUID()}`,
         runId: pendingApproval.request.runId,
         requestId: pendingApproval.request.id,
@@ -190,8 +211,14 @@ export function App() {
             ? "Cancelled from Helarc desktop."
             : null,
       });
+      setSnapshot(response.snapshot);
       setApprovalSubmissionError(
-        receipt.status === "rejected" ? receipt.code : null,
+        response.receipt.status === "rejected"
+          ? response.receipt.code
+          : response.receipt.kind === "approval.submit" &&
+              response.receipt.result.status === "rejected"
+            ? response.receipt.result.code
+            : null,
       );
     } finally {
       setIsBusy(false);
@@ -200,14 +227,19 @@ export function App() {
 
   async function cancelRun() {
     const api = getHelarcApi();
-    if (!api) {
+    const runId = snapshot.run?.runId;
+    if (!api || !runId) {
       return;
     }
 
     setIsBusy(true);
     try {
-      const result = await api.cancelRun();
-      setSnapshot(result.snapshot);
+      const response = await api.cancelRun({
+        commandId: createCommandId("run.cancel"),
+        runId,
+        reason: "Cancelled from Helarc desktop.",
+      });
+      setSnapshot(response.snapshot);
     } finally {
       setIsBusy(false);
     }
@@ -221,7 +253,8 @@ export function App() {
 
     setIsBusy(true);
     try {
-      const result = await api.resolvePatchReview({
+      const receipt = await api.resolvePatchReview({
+        commandId: createCommandId("patch_review.submit"),
         submissionId: globalThis.crypto.randomUUID(),
         runId: pendingPatchReview.runId,
         proposalId: pendingPatchReview.proposalId,
@@ -230,7 +263,9 @@ export function App() {
         decision,
         reason: decision === "accepted" ? "Accepted from Helarc desktop." : "Rejected from Helarc desktop.",
       });
-      setSnapshot(result.snapshot);
+      if (receipt.status === "handled") {
+        setSnapshot(receipt.result.snapshot);
+      }
     } finally {
       setIsBusy(false);
     }
@@ -788,7 +823,8 @@ function SettingsPanel({
 
     setIsSaving(true);
     try {
-      const nextSnapshot = await api.saveProviderConfig({
+      const receipt = await api.saveProviderConfig({
+        commandId: createCommandId("provider.save"),
         providerKind: submittedProviderKind,
         displayName: submittedDisplayName,
         baseUrl: submittedBaseUrl,
@@ -801,7 +837,9 @@ function SettingsPanel({
             : "clear",
         apiKey: submittedApiKey,
       });
-      onSaved(nextSnapshot);
+      if (receipt.status === "handled") {
+        onSaved(receipt.result);
+      }
     } finally {
       setIsSaving(false);
     }
@@ -1197,4 +1235,8 @@ function renderTaskTemplatePrompt(promptText: string, constraints: string[]): st
   }
 
   return `${promptText}\n\nConstraints:\n${constraints.map((constraint) => `- ${constraint}`).join("\n")}`;
+}
+
+function createCommandId(kind: string): string {
+  return `helarc-desktop-${kind}-${globalThis.crypto.randomUUID()}`;
 }

@@ -1,7 +1,11 @@
 import {
+  createHostCommandDispatcher,
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,
   createUserApprovalReviewBridge,
+  type HostCommandDispatcher,
+  type HostCommandKind,
+  type HostCommandReceipt,
   type HostTerminalRunProjection,
   type UserApprovalReviewBridge,
 } from "@agent-anything/host";
@@ -43,10 +47,6 @@ import {
   type HelarcWorkspaceProfile,
 } from "@agent-anything/helarc";
 import type { RunWorkspace } from "@agent-anything/foundation";
-import type {
-  ApprovalDecisionSubmission,
-  ApprovalSubmissionReceipt,
-} from "@agent-anything/permission";
 import type { Provider } from "@agent-anything/model-interaction";
 import { basename, isAbsolute, normalize } from "node:path";
 import type { ProviderCredentialStoreError } from "./provider/ProviderCredentialStore.js";
@@ -213,10 +213,6 @@ export type StartHelarcRunResult =
   | { ok: true; taskId: string; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
 
-export type CancelHelarcRunResult =
-  | { ok: true; snapshot: HelarcMainSnapshot }
-  | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
-
 export type ResolveHelarcPatchReviewInput = HelarcPatchReviewDecisionSubmission;
 
 export type ResolveHelarcPatchReviewResult =
@@ -275,6 +271,19 @@ export class HelarcMainController {
   private inactiveStatus: "idle" | "workspace_selected" = "idle";
   private nextTaskNumber = 1;
   private activeRunSlot: DesktopActiveRunSlot = { kind: "empty" };
+  private readonly hostCommandDispatcher: HostCommandDispatcher =
+    createHostCommandDispatcher({
+      resolveActiveRun: (runId) => {
+        const slot = this.activeRunSlot;
+        return slot.kind === "active" && slot.handle.runId === runId
+          ? slot.handle
+          : null;
+      },
+      cancellationAttribution: {
+        origin: "user",
+        reasonCode: "user_requested",
+      },
+    });
   private runProjectionUnsubscribers: Array<() => void> = [];
   private readonly sessionAuthorityStore = createInMemoryHostSessionAuthorityStore({
     maxRecords: 64,
@@ -343,6 +352,13 @@ export class HelarcMainController {
     return () => {
       this.snapshotSubscribers.delete(subscriber);
     };
+  }
+
+  dispatchHostCommand(
+    candidate: unknown,
+    expectedKind: HostCommandKind,
+  ): HostCommandReceipt {
+    return this.hostCommandDispatcher.dispatch(candidate, expectedKind);
   }
 
   selectWorkspacePath(workspacePath: string): HelarcMainSnapshot {
@@ -560,41 +576,6 @@ export class HelarcMainController {
       this.publishSnapshot();
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
-  }
-
-  submitApprovalDecision(
-    input: ApprovalDecisionSubmission,
-  ): ApprovalSubmissionReceipt {
-    const slot = this.activeRunSlot;
-    if (slot.kind !== "active") {
-      return {
-        status: "rejected",
-        submissionId: typeof input?.submissionId === "string" ? input.submissionId : "",
-        code: "approval_not_pending",
-      };
-    }
-    return slot.handle.submitApprovalDecision(input);
-  }
-
-  cancelRun(): CancelHelarcRunResult {
-    const slot = this.activeRunSlot;
-    if (slot.kind !== "active") {
-      const error = this.setError("run_not_active", "No Helarc Run is active.");
-      return { ok: false, error, snapshot: this.getSnapshot() };
-    }
-
-    const cancellationInput = {
-      origin: "user",
-      reasonCode: "user_requested",
-      reason: "Cancelled from Helarc desktop.",
-    } as const;
-    const receipt = slot.handle.cancel(cancellationInput);
-    if (receipt.status === "run_settled" || receipt.status === "start_failed") {
-      const error = this.setError("run_not_active", "No Helarc Run is active.");
-      return { ok: false, error, snapshot: this.getSnapshot() };
-    }
-    this.lastError = null;
-    return { ok: true, snapshot: this.publishSnapshot() };
   }
 
   resolvePatchReview(input: ResolveHelarcPatchReviewInput): ResolveHelarcPatchReviewResult {

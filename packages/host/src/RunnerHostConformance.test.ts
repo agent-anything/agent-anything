@@ -466,6 +466,7 @@ function createHostInput(input: {
   return {
     sessionId: "session-conformance",
     agent: createAgent(),
+    userApprovalReviewBridge: null,
     runInput: {
       runId: "run-conformance",
       task: {

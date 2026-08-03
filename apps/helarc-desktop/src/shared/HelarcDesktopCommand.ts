@@ -1,0 +1,63 @@
+export const HELARC_PRODUCT_COMMAND_VERSION = 1 as const;
+export const HELARC_PRODUCT_COMMAND_RECEIPT_LIMIT = 4_096;
+
+export type HelarcProductCommandKind =
+  | "workspace.choose"
+  | "workspace.select"
+  | "provider.save"
+  | "run.start"
+  | "patch_review.submit"
+  | "thread.open";
+
+export interface HelarcProductCommandPayloadMap {
+  readonly "workspace.choose": Record<string, never>;
+  readonly "workspace.select": {
+    readonly profileId: string;
+  };
+  readonly "provider.save": {
+    readonly providerKind: "openai-compatible" | "ollama";
+    readonly displayName: string;
+    readonly baseUrl: string;
+    readonly model: string;
+    readonly timeoutMs: number;
+    readonly apiKeyUpdate: "keep" | "set" | "clear";
+    readonly apiKey: string;
+  };
+  readonly "run.start": {
+    readonly taskText: string;
+  };
+  readonly "patch_review.submit": {
+    readonly submissionId: string;
+    readonly runId: string;
+    readonly proposalId: string;
+    readonly reviewId: string;
+    readonly pendingVersion: number;
+    readonly decision: "accepted" | "rejected";
+    readonly reason: string | null;
+  };
+  readonly "thread.open": {
+    readonly threadId: string;
+  };
+}
+
+export interface HelarcProductCommandEnvelope<
+  TKind extends HelarcProductCommandKind,
+> {
+  readonly version: typeof HELARC_PRODUCT_COMMAND_VERSION;
+  readonly commandId: string;
+  readonly kind: TKind;
+  readonly payload: HelarcProductCommandPayloadMap[TKind];
+}
+
+export type HelarcProductCommand = {
+  [TKind in HelarcProductCommandKind]: HelarcProductCommandEnvelope<TKind>;
+}[HelarcProductCommandKind];
+
+export type HelarcProductCommandRejectionCode =
+  | "helarc_product_command_invalid"
+  | "helarc_product_command_version_unsupported"
+  | "helarc_product_command_kind_unsupported"
+  | "helarc_product_command_kind_mismatch"
+  | "helarc_product_command_id_conflict"
+  | "helarc_product_command_ledger_full"
+  | "helarc_product_command_failed";
