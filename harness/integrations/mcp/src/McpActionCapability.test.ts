@@ -1,7 +1,13 @@
 import type { TrustedRemoteActionRegistration } from "@agent-anything/remote-integrations/action";
 import { describe, expect, it } from "vitest";
 import { createMcpActionCapability } from "./createMcpActionCapability.js";
+import { createMcpContractFingerprint } from "./McpJson.js";
 import type { McpActivationSnapshot } from "./McpLifecycle.js";
+import type { McpSourceSnapshot } from "./McpPrimitives.js";
+import {
+  MCP_JSON_SCHEMA_2020_12,
+  MCP_SCHEMA_TRANSLATION_VERSION,
+} from "./McpSchema.js";
 
 const SERVER_FINGERPRINT = `sha256:${"a".repeat(64)}`;
 const TRANSPORT_FINGERPRINT = `sha256:${"b".repeat(64)}`;
@@ -13,13 +19,13 @@ const NOW = "2026-08-03T04:00:00.000Z";
 describe("createMcpActionCapability", () => {
   it("reuses the protocol-neutral remote enforcement adapter", () => {
     const trustedRegistration = registration();
-    const active = activation();
+    const source = sourceSnapshot();
     const capability = createMcpActionCapability({
       registration: trustedRegistration,
-      activationResolver: {
-        resolveActivation(input) {
+      sourceResolver: {
+        resolveSource(input) {
           return input.registrationFingerprint === SERVER_FINGERPRINT
-            ? active
+            ? source
             : null;
         },
       },
@@ -56,9 +62,9 @@ describe("createMcpActionCapability", () => {
 
     expect(() => createMcpActionCapability({
       registration: remote,
-      activationResolver: {
-        resolveActivation() {
-          return activation();
+      sourceResolver: {
+        resolveSource() {
+          return sourceSnapshot();
         },
       },
       operationPort: {
@@ -69,11 +75,11 @@ describe("createMcpActionCapability", () => {
     })).toThrow("MCP Action capability requires MCP Tool source provenance.");
   });
 
-  it("requires a current activation with exact source provenance", () => {
+  it("requires a current source epoch with exact Tool provenance", () => {
     expect(() => createMcpActionCapability({
       registration: registration(),
-      activationResolver: {
-        resolveActivation() {
+      sourceResolver: {
+        resolveSource() {
           return null;
         },
       },
@@ -82,7 +88,7 @@ describe("createMcpActionCapability", () => {
           throw new Error("not executed");
         },
       },
-    })).toThrow("requires a current validated activation");
+    })).toThrow("requires a current validated source snapshot");
 
     expect(() => createMcpActionCapability({
       registration: registration({
@@ -94,9 +100,9 @@ describe("createMcpActionCapability", () => {
           capabilityId: "status",
         },
       }),
-      activationResolver: {
-        resolveActivation() {
-          return activation();
+      sourceResolver: {
+        resolveSource() {
+          return sourceSnapshot();
         },
       },
       operationPort: {
@@ -104,7 +110,9 @@ describe("createMcpActionCapability", () => {
           throw new Error("not executed");
         },
       },
-    })).toThrow("requires exact server, registration, and activation provenance");
+    })).toThrow(
+      "requires exact server, registration, and source-epoch provenance",
+    );
   });
 });
 
@@ -138,14 +146,76 @@ function registration(
     toolDisplayName: "Status",
     inputSchema: { type: "object" },
     schema: {
-      dialect: "json-schema-2020-12",
-      translationVersion: "native-v1",
+      dialect: MCP_JSON_SCHEMA_2020_12,
+      translationVersion: MCP_SCHEMA_TRANSLATION_VERSION,
     },
     registrationVersion: "1",
     supportsSessionAuthority: true,
     timeoutMs: 1_000,
     ...overrides,
   };
+}
+
+function sourceSnapshot(): McpSourceSnapshot {
+  const inputSchema = Object.freeze({ type: "object" as const });
+  const schema = Object.freeze({
+    dialect: MCP_JSON_SCHEMA_2020_12,
+    translationVersion: MCP_SCHEMA_TRANSLATION_VERSION,
+  });
+  const inputSchemaFingerprint = createMcpContractFingerprint(
+    "agent-anything.mcp-json-schema.v1",
+    Object.freeze({
+      dialect: schema.dialect,
+      schema: inputSchema,
+    }),
+  );
+  const descriptor = Object.freeze({
+    name: "status",
+    title: "Status",
+    description: "Read server status.",
+    icons: Object.freeze([]),
+    inputSchema,
+    schema,
+    inputSchemaFingerprint,
+    outputSchemaFingerprint: null,
+    annotations: Object.freeze({}),
+    headerBindings: Object.freeze([]),
+    sourceMetadata: Object.freeze({}),
+    descriptorFingerprint: `sha256:${"f".repeat(64)}`,
+  });
+  const cache = Object.freeze({
+    ttlMs: 5_000,
+    scope: "private" as const,
+    receivedAt: NOW,
+    expiresAt: "2026-08-03T04:00:05.000Z",
+  });
+  const unsupported = Object.freeze({
+    advertised: false,
+    snapshotId: `sha256:${"1".repeat(64)}`,
+    items: Object.freeze([]),
+    cache: null,
+  });
+  return Object.freeze({
+    schemaVersion: 1,
+    sourceSnapshotId: `sha256:${"2".repeat(64)}`,
+    serverId: "mcp_server",
+    registrationFingerprint: SERVER_FINGERPRINT,
+    sourceEpoch: 1,
+    authorityBindingId: "authority-main",
+    protocolRevision: "2026-07-28",
+    transportActivation: activation(),
+    tools: Object.freeze({
+      advertised: true,
+      snapshotId: `sha256:${"3".repeat(64)}`,
+      items: Object.freeze([descriptor]),
+      cache,
+    }),
+    resources: unsupported,
+    resourceTemplates: unsupported,
+    prompts: unsupported,
+    diagnostics: Object.freeze([]),
+    publishedAt: NOW,
+  });
 }
 
 function activation(): McpActivationSnapshot {
@@ -155,7 +225,7 @@ function activation(): McpActivationSnapshot {
     serverId: "mcp_server",
     registrationFingerprint: SERVER_FINGERPRINT,
     transportBindingFingerprint: TRANSPORT_FINGERPRINT,
-    activationEpoch: 1,
+    activationGeneration: 1,
     displayName: "MCP Server",
     authorityBindingId: "authority-main",
     protocolRevision: "2026-07-28",
@@ -182,10 +252,10 @@ function activation(): McpActivationSnapshot {
       selfReportedServerInfo: null,
       instructions: null,
       cache: Object.freeze({
-        ttlMs: 0,
+        ttlMs: 5_000,
         scope: "private",
         receivedAt: NOW,
-        expiresAt: NOW,
+        expiresAt: "2026-08-03T04:00:05.000Z",
       }),
     }),
     activatedAt: NOW,

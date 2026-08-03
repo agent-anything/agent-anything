@@ -16,7 +16,14 @@ export { McpActivationError } from "./McpLifecycle.js";
 export type {
   McpCacheScope,
   McpDiscoverySnapshot,
+  McpOperationCache,
+  McpOperationErrorCode,
+  McpProtocolErrorCode,
   McpServerCapabilitySnapshot,
+} from "./McpProtocol.js";
+export {
+  McpOperationError,
+  McpProtocolError,
 } from "./McpProtocol.js";
 export type {
   McpClientProfile,
@@ -48,7 +55,42 @@ export type {
   McpTransportConnectRequest,
   McpTransportOperationControl,
   McpTransportRequest,
+  McpTransportResponseStream,
 } from "./McpTransport.js";
+export type {
+  McpBlobResourceContent,
+  McpIcon,
+  McpPrimitiveCache,
+  McpPrimitiveDiagnostic,
+  McpPrimitiveInventory,
+  McpPrimitiveKind,
+  McpPromptArgumentDescriptor,
+  McpPromptDescriptor,
+  McpPromptGetInput,
+  McpPromptGetResult,
+  McpPromptMessage,
+  McpPromptPort,
+  McpResourceAnnotations,
+  McpResourceContent,
+  McpResourceDescriptor,
+  McpResourcePort,
+  McpResourceReadInput,
+  McpResourceReadResult,
+  McpResourceTemplateDescriptor,
+  McpSourceLookup,
+  McpSourceResolver,
+  McpSourceSnapshot,
+  McpSubscriptionAcknowledgement,
+  McpSubscriptionEvent,
+  McpSubscriptionFilter,
+  McpSubscriptionHandle,
+  McpTextResourceContent,
+  McpToolCallOutput,
+  McpToolDescriptor,
+  RefreshMcpSourceInput,
+  StartMcpSubscriptionInput,
+} from "./McpPrimitives.js";
+export { McpPrimitiveError } from "./McpPrimitiveCoordinator.js";
 export type {
   McpToolCallInput,
   McpToolCallResult,

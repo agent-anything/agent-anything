@@ -18,6 +18,7 @@ import type {
   McpTransportConnectRequest,
   McpTransportOperationControl,
   McpTransportRequest,
+  McpTransportResponseStream,
 } from "./McpTransport.js";
 
 const NOW = "2026-08-03T04:00:00.000Z";
@@ -120,7 +121,7 @@ describe("McpRegistry activation lifecycle", () => {
     )).toEqual(["server/discover"]);
     expect(activation).toMatchObject({
       serverId: "server-main",
-      activationEpoch: 1,
+      activationGeneration: 1,
       protocolRevision: "2026-07-28",
       transportConnectionId: "connection-1",
       discovery: {
@@ -163,7 +164,9 @@ describe("McpRegistry activation lifecycle", () => {
     expect(registry.getActiveSnapshot("server-main")).toBeNull();
 
     pending.resolve(discoverResponse("id-2"));
-    await expect(activation).resolves.toMatchObject({ activationEpoch: 1 });
+    await expect(activation).resolves.toMatchObject({
+      activationGeneration: 1,
+    });
   });
 
   it("fails closed for unsupported revisions without an initialize fallback", async () => {
@@ -202,7 +205,7 @@ describe("McpRegistry activation lifecycle", () => {
       serverId: registration.serverId,
       registrationFingerprint: registration.registrationFingerprint,
     })).resolves.toMatchObject({
-      activationEpoch: 1,
+      activationGeneration: 1,
     });
   });
 
@@ -327,7 +330,7 @@ describe("McpRegistry activation lifecycle", () => {
       serverId: extension.registration.serverId,
       registrationFingerprint: extension.registration.registrationFingerprint,
     })).resolves.toMatchObject({
-      activationEpoch: 1,
+      activationGeneration: 1,
     });
     expect(
       extension.registry.getActiveSnapshot("server-main")?.discovery,
@@ -516,8 +519,8 @@ describe("McpRegistry activation lifecycle", () => {
       registrationFingerprint: registration.registrationFingerprint,
     });
 
-    expect(first.activationEpoch).toBe(1);
-    expect(second.activationEpoch).toBe(2);
+    expect(first.activationGeneration).toBe(1);
+    expect(second.activationGeneration).toBe(2);
     expect(second.transportConnectionId).toBe("connection-2");
     expect(registry.getActiveSnapshot("server-main")).toBe(second);
   });
@@ -551,7 +554,7 @@ describe("McpRegistry activation lifecycle", () => {
     staleResponse.resolve(discoverResponse("id-2", { prompts: {} }));
     await flushMicrotasks();
 
-    expect(current.activationEpoch).toBe(1);
+    expect(current.activationGeneration).toBe(1);
     expect(current.discovery.serverCapabilities.advertisedCapabilityIds).toEqual([
       "resources",
       "tools",
@@ -664,6 +667,13 @@ class TestConnection implements McpTransportConnection {
   ): Promise<unknown> {
     this.requests.push({ request, control });
     return this.handler(request, control);
+  }
+
+  async openStream(
+    _request: McpTransportRequest,
+    _control: McpTransportOperationControl,
+  ): Promise<McpTransportResponseStream> {
+    throw new Error("Test connection has no configured response stream.");
   }
 
   async close(

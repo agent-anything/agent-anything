@@ -9,13 +9,13 @@ export interface McpActivationRef {
   readonly serverId: string;
   readonly registrationFingerprint: string;
   readonly transportBindingFingerprint: string;
-  readonly activationEpoch: number;
+  readonly activationGeneration: number;
 }
 
 export interface McpActivationLookup {
   readonly serverId: string;
   readonly registrationFingerprint: string;
-  readonly activationEpoch: number;
+  readonly activationGeneration: number;
 }
 
 export interface McpActivationSnapshot extends McpActivationRef {

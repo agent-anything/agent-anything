@@ -28,7 +28,8 @@
   "dependencies": {
     "@agent-anything/foundation": "workspace:*",
     "@agent-anything/remote-integrations": "workspace:*",
-    "@agent-anything/tools": "workspace:*"
+    "@agent-anything/tools": "workspace:*",
+    "ajv": "8.20.0"
   },
   "license": "Apache-2.0",
   "private": true

@@ -51,6 +51,7 @@ export interface RemoteActionInvokeInput {
   readonly toolName: string;
   readonly input: SerializableValue;
   readonly timeoutMs: number | null;
+  readonly signal: AbortSignal;
 }
 
 export interface RemoteActionInvokePort {

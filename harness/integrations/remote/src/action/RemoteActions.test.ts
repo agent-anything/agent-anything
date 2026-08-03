@@ -139,6 +139,7 @@ describe("canonical remote Actions", () => {
       actionName: string;
       serverId: string;
       toolName: string;
+      signal: AbortSignal;
     }) => ({
       toolCallId: input.actionId,
       toolName: input.actionName,
@@ -164,6 +165,7 @@ describe("canonical remote Actions", () => {
       serverId: registration.server.serverId,
       toolName: registration.toolName,
       timeoutMs: registration.timeoutMs,
+      signal: expect.any(AbortSignal),
     }));
   });
 

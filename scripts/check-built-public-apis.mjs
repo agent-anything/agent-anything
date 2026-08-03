@@ -493,6 +493,9 @@ const expectedMcpValueExports = {
   "@agent-anything/mcp": [
     "MCP_PROTOCOL_REVISION",
     "McpActivationError",
+    "McpOperationError",
+    "McpPrimitiveError",
+    "McpProtocolError",
     "McpRegistrationError",
     "McpRegistry",
     "createMcpActionCapability",

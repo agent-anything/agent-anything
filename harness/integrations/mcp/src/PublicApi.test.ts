@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import * as mcpApi from "./index.js";
 import type {
   McpActivationResolver,
+  McpSourceResolver,
   McpToolOperationPort,
   McpTransportConnector,
 } from "./index.js";
@@ -12,6 +13,9 @@ describe("MCP public API", () => {
     expect(Object.keys(mcpApi).sort()).toEqual([
       "MCP_PROTOCOL_REVISION",
       "McpActivationError",
+      "McpOperationError",
+      "McpPrimitiveError",
+      "McpProtocolError",
       "McpRegistrationError",
       "McpRegistry",
       "createMcpServerRegistration",
@@ -23,6 +27,7 @@ describe("MCP public API", () => {
   it("uses the public remote Action capability Contract", () => {
     expectTypeOf<McpTransportConnector>().toBeObject();
     expectTypeOf<McpActivationResolver>().toBeObject();
+    expectTypeOf<McpSourceResolver>().toBeObject();
     expectTypeOf<McpToolOperationPort>().toBeObject();
     expectTypeOf<ReturnType<typeof mcpApi.createMcpActionCapability>>()
       .toMatchTypeOf<RemoteActionCapability>();

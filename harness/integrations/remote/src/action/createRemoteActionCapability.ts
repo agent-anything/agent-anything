@@ -285,6 +285,7 @@ function createRemoteActionExecutor(
           toolName: payload.toolName,
           input: payload.input,
           timeoutMs: payload.timeoutMs,
+          signal: context.interruption.signal,
         });
         if (result.toolCallId !== context.attempt.actionId || result.toolName !== payload.actionName) {
           throw new RemoteActionError(

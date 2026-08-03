@@ -63,6 +63,7 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/foundation",
     "@agent-anything/remote-integrations",
     "@agent-anything/tools",
+    "ajv",
   ],
   "@agent-anything/plugins": [
     "@agent-anything/foundation",

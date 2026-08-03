@@ -12,6 +12,7 @@ import {
   validateMcpToken,
   validateNonNegativeSafeInteger,
 } from "./McpJson.js";
+import { encodeMcpHeaderValue } from "./McpHeaders.js";
 import {
   MCP_PROTOCOL_REVISION,
   type McpClientProfile,
@@ -59,6 +60,13 @@ export type McpProtocolErrorCode =
   | "mcp_protocol_version_unsupported"
   | "mcp_required_capability_missing";
 
+export type McpOperationErrorCode =
+  | "mcp_operation_response_invalid"
+  | "mcp_operation_rejected"
+  | "mcp_operation_result_unsupported"
+  | "mcp_protocol_version_unsupported"
+  | "mcp_header_mismatch";
+
 export class McpProtocolError extends Error {
   constructor(
     readonly code: McpProtocolErrorCode,
@@ -67,6 +75,24 @@ export class McpProtocolError extends Error {
     super(message);
     this.name = "McpProtocolError";
   }
+}
+
+export class McpOperationError extends Error {
+  constructor(
+    readonly code: McpOperationErrorCode,
+    message: string,
+    readonly remoteCode: number | null = null,
+  ) {
+    super(message);
+    this.name = "McpOperationError";
+  }
+}
+
+export interface McpOperationCache {
+  readonly ttlMs: number;
+  readonly scope: McpCacheScope;
+  readonly receivedAt: ISODateTimeString;
+  readonly expiresAt: ISODateTimeString;
 }
 
 export function createMcpDiscoverRequest(input: {
@@ -107,6 +133,175 @@ export function createMcpDiscoverRequest(input: {
       })
       : null,
   });
+}
+
+export function createMcpOperationRequest(input: {
+  readonly requestId: string;
+  readonly transportKind: McpTransportKind;
+  readonly client: McpClientProfile;
+  readonly method: string;
+  readonly params: McpJsonObject;
+  readonly name?: string;
+  readonly parameterHeaders?: Readonly<Record<string, string>>;
+}): McpTransportRequest {
+  const requestId = validateMcpToken(
+    input.requestId,
+    "operation.requestId",
+    512,
+  );
+  const method = validateMcpToken(input.method, "operation.method", 256);
+  if (Object.hasOwn(input.params, "_meta")) {
+    throw new McpOperationError(
+      "mcp_operation_response_invalid",
+      "MCP operation params cannot supply protocol metadata.",
+    );
+  }
+  const paramsInput = snapshotMcpJsonObject(
+    input.params,
+    "operation.params",
+  );
+  const meta: McpJsonObject = Object.freeze({
+    [PROTOCOL_VERSION_META_KEY]: MCP_PROTOCOL_REVISION,
+    [CLIENT_INFO_META_KEY]: Object.freeze({
+      name: input.client.info.name,
+      version: input.client.info.version,
+    }),
+    [CLIENT_CAPABILITIES_META_KEY]: input.client.capabilities,
+  });
+  const params = Object.freeze({
+    ...paramsInput,
+    _meta: meta,
+  });
+  const message = Object.freeze({
+    jsonrpc: "2.0" as const,
+    id: requestId,
+    method,
+    params,
+  });
+  if (input.transportKind !== "streamable-http") {
+    return Object.freeze({ message, httpHeaders: null });
+  }
+
+  const headers: Record<string, string> = {
+    Accept: "application/json, text/event-stream",
+    "MCP-Protocol-Version": MCP_PROTOCOL_REVISION,
+    "Mcp-Method": method,
+  };
+  if (input.name !== undefined) {
+    if (
+      typeof input.name !== "string" ||
+      input.name.length === 0 ||
+      input.name.length > 8_192
+    ) {
+      throw new McpOperationError(
+        "mcp_operation_response_invalid",
+        "MCP operation name is invalid.",
+      );
+    }
+    headers["Mcp-Name"] = encodeMcpHeaderValue(input.name);
+  }
+  for (const [name, value] of Object.entries(input.parameterHeaders ?? {})) {
+    if (
+      !/^Mcp-Param-[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name) ||
+      typeof value !== "string" ||
+      Object.keys(headers).some(
+        (existing) => existing.toLowerCase() === name.toLowerCase(),
+      )
+    ) {
+      throw new McpOperationError(
+        "mcp_operation_response_invalid",
+        "MCP operation parameter headers are invalid.",
+      );
+    }
+    headers[name] = value;
+  }
+  return Object.freeze({
+    message,
+    httpHeaders: Object.freeze(headers) as McpTransportRequest["httpHeaders"],
+  });
+}
+
+export function parseMcpOperationResponse(input: {
+  readonly response: unknown;
+  readonly requestId: string;
+  readonly operation: string;
+}): McpJsonObject {
+  try {
+    assertPlainRecord(input.response, "response");
+    assertExactDataProperties(
+      input.response,
+      new Set(["jsonrpc", "id"]),
+      new Set(["result", "error"]),
+      "response",
+    );
+    if (
+      input.response.jsonrpc !== "2.0" ||
+      input.response.id !== input.requestId
+    ) {
+      operationInvalid("MCP operation response identity is invalid.");
+    }
+    const hasResult = Object.hasOwn(input.response, "result");
+    const hasError = Object.hasOwn(input.response, "error");
+    if (hasResult === hasError) {
+      operationInvalid(
+        "MCP operation response must contain exactly one result or error.",
+      );
+    }
+    if (hasError) {
+      throwOperationError(input.response.error, input.operation);
+    }
+    return snapshotMcpJsonObject(
+      input.response.result,
+      "response.result",
+    );
+  } catch (error) {
+    if (error instanceof McpOperationError) throw error;
+    throw new McpOperationError(
+      "mcp_operation_response_invalid",
+      error instanceof Error
+        ? error.message
+        : "MCP operation response is invalid.",
+    );
+  }
+}
+
+export function parseMcpOperationCache(input: {
+  readonly result: McpJsonObject;
+  readonly receivedAt: ISODateTimeString;
+  readonly maxTtlMs: number;
+  readonly path?: string;
+}): McpOperationCache {
+  const path = input.path ?? "response.result";
+  try {
+    const advertisedTtlMs = validateNonNegativeSafeInteger(
+      input.result.ttlMs,
+      `${path}.ttlMs`,
+    );
+    const ttlMs = Math.min(advertisedTtlMs, input.maxTtlMs);
+    const scope = snapshotCacheScope(input.result.cacheScope);
+    const receivedAtMs = Date.parse(input.receivedAt);
+    if (!Number.isFinite(receivedAtMs)) {
+      operationInvalid("MCP cache receivedAt is invalid.");
+    }
+    const expiresAtMs = receivedAtMs + ttlMs;
+    if (!Number.isSafeInteger(expiresAtMs)) {
+      operationInvalid("MCP cache expiry exceeds the supported range.");
+    }
+    return Object.freeze({
+      ttlMs,
+      scope,
+      receivedAt: input.receivedAt,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+    });
+  } catch (error) {
+    if (error instanceof McpOperationError) throw error;
+    throw new McpOperationError(
+      "mcp_operation_response_invalid",
+      error instanceof Error
+        ? error.message
+        : "MCP cache metadata is invalid.",
+    );
+  }
 }
 
 export function parseMcpDiscoverResponse(input: {
@@ -325,6 +520,43 @@ function throwDiscoveryError(input: unknown): never {
     "mcp_discovery_rejected",
     "MCP server rejected discovery.",
   );
+}
+
+function throwOperationError(input: unknown, operation: string): never {
+  assertPlainRecord(input, "response.error");
+  assertExactDataProperties(
+    input,
+    new Set(["code", "message"]),
+    new Set(["data"]),
+    "response.error",
+  );
+  if (!Number.isSafeInteger(input.code) || typeof input.message !== "string") {
+    operationInvalid("MCP operation error response is malformed.");
+  }
+  const remoteCode = input.code as number;
+  if (remoteCode === -32022) {
+    throw new McpOperationError(
+      "mcp_protocol_version_unsupported",
+      `MCP server rejected the protocol revision during ${operation}.`,
+      remoteCode,
+    );
+  }
+  if (remoteCode === -32020) {
+    throw new McpOperationError(
+      "mcp_header_mismatch",
+      `MCP server rejected request headers during ${operation}.`,
+      remoteCode,
+    );
+  }
+  throw new McpOperationError(
+    "mcp_operation_rejected",
+    `MCP server rejected ${operation}.`,
+    remoteCode,
+  );
+}
+
+function operationInvalid(message: string): never {
+  throw new McpOperationError("mcp_operation_response_invalid", message);
 }
 
 function invalid(message: string): never {

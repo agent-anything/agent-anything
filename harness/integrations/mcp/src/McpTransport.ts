@@ -13,6 +13,7 @@ export interface McpJsonRpcRequest {
 }
 
 export interface McpHttpRequestHeaders {
+  readonly [headerName: string]: string | undefined;
   readonly Accept: "application/json, text/event-stream";
   readonly "MCP-Protocol-Version": McpProtocolRevision;
   readonly "Mcp-Method": string;
@@ -28,7 +29,11 @@ export interface McpTransportOperationControl {
   readonly operationId: string;
   readonly registrationFingerprint: string;
   readonly sourceEpoch: number | null;
-  readonly deadlineAt: ISODateTimeString;
+  readonly deadlineAt: ISODateTimeString | null;
+  /**
+   * STDIO maps abort to notifications/cancelled; Streamable HTTP closes the
+   * request-scoped response stream.
+   */
   readonly signal: AbortSignal;
 }
 
@@ -57,6 +62,10 @@ export interface McpTransportCloseRequest {
     | "stale_connection";
 }
 
+export interface McpTransportResponseStream {
+  readonly messages: AsyncIterable<unknown>;
+}
+
 export interface McpTransportConnection {
   readonly identity: McpTransportConnectionIdentity;
   readonly closed: Promise<McpTransportClosure>;
@@ -64,6 +73,10 @@ export interface McpTransportConnection {
     request: McpTransportRequest,
     control: McpTransportOperationControl,
   ): Promise<unknown>;
+  openStream(
+    request: McpTransportRequest,
+    control: McpTransportOperationControl,
+  ): Promise<McpTransportResponseStream>;
   close(
     request: McpTransportCloseRequest,
     control: McpTransportOperationControl,

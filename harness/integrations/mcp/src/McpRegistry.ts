@@ -6,18 +6,37 @@ import {
   type McpActivationResolver,
   type McpActivationSnapshot,
   type McpLifecycleFailure,
-  type McpLifecycleFailureCode,
   type McpLifecycleState,
 } from "./McpLifecycle.js";
 import {
   createMcpContractFingerprint,
+  type McpJsonObject,
   validateMcpToken,
 } from "./McpJson.js";
 import {
+  createMcpOperationRequest,
   createMcpDiscoverRequest,
+  McpOperationError,
   McpProtocolError,
   parseMcpDiscoverResponse,
 } from "./McpProtocol.js";
+import {
+  McpPrimitiveCoordinator,
+  McpPrimitiveError,
+  type McpPrimitiveTransportLease,
+} from "./McpPrimitiveCoordinator.js";
+import type {
+  McpPromptGetInput,
+  McpPromptGetResult,
+  McpResourceReadInput,
+  McpResourceReadResult,
+  McpSourceLookup,
+  McpSourceResolver,
+  McpSourceSnapshot,
+  McpSubscriptionHandle,
+  RefreshMcpSourceInput,
+  StartMcpSubscriptionInput,
+} from "./McpPrimitives.js";
 import {
   createMcpServerRegistration,
   type McpServerRegistration,
@@ -25,11 +44,17 @@ import {
   type McpTransportBindingIdentity,
 } from "./McpRegistration.js";
 import type {
+  McpToolCallInput,
+  McpToolCallResult,
+  McpToolOperationPort,
+} from "./McpToolOperationPort.js";
+import type {
   McpTransportCloseRequest,
   McpTransportConnection,
   McpTransportConnectionIdentity,
   McpTransportConnector,
   McpTransportOperationControl,
+  McpTransportResponseStream,
 } from "./McpTransport.js";
 
 export interface McpRegistryDependencies {
@@ -71,7 +96,7 @@ interface ServerRecord {
   registration: McpServerRegistration;
   state: McpLifecycleState;
   generation: number;
-  nextEpoch: number;
+  nextActivationGeneration: number;
   attempt: ActivationAttempt | null;
   active: ActiveTransport | null;
 }
@@ -81,12 +106,16 @@ interface OperationScope {
   dispose(): void;
 }
 
-export class McpRegistry implements McpActivationResolver {
+export class McpRegistry implements
+  McpActivationResolver,
+  McpSourceResolver,
+  McpToolOperationPort {
   private readonly records = new Map<string, ServerRecord>();
   private readonly connectionClosures =
     new WeakMap<McpTransportConnection, Promise<void>>();
   private readonly now: () => Date;
   private readonly createId: () => string;
+  private readonly primitives: McpPrimitiveCoordinator;
 
   constructor(private readonly dependencies: McpRegistryDependencies) {
     if (
@@ -98,6 +127,17 @@ export class McpRegistry implements McpActivationResolver {
     }
     this.now = dependencies.now ?? (() => new Date());
     this.createId = dependencies.createId ?? randomUUID;
+    this.primitives = new McpPrimitiveCoordinator({
+      getActiveLease: (serverId, registrationFingerprint) =>
+        this.getActiveLease(serverId, registrationFingerprint),
+      isLeaseCurrent: (lease) => this.isLeaseCurrent(lease),
+      request: (input) => this.performPrimitiveRequest(input),
+      openStream: (input) => this.openPrimitiveStream(input),
+      invalidateLease: (lease, error) =>
+        this.invalidatePrimitiveLease(lease, error),
+      now: () => this.nowDate(),
+      createId: () => this.createId(),
+    });
   }
 
   register(input: McpServerRegistrationInput): McpServerRegistration {
@@ -118,7 +158,7 @@ export class McpRegistry implements McpActivationResolver {
         changedAt,
       }),
       generation: 0,
-      nextEpoch: 1,
+      nextActivationGeneration: 1,
       attempt: null,
       active: null,
     });
@@ -141,6 +181,7 @@ export class McpRegistry implements McpActivationResolver {
       );
     }
     record.generation += 1;
+    this.primitives.invalidate(registration.serverId);
     record.registration = registration;
     record.state = Object.freeze({
       serverId: registration.serverId,
@@ -170,6 +211,7 @@ export class McpRegistry implements McpActivationResolver {
     const registration = record.registration;
     const generation = record.generation + 1;
     record.generation = generation;
+    this.primitives.invalidate(registration.serverId);
     const attemptId = this.nextId("activation attempt");
     const controller = new AbortController();
     const removeExternalAbort = linkAbortSignal(
@@ -289,14 +331,14 @@ export class McpRegistry implements McpActivationResolver {
         throw staleActivation();
       }
 
-      const activationEpoch = record.nextEpoch;
+      const activationGeneration = record.nextActivationGeneration;
       const activationFields = Object.freeze({
         schemaVersion: 1 as const,
         serverId: registration.serverId,
         registrationFingerprint: registration.registrationFingerprint,
         transportBindingFingerprint:
           registration.transport.bindingFingerprint,
-        activationEpoch,
+        activationGeneration,
         displayName: registration.displayName,
         authorityBindingId: registration.authorityBindingId,
         protocolRevision: registration.protocolRevision,
@@ -315,7 +357,7 @@ export class McpRegistry implements McpActivationResolver {
         ),
       });
 
-      record.nextEpoch += 1;
+      record.nextActivationGeneration += 1;
       record.attempt = null;
       record.active = {
         generation,
@@ -390,6 +432,7 @@ export class McpRegistry implements McpActivationResolver {
     record.generation += 1;
     record.attempt = null;
     record.active = null;
+    this.primitives.invalidate(registration.serverId);
     attempt?.controller.abort(new McpActivationError(
       "mcp_activation_cancelled",
       "MCP activation was stopped.",
@@ -409,7 +452,7 @@ export class McpRegistry implements McpActivationResolver {
           registration,
           connection,
           "deactivated",
-          active?.snapshot.activationEpoch ?? null,
+          null,
         );
       } catch (error) {
         const normalized = normalizeShutdownError(error);
@@ -466,9 +509,314 @@ export class McpRegistry implements McpActivationResolver {
     const snapshot = this.getActiveSnapshot(input.serverId);
     return snapshot !== null &&
         snapshot.registrationFingerprint === input.registrationFingerprint &&
-        snapshot.activationEpoch === input.activationEpoch
+        snapshot.activationGeneration === input.activationGeneration
       ? snapshot
       : null;
+  }
+
+  refreshSource(input: RefreshMcpSourceInput): Promise<McpSourceSnapshot> {
+    return this.primitives.refresh(input);
+  }
+
+  getSourceSnapshot(serverId: string): McpSourceSnapshot | null {
+    return this.primitives.getSnapshot(serverId);
+  }
+
+  resolveSource(input: McpSourceLookup): McpSourceSnapshot | null {
+    return this.primitives.resolveSource(input);
+  }
+
+  callTool<TInput = unknown>(
+    input: McpToolCallInput<TInput>,
+  ): Promise<McpToolCallResult> {
+    return this.primitives.callTool(input);
+  }
+
+  readResource(input: McpResourceReadInput): Promise<McpResourceReadResult> {
+    return this.primitives.readResource(input);
+  }
+
+  getPrompt(input: McpPromptGetInput): Promise<McpPromptGetResult> {
+    return this.primitives.getPrompt(input);
+  }
+
+  startSubscription(
+    input: StartMcpSubscriptionInput,
+  ): Promise<McpSubscriptionHandle> {
+    return this.primitives.startSubscription(input);
+  }
+
+  private getActiveLease(
+    serverId: string,
+    registrationFingerprint: string,
+  ): McpPrimitiveTransportLease | null {
+    const record = this.records.get(serverId);
+    if (
+      record === undefined ||
+      record.registration.registrationFingerprint !== registrationFingerprint ||
+      record.active === null ||
+      record.state.status !== "active"
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      registration: record.registration,
+      activation: record.active.snapshot,
+    });
+  }
+
+  private isLeaseCurrent(lease: McpPrimitiveTransportLease): boolean {
+    const active = this.records.get(lease.registration.serverId)?.active;
+    return active !== null &&
+      active !== undefined &&
+      active.snapshot.activationId === lease.activation.activationId &&
+      active.snapshot.registrationFingerprint ===
+        lease.registration.registrationFingerprint;
+  }
+
+  private async performPrimitiveRequest(input: {
+    readonly lease: McpPrimitiveTransportLease;
+    readonly requestId: string;
+    readonly method: string;
+    readonly params: McpJsonObject;
+    readonly name?: string;
+    readonly parameterHeaders?: Readonly<Record<string, string>>;
+    readonly sourceEpoch: number | null;
+    readonly signal?: AbortSignal;
+  }): Promise<unknown> {
+    const active = this.requireActiveTransport(input.lease);
+    const request = createMcpOperationRequest({
+      requestId: input.requestId,
+      transportKind: input.lease.registration.transport.kind,
+      client: input.lease.registration.client,
+      method: input.method,
+      params: input.params,
+      name: input.name,
+      parameterHeaders: input.parameterHeaders,
+    });
+    const scope = this.createPrimitiveOperationScope({
+      registration: input.lease.registration,
+      operationId: input.requestId,
+      timeoutMs: input.lease.registration.limits.requestTimeoutMs,
+      parentSignal: input.signal,
+      sourceEpoch: input.sourceEpoch,
+    });
+    try {
+      const response = await raceWithSignal(
+        Promise.resolve(active.connection.request(request, scope.control)),
+        scope.control.signal,
+      );
+      if (!this.isLeaseCurrent(input.lease)) {
+        throw new McpPrimitiveError(
+          "mcp_source_stale",
+          "MCP operation completed for a stale transport activation.",
+        );
+      }
+      return response;
+    } catch (error) {
+      if (
+        error instanceof McpPrimitiveError ||
+        error instanceof McpOperationError
+      ) {
+        throw error;
+      }
+      throw new McpPrimitiveError(
+        "mcp_operation_failed",
+        "MCP transport request failed.",
+      );
+    } finally {
+      scope.dispose();
+    }
+  }
+
+  private async openPrimitiveStream(input: {
+    readonly lease: McpPrimitiveTransportLease;
+    readonly requestId: string;
+    readonly method: "subscriptions/listen";
+    readonly params: McpJsonObject;
+    readonly sourceEpoch: number;
+    readonly signal: AbortSignal;
+  }): Promise<McpTransportResponseStream> {
+    const active = this.requireActiveTransport(input.lease);
+    const request = createMcpOperationRequest({
+      requestId: input.requestId,
+      transportKind: input.lease.registration.transport.kind,
+      client: input.lease.registration.client,
+      method: input.method,
+      params: input.params,
+    });
+    const controller = new AbortController();
+    const removeParentAbort = linkAbortSignal(
+      input.signal,
+      controller,
+      new McpPrimitiveError(
+        "mcp_operation_cancelled",
+        "MCP subscription was cancelled.",
+      ),
+    );
+    const timer = setTimeout(() => {
+      controller.abort(new McpPrimitiveError(
+        "mcp_operation_timeout",
+        "MCP subscription opening timed out.",
+      ));
+    }, input.lease.registration.limits.requestTimeoutMs);
+    const control = Object.freeze({
+      operationId: validateMcpToken(
+        input.requestId,
+        "transport.operationId",
+        1_024,
+      ),
+      registrationFingerprint:
+        input.lease.registration.registrationFingerprint,
+      sourceEpoch: input.sourceEpoch,
+      deadlineAt: null,
+      signal: controller.signal,
+    });
+    try {
+      const stream = await raceWithSignal(
+        Promise.resolve(active.connection.openStream(request, control)),
+        control.signal,
+      );
+      clearTimeout(timer);
+      if (
+        !this.isLeaseCurrent(input.lease) ||
+        !isTransportResponseStream(stream)
+      ) {
+        controller.abort();
+        throw new McpPrimitiveError(
+          "mcp_source_stale",
+          "MCP subscription opened for an invalid or stale transport.",
+        );
+      }
+      return Object.freeze({
+        messages: finalizeResponseStream(
+          stream.messages,
+          removeParentAbort,
+        ),
+      });
+    } catch (error) {
+      clearTimeout(timer);
+      removeParentAbort();
+      if (
+        error instanceof McpPrimitiveError ||
+        error instanceof McpOperationError
+      ) {
+        throw error;
+      }
+      throw new McpPrimitiveError(
+        "mcp_operation_failed",
+        "MCP subscription transport failed to open.",
+      );
+    }
+  }
+
+  private requireActiveTransport(
+    lease: McpPrimitiveTransportLease,
+  ): ActiveTransport {
+    const active = this.records.get(lease.registration.serverId)?.active;
+    if (
+      active === null ||
+      active === undefined ||
+      active.snapshot.activationId !== lease.activation.activationId ||
+      active.snapshot.registrationFingerprint !==
+        lease.registration.registrationFingerprint
+    ) {
+      throw new McpPrimitiveError(
+        "mcp_source_stale",
+        "MCP transport lease is unavailable or stale.",
+      );
+    }
+    return active;
+  }
+
+  private invalidatePrimitiveLease(
+    lease: McpPrimitiveTransportLease,
+    error: McpOperationError,
+  ): void {
+    const record = this.records.get(lease.registration.serverId);
+    const active = record?.active;
+    if (
+      record === undefined ||
+      active === null ||
+      active === undefined ||
+      active.snapshot.activationId !== lease.activation.activationId
+    ) {
+      return;
+    }
+    const sourceEpoch =
+      this.primitives.getSnapshot(lease.registration.serverId)?.sourceEpoch ??
+        null;
+    record.generation += 1;
+    record.active = null;
+    this.primitives.invalidate(lease.registration.serverId);
+    const normalized = new McpActivationError(
+      "mcp_protocol_version_unsupported",
+      error.message,
+    );
+    record.state = Object.freeze({
+      serverId: record.registration.serverId,
+      registrationFingerprint: record.registration.registrationFingerprint,
+      status: "failed",
+      failure: this.failure(normalized, null),
+      changedAt: this.nowIso(),
+    });
+    void this.closeConnection(
+      record.registration,
+      active.connection,
+      "activation_failed",
+      sourceEpoch,
+    ).catch(() => undefined);
+  }
+
+  private createPrimitiveOperationScope(input: {
+    readonly registration: McpServerRegistration;
+    readonly operationId: string;
+    readonly timeoutMs: number;
+    readonly parentSignal?: AbortSignal;
+    readonly sourceEpoch: number | null;
+  }): OperationScope {
+    const controller = new AbortController();
+    const removeParentAbort = linkAbortSignal(
+      input.parentSignal,
+      controller,
+      new McpPrimitiveError(
+        "mcp_operation_cancelled",
+        "MCP operation was cancelled.",
+      ),
+    );
+    const startedAt = this.nowDate();
+    const deadlineMs = startedAt.getTime() + input.timeoutMs;
+    if (!Number.isSafeInteger(deadlineMs)) {
+      removeParentAbort();
+      throw new McpPrimitiveError(
+        "mcp_operation_timeout",
+        "MCP operation deadline is invalid.",
+      );
+    }
+    const timer = setTimeout(() => {
+      controller.abort(new McpPrimitiveError(
+        "mcp_operation_timeout",
+        "MCP operation timed out.",
+      ));
+    }, input.timeoutMs);
+    return {
+      control: Object.freeze({
+        operationId: validateMcpToken(
+          input.operationId,
+          "transport.operationId",
+          1_024,
+        ),
+        registrationFingerprint:
+          input.registration.registrationFingerprint,
+        sourceEpoch: input.sourceEpoch,
+        deadlineAt: new Date(deadlineMs).toISOString(),
+        signal: controller.signal,
+      }),
+      dispose() {
+        clearTimeout(timer);
+        removeParentAbort();
+      },
+    };
   }
 
   private observeConnectionClosure(
@@ -486,6 +834,7 @@ export class McpRegistry implements McpActivationResolver {
         }
         record.generation += 1;
         record.active = null;
+        this.primitives.invalidate(record.registration.serverId);
         const failed = closure?.kind === "failed";
         const error = new McpActivationError(
           failed ? "mcp_transport_failed" : "mcp_transport_closed",
@@ -512,6 +861,7 @@ export class McpRegistry implements McpActivationResolver {
         }
         record.generation += 1;
         record.active = null;
+        this.primitives.invalidate(record.registration.serverId);
         const error = new McpActivationError(
           "mcp_transport_failed",
           "MCP transport closure reporting failed.",
@@ -712,6 +1062,7 @@ function validateConnectionIdentity(
     connection === null ||
     typeof connection !== "object" ||
     typeof connection.request !== "function" ||
+    typeof connection.openStream !== "function" ||
     typeof connection.close !== "function" ||
     connection.closed === null ||
     typeof connection.closed !== "object" ||
@@ -793,7 +1144,7 @@ function staleActivation(): McpActivationError {
 function linkAbortSignal(
   source: AbortSignal | undefined,
   target: AbortController,
-  error: McpActivationError,
+  error: Error,
 ): () => void {
   if (source === undefined) return () => undefined;
   const abort = () => target.abort(error);
@@ -827,13 +1178,35 @@ async function raceWithSignal<T>(
   });
 }
 
-function interruptionError(signal: AbortSignal): McpActivationError {
-  return signal.reason instanceof McpActivationError
+function interruptionError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
     ? signal.reason
     : new McpActivationError(
       "mcp_activation_cancelled",
       "MCP operation was cancelled.",
     );
+}
+
+function isTransportResponseStream(
+  input: unknown,
+): input is McpTransportResponseStream {
+  if (input === null || typeof input !== "object") return false;
+  const messages = (input as { readonly messages?: unknown }).messages;
+  return messages !== null &&
+    typeof messages === "object" &&
+    typeof (messages as AsyncIterable<unknown>)[Symbol.asyncIterator] ===
+      "function";
+}
+
+async function* finalizeResponseStream(
+  messages: AsyncIterable<unknown>,
+  dispose: () => void,
+): AsyncIterable<unknown> {
+  try {
+    yield* messages;
+  } finally {
+    dispose();
+  }
 }
 
 function compareStrings(left: string, right: string): number {
