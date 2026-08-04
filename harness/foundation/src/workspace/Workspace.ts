@@ -3,7 +3,7 @@ import {
   assertNonEmpty,
   assertRecord,
   snapshotMetadata,
-} from "../internal/validation.js";
+} from "../validation.js";
 import type { Metadata } from "../primitives/index.js";
 
 export type WorkspaceTrustState = "trusted" | "restricted" | "unknown";

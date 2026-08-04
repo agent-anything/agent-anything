@@ -37,7 +37,7 @@
   },
   "agentAnything": {
     "architecture": {
-      "layer": "harness",
+      "kind": "harness",
       "component": "context"
     }
   },

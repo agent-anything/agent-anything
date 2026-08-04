@@ -4,7 +4,6 @@ export * from "./artifact/index.js";
 export * from "./interaction/index.js";
 export * from "./invocation/index.js";
 export * from "./primitives/index.js";
-export * from "./result/index.js";
 export * from "./run/index.js";
 export * from "./task/index.js";
 export * from "./workspace/index.js";

@@ -2,16 +2,21 @@ import type { IdentityRef, RunWorkspace } from "@agent-anything/foundation";
 import {
   createAuditRecord,
   createTelemetryRecord,
+  type AuditFailure,
   type AuditSandboxAttemptResolvedPayload,
   type AuditSandboxAttemptStartedPayload,
   type AuditPort,
+  type TelemetryFailure,
   type TelemetryPort,
 } from "@agent-anything/observability";
 import type { ISODateTimeString } from "@agent-anything/foundation";
 import type { SandboxAttempt } from "@agent-anything/action-execution";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
-import type { SandboxAttemptResolutionSummary } from "@agent-anything/runtime/run";
-import type { RuntimeError } from "@agent-anything/foundation";
+import {
+  type RunFailureCause,
+  type SandboxAttemptResolutionSummary,
+} from "@agent-anything/runtime/run";
+import { createRunFailureCause } from "../run/RunFailure.js";
 import {
   settleRunnerRecordingGate,
   type RunnerRecorder,
@@ -30,9 +35,14 @@ interface SandboxAttemptRecordInput {
   readonly telemetryPort?: TelemetryPort;
 }
 
+type ObservabilityRunFailure = Extract<
+  RunFailureCause,
+  { readonly kind: "audit" | "telemetry" }
+>;
+
 export async function recordSandboxAttemptStarted(
   input: SandboxAttemptRecordInput,
-): Promise<readonly RuntimeError[]> {
+): Promise<readonly ObservabilityRunFailure[]> {
   return recordAttempt(input, "started", null);
 }
 
@@ -40,7 +50,7 @@ export async function recordSandboxAttemptResolved(
   input: SandboxAttemptRecordInput & {
     readonly resolution: SandboxAttemptResolutionSummary;
   },
-): Promise<readonly RuntimeError[]> {
+): Promise<readonly ObservabilityRunFailure[]> {
   return recordAttempt(input, "resolved", input.resolution);
 }
 
@@ -48,7 +58,7 @@ async function recordAttempt(
   input: SandboxAttemptRecordInput,
   phase: "started" | "resolved",
   resolution: SandboxAttemptResolutionSummary | null,
-): Promise<readonly RuntimeError[]> {
+): Promise<readonly ObservabilityRunFailure[]> {
   if (input.signal.aborted) throw input.signal.reason;
   const recorders: RunnerRecorder[] = [
     {
@@ -73,7 +83,7 @@ async function recordAudit(
   input: SandboxAttemptRecordInput,
   phase: "started" | "resolved",
   resolution: SandboxAttemptResolutionSummary | null,
-): Promise<RuntimeError | null> {
+): Promise<ObservabilityRunFailure | null> {
   if (input.auditPort === undefined) {
     return input.auditRequirement === "required"
       ? requiredError("audit", "audit_required_failed", `Required sandbox attempt ${phase} AuditPort is unavailable.`)
@@ -106,7 +116,7 @@ async function recordTelemetry(
   input: SandboxAttemptRecordInput,
   phase: "started" | "resolved",
   resolution: SandboxAttemptResolutionSummary | null,
-): Promise<RuntimeError | null> {
+): Promise<ObservabilityRunFailure | null> {
   if (input.telemetryPort === undefined) {
     return input.telemetryRequirement === "required"
       ? requiredError(
@@ -293,12 +303,14 @@ function requiredError(
   code: string,
   message: string,
   cause?: unknown,
-): RuntimeError {
-  return Object.freeze({
-    owner,
+): ObservabilityRunFailure {
+  const common = Object.freeze({
     code,
     message,
     retryable: false,
     metadata: Object.freeze(cause instanceof Error ? { causeName: cause.name } : {}),
   });
+  return owner === "audit"
+    ? createRunFailureCause("audit", common satisfies AuditFailure)
+    : createRunFailureCause("telemetry", common satisfies TelemetryFailure);
 }

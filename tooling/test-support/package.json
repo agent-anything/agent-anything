@@ -1,7 +1,7 @@
 {
-  "name": "@agent-anything/host",
+  "name": "@agent-anything/test-support",
   "version": "0.0.0",
-  "description": "Product-neutral host integration, safe Run projection, approval bridge, and host authority stores for AgentAnything.",
+  "description": "Reusable development-only fakes and fixtures for Agent Harness packages.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -19,17 +19,18 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
-  "dependencies": {
-    "@agent-anything/action-execution": "workspace:*",
-    "@agent-anything/observability": "workspace:*",
-    "@agent-anything/runtime": "workspace:*",
-    "@agent-anything/governance": "workspace:*",
-    "@agent-anything/permission": "workspace:*",
-    "@agent-anything/foundation": "workspace:*"
+  "agentAnything": {
+    "architecture": {
+      "kind": "tooling",
+      "component": "test-support"
+    }
   },
-  "devDependencies": {
+  "dependencies": {
+    "@agent-anything/context": "workspace:*",
+    "@agent-anything/observability": "workspace:*",
+    "@agent-anything/permission": "workspace:*",
     "@agent-anything/model-interaction": "workspace:*",
-    "@agent-anything/testing": "workspace:*"
+    "@agent-anything/foundation": "workspace:*"
   },
   "license": "Apache-2.0",
   "private": true

@@ -34,6 +34,7 @@ describe("Action Execution public API", () => {
       "capabilityEffectKey",
       "createActionAdapterImplementationSnapshot",
       "createActionEffectSet",
+      "createActionExecutionFailure",
       "createActionFingerprint",
       "createActionRegistrationSnapshot",
       "createCanonicalActionOperation",

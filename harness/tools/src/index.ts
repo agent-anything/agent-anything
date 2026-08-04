@@ -39,6 +39,7 @@ export {
   findSelectedTool,
   ToolSelectionValidationError,
 } from "./selection/index.js";
+export type { ToolFailure } from "./ToolFailure.js";
 export type {
   FailedToolResult,
   PartialToolResult,

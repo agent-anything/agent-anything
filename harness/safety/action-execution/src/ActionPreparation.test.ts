@@ -167,7 +167,12 @@ describe("Action preparation", () => {
     for (const result of [missingEffect, conflictingEffect]) {
       expect(result).toEqual(expect.objectContaining({
         status: "failed",
-        error: expect.objectContaining({ code: "tool_action_adapter_contract_invalid" }),
+        failure: expect.objectContaining({
+          kind: "tool",
+          failure: expect.objectContaining({
+            code: "tool_action_adapter_contract_invalid",
+          }),
+        }),
       }));
     }
   });
@@ -219,12 +224,14 @@ describe("Action preparation", () => {
     expect(rejectedResult).toEqual({ status: "rejected", code: "action_invalid", message: "Path is required." });
     expect(failedResult).toEqual({
       status: "failed",
-      error: {
-        owner: "tool",
-        code: "tool_resolver_failed",
-        message: "Resolution failed.",
-        retryable: true,
-        metadata: {},
+      failure: {
+        kind: "tool",
+        failure: {
+          code: "tool_resolver_failed",
+          message: "Resolution failed.",
+          retryable: true,
+          metadata: {},
+        },
       },
     });
     expect(interruptedResult).toEqual({
@@ -267,12 +274,20 @@ describe("Action preparation", () => {
 
     expect(thrown).toEqual(expect.objectContaining({
       status: "failed",
-      error: expect.objectContaining({ code: "tool_action_adapter_failed" }),
+      failure: expect.objectContaining({
+        kind: "tool",
+        failure: expect.objectContaining({ code: "tool_action_adapter_failed" }),
+      }),
     }));
     for (const result of [malformed, mismatch, missingApprovalPayload]) {
       expect(result).toEqual(expect.objectContaining({
         status: "failed",
-        error: expect.objectContaining({ code: "tool_action_adapter_contract_invalid" }),
+        failure: expect.objectContaining({
+          kind: "tool",
+          failure: expect.objectContaining({
+            code: "tool_action_adapter_contract_invalid",
+          }),
+        }),
       }));
     }
   });
@@ -305,7 +320,12 @@ describe("Action preparation", () => {
 
     expect(result).toEqual(expect.objectContaining({
       status: "failed",
-      error: expect.objectContaining({ code: "tool_action_interruption_unattributed" }),
+      failure: expect.objectContaining({
+        kind: "tool",
+        failure: expect.objectContaining({
+          code: "tool_action_interruption_unattributed",
+        }),
+      }),
     }));
     expect(prepare).not.toHaveBeenCalled();
   });

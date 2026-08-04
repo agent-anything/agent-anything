@@ -24,6 +24,13 @@
     "clean:user-data": "node scripts/clear-user-data.mjs",
     "start": "electron ."
   },
+  "agentAnything": {
+    "architecture": {
+      "kind": "product",
+      "productId": "helarc",
+      "component": "desktop"
+    }
+  },
   "dependencies": {
     "@agent-anything/action-execution": "workspace:*",
     "@agent-anything/observability": "workspace:*",

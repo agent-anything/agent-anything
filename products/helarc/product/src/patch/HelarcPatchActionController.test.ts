@@ -249,8 +249,8 @@ function actionFailure(): Observation {
     kind: "action_failure",
     runId: "run-1",
     actionId: "action-1",
-    error: {
-      owner: "tool",
+    failure: {
+      source: "tool",
       code: "filesystem_write_failed",
       message: "Write failed.",
       retryable: false,

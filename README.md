@@ -74,32 +74,36 @@ Current Helarc capabilities include:
 ```text
 agent-anything/
   harness/
-    foundation/       Dependency-free Harness contracts and semantics
-    context/          Context, Observation, Evidence, and persistence contracts
-    model-interaction/ Provider-neutral model invocation contracts
-    runtime/          Runner, Agent Loop, Controller, Plan, Retry, Run lifecycle
-  packages/
-    tools/           Declarative Tool catalog and result contracts
-    permission/      Permission profiles, approvals, and authority contracts
-    governance/      Policy, workspace, and identity context
-    observability/   Audit, telemetry, and redaction contracts
-    testing/         Lower-level test fakes
-    extensions/      MCP, plugins, remote tools, and extension points
-    agent-core/      Transitional RuntimeEvent contracts
-    action-execution/ Trusted Action preparation and Sandbox dispatch
-    host/            Host runtime integration, safe projections, approval bridges
-    code-agent/      Code-oriented tools and workflows
+    foundation/         Dependency-free Harness contracts and semantics
+    context/            Context, Observation, Evidence, and persistence contracts
+    model-interaction/  Provider-neutral model invocation contracts
+    runtime/            Runner, Agent Loop, Controller, Plan, Retry, Run lifecycle
+    tools/              Declarative Tool registration, catalogs, and results
+    safety/
+      governance/       Policy and managed constraint contracts
+      permission/       Permission, approval, and authority contracts
+      action-execution/ Canonical Action enforcement and Sandbox dispatch
+    integrations/
+      mcp/              MCP lifecycle and primitive adaptation
+      plugins/          Plugin trust admission and contribution activation
+      remote/           Protocol-neutral remote Tool and Action adaptation
+      enterprise-storage/ Enterprise persistence adapters
+    observability/      Events, Audit, Telemetry, tracing, and redaction
+    host/               Product-neutral Host composition and Run control
   products/
-    helarc/          Helarc product composition
-  apps/
-    helarc-desktop/  Electron desktop app for Helarc
+    helarc/
+      product/          Helarc Product model and workflows
+      code-agent/       Helarc code-oriented capabilities
+      desktop/          Electron delivery, persistence, IPC, and renderer
+  tooling/
+    test-support/       Development-only reusable fakes and fixtures
   scripts/
     architecture/       Workspace discovery, dependency policy, and fixtures
-    check-boundaries.mjs
+    check-architecture.mjs
     check-built-public-apis.mjs
 ```
 
-## Package Boundaries
+## Architecture Ownership
 
 Reusable Harness packages are designed to point inward:
 
@@ -110,24 +114,25 @@ Reusable Harness packages are designed to point inward:
   persistence semantics without becoming a general storage facade.
 - `runtime` owns authoritative Run advancement and coordinates other components
   through their public Contracts.
-- `agent-core` currently exposes only RuntimeEvent semantics.
 - `action-execution` owns canonical Action preparation, policy and authority
   assessment, revalidation, and the mandatory Sandbox execution gateway.
 - `host` adapts authoritative Runner execution to product-neutral application hosts.
-- `extensions` contains optional integration surfaces such as MCP, plugins,
-  remote tools, remote Actions, and enterprise storage behind focused subpaths.
-- `code-agent` exposes focused workspace, filesystem, command, and patch
+- focused Integration packages own MCP, Plugin, remote capability, and
+  enterprise storage adapters without a generic extension owner.
+- Helarc Code Agent exposes focused workspace, filesystem, command, and patch
   capability subpaths while keeping external effects behind Action execution.
 - Product packages compose Harness contracts into product behavior.
-- App packages own UI, local persistence, credentials, desktop concerns, and
-  product hosting.
+- Helarc Desktop owns UI, local persistence, credentials, IPC, and concrete
+  Product hosting.
+- Test Support is a development-only dependency and defines no production
+  Contracts.
 
-`pnpm-workspace.yaml` is the package-location authority. Boundary rules are checked
-by `scripts/check-boundaries.mjs` using the reusable policy under
-`scripts/architecture/` and run as part of the root test command. Harness and
-reusable component packages cannot depend on products or apps; products cannot
-depend on apps or another product; apps cannot depend on another app. Production
-edges must also match the exact reviewed dependency graph.
+`pnpm-workspace.yaml` is the package-location authority.
+`scripts/check-architecture.mjs` validates exact package metadata, repository
+paths, production dependency policies, development-only Test Support use,
+exports, ownership rules, and prohibited legacy topology. Harness cannot depend
+on Products; Product components may collaborate only inside the same Product;
+all production edges must match the exact reviewed dependency graph.
 
 ## Common Commands
 
@@ -143,7 +148,7 @@ Typecheck all workspace packages:
 pnpm typecheck
 ```
 
-Run boundary checks and tests:
+Run architecture checks and all tests:
 
 ```powershell
 pnpm test
@@ -163,8 +168,8 @@ Build all workspace packages:
 pnpm build
 ```
 
-Build and verify the exact Core, Action Execution, Runtime, Host, Code Agent,
-and Extensions ESM entry points, including removed and private paths:
+Build and verify the exact Foundation, Runtime, Host, Integration, and Helarc
+ESM entry points, including removed and private paths:
 
 ```powershell
 pnpm run api:check
@@ -221,8 +226,7 @@ through a working Desktop Run, review, cancellation, and durable Thread workflow
 Current validation commands:
 
 ```powershell
-pnpm run boundaries
-pnpm run architecture:test
+pnpm run architecture:check
 pnpm run conformance:test
 pnpm run typecheck
 pnpm run test

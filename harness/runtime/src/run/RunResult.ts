@@ -2,13 +2,15 @@ import type {
   ArtifactRef,
   EvidenceRef,
   Metadata,
+} from "@agent-anything/foundation";
+import type { RunCancellationSummary } from "./RunCancellation.js";
+import type { RunFailureCause } from "./RunFailure.js";
+import type { RunItem } from "./RunItem.js";
+import type {
   RunBlockedCode,
   RunCancelledCode,
   RunFailureCode,
-  RuntimeError,
-} from "@agent-anything/foundation";
-import type { RunCancellationSummary } from "./RunCancellation.js";
-import type { RunItem } from "./RunItem.js";
+} from "./RunStatus.js";
 
 interface RunResultBase<TOutput> {
   readonly runId: string;
@@ -24,7 +26,8 @@ export type SucceededRunResult<TOutput> = RunResultBase<TOutput> & {
   readonly code: null;
   readonly finalOutput: NonNullable<TOutput>;
   readonly cancellation: null;
-  readonly errors: readonly [];
+  readonly failure: null;
+  readonly relatedFailures: readonly [];
 };
 
 export type BlockedRunResult<TOutput = never> = RunResultBase<TOutput> & {
@@ -32,7 +35,8 @@ export type BlockedRunResult<TOutput = never> = RunResultBase<TOutput> & {
   readonly code: RunBlockedCode;
   readonly finalOutput: null;
   readonly cancellation: null;
-  readonly errors: readonly [];
+  readonly failure: null;
+  readonly relatedFailures: readonly [];
 };
 
 export type FailedRunResult<TOutput = never> = RunResultBase<TOutput> & {
@@ -40,7 +44,8 @@ export type FailedRunResult<TOutput = never> = RunResultBase<TOutput> & {
   readonly code: RunFailureCode;
   readonly finalOutput: null;
   readonly cancellation: RunCancellationSummary | null;
-  readonly errors: readonly [RuntimeError, ...RuntimeError[]];
+  readonly failure: RunFailureCause;
+  readonly relatedFailures: readonly RunFailureCause[];
 };
 
 export type CancelledRunResult<TOutput = never> = RunResultBase<TOutput> & {
@@ -48,7 +53,8 @@ export type CancelledRunResult<TOutput = never> = RunResultBase<TOutput> & {
   readonly code: RunCancelledCode;
   readonly finalOutput: null;
   readonly cancellation: RunCancellationSummary;
-  readonly errors: readonly [];
+  readonly failure: null;
+  readonly relatedFailures: readonly [];
 };
 
 export type RunResult<TOutput = unknown> =
@@ -80,7 +86,8 @@ export function createSucceededRunResult<TOutput>(
     code: null,
     finalOutput,
     cancellation: null,
-    errors: Object.freeze([]) as readonly [],
+    failure: null,
+    relatedFailures: Object.freeze([]) as readonly [],
   });
 }
 
@@ -94,28 +101,48 @@ export function createBlockedRunResult<TOutput = never>(
     code,
     finalOutput: null,
     cancellation: null,
-    errors: Object.freeze([]) as readonly [],
+    failure: null,
+    relatedFailures: Object.freeze([]) as readonly [],
   });
 }
 
 export function createFailedRunResult<TOutput = never>(
   input: CreateRunResultBaseInput<TOutput>,
   code: RunFailureCode,
-  errors: readonly [RuntimeError, ...RuntimeError[]],
+  failure: RunFailureCause,
+  relatedFailures: readonly RunFailureCause[] = [],
   cancellation: RunCancellationSummary | null = null,
 ): FailedRunResult<TOutput> {
-  if (errors.length === 0) {
-    throw new TypeError("A failed RunResult requires at least one RuntimeError.");
-  }
-
+  assertRunFailureCause(failure, "failure");
+  relatedFailures.forEach((relatedFailure, index) => {
+    assertRunFailureCause(relatedFailure, `relatedFailures[${index}]`);
+  });
   return Object.freeze({
     ...createBase(input),
     status: "failed" as const,
     code,
     finalOutput: null,
     cancellation,
-    errors: Object.freeze([...errors]) as unknown as readonly [RuntimeError, ...RuntimeError[]],
+    failure,
+    relatedFailures: Object.freeze([...relatedFailures]),
   });
+}
+
+function assertRunFailureCause(
+  cause: RunFailureCause,
+  field: string,
+): void {
+  if (
+    cause === null ||
+    typeof cause !== "object" ||
+    typeof cause.kind !== "string" ||
+    cause.failure === null ||
+    typeof cause.failure !== "object" ||
+    typeof cause.failure.code !== "string" ||
+    cause.failure.code.trim().length === 0
+  ) {
+    throw new TypeError(`${field} must be a valid RunFailureCause.`);
+  }
 }
 
 export function createCancelledRunResult<TOutput = never>(
@@ -129,7 +156,8 @@ export function createCancelledRunResult<TOutput = never>(
     code: "runtime_cancelled" as const,
     finalOutput: null,
     cancellation,
-    errors: Object.freeze([]) as readonly [],
+    failure: null,
+    relatedFailures: Object.freeze([]) as readonly [],
   });
 }
 

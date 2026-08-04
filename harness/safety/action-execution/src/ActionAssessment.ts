@@ -19,8 +19,8 @@ import type {
   InvocationInterruptionRef,
   ISODateTimeString,
 } from "@agent-anything/foundation";
-import type { RuntimeError } from "@agent-anything/foundation";
 import type { ActionRuleOutcome } from "@agent-anything/governance/policy";
+import type { ActionExecutionFailure } from "./ActionExecutionFailure.js";
 import type { CanonicalEffectivePermissions } from "./CanonicalEffectivePermissions.js";
 import type { PreparedExternalAction } from "./PreparedExternalAction.js";
 
@@ -97,7 +97,7 @@ export type ActionAssessment =
       readonly message: string;
     }
   | { readonly status: "invalidated"; readonly code: string; readonly message: string }
-  | { readonly status: "failed"; readonly error: RuntimeError }
+  | { readonly status: "failed"; readonly failure: ActionExecutionFailure }
   | { readonly status: "interrupted"; readonly interruption: InvocationInterruptionRef };
 
 export function snapshotActionAssessmentAuthority(

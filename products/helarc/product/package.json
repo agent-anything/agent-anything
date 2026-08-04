@@ -19,6 +19,13 @@
                     "typecheck":  "tsc -p tsconfig.json --noEmit",
                     "test":  "vitest run --passWithNoTests"
                 },
+    "agentAnything":  {
+                           "architecture":  {
+                                                "kind":  "product",
+                                                "productId":  "helarc",
+                                                "component":  "product"
+                                            }
+                       },
     "license":  "Apache-2.0",
     "private":  true,
     "dependencies":  {

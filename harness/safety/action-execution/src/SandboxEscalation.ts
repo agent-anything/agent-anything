@@ -8,7 +8,8 @@ import type {
   InvocationInterruptionContext,
   InvocationInterruptionRef,
 } from "@agent-anything/foundation";
-import type { RuntimeError } from "@agent-anything/foundation";
+import type { ActionExecutionFailure } from "./ActionExecutionFailure.js";
+import { createActionExecutionFailure } from "./ActionExecutionFailure.js";
 import type { ActionDispatchPlan } from "./ActionRevalidation.js";
 import type { CanonicalPathIdentity } from "./CanonicalIdentity.js";
 import { assertCanonicalActionCoherence } from "./CanonicalActionCoherence.js";
@@ -51,7 +52,7 @@ export type SandboxEscalationResult =
   | { readonly status: "eligible"; readonly proposal: SandboxEscalationProposal }
   | { readonly status: "ineligible"; readonly code: string; readonly message: string }
   | { readonly status: "invalidated"; readonly code: string; readonly message: string }
-  | { readonly status: "failed"; readonly error: RuntimeError }
+  | { readonly status: "failed"; readonly failure: ActionExecutionFailure }
   | { readonly status: "interrupted"; readonly interruption: InvocationInterruptionRef };
 
 export interface CreateSandboxEscalationProposalInput {
@@ -165,7 +166,7 @@ export async function createSandboxEscalationProposal(
   } catch (error) {
     return Object.freeze({
       status: "failed" as const,
-      error: runtimeError(
+      failure: sandboxFailure(
         "sandbox_escalation_contract_invalid",
         error instanceof Error
           ? error.message
@@ -326,12 +327,15 @@ function ineligible(code: string, message: string): SandboxEscalationResult {
   return Object.freeze({ status: "ineligible" as const, code, message });
 }
 
-function runtimeError(code: string, message: string): RuntimeError {
-  return Object.freeze({
-    owner: "sandbox" as const,
+function sandboxFailure(
+  code: string,
+  message: string,
+): ActionExecutionFailure {
+  return createActionExecutionFailure("sandbox", Object.freeze({
     code,
     message,
     retryable: false,
+    effectState: "none",
     metadata: Object.freeze({}),
-  });
+  }));
 }

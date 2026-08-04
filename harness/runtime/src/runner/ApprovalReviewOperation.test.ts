@@ -1,4 +1,4 @@
-import { FakeApprovalReviewer } from "@agent-anything/testing";
+import { FakeApprovalReviewer } from "@agent-anything/test-support";
 import type {
   ApprovalReviewInput,
   ApprovalReviewOutcome,

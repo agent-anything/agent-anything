@@ -78,7 +78,10 @@ describe("SandboxExecutionGateway", () => {
     await expect(gateway.execute(Object.freeze({ ...preparation.prepared }))).resolves
       .toMatchObject({
         status: "failed",
-        error: { code: "sandbox_prepared_dispatch_invalid" },
+        failure: {
+          kind: "sandbox",
+          failure: { code: "sandbox_prepared_dispatch_invalid" },
+        },
       });
     expect(execute).not.toHaveBeenCalled();
 
@@ -87,7 +90,10 @@ describe("SandboxExecutionGateway", () => {
     });
     await expect(gateway.execute(preparation.prepared)).resolves.toMatchObject({
       status: "failed",
-      error: { code: "sandbox_prepared_dispatch_consumed" },
+      failure: {
+        kind: "sandbox",
+        failure: { code: "sandbox_prepared_dispatch_consumed" },
+      },
     });
     expect(execute).toHaveBeenCalledTimes(1);
   });
@@ -106,7 +112,10 @@ describe("SandboxExecutionGateway", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      error: { code: "sandbox_dispatch_invalid" },
+      failure: {
+        kind: "sandbox",
+        failure: { code: "sandbox_dispatch_invalid" },
+      },
     });
     expect(execute).not.toHaveBeenCalled();
   });
@@ -131,7 +140,10 @@ describe("SandboxExecutionGateway", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      error: { code: "sandbox_dispatch_invalid" },
+      failure: {
+        kind: "sandbox",
+        failure: { code: "sandbox_dispatch_invalid" },
+      },
     });
     expect(execute).not.toHaveBeenCalled();
   });
@@ -308,9 +320,9 @@ describe("SandboxExecutionGateway", () => {
       expect(result).toMatchObject({
         status: "failed",
         effectState: "unknown",
-        error: {
-          owner: "tool",
-          code: "tool_result_invalid",
+        failure: {
+          kind: "tool",
+          failure: { code: "tool_result_invalid" },
         },
       });
     },
@@ -367,16 +379,18 @@ describe("SandboxExecutionGateway", () => {
     expect(result).toMatchObject({
       status: "failed",
       effectState: "unknown",
-      error: {
-        owner: "tool",
-        code: "tool_settlement_unknown",
-        metadata: { stage: "settlement" },
+      failure: {
+        kind: "tool",
+        failure: {
+          code: "tool_settlement_unknown",
+          metadata: { stage: "settlement" },
+        },
       },
     });
     expect(result).not.toHaveProperty("toolResult");
     if (result.status !== "failed") throw new Error("Expected executor failure.");
-    expect(result.error.metadata).not.toBe(failure.metadata);
-    expect(Object.isFrozen(result.error.metadata)).toBe(true);
+    expect(result.failure.failure.metadata).not.toBe(failure.metadata);
+    expect(Object.isFrozen(result.failure.failure.metadata)).toBe(true);
   });
 
   it("distinguishes a malformed executor result from a malformed ToolResult", async () => {
@@ -395,9 +409,9 @@ describe("SandboxExecutionGateway", () => {
     await expect(prepareAndExecute(gateway, dispatchInput(fixture))).resolves.toMatchObject({
       status: "failed",
       effectState: "unknown",
-      error: {
-        owner: "tool",
-        code: "tool_executor_result_invalid",
+      failure: {
+        kind: "tool",
+        failure: { code: "tool_executor_result_invalid" },
       },
     });
   });

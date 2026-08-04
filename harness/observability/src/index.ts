@@ -3,6 +3,10 @@ export type {
   ObservabilityRecordPurpose,
 } from "./ObservabilityRecordContext.js";
 export type {
+  AuditFailure,
+  TelemetryFailure,
+} from "./ObservabilityFailure.js";
+export type {
   AuditActor,
   AuditActionByName,
   AuditActionDispatchAuthorizedPayload,

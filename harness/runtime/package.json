@@ -35,6 +35,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
+  "agentAnything": {
+    "architecture": {
+      "kind": "harness",
+      "component": "runtime"
+    }
+  },
   "dependencies": {
     "@agent-anything/action-execution": "workspace:*",
     "@agent-anything/context": "workspace:*",
@@ -46,7 +52,7 @@
     "@agent-anything/tools": "workspace:*"
   },
   "devDependencies": {
-    "@agent-anything/testing": "workspace:*"
+    "@agent-anything/test-support": "workspace:*"
   },
   "license": "Apache-2.0",
   "private": true

@@ -350,7 +350,8 @@ function terminalRun(
         itemCount: 0,
         evidenceCount: 0,
         artifactCount: 0,
-        errors: [],
+        failure: null,
+        relatedFailures: [],
         cancellation: null,
       },
       product: {

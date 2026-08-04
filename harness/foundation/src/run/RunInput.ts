@@ -5,7 +5,7 @@ import {
   assertNonEmpty,
   assertRecord,
   snapshotMetadata,
-} from "../internal/validation.js";
+} from "../validation.js";
 import type { Metadata } from "../primitives/index.js";
 import {
   snapshotAgentTask,

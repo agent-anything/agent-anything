@@ -218,7 +218,10 @@ describe("fixed-order Action assessment", () => {
     }));
     expect(failed).toEqual(expect.objectContaining({
       status: "failed",
-      error: expect.objectContaining({ owner: "policy", code: "policy_evaluation_failed" }),
+      failure: expect.objectContaining({
+        kind: "policy",
+        failure: expect.objectContaining({ code: "policy_evaluation_failed" }),
+      }),
     }));
     expect(interrupted).toEqual({
       status: "interrupted",

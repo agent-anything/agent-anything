@@ -454,10 +454,11 @@ describe("Helarc Host Run composition", () => {
     expect(result.runResult).toMatchObject({
       status: "failed",
       code: "model_structured_output_retry_exhausted",
-      errors: [{
-        owner: "model",
-        code: "model_structured_output_retry_exhausted",
-      }],
+      failure: {
+        kind: "model",
+        failure: { code: "model_structured_output_retry_exhausted" },
+      },
+      relatedFailures: [],
     });
     expect(result.runResult.items.some((item) =>
       item.kind === "model_output" || item.kind === "action"
@@ -649,7 +650,8 @@ describe("Helarc Host Run composition", () => {
         kind: "complete",
         summary: "Create a new file.",
       },
-      errors: [],
+      failure: null,
+      relatedFailures: [],
     });
     expect(result.product.output).toMatchObject({
       patchStatus: "applied",
@@ -711,7 +713,8 @@ describe("Helarc Host Run composition", () => {
         kind: "complete",
         summary: "Update the file.",
       },
-      errors: [],
+      failure: null,
+      relatedFailures: [],
     });
     expect(result.product.output).toMatchObject({
       patchStatus: "rejected",
@@ -758,7 +761,8 @@ describe("Helarc Host Run composition", () => {
         kind: "complete",
         summary: "Update the file.",
       },
-      errors: [],
+      failure: null,
+      relatedFailures: [],
     });
     expect(result.product.output).toMatchObject({
       patchStatus: "failed",

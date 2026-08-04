@@ -5,17 +5,19 @@ import {
   createFailedRunResult,
   createSucceededRunResult,
 } from "./RunResult.js";
-import type { RuntimeError } from "./RuntimeError.js";
+import type { RunFailureCause } from "./RunFailure.js";
 
 describe("RunResult", () => {
   it("constructs structurally distinct terminal results", () => {
     const base = { runId: "run-1", taskId: "task-1" };
-    const error: RuntimeError = {
-      owner: "provider",
-      code: "provider_request_failed",
-      message: "Provider request failed.",
-      retryable: false,
-      metadata: {},
+    const failure: RunFailureCause = {
+      kind: "provider",
+      failure: {
+        category: "transport",
+        code: "provider_request_failed",
+        message: "Provider request failed.",
+        metadata: {},
+      },
     };
     const cancellation = {
       requestId: "cancel-1",
@@ -29,28 +31,32 @@ describe("RunResult", () => {
       code: null,
       finalOutput: { answer: "done" },
       cancellation: null,
-      errors: [],
+      failure: null,
+      relatedFailures: [],
     });
     expect(createBlockedRunResult(base, "runtime_no_safe_path")).toMatchObject({
       status: "blocked",
       code: "runtime_no_safe_path",
       finalOutput: null,
       cancellation: null,
-      errors: [],
+      failure: null,
+      relatedFailures: [],
     });
-    expect(createFailedRunResult(base, "provider_request_failed", [error])).toMatchObject({
+    expect(createFailedRunResult(base, "provider_request_failed", failure)).toMatchObject({
       status: "failed",
       code: "provider_request_failed",
       finalOutput: null,
       cancellation: null,
-      errors: [error],
+      failure,
+      relatedFailures: [],
     });
     expect(createCancelledRunResult(base, cancellation)).toMatchObject({
       status: "cancelled",
       code: "runtime_cancelled",
       finalOutput: null,
       cancellation,
-      errors: [],
+      failure: null,
+      relatedFailures: [],
     });
   });
 
@@ -62,13 +68,13 @@ describe("RunResult", () => {
     )).toThrow("non-null finalOutput");
   });
 
-  it("rejects a failed result without an error", () => {
+  it("rejects a failed result without a primary failure", () => {
     expect(() => createFailedRunResult(
       { runId: "run-1", taskId: "task-1" },
       "provider_request_failed",
       // @ts-expect-error Runtime validation also protects untyped callers.
-      [],
-    )).toThrow("at least one RuntimeError");
+      null,
+    )).toThrow("failure must be a valid RunFailureCause");
   });
 
   it("rejects RunItems from a different Run", () => {

@@ -7,6 +7,13 @@ export {
 export * from "./ActionAdapter.js";
 export * from "./ActionEnforcementPipeline.js";
 export type {
+  ActionProcessingFailure,
+  ActionExecutionFailure,
+  ActionExecutionFailureForKind,
+  ActionExecutionFailureKind,
+} from "./ActionExecutionFailure.js";
+export { createActionExecutionFailure } from "./ActionExecutionFailure.js";
+export type {
   ActionExecutor,
   ActionExecutorContext,
   ActionExecutorDispatchPermit,
@@ -55,6 +62,7 @@ export type {
   SandboxEscalationResult,
 } from "./SandboxEscalation.js";
 export * from "./SandboxContracts.js";
+export type { SandboxExecutionFailure } from "./SandboxExecutionFailure.js";
 export {
   createSandboxExecutionGateway,
   type ActionSecretResolver,

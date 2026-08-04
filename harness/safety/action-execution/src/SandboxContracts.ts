@@ -4,7 +4,7 @@ import type {
   ISODateTimeString,
 } from "@agent-anything/foundation";
 import type { ToolResult } from "@agent-anything/tools";
-import type { RuntimeError } from "@agent-anything/foundation";
+import type { ActionExecutionFailure } from "./ActionExecutionFailure.js";
 import type { ActionDispatchPlan } from "./ActionRevalidation.js";
 import type { ActionExecutorDescriptor } from "./ActionRegistration.js";
 import type { CanonicalEffectivePermissions } from "./CanonicalEffectivePermissions.js";
@@ -69,7 +69,7 @@ export interface PreparedSandboxDispatch {
 export type SandboxDispatchPreparationResult =
   | { readonly status: "ready"; readonly prepared: PreparedSandboxDispatch }
   | { readonly status: "interrupted"; readonly interruption: InvocationInterruptionRef }
-  | { readonly status: "failed"; readonly error: RuntimeError };
+  | { readonly status: "failed"; readonly failure: ActionExecutionFailure };
 
 export interface SandboxExecutionRequest {
   readonly attempt: SandboxAttempt;
@@ -174,7 +174,7 @@ export type ActionExecutionResult =
       readonly status: "failed";
       readonly attempt: SandboxAttempt | null;
       readonly effectState: "none" | "unknown";
-      readonly error: RuntimeError;
+      readonly failure: ActionExecutionFailure;
     };
 
 export interface SandboxExecutionGateway {

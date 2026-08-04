@@ -61,7 +61,16 @@ export function completeRunnerTrace(
         evidenceCount: result.evidenceRefs.length,
         artifactCount: result.artifactRefs.length,
         errorCodes: Object.freeze(
-          [...new Set(result.errors.map((error) => error.code))],
+          [...new Set(
+            result.failure === null
+              ? []
+              : [
+                  result.failure.failure.code,
+                  ...result.relatedFailures.map(
+                    (cause) => cause.failure.code,
+                  ),
+                ],
+          )],
         ),
       }),
     });

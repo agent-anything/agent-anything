@@ -13,7 +13,11 @@ import type {
   Action,
   ActionRejectedCode,
 } from "@agent-anything/foundation/action";
-import type { RuntimeError } from "@agent-anything/foundation";
+import {
+  createActionExecutionFailure,
+  type ActionExecutionFailure,
+  type ActionExecutionFailureKind,
+} from "./ActionExecutionFailure.js";
 import {
   type ActionAdapterImplementation,
   type ActionAdapterPreparationResult,
@@ -118,7 +122,7 @@ export interface PrepareExternalActionInput {
 export type ActionPreparationResult =
   | { readonly status: "prepared"; readonly prepared: PreparedExternalAction }
   | { readonly status: "rejected"; readonly code: ActionRejectedCode; readonly message: string }
-  | { readonly status: "failed"; readonly error: RuntimeError }
+  | { readonly status: "failed"; readonly failure: ActionExecutionFailure }
   | { readonly status: "interrupted"; readonly interruption: InvocationInterruptionRef };
 
 export interface ActionEnforcementPipelineDependencies {
@@ -1096,18 +1100,12 @@ function escalationIneligible(code: string, message: string): SandboxEscalationR
 function escalationFailed(
   code: string,
   message: string,
-  owner: RuntimeError["owner"] = "sandbox",
+  owner: ActionExecutionFailureKind = "sandbox",
   retryable = false,
 ): SandboxEscalationResult {
   return Object.freeze({
     status: "failed" as const,
-    error: Object.freeze({
-      owner,
-      code,
-      message,
-      retryable,
-      metadata: Object.freeze({}),
-    }),
+    failure: pipelineFailure(owner, code, message, retryable),
   });
 }
 
@@ -1117,7 +1115,7 @@ function observeRevalidationInterruption(
   if (!context.signal.aborted) return null;
   if (context.interruption === null) {
     return revalidationFailed(
-      "runtime",
+      "action_execution",
       "runtime_action_revalidation_interruption_unattributed",
       "Action revalidation was aborted without interruption attribution.",
       false,
@@ -1130,7 +1128,7 @@ function observeRevalidationInterruption(
     });
   } catch {
     return revalidationFailed(
-      "runtime",
+      "action_execution",
       "runtime_action_revalidation_interruption_invalid",
       "Action revalidation interruption attribution is invalid.",
       false,
@@ -1146,14 +1144,14 @@ function revalidationInvalidated(
 }
 
 function revalidationFailed(
-  owner: RuntimeError["owner"],
+  owner: ActionExecutionFailureKind,
   code: string,
   message: string,
   retryable: boolean,
 ): ActionRevalidationResult {
   return Object.freeze({
     status: "failed" as const,
-    error: Object.freeze({ owner, code, message, retryable, metadata: Object.freeze({}) }),
+    failure: pipelineFailure(owner, code, message, retryable),
   });
 }
 
@@ -1171,7 +1169,7 @@ function observeAssessmentInterruption(
   if (!context.signal.aborted) return null;
   if (context.interruption === null) {
     return assessmentFailed(
-      "runtime",
+      "action_execution",
       "runtime_action_assessment_interruption_unattributed",
       "Action assessment was aborted without interruption attribution.",
     );
@@ -1180,7 +1178,7 @@ function observeAssessmentInterruption(
     return Object.freeze({ status: "interrupted" as const, interruption: snapshotInterruption(context.interruption) });
   } catch {
     return assessmentFailed(
-      "runtime",
+      "action_execution",
       "runtime_action_assessment_interruption_invalid",
       "Action assessment interruption attribution is invalid.",
     );
@@ -1196,13 +1194,13 @@ function assessmentDenied(
 }
 
 function assessmentFailed(
-  owner: RuntimeError["owner"],
+  owner: ActionExecutionFailureKind,
   code: string,
   message: string,
 ): ActionAssessment {
   return Object.freeze({
     status: "failed" as const,
-    error: Object.freeze({ owner, code, message, retryable: false, metadata: Object.freeze({}) }),
+    failure: pipelineFailure(owner, code, message, false),
   });
 }
 
@@ -1382,14 +1380,38 @@ function rejected(code: ActionRejectedCode, message: string): ActionPreparationR
 function failed(code: string, message: string, retryable: boolean): ActionPreparationResult {
   return Object.freeze({
     status: "failed",
-    error: Object.freeze({
-      owner: "tool" as const,
-      code,
-      message,
-      retryable,
-      metadata: Object.freeze({}),
-    }),
+    failure: pipelineFailure("tool", code, message, retryable),
   });
+}
+
+function pipelineFailure(
+  kind: ActionExecutionFailureKind,
+  code: string,
+  message: string,
+  retryable: boolean,
+): ActionExecutionFailure {
+  const failure = Object.freeze({
+    code,
+    message,
+    retryable,
+    metadata: Object.freeze({}),
+  });
+
+  switch (kind) {
+    case "action_execution":
+      return createActionExecutionFailure("action_execution", failure);
+    case "policy":
+      return createActionExecutionFailure("policy", failure);
+    case "permission":
+      return createActionExecutionFailure("permission", failure);
+    case "tool":
+      return createActionExecutionFailure("tool", failure);
+    case "sandbox":
+      return createActionExecutionFailure("sandbox", Object.freeze({
+        ...failure,
+        effectState: "none" as const,
+      }));
+  }
 }
 
 function interrupted(interruption: InvocationInterruptionRef): ActionPreparationResult {

@@ -1,5 +1,6 @@
 import {
   createAuditRecord,
+  type AuditFailure,
   type AuditPort,
 } from "@agent-anything/observability";
 import type {
@@ -9,7 +10,8 @@ import type {
 } from "@agent-anything/foundation";
 import type { ActionDispatchPlan } from "@agent-anything/action-execution";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
-import type { RuntimeError } from "@agent-anything/foundation";
+import type { RunFailureCause } from "@agent-anything/runtime/run";
+import { createRunFailureCause } from "../run/RunFailure.js";
 import { settleRunnerRecordingGate } from "./RunnerRecordingGate.js";
 
 interface RecordActionDispatchAuthorizationAuditInput {
@@ -25,8 +27,8 @@ interface RecordActionDispatchAuthorizationAuditInput {
 
 export async function recordActionDispatchAuthorizationAudit(
   input: RecordActionDispatchAuthorizationAuditInput,
-): Promise<RuntimeError | null> {
-  const errors = await settleRunnerRecordingGate({
+): Promise<AuditRunFailure | null> {
+  const failures = await settleRunnerRecordingGate({
     purpose: "runtime",
     signal: input.signal,
     recorders: [{
@@ -35,12 +37,16 @@ export async function recordActionDispatchAuthorizationAudit(
       execute: () => recordAuthorizationAudit(input),
     }],
   });
-  return errors[0] ?? null;
+  const failure = failures[0] ?? null;
+  if (failure !== null && failure.kind !== "audit") {
+    throw new TypeError("Action dispatch Audit recording returned a non-Audit failure.");
+  }
+  return failure;
 }
 
 async function recordAuthorizationAudit(
   input: RecordActionDispatchAuthorizationAuditInput,
-): Promise<RuntimeError | null> {
+): Promise<AuditRunFailure | null> {
   if (input.signal.aborted) throw input.signal.reason;
   if (input.port === undefined) {
     return input.requirement === "required"
@@ -130,12 +136,17 @@ function recordWithinSignal(
 function requiredAuditError(
   message: string,
   causeName: string | null = null,
-): RuntimeError {
-  return Object.freeze({
-    owner: "audit" as const,
+): AuditRunFailure {
+  const failure: AuditFailure = Object.freeze({
     code: "audit_required_failed",
     message,
     retryable: false,
     metadata: Object.freeze(causeName === null ? {} : { causeName }),
   });
+  return createRunFailureCause("audit", failure);
 }
+
+type AuditRunFailure = Extract<
+  RunFailureCause,
+  { readonly kind: "audit" }
+>;

@@ -1,10 +1,11 @@
 import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
-import type { Action, RuntimeError } from "@agent-anything/foundation";
+import type { Action } from "@agent-anything/foundation";
 import type { ControllerModelItem } from "../controller/Controller.js";
 import type { PlanProjection } from "../plan/index.js";
 import type { Observation } from "@agent-anything/context/observation";
 import type { RunCancellationSummary } from "./RunCancellation.js";
-import type { RunBlockedCode, RunFailureCode } from "@agent-anything/foundation/result";
+import type { RunFailureCause } from "./RunFailure.js";
+import type { RunBlockedCode, RunFailureCode } from "./RunStatus.js";
 import type { ApprovalsReviewer } from "@agent-anything/permission";
 import type {
   ApprovalRecordSummary,
@@ -91,7 +92,8 @@ export interface RunBlockedRunItem extends RunItemBase {
 export interface RunFailedRunItem extends RunItemBase {
   readonly kind: "run_failed";
   readonly code: RunFailureCode;
-  readonly errors: readonly [RuntimeError, ...RuntimeError[]];
+  readonly failure: RunFailureCause;
+  readonly relatedFailures: readonly RunFailureCause[];
 }
 
 export interface RunCancelledRunItem extends RunItemBase {

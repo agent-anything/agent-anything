@@ -4,7 +4,7 @@ import {
   assertNonEmpty,
   assertRecord,
   snapshotMetadata,
-} from "../internal/validation.js";
+} from "../validation.js";
 import type { ISODateTimeString, Metadata } from "../primitives/index.js";
 
 export interface AgentTask<TInput = unknown> {

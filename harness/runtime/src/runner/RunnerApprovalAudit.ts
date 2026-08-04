@@ -1,5 +1,6 @@
 import {
   createAuditRecord,
+  type AuditFailure,
   type AuditPort,
 } from "@agent-anything/observability";
 import type {
@@ -12,7 +13,8 @@ import type {
   RunWorkspace,
 } from "@agent-anything/foundation";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
-import type { RuntimeError } from "@agent-anything/foundation";
+import type { RunFailureCause } from "@agent-anything/runtime/run";
+import { createRunFailureCause } from "../run/RunFailure.js";
 import { settleRunnerRecordingGate } from "./RunnerRecordingGate.js";
 
 interface ApprovalAuditBaseInput {
@@ -29,13 +31,13 @@ interface ApprovalAuditBaseInput {
 
 export function recordApprovalRequestAudit(
   input: ApprovalAuditBaseInput,
-): Promise<RuntimeError | null> {
+): Promise<AuditRunFailure | null> {
   return recordApprovalAudit(input, "requested", null);
 }
 
 export function recordApprovalValidatedDecisionAudit(
   input: ApprovalAuditBaseInput & { readonly decision: ValidatedApprovalDecision },
-): Promise<RuntimeError | null> {
+): Promise<AuditRunFailure | null> {
   return recordApprovalAudit(input, "decision_validated", input.decision.kind);
 }
 
@@ -43,8 +45,8 @@ async function recordApprovalAudit(
   input: ApprovalAuditBaseInput,
   phase: "requested" | "decision_validated",
   decisionKind: ValidatedApprovalDecision["kind"] | null,
-): Promise<RuntimeError | null> {
-  const errors = await settleRunnerRecordingGate({
+): Promise<AuditRunFailure | null> {
+  const failures = await settleRunnerRecordingGate({
     purpose: "runtime",
     signal: input.signal,
     recorders: [{
@@ -53,14 +55,18 @@ async function recordApprovalAudit(
       execute: () => writeApprovalAudit(input, phase, decisionKind),
     }],
   });
-  return errors[0] ?? null;
+  const failure = failures[0] ?? null;
+  if (failure !== null && failure.kind !== "audit") {
+    throw new TypeError("Approval Audit recording returned a non-Audit failure.");
+  }
+  return failure;
 }
 
 async function writeApprovalAudit(
   input: ApprovalAuditBaseInput,
   phase: "requested" | "decision_validated",
   decisionKind: ValidatedApprovalDecision["kind"] | null,
-): Promise<RuntimeError | null> {
+): Promise<AuditRunFailure | null> {
   if (input.port === undefined) {
     return input.requirement === "required"
       ? requiredAuditError("Required AuditPort is unavailable for approval.")
@@ -172,12 +178,20 @@ function recordWithinSignal(
   });
 }
 
-function requiredAuditError(message: string, causeName: string | null = null): RuntimeError {
-  return Object.freeze({
-    owner: "audit" as const,
+type AuditRunFailure = Extract<
+  RunFailureCause,
+  { readonly kind: "audit" }
+>;
+
+function requiredAuditError(
+  message: string,
+  causeName: string | null = null,
+): AuditRunFailure {
+  const failure: AuditFailure = Object.freeze({
     code: "audit_required_failed",
     message,
     retryable: false,
     metadata: Object.freeze(causeName === null ? {} : { causeName }),
   });
+  return createRunFailureCause("audit", failure);
 }

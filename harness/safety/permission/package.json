@@ -33,7 +33,7 @@
   },
   "agentAnything": {
     "architecture": {
-      "layer": "harness",
+      "kind": "harness",
       "component": "safety.permission"
     }
   },

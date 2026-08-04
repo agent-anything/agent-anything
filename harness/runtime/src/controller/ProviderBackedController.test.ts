@@ -5,7 +5,7 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/model-interaction";
-import { FakeProvider } from "@agent-anything/testing";
+import { FakeProvider } from "@agent-anything/test-support";
 import type { Agent } from "@agent-anything/foundation/agent";
 import { projectContext, createInitialContext } from "@agent-anything/context/context";
 import { createRunCancellationController } from "@agent-anything/runtime/run";
@@ -153,11 +153,11 @@ describe("ProviderBackedController", () => {
     );
 
     expect(error).toBeInstanceOf(ControllerError);
-    expect((error as ControllerError).runtimeError).toEqual({
-      owner: "provider",
+    expect((error as ControllerError).failure.kind).toBe("provider");
+    expect((error as ControllerError).failure.failure).toEqual({
+      category: "transport",
       code: "provider_request_failed",
       message: "Provider unavailable.",
-      retryable: false,
       metadata: {
         providerId: "fake-provider",
         providerFailureCategory: "transport",
@@ -186,8 +186,8 @@ describe("ProviderBackedController", () => {
       controller.next(createControllerInput(), callContext()),
     );
 
-    expect((error as ControllerError).runtimeError).toMatchObject({
-      owner: "provider",
+    expect((error as ControllerError).failure.kind).toBe("provider");
+    expect((error as ControllerError).failure.failure).toMatchObject({
       code: "provider_timeout",
       metadata: {
         providerFailureCategory: "timeout",
@@ -309,7 +309,7 @@ describe("ProviderBackedController", () => {
     ));
 
     expect(provider.requests()).toHaveLength(1);
-    expect((error as ControllerError).runtimeError).toMatchObject({
+    expect((error as ControllerError).failure.failure).toMatchObject({
       code: "provider_request_failed",
       metadata: { providerFailureCategory: "authentication", providerStatusCode: 401 },
     });
@@ -336,7 +336,7 @@ describe("ProviderBackedController", () => {
     ));
 
     expect(provider.requests()).toHaveLength(3);
-    expect((error as ControllerError).runtimeError).toMatchObject({
+    expect((error as ControllerError).failure.failure).toMatchObject({
       code: "provider_retry_exhausted",
       metadata: {
         retryExhaustionReason: "retry_budget_exhausted",
@@ -378,7 +378,7 @@ describe("ProviderBackedController", () => {
     await vi.advanceTimersByTimeAsync(25);
     const error = await run;
 
-    expect((error as ControllerError).runtimeError).toMatchObject({
+    expect((error as ControllerError).failure.failure).toMatchObject({
       code: "provider_retry_exhausted",
       metadata: { retryExhaustionReason: "deadline_exceeded", retryTotalAttempts: 1 },
     });
@@ -502,10 +502,10 @@ describe("ProviderBackedController", () => {
       unconfirmed.next(createControllerInput(), callContext()),
     );
 
-    expect((mismatchedError as ControllerError).runtimeError.code)
+    expect((mismatchedError as ControllerError).failure.failure.code)
       .toBe("provider_cancellation_unconfirmed");
-    expect((unconfirmedError as ControllerError).runtimeError).toMatchObject({
-      owner: "provider",
+    expect((unconfirmedError as ControllerError).failure.kind).toBe("provider");
+    expect((unconfirmedError as ControllerError).failure.failure).toMatchObject({
       code: "provider_cancellation_unconfirmed",
       message: "Provider settlement could not be confirmed.",
     });
@@ -519,8 +519,8 @@ describe("ProviderBackedController", () => {
     );
 
     expect(error).toBeInstanceOf(ControllerError);
-    expect((error as ControllerError).runtimeError).toMatchObject({
-      owner: "provider",
+    expect((error as ControllerError).failure.kind).toBe("provider");
+    expect((error as ControllerError).failure.failure).toMatchObject({
       code: "provider_request_failed",
       message: "Provider request failed.",
       metadata: {
@@ -541,8 +541,8 @@ describe("ProviderBackedController", () => {
       controller.next(createControllerInput(), callContext()),
     );
 
-    expect((error as ControllerError).runtimeError).toMatchObject({
-      owner: "model",
+    expect((error as ControllerError).failure.kind).toBe("model");
+    expect((error as ControllerError).failure.failure).toMatchObject({
       code: "model_request_failed",
       message: "Prompt assembly failed.",
     });
@@ -560,8 +560,8 @@ describe("ProviderBackedController", () => {
     );
 
     expect(parseResponse).not.toHaveBeenCalled();
-    expect((error as ControllerError).runtimeError).toMatchObject({
-      owner: "model",
+    expect((error as ControllerError).failure.kind).toBe("model");
+    expect((error as ControllerError).failure.failure).toMatchObject({
       code: "model_output_invalid",
       message: "Model output did not satisfy the active structured-output contract.",
       metadata: {
@@ -596,11 +596,11 @@ describe("ProviderBackedController", () => {
       outputFailure.next(createControllerInput(), callContext()),
     );
 
-    expect((parseError as ControllerError).runtimeError).toMatchObject({
+    expect((parseError as ControllerError).failure.failure).toMatchObject({
       code: "model_output_invalid",
       message: "Provider output parsing failed.",
     });
-    expect((outputError as ControllerError).runtimeError).toMatchObject({
+    expect((outputError as ControllerError).failure.failure).toMatchObject({
       code: "model_output_invalid",
       message: "Model output did not satisfy the active structured-output contract.",
       metadata: {
@@ -738,8 +738,8 @@ describe("ProviderBackedController", () => {
     ));
 
     expect(provider.requests()).toHaveLength(1);
-    expect((error as ControllerError).runtimeError).toMatchObject({
-      owner: "model",
+    expect((error as ControllerError).failure.kind).toBe("model");
+    expect((error as ControllerError).failure.failure).toMatchObject({
       code: "model_output_invalid",
       message: "Provider output parsing failed.",
     });
@@ -770,8 +770,8 @@ describe("ProviderBackedController", () => {
     ));
 
     expect(provider.requests()).toHaveLength(2);
-    expect((error as ControllerError).runtimeError).toMatchObject({
-      owner: "model",
+    expect((error as ControllerError).failure.kind).toBe("model");
+    expect((error as ControllerError).failure.failure).toMatchObject({
       code: "model_structured_output_retry_exhausted",
       metadata: {
         retryExhaustionReason: "retry_budget_exhausted",
@@ -811,8 +811,8 @@ describe("ProviderBackedController", () => {
     ));
 
     expect(provider.requests()).toHaveLength(2);
-    expect((error as ControllerError).runtimeError).toMatchObject({
-      owner: "provider",
+    expect((error as ControllerError).failure.kind).toBe("provider");
+    expect((error as ControllerError).failure.failure).toMatchObject({
       code: "provider_request_failed",
       metadata: {
         providerFailureCategory: "authentication",
@@ -876,7 +876,7 @@ describe("ProviderBackedController", () => {
     ));
 
     expect(provider.requests()).toHaveLength(1);
-    expect((error as ControllerError).runtimeError).toMatchObject({
+    expect((error as ControllerError).failure.failure).toMatchObject({
       code: "model_structured_output_retry_exhausted",
       metadata: {
         retryExhaustionReason: "deadline_exceeded",
@@ -947,7 +947,7 @@ describe("ProviderBackedController", () => {
     );
 
     expect(error).toBeInstanceOf(ControllerError);
-    expect((error as ControllerError).runtimeError.code).toBe("model_output_invalid");
+    expect((error as ControllerError).failure.failure.code).toBe("model_output_invalid");
   });
 
   it("does not start provider work after cancellation", async () => {

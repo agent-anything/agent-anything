@@ -4,15 +4,14 @@ import type {
   IdentityRef,
   ISODateTimeString,
   Metadata,
-  RunLifecycleStatus,
   RunWorkspace,
-  RuntimeError,
 } from "@agent-anything/foundation";
 import type { Context } from "@agent-anything/context/context";
 import type { Plan } from "../plan/index.js";
 import type { RunCancellationRequest } from "./RunCancellation.js";
+import type { RunFailureCause } from "./RunFailure.js";
 import type { RunItem } from "./RunItem.js";
-import type { RunBlockedCode, RunFailureCode } from "@agent-anything/foundation/result";
+import type { RunBlockedCode, RunFailureCode } from "./RunStatus.js";
 import type {
   PendingApproval,
   RunPermissionState,
@@ -55,7 +54,8 @@ type ActiveRunState<TOutput> = RunStateBase<TOutput> & {
   readonly status: "initializing" | "running";
   readonly code: null;
   readonly finalOutput: null;
-  readonly errors: readonly [];
+  readonly failure: null;
+  readonly relatedFailures: readonly [];
   readonly cancellationRequest: null;
   readonly permission: RunPermissionStateWithoutPending;
 };
@@ -64,7 +64,8 @@ type WaitingForApprovalRunState<TOutput> = RunStateBase<TOutput> & {
   readonly status: "waiting_for_approval";
   readonly code: null;
   readonly finalOutput: null;
-  readonly errors: readonly [];
+  readonly failure: null;
+  readonly relatedFailures: readonly [];
   readonly cancellationRequest: null;
   readonly permission: RunPermissionStateWithPending;
 };
@@ -73,7 +74,8 @@ type CancellingRunState<TOutput> = RunStateBase<TOutput> & {
   readonly status: "cancelling";
   readonly code: null;
   readonly finalOutput: null;
-  readonly errors: readonly [];
+  readonly failure: null;
+  readonly relatedFailures: readonly [];
   readonly cancellationRequest: RunCancellationRequest;
   readonly permission: RunPermissionStateWithoutPending;
 };
@@ -82,7 +84,8 @@ type SucceededRunState<TOutput> = RunStateBase<TOutput> & {
   readonly status: "succeeded";
   readonly code: null;
   readonly finalOutput: NonNullable<TOutput>;
-  readonly errors: readonly [];
+  readonly failure: null;
+  readonly relatedFailures: readonly [];
   readonly cancellationRequest: null;
   readonly permission: RunPermissionStateWithoutPending;
 };
@@ -91,7 +94,8 @@ type BlockedRunState<TOutput> = RunStateBase<TOutput> & {
   readonly status: "blocked";
   readonly code: RunBlockedCode;
   readonly finalOutput: null;
-  readonly errors: readonly [];
+  readonly failure: null;
+  readonly relatedFailures: readonly [];
   readonly cancellationRequest: null;
   readonly permission: RunPermissionStateWithoutPending;
 };
@@ -100,7 +104,8 @@ type FailedRunState<TOutput> = RunStateBase<TOutput> & {
   readonly status: "failed";
   readonly code: RunFailureCode;
   readonly finalOutput: null;
-  readonly errors: readonly [RuntimeError, ...RuntimeError[]];
+  readonly failure: RunFailureCause;
+  readonly relatedFailures: readonly RunFailureCause[];
   readonly cancellationRequest: RunCancellationRequest | null;
   readonly permission: RunPermissionStateWithoutPending;
 };
@@ -109,7 +114,8 @@ type CancelledRunState<TOutput> = RunStateBase<TOutput> & {
   readonly status: "cancelled";
   readonly code: "runtime_cancelled";
   readonly finalOutput: null;
-  readonly errors: readonly [];
+  readonly failure: null;
+  readonly relatedFailures: readonly [];
   readonly cancellationRequest: RunCancellationRequest;
   readonly permission: RunPermissionStateWithoutPending;
 };

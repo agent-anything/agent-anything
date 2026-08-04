@@ -34,10 +34,6 @@
       "types": "./src/primitives/index.ts",
       "import": "./dist/primitives/index.js"
     },
-    "./result": {
-      "types": "./src/result/index.ts",
-      "import": "./dist/result/index.js"
-    },
     "./run": {
       "types": "./src/run/index.ts",
       "import": "./dist/run/index.js"
@@ -61,7 +57,7 @@
   },
   "agentAnything": {
     "architecture": {
-      "layer": "harness",
+      "kind": "harness",
       "component": "foundation"
     }
   },

@@ -17,7 +17,7 @@ import { RetryExecutor } from "../retry/RetryExecutor.js";
 import type { RetryClassification, RetryFailure } from "@agent-anything/runtime/retry";
 import type { RetryExhaustedEvent } from "@agent-anything/runtime/retry";
 import type { RetryOperation } from "@agent-anything/runtime/retry";
-import type { RuntimeError } from "@agent-anything/foundation";
+import type { ModelFailure } from "./ModelFailure.js";
 import type {
   Controller,
   ControllerCallContext,
@@ -52,17 +52,22 @@ export type ControllerFailureCode =
   | "provider_retry_exhausted"
   | "provider_cancellation_unconfirmed";
 
-export interface ControllerFailure extends RuntimeError {
-  readonly owner: "model" | "provider";
-  readonly code: ControllerFailureCode;
-}
+export type ControllerFailure =
+  | {
+      readonly kind: "model";
+      readonly failure: ModelFailure & { readonly code: ControllerFailureCode };
+    }
+  | {
+      readonly kind: "provider";
+      readonly failure: ProviderFailure & { readonly code: ControllerFailureCode };
+    };
 
 export class ControllerError extends Error {
   constructor(
-    readonly runtimeError: ControllerFailure,
+    readonly failure: ControllerFailure,
     readonly operationSettlement: "unsettled" | "settled_failure" = "unsettled",
   ) {
-    super(runtimeError.message);
+    super(failure.failure.message);
     this.name = "ControllerError";
   }
 }
@@ -693,23 +698,44 @@ function decisionContractError(code: string): StructuredOutputError {
 }
 
 function createControllerError(
-  owner: ControllerFailure["owner"],
+  owner: ControllerFailure["kind"],
   code: ControllerFailureCode,
   message: string,
   retryable: boolean,
   metadata: Metadata,
   operationSettlement: "unsettled" | "settled_failure" = "unsettled",
+  providerCategory?: string,
 ): ControllerError {
+  const frozenMetadata = Object.freeze({ ...metadata });
   return new ControllerError(
-    Object.freeze({
-      owner,
-      code,
-      message,
-      retryable,
-      metadata: Object.freeze({ ...metadata }),
-    }),
+    owner === "model"
+      ? Object.freeze({
+          kind: "model" as const,
+          failure: Object.freeze({
+            code,
+            message,
+            retryable,
+            metadata: frozenMetadata,
+          }),
+        })
+      : Object.freeze({
+          kind: "provider" as const,
+          failure: Object.freeze({
+            category: providerCategory ?? providerFailureCategory(code),
+            code,
+            message,
+            metadata: frozenMetadata,
+          }),
+        }),
     operationSettlement,
   );
+}
+
+function providerFailureCategory(code: ControllerFailureCode): string {
+  if (code === "provider_timeout") return "timeout";
+  if (code === "provider_cancellation_unconfirmed") return "cancellation";
+  if (code === "provider_retry_exhausted") return "retry_exhausted";
+  return "provider";
 }
 
 function createInvocationInterruptionContext(
@@ -795,7 +821,7 @@ function classifyStructuredOutputAttemptFailure(
   }
   if (error.kind === "terminal") {
     const code = error.error instanceof ControllerError
-      ? error.error.runtimeError.code
+      ? error.error.failure.failure.code
       : "structured_output_owner_failure";
     return {
       failure: {
@@ -1168,6 +1194,7 @@ function providerRetryFailureError(
       providerRetryAfterMs: failure.retryAfterMs ?? null,
     },
     "settled_failure",
+    failure.category,
   );
 }
 

@@ -62,7 +62,7 @@ import {
   FakeApprovalReviewer,
   FakeEvidencePersistencePort,
   FakeRuntimeEventPublisher,
-} from "@agent-anything/testing";
+} from "@agent-anything/test-support";
 import type {
   AdditionalPermissions,
   ApprovalReviewInput,
@@ -615,11 +615,14 @@ describe("Runner", () => {
         status: "failed",
         code: "runtime_cancellation_settlement_timeout",
         cancellation: { reasonCode: "host_requested" },
-        errors: [{
-          owner: "runtime",
-          code: "runtime_cancellation_settlement_timeout",
-          metadata: { operation: "controller", settlementTimeoutMs: 25 },
-        }],
+        failure: {
+          kind: "runtime",
+          failure: {
+            code: "runtime_cancellation_settlement_timeout",
+            metadata: { operation: "controller", settlementTimeoutMs: 25 },
+          },
+        },
+        relatedFailures: [],
       });
       expect(result.items.map((item) => item.kind)).toEqual([
         "run_cancellation_requested",
@@ -640,11 +643,13 @@ describe("Runner", () => {
         });
         throw new ControllerError(
           {
-            owner: "provider",
-            code: "provider_cancellation_unconfirmed",
-            message: "Provider settlement could not be confirmed.",
-            retryable: false,
-            metadata: {},
+            kind: "provider",
+            failure: {
+              category: "cancellation",
+              code: "provider_cancellation_unconfirmed",
+              message: "Provider settlement could not be confirmed.",
+              metadata: {},
+            },
           },
           "settled_failure",
         );
@@ -661,10 +666,11 @@ describe("Runner", () => {
       status: "failed",
       code: "provider_cancellation_unconfirmed",
       cancellation: { reasonCode: "host_requested" },
-      errors: [{
-        owner: "provider",
-        code: "provider_cancellation_unconfirmed",
-      }],
+      failure: {
+        kind: "provider",
+        failure: { code: "provider_cancellation_unconfirmed" },
+      },
+      relatedFailures: [],
     });
   });
 
@@ -678,11 +684,13 @@ describe("Runner", () => {
         });
         throw new ControllerError(
           {
-            owner: "provider",
-            code: "provider_timeout",
-            message: "Provider request timed out.",
-            retryable: false,
-            metadata: {},
+            kind: "provider",
+            failure: {
+              category: "timeout",
+              code: "provider_timeout",
+              message: "Provider request timed out.",
+              metadata: {},
+            },
           },
           "settled_failure",
         );
@@ -699,7 +707,11 @@ describe("Runner", () => {
       status: "failed",
       code: "provider_timeout",
       cancellation: { reasonCode: "host_requested" },
-      errors: [{ owner: "provider", code: "provider_timeout" }],
+      failure: {
+        kind: "provider",
+        failure: { code: "provider_timeout" },
+      },
+      relatedFailures: [],
     });
   });
 
@@ -787,7 +799,8 @@ describe("Runner", () => {
         expect(result).toMatchObject({
           status: "failed",
           code: expectedCode,
-          errors: [{ owner, code: expectedCode }],
+          failure: { kind: owner, failure: { code: expectedCode } },
+          relatedFailures: [],
         });
       } finally {
         vi.useRealTimers();
@@ -964,11 +977,13 @@ describe("Runner", () => {
 
   it("preserves typed Controller failure ownership", async () => {
     const controllerError = new ControllerError(Object.freeze({
-      owner: "provider",
-      code: "provider_request_failed",
-      message: "Provider unavailable.",
-      retryable: false,
-      metadata: Object.freeze({ providerId: "test-provider" }),
+      kind: "provider",
+      failure: Object.freeze({
+        category: "transport",
+        code: "provider_request_failed",
+        message: "Provider unavailable.",
+        metadata: Object.freeze({ providerId: "test-provider" }),
+      }),
     }));
     const result = await createRunner(new ScriptedController([controllerError])).run(
       createAgent(),
@@ -979,7 +994,11 @@ describe("Runner", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "provider_request_failed",
-      errors: [{ owner: "provider", code: "provider_request_failed" }],
+      failure: {
+        kind: "provider",
+        failure: { code: "provider_request_failed" },
+      },
+      relatedFailures: [],
     });
   });
 
@@ -1040,13 +1059,15 @@ describe("Runner", () => {
     expect(missingAudit).toMatchObject({
       status: "failed",
       code: "audit_required_failed",
-      errors: [{ owner: "audit" }],
+      failure: { kind: "audit" },
+      relatedFailures: [],
     });
     expect(optionalResult.status).toBe("succeeded");
     expect(telemetryResult).toMatchObject({
       status: "failed",
       code: "telemetry_required_failed",
-      errors: [{ owner: "telemetry" }],
+      failure: { kind: "telemetry" },
+      relatedFailures: [],
     });
     expect(telemetryResult.items.map((item) => item.kind)).toEqual([
       "model_output",
@@ -1270,7 +1291,11 @@ describe("Runner", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "runtime_invalid_options",
-      errors: [{ owner: "runtime", code: "runtime_invalid_options" }],
+      failure: {
+        kind: "runtime",
+        failure: { code: "runtime_invalid_options" },
+      },
+      relatedFailures: [],
     });
     expect(result.items.map((item) => item.kind)).toEqual(["run_failed"]);
     expect(controller.calls).toHaveLength(0);
@@ -1295,7 +1320,11 @@ describe("Runner", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "runtime_invalid_options",
-      errors: [{ message: expect.stringContaining("maxRetries") }],
+      failure: {
+        kind: "runtime",
+        failure: { message: expect.stringContaining("maxRetries") },
+      },
+      relatedFailures: [],
     });
     expect(controller.calls).toHaveLength(0);
   });
@@ -1318,10 +1347,14 @@ describe("Runner", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "runtime_invalid_options",
-      errors: [{
-        code: "runtime_invalid_options",
-        message: expect.stringContaining(field),
-      }],
+      failure: {
+        kind: "runtime",
+        failure: {
+          code: "runtime_invalid_options",
+          message: expect.stringContaining(field),
+        },
+      },
+      relatedFailures: [],
     });
     expect(controller.calls).toHaveLength(0);
   });
@@ -1339,7 +1372,11 @@ describe("Runner", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "runtime_invalid_options",
-      errors: [{ message: expect.stringContaining("2147483647") }],
+      failure: {
+        kind: "runtime",
+        failure: { message: expect.stringContaining("2147483647") },
+      },
+      relatedFailures: [],
     });
     expect(controller.calls).toHaveLength(0);
   });
@@ -1568,7 +1605,11 @@ describe("Runner external Action approval attachment", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "runtime_invalid_options",
-      errors: [{ code: "runtime_invalid_options" }],
+      failure: {
+        kind: "runtime",
+        failure: { code: "runtime_invalid_options" },
+      },
+      relatedFailures: [],
     });
     expect(fixture.prepareCalls()).toBe(0);
   });
@@ -1606,7 +1647,11 @@ describe("Runner external Action approval attachment", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "audit_required_failed",
-      errors: [{ owner: "audit", code: "audit_required_failed" }],
+      failure: {
+        kind: "audit",
+        failure: { code: "audit_required_failed" },
+      },
+      relatedFailures: [],
     });
     expect(fixture.policyCalls()).toBe(2);
     expect(fixture.revalidationCalls()).toBe(1);
@@ -2045,7 +2090,11 @@ describe("Runner sandbox denial escalation", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "audit_required_failed",
-      errors: [{ owner: "audit", code: "audit_required_failed" }],
+      failure: {
+        kind: "audit",
+        failure: { code: "audit_required_failed" },
+      },
+      relatedFailures: [],
     });
     expect(fixture.providerCalls()).toBe(0);
     expect(result.items.some(({ kind }) => kind === "sandbox_attempt_started")).toBe(false);
@@ -2071,7 +2120,11 @@ describe("Runner sandbox denial escalation", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "telemetry_required_failed",
-      errors: [{ owner: "telemetry", code: "telemetry_required_failed" }],
+      failure: {
+        kind: "telemetry",
+        failure: { code: "telemetry_required_failed" },
+      },
+      relatedFailures: [],
     });
     expect(fixture.providerCalls()).toBe(0);
     expect(result.items.some(({ kind }) => kind === "sandbox_attempt_started")).toBe(false);
@@ -2324,7 +2377,11 @@ describe("Runner sandbox denial escalation", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "audit_required_failed",
-      errors: [{ owner: "audit", code: "audit_required_failed" }],
+      failure: {
+        kind: "audit",
+        failure: { code: "audit_required_failed" },
+      },
+      relatedFailures: [],
     });
     expect(fixture.providerCalls()).toBe(1);
     expect(result.items).toContainEqual(expect.objectContaining({
@@ -2380,7 +2437,11 @@ describe("Runner sandbox denial escalation", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "telemetry_required_failed",
-      errors: [{ owner: "telemetry", code: "telemetry_required_failed" }],
+      failure: {
+        kind: "telemetry",
+        failure: { code: "telemetry_required_failed" },
+      },
+      relatedFailures: [],
     });
     expect(fixture.providerCalls()).toBe(1);
     expect(result.items).toContainEqual(expect.objectContaining({
@@ -2748,7 +2809,11 @@ describe("Runner approval lifecycle", () => {
           status: "failed",
           code: "approval_cancellation_unconfirmed",
           cancellation: { reasonCode: "user_requested" },
-          errors: [{ owner: "approval", code: "approval_cancellation_unconfirmed" }],
+          failure: {
+            kind: "approval",
+            failure: { code: "approval_cancellation_unconfirmed" },
+          },
+          relatedFailures: [],
         });
         expect(result.items.filter((item) => item.kind === "approval_resolved")).toHaveLength(1);
         lateReview.resolve(decidedReview(reviewInput!, null, "decline"));
@@ -2913,7 +2978,8 @@ describe("Runner approval lifecycle", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "audit_required_failed",
-      errors: [{ owner: "audit" }],
+      failure: { kind: "audit" },
+      relatedFailures: [],
     });
     expect(controller.calls).toHaveLength(1);
     expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({
@@ -2959,7 +3025,8 @@ describe("Runner approval lifecycle", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "telemetry_required_failed",
-      errors: [{ owner: "telemetry" }],
+      failure: { kind: "telemetry" },
+      relatedFailures: [],
     });
     expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({
       record: {
@@ -3008,7 +3075,11 @@ describe("Runner approval lifecycle", () => {
           status: "failed",
           code: "session_authority_commit_unconfirmed",
           cancellation: null,
-          errors: [{ owner: "permission", code: "session_authority_commit_outcome_unknown" }],
+          failure: {
+            kind: "permission",
+            failure: { code: "session_authority_commit_outcome_unknown" },
+          },
+          relatedFailures: [],
         });
         expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({
           record: {
@@ -3082,7 +3153,11 @@ describe("Runner approval lifecycle", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "session_authority_commit_unconfirmed",
-      errors: [{ owner: "permission", code: "session_authority_commit_outcome_unknown" }],
+      failure: {
+        kind: "permission",
+        failure: { code: "session_authority_commit_outcome_unknown" },
+      },
+      relatedFailures: [],
     });
     expect(result.items.find((item) => item.kind === "approval_resolved")).toMatchObject({
       record: {
@@ -3430,7 +3505,11 @@ describe("Runner external Action result settlement", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "storage_write_failed",
-      errors: [{ owner: "storage", code: "storage_write_failed" }],
+      failure: {
+        kind: "context",
+        failure: { code: "context_evidence_persistence_failed" },
+      },
+      relatedFailures: [],
     });
     expect(result.evidenceRefs).toEqual([]);
     expect(result.artifactRefs).toEqual([]);
@@ -3505,7 +3584,11 @@ describe("Runner external Action result settlement", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "tool_execution_failed",
-      errors: [{ owner: "tool", code: "tool_result_invalid" }],
+      failure: {
+        kind: "tool",
+        failure: { code: "tool_result_invalid" },
+      },
+      relatedFailures: [],
     });
     expect(result.evidenceRefs).toEqual([]);
     expect(result.items).toContainEqual(expect.objectContaining({

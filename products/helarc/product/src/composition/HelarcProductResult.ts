@@ -1,10 +1,12 @@
 import type { RuntimeEvent } from "@agent-anything/observability/events";
-import type { RunResult } from "@agent-anything/runtime/run";
+import type {
+  RunResult,
+  RunResultStatus,
+} from "@agent-anything/runtime/run";
 import type {
   AgentTask,
   RunWorkspace,
 } from "@agent-anything/foundation";
-import type { RunResultStatus } from "@agent-anything/foundation";
 import type { SandboxEnforcement } from "@agent-anything/action-execution";
 import { projectRuntimeEventForHost } from "@agent-anything/host";
 import { CODE_AGENT_RUN_COMMAND_ACTION } from "@agent-anything/helarc-code-agent/command";
@@ -170,8 +172,11 @@ function collectSafeRunErrors(
   runResult: RunResult<HelarcAgentOutput>,
 ): Array<{ code: string; message: string }> {
   const errors: Array<{ code: string; message: string }> = [];
-  for (const error of runResult.errors) {
-    appendSafeError(errors, error.code);
+  if (runResult.failure !== null) {
+    appendSafeError(errors, runResult.failure.failure.code);
+  }
+  for (const failure of runResult.relatedFailures) {
+    appendSafeError(errors, failure.failure.code);
   }
   for (const item of runResult.items) {
     if (item.kind !== "observation") continue;
@@ -179,7 +184,7 @@ function collectSafeRunErrors(
     if (observation.kind === "action_denied" || observation.kind === "action_rejected") {
       appendSafeError(errors, observation.code);
     } else if (observation.kind === "action_failure") {
-      appendSafeError(errors, observation.error.code);
+      appendSafeError(errors, observation.failure.code);
     }
   }
   return errors;

@@ -19,6 +19,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
+  "agentAnything": {
+    "architecture": {
+      "kind": "harness",
+      "component": "model-interaction"
+    }
+  },
   "license": "Apache-2.0",
   "private": true,
   "dependencies": {

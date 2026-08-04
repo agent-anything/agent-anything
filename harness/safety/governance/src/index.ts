@@ -27,3 +27,4 @@ export type {
   ManagedProfileSelectionConstraints,
 } from "./managed-permission/index.js";
 export * from "./amendment/index.js";
+export type { PolicyFailure } from "./PolicyFailure.js";

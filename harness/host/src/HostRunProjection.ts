@@ -5,8 +5,6 @@ import type {
 } from "@agent-anything/permission";
 import type {
   ISODateTimeString,
-  RunResultCode,
-  RuntimeErrorOwner,
 } from "@agent-anything/foundation";
 import type { SandboxEnforcement } from "@agent-anything/action-execution";
 import type {
@@ -16,7 +14,10 @@ import type {
 import type { PlanProjection } from "@agent-anything/runtime/plan";
 import type {
   RunCancellationSummary,
+  RunFailureCause,
+  RunFailureKind,
   RunResult,
+  RunResultCode,
 } from "@agent-anything/runtime/run";
 
 export const HOST_RETRY_EVENT_LIMIT = 16;
@@ -116,10 +117,10 @@ export interface HostEnforcementProjection {
   readonly latestAttempt: HostSandboxAttemptProjection | null;
 }
 
-export interface HostTerminalErrorProjection {
-  readonly owner: RuntimeErrorOwner;
+export interface HostTerminalFailureProjection {
+  readonly kind: RunFailureKind;
   readonly code: string;
-  readonly retryable: boolean;
+  readonly retryable: boolean | null;
 }
 
 export interface HostTerminalRunProjection {
@@ -134,7 +135,8 @@ export interface HostTerminalRunProjection {
   readonly itemCount: number;
   readonly evidenceCount: number;
   readonly artifactCount: number;
-  readonly errors: readonly HostTerminalErrorProjection[];
+  readonly failure: HostTerminalFailureProjection | null;
+  readonly relatedFailures: readonly HostTerminalFailureProjection[];
   readonly cancellation: HostCancellationProjection | null;
 }
 
@@ -297,12 +299,25 @@ export function createHostTerminalRunProjection<TOutput>(
     itemCount: input.runResult.items.length,
     evidenceCount: input.runResult.evidenceRefs.length,
     artifactCount: input.runResult.artifactRefs.length,
-    errors: Object.freeze(input.runResult.errors.map((error) => Object.freeze({
-      owner: error.owner,
-      code: error.code,
-      retryable: error.retryable,
-    }))),
+    failure: input.runResult.failure === null
+      ? null
+      : projectFailure(input.runResult.failure),
+    relatedFailures: Object.freeze(
+      input.runResult.relatedFailures.map(projectFailure),
+    ),
     cancellation: snapshotCancellation(input.runResult.cancellation),
+  });
+}
+
+function projectFailure(
+  cause: RunFailureCause,
+): HostTerminalFailureProjection {
+  return Object.freeze({
+    kind: cause.kind,
+    code: cause.failure.code,
+    retryable: "retryable" in cause.failure
+      ? cause.failure.retryable
+      : null,
   });
 }
 

@@ -16,7 +16,7 @@ import type {
   ControllerDecision,
   ControllerInput,
 } from "@agent-anything/runtime/controller";
-import { FakeRuntimeEventPublisher } from "@agent-anything/testing";
+import { FakeRuntimeEventPublisher } from "@agent-anything/test-support";
 import {
   createRunCancellationController,
   type ResolvedRunPermissionConfig,

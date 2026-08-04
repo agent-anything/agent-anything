@@ -266,24 +266,27 @@ describe("HostRunProjectionReducer", () => {
         },
       },
       "provider_request_failed",
-      [{
-        owner: "provider",
-        code: "provider_request_failed",
-        message: "private provider failure",
-        retryable: true,
-        metadata: { credential: "private credential" },
-      }],
+      {
+        kind: "provider",
+        failure: {
+          category: "transport",
+          code: "provider_request_failed",
+          message: "private provider failure",
+          metadata: { credential: "private credential" },
+        },
+      },
     );
     const terminal = createHostTerminalRunProjection({ runResult: result });
 
     expect(terminal).toMatchObject({
       status: "failed",
       code: "provider_request_failed",
-      errors: [{
-        owner: "provider",
+      failure: {
+        kind: "provider",
         code: "provider_request_failed",
-        retryable: true,
-      }],
+        retryable: null,
+      },
+      relatedFailures: [],
     });
     expect(JSON.stringify(terminal)).not.toContain("private");
     expect(JSON.stringify(terminal)).not.toContain("credential");

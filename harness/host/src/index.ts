@@ -64,7 +64,7 @@ export {
   type HostRunProjectionUpdate,
   type HostRuntimeEventProjectionUpdate,
   type HostSandboxAttemptProjection,
-  type HostTerminalErrorProjection,
+  type HostTerminalFailureProjection,
   type HostTerminalProjectionUpdate,
   type HostTerminalRunProjection,
 } from "./HostRunProjection.js";

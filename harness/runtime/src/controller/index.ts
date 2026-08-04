@@ -26,3 +26,4 @@ export type {
 export {
   StructuredOutputError,
 } from "./StructuredOutput.js";
+export type { ModelFailure } from "./ModelFailure.js";

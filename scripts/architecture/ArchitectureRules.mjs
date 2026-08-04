@@ -1,22 +1,3 @@
-export const PLATFORM_PRODUCTION_DEPENDENCIES = Object.freeze({
-  "@agent-anything/testing": [
-    "@agent-anything/context",
-    "@agent-anything/foundation",
-    "@agent-anything/observability",
-    "@agent-anything/permission",
-    "@agent-anything/model-interaction",
-  ],
-  "@agent-anything/host": [
-    "@agent-anything/action-execution",
-    "@agent-anything/observability",
-    "@agent-anything/runtime",
-    "@agent-anything/foundation",
-    "@agent-anything/governance",
-    "@agent-anything/permission",
-  ],
-});
-
-export const PLATFORM_PACKAGE_NAMES = Object.freeze(Object.keys(PLATFORM_PRODUCTION_DEPENDENCIES));
 export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
   "@agent-anything/foundation": [],
   "@agent-anything/model-interaction": ["@agent-anything/foundation"],
@@ -70,118 +51,153 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/context",
     "@agent-anything/foundation",
   ],
-});
-export const HARNESS_PACKAGE_NAMES = Object.freeze(Object.keys(HARNESS_PRODUCTION_DEPENDENCIES));
-export const PHASE_19_HARNESS_MIGRATION_DEPENDENCIES = Object.freeze({});
-export const PHASE_19_HARNESS_TEST_DEPENDENCIES = Object.freeze({
-  "@agent-anything/runtime": Object.freeze([
-    "@agent-anything/testing",
-  ]),
+  "@agent-anything/host": [
+    "@agent-anything/action-execution",
+    "@agent-anything/foundation",
+    "@agent-anything/governance",
+    "@agent-anything/observability",
+    "@agent-anything/permission",
+    "@agent-anything/runtime",
+  ],
 });
 
-export function evaluateRepositoryDirection({ owner, imported }) {
+export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
+  "@agent-anything/helarc-code-agent": [
+    "@agent-anything/action-execution",
+    "@agent-anything/foundation",
+    "@agent-anything/governance",
+    "@agent-anything/tools",
+  ],
+  "@agent-anything/helarc": [
+    "@agent-anything/action-execution",
+    "@agent-anything/foundation",
+    "@agent-anything/governance",
+    "@agent-anything/helarc-code-agent",
+    "@agent-anything/host",
+    "@agent-anything/model-interaction",
+    "@agent-anything/observability",
+    "@agent-anything/runtime",
+    "@agent-anything/tools",
+  ],
+  "@agent-anything/helarc-desktop": [
+    "@agent-anything/action-execution",
+    "@agent-anything/context",
+    "@agent-anything/foundation",
+    "@agent-anything/governance",
+    "@agent-anything/helarc",
+    "@agent-anything/helarc-code-agent",
+    "@agent-anything/host",
+    "@agent-anything/model-interaction",
+    "@agent-anything/observability",
+    "@agent-anything/permission",
+    "@agent-anything/runtime",
+    "lucide-react",
+    "react",
+    "react-dom",
+  ],
+});
+
+export const TOOLING_PRODUCTION_DEPENDENCIES = Object.freeze({
+  "@agent-anything/test-support": [
+    "@agent-anything/context",
+    "@agent-anything/foundation",
+    "@agent-anything/model-interaction",
+    "@agent-anything/observability",
+    "@agent-anything/permission",
+  ],
+});
+
+export const REVIEWED_PRODUCTION_DEPENDENCIES = Object.freeze({
+  ...HARNESS_PRODUCTION_DEPENDENCIES,
+  ...PRODUCT_PRODUCTION_DEPENDENCIES,
+  ...TOOLING_PRODUCTION_DEPENDENCIES,
+});
+
+export function evaluateRepositoryDirection({
+  owner,
+  imported,
+  isTestOnly = false,
+}) {
   if (owner.name === imported.name) return [];
 
-  if (
-    owner.kind === "harness" &&
-    imported.kind === "platform" &&
-    (
-      isPhase19HarnessMigrationDependency(owner.name, imported.name) ||
-      isPhase19HarnessTestDependency(owner.name, imported.name)
-    )
-  ) {
-    return [];
+  if (imported.kind === "tooling") {
+    if (
+      isTestOnly &&
+      imported.name === "@agent-anything/test-support" &&
+      (owner.kind === "harness" || owner.kind === "product")
+    ) {
+      return [];
+    }
+    return [violation(
+      "tooling_dependency_forbidden",
+      `${label(owner)} must not use Tooling package '${imported.name}' outside test sources.`,
+    )];
   }
-  if (owner.kind === "harness" && imported.kind !== "harness") {
-    return [violation("repository_direction", `Harness package must not depend on ${imported.kind} package '${imported.name}'.`)];
+
+  if (owner.kind === "tooling") {
+    if (imported.kind === "harness") return [];
+    return [violation(
+      "tooling_direction",
+      `Tooling package must not depend on ${imported.kind} package '${imported.name}'.`,
+    )];
   }
-  if (
-    owner.kind === "platform" &&
-    imported.kind !== "platform" &&
-    imported.kind !== "harness"
-  ) {
-    return [violation("repository_direction", `Transitional package must not depend on ${imported.kind} package '${imported.name}'.`)];
+
+  if (owner.kind === "harness") {
+    if (imported.kind === "harness") return [];
+    return [violation(
+      "repository_direction",
+      `Harness package must not depend on ${imported.kind} package '${imported.name}'.`,
+    )];
   }
-  if (owner.kind === "product" && imported.kind === "app") {
-    return [violation("repository_direction", `Product package must not depend on app package '${imported.name}'.`)];
+
+  if (owner.kind === "product") {
+    if (imported.kind === "harness") return [];
+    if (
+      imported.kind === "product" &&
+      owner.productId &&
+      owner.productId === imported.productId
+    ) {
+      return [];
+    }
+    return [violation(
+      "repository_direction",
+      `Product package must not depend on '${imported.name}' outside Product '${owner.productId ?? "unknown"}'.`,
+    )];
   }
-  if (
-    owner.kind === "product" &&
-    imported.kind === "product" &&
-    (
-      owner.productId === null ||
-      owner.productId === undefined ||
-      imported.productId === null ||
-      imported.productId === undefined ||
-      owner.productId !== imported.productId
-    )
-  ) {
-    return [violation("repository_direction", `Product package must not depend on another product package '${imported.name}'.`)];
-  }
-  if (owner.kind === "app" && imported.kind === "app") {
-    return [violation("repository_direction", `App package must not depend on another app package '${imported.name}'.`)];
-  }
-  return [];
+
+  return [violation(
+    "repository_kind_unknown",
+    `Package '${owner.name}' has unsupported repository kind '${owner.kind}'.`,
+  )];
 }
 
-export function evaluatePlatformProductionDependency({ owner, imported }) {
-  if (owner.kind !== "platform" || imported.kind !== "platform" || owner.name === imported.name) {
-    return [];
-  }
+export function evaluateProductionDependency({ owner, imported }) {
+  if (owner.name === imported.name) return [];
 
-  const allowed = PLATFORM_PRODUCTION_DEPENDENCIES[owner.name];
+  const allowed = REVIEWED_PRODUCTION_DEPENDENCIES[owner.name];
   if (!allowed) {
-    return [violation("platform_dependency_policy_missing", `Platform package '${owner.name}' has no production dependency policy.`)];
+    return [violation(
+      "dependency_policy_missing",
+      `Package '${owner.name}' has no reviewed production dependency policy.`,
+    )];
   }
   if (!allowed.includes(imported.name)) {
-    return [violation("platform_dependency_forbidden", `Platform package '${owner.name}' must not depend on '${imported.name}'.`)];
+    return [violation(
+      "production_dependency_forbidden",
+      `Package '${owner.name}' must not depend on '${imported.name}'.`,
+    )];
   }
   return [];
 }
 
-export function expectedPlatformDependencies(packageName) {
-  return PLATFORM_PRODUCTION_DEPENDENCIES[packageName] ?? null;
+export function expectedProductionDependencies(packageName) {
+  return REVIEWED_PRODUCTION_DEPENDENCIES[packageName] ?? null;
 }
 
-export function evaluateHarnessProductionDependency({ owner, imported }) {
-  if (owner.kind !== "harness" || owner.name === imported.name) {
-    return [];
-  }
-
-  const allowed = HARNESS_PRODUCTION_DEPENDENCIES[owner.name];
-  if (!allowed) {
-    return [violation("harness_dependency_policy_missing", `Harness package '${owner.name}' has no production dependency policy.`)];
-  }
-  if (
-    !allowed.includes(imported.name) &&
-    !isPhase19HarnessMigrationDependency(owner.name, imported.name)
-  ) {
-    return [violation("harness_dependency_forbidden", `Harness package '${owner.name}' must not depend on '${imported.name}'.`)];
-  }
-  return [];
-}
-
-export function expectedHarnessDependencies(packageName) {
-  const permanent = HARNESS_PRODUCTION_DEPENDENCIES[packageName];
-  if (!permanent) return null;
-  return [
-    ...permanent,
-    ...(PHASE_19_HARNESS_MIGRATION_DEPENDENCIES[packageName] ?? []),
-  ];
-}
-
-function isPhase19HarnessMigrationDependency(ownerName, importedName) {
-  return (
-    PHASE_19_HARNESS_MIGRATION_DEPENDENCIES[ownerName]?.includes(importedName) ??
-    false
-  );
-}
-
-function isPhase19HarnessTestDependency(ownerName, importedName) {
-  return (
-    PHASE_19_HARNESS_TEST_DEPENDENCIES[ownerName]?.includes(importedName) ??
-    false
-  );
+function label(owner) {
+  if (owner.kind === "harness") return "Harness package";
+  if (owner.kind === "product") return "Product package";
+  return `Package '${owner.name}'`;
 }
 
 function violation(rule, message) {

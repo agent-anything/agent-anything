@@ -1,8 +1,10 @@
 import {
   createAuditRecord,
   createTelemetryRecord,
+  type AuditFailure,
   type AuditPort,
   type ObservabilityRecordContext,
+  type TelemetryFailure,
   type TelemetryPort,
 } from "@agent-anything/observability";
 import type {
@@ -11,8 +13,12 @@ import type {
   Metadata,
   RunWorkspace,
 } from "@agent-anything/foundation";
-import type { RunCounters } from "@agent-anything/runtime/run";
-import type { RuntimeError, RuntimeErrorOwner } from "@agent-anything/foundation";
+import {
+  type RunCounters,
+  type RunFailureCause,
+  type RunFailureKind,
+} from "@agent-anything/runtime/run";
+import { createRunFailureCause } from "../run/RunFailure.js";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
 import {
   settleRunnerRecordingGate,
@@ -35,13 +41,18 @@ export interface RecordRunnerLifecycleInput {
   readonly context: ObservabilityRecordContext;
   readonly auditPort?: AuditPort;
   readonly telemetryPort?: TelemetryPort;
-  readonly skipOwners?: ReadonlySet<RuntimeErrorOwner>;
+  readonly skipKinds?: ReadonlySet<RunFailureKind>;
 }
+
+type ObservabilityRunFailure = Extract<
+  RunFailureCause,
+  { readonly kind: "audit" | "telemetry" }
+>;
 
 export async function recordRunnerLifecycle(
   input: RecordRunnerLifecycleInput,
-): Promise<RuntimeError[]> {
-  const skipOwners = input.skipOwners ?? new Set<RuntimeErrorOwner>();
+): Promise<ObservabilityRunFailure[]> {
+  const skipKinds = input.skipKinds ?? new Set<RunFailureKind>();
   const allRecorders = [
     {
       owner: "audit",
@@ -55,7 +66,7 @@ export async function recordRunnerLifecycle(
     },
   ] satisfies RunnerRecorder[];
   const recorders = allRecorders.filter(
-    (recorder) => !skipOwners.has(recorder.owner),
+    (recorder) => !skipKinds.has(recorder.owner),
   );
 
   return [
@@ -69,7 +80,7 @@ export async function recordRunnerLifecycle(
 
 async function recordAudit(
   input: RecordRunnerLifecycleInput,
-): Promise<RuntimeError | null> {
+): Promise<ObservabilityRunFailure | null> {
   if (!input.auditPort) {
     return input.auditRequirement === "required"
       ? requiredAuditError("Required AuditPort is unavailable.")
@@ -99,7 +110,7 @@ async function recordAudit(
 
 async function recordTelemetry(
   input: RecordRunnerLifecycleInput,
-): Promise<RuntimeError | null> {
+): Promise<ObservabilityRunFailure | null> {
   if (!input.telemetryPort) {
     return input.telemetryRequirement === "required"
       ? requiredTelemetryError("Required TelemetryPort is unavailable.")
@@ -290,22 +301,28 @@ class FinalizationDeadlineError extends Error {
   }
 }
 
-function requiredAuditError(message: string, metadata: Metadata = {}): RuntimeError {
-  return runtimeError("audit", "audit_required_failed", message, metadata);
+function requiredAuditError(
+  message: string,
+  metadata: Metadata = {},
+): ObservabilityRunFailure {
+  return auditFailure("audit_required_failed", message, metadata);
 }
 
-function auditFinalizationTimeout(deadlineAt: ISODateTimeString | null): RuntimeError {
-  return runtimeError(
-    "audit",
+function auditFinalizationTimeout(
+  deadlineAt: ISODateTimeString | null,
+): ObservabilityRunFailure {
+  return auditFailure(
     "audit_finalization_timeout",
     "Required audit recording exceeded the Run finalization deadline.",
     { deadlineAt },
   );
 }
 
-function requiredTelemetryError(message: string, metadata: Metadata = {}): RuntimeError {
-  return runtimeError(
-    "telemetry",
+function requiredTelemetryError(
+  message: string,
+  metadata: Metadata = {},
+): ObservabilityRunFailure {
+  return telemetryFailure(
     "telemetry_required_failed",
     message,
     metadata,
@@ -314,28 +331,40 @@ function requiredTelemetryError(message: string, metadata: Metadata = {}): Runti
 
 function telemetryFinalizationTimeout(
   deadlineAt: ISODateTimeString | null,
-): RuntimeError {
-  return runtimeError(
-    "telemetry",
+): ObservabilityRunFailure {
+  return telemetryFailure(
     "telemetry_finalization_timeout",
     "Required telemetry recording exceeded the Run finalization deadline.",
     { deadlineAt },
   );
 }
 
-function runtimeError(
-  owner: RuntimeErrorOwner,
+function auditFailure(
   code: string,
   message: string,
   metadata: Metadata,
-): RuntimeError {
-  return Object.freeze({
-    owner,
+): ObservabilityRunFailure {
+  const failure: AuditFailure = Object.freeze({
     code,
     message,
     retryable: false,
     metadata: Object.freeze({ ...metadata }),
   });
+  return createRunFailureCause("audit", failure);
+}
+
+function telemetryFailure(
+  code: string,
+  message: string,
+  metadata: Metadata,
+): ObservabilityRunFailure {
+  const failure: TelemetryFailure = Object.freeze({
+    code,
+    message,
+    retryable: false,
+    metadata: Object.freeze({ ...metadata }),
+  });
+  return createRunFailureCause("telemetry", failure);
 }
 
 function errorMetadata(error: unknown): Metadata {

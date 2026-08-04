@@ -4,12 +4,12 @@ import {
   snapshotRunInput,
   snapshotRunWorkspace,
   type Metadata,
-  type RuntimeError,
 } from "@agent-anything/foundation";
 import type { ControllerDecision } from "@agent-anything/runtime/controller";
 import { assertValidPlanLimits } from "@agent-anything/runtime/plan";
 import { snapshotRetryPolicy } from "@agent-anything/runtime/retry";
 import { snapshotResolvedRunPermissionConfig } from "@agent-anything/runtime/run";
+import type { RuntimeFailure } from "@agent-anything/runtime/run";
 import {
   assertToolActionBindingSnapshot,
   snapshotRunActionContext,
@@ -20,7 +20,7 @@ export { snapshotAgent, snapshotRunInput };
 
 export interface ConfigValidationFailure {
   readonly valid: false;
-  readonly error: RuntimeError & { readonly code: "runtime_invalid_options" };
+  readonly failure: RuntimeFailure & { readonly code: "runtime_invalid_options" };
 }
 
 export interface ConfigValidationSuccess {
@@ -156,8 +156,7 @@ export function snapshotRunConfig(
   } catch (error) {
     return {
       valid: false,
-      error: Object.freeze({
-        owner: "runtime",
+      failure: Object.freeze({
         code: "runtime_invalid_options",
         message: error instanceof Error ? error.message : "RunConfig is invalid.",
         retryable: false,

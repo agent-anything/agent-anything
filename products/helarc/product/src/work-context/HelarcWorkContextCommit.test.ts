@@ -335,7 +335,8 @@ function terminalCommit(): HelarcRunTerminalCommit {
         itemCount: 0,
         evidenceCount: 0,
         artifactCount: 1,
-        errors: [],
+        failure: null,
+        relatedFailures: [],
         cancellation: null,
       },
       product: {

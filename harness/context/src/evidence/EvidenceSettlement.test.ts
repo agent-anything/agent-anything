@@ -100,9 +100,8 @@ describe("Evidence settlement", () => {
       status: "failed",
       evidenceRefs: ["evidence_1"],
       artifactRefs: ["memory://evidence/evidence_1"],
-      error: {
-        owner: "storage",
-        code: "storage_write_failed",
+      failure: {
+        code: "context_evidence_persistence_failed",
         metadata: { persistenceCode: "evidence_store_unavailable" },
       },
     });
@@ -160,7 +159,7 @@ describe("Evidence settlement", () => {
 
     expect(settlement).toMatchObject({
       status: "failed",
-      error: { owner: "tool", code: "tool_evidence_creation_failed" },
+      failure: { code: "context_evidence_creation_failed" },
     });
     expect(persistEvidence).not.toHaveBeenCalled();
   });
@@ -183,7 +182,7 @@ describe("Evidence settlement", () => {
       status: "failed",
       evidenceRefs: [],
       artifactRefs: [],
-      error: { owner: "storage", code: "storage_write_failed" },
+      failure: { code: "context_evidence_persistence_failed" },
     });
   });
 

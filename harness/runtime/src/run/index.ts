@@ -27,6 +27,25 @@ export {
   toRunCancellationSummary,
 } from "./RunCancellation.js";
 export type {
+  RunFailureCause,
+  RunFailureForKind,
+  RunFailureKind,
+  RuntimeFailure,
+} from "./RunFailure.js";
+export {
+  createRunFailureCause,
+  runFailureCode,
+  runFailureMessage,
+  runFailureMetadata,
+} from "./RunFailure.js";
+export type {
+  RunBlockedCode,
+  RunCancelledCode,
+  RunFailureCode,
+  RunResultCode,
+  RunResultStatus,
+} from "./RunStatus.js";
+export type {
   ActionAssessedRunItem,
   ActionAssessedSummary,
   ActionInvalidatedRunItem,

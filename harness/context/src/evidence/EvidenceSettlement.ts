@@ -1,6 +1,6 @@
 import type { ArtifactRef, EvidenceRef, Metadata } from "@agent-anything/foundation";
 import type { ToolResult } from "@agent-anything/tools";
-import type { RuntimeError } from "@agent-anything/foundation";
+import type { ContextFailure } from "../ContextFailure.js";
 import type { Evidence } from "./Evidence.js";
 import type { EvidenceBuilderPort } from "./EvidenceBuilder.js";
 import type {
@@ -24,7 +24,7 @@ export type EvidenceSettlementResult =
       readonly status: "failed";
       readonly evidenceRefs: readonly EvidenceRef[];
       readonly artifactRefs: readonly ArtifactRef[];
-      readonly error: RuntimeError;
+      readonly failure: ContextFailure;
     };
 
 export function classifyToolResult(toolResult: ToolResult): ToolResultClassification {
@@ -61,8 +61,7 @@ export async function settleToolResultEvidence(input: {
     }), input.toolResult);
   } catch (error) {
     return failed(
-      "tool",
-      "tool_evidence_creation_failed",
+      "context_evidence_creation_failed",
       error instanceof Error ? error.message : "Failed to build Evidence from ToolResult.",
       { actionId: input.actionId, ...toolResultMetadata(input.toolResult) },
       [],
@@ -92,8 +91,7 @@ export async function settleToolResultEvidence(input: {
       artifactRefs.push(stored.artifactRef);
     } catch (error) {
       return failed(
-        "storage",
-        "storage_write_failed",
+        "context_evidence_persistence_failed",
         error instanceof Error ? error.message : "Failed to persist Evidence.",
         { actionId: input.actionId, evidenceId: item.id },
         evidenceRefs,
@@ -123,8 +121,7 @@ function persistenceFailed(
     typeof error.metadata !== "object"
   ) {
     return failed(
-      "storage",
-      "storage_write_failed",
+      "context_evidence_persistence_failed",
       "EvidencePersistencePort returned an invalid failure.",
       { actionId, evidenceId },
       evidenceRefs,
@@ -133,8 +130,7 @@ function persistenceFailed(
   }
 
   return failed(
-    "storage",
-    "storage_write_failed",
+    "context_evidence_persistence_failed",
     error.message,
     {
       ...error.metadata,
@@ -221,7 +217,6 @@ function settled(
 }
 
 function failed(
-  owner: "tool" | "storage",
   code: string,
   message: string,
   metadata: Metadata,
@@ -232,18 +227,16 @@ function failed(
     status: "failed" as const,
     evidenceRefs: Object.freeze([...evidenceRefs]),
     artifactRefs: Object.freeze([...artifactRefs]),
-    error: runtimeError(owner, code, message, metadata),
+    failure: contextFailure(code, message, metadata),
   });
 }
 
-function runtimeError(
-  owner: "tool" | "storage",
+function contextFailure(
   code: string,
   message: string,
   metadata: Metadata,
-): RuntimeError {
+): ContextFailure {
   return Object.freeze({
-    owner,
     code,
     message,
     retryable: false,

@@ -3,11 +3,9 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 import {
-  evaluateHarnessProductionDependency,
-  evaluatePlatformProductionDependency,
+  evaluateProductionDependency,
   evaluateRepositoryDirection,
-  expectedHarnessDependencies,
-  expectedPlatformDependencies,
+  expectedProductionDependencies,
 } from "./architecture/ArchitectureRules.mjs";
 import {
   WorkspaceDiscoveryError,
@@ -47,6 +45,7 @@ for (const discovered of discoveredPackages) {
 }
 
 const violations = [];
+checkRepositoryTopology();
 for (const root of packageRoots) {
   for (const file of collectSourceFiles(root)) {
     checkFile(file);
@@ -62,7 +61,7 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
-console.log("Boundary check passed.");
+console.log("Architecture check passed.");
 
 function report(rule, { file = null, owner = null, imported = null, message }) {
   const resolvedOwner = typeof owner === "string"
@@ -79,7 +78,7 @@ function report(rule, { file = null, owner = null, imported = null, message }) {
 }
 
 function printViolations(items) {
-  console.error("Boundary check failed:");
+  console.error("Architecture check failed:");
   for (const item of items) {
     console.error(
       `- [${item.rule}] owner=${item.owner ?? "-"} imported=${item.imported ?? "-"} file=${item.file ?? "-"}: ${item.message}`,
@@ -169,19 +168,19 @@ function checkPublicApiImport(file, owner, statement, specifier) {
 
 function checkReviewedManifests() {
   for (const info of packageInfo.values()) {
-    if (info.kind !== "platform" && info.kind !== "harness") continue;
-    const expected = info.kind === "harness"
-      ? expectedHarnessDependencies(info.name)
-      : expectedPlatformDependencies(info.name);
+    const expected = expectedProductionDependencies(info.name);
     if (!expected) {
-      const ownerLabel = info.kind === "harness" ? "Harness" : "Transitional";
-      report(`${info.kind}_dependency_policy_missing`, { file: join(info.root, "package.json"), owner: info, message: `${ownerLabel} package '${info.name}' has no production dependency policy.` });
+      report("dependency_policy_missing", {
+        file: join(info.root, "package.json"),
+        owner: info,
+        message: `Package '${info.name}' has no reviewed production dependency policy.`,
+      });
       continue;
     }
     const actual = [...info.dependencies].sort();
     const sortedExpected = [...expected].sort();
     if (JSON.stringify(actual) !== JSON.stringify(sortedExpected)) {
-      report(`${info.kind}_manifest_dependencies`, {
+      report("manifest_dependencies", {
         file: join(info.root, "package.json"),
         owner: info,
         message: `Production dependencies must be exactly: ${sortedExpected.join(", ") || "(none)"}.`,
@@ -193,6 +192,16 @@ function checkReviewedManifests() {
 function checkArchitectureSource(file, text, isTestOnly) {
   const rel = display(file);
   checkDesktopSafeSurface(rel, text);
+  if (
+    rel.startsWith("harness/foundation/src/internal/") ||
+    rel.startsWith("harness/foundation/src/result/")
+  ) {
+    report("ambiguous_foundation_source_owner", {
+      file,
+      message:
+        "Foundation source must use an explicit semantic owner instead of internal or result.",
+    });
+  }
   const legacySymbols = [
     "TemporaryToolActionBridge",
     "ToolExecutionBoundary",
@@ -240,12 +249,13 @@ function checkArchitectureSource(file, text, isTestOnly) {
   if (/\bwaiting_for_permission\b/.test(text)) {
     report("removed_run_status", { file, message: "Retains the removed waiting_for_permission status." });
   }
-  if (
-    /requestRetryScheduler[\s\S]{0,200}?kind\s*:\s*["']platform["']/.test(text)
-  ) {
+  const removedArchitectureOwner = "plat" + "form";
+  if (new RegExp(
+    `requestRetryScheduler[\\s\\S]{0,200}?kind\\s*:\\s*["']${removedArchitectureOwner}["']`,
+  ).test(text)) {
     report("removed_provider_retry_owner", {
       file,
-      message: "Retains the removed architectural Provider Retry owner 'platform'.",
+      message: "Retains a removed architectural Provider Retry owner.",
     });
   }
   if (
@@ -263,14 +273,6 @@ function checkArchitectureSource(file, text, isTestOnly) {
     report("removed_storage_facade", {
       file,
       message: "Retains the removed generic Evidence storage dependency name.",
-    });
-  }
-  if (
-    /requestRetryScheduler[\s\S]{0,200}?kind\s*:\s*["']platform["']/.test(text)
-  ) {
-    report("removed_provider_retry_owner", {
-      file,
-      message: "Retains the removed architectural Provider Retry owner 'platform'.",
     });
   }
   if (/helarc:(?:start|cancel)-session/.test(text)) {
@@ -297,7 +299,7 @@ function checkArchitectureSource(file, text, isTestOnly) {
     report("conformance_sandbox_in_production", { file, message: "Retains a production conformance sandbox provider." });
   }
   if (
-    (rel.startsWith("apps/") || rel.startsWith("products/")) &&
+    rel.startsWith("products/") &&
     /\brunner\.run\s*\(/i.test(text)
   ) {
     report("direct_runner_invocation", { file, message: "Invokes Runner directly instead of starting it through HostRuntime." });
@@ -349,8 +351,14 @@ function checkWorkspaceImport({ file, owner, imported, isTestOnly }) {
     report("desktop_shared_workspace_import", { file, owner, imported: imported.packageName, message: "Desktop shared IPC must own its DTOs instead of importing workspace Contracts." });
   }
 
-  if (imported.packageName === "@agent-anything/platform") {
-    report("platform_facade_import", { file, owner, imported: imported.packageName, message: "Must consume concrete platform packages, not @agent-anything/platform." });
+  const removedFacadeName = `@agent-anything/${"plat" + "form"}`;
+  if (imported.packageName === removedFacadeName) {
+    report("removed_facade_import", {
+      file,
+      owner,
+      imported: imported.packageName,
+      message: "Must consume the exact Harness component owner.",
+    });
     return;
   }
 
@@ -367,7 +375,11 @@ function checkWorkspaceImport({ file, owner, imported, isTestOnly }) {
   const hasDevDependency = owner.devDependencies.has(imported.packageName);
   const isSelf = owner.name === imported.packageName;
   if (!isSelf) {
-    for (const result of evaluateRepositoryDirection({ owner, imported: importedPackage })) {
+    for (const result of evaluateRepositoryDirection({
+      owner,
+      imported: importedPackage,
+      isTestOnly,
+    })) {
       report(result.rule, { file, owner, imported: importedPackage, message: result.message });
     }
   }
@@ -378,16 +390,33 @@ function checkWorkspaceImport({ file, owner, imported, isTestOnly }) {
     report("dependency_dev_only", { file, owner, imported: importedPackage, message: "Production import must be declared in dependencies, not only devDependencies." });
   }
 
-  if (!isTestOnly && imported.packageName === "@agent-anything/testing") {
-    report("testing_import_in_production", { file, owner, imported: importedPackage, message: "Production code must not import @agent-anything/testing." });
+  if (!isTestOnly && imported.packageName === "@agent-anything/test-support") {
+    report("test_support_import_in_production", {
+      file,
+      owner,
+      imported: importedPackage,
+      message: "Production code must not import Test Support.",
+    });
   }
 
   if (!isTestOnly && !isSelf) {
-    for (const result of evaluateHarnessProductionDependency({ owner, imported: importedPackage })) {
+    for (const result of evaluateProductionDependency({
+      owner,
+      imported: importedPackage,
+    })) {
       report(result.rule, { file, owner, imported: importedPackage, message: result.message });
     }
-    for (const result of evaluatePlatformProductionDependency({ owner, imported: importedPackage })) {
-      report(result.rule, { file, owner, imported: importedPackage, message: result.message });
+  }
+}
+
+function checkRepositoryTopology() {
+  for (const rootName of ["packages", "apps", "extensions"]) {
+    const root = join(repoRoot, rootName);
+    if (exists(root)) {
+      report("generic_repository_root", {
+        file: root,
+        message: `Generic repository root '${rootName}' is prohibited.`,
+      });
     }
   }
 }

@@ -1,4 +1,4 @@
-import type { ISODateTimeString, Metadata } from "../primitives/index.js";
+import type { ISODateTimeString, Metadata } from "./primitives/index.js";
 
 export function assertRecord(
   value: unknown,

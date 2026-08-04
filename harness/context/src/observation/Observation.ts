@@ -1,7 +1,7 @@
 import type {
   ActionRejectedCode,
+  Metadata,
   ObservationBase,
-  RuntimeError,
 } from "@agent-anything/foundation";
 import type { ToolResult } from "@agent-anything/tools";
 import type {
@@ -48,7 +48,23 @@ export interface ActionDeniedObservation extends ObservationBase {
 
 export interface ActionFailureObservation extends ObservationBase {
   readonly kind: "action_failure";
-  readonly error: RuntimeError;
+  readonly failure: ActionFailureObservationDetail;
+}
+
+export type ActionFailureObservationSource =
+  | "action_execution"
+  | "policy"
+  | "permission"
+  | "sandbox"
+  | "tool"
+  | "context";
+
+export interface ActionFailureObservationDetail {
+  readonly source: ActionFailureObservationSource;
+  readonly code: string;
+  readonly message: string;
+  readonly retryable: boolean;
+  readonly metadata: Readonly<Metadata>;
 }
 
 export interface ActionRejectedObservation extends ObservationBase {

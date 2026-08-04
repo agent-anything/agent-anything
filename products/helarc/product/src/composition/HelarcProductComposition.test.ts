@@ -65,13 +65,15 @@ describe("HelarcProductComposition", () => {
       runId: "run-1",
       taskId: "helarc-composition-test-task",
       metadata: { rawProvider: secret },
-    }, "provider_request_failed", [{
-      owner: "provider",
-      code: "provider_request_failed",
-      message: `Provider failed with ${secret}.`,
-      retryable: false,
-      metadata: { apiKey: secret },
-    }]), "disabled");
+    }, "provider_request_failed", {
+      kind: "provider",
+      failure: {
+        category: "transport",
+        code: "provider_request_failed",
+        message: `Provider failed with ${secret}.`,
+        metadata: { apiKey: secret },
+      },
+    }), "disabled");
 
     expect(result.output.safeErrors).toEqual([{
       code: "provider_request_failed",

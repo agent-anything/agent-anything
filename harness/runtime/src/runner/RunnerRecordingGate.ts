@@ -1,27 +1,32 @@
-import type {
-  RuntimeError,
-  RuntimeErrorOwner,
-} from "@agent-anything/foundation";
 import type { ObservabilityRecordPurpose } from "@agent-anything/observability";
+import type {
+  RunFailureCause,
+  RunFailureKind,
+} from "@agent-anything/runtime/run";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
 
 export interface RunnerRecorder {
-  readonly owner: Extract<RuntimeErrorOwner, "audit" | "telemetry">;
+  readonly owner: Extract<RunFailureKind, "audit" | "telemetry">;
   readonly requirement: RunInfrastructureRequirement;
-  execute(): Promise<RuntimeError | null>;
+  execute(): Promise<ObservabilityRunFailure | null>;
 }
+
+type ObservabilityRunFailure = Extract<
+  RunFailureCause,
+  { readonly kind: "audit" | "telemetry" }
+>;
 
 export async function settleRunnerRecordingGate(input: {
   readonly purpose: ObservabilityRecordPurpose;
   readonly signal: AbortSignal;
   readonly recorders: readonly RunnerRecorder[];
-}): Promise<readonly RuntimeError[]> {
+}): Promise<readonly ObservabilityRunFailure[]> {
   const ordered = [...input.recorders].sort(compareRecorders);
 
   if (input.purpose === "runtime") {
-    const errors = await settleRequired(ordered, input.signal);
-    if (errors.length > 0) {
-      return errors;
+    const failures = await settleRequired(ordered, input.signal);
+    if (failures.length > 0) {
+      return failures;
     }
     for (const recorder of ordered) {
       if (recorder.requirement === "optional") {
@@ -31,24 +36,24 @@ export async function settleRunnerRecordingGate(input: {
     return Object.freeze([]);
   }
 
-  const errors: RuntimeError[] = [];
+  const failures: ObservabilityRunFailure[] = [];
   for (const recorder of ordered) {
     if (input.signal.aborted) {
       break;
     }
-    const error = await recorder.execute();
-    if (error !== null) {
-      errors.push(error);
+    const failure = await recorder.execute();
+    if (failure !== null) {
+      failures.push(failure);
     }
   }
-  return Object.freeze(errors);
+  return Object.freeze(failures);
 }
 
 async function settleRequired(
   recorders: readonly RunnerRecorder[],
   signal: AbortSignal,
-): Promise<readonly RuntimeError[]> {
-  const errors: RuntimeError[] = [];
+): Promise<readonly ObservabilityRunFailure[]> {
+  const failures: ObservabilityRunFailure[] = [];
   for (const recorder of recorders) {
     if (recorder.requirement !== "required") {
       continue;
@@ -56,12 +61,12 @@ async function settleRequired(
     if (signal.aborted) {
       throw signal.reason;
     }
-    const error = await recorder.execute();
-    if (error !== null) {
-      errors.push(error);
+    const failure = await recorder.execute();
+    if (failure !== null) {
+      failures.push(failure);
     }
   }
-  return Object.freeze(errors);
+  return Object.freeze(failures);
 }
 
 function startOptional(recorder: RunnerRecorder): void {

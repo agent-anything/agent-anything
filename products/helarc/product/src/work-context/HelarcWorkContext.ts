@@ -1119,37 +1119,45 @@ function isHostTerminalProjection(value: HostTerminalRunProjection): boolean {
     !isNonNegativeInteger(value.itemCount) ||
     !isNonNegativeInteger(value.evidenceCount) ||
     !isNonNegativeInteger(value.artifactCount) ||
-    !Array.isArray(value.errors) || !value.errors.every(isHostTerminalError) ||
+    !isHostTerminalFailure(value.failure) ||
+    !Array.isArray(value.relatedFailures) ||
+    !value.relatedFailures.every((failure) =>
+      failure !== null && isHostTerminalFailure(failure)
+    ) ||
     !isCancellationSummary(value.cancellation)
   ) {
     return false;
   }
   if (value.status === "completed") {
-    return value.code === null && value.errors.length === 0 && value.cancellation === null;
+    return value.code === null && value.failure === null &&
+      value.relatedFailures.length === 0 && value.cancellation === null;
   }
   if (value.status === "blocked") {
-    return value.code === "runtime_no_safe_path" && value.errors.length === 0 &&
+    return value.code === "runtime_no_safe_path" && value.failure === null &&
+      value.relatedFailures.length === 0 &&
       value.cancellation === null;
   }
   if (value.status === "cancelled") {
-    return value.code === "runtime_cancelled" && value.errors.length === 0 &&
+    return value.code === "runtime_cancelled" && value.failure === null &&
+      value.relatedFailures.length === 0 &&
       value.cancellation !== null;
   }
-  return value.code !== null && value.errors.length > 0;
+  return value.code !== null && value.failure !== null;
 }
 
-function isHostTerminalError(value: unknown): boolean {
+function isHostTerminalFailure(value: unknown): boolean {
+  if (value === null) return true;
   if (value === null || typeof value !== "object") return false;
-  const error = value as { owner?: unknown; code?: unknown; retryable?: unknown };
-  return isRuntimeErrorOwner(error.owner) && hasText(error.code) &&
-    typeof error.retryable === "boolean";
+  const failure = value as { kind?: unknown; code?: unknown; retryable?: unknown };
+  return isRunFailureKind(failure.kind) && hasText(failure.code) &&
+    (failure.retryable === null || typeof failure.retryable === "boolean");
 }
 
-function isRuntimeErrorOwner(value: unknown): boolean {
+function isRunFailureKind(value: unknown): boolean {
   return value === "runtime" || value === "model" || value === "provider" ||
     value === "approval" || value === "permission" || value === "policy" ||
-    value === "sandbox" || value === "tool" || value === "storage" ||
-    value === "audit" || value === "telemetry";
+    value === "action_execution" || value === "sandbox" || value === "tool" ||
+    value === "context" || value === "audit" || value === "telemetry";
 }
 
 function isCancellationSummary(value: unknown): boolean {

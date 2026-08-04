@@ -25,7 +25,7 @@
   },
   "agentAnything": {
     "architecture": {
-      "layer": "harness",
+      "kind": "harness",
       "component": "integrations.enterprise-storage"
     }
   },

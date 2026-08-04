@@ -1,6 +1,8 @@
 export type {
   ActionDeniedObservation,
   ActionDeniedOwner,
+  ActionFailureObservationDetail,
+  ActionFailureObservationSource,
   ActionFailureObservation,
   ActionRejectedObservation,
   ApprovalApplicationFailedObservation,

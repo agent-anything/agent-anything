@@ -4,7 +4,10 @@ import type {
   ISODateTimeString,
 } from "@agent-anything/foundation";
 import type { ToolResult } from "@agent-anything/tools";
-import type { RuntimeError } from "@agent-anything/foundation";
+import {
+  createActionExecutionFailure,
+  type ActionExecutionFailureKind,
+} from "./ActionExecutionFailure.js";
 import {
   createActionExecutorDispatchPermit,
   type ActionExecutor,
@@ -1126,20 +1129,25 @@ function failed(
   attempt: SandboxAttempt | null,
   code: string,
   message: string,
-  owner: RuntimeError["owner"] = "sandbox",
+  owner: Extract<ActionExecutionFailureKind, "sandbox" | "tool"> = "sandbox",
   effectState: "none" | "unknown" = "none",
 ): ActionExecutionResult {
+  const base = Object.freeze({
+    code,
+    message,
+    retryable: false,
+    metadata: Object.freeze({}),
+  });
   return Object.freeze({
     status: "failed" as const,
     attempt,
     effectState,
-    error: Object.freeze({
-      owner,
-      code,
-      message,
-      retryable: false,
-      metadata: Object.freeze({}),
-    }),
+    failure: owner === "sandbox"
+      ? createActionExecutionFailure("sandbox", Object.freeze({
+          ...base,
+          effectState,
+        }))
+      : createActionExecutionFailure("tool", base),
   });
 }
 
@@ -1151,26 +1159,25 @@ function executorFailed(
     status: "failed" as const,
     attempt,
     effectState: failure.effectState,
-    error: Object.freeze({
-      owner: "tool" as const,
+    failure: createActionExecutionFailure("tool", Object.freeze({
       code: failure.code,
       message: failure.message,
       retryable: false,
       metadata: Object.freeze({ ...failure.metadata }),
-    }),
+    })),
   });
 }
 
 function preparationFailed(code: string, message: string): SandboxDispatchPreparationResult {
   return Object.freeze({
     status: "failed" as const,
-    error: Object.freeze({
-      owner: "sandbox" as const,
+    failure: createActionExecutionFailure("sandbox", Object.freeze({
       code,
       message,
       retryable: false,
+      effectState: "none",
       metadata: Object.freeze({}),
-    }),
+    })),
   });
 }
 

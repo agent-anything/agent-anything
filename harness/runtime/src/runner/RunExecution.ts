@@ -6,26 +6,29 @@ import type {
   EvidenceRef,
   ISODateTimeString,
   Metadata,
-  RunBlockedCode,
-  RunFailureCode,
   RunInput,
-  RuntimeError,
 } from "@agent-anything/foundation";
 import {
   RuntimeEventStream,
+  type AuditFailure,
   type ObservabilityRecordContext,
   type RunTraceAssembler,
   type RunTraceObserver,
   type RuntimeEventName,
   type RuntimeEventPayloadMap,
   type RuntimeEventPublisher,
+  type TelemetryFailure,
 } from "@agent-anything/observability";
-import type { AppliedPolicyAmendmentRecord } from "@agent-anything/governance";
+import type {
+  AppliedPolicyAmendmentRecord,
+  PolicyFailure,
+} from "@agent-anything/governance";
 import {
   createApprovalRequest,
   projectApprovalReviewRequest,
   validateApprovalDecision,
   type ApprovalRecord,
+  type ApprovalFailure,
   type ApprovalRequirement,
   type ApprovalRequest,
   type ApprovalReviewContext,
@@ -33,6 +36,7 @@ import {
   type ApprovalReviewInput,
   type ApprovalScope,
   type PermissionResolutionEnvironmentInput,
+  type PermissionFailure,
   type SessionAuthorityRecord,
   type ValidatedApprovalDecision,
 } from "@agent-anything/permission";
@@ -43,11 +47,15 @@ import type {
   ActionDispatchPlan,
   ActionRevalidationResult,
   ActionExecutionResult,
+  ActionExecutionFailure,
+  ActionProcessingFailure,
   PreparedExternalAction,
   SandboxAttempt,
+  SandboxExecutionFailure,
 } from "@agent-anything/action-execution";
-import type { ToolResult } from "@agent-anything/tools";
+import type { ToolFailure, ToolResult } from "@agent-anything/tools";
 import { ControllerError } from "../controller/ProviderBackedController.js";
+import type { ModelFailure } from "../controller/ModelFailure.js";
 import type {
   ControllerDecision,
   ControllerInput,
@@ -58,6 +66,7 @@ import {
   projectContext,
   type Context,
 } from "@agent-anything/context/context";
+import type { ContextFailure } from "@agent-anything/context";
 import {
   abandonPlan,
   applyPlanUpdate,
@@ -67,6 +76,7 @@ import {
 } from "@agent-anything/runtime/plan";
 import type {
   ActionDeniedObservation,
+  ActionFailureObservationDetail,
   ActionFailureObservation,
   ActionRejectedObservation,
   ApprovalDeclinedObservation,
@@ -81,10 +91,21 @@ import type {
 } from "@agent-anything/context/observation";
 import type {
   InterruptibleOperationKind,
+  RunBlockedCode,
+  RunFailureCause,
+  RunFailureCode,
+  RunFailureKind,
   RunFinalizationContext,
   RunCancellationRequest,
+  RuntimeFailure,
 } from "@agent-anything/runtime/run";
-import { toRunCancellationSummary } from "@agent-anything/runtime/run";
+import {
+  toRunCancellationSummary,
+} from "@agent-anything/runtime/run";
+import {
+  createRunFailureCause,
+  runFailureCode,
+} from "../run/RunFailure.js";
 import { createRunFinalizationContext } from "./RunFinalization.js";
 import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
 import type {
@@ -201,7 +222,8 @@ type TerminalCandidate<TOutput> =
   | {
       readonly status: "failed";
       readonly code: RunFailureCode;
-      readonly errors: readonly [RuntimeError, ...RuntimeError[]];
+      readonly failure: RunFailureCause;
+      readonly relatedFailures: readonly RunFailureCause[];
       readonly cancellationRequest: RunCancellationRequest | null;
     }
   | {
@@ -330,7 +352,9 @@ export class RunExecution<TOutput> {
 
     const config = snapshotRunConfig(this.rawConfig, this.input.runId);
     if (!config.valid) {
-      return this.createInvalidConfigResult(config.error);
+      return this.createInvalidConfigResult(
+        createRunFailureCause("runtime", config.failure),
+      );
     }
     this.config = config.config;
     const actionPipelineParts = [
@@ -341,7 +365,7 @@ export class RunExecution<TOutput> {
       this.config.actionContext !== null,
     ];
     if (actionPipelineParts.some(Boolean) && !actionPipelineParts.every(Boolean)) {
-      return this.createInvalidConfigResult(runtimeError(
+      return this.createInvalidConfigResult(runFailure(
         "runtime",
         "runtime_invalid_options",
         "ActionEnforcementPipeline, SandboxExecutionGateway, EvidenceBuilderPort, EvidencePersistencePort, and RunConfig.actionContext must be configured together.",
@@ -354,7 +378,7 @@ export class RunExecution<TOutput> {
       this.dependencies.actionEnforcementPipeline.toolBindingSnapshotId !==
         this.config.toolBindings.snapshotId
     ) {
-      return this.createInvalidConfigResult(runtimeError(
+      return this.createInvalidConfigResult(runFailure(
         "runtime",
         "runtime_invalid_options",
         "RunConfig Tool bindings do not match ActionEnforcementPipeline composition.",
@@ -376,7 +400,8 @@ export class RunExecution<TOutput> {
       status: "initializing",
       code: null,
       finalOutput: null,
-      errors: Object.freeze([]) as readonly [],
+      failure: null,
+      relatedFailures: Object.freeze([]) as readonly [],
       cancellationRequest: null,
       permission: createInitialRunPermissionState(this.config.permissions),
       context: createInitialContext(this.input.task),
@@ -408,7 +433,8 @@ export class RunExecution<TOutput> {
       status: "running",
       code: null,
       finalOutput: null,
-      errors: Object.freeze([]) as readonly [],
+      failure: null,
+      relatedFailures: Object.freeze([]) as readonly [],
       cancellationRequest: null,
     }));
     this.emit("run.started", {
@@ -416,18 +442,20 @@ export class RunExecution<TOutput> {
       activeAgentId: this.state.activeAgentId,
     });
 
-    const startErrors = await this.recordLifecycle("started");
-    if (startErrors.length > 0) {
+    const startFailures = await this.recordLifecycle("started");
+    if (startFailures.length > 0) {
       const cancellationRequest = this.cancellationRequest();
       if (cancellationRequest !== null) {
         this.enterCancelling(cancellationRequest);
       }
+      const [failure, ...relatedFailures] = startFailures;
       return this.terminalize({
         status: "failed",
-        code: failureCode(startErrors[0]),
-        errors: asErrorTuple(startErrors),
+        code: failureCode(failure),
+        failure,
+        relatedFailures: Object.freeze(relatedFailures),
         cancellationRequest,
-      }, new Set(startErrors.map((error) => error.owner)));
+      }, new Set(startFailures.map((cause) => cause.kind)));
     }
 
     if (this.cancellationRequest() !== null) {
@@ -476,7 +504,7 @@ export class RunExecution<TOutput> {
             decisionKind: null,
           });
           return this.fail(
-            cancellationSettlementRuntimeError(error),
+            cancellationSettlementRunFailure(error),
             "runtime_cancellation_settlement_timeout",
           );
         }
@@ -487,12 +515,12 @@ export class RunExecution<TOutput> {
           this.emit("controller.finished", {
             iteration,
             status: "failed",
-            code: error.runtimeError.code,
+            code: error.failure.failure.code,
             decisionKind: null,
           });
           return this.fail(
-            error.runtimeError,
-            failureCode(error.runtimeError),
+            error.failure,
+            failureCode(error.failure),
           );
         }
         if (this.cancellationRequest() !== null) {
@@ -505,14 +533,14 @@ export class RunExecution<TOutput> {
           return this.cancelRun();
         }
 
-        const runtimeError = controllerRuntimeError(error);
+        const failure = controllerRunFailure(error);
         this.emit("controller.finished", {
           iteration,
           status: "failed",
-          code: runtimeError.code,
+          code: runFailureCode(failure),
           decisionKind: null,
         });
-        return this.fail(runtimeError, failureCode(runtimeError));
+        return this.fail(failure, failureCode(failure));
       }
 
       if (this.cancellationRequest() !== null) {
@@ -530,7 +558,7 @@ export class RunExecution<TOutput> {
         this.emit("controller.finished", {
           iteration,
           status: "failed",
-          code: controllerDurationError.code,
+          code: runFailureCode(controllerDurationError),
           decisionKind: null,
         });
         return this.fail(controllerDurationError);
@@ -538,7 +566,7 @@ export class RunExecution<TOutput> {
 
       const malformedDecision = validateControllerDecision(decision);
       if (malformedDecision !== null) {
-        const error = runtimeError(
+        const error = runFailure(
           "model",
           "model_output_invalid",
           malformedDecision,
@@ -547,7 +575,7 @@ export class RunExecution<TOutput> {
         this.emit("controller.finished", {
           iteration,
           status: "failed",
-          code: error.code,
+          code: runFailureCode(error),
           decisionKind: null,
         });
         return this.fail(error, "model_output_invalid");
@@ -575,7 +603,7 @@ export class RunExecution<TOutput> {
         try {
           validation = this.agent.output.validate(decision.output);
         } catch (error) {
-          return this.fail(runtimeError(
+          return this.fail(runFailure(
             "model",
             "model_output_invalid",
             "Agent output validation failed.",
@@ -585,7 +613,7 @@ export class RunExecution<TOutput> {
         }
 
         if (!validation.valid || validation.output === null || validation.output === undefined) {
-          return this.fail(runtimeError(
+          return this.fail(runFailure(
             "model",
             "model_output_invalid",
             validation.valid
@@ -613,7 +641,7 @@ export class RunExecution<TOutput> {
         this.state.counters.actions + decision.actions.length >
         this.config.limits.maxActions
       ) {
-        return this.fail(limitRuntimeError("Run exceeded maxActions.", {
+        return this.fail(limitRunFailure("Run exceeded maxActions.", {
           maxActions: this.config.limits.maxActions,
           attemptedActions: this.state.counters.actions + decision.actions.length,
         }));
@@ -761,7 +789,7 @@ export class RunExecution<TOutput> {
     if (Date.parse(deadlineAt) <= Date.parse(createdAt)) {
       return {
         invalidatesBatch: true,
-        terminalResult: await this.fail(limitRuntimeError(
+        terminalResult: await this.fail(limitRunFailure(
           "Run deadline elapsed before approval review could start.",
           { requestId, deadlineAt },
         )),
@@ -841,7 +869,7 @@ export class RunExecution<TOutput> {
     if (Date.parse(request.deadlineAt) <= Date.parse(this.now())) {
       return {
         invalidatesBatch: true,
-        terminalResult: await this.fail(limitRuntimeError(
+        terminalResult: await this.fail(limitRunFailure(
           "Run deadline elapsed before approval review could start.",
           { requestId: request.id, deadlineAt: request.deadlineAt },
         )),
@@ -864,7 +892,7 @@ export class RunExecution<TOutput> {
     ) {
       return {
         invalidatesBatch: true,
-        terminalResult: await this.fail(runtimeError(
+        terminalResult: await this.fail(runFailure(
           "approval",
           "approval_review_failure_limit_exceeded",
           "Approval reviewer failure circuit is open.",
@@ -919,11 +947,11 @@ export class RunExecution<TOutput> {
         {
           kind: "request_failure",
           owner: "audit",
-          code: requestAuditError.code,
+          code: runFailureCode(requestAuditError),
         },
-        { kind: "not_applied", code: requestAuditError.code },
+        { kind: "not_applied", code: runFailureCode(requestAuditError) },
       );
-      const settlementErrors = await this.settlePendingApproval(
+      const settlementFailures = await this.settlePendingApproval(
         record,
         "neutral",
         null,
@@ -934,7 +962,7 @@ export class RunExecution<TOutput> {
       return {
         invalidatesBatch: true,
         terminalResult: await this.failMany(
-          asErrorTuple([requestAuditError, ...settlementErrors]),
+          asFailureTuple([requestAuditError, ...settlementFailures]),
           "audit_required_failed",
         ),
       };
@@ -952,9 +980,9 @@ export class RunExecution<TOutput> {
     } catch (error) {
       if (error instanceof OperationSettlementTimeoutError) {
         const cancellation = this.cancellationRequest();
-        let settlementErrors: RuntimeError[];
+        let settlementFailures: RunFailureCause[];
         if (cancellation !== null) {
-          settlementErrors = await this.settlePendingApproval(
+          settlementFailures = await this.settlePendingApproval(
             this.createApprovalRecord({
               kind: "run_cancelled",
               cancellationRequestId: cancellation.id,
@@ -966,7 +994,7 @@ export class RunExecution<TOutput> {
           );
           this.enterCancelling(cancellation);
         } else {
-          settlementErrors = await this.settlePendingApproval(
+          settlementFailures = await this.settlePendingApproval(
             this.createApprovalRecord({
               kind: "review_failure",
               failure: approvalReviewFailure(
@@ -980,11 +1008,11 @@ export class RunExecution<TOutput> {
             true,
           );
         }
-        const settlementError = approvalSettlementRuntimeError(error);
+        const settlementError = approvalSettlementRunFailure(error);
         return {
           invalidatesBatch: true,
           terminalResult: await this.failMany(
-            asErrorTuple([settlementError, ...settlementErrors]),
+            asFailureTuple([settlementError, ...settlementFailures]),
             "approval_cancellation_unconfirmed",
           ),
         };
@@ -1200,7 +1228,7 @@ export class RunExecution<TOutput> {
     if (auditError !== null) {
       const record = this.createApprovalRecord(
         { kind: "decision", decision },
-        { kind: "not_applied", code: auditError.code },
+        { kind: "not_applied", code: runFailureCode(auditError) },
       );
       const settlementErrors = await this.settlePendingApproval(
         record,
@@ -1213,7 +1241,7 @@ export class RunExecution<TOutput> {
       return {
         invalidatesBatch: true,
         terminalResult: await this.failMany(
-          asErrorTuple([auditError, ...settlementErrors]),
+          asFailureTuple([auditError, ...settlementErrors]),
           "audit_required_failed",
         ),
       };
@@ -1252,7 +1280,7 @@ export class RunExecution<TOutput> {
         invalidatesBatch: true,
         terminalResult: settlementErrors.length === 0
           ? null
-          : await this.failMany(asErrorTuple(settlementErrors)),
+          : await this.failMany(asFailureTuple(settlementErrors)),
       };
     }
 
@@ -1360,7 +1388,7 @@ export class RunExecution<TOutput> {
       invalidatesBatch: true,
       terminalResult: settlementErrors.length === 0
         ? null
-        : await this.failMany(asErrorTuple(settlementErrors)),
+        : await this.failMany(asFailureTuple(settlementErrors)),
     };
   }
 
@@ -1397,7 +1425,7 @@ export class RunExecution<TOutput> {
       if (settlementErrors.length > 0) {
         return {
           invalidatesBatch: true,
-          terminalResult: await this.failMany(asErrorTuple(settlementErrors)),
+          terminalResult: await this.failMany(asFailureTuple(settlementErrors)),
         };
       }
       return this.finishAuthoritySettlement(result, true);
@@ -1429,7 +1457,7 @@ export class RunExecution<TOutput> {
     if (settlementErrors.length > 0) {
       return {
         invalidatesBatch: true,
-        terminalResult: await this.failMany(asErrorTuple(settlementErrors)),
+        terminalResult: await this.failMany(asFailureTuple(settlementErrors)),
       };
     }
     return this.finishAuthoritySettlement(result, false);
@@ -1516,7 +1544,7 @@ export class RunExecution<TOutput> {
         return {
           invalidatesBatch: true,
           terminalResult: await this.fail(
-            authorityCommitRuntimeError(result),
+            authorityCommitRunFailure(result),
             authorityCommitFailureCode(result.owner, true),
           ),
         };
@@ -1528,7 +1556,7 @@ export class RunExecution<TOutput> {
       return {
         invalidatesBatch: true,
         terminalResult: await this.fail(
-          authorityCommitRuntimeError(result),
+          authorityCommitRunFailure(result),
           authorityCommitFailureCode(result.owner, true),
         ),
       };
@@ -1537,7 +1565,7 @@ export class RunExecution<TOutput> {
       if (result.deadlineAt === this.runDeadlineAt()) {
         return {
           invalidatesBatch: true,
-          terminalResult: await this.fail(limitRuntimeError(
+          terminalResult: await this.fail(limitRunFailure(
             "Run deadline elapsed during authority application.",
             { commitId: result.commitId, deadlineAt: result.deadlineAt },
           )),
@@ -1547,7 +1575,7 @@ export class RunExecution<TOutput> {
         return {
           invalidatesBatch: true,
           terminalResult: await this.fail(
-            runtimeError(
+            runFailure(
               result.owner,
               authorityCommitFailureCode(result.owner, false),
               "Authority was durably committed, but completion was confirmed after its operation deadline.",
@@ -1588,14 +1616,14 @@ export class RunExecution<TOutput> {
     if (settlementErrors.length > 0) {
       return {
         invalidatesBatch: true,
-        terminalResult: await this.failMany(asErrorTuple(settlementErrors)),
+        terminalResult: await this.failMany(asFailureTuple(settlementErrors)),
       };
     }
     if (
       failure.code === "approval_review_timeout" &&
       pending.request.deadlineAt === this.runDeadlineAt()
     ) {
-      const terminalResult = await this.fail(limitRuntimeError(
+      const terminalResult = await this.fail(limitRunFailure(
         "Run deadline elapsed during approval review.",
         { requestId: pending.request.id, deadlineAt: pending.request.deadlineAt },
       ));
@@ -1605,7 +1633,7 @@ export class RunExecution<TOutput> {
       this.state.permission.counters.consecutiveReviewFailures >=
       this.config.permissions.approvalLimits.maxConsecutiveReviewFailures
     ) {
-      const terminalResult = await this.fail(runtimeError(
+      const terminalResult = await this.fail(runFailure(
         "approval",
         "approval_review_failure_limit_exceeded",
         "Approval reviewer failure circuit limit was reached.",
@@ -1639,7 +1667,7 @@ export class RunExecution<TOutput> {
       this.enterCancelling(cancellation);
       return {
         invalidatesBatch: true,
-        terminalResult: await this.failMany(asErrorTuple(settlementErrors)),
+        terminalResult: await this.failMany(asFailureTuple(settlementErrors)),
       };
     }
     return {
@@ -1654,8 +1682,8 @@ export class RunExecution<TOutput> {
     observation: Observation | null,
     failed: boolean,
     permissionBase: RunPermissionState = this.state.permission,
-    skipOwners: ReadonlySet<RuntimeError["owner"]> = new Set(),
-  ): Promise<RuntimeError[]> {
+    skipKinds: ReadonlySet<RunFailureKind> = new Set(),
+  ): Promise<RunFailureCause[]> {
     if (this.state.status !== "waiting_for_approval") {
       throw new Error(`Cannot settle approval while Run is ${this.state.status}.`);
     }
@@ -1697,9 +1725,9 @@ export class RunExecution<TOutput> {
       timeoutMs: this.config.cancellationLimits.finalizationTimeoutMs,
       startedAt: recordingStartedAt,
     });
-    let errors: RuntimeError[];
+    let failures: RunFailureCause[];
     try {
-      errors = await recordApprovalResolution({
+      failures = await recordApprovalResolution({
         runId: record.runId,
         summary,
         taskId: this.state.taskId,
@@ -1716,16 +1744,16 @@ export class RunExecution<TOutput> {
         }),
         auditPort: this.dependencies.auditPort,
         telemetryPort: this.dependencies.telemetryPort,
-        skipOwners,
+        skipKinds,
       });
     } finally {
       scope.dispose();
     }
-    if (errors.length === 0 && skipOwners.size === 0) {
+    if (failures.length === 0 && skipKinds.size === 0) {
       this.publishItems(items);
       this.emitApprovalResolved(summary);
     }
-    return errors;
+    return failures;
   }
 
   private emitApprovalResolved(
@@ -1861,7 +1889,7 @@ export class RunExecution<TOutput> {
       return this.commitActionObservation(observation, true, true);
     }
     if (preparation.status === "failed") {
-      return this.commitActionFailure(action, preparation.error);
+      return this.commitActionFailure(action, preparation.failure);
     }
     if (preparation.status === "interrupted") {
       return this.handleActionInterruption(action);
@@ -2114,16 +2142,16 @@ export class RunExecution<TOutput> {
         : assessment.status === "invalidated"
         ? "tool"
         : assessment.status === "failed"
-        ? assessment.error.owner === "policy" ||
-            assessment.error.owner === "permission" ||
-            assessment.error.owner === "tool"
-          ? assessment.error.owner
+        ? assessment.failure.kind === "policy" ||
+            assessment.failure.kind === "permission" ||
+            assessment.failure.kind === "tool"
+          ? assessment.failure.kind
           : null
         : null,
       code: assessment.status === "denied" || assessment.status === "invalidated"
         ? assessment.code
         : assessment.status === "failed"
-        ? assessment.error.code
+        ? assessment.failure.failure.code
         : null,
     });
     this.commitRunning([(base) => Object.freeze({
@@ -2186,7 +2214,7 @@ export class RunExecution<TOutput> {
       return this.commitActionObservation(observation, true, true);
     }
     if (assessment.status === "failed") {
-      return this.commitActionFailure(action, assessment.error);
+      return this.commitActionFailure(action, assessment.failure);
     }
     if (assessment.status === "interrupted") {
       return this.handleActionInterruption(action);
@@ -2225,7 +2253,7 @@ export class RunExecution<TOutput> {
       return this.commitActionObservation(observation, true, true);
     }
     if (revalidation.status === "failed") {
-      return this.commitActionFailure(action, revalidation.error);
+      return this.commitActionFailure(action, revalidation.failure);
     }
     return this.handleActionInterruption(action);
   }
@@ -2274,9 +2302,9 @@ export class RunExecution<TOutput> {
       return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
     }
 
-    let auditError: RuntimeError | null;
+    let auditFailure: RunFailureCause | null;
     try {
-      auditError = await this.awaitInterruptibleOperation(
+      auditFailure = await this.awaitInterruptibleOperation(
         "tool",
         () => recordActionDispatchAuthorizationAudit({
           plan,
@@ -2297,7 +2325,7 @@ export class RunExecution<TOutput> {
         return {
           invalidatesBatch: true,
           terminalResult: await this.fail(
-            cancellationSettlementRuntimeError(error),
+            cancellationSettlementRunFailure(error),
             "runtime_cancellation_settlement_timeout",
           ),
         };
@@ -2305,7 +2333,7 @@ export class RunExecution<TOutput> {
       if (this.cancellationRequest() !== null) {
         return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
       }
-      auditError = runtimeError(
+      auditFailure = runFailure(
         "audit",
         "audit_required_failed",
         "Action dispatch authorization Audit failed unexpectedly.",
@@ -2313,10 +2341,10 @@ export class RunExecution<TOutput> {
         { actionId: action.id },
       );
     }
-    if (auditError !== null) {
+    if (auditFailure !== null) {
       return {
         invalidatesBatch: true,
-        terminalResult: await this.fail(auditError, "audit_required_failed"),
+        terminalResult: await this.fail(auditFailure, "audit_required_failed"),
       };
     }
     if (this.cancellationRequest() !== null) {
@@ -2346,7 +2374,7 @@ export class RunExecution<TOutput> {
       return {
         invalidatesBatch: true,
         terminalResult: await this.fail(
-          sandboxPreparation.error,
+          actionExecutionRunFailure(sandboxPreparation.failure),
           "sandbox_enforcement_failed",
         ),
       };
@@ -2356,9 +2384,9 @@ export class RunExecution<TOutput> {
     }
 
     const sandboxAttempt = sandboxPreparation.prepared.attempt;
-    let startErrors: readonly RuntimeError[];
+    let startFailures: readonly RunFailureCause[];
     try {
-      startErrors = await this.awaitInterruptibleOperation(
+      startFailures = await this.awaitInterruptibleOperation(
         "tool",
         () => recordSandboxAttemptStarted({
           attempt: sandboxAttempt,
@@ -2381,11 +2409,14 @@ export class RunExecution<TOutput> {
     } catch (error) {
       return this.handleActionPipelineOperationError(action, error, "dispatch");
     }
-    if (startErrors.length > 0) {
-      const error = startErrors[0]!;
+    if (startFailures.length > 0) {
+      const failure = startFailures[0]!;
       return {
         invalidatesBatch: true,
-        terminalResult: await this.fail(error, infrastructureFailureCode(error)),
+        terminalResult: await this.fail(
+          failure,
+          infrastructureFailureCode(failure),
+        ),
       };
     }
     this.commitAndPublishSettledToolState([
@@ -2439,9 +2470,9 @@ export class RunExecution<TOutput> {
       }),
     ], {});
 
-    let resolutionErrors: readonly RuntimeError[];
+    let resolutionFailures: readonly RunFailureCause[];
     try {
-      resolutionErrors = await this.awaitInterruptibleOperation(
+      resolutionFailures = await this.awaitInterruptibleOperation(
         "tool",
         () => recordSandboxAttemptResolved({
           attempt: sandboxAttempt,
@@ -2479,12 +2510,12 @@ export class RunExecution<TOutput> {
         return {
           invalidatesBatch: true,
           terminalResult: await this.fail(
-            cancellationSettlementRuntimeError(error),
+            cancellationSettlementRunFailure(error),
             "runtime_cancellation_settlement_timeout",
           ),
         };
       }
-      resolutionErrors = Object.freeze([runtimeError(
+      resolutionFailures = Object.freeze([runFailure(
         "runtime",
         "runtime_action_dispatch_failed",
         "Sandbox attempt settlement failed unexpectedly.",
@@ -2493,8 +2524,8 @@ export class RunExecution<TOutput> {
       )]);
     }
     this.publishSandboxAttemptResolution(resolutionItems, resolution);
-    if (resolutionErrors.length > 0) {
-      const error = resolutionErrors[0]!;
+    if (resolutionFailures.length > 0) {
+      const failure = resolutionFailures[0]!;
       if (execution.status === "executed" && retainedToolOutcome !== null) {
         this.publishExternalToolOutcome(
           action,
@@ -2502,12 +2533,15 @@ export class RunExecution<TOutput> {
           retainedToolOutcome.items,
           retainedToolOutcome.observation,
           [],
-          { status: "failed", code: error.code },
+          { status: "failed", code: runFailureCode(failure) },
         );
       }
       return {
         invalidatesBatch: true,
-        terminalResult: await this.fail(error, infrastructureFailureCode(error)),
+        terminalResult: await this.fail(
+          failure,
+          infrastructureFailureCode(failure),
+        ),
       };
     }
 
@@ -2529,7 +2563,7 @@ export class RunExecution<TOutput> {
       return this.processSandboxDenial(action, prepared, plan, execution);
     }
     if (execution.status === "sandbox_unavailable") {
-      const error = runtimeError(
+      const error = runFailure(
         "sandbox",
         execution.code,
         "The selected sandbox enforcement could not execute the Action.",
@@ -2551,19 +2585,25 @@ export class RunExecution<TOutput> {
     }
     if (
       execution.effectState === "unknown" ||
-      execution.error.code === "tool_result_invalid"
+      execution.failure.failure.code === "tool_result_invalid"
     ) {
       return {
         invalidatesBatch: true,
-        terminalResult: await this.fail(execution.error, "tool_execution_failed"),
+        terminalResult: await this.fail(
+          actionExecutionRunFailure(execution.failure),
+          "tool_execution_failed",
+        ),
       };
     }
-    if (execution.error.owner === "tool") {
-      return this.commitActionFailure(action, execution.error);
+    if (execution.failure.kind === "tool") {
+      return this.commitActionFailure(action, execution.failure);
     }
     return {
       invalidatesBatch: true,
-      terminalResult: await this.fail(execution.error, "sandbox_enforcement_failed"),
+      terminalResult: await this.fail(
+        actionExecutionRunFailure(execution.failure),
+        "sandbox_enforcement_failed",
+      ),
     };
   }
 
@@ -2621,7 +2661,7 @@ export class RunExecution<TOutput> {
         return {
           invalidatesBatch: true,
           terminalResult: await this.fail(
-            cancellationSettlementRuntimeError(error),
+            cancellationSettlementRunFailure(error),
             "runtime_cancellation_settlement_timeout",
           ),
         };
@@ -2630,11 +2670,9 @@ export class RunExecution<TOutput> {
         status: "failed" as const,
         evidenceRefs: Object.freeze([]),
         artifactRefs: Object.freeze([]),
-        error: runtimeError(
-          "tool",
-          "tool_evidence_creation_failed",
+        failure: contextFailure(
+          "context_evidence_creation_failed",
           "Action result settlement failed unexpectedly.",
-          false,
           { actionId: action.id },
         ),
       });
@@ -2660,7 +2698,7 @@ export class RunExecution<TOutput> {
       retained.observation,
       settlement.evidenceRefs,
       settlement.status === "failed"
-        ? { status: "failed", code: settlement.error.code }
+        ? { status: "failed", code: settlement.failure.code }
         : {
             status: classification.failed ? "failed" : "succeeded",
             code: toolResultErrorCode(execution.toolResult),
@@ -2671,8 +2709,10 @@ export class RunExecution<TOutput> {
       return {
         invalidatesBatch: true,
         terminalResult: await this.fail(
-          settlement.error,
-          settlement.error.owner === "storage" ? "storage_write_failed" : "tool_execution_failed",
+          createRunFailureCause("context", settlement.failure),
+          settlement.failure.code === "context_evidence_persistence_failed"
+            ? "storage_write_failed"
+            : "tool_execution_failed",
         ),
       };
     }
@@ -2685,7 +2725,7 @@ export class RunExecution<TOutput> {
     ) {
       return {
         invalidatesBatch: true,
-        terminalResult: await this.fail(limitRuntimeError(
+        terminalResult: await this.fail(limitRunFailure(
           "Run exceeded maxConsecutiveActionFailures.",
           {
             maxConsecutiveActionFailures:
@@ -2846,7 +2886,7 @@ export class RunExecution<TOutput> {
     return {
       invalidatesBatch: true,
       terminalResult: await this.fail(
-        escalation.error,
+        actionExecutionRunFailure(escalation.failure),
         "tool_sandbox_escalation_failed",
       ),
     };
@@ -2869,12 +2909,12 @@ export class RunExecution<TOutput> {
 
   private commitActionFailure(
     action: Action,
-    error: RuntimeError,
+    failure: ActionExecutionFailure,
   ): Promise<ProcessActionResult> {
     const observation: ActionFailureObservation = Object.freeze({
       ...this.createObservationBase(action),
       kind: "action_failure",
-      error,
+      failure: actionFailureObservationDetail(failure),
     });
     return this.commitActionObservation(observation, true, true);
   }
@@ -2890,7 +2930,7 @@ export class RunExecution<TOutput> {
       }));
     }
     if (interruption?.kind === "operation_deadline") {
-      return this.commitActionFailure(action, runtimeError(
+      return this.commitActionFailure(action, actionFailure(
         "tool",
         "tool_timeout",
         "Action execution exceeded its operation deadline.",
@@ -2903,7 +2943,7 @@ export class RunExecution<TOutput> {
       ));
     }
     if (interruption?.kind === "run_cancellation") {
-      return this.fail(runtimeError(
+      return this.fail(runFailure(
         "tool",
         "tool_cancellation_unconfirmed",
         "Action reported Run cancellation without a matching active request.",
@@ -2918,8 +2958,8 @@ export class RunExecution<TOutput> {
         terminalResult,
       }));
     }
-    return this.commitActionFailure(action, runtimeError(
-      "runtime",
+    return this.commitActionFailure(action, actionFailure(
+      "action_execution",
       "runtime_action_interrupted",
       "Action processing was interrupted before execution.",
       false,
@@ -2936,7 +2976,7 @@ export class RunExecution<TOutput> {
       return {
         invalidatesBatch: true,
         terminalResult: await this.fail(
-          cancellationSettlementRuntimeError(error),
+          cancellationSettlementRunFailure(error),
           "runtime_cancellation_settlement_timeout",
         ),
       };
@@ -2944,8 +2984,8 @@ export class RunExecution<TOutput> {
     if (this.cancellationRequest() !== null) {
       return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
     }
-    return this.commitActionFailure(action, runtimeError(
-      "runtime",
+    return this.commitActionFailure(action, actionFailure(
+      "action_execution",
       `runtime_action_${phase}_failed`,
       `Action ${phase} failed unexpectedly.`,
       false,
@@ -2997,7 +3037,7 @@ export class RunExecution<TOutput> {
     if (counters.consecutiveActionFailures > this.config.limits.maxConsecutiveActionFailures) {
       return {
         invalidatesBatch: true,
-        terminalResult: await this.fail(limitRuntimeError(
+        terminalResult: await this.fail(limitRunFailure(
           "Run exceeded maxConsecutiveActionFailures.",
           {
             maxConsecutiveActionFailures:
@@ -3030,7 +3070,7 @@ export class RunExecution<TOutput> {
     if (counters.consecutiveActionFailures > this.config.limits.maxConsecutiveActionFailures) {
       return {
         invalidatesBatch: true,
-        terminalResult: await this.fail(limitRuntimeError(
+        terminalResult: await this.fail(limitRunFailure(
           "Run exceeded maxConsecutiveActionFailures.",
           {
             maxConsecutiveActionFailures:
@@ -3080,7 +3120,7 @@ export class RunExecution<TOutput> {
     };
   }
 
-  private checkLoopLimits(): RuntimeError | null {
+  private checkLoopLimits(): RunFailureCause | null {
     const cancellationRequest = this.cancellationRequest();
     if (cancellationRequest !== null) {
       return null;
@@ -3091,7 +3131,7 @@ export class RunExecution<TOutput> {
       return duration;
     }
     if (this.state.counters.iterations >= this.config.limits.maxIterations) {
-      return limitRuntimeError("Run exceeded maxIterations.", {
+      return limitRunFailure("Run exceeded maxIterations.", {
         maxIterations: this.config.limits.maxIterations,
       });
     }
@@ -3099,7 +3139,7 @@ export class RunExecution<TOutput> {
       this.state.counters.consecutiveActionFailures >
       this.config.limits.maxConsecutiveActionFailures
     ) {
-      return limitRuntimeError("Run exceeded maxConsecutiveActionFailures.", {
+      return limitRunFailure("Run exceeded maxConsecutiveActionFailures.", {
         maxConsecutiveActionFailures:
           this.config.limits.maxConsecutiveActionFailures,
         actualConsecutiveActionFailures:
@@ -3109,10 +3149,10 @@ export class RunExecution<TOutput> {
     return null;
   }
 
-  private checkDurationLimit(): RuntimeError | null {
+  private checkDurationLimit(): RunFailureCause | null {
     const elapsedMs = Date.parse(this.now()) - this.startedAtMs;
     if (elapsedMs > this.config.limits.maxDurationMs) {
-      return limitRuntimeError("Run exceeded maxDurationMs.", {
+      return limitRunFailure("Run exceeded maxDurationMs.", {
         maxDurationMs: this.config.limits.maxDurationMs,
         elapsedMs,
       });
@@ -3125,33 +3165,33 @@ export class RunExecution<TOutput> {
   }
 
   private fail(
-    error: RuntimeError,
-    code: RunFailureCode = "runtime_limit_exceeded",
-    skipOwners: ReadonlySet<RuntimeError["owner"]> = new Set(),
+    failure: RunFailureCause,
+    code: RunFailureCode = failureCode(failure),
+    skipKinds: ReadonlySet<RunFailureKind> = new Set(),
   ): Promise<RunResult<TOutput>> {
     return this.terminalize({
       status: "failed",
       code,
-      errors: Object.freeze([error]) as readonly [RuntimeError],
+      failure,
+      relatedFailures: Object.freeze([]),
       cancellationRequest: this.state.status === "cancelling"
         ? this.state.cancellationRequest
         : null,
-    }, skipOwners);
+    }, skipKinds);
   }
 
   private failMany(
-    errors: readonly [RuntimeError, ...RuntimeError[]],
-    code: RunFailureCode = failureCode(errors[0]),
+    failures: readonly [RunFailureCause, ...RunFailureCause[]],
+    code: RunFailureCode = failureCode(failures[0]),
   ): Promise<RunResult<TOutput>> {
+    const [failure, ...relatedFailures] = failures;
     return this.terminalize({
       status: "failed",
       code,
-      errors: Object.freeze([...errors]) as unknown as readonly [
-        RuntimeError,
-        ...RuntimeError[],
-      ],
+      failure,
+      relatedFailures: Object.freeze(relatedFailures),
       cancellationRequest: this.cancellationRequest(),
-    }, new Set(errors.map((error) => error.owner)));
+    }, new Set(failures.map((cause) => cause.kind)));
   }
 
   private cancelRun(): Promise<RunResult<TOutput>> {
@@ -3184,7 +3224,8 @@ export class RunExecution<TOutput> {
       status: "cancelling",
       code: null,
       finalOutput: null,
-      errors: Object.freeze([]) as readonly [],
+      failure: null,
+      relatedFailures: Object.freeze([]) as readonly [],
       cancellationRequest: request,
       items: Object.freeze([...this.state.items, ...item]),
     }));
@@ -3193,21 +3234,21 @@ export class RunExecution<TOutput> {
 
   private async terminalize(
     initial: TerminalCandidate<TOutput>,
-    skipOwners: ReadonlySet<RuntimeError["owner"]> = new Set(),
+    skipKinds: ReadonlySet<RunFailureKind> = new Set(),
   ): Promise<RunResult<TOutput>> {
     if (this.terminalResult !== null) {
       return this.terminalResult;
     }
 
     let candidate = this.reconcileTerminalCancellation(initial);
-    const firstFinalization = await this.finalizeCandidate(candidate, skipOwners);
+    const firstFinalization = await this.finalizeCandidate(candidate, skipKinds);
     candidate = firstFinalization.candidate;
 
     if (!firstFinalization.failed) {
       const correctedCandidate = this.reconcileTerminalCancellation(candidate);
       if (correctedCandidate.status !== candidate.status) {
         candidate = (
-          await this.finalizeCandidate(correctedCandidate, skipOwners)
+          await this.finalizeCandidate(correctedCandidate, skipKinds)
         ).candidate;
       }
     }
@@ -3267,7 +3308,8 @@ export class RunExecution<TOutput> {
         ...base,
         kind: "run_failed" as const,
         code: candidate.code,
-        errors: candidate.errors,
+        failure: candidate.failure,
+        relatedFailures: candidate.relatedFailures,
       }));
     } else {
       drafts.push((base) => Object.freeze({
@@ -3298,7 +3340,8 @@ export class RunExecution<TOutput> {
         status: "succeeded",
         code: null,
         finalOutput: candidate.output,
-        errors: Object.freeze([]) as readonly [],
+        failure: null,
+        relatedFailures: Object.freeze([]) as readonly [],
         cancellationRequest: null,
       }));
     } else if (candidate.status === "blocked") {
@@ -3307,7 +3350,8 @@ export class RunExecution<TOutput> {
         status: "blocked",
         code: candidate.code,
         finalOutput: null,
-        errors: Object.freeze([]) as readonly [],
+        failure: null,
+        relatedFailures: Object.freeze([]) as readonly [],
         cancellationRequest: null,
       }));
     } else if (candidate.status === "failed") {
@@ -3316,7 +3360,8 @@ export class RunExecution<TOutput> {
         status: "failed",
         code: candidate.code,
         finalOutput: null,
-        errors: candidate.errors,
+        failure: candidate.failure,
+        relatedFailures: candidate.relatedFailures,
         cancellationRequest: candidate.cancellationRequest,
       }));
     } else {
@@ -3325,7 +3370,8 @@ export class RunExecution<TOutput> {
         status: "cancelled",
         code: "runtime_cancelled",
         finalOutput: null,
-        errors: Object.freeze([]) as readonly [],
+        failure: null,
+        relatedFailures: Object.freeze([]) as readonly [],
         cancellationRequest: candidate.cancellationRequest,
       }));
     }
@@ -3337,7 +3383,14 @@ export class RunExecution<TOutput> {
       evidenceCount: this.state.evidenceRefs.length,
       artifactCount: this.state.artifactRefs.length,
       errorCodes: Object.freeze(
-        [...new Set(this.state.errors.map((error) => error.code))],
+        [...new Set(
+          this.state.failure === null
+            ? []
+            : [
+                runFailureCode(this.state.failure),
+                ...this.state.relatedFailures.map(runFailureCode),
+              ],
+        )],
       ),
     };
     if (candidate.status === "succeeded") {
@@ -3389,7 +3442,7 @@ export class RunExecution<TOutput> {
 
   private async finalizeCandidate(
     candidate: TerminalCandidate<TOutput>,
-    skipOwners: ReadonlySet<RuntimeError["owner"]>,
+    skipKinds: ReadonlySet<RunFailureKind>,
   ): Promise<{
     readonly candidate: TerminalCandidate<TOutput>;
     readonly failed: boolean;
@@ -3401,22 +3454,21 @@ export class RunExecution<TOutput> {
       startedAt: this.now(),
     });
 
-    let finalizationErrors: RuntimeError[];
+    let finalizationFailures: RunFailureCause[];
     try {
-      finalizationErrors = await this.recordLifecycle(
+      finalizationFailures = await this.recordLifecycle(
         candidate.status,
-        skipOwners,
+        skipKinds,
         finalizationObservabilityContext(scope.context),
       );
     } finally {
       scope.dispose();
     }
 
-    if (finalizationErrors.length === 0) {
+    if (finalizationFailures.length === 0) {
       return { candidate, failed: false };
     }
 
-    const priorErrors = candidate.status === "failed" ? [...candidate.errors] : [];
     const acceptedCancellation = this.cancellationRequest();
     const cancellationRequest = candidate.status === "cancelled"
       ? candidate.cancellationRequest
@@ -3424,11 +3476,27 @@ export class RunExecution<TOutput> {
         ? candidate.cancellationRequest
         : acceptedCancellation;
 
+    if (candidate.status === "failed") {
+      return {
+        candidate: {
+          ...candidate,
+          relatedFailures: Object.freeze([
+            ...candidate.relatedFailures,
+            ...finalizationFailures,
+          ]),
+          cancellationRequest,
+        },
+        failed: true,
+      };
+    }
+
+    const [failure, ...relatedFailures] = finalizationFailures;
     return {
       candidate: {
         status: "failed",
-        code: failureCode(finalizationErrors[0]),
-        errors: asErrorTuple([...priorErrors, ...finalizationErrors]),
+        code: failureCode(failure),
+        failure,
+        relatedFailures: Object.freeze(relatedFailures),
         cancellationRequest,
       },
       failed: true,
@@ -3454,7 +3522,8 @@ export class RunExecution<TOutput> {
         return createFailedRunResult(
           base,
           this.state.code,
-          this.state.errors,
+          this.state.failure,
+          this.state.relatedFailures,
           this.state.cancellationRequest === null
             ? null
             : toRunCancellationSummary(this.state.cancellationRequest),
@@ -3469,7 +3538,9 @@ export class RunExecution<TOutput> {
     }
   }
 
-  private createInvalidConfigResult(error: RuntimeError): RunResult<TOutput> {
+  private createInvalidConfigResult(
+    failure: RunFailureCause,
+  ): RunResult<TOutput> {
     const input = this.input;
     const now = this.now();
     const item: RunItem<TOutput> = Object.freeze({
@@ -3484,7 +3555,8 @@ export class RunExecution<TOutput> {
       metadata: Object.freeze({}),
       kind: "run_failed",
       code: "runtime_invalid_options",
-      errors: Object.freeze([error]) as readonly [RuntimeError],
+      failure,
+      relatedFailures: Object.freeze([]),
     });
     return createFailedRunResult(
       {
@@ -3499,7 +3571,7 @@ export class RunExecution<TOutput> {
         }),
       },
       "runtime_invalid_options",
-      Object.freeze([error]) as readonly [RuntimeError],
+      failure,
     );
   }
 
@@ -3927,9 +3999,9 @@ export class RunExecution<TOutput> {
 
   private async recordLifecycle(
     phase: "started" | "succeeded" | "blocked" | "failed" | "cancelled",
-    skipOwners: ReadonlySet<RuntimeError["owner"]> = new Set(),
+    skipKinds: ReadonlySet<RunFailureKind> = new Set(),
     context: ObservabilityRecordContext = this.runtimeObservabilityContext(),
-  ): Promise<RuntimeError[]> {
+  ): Promise<RunFailureCause[]> {
     const timestamp = this.now();
     return recordRunnerLifecycle({
       phase,
@@ -3946,7 +4018,7 @@ export class RunExecution<TOutput> {
       telemetryRequirement: this.config.telemetry,
       auditPort: this.dependencies.auditPort,
       telemetryPort: this.dependencies.telemetryPort,
-      skipOwners,
+      skipKinds,
       context,
     });
   }
@@ -4003,10 +4075,10 @@ function authorityInterruptionCode(owner: AuthorityCommitOwner): string {
     : "policy_amendment_commit_interrupted";
 }
 
-function authorityCommitRuntimeError(
+function authorityCommitRunFailure(
   result: Extract<AuthorityCommitExecutionResult, { readonly kind: "outcome_unknown" }>,
-): RuntimeError {
-  return runtimeError(
+): RunFailureCause {
+  return runFailure(
     result.owner,
     result.code,
     result.message,
@@ -4095,7 +4167,7 @@ function observationNotificationOutcome(
     case "action_denied":
       return { status: "denied", code: observation.code };
     case "action_failure":
-      return { status: "failed", code: observation.error.code };
+      return { status: "failed", code: observation.failure.code };
     case "action_rejected":
       return { status: "rejected", code: observation.code };
     case "approval_declined":
@@ -4122,11 +4194,13 @@ function nextActionCounters(current: RunCounters, failed: boolean): RunCounters 
   });
 }
 
-function controllerRuntimeError(error: unknown): RuntimeError {
+function controllerRunFailure(error: unknown): RunFailureCause {
   if (error instanceof ControllerError) {
-    return error.runtimeError;
+    return error.failure.kind === "model"
+      ? createRunFailureCause("model", error.failure.failure)
+      : createRunFailureCause("provider", error.failure.failure);
   }
-  return runtimeError(
+  return runFailure(
     "model",
     "model_output_invalid",
     "Controller failed to produce a valid decision.",
@@ -4135,14 +4209,14 @@ function controllerRuntimeError(error: unknown): RuntimeError {
   );
 }
 
-function limitRuntimeError(message: string, metadata: Metadata): RuntimeError {
-  return runtimeError("runtime", "runtime_limit_exceeded", message, false, metadata);
+function limitRunFailure(message: string, metadata: Metadata): RunFailureCause {
+  return runFailure("runtime", "runtime_limit_exceeded", message, false, metadata);
 }
 
-function cancellationSettlementRuntimeError(
+function cancellationSettlementRunFailure(
   error: OperationSettlementTimeoutError,
-): RuntimeError {
-  return runtimeError(
+): RunFailureCause {
+  return runFailure(
     "runtime",
     "runtime_cancellation_settlement_timeout",
     error.message,
@@ -4155,10 +4229,10 @@ function cancellationSettlementRuntimeError(
   );
 }
 
-function approvalSettlementRuntimeError(
+function approvalSettlementRunFailure(
   error: OperationSettlementTimeoutError,
-): RuntimeError {
-  return runtimeError(
+): RunFailureCause {
+  return runFailure(
     "approval",
     "approval_cancellation_unconfirmed",
     error.message,
@@ -4171,19 +4245,121 @@ function approvalSettlementRuntimeError(
   );
 }
 
-function runtimeError(
-  owner: RuntimeError["owner"],
+type BasicRunFailureKind = Exclude<RunFailureKind, "provider">;
+
+function runFailure(
+  kind: BasicRunFailureKind,
   code: string,
   message: string,
   retryable: boolean,
   metadata: Metadata = {},
-): RuntimeError {
-  return Object.freeze({
-    owner,
+): RunFailureCause {
+  const failure = Object.freeze({
     code,
     message,
     retryable,
     metadata: Object.freeze({ ...metadata }),
+  });
+  switch (kind) {
+    case "runtime":
+      return createRunFailureCause("runtime", failure satisfies RuntimeFailure);
+    case "model":
+      return createRunFailureCause("model", failure satisfies ModelFailure);
+    case "approval":
+      return createRunFailureCause("approval", failure satisfies ApprovalFailure);
+    case "permission":
+      return createRunFailureCause("permission", failure satisfies PermissionFailure);
+    case "policy":
+      return createRunFailureCause("policy", failure satisfies PolicyFailure);
+    case "action_execution":
+      return createRunFailureCause(
+        "action_execution",
+        failure satisfies ActionProcessingFailure,
+      );
+    case "sandbox":
+      return createRunFailureCause("sandbox", Object.freeze({
+        ...failure,
+        effectState: metadata.effectState === "unknown" ? "unknown" : "none",
+      }) satisfies SandboxExecutionFailure);
+    case "tool":
+      return createRunFailureCause("tool", failure satisfies ToolFailure);
+    case "context":
+      return createRunFailureCause("context", failure satisfies ContextFailure);
+    case "audit":
+      return createRunFailureCause("audit", failure satisfies AuditFailure);
+    case "telemetry":
+      return createRunFailureCause("telemetry", failure satisfies TelemetryFailure);
+  }
+}
+
+function contextFailure(
+  code: string,
+  message: string,
+  metadata: Metadata = {},
+): ContextFailure {
+  return Object.freeze({
+    code,
+    message,
+    retryable: false,
+    metadata: Object.freeze({ ...metadata }),
+  });
+}
+
+function actionFailure(
+  kind: "action_execution" | "tool",
+  code: string,
+  message: string,
+  retryable: boolean,
+  metadata: Metadata = {},
+): ActionExecutionFailure {
+  const failure = Object.freeze({
+    code,
+    message,
+    retryable,
+    metadata: Object.freeze({ ...metadata }),
+  });
+  return kind === "action_execution"
+    ? Object.freeze({
+        kind: "action_execution" as const,
+        failure: failure satisfies ActionProcessingFailure,
+      })
+    : Object.freeze({
+        kind: "tool" as const,
+        failure: failure satisfies ToolFailure,
+      });
+}
+
+function actionExecutionRunFailure(
+  failure: ActionExecutionFailure,
+): RunFailureCause {
+  switch (failure.kind) {
+    case "action_execution":
+      return createRunFailureCause("action_execution", failure.failure);
+    case "policy":
+      return createRunFailureCause("policy", failure.failure);
+    case "permission":
+      return createRunFailureCause("permission", failure.failure);
+    case "sandbox":
+      return createRunFailureCause("sandbox", failure.failure);
+    case "tool":
+      return createRunFailureCause("tool", failure.failure);
+  }
+}
+
+function actionFailureObservationDetail(
+  cause: ActionExecutionFailure,
+): ActionFailureObservationDetail {
+  return Object.freeze({
+    source: cause.kind,
+    code: cause.failure.code,
+    message: cause.failure.message,
+    retryable: cause.failure.retryable,
+    metadata: Object.freeze({
+      ...cause.failure.metadata,
+      ...(cause.kind === "sandbox"
+        ? { effectState: cause.failure.effectState }
+        : {}),
+    }),
   });
 }
 
@@ -4262,7 +4438,7 @@ function sandboxAttemptResolution(
         ordinal: attempt.ordinal,
         enforcement: attempt.enforcement,
         outcome: execution.status,
-        code: execution.error.code,
+        code: execution.failure.failure.code,
         effectState: execution.effectState,
         settledAt,
       });
@@ -4273,25 +4449,28 @@ function toolResultErrorCode(result: ToolResult): string | null {
   return result.status === "succeeded" ? null : result.error.code;
 }
 
-function infrastructureFailureCode(error: RuntimeError): RunFailureCode {
-  return error.owner === "audit"
+function infrastructureFailureCode(failure: RunFailureCause): RunFailureCode {
+  return failure.kind === "audit"
     ? "audit_required_failed"
-    : error.owner === "telemetry"
+    : failure.kind === "telemetry"
     ? "telemetry_required_failed"
-    : failureCode(error);
+    : failureCode(failure);
 }
 
-function failureCode(error: RuntimeError): RunFailureCode {
-  return error.code as RunFailureCode;
+function failureCode(failure: RunFailureCause): RunFailureCode {
+  return runFailureCode(failure) as RunFailureCode;
 }
 
-function asErrorTuple(
-  errors: readonly RuntimeError[],
-): readonly [RuntimeError, ...RuntimeError[]] {
-  if (errors.length === 0) {
-    throw new TypeError("At least one RuntimeError is required.");
+function asFailureTuple(
+  failures: readonly RunFailureCause[],
+): readonly [RunFailureCause, ...RunFailureCause[]] {
+  if (failures.length === 0) {
+    throw new TypeError("At least one RunFailureCause is required.");
   }
-  return Object.freeze([...errors]) as unknown as readonly [RuntimeError, ...RuntimeError[]];
+  return Object.freeze([...failures]) as unknown as readonly [
+    RunFailureCause,
+    ...RunFailureCause[],
+  ];
 }
 
 function assertStateTransition<TOutput>(

@@ -35,6 +35,13 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
+  "agentAnything": {
+    "architecture": {
+      "kind": "product",
+      "productId": "helarc",
+      "component": "code-agent"
+    }
+  },
   "license": "Apache-2.0",
   "private": true,
   "dependencies": {
@@ -47,7 +54,7 @@
     "@agent-anything/context": "workspace:*",
     "@agent-anything/runtime": "workspace:*",
     "@agent-anything/permission": "workspace:*",
-    "@agent-anything/testing": "workspace:*",
+    "@agent-anything/test-support": "workspace:*",
     "@types/node": "^25.9.1"
   }
 }
