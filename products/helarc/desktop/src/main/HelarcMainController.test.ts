@@ -1448,8 +1448,8 @@ describe("HelarcMainController", () => {
   it("does not invoke the Provider when the atomic start commit fails", async () => {
     const provider = new CountingCompleteProvider();
     const threadStore = new FileHelarcThreadStore(await threadFilePath(), {
-      atomicWriteOperations: {
-        async rename() {
+      operations: {
+        async replace() {
           throw new Error("Injected start replacement failure.");
         },
       },

@@ -11,9 +11,11 @@ import {
   type HelarcThreadRecord,
   type HelarcWorkContextCommitStore,
 } from "@agent-anything/helarc";
-import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import {
+  SerializedAtomicFile,
+  type AtomicFileTransaction,
+  type SerializedAtomicFileOptions,
+} from "../persistence/SerializedAtomicFile.js";
 import {
   createHelarcThreadSummary,
   type HelarcThreadSummary,
@@ -24,18 +26,8 @@ export interface HelarcThreadStoreDocumentV1 {
   readonly aggregates: readonly HelarcThreadAggregate[];
 }
 
-export interface HelarcAtomicWriteOperations {
-  mkdir(path: string): Promise<void>;
-  writeExclusive(path: string, contents: string): Promise<void>;
-  syncFile(path: string): Promise<void>;
-  rename(sourcePath: string, targetPath: string): Promise<void>;
-  remove(path: string): Promise<void>;
-}
-
-export interface FileHelarcThreadStoreOptions {
+export interface FileHelarcThreadStoreOptions extends SerializedAtomicFileOptions {
   readonly maxThreads?: number;
-  readonly atomicWriteOperations?: Partial<HelarcAtomicWriteOperations>;
-  readonly createTemporaryId?: () => string;
 }
 
 export interface HelarcThreadStore extends HelarcWorkContextCommitStore {
@@ -52,64 +44,25 @@ export class HelarcThreadStoreCorruptionError extends Error {
   }
 }
 
-const operationQueues = new Map<string, Promise<void>>();
-
-const nodeAtomicWriteOperations: HelarcAtomicWriteOperations = Object.freeze({
-  async mkdir(path: string) {
-    await mkdir(path, { recursive: true });
-  },
-  async writeExclusive(path: string, contents: string) {
-    await writeFile(path, contents, { encoding: "utf8", flag: "wx", mode: 0o600 });
-  },
-  async syncFile(path: string) {
-    const handle = await open(path, "r+");
-    try {
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-  },
-  async rename(sourcePath: string, targetPath: string) {
-    await rename(sourcePath, targetPath);
-  },
-  async remove(path: string) {
-    await unlink(path);
-  },
-});
-
 export class FileHelarcThreadStore implements HelarcThreadStore {
-  private readonly canonicalFilePath: string;
-  private readonly operationQueueKey: string;
+  private readonly atomicFile: SerializedAtomicFile;
   private readonly maxThreads: number;
-  private readonly atomicWriteOperations: HelarcAtomicWriteOperations;
-  private readonly createTemporaryId: () => string;
 
   constructor(
     filePath: string,
     options: FileHelarcThreadStoreOptions = {},
   ) {
-    if (filePath.trim().length === 0) {
-      throw new TypeError("Thread Store file path is required.");
-    }
     const maxThreads = options.maxThreads ?? 100;
     if (!Number.isSafeInteger(maxThreads) || maxThreads < 1) {
       throw new TypeError("Thread Store maxThreads must be a positive safe integer.");
     }
-    this.canonicalFilePath = resolve(filePath);
-    this.operationQueueKey = process.platform === "win32"
-      ? this.canonicalFilePath.toLowerCase()
-      : this.canonicalFilePath;
+    this.atomicFile = new SerializedAtomicFile(filePath, options);
     this.maxThreads = maxThreads;
-    this.atomicWriteOperations = Object.freeze({
-      ...nodeAtomicWriteOperations,
-      ...options.atomicWriteOperations,
-    });
-    this.createTemporaryId = options.createTemporaryId ?? randomUUID;
   }
 
   async listThreadSummaries(): Promise<HelarcThreadSummary[]> {
-    return serializeFileOperation(this.operationQueueKey, async () => {
-      const document = await this.readDocument();
+    return this.atomicFile.transact(async (file) => {
+      const document = await this.readDocument(file);
       return sortAggregates(document.aggregates).map((aggregate) =>
         createHelarcThreadSummary(aggregate.record)
       );
@@ -119,8 +72,8 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
   async loadThread(threadId: string): Promise<HelarcThreadRecord | null> {
     const normalizedThreadId = threadId.trim();
     if (normalizedThreadId.length === 0) return null;
-    return serializeFileOperation(this.operationQueueKey, async () => {
-      const document = await this.readDocument();
+    return this.atomicFile.transact(async (file) => {
+      const document = await this.readDocument(file);
       return document.aggregates.find(
         (aggregate) => aggregate.record.thread.id === normalizedThreadId,
       )?.record ?? null;
@@ -151,8 +104,8 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
       aggregate: HelarcThreadAggregate | null,
     ) => Promise<HelarcCommitResult>,
   ): Promise<HelarcCommitResult> {
-    return serializeFileOperation(this.operationQueueKey, async () => {
-      const document = await this.readDocument();
+    return this.atomicFile.transact(async (file) => {
+      const document = await this.readDocument(file);
       const aggregate = document.aggregates.find(
         (candidate) => candidate.record.thread.id === threadId,
       ) ?? null;
@@ -170,20 +123,17 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
         result.aggregate.record.thread.id,
         this.maxThreads,
       );
-      await this.writeDocument({ formatVersion: 1, aggregates: retained });
+      await this.writeDocument(file, { formatVersion: 1, aggregates: retained });
       return result;
     });
   }
 
-  private async readDocument(): Promise<HelarcThreadStoreDocumentV1> {
-    let contents: string;
-    try {
-      contents = await readFile(this.canonicalFilePath, "utf8");
-    } catch (error) {
-      if (isFileSystemError(error, "ENOENT")) {
-        return Object.freeze({ formatVersion: 1, aggregates: Object.freeze([]) });
-      }
-      throw error;
+  private async readDocument(
+    file: AtomicFileTransaction,
+  ): Promise<HelarcThreadStoreDocumentV1> {
+    const contents = await file.readText();
+    if (contents === null) {
+      return Object.freeze({ formatVersion: 1, aggregates: Object.freeze([]) });
     }
 
     let parsed: unknown;
@@ -222,52 +172,13 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
     });
   }
 
-  private async writeDocument(document: HelarcThreadStoreDocumentV1): Promise<void> {
+  private async writeDocument(
+    file: AtomicFileTransaction,
+    document: HelarcThreadStoreDocumentV1,
+  ): Promise<void> {
     const contents = `${JSON.stringify(document, null, 2)}\n`;
-    const temporaryId = this.createTemporaryId();
-    if (!/^[A-Za-z0-9_-]+$/.test(temporaryId)) {
-      throw new TypeError("Thread Store temporary file identity is invalid.");
-    }
-    const temporaryPath = `${this.canonicalFilePath}.tmp-${process.pid}-${temporaryId}`;
-    const directoryPath = dirname(this.canonicalFilePath);
-    let temporaryCreated = false;
-    try {
-      await this.atomicWriteOperations.mkdir(directoryPath);
-      try {
-        await this.atomicWriteOperations.writeExclusive(temporaryPath, contents);
-        temporaryCreated = true;
-      } catch (error) {
-        temporaryCreated = !isFileSystemError(error, "EEXIST");
-        throw error;
-      }
-      await this.atomicWriteOperations.syncFile(temporaryPath);
-      await this.atomicWriteOperations.rename(temporaryPath, this.canonicalFilePath);
-      temporaryCreated = false;
-    } finally {
-      if (temporaryCreated) {
-        try {
-          await this.atomicWriteOperations.remove(temporaryPath);
-        } catch {
-          // The target remains authoritative; stale temporary files are never read.
-        }
-      }
-    }
+    await file.replaceText(contents);
   }
-}
-
-function serializeFileOperation<T>(
-  canonicalFilePath: string,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const previous = operationQueues.get(canonicalFilePath) ?? Promise.resolve();
-  const result = previous.catch(() => undefined).then(operation);
-  const settled = result.then(() => undefined, () => undefined);
-  operationQueues.set(canonicalFilePath, settled);
-  return result.finally(() => {
-    if (operationQueues.get(canonicalFilePath) === settled) {
-      operationQueues.delete(canonicalFilePath);
-    }
-  });
 }
 
 function retainAggregates(
@@ -305,9 +216,4 @@ function isStoreDocument(value: unknown): value is {
   const record = value as Record<string, unknown>;
   return Object.keys(record).length === 2 && record.formatVersion === 1 &&
     Array.isArray(record.aggregates);
-}
-
-function isFileSystemError(error: unknown, code: string): boolean {
-  return error !== null && typeof error === "object" &&
-    (error as { code?: unknown }).code === code;
 }

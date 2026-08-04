@@ -1,27 +1,49 @@
 import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const scriptDirectory = dirname(fileURLToPath(import.meta.url));
-const packageJsonPath = resolve(scriptDirectory, "../package.json");
-const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
-const productName = readProductName(packageJson);
-const appDataPath = resolveElectronAppDataPath(process.platform, process.env, homedir());
-const userDataPath = resolve(appDataPath, productName);
+if (isEntryPoint(import.meta.url, process.argv[1])) {
+  await main();
+}
 
-assertSafeUserDataPath(userDataPath, appDataPath, productName);
+async function main() {
+  const scriptDirectory = dirname(fileURLToPath(import.meta.url));
+  const packageJsonPath = resolve(scriptDirectory, "../package.json");
+  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
+  const productName = readProductName(packageJson);
+  const appDataPath = resolveElectronAppDataPath(process.platform, process.env, homedir());
+  const userDataPath = resolve(appDataPath, productName);
 
-if (process.argv.includes("--dry-run")) {
-  console.log(`Would delete Helarc user data: ${userDataPath}`);
-} else {
+  await clearUserData({
+    userDataPath,
+    appDataPath,
+    productName,
+    dryRun: process.argv.includes("--dry-run"),
+  });
+}
+
+export async function clearUserData({
+  userDataPath,
+  appDataPath,
+  productName,
+  dryRun = false,
+  log = console.log,
+}) {
+  assertSafeUserDataPath(userDataPath, appDataPath, productName);
+
+  if (dryRun) {
+    log(`Would delete Helarc user data: ${userDataPath}`);
+    return;
+  }
+
   await rm(userDataPath, {
     recursive: true,
     force: true,
     maxRetries: 3,
     retryDelay: 100,
   });
-  console.log(`Deleted Helarc user data: ${userDataPath}`);
+  log(`Deleted Helarc user data: ${userDataPath}`);
 }
 
 function readProductName(value) {
@@ -58,4 +80,9 @@ function assertSafeUserDataPath(userDataPath, appDataPath, productName) {
   if (dirname(userDataPath) !== resolve(appDataPath) || basename(userDataPath) !== productName) {
     throw new TypeError("Refusing to delete a path outside the Electron app-data directory.");
   }
+}
+
+function isEntryPoint(moduleUrl, entryPath) {
+  return typeof entryPath === "string" &&
+    pathToFileURL(resolve(entryPath)).href === moduleUrl;
 }

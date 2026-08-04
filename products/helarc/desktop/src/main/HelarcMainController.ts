@@ -50,6 +50,7 @@ import type { RunInputItem, RunWorkspace } from "@agent-anything/foundation";
 import type { Provider } from "@agent-anything/model-interaction";
 import { basename, isAbsolute, normalize } from "node:path";
 import type { HelarcProductRunStartTarget } from "../shared/HelarcDesktopCommand.js";
+import type { HelarcProviderProfileStoreError } from "./provider/HelarcProviderProfileStore.js";
 import type { ProviderCredentialStoreError } from "./provider/ProviderCredentialStore.js";
 import {
   createHelarcDesktopIdentityResolver,
@@ -194,6 +195,7 @@ export type HelarcMainErrorCode =
   | "thread_workspace_mismatch"
   | HelarcWorkContextError["code"]
   | ProviderCredentialStoreError["code"]
+  | HelarcProviderProfileStoreError["code"]
   | "provider_profile_id_required"
   | "provider_profile_display_name_required"
   | "provider_profile_base_url_required"

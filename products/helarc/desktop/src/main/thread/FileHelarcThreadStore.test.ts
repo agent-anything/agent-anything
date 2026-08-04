@@ -65,8 +65,8 @@ describe("FileHelarcThreadStore", () => {
     const filePath = await threadFilePath();
     let replacementCount = 0;
     const store = new FileHelarcThreadStore(filePath, {
-      atomicWriteOperations: {
-        async rename(sourcePath, targetPath) {
+      operations: {
+        async replace(sourcePath, targetPath) {
           replacementCount += 1;
           await renameFile(sourcePath, targetPath);
         },
@@ -95,8 +95,8 @@ describe("FileHelarcThreadStore", () => {
     const filePath = await threadFilePath();
     let replacementCount = 0;
     const store = new FileHelarcThreadStore(filePath, {
-      atomicWriteOperations: {
-        async rename(sourcePath, targetPath) {
+      operations: {
+        async replace(sourcePath, targetPath) {
           replacementCount += 1;
           await renameFile(sourcePath, targetPath);
         },
@@ -132,8 +132,8 @@ describe("FileHelarcThreadStore", () => {
     const filePath = await threadFilePath();
     let replacementCount = 0;
     const store = new FileHelarcThreadStore(filePath, {
-      atomicWriteOperations: {
-        async rename(sourcePath, targetPath) {
+      operations: {
+        async replace(sourcePath, targetPath) {
           replacementCount += 1;
           await renameFile(sourcePath, targetPath);
         },
@@ -163,8 +163,8 @@ describe("FileHelarcThreadStore", () => {
     const before = await readFile(filePath, "utf8");
     const failingStore = new FileHelarcThreadStore(filePath, {
       createTemporaryId: () => "injected-failure",
-      atomicWriteOperations: {
-        async rename() {
+      operations: {
+        async replace() {
           throw new Error("injected rename failure");
         },
       },

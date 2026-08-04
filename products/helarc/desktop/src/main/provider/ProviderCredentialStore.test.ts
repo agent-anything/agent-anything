@@ -1,10 +1,17 @@
-import { mkdir, mkdtemp, readFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FileProviderCredentialPersistence,
   ProviderCredentialStore,
+  ProviderCredentialStoreCorruptionError,
   type PersistedProviderCredential,
   type ProviderCredentialCipher,
   type ProviderCredentialPersistence,
@@ -88,6 +95,26 @@ describe("ProviderCredentialStore", () => {
     expect(persistence.records.size).toBe(0);
   });
 
+  it("does not persist a credential when encryption throws", async () => {
+    const persistence = new MemoryCredentialPersistence();
+    const store = new ProviderCredentialStore(persistence, new ThrowingCipher());
+
+    const result = await store.saveApiKey({
+      profileId: "provider-a",
+      apiKey: "secret-key",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "provider_credential_encryption_failed",
+        message: "Provider credential could not be encrypted.",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("secret-key");
+    expect(persistence.records.size).toBe(0);
+  });
+
   it("persists encrypted credential records to files", async () => {
     const directoryPath = await mkdtemp(join(tmpdir(), "helarc-provider-credentials-"));
     await mkdir(directoryPath, { recursive: true });
@@ -99,10 +126,137 @@ describe("ProviderCredentialStore", () => {
     const rawRecord = await readFile(join(directoryPath, "provider%2Fa.json"), "utf8");
     expect(rawRecord).toContain("encrypted:c2VjcmV0LWtleQ==");
     expect(rawRecord).not.toContain("secret-key");
+    expect(JSON.parse(rawRecord)).toMatchObject({
+      formatVersion: 1,
+      credential: {
+        profileId: "provider/a",
+      },
+    });
     await expect(store.resolveApiKey("provider/a")).resolves.toMatchObject({
       ok: true,
       apiKey: "secret-key",
     });
+  });
+
+  it("serializes credential writes across Persistence instances", async () => {
+    const directoryPath = await mkdtemp(join(tmpdir(), "helarc-provider-credentials-"));
+    const firstStore = new ProviderCredentialStore(
+      new FileProviderCredentialPersistence(directoryPath),
+      new PrefixCipher(),
+    );
+    const secondStore = new ProviderCredentialStore(
+      new FileProviderCredentialPersistence(directoryPath),
+      new PrefixCipher(),
+    );
+
+    const [first, second] = await Promise.all([
+      firstStore.saveApiKey({ profileId: "provider-a", apiKey: "first-key" }),
+      secondStore.saveApiKey({ profileId: "provider-a", apiKey: "second-key" }),
+    ]);
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    await expect(firstStore.resolveApiKey("provider-a")).resolves.toEqual({
+      ok: true,
+      apiKey: "second-key",
+      credentialStatus: "present",
+    });
+  });
+
+  it("preserves the prior credential when replacement or removal fails", async () => {
+    const directoryPath = await mkdtemp(join(tmpdir(), "helarc-provider-credentials-"));
+    const workingStore = new ProviderCredentialStore(
+      new FileProviderCredentialPersistence(directoryPath),
+      new PrefixCipher(),
+    );
+    await workingStore.saveApiKey({ profileId: "provider-a", apiKey: "first-key" });
+    const recordPath = join(directoryPath, "provider-a.json");
+    const before = await readFile(recordPath, "utf8");
+
+    const replacementFailure = new ProviderCredentialStore(
+      new FileProviderCredentialPersistence(directoryPath, {
+        createTemporaryId: () => "injected-replacement-failure",
+        operations: {
+          async replace() {
+            throw new Error("injected replacement failure");
+          },
+        },
+      }),
+      new PrefixCipher(),
+    );
+    await expect(replacementFailure.saveApiKey({
+      profileId: "provider-a",
+      apiKey: "second-key",
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: "provider_credential_persistence_failed" },
+    });
+    expect(await readFile(recordPath, "utf8")).toBe(before);
+    expect(await readdir(directoryPath)).toEqual(["provider-a.json"]);
+
+    const removalFailure = new ProviderCredentialStore(
+      new FileProviderCredentialPersistence(directoryPath, {
+        operations: {
+          async remove() {
+            throw new Error("injected removal failure");
+          },
+        },
+      }),
+      new PrefixCipher(),
+    );
+    await expect(removalFailure.deleteApiKey("provider-a")).resolves.toMatchObject({
+      ok: false,
+      error: { code: "provider_credential_persistence_failed" },
+    });
+    expect(await readFile(recordPath, "utf8")).toBe(before);
+  });
+
+  it("fails closed for invalid JSON, old versions, malformed records, and identity mismatch", async () => {
+    const directoryPath = await mkdtemp(join(tmpdir(), "helarc-provider-credentials-"));
+    const recordPath = join(directoryPath, "provider-a.json");
+    const secret = "secret-provider-key";
+    const store = new ProviderCredentialStore(
+      new FileProviderCredentialPersistence(directoryPath),
+      new PrefixCipher(),
+    );
+
+    await writeFile(recordPath, `{invalid:${secret}`, "utf8");
+    try {
+      await store.resolveApiKey("provider-a");
+      throw new Error("Expected credential corruption.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderCredentialStoreCorruptionError);
+      expect(String(error)).not.toContain(secret);
+      expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
+    }
+
+    await writeFile(recordPath, JSON.stringify({
+      profileId: "provider-a",
+      encryptedApiKey: "encrypted:value",
+      updatedAt: "2026-08-04T00:00:00.000Z",
+    }), "utf8");
+    await expect(store.resolveApiKey("provider-a")).rejects
+      .toBeInstanceOf(ProviderCredentialStoreCorruptionError);
+
+    await writeFile(recordPath, JSON.stringify({
+      formatVersion: 2,
+      credential: {},
+    }), "utf8");
+    await expect(store.resolveApiKey("provider-a")).rejects
+      .toBeInstanceOf(ProviderCredentialStoreCorruptionError);
+
+    await writeFile(recordPath, JSON.stringify({
+      formatVersion: 1,
+      credential: {
+        profileId: "provider-b",
+        encryptedApiKey: "encrypted:value",
+        updatedAt: "2026-08-04T00:00:00.000Z",
+      },
+    }), "utf8");
+    await expect(store.saveApiKey({
+      profileId: "provider-a",
+      apiKey: "replacement-key",
+    })).rejects.toBeInstanceOf(ProviderCredentialStoreCorruptionError);
   });
 });
 
@@ -150,5 +304,19 @@ class UnavailableCipher implements ProviderCredentialCipher {
 
   decryptString(_value: string): string {
     throw new Error("Encryption unavailable.");
+  }
+}
+
+class ThrowingCipher implements ProviderCredentialCipher {
+  isEncryptionAvailable(): boolean {
+    return true;
+  }
+
+  encryptString(_value: string): string {
+    throw new Error("injected encryption failure");
+  }
+
+  decryptString(_value: string): string {
+    throw new Error("not used");
   }
 }
