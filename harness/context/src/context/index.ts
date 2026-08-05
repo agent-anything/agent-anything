@@ -1,11 +1,23 @@
 export type {
   Context,
-  ContextProjection,
   ContextUpdate,
 } from "./Context.js";
 export {
   applyContextUpdate,
   createInitialContext,
-  projectContext,
 } from "./Context.js";
+export type { ContextFailure } from "./ContextFailure.js";
 export type { ContextMessage, ContextMessageRole } from "./ContextMessage.js";
+export type {
+  ContextProjection,
+  ContextProjectionLimits,
+  ContextProjectionPurpose,
+  ContextProjectionRequest,
+  ContextProjectorInput,
+  ContextProjectorPort,
+} from "./ContextProjection.js";
+export {
+  ContextProjectionError,
+  snapshotContextProjection,
+  snapshotContextProjectionRequest,
+} from "./ContextProjection.js";

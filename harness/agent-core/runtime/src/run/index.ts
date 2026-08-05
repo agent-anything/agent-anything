@@ -129,3 +129,19 @@ export type {
   RunCounters,
   RunState,
 } from "./RunState.js";
+export type {
+  ActionDeniedObservation,
+  ActionDeniedOwner,
+  ActionFailureObservation,
+  ActionRejectedObservation,
+  ApprovalApplicationFailedObservation,
+  ApprovalDeclinedObservation,
+  ApprovalLimitReachedObservation,
+  ApprovalObservation,
+  ApprovalPolicyRejectedObservation,
+  ApprovalReviewFailedObservation,
+  PermissionsGrantedObservation,
+  PlanUpdateResultObservation,
+  RunObservation,
+  ToolResultObservation,
+} from "./RunObservation.js";

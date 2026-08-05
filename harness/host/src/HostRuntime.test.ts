@@ -8,7 +8,10 @@ import {
 import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { Agent } from "@agent-anything/agent-core/agent";
 import type { Controller, ControllerCallContext, ControllerDecision, ControllerInput } from "@agent-anything/agent-runtime/controller";
-import { FakeRuntimeEventPublisher } from "@agent-anything/test-support";
+import {
+  FakeRuntimeEventPublisher,
+  createTestContextProjection,
+} from "@agent-anything/test-support";
 import type { CancellationContext, ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
 import { Runner, type RunConfig } from "@agent-anything/agent-runtime/runner";
 import { createEmptyToolActionBindingSnapshot } from "@agent-anything/action-execution";
@@ -275,6 +278,7 @@ describe("HostRuntime", () => {
     const runtime = createHostRuntime({
       runner: new Runner({
         controller,
+        contextProjection: createTestContextProjection(),
         createRunId: () => "run-1",
         runtimeEventPublisher: globalEvents,
         now: () => now,
@@ -341,6 +345,7 @@ describe("HostRuntime", () => {
     const runtime = createHostRuntime({
       runner: new Runner({
         controller,
+        contextProjection: createTestContextProjection(),
         createRunId: () => {
           sequence += 1;
           return `run-${sequence}`;
@@ -693,6 +698,7 @@ function runInterruptionContext(cancellation: CancellationContext): InvocationIn
 function createRunner(controller: Controller): Runner {
   return new Runner({
     controller,
+    contextProjection: createTestContextProjection(),
     createRunId: () => "run-1",
     now: () => now,
   });

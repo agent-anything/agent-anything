@@ -7,6 +7,7 @@ export type {
   PlanStepStatus,
   UpdatePlanInput,
 } from "./Plan.js";
+export type { PlanUpdateOutcome } from "./PlanObservation.js";
 export type {
   AbandonPlanInput,
   AbandonPlanResult,

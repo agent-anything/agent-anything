@@ -22,6 +22,7 @@ import type { RetryClock } from "@agent-anything/agent-runtime/retry";
 import type { ActionCandidate } from "@agent-anything/agent-core/action";
 import type { ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
 import { createEmptyToolActionBindingSnapshot } from "@agent-anything/action-execution";
+import { createTestContextProjection } from "@agent-anything/test-support";
 
 interface ConformanceOutput {
   readonly summary: string;
@@ -334,6 +335,7 @@ describe("Runner and generic Host conformance", () => {
     const runtime = createHostRuntime({
       runner: new Runner({
         controller,
+        contextProjection: createTestContextProjection(),
         createRunId: () => "run-conformance",
         now: () => "2026-07-14T00:00:00.000Z",
       }),
@@ -431,6 +433,7 @@ function createHostHarness(
 ): InMemoryHostHarness {
   const runner = new Runner({
     controller,
+    contextProjection: createTestContextProjection(),
     createRunId: () => "run-conformance",
     now: () => "2026-07-14T00:00:00.000Z",
   });

@@ -1,5 +1,4 @@
 
-import type { PlanUpdateObservation } from "@agent-anything/context/observation";
 import type {
   Plan,
   PlanLimits,
@@ -7,6 +6,7 @@ import type {
   PlanStep,
   PlanStepStatus,
 } from "./Plan.js";
+import type { PlanUpdateOutcome } from "./PlanObservation.js";
 
 export type PlanLifecycleChange =
   | {
@@ -48,9 +48,9 @@ export type ApplyPlanUpdateInput =
       readonly newPlanId?: never;
     });
 
-type AppliedObservation = Extract<PlanUpdateObservation, { readonly status: "applied" }>;
-type NoChangeObservation = Extract<PlanUpdateObservation, { readonly status: "no_change" }>;
-type RejectedObservation = Extract<PlanUpdateObservation, { readonly status: "rejected" }>;
+type AppliedObservation = Extract<PlanUpdateOutcome, { readonly status: "applied" }>;
+type NoChangeObservation = Extract<PlanUpdateOutcome, { readonly status: "no_change" }>;
+type RejectedObservation = Extract<PlanUpdateOutcome, { readonly status: "rejected" }>;
 
 export type ApplyPlanUpdateResult =
   | {

@@ -15,10 +15,8 @@ const packageExportKeys = {
     "./task",
   ],
   "harness/context": [
-    ".",
     "./context",
     "./evidence",
-    "./observation",
     "./persistence",
   ],
   "harness/tools": [".", "./catalog", "./registration", "./selection"],
@@ -77,25 +75,18 @@ const expectedLowerValueExports = {
     "snapshotWorkspaceContext",
   ],
   "@agent-anything/agent-core/task": ["snapshotAgentTask"],
-  "@agent-anything/context": [
-    "EvidenceBuilder",
-    "applyContextUpdate",
-    "classifyToolResult",
-    "createInitialContext",
-    "projectContext",
-    "settleToolResultEvidence",
-  ],
   "@agent-anything/context/context": [
+    "ContextProjectionError",
     "applyContextUpdate",
     "createInitialContext",
-    "projectContext",
+    "snapshotContextProjection",
+    "snapshotContextProjectionRequest",
   ],
   "@agent-anything/context/evidence": [
     "EvidenceBuilder",
     "classifyToolResult",
     "settleToolResultEvidence",
   ],
-  "@agent-anything/context/observation": [],
   "@agent-anything/context/persistence": [],
   "@agent-anything/tools": [
     "ToolCatalogValidationError",
@@ -251,6 +242,8 @@ const expectedLowerValueExports = {
     "FakeProvider",
     "FakeRuntimeEventPublisher",
     "FakeTelemetryPort",
+    "createTestContextProjection",
+    "createTestIdentityContextProjector",
   ],
 };
 
@@ -432,6 +425,7 @@ const expectedValueExports = {
     "createBuiltInHelarcTaskTemplates",
     "createHelarcActionComposition",
     "createHelarcArtifact",
+    "createHelarcContextProjector",
     "createHelarcConversation",
     "createHelarcMessage",
     "createHelarcPersistedRun",
@@ -562,6 +556,8 @@ checkBuiltSurfaces(
     "@agent-anything/observability/redaction/Redactor",
     "@agent-anything/permission/approval/snapshot",
     "@agent-anything/model-interaction/ProviderAttemptInterruption",
+    "@agent-anything/context",
+    "@agent-anything/context/observation",
   ],
   join(repoRoot, "harness/agent-core/runtime"),
 );

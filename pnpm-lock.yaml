@@ -56,9 +56,6 @@ importers:
       '@agent-anything/agent-core':
         specifier: workspace:*
         version: link:../agent-core/contracts
-      '@agent-anything/permission':
-        specifier: workspace:*
-        version: link:../safety/permission
       '@agent-anything/tools':
         specifier: workspace:*
         version: link:../tools
@@ -152,6 +149,9 @@ importers:
       '@agent-anything/permission':
         specifier: workspace:*
         version: link:../../safety/permission
+      '@agent-anything/test-support':
+        specifier: workspace:*
+        version: link:../../../tooling/test-support
 
   harness/model-interaction:
     dependencies:
@@ -318,6 +318,9 @@ importers:
       '@agent-anything/agent-runtime':
         specifier: workspace:*
         version: link:../../../harness/agent-core/runtime
+      '@agent-anything/context':
+        specifier: workspace:*
+        version: link:../../../harness/context
       '@agent-anything/governance':
         specifier: workspace:*
         version: link:../../../harness/safety/governance

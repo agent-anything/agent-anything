@@ -4,6 +4,7 @@ import type { IdentityRef, RunWorkspace } from "@agent-anything/agent-core/run";
 import type { RunInputItem } from "@agent-anything/agent-core/input";
 import type { ContextProjection } from "@agent-anything/context/context";
 import type { ActionCandidate } from "@agent-anything/agent-core/action";
+import type { RunObservation } from "../run/RunObservation.js";
 import type { PlanProjection } from "../plan/index.js";
 import type { CancellationContext } from "../run/RunCancellation.js";
 import type { PermissionContextProjection } from "../run/RunPermissionState.js";
@@ -26,7 +27,7 @@ export interface ControllerInput<TOutput = unknown> {
   readonly inputItems: readonly RunInputItem[];
   readonly toolCatalog: ToolCatalogSnapshot;
   readonly toolSelectionId: string;
-  readonly context: ContextProjection;
+  readonly context: ContextProjection<RunObservation>;
   readonly plan: PlanProjection | null;
   readonly permission: PermissionContextProjection;
   readonly workspace: RunWorkspace | null;

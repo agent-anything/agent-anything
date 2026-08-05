@@ -2,6 +2,7 @@ import type { ArtifactRef, IdentityRef, RunWorkspace } from "@agent-anything/age
 import type { EvidenceRef } from "@agent-anything/context/evidence";
 import type { Context } from "@agent-anything/context/context";
 import type { Plan } from "../plan/index.js";
+import type { RunObservation } from "./RunObservation.js";
 import type { RunCancellationRequest } from "./RunCancellation.js";
 import type { RunFailureCause } from "./RunFailure.js";
 import type { RunItem } from "./RunItem.js";
@@ -25,7 +26,7 @@ interface RunStateBase<TOutput> {
   readonly workspace: RunWorkspace | null;
   readonly identity: IdentityRef;
   readonly startedAt: string;
-  readonly context: Context;
+  readonly context: Context<RunObservation>;
   readonly plan: Plan | null;
   readonly items: readonly RunItem<TOutput>[];
   readonly counters: RunCounters;

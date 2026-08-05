@@ -54,13 +54,13 @@ import type { ModelFailure } from "../controller/ModelFailure.js";
 import type { ControllerDecision, ControllerInput } from "../controller/index.js";
 import {
   applyContextUpdate,
+  ContextProjectionError,
   type Context,
+  type ContextFailure,
 } from "@agent-anything/context/context";
-import type { ContextFailure } from "@agent-anything/context";
 import { abandonPlan, applyPlanUpdate, type Plan, type PlanLifecycleChange } from "../plan/index.js";
 import type {
   ActionDeniedObservation,
-  ActionFailureObservationDetail,
   ActionFailureObservation,
   ActionRejectedObservation,
   ApprovalDeclinedObservation,
@@ -68,11 +68,11 @@ import type {
   ApprovalPolicyRejectedObservation,
   ApprovalReviewFailedObservation,
   ApprovalApplicationFailedObservation,
-  Observation,
   PermissionsGrantedObservation,
   PlanUpdateResultObservation,
+  RunObservation,
   ToolResultObservation,
-} from "@agent-anything/context/observation";
+} from "../run/RunObservation.js";
 import type { RunBlockedCode, RunFailureCause, RunFailureCode, RunFailureKind, RunFinalizationContext, RunCancellationRequest, RuntimeFailure } from "../run/index.js";
 import { toRunCancellationSummary } from "../run/index.js";
 import {
@@ -368,6 +368,7 @@ export class RunExecution<TOutput> {
             state: this.state,
             deadlineAt: this.runDeadlineAt(),
             retryEvents: this.createRetryEventSink({ kind: "controller" }),
+            contextProjection: this.dependencies.contextProjection,
           }),
         );
       } catch (error) {
@@ -381,6 +382,18 @@ export class RunExecution<TOutput> {
           return this.fail(
             cancellationSettlementRunFailure(error),
             "runtime_cancellation_settlement_timeout",
+          );
+        }
+        if (error instanceof ContextProjectionError) {
+          this.emit("controller.finished", {
+            iteration,
+            status: "failed",
+            code: "context_projection_failed",
+            decisionKind: null,
+          });
+          return this.fail(
+            createRunFailureCause("context", error.failure),
+            "context_projection_failed",
           );
         }
         if (
@@ -1536,7 +1549,7 @@ export class RunExecution<TOutput> {
   private async settlePendingApproval(
     record: ApprovalRecord,
     counterEffect: ApprovalSettlementCounterEffect,
-    observation: Observation | null,
+    observation: RunObservation | null,
     failed: boolean,
     permissionBase: RunPermissionState = this.state.permission,
     skipKinds: ReadonlySet<RunFailureKind> = new Set(),
@@ -2618,7 +2631,7 @@ export class RunExecution<TOutput> {
 
   private retainExternalToolOutcome(
     action: Action,
-    observation: Observation | null,
+    observation: RunObservation | null,
     failed: boolean,
   ): { readonly items: readonly RunItem<TOutput>[]; readonly counters: RunCounters } {
     const context = applyContextUpdate(this.state.context, {
@@ -2646,7 +2659,7 @@ export class RunExecution<TOutput> {
     action: Action,
     execution: Extract<ActionExecutionResult, { readonly status: "executed" }>,
     items: readonly RunItem<TOutput>[],
-    observation: Observation | null,
+    observation: RunObservation | null,
     evidenceRefs: readonly EvidenceRef[],
     outcome: { readonly status: "succeeded" | "failed"; readonly code: string | null },
   ): void {
@@ -2771,7 +2784,7 @@ export class RunExecution<TOutput> {
     const observation: ActionFailureObservation = Object.freeze({
       ...this.createObservationBase(action),
       kind: "action_failure",
-      failure: actionFailureObservationDetail(failure),
+      failure,
     });
     return this.commitActionObservation(observation, true, true);
   }
@@ -2909,7 +2922,7 @@ export class RunExecution<TOutput> {
   }
 
   private async commitActionObservation(
-    observation: Observation,
+    observation: RunObservation,
     failed: boolean,
     invalidatesBatch: boolean,
   ): Promise<ProcessActionResult> {
@@ -2942,7 +2955,7 @@ export class RunExecution<TOutput> {
   }
 
   private publishObservationNotifications(
-    observation: Observation,
+    observation: RunObservation,
     evidenceRefs: readonly EvidenceRef[],
   ): void {
     const outcome = observationNotificationOutcome(observation);
@@ -3459,7 +3472,7 @@ export class RunExecution<TOutput> {
   private commitRunning(
     drafts: readonly RunItemDraft<TOutput>[],
     update: {
-      readonly context?: Context;
+      readonly context?: Context<RunObservation>;
       readonly plan?: Plan | null;
       readonly counters?: RunCounters;
       readonly evidenceRefs?: readonly EvidenceRef[];
@@ -3485,7 +3498,7 @@ export class RunExecution<TOutput> {
   private commitSettledToolState(
     drafts: readonly RunItemDraft<TOutput>[],
     update: {
-      readonly context?: Context;
+      readonly context?: Context<RunObservation>;
       readonly counters?: RunCounters;
       readonly evidenceRefs?: readonly EvidenceRef[];
       readonly artifactRefs?: readonly ArtifactRef[];
@@ -3509,7 +3522,7 @@ export class RunExecution<TOutput> {
   private commitAndPublishSettledToolState(
     drafts: readonly RunItemDraft<TOutput>[],
     update: {
-      readonly context?: Context;
+      readonly context?: Context<RunObservation>;
       readonly counters?: RunCounters;
       readonly evidenceRefs?: readonly EvidenceRef[];
       readonly artifactRefs?: readonly ArtifactRef[];
@@ -3931,7 +3944,9 @@ function planLifecycleDraft<TOutput>(
   }
 }
 
-function observationDraft<TOutput>(observation: Observation): RunItemDraft<TOutput> {
+function observationDraft<TOutput>(
+  observation: RunObservation,
+): RunItemDraft<TOutput> {
   return (base) => Object.freeze({
     ...base,
     kind: "observation",
@@ -3940,7 +3955,7 @@ function observationDraft<TOutput>(observation: Observation): RunItemDraft<TOutp
 }
 
 function observationNotificationOutcome(
-  observation: Observation,
+  observation: RunObservation,
 ): Pick<
   RuntimeEventPayloadMap["observation.created"],
   "status" | "code"
@@ -3954,7 +3969,10 @@ function observationNotificationOutcome(
     case "action_denied":
       return { status: "denied", code: observation.code };
     case "action_failure":
-      return { status: "failed", code: observation.failure.code };
+      return {
+        status: "failed",
+        code: observation.failure.failure.code,
+      };
     case "action_rejected":
       return { status: "rejected", code: observation.code };
     case "approval_declined":
@@ -4131,23 +4149,6 @@ function actionExecutionRunFailure(
     case "tool":
       return createRunFailureCause("tool", failure.failure);
   }
-}
-
-function actionFailureObservationDetail(
-  cause: ActionExecutionFailure,
-): ActionFailureObservationDetail {
-  return Object.freeze({
-    source: cause.kind,
-    code: cause.failure.code,
-    message: cause.failure.message,
-    retryable: cause.failure.retryable,
-    metadata: Object.freeze({
-      ...cause.failure.metadata,
-      ...(cause.kind === "sandbox"
-        ? { effectState: cause.failure.effectState }
-        : {}),
-    }),
-  });
 }
 
 function errorMetadata(error: unknown): Readonly<Record<string, unknown>> {

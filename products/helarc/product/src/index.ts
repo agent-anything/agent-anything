@@ -65,6 +65,7 @@ export type {
   HelarcToolCatalogMetadata,
   HelarcToolCatalogMode,
 } from "./controller/index.js";
+export { createHelarcContextProjector } from "./controller/index.js";
 export type {
   CreateHelarcProviderProfileInput,
   CreateHelarcProviderProfileResult,

@@ -34,6 +34,7 @@ export interface ObservationBase {
   readonly id: string;
   readonly runId: string;
   readonly actionId: string;
+  readonly kind: string;
   readonly createdAt: string;
   readonly metadata: Readonly<Record<string, unknown>>;
 }

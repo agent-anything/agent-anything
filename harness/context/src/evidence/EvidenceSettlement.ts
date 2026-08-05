@@ -1,7 +1,7 @@
 import type { ArtifactRef } from "@agent-anything/agent-core/run";
 import type { EvidenceRef } from "./EvidenceRef.js";
 import type { ToolResult } from "@agent-anything/tools";
-import type { ContextFailure } from "../ContextFailure.js";
+import type { ContextFailure } from "../context/ContextFailure.js";
 import type { Evidence } from "./Evidence.js";
 import type { EvidenceBuilderPort } from "./EvidenceBuilder.js";
 import type {

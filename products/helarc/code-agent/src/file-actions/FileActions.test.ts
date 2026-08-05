@@ -24,7 +24,10 @@ import { Runner, type RunConfig } from "@agent-anything/agent-runtime/runner";
 import { EvidenceBuilder } from "@agent-anything/context/evidence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
-import { FakeEvidencePersistencePort } from "@agent-anything/test-support";
+import {
+  FakeEvidencePersistencePort,
+  createTestContextProjection,
+} from "@agent-anything/test-support";
 import { createToolSelectionSnapshot } from "@agent-anything/tools";
 import { describe, expect, it } from "vitest";
 import { acceptPatch, createPatchProposal } from "../patch/index.js";
@@ -288,6 +291,7 @@ async function runFileAction(
   const controller = new ScriptedController(actionName, input, origin);
   const runner = new Runner({
     controller,
+    contextProjection: createTestContextProjection(),
     actionEnforcementPipeline: pipeline,
     sandboxExecutionGateway: gateway,
     evidenceBuilder: new EvidenceBuilder(),

@@ -37,6 +37,7 @@
                          "@agent-anything/host":  "workspace:*",
                          "@agent-anything/model-interaction":  "workspace:*",
                          "@agent-anything/agent-core":  "workspace:*",
+                         "@agent-anything/context":  "workspace:*",
                          "@agent-anything/tools":  "workspace:*"
                      },
     "devDependencies":  {

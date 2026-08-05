@@ -23,6 +23,7 @@ import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } fro
 import type { ApprovalReviewerPort } from "@agent-anything/permission";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
 import { createToolSelectionSnapshot } from "@agent-anything/tools";
+import { createTestContextProjection } from "@agent-anything/test-support";
 import { describe, expect, it, vi } from "vitest";
 import { createRemoteToolActionCapability } from "../tools/index.js";
 import {
@@ -321,6 +322,7 @@ async function runRemoteAction(
   });
   const runner = new Runner({
     controller: new ScriptedController(localToolName, input),
+    contextProjection: createTestContextProjection(),
     actionEnforcementPipeline: pipeline,
     sandboxExecutionGateway: gateway,
     evidenceBuilder: new EvidenceBuilder(),

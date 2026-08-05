@@ -1,8 +1,10 @@
 import type {
   Evidence,
+} from "@agent-anything/context/evidence";
+import type {
   EvidencePersistencePort,
   EvidencePersistenceResult,
-} from "@agent-anything/context";
+} from "@agent-anything/context/persistence";
 
 export type FakeEvidencePersistenceHandler = (
   evidence: Evidence,

@@ -1,6 +1,9 @@
 import type { Controller } from "@agent-anything/agent-runtime/controller";
 import type { ControllerCallContext, ControllerDecision, ControllerInput } from "@agent-anything/agent-runtime/controller";
-import { createRunCancellationController, type Observation } from "@agent-anything/agent-runtime/run";
+import {
+  createRunCancellationController,
+  type RunObservation,
+} from "@agent-anything/agent-runtime/run";
 import type {
   HelarcPatchReviewBridge,
   HelarcPatchReviewDecisionSubmission,
@@ -161,7 +164,7 @@ async function createFixture() {
 
 function createInput(
   fixture: Awaited<ReturnType<typeof createFixture>>,
-  observations: readonly Observation[],
+  observations: readonly RunObservation[],
 ): ControllerInput<HelarcAgentOutput> {
   return {
     runId: "run-1",
@@ -222,7 +225,7 @@ function createCallContext(): ControllerCallContext {
   };
 }
 
-function actionDenied(): Observation {
+function actionDenied(): RunObservation {
   return {
     id: "observation-denied",
     kind: "action_denied",
@@ -236,18 +239,20 @@ function actionDenied(): Observation {
   };
 }
 
-function actionFailure(): Observation {
+function actionFailure(): RunObservation {
   return {
     id: "observation-failed",
     kind: "action_failure",
     runId: "run-1",
     actionId: "action-1",
     failure: {
-      source: "tool",
-      code: "filesystem_write_failed",
-      message: "Write failed.",
-      retryable: false,
-      metadata: {},
+      kind: "tool",
+      failure: {
+        code: "filesystem_write_failed",
+        message: "Write failed.",
+        retryable: false,
+        metadata: {},
+      },
     },
     createdAt: "2026-07-17T00:00:01.000Z",
     metadata: { actionName: "codeAgent.updateFile" },

@@ -5,10 +5,19 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/model-interaction";
-import { FakeProvider } from "@agent-anything/test-support";
+import {
+  FakeProvider,
+  createTestIdentityContextProjector,
+} from "@agent-anything/test-support";
 import type { Agent } from "@agent-anything/agent-core/agent";
-import { projectContext, createInitialContext } from "@agent-anything/context/context";
-import { createRunCancellationController } from "../run/index.js";
+import {
+  createInitialContext,
+  snapshotContextProjection,
+} from "@agent-anything/context/context";
+import {
+  createRunCancellationController,
+  type RunObservation,
+} from "../run/index.js";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { ControllerCallContext, ControllerDecision, ControllerInput } from "./Controller.js";
 import { createToolCatalogSnapshot } from "@agent-anything/tools";
@@ -1028,6 +1037,20 @@ function createController(
 
 function createControllerInput(): ControllerInput<TestOutput> {
   const task = createTask();
+  const context = createInitialContext<RunObservation>(task);
+  const request = Object.freeze({
+    runId: "run_001",
+    controllerIteration: 1,
+    purpose: "workflow" as const,
+    limits: Object.freeze({
+      maxMessages: 1_000,
+      maxMessageLength: 1_000_000,
+      maxObservations: 1_000,
+      maxObservationBytes: 1_000_000,
+      maxEvidenceRefs: 1_000,
+      maxMetadataEntries: 1_000,
+    }),
+  });
   return {
     runId: "run_001",
     iteration: 1,
@@ -1035,7 +1058,13 @@ function createControllerInput(): ControllerInput<TestOutput> {
     task,
     conversationItems: [],
     toolCatalog: createToolCatalogSnapshot([]),
-    context: projectContext(createInitialContext(task)),
+    context: snapshotContextProjection({
+      projection: createTestIdentityContextProjector<RunObservation>().project({
+        context,
+        request,
+      }),
+      request,
+    }),
     plan: null,
     permission: testPermissionProjection(),
     workspace: {

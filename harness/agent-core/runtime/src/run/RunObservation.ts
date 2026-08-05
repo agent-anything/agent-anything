@@ -1,39 +1,31 @@
-import type { ActionRejectedCode, ObservationBase } from "@agent-anything/agent-core/action";
-import type { ToolResult } from "@agent-anything/tools";
+import type {
+  ActionRejectedCode,
+  ObservationBase,
+} from "@agent-anything/agent-core/action";
+import type { ActionExecutionFailure } from "@agent-anything/action-execution";
 import type {
   ApprovalCategory,
   ApprovalScope,
 } from "@agent-anything/permission";
-
-export type PlanUpdateObservation =
-  | {
-      readonly status: "applied";
-      readonly transition: "created" | "updated" | "completed" | "reactivated";
-      readonly planId: string;
-      readonly version: number;
-    }
-  | {
-      readonly status: "no_change";
-      readonly planId: string;
-      readonly version: number;
-    }
-  | {
-      readonly status: "rejected";
-      readonly code: "plan_invalid" | "plan_limit_exceeded";
-      readonly message: string;
-    };
+import type { ToolResult } from "@agent-anything/tools";
+import type { PlanUpdateOutcome } from "../plan/PlanObservation.js";
 
 export interface PlanUpdateResultObservation extends ObservationBase {
   readonly kind: "plan_update";
-  readonly result: PlanUpdateObservation;
+  readonly result: PlanUpdateOutcome;
 }
 
-export interface ToolResultObservation<TOutput = unknown> extends ObservationBase {
+export interface ToolResultObservation<TOutput = unknown>
+  extends ObservationBase {
   readonly kind: "tool_result";
   readonly result: ToolResult<TOutput>;
 }
 
-export type ActionDeniedOwner = "policy" | "permission" | "sandbox" | "tool";
+export type ActionDeniedOwner =
+  | "policy"
+  | "permission"
+  | "sandbox"
+  | "tool";
 
 export interface ActionDeniedObservation extends ObservationBase {
   readonly kind: "action_denied";
@@ -44,23 +36,7 @@ export interface ActionDeniedObservation extends ObservationBase {
 
 export interface ActionFailureObservation extends ObservationBase {
   readonly kind: "action_failure";
-  readonly failure: ActionFailureObservationDetail;
-}
-
-export type ActionFailureObservationSource =
-  | "action_execution"
-  | "policy"
-  | "permission"
-  | "sandbox"
-  | "tool"
-  | "context";
-
-export interface ActionFailureObservationDetail {
-  readonly source: ActionFailureObservationSource;
-  readonly code: string;
-  readonly message: string;
-  readonly retryable: boolean;
-  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly failure: ActionExecutionFailure;
 }
 
 export interface ActionRejectedObservation extends ObservationBase {
@@ -74,7 +50,8 @@ interface ApprovalObservationBase extends ObservationBase {
   readonly category: ApprovalCategory;
 }
 
-export interface ApprovalDeclinedObservation extends ApprovalObservationBase {
+export interface ApprovalDeclinedObservation
+  extends ApprovalObservationBase {
   readonly kind: "approval_declined";
   readonly reason: string | null;
 }
@@ -86,7 +63,8 @@ export interface ApprovalPolicyRejectedObservation
   readonly message: string;
 }
 
-export interface ApprovalLimitReachedObservation extends ApprovalObservationBase {
+export interface ApprovalLimitReachedObservation
+  extends ApprovalObservationBase {
   readonly kind: "approval_limit_reached";
   readonly limit:
     | "requests_per_run"
@@ -96,7 +74,8 @@ export interface ApprovalLimitReachedObservation extends ApprovalObservationBase
   readonly maximum: number;
 }
 
-export interface ApprovalReviewFailedObservation extends ApprovalObservationBase {
+export interface ApprovalReviewFailedObservation
+  extends ApprovalObservationBase {
   readonly kind: "approval_review_failed";
   readonly code:
     | "approval_reviewer_unavailable"
@@ -116,7 +95,8 @@ export interface ApprovalApplicationFailedObservation
   readonly message: string;
 }
 
-export interface PermissionsGrantedObservation extends ApprovalObservationBase {
+export interface PermissionsGrantedObservation
+  extends ApprovalObservationBase {
   readonly kind: "permissions_granted";
   readonly scope: Extract<ApprovalScope, "run" | "session">;
   readonly summary: {
@@ -135,7 +115,7 @@ export type ApprovalObservation =
   | ApprovalApplicationFailedObservation
   | PermissionsGrantedObservation;
 
-export type Observation<TToolOutput = unknown> =
+export type RunObservation<TToolOutput = unknown> =
   | PlanUpdateResultObservation
   | ToolResultObservation<TToolOutput>
   | ActionDeniedObservation

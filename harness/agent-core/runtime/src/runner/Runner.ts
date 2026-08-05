@@ -28,6 +28,9 @@ import type {
   RunnerDependencies,
 } from "./RunnerDependencies.js";
 import {
+  snapshotContextProjectionRequest,
+} from "@agent-anything/context/context";
+import {
   snapshotAgent,
   snapshotRunConfig,
   snapshotRunInput,
@@ -43,8 +46,12 @@ export class Runner {
     }
 
     const now = dependencies.now ?? (() => new Date().toISOString());
+    const contextProjection = snapshotRunnerContextProjection(
+      dependencies.contextProjection,
+    );
     this.dependencies = Object.freeze({
       ...dependencies,
+      contextProjection,
       now,
       createRunId: dependencies.createRunId ?? createDefaultRunIdentity,
       createId: dependencies.createId ?? createDefaultIdentity,
@@ -132,6 +139,31 @@ export class Runner {
   ): Promise<RunResult<TOutput>> {
     return this.start(agent, input, config, options).wait();
   }
+}
+
+function snapshotRunnerContextProjection(
+  input: RunnerDependencies["contextProjection"],
+): RunnerDependencies["contextProjection"] {
+  if (
+    input === null ||
+    typeof input !== "object" ||
+    input.projector === null ||
+    typeof input.projector !== "object" ||
+    typeof input.projector.project !== "function"
+  ) {
+    throw new TypeError("Runner requires an explicit ContextProjectorPort.");
+  }
+  const request = snapshotContextProjectionRequest({
+    runId: "runner_context_projection_validation",
+    controllerIteration: 1,
+    purpose: input.purpose,
+    limits: input.limits,
+  });
+  return Object.freeze({
+    projector: input.projector,
+    purpose: request.purpose,
+    limits: request.limits,
+  });
 }
 
 function createEmergencyRunResult<TOutput>(

@@ -39,6 +39,7 @@ import {
   type PersistentPolicyAmendmentPort,
 } from "@agent-anything/governance";
 import {
+  createHelarcContextProjector,
   createHelarcProductComposition,
   type HelarcActivityItem,
   type HelarcAgentOutput,
@@ -203,6 +204,18 @@ export async function prepareHelarcHostRun(
   });
   const runner = new Runner({
     controller: product.controller,
+    contextProjection: {
+      projector: createHelarcContextProjector(),
+      purpose: "model",
+      limits: {
+        maxMessages: 32,
+        maxMessageLength: 16_000,
+        maxObservations: 32,
+        maxObservationBytes: 64 * 1024,
+        maxEvidenceRefs: 32,
+        maxMetadataEntries: 1,
+      },
+    },
     actionEnforcementPipeline,
     sandboxExecutionGateway,
     evidenceBuilder: new EvidenceBuilder(),

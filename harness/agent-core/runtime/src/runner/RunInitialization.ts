@@ -6,6 +6,7 @@ import {
   createInitialRunPermissionState,
   type RunState,
 } from "../run/index.js";
+import type { RunObservation } from "../run/RunObservation.js";
 import type { ResolvedRunConfig } from "./RunConfig.js";
 
 export interface CreateInitialRunStateInput<TOutput> {
@@ -35,7 +36,7 @@ export function createInitialRunState<TOutput>(
     relatedFailures: Object.freeze([]) as readonly [],
     cancellationRequest: null,
     permission,
-    context: createInitialContext(input.input.task),
+    context: createInitialContext<RunObservation>(input.input.task),
     plan: null,
     items: Object.freeze([]),
     counters: Object.freeze({

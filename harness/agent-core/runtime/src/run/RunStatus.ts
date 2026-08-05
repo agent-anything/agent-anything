@@ -9,6 +9,7 @@ export type RunFailureCode =
   | "runtime_workspace_resolution_failed"
   | "runtime_identity_resolution_failed"
   | "runtime_cancellation_settlement_timeout"
+  | "context_projection_failed"
   | "model_request_failed"
   | "model_output_invalid"
   | "model_structured_output_retry_exhausted"

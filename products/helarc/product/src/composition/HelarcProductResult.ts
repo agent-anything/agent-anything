@@ -179,7 +179,7 @@ function collectSafeRunErrors(
     if (observation.kind === "action_denied" || observation.kind === "action_rejected") {
       appendSafeError(errors, observation.code);
     } else if (observation.kind === "action_failure") {
-      appendSafeError(errors, observation.failure.code);
+      appendSafeError(errors, observation.failure.failure.code);
     }
   }
   return errors;

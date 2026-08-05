@@ -2,7 +2,7 @@
 import type { Action } from "@agent-anything/agent-core/action";
 import type { ControllerModelItem } from "../controller/Controller.js";
 import type { PlanProjection } from "../plan/index.js";
-import type { Observation } from "@agent-anything/context/observation";
+import type { RunObservation } from "./RunObservation.js";
 import type { RunCancellationSummary } from "./RunCancellation.js";
 import type { RunFailureCause } from "./RunFailure.js";
 import type { RunBlockedCode, RunFailureCode } from "./RunStatus.js";
@@ -40,7 +40,7 @@ export interface ActionRunItem extends RunItemBase {
 
 export interface ObservationRunItem extends RunItemBase {
   readonly kind: "observation";
-  readonly observation: Observation;
+  readonly observation: RunObservation;
 }
 
 export interface PlanCreatedRunItem extends RunItemBase {

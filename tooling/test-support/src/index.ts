@@ -17,3 +17,7 @@ export {
   type FakeEvidencePersistenceHandler,
 } from "./FakeEvidencePersistencePort.js";
 export { FakeRuntimeEventPublisher } from "./FakeRuntimeEventPublisher.js";
+export {
+  createTestContextProjection,
+  createTestIdentityContextProjector,
+} from "./TestIdentityContextProjector.js";

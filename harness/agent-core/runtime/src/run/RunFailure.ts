@@ -1,4 +1,4 @@
-import type { ContextFailure } from "@agent-anything/context";
+import type { ContextFailure } from "@agent-anything/context/context";
 import type { ProviderFailure } from "@agent-anything/model-interaction";
 import type {
   AuditFailure,

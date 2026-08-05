@@ -1,6 +1,11 @@
 import type { EvidenceBuilderPort } from "@agent-anything/context/evidence";
 import type { EvidencePersistencePort } from "@agent-anything/context/persistence";
 import type {
+  ContextProjectionLimits,
+  ContextProjectionPurpose,
+  ContextProjectorPort,
+} from "@agent-anything/context/context";
+import type {
   AuditPort,
   RunTraceObserver,
   RuntimeEventPublisher,
@@ -13,6 +18,7 @@ import type {
 } from "@agent-anything/action-execution";
 import type { Controller } from "../controller/index.js";
 import type { RetryExecutor } from "../retry/RetryExecutor.js";
+import type { RunObservation } from "../run/RunObservation.js";
 
 export type RunnerIdentityKind =
   | "run_cancellation_request"
@@ -41,8 +47,15 @@ export interface CreateRunnerIdentityInput {
 export type CreateRunnerIdentity = (input: CreateRunnerIdentityInput) => string;
 export type CreateRunIdentity = () => string;
 
+export interface RunnerContextProjection {
+  readonly projector: ContextProjectorPort<RunObservation, RunObservation>;
+  readonly purpose: ContextProjectionPurpose;
+  readonly limits: ContextProjectionLimits;
+}
+
 export interface RunnerDependencies {
   readonly controller: Controller<unknown>;
+  readonly contextProjection: RunnerContextProjection;
   readonly runtimeEventPublisher?: RuntimeEventPublisher;
   readonly auditPort?: AuditPort;
   readonly telemetryPort?: TelemetryPort;

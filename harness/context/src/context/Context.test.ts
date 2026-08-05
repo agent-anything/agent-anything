@@ -1,15 +1,19 @@
-import { describe, expect, it } from "vitest";
+import type { ObservationBase } from "@agent-anything/agent-core/action";
 import type { AgentTask } from "@agent-anything/agent-core/task";
-import type { ActionRejectedObservation } from "../observation/index.js";
+import { describe, expect, it } from "vitest";
 import {
   applyContextUpdate,
   createInitialContext,
-  projectContext,
 } from "./Context.js";
+
+interface TestObservation extends ObservationBase {
+  readonly kind: "test_result";
+  readonly value: string;
+}
 
 describe("Context transitions", () => {
   it("creates invocation-local Context without retaining task identity as state ownership", () => {
-    const context = createInitialContext(createTask());
+    const context = createInitialContext<TestObservation>(createTask());
 
     expect(context).toEqual({
       messages: [],
@@ -26,7 +30,7 @@ describe("Context transitions", () => {
   });
 
   it("applies an immutable append-only update and deduplicates evidence references", () => {
-    const initial = createInitialContext(createTask());
+    const initial = createInitialContext<TestObservation>(createTask());
     const observation = createObservation();
     const updated = applyContextUpdate(initial, {
       messages: [{
@@ -48,17 +52,19 @@ describe("Context transitions", () => {
     expect(updated.evidenceRefs).toEqual(["evidence-1"]);
     expect(updated.metadata).toMatchObject({ source: "test", iteration: 1 });
     expect(Object.isFrozen(updated.observations)).toBe(true);
+    expect(Object.isFrozen(updated.observations[0]?.metadata)).toBe(true);
   });
 
-  it("projects only Context-owned state through one immutable value", () => {
-    const context = applyContextUpdate(createInitialContext(createTask()), {
-      observations: [createObservation()],
-    });
-    const projection = projectContext(context);
+  it("rejects duplicate Observation identities across updates", () => {
+    const observation = createObservation();
+    const context = applyContextUpdate(
+      createInitialContext<TestObservation>(createTask()),
+      { observations: [observation] },
+    );
 
-    expect(projection.observations).toEqual(context.observations);
-    expect(projection.metadata).toEqual(context.metadata);
-    expect(Object.isFrozen(projection)).toBe(true);
+    expect(() =>
+      applyContextUpdate(context, { observations: [observation] }),
+    ).toThrow("Observation id 'observation-1' is duplicated");
   });
 });
 
@@ -72,14 +78,13 @@ function createTask(): AgentTask {
   };
 }
 
-function createObservation(): ActionRejectedObservation {
+function createObservation(): TestObservation {
   return {
     id: "observation-1",
     runId: "run-1",
     actionId: "action-1",
-    kind: "action_rejected",
-    code: "action_unsupported",
-    message: "Action is not supported.",
+    kind: "test_result",
+    value: "accepted",
     createdAt: "2026-07-13T00:00:01.000Z",
     metadata: {},
   };

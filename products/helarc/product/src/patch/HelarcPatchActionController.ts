@@ -276,7 +276,9 @@ function observationCode(observation: ControllerInput["context"]["observations"]
   if (observation.kind === "tool_result" && observation.result.status !== "succeeded") {
     return observation.result.error.code;
   }
-  if (observation.kind === "action_failure") return observation.failure.code;
+  if (observation.kind === "action_failure") {
+    return observation.failure.failure.code;
+  }
   if (observation.kind === "action_denied" || observation.kind === "action_rejected") return observation.code;
   return "patch_action_failed";
 }
@@ -286,7 +288,9 @@ function observationMessage(observation: ControllerInput["context"]["observation
   if (observation.kind === "tool_result" && observation.result.status !== "succeeded") {
     return observation.result.error.message;
   }
-  if (observation.kind === "action_failure") return observation.failure.message;
+  if (observation.kind === "action_failure") {
+    return observation.failure.failure.message;
+  }
   if (observation.kind === "action_denied" || observation.kind === "action_rejected") return observation.message;
   return "Patch Action failed.";
 }

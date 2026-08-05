@@ -61,6 +61,7 @@ import {
   FakeApprovalReviewer,
   FakeEvidencePersistencePort,
   FakeRuntimeEventPublisher,
+  createTestContextProjection,
 } from "@agent-anything/test-support";
 import type {
   AdditionalPermissions,
@@ -145,6 +146,46 @@ describe("Runner", () => {
       "C:/workspace",
     );
     expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it("fails the Run when a Context projector fabricates correlation", async () => {
+    const testProjection = createTestContextProjection();
+    const result = await createRunner(
+      new ScriptedController([finalDecision("must not run")]),
+      {
+        contextProjection: {
+          ...testProjection,
+          projector: {
+            project({ context }) {
+              return {
+                messages: context.messages,
+                observations: [{
+                  id: "fabricated-observation",
+                  runId: "run_001",
+                  actionId: "fabricated-action",
+                  kind: "action_rejected",
+                  code: "action_invalid",
+                  message: "Fabricated.",
+                  createdAt: "2026-07-13T00:00:00.000Z",
+                  metadata: {},
+                }],
+                evidenceRefs: context.evidenceRefs,
+                metadata: {},
+              };
+            },
+          },
+        },
+      },
+    ).run(createAgent(), createRunInput(), createRunConfig());
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "context_projection_failed",
+      failure: {
+        kind: "context",
+        failure: { code: "context_projection_not_derived" },
+      },
+    });
   });
 
   it("commits safe Retry RunItems before their Runtime notifications", async () => {
@@ -3560,6 +3601,7 @@ describe("Runner external Action result settlement", () => {
     const fixture = createExternalActionPipeline("allowed");
     const runner = new Runner({
       controller: new ScriptedController([finalDecision("unused")]),
+      contextProjection: createTestContextProjection(),
       actionEnforcementPipeline: fixture.pipeline,
       sandboxExecutionGateway: fixture.gateway,
       evidencePersistence: new FakeEvidencePersistencePort(),
@@ -3637,6 +3679,7 @@ function createRunner(
       };
   return new Runner({
     controller,
+    contextProjection: createTestContextProjection(),
     now: () => "2026-07-13T00:00:00.000Z",
     createRunId: () => {
       runSequence += 1;

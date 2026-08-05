@@ -15,7 +15,6 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
   ],
   "@agent-anything/context": [
     "@agent-anything/agent-core",
-    "@agent-anything/permission",
     "@agent-anything/tools",
   ],
   "@agent-anything/observability": [
@@ -71,6 +70,7 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
   "@agent-anything/helarc": [
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",
+    "@agent-anything/context",
     "@agent-anything/governance",
     "@agent-anything/helarc-code-agent",
     "@agent-anything/host",

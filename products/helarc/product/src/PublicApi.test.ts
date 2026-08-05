@@ -13,6 +13,7 @@ describe("Helarc public API", () => {
       "createBuiltInHelarcTaskTemplates",
       "createHelarcActionComposition",
       "createHelarcArtifact",
+      "createHelarcContextProjector",
       "createHelarcConversation",
       "createHelarcMessage",
       "createHelarcPersistedRun",

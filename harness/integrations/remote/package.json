@@ -42,7 +42,8 @@
     "@agent-anything/context": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/permission": "workspace:*",
-    "@agent-anything/agent-runtime": "workspace:*"
+    "@agent-anything/agent-runtime": "workspace:*",
+    "@agent-anything/test-support": "workspace:*"
   },
   "license": "Apache-2.0",
   "private": true

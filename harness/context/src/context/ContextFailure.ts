@@ -1,5 +1,3 @@
-
-
 export interface ContextFailure {
   readonly code: string;
   readonly message: string;

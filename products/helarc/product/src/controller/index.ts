@@ -53,3 +53,4 @@ export {
   HELARC_PROMPT_ARCHITECTURE_VERSION,
   HELARC_TOOL_CATALOG_VERSION,
 } from "./HelarcPromptAssembly.js";
+export { createHelarcContextProjector } from "./HelarcContextProjector.js";
