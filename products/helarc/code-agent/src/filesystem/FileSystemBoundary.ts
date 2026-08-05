@@ -1,7 +1,7 @@
 import type { Stats } from "node:fs";
 import { lstat, realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
-import type { RunWorkspace } from "@agent-anything/foundation";
+import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import {
   resolveWorkspacePath,
   type ResolvedWorkspacePath,

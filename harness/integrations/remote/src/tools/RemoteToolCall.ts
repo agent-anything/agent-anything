@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/foundation";
+
 
 export interface RemoteToolCall<TInput = unknown> {
   id: string;
@@ -7,5 +7,5 @@ export interface RemoteToolCall<TInput = unknown> {
   remoteNodeId: string;
   input: TInput;
   timeoutMs: number | null;
-  metadata: Metadata;
+  metadata: Readonly<Record<string, unknown>>;
 }

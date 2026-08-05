@@ -1,5 +1,5 @@
 import type { EvidenceSensitivity } from "@agent-anything/context/evidence";
-import type { Metadata } from "@agent-anything/foundation";
+
 import { defaultRedactionRules } from "./defaultRules.js";
 import type { Redaction, RedactionResult } from "./RedactionResult.js";
 import type { RedactionRule } from "./RedactionRule.js";
@@ -7,7 +7,7 @@ import type { RedactionRule } from "./RedactionRule.js";
 export interface RedactInput<TValue = unknown> {
   value: TValue;
   sensitivity?: EvidenceSensitivity;
-  metadata?: Metadata;
+  metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface RedactorInput {

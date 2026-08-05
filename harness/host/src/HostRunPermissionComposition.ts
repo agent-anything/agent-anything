@@ -16,14 +16,8 @@ import {
   type SessionAuthorityContext,
   type SessionAuthorityPort,
 } from "@agent-anything/permission";
-import type { InvocationInterruptionContext } from "@agent-anything/foundation";
-import {
-  isReviewCapablePolicy,
-  type ApprovalLimits,
-  type ApprovalReviewerBinding,
-  type AuthorityApplicationLimits,
-  type ResolvedRunPermissionConfig,
-} from "@agent-anything/runtime/run";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
+import { isReviewCapablePolicy, type ApprovalLimits, type ApprovalReviewerBinding, type AuthorityApplicationLimits, type ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
 
 export interface HostPermissionProfileSelection {
   readonly profileId: string;

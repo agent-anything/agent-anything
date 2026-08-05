@@ -1,8 +1,5 @@
 import { basename, join, resolve } from "node:path";
-import type {
-  RunWorkspace,
-  WorkspaceContext,
-} from "@agent-anything/foundation/workspace";
+import type { RunWorkspace, WorkspaceContext } from "@agent-anything/agent-core/run";
 import { describe, expect, it } from "vitest";
 import { resolveWorkspacePath } from "./resolveWorkspacePath.js";
 

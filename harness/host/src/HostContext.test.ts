@@ -1,8 +1,4 @@
-import type {
-  IdentityRef,
-  RunWorkspace,
-  WorkspaceContext,
-} from "@agent-anything/foundation";
+import type { IdentityRef, RunWorkspace, WorkspaceContext } from "@agent-anything/agent-core/run";
 import { describe, expect, it } from "vitest";
 import {
   createStaticHostIdentityResolver,

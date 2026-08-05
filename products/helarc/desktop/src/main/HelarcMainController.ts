@@ -10,9 +10,6 @@ import {
   type UserApprovalReviewBridge,
 } from "@agent-anything/host";
 import {
-  createRunCancellationController,
-} from "@agent-anything/runtime/run";
-import {
   createHelarcProviderProfile,
   createHelarcConversation,
   createHelarcMessage,
@@ -46,7 +43,8 @@ import {
   type HelarcPersistedRun,
   type HelarcWorkspaceProfile,
 } from "@agent-anything/helarc";
-import type { RunInputItem, RunWorkspace } from "@agent-anything/foundation";
+import type { RunInputItem } from "@agent-anything/agent-core/input";
+import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import type { Provider } from "@agent-anything/model-interaction";
 import { basename, isAbsolute, normalize } from "node:path";
 import type { HelarcProductRunStartTarget } from "../shared/HelarcDesktopCommand.js";
@@ -59,7 +57,7 @@ import {
   prepareHelarcHostRun,
   prepareHelarcRunStart,
   type HelarcHostActiveRun,
-  type HelarcHostRunOutcome,
+  type HelarcHostRunResult,
 } from "./run/index.js";
 import {
   InMemoryHelarcThreadStore,
@@ -221,7 +219,7 @@ export type StartHelarcRunResult =
   | {
       ok: true;
       taskId: string;
-      runId: string;
+      productRunId: string;
       threadId: string;
       snapshot: HelarcMainSnapshot;
     }
@@ -282,12 +280,13 @@ type DesktopActiveRunSlot =
       readonly kind: "reserved";
       readonly token: symbol;
       readonly threadId: string;
-      readonly runId: string;
+      readonly productRunId: string;
     }
   | {
       readonly kind: "active";
       readonly token: symbol;
       readonly threadId: string;
+      readonly productRunId: string;
       readonly handle: HelarcHostActiveRun;
       progressSequence: number;
       progressTail: Promise<void>;
@@ -526,16 +525,20 @@ export class HelarcMainController {
     }
 
     const token = Symbol(runId);
-    this.activeRunSlot = { kind: "reserved", token, threadId, runId };
+    this.activeRunSlot = {
+      kind: "reserved",
+      token,
+      threadId,
+      productRunId: runId,
+    };
     this.acceptedTask = null;
     this.runProjection = null;
     this.lastError = null;
     this.lastPatchReview = null;
     this.publishSnapshot();
 
-    const cancellation = createRunCancellationController({ runId });
-    const userApprovalBridge = this.createApprovalReviewBridge(runId);
-    const patchReviewBridge = this.createPatchReviewBridge(runId);
+    const userApprovalBridge = this.createApprovalReviewBridge();
+    const patchReviewBridge = this.createPatchReviewBridge();
     let startCommitted = false;
     try {
       const threadWorkspace = preparedStart.prepared.workspace;
@@ -551,9 +554,8 @@ export class HelarcMainController {
         },
         identityResolver: createHelarcDesktopIdentityResolver(),
         identitySelection: { kind: "anonymous" },
-        runId,
+        productRunId: runId,
         sessionId: threadId,
-        cancellation,
         provider: providerInstance,
         conversationItems,
         toolMode: this.runtimeToolMode,
@@ -606,13 +608,14 @@ export class HelarcMainController {
       this.attachActiveHostRun(
         token,
         threadId,
+        runId,
         composition.activeRun,
       );
       void this.observeActiveRun(token, composition.result);
       return {
         ok: true,
         taskId: preparedStart.prepared.task.id,
-        runId,
+        productRunId: runId,
         threadId,
         snapshot: this.getSnapshot(),
       };
@@ -874,9 +877,9 @@ export class HelarcMainController {
 
   private async observeActiveRun(
     token: symbol,
-    result: Promise<HelarcHostRunOutcome>,
+    result: Promise<HelarcHostRunResult>,
   ): Promise<void> {
-    let outcome: HelarcHostRunOutcome;
+    let outcome: HelarcHostRunResult;
     try {
       outcome = await result;
     } catch {
@@ -894,17 +897,6 @@ export class HelarcMainController {
     const slot = this.activeRunSlot;
     if (slot.kind !== "active" || slot.token !== token) return;
     await slot.progressTail;
-
-    if (outcome.kind === "start_failure") {
-      this.lastError = {
-        code: "run_execution_failed",
-        message: outcome.failure.code,
-      };
-      this.runProjection = null;
-      this.releaseActiveRunSlot(token);
-      this.publishSnapshot();
-      return;
-    }
 
     if (outcome.product.status === "failed") {
       const firstError = outcome.product.output.safeErrors[0];
@@ -931,11 +923,13 @@ export class HelarcMainController {
   private attachActiveHostRun(
     token: symbol,
     threadId: string,
+    productRunId: string,
     activeRun: HelarcHostActiveRun,
   ): void {
     const reservation = this.activeRunSlot;
     if (reservation.kind !== "reserved" || reservation.token !== token ||
-      reservation.runId !== activeRun.runId || reservation.threadId !== threadId) {
+      reservation.productRunId !== productRunId ||
+      reservation.threadId !== threadId) {
       throw new Error("Helarc active Run reservation does not match the prepared launch.");
     }
     this.detachRunProjectionSubscriptions();
@@ -943,6 +937,7 @@ export class HelarcMainController {
       kind: "active",
       token,
       threadId,
+      productRunId,
       handle: activeRun,
       progressSequence: 0,
       progressTail: Promise.resolve(),
@@ -984,7 +979,7 @@ export class HelarcMainController {
     slot.progressSequence += 1;
     const progressSequence = slot.progressSequence;
     const currentRun = this.currentThreadRecord?.runs.find(
-      (run) => run.id === slot.handle.runId,
+      (run) => run.id === slot.productRunId,
     );
     const recordedAt = maxIsoDateTime(
       currentRun?.updatedAt ?? new Date().toISOString(),
@@ -992,9 +987,9 @@ export class HelarcMainController {
     );
     const commit: HelarcRunProgressCommit = {
       kind: "run_progress",
-      commitId: `helarc-progress-${slot.handle.runId}-${progressSequence}`,
+      commitId: `helarc-progress-${slot.productRunId}-${progressSequence}`,
       threadId: slot.threadId,
-      runId: slot.handle.runId,
+      runId: slot.productRunId,
       committedAt: recordedAt,
       progressSequence,
       progress: {
@@ -1046,11 +1041,8 @@ export class HelarcMainController {
       : this.inactiveStatus;
   }
 
-  private createApprovalReviewBridge(
-    runId: string,
-  ): UserApprovalReviewBridge {
+  private createApprovalReviewBridge(): UserApprovalReviewBridge {
     return createUserApprovalReviewBridge({
-      runId,
       descriptor: {
         id: "helarc-desktop-user-reviewer",
         kind: "user",
@@ -1061,8 +1053,8 @@ export class HelarcMainController {
     });
   }
 
-  private createPatchReviewBridge(runId: string) {
-    return createHelarcPatchReviewBridge({ runId });
+  private createPatchReviewBridge() {
+    return createHelarcPatchReviewBridge();
   }
 
   private createRunStartCommit(input: {
@@ -1173,7 +1165,7 @@ export class HelarcMainController {
   }
 
   private async persistWorkContextTerminal(
-    outcome: Extract<HelarcHostRunOutcome, { kind: "run_result" }>,
+    outcome: HelarcHostRunResult,
   ): Promise<void> {
     const record = this.currentThreadRecord;
     if (record === null) {
@@ -1182,7 +1174,9 @@ export class HelarcMainController {
         "The active Thread record is unavailable.",
       );
     }
-    const run = record.runs.find((candidate) => candidate.id === outcome.terminal.runId);
+    const run = record.runs.find(
+      (candidate) => candidate.id === outcome.productRunId,
+    );
     if (run === undefined) {
       throw new HelarcDesktopPersistenceError("run_not_found", "The active Run was not found.");
     }

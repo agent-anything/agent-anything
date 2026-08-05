@@ -3,12 +3,8 @@ import type {
   EvidencePersistencePort,
   EvidencePersistenceResult,
 } from "@agent-anything/context/persistence";
-import type {
-  ArtifactRef,
-  EvidenceRef,
-  ISODateTimeString,
-  Metadata,
-} from "@agent-anything/foundation";
+import type { ArtifactRef } from "@agent-anything/agent-core/run";
+import type { EvidenceRef } from "@agent-anything/context/evidence";
 
 export type EnterpriseRetentionPolicyRef = string;
 export type EnterpriseAccessPolicyRef = string;
@@ -40,21 +36,21 @@ export interface EnterpriseEvidenceCommitReceipt {
   readonly storageId: string;
   readonly evidenceRef: EvidenceRef;
   readonly artifactRef: ArtifactRef;
-  readonly createdAt: ISODateTimeString;
+  readonly createdAt: string;
   readonly workspaceId: string | null;
   readonly actorRef: string | null;
   readonly retentionPolicyRef: EnterpriseRetentionPolicyRef;
   readonly accessPolicyRef: EnterpriseAccessPolicyRef;
   readonly sensitivity: EvidenceSensitivity;
   readonly auditCorrelationId: string | null;
-  readonly safeMetadata: Metadata;
+  readonly safeMetadata: Readonly<Record<string, unknown>>;
 }
 
 export interface EnterpriseEvidenceFailure {
   readonly code: string;
   readonly message: string;
   readonly retryable: boolean;
-  readonly metadata: Metadata;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export type EnterpriseEvidenceCommitOutcome =
@@ -454,12 +450,12 @@ function snapshotPolicy(
   });
 }
 
-function snapshotMetadata(value: Metadata, field: string): Metadata {
+function snapshotMetadata(value: Readonly<Record<string, unknown>>, field: string): Readonly<Record<string, unknown>> {
   const snapshot = snapshotJsonValue(value, field);
   if (snapshot === null || Array.isArray(snapshot) || typeof snapshot !== "object") {
     throw new TypeError(`${field} must be a plain object.`);
   }
-  return snapshot as Metadata;
+  return snapshot as Readonly<Record<string, unknown>>;
 }
 
 function snapshotJsonValue(
@@ -544,7 +540,7 @@ function failed(
   code: string,
   message: string,
   retryable: boolean,
-  metadata: Metadata = {},
+  metadata: Readonly<Record<string, unknown>> = {},
 ): EvidencePersistenceResult {
   return {
     status: "failed",

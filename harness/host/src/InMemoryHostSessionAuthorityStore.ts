@@ -6,7 +6,7 @@ import {
   type SessionAuthorityPort,
   type SessionAuthorityRecord,
 } from "@agent-anything/permission";
-import type { InvocationInterruptionContext } from "@agent-anything/foundation";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
 
 export interface InMemoryHostSessionAuthorityStore extends SessionAuthorityPort {
   listRecords(): readonly SessionAuthorityRecord[];

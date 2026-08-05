@@ -1,9 +1,9 @@
 packages:
-  - "harness/foundation"
+  - "harness/agent-core/contracts"
   - "harness/model-interaction"
   - "harness/context"
   - "harness/observability"
-  - "harness/runtime"
+  - "harness/agent-core/runtime"
   - "harness/tools"
   - "harness/host"
   - "harness/safety/*"

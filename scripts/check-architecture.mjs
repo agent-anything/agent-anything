@@ -125,7 +125,7 @@ function checkFile(file) {
 function checkPublicApiImport(file, owner, statement, specifier) {
   const executionPackages = new Set([
     "@agent-anything/action-execution",
-    "@agent-anything/runtime",
+    "@agent-anything/agent-runtime",
     "@agent-anything/host",
   ]);
   const packageName = parseWorkspaceSpecifier(specifier).packageName;
@@ -142,27 +142,16 @@ function checkPublicApiImport(file, owner, statement, specifier) {
     report("execution_api_reexport", { file, owner, imported: packageName, message: `Must not re-export API owned by '${packageName}'.` });
   }
 
-  if (specifier !== "@agent-anything/agent-core" || !ts.isImportDeclaration(statement)) {
-    return;
-  }
-
-  const allowedRootTypes = new Set([
-    "RuntimeEvent",
-  ]);
-  const clause = statement.importClause;
-  if (!clause || clause.name || !clause.namedBindings || !ts.isNamedImports(clause.namedBindings)) {
-    report("agent_core_root_import", { file, owner, imported: packageName, message: "Must use named type imports from the agent-core root." });
-    return;
-  }
-
-  for (const element of clause.namedBindings.elements) {
-    const importedName = (element.propertyName ?? element.name).text;
-    if (!allowedRootTypes.has(importedName)) {
-      report("agent_core_root_import", { file, owner, imported: packageName, message: `Imports specialized Agent Core Contract '${importedName}' from the root.` });
-    }
-    if (!clause.isTypeOnly && !element.isTypeOnly) {
-      report("agent_core_root_value_import", { file, owner, imported: packageName, message: `Imports runtime value '${importedName}' from the type-only agent-core root.` });
-    }
+  if (
+    specifier === "@agent-anything/agent-core" ||
+    specifier === "@agent-anything/agent-runtime"
+  ) {
+    report("agent_core_root_import", {
+      file,
+      owner,
+      imported: packageName,
+      message: `Must import an explicit Agent Core semantic subpath instead of '${specifier}'.`,
+    });
   }
 }
 
@@ -193,13 +182,28 @@ function checkArchitectureSource(file, text, isTestOnly) {
   const rel = display(file);
   checkDesktopSafeSurface(rel, text);
   if (
-    rel.startsWith("harness/foundation/src/internal/") ||
-    rel.startsWith("harness/foundation/src/result/")
+    rel.startsWith("harness/agent-core/contracts/src/internal/") ||
+    rel.startsWith("harness/agent-core/contracts/src/result/")
   ) {
-    report("ambiguous_foundation_source_owner", {
+    report("ambiguous_agent_core_contract_owner", {
       file,
       message:
-        "Foundation source must use an explicit semantic owner instead of internal or result.",
+        "Agent Core Contracts must use an explicit semantic owner instead of internal or result.",
+    });
+  }
+  if (
+    !isTestOnly &&
+    rel.startsWith("harness/agent-core/runtime/src/runner/") &&
+    rel !== "harness/agent-core/runtime/src/runner/RunExecution.ts" &&
+    (
+      /\bthis\.state\s*=/.test(text) ||
+      /\breplaceState\s*\(/.test(text)
+    )
+  ) {
+    report("run_state_writer", {
+      file,
+      message:
+        "Only RunExecution may replace authoritative RunState inside Agent Core Runtime.",
     });
   }
   const legacySymbols = [
@@ -374,6 +378,14 @@ function checkWorkspaceImport({ file, owner, imported, isTestOnly }) {
   const hasDependency = owner.dependencies.has(imported.packageName);
   const hasDevDependency = owner.devDependencies.has(imported.packageName);
   const isSelf = owner.name === imported.packageName;
+  if (isSelf) {
+    report("package_self_import", {
+      file,
+      owner,
+      imported: importedPackage,
+      message: "Package source must use relative imports for modules owned by the same package.",
+    });
+  }
   if (!isSelf) {
     for (const result of evaluateRepositoryDirection({
       owner,

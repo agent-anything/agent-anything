@@ -6,19 +6,11 @@ import type {
 } from "@agent-anything/model-interaction";
 import { resolvePermissionProfile } from "@agent-anything/permission";
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
-import type { Agent } from "@agent-anything/foundation/agent";
-import type {
-  Controller,
-  ControllerCallContext,
-  ControllerDecision,
-  ControllerInput,
-} from "@agent-anything/runtime/controller";
-import {
-  createSystemRetryExecutor,
-  ProviderBackedController,
-  Runner,
-  type RunConfig,
-} from "@agent-anything/runtime";
+import type { Agent } from "@agent-anything/agent-core/agent";
+import type { Controller, ControllerCallContext, ControllerDecision, ControllerInput } from "@agent-anything/agent-runtime/controller";
+import { createSystemRetryExecutor } from "@agent-anything/agent-runtime/retry";
+import { ProviderBackedController } from "@agent-anything/agent-runtime/controller";
+import { Runner, type RunConfig } from "@agent-anything/agent-runtime/runner";
 import {
   createHostRuntime,
   type HostRunProjection,
@@ -26,12 +18,9 @@ import {
   type HostRunStartInput,
   type HostRuntime,
 } from "./index.js";
-import type { RetryClock } from "@agent-anything/runtime/retry";
-import type { ActionCandidate } from "@agent-anything/foundation/action";
-import {
-  createRunCancellationController,
-  type ResolvedRunPermissionConfig,
-} from "@agent-anything/runtime/run";
+import type { RetryClock } from "@agent-anything/agent-runtime/retry";
+import type { ActionCandidate } from "@agent-anything/agent-core/action";
+import type { ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
 import { createEmptyToolActionBindingSnapshot } from "@agent-anything/action-execution";
 
 interface ConformanceOutput {
@@ -60,7 +49,7 @@ describe("Runner and generic Host conformance", () => {
       },
     });
     expect(result.terminal).toBe(harness.projections.at(-1)?.terminal);
-    expect(harness.projections[0]?.status).toBe("running");
+    expect(harness.projections[0]?.status).toBe("starting");
     expect(harness.projections.at(-1)?.status).toBe("completed");
   });
 
@@ -345,6 +334,7 @@ describe("Runner and generic Host conformance", () => {
     const runtime = createHostRuntime({
       runner: new Runner({
         controller,
+        createRunId: () => "run-conformance",
         now: () => "2026-07-14T00:00:00.000Z",
       }),
       now: () => "2026-07-14T00:00:00.000Z",
@@ -374,9 +364,6 @@ describe("Runner and generic Host conformance", () => {
 
     releaseController.resolve();
     const outcome = await active.result;
-    if (outcome.kind !== "run_result") {
-      throw new Error(`Conformance Host failed to start: ${outcome.code}.`);
-    }
 
     expect(outcome).toMatchObject({
       runResult: {
@@ -434,9 +421,6 @@ class InMemoryHostHarness {
     });
     const outcome = await active.result;
     unsubscribe();
-    if (outcome.kind !== "run_result") {
-      throw new Error(`Conformance Host failed to start: ${outcome.code}.`);
-    }
     return outcome;
   }
 
@@ -447,6 +431,7 @@ function createHostHarness(
 ): InMemoryHostHarness {
   const runner = new Runner({
     controller,
+    createRunId: () => "run-conformance",
     now: () => "2026-07-14T00:00:00.000Z",
   });
   return new InMemoryHostHarness(createHostRuntime({
@@ -459,16 +444,11 @@ function createHostInput(input: {
   limits?: Partial<Omit<RunConfig["limits"], "plan">>;
   retry?: RunConfig["retry"];
 } = {}): HostRunStartInput<ConformanceOutput> {
-  const cancellation = createRunCancellationController({
-    runId: "run-conformance",
-    now: () => "2026-07-14T00:00:00.000Z",
-  });
   return {
     sessionId: "session-conformance",
     agent: createAgent(),
     userApprovalReviewBridge: null,
     runInput: {
-      runId: "run-conformance",
       task: {
         id: "task-conformance",
         kind: "conformance.task",
@@ -476,7 +456,7 @@ function createHostInput(input: {
         createdAt: "2026-07-14T00:00:00.000Z",
         metadata: {},
       },
-      conversationItems: [],
+      items: [],
       metadata: {},
     },
     runConfig: {
@@ -515,7 +495,6 @@ function createHostInput(input: {
       },
       audit: "optional",
       telemetry: "optional",
-      cancellation,
       cancellationLimits: {
         operationSettlementTimeoutMs: 1_000,
         processGracePeriodMs: 100,

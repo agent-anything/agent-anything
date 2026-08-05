@@ -41,6 +41,6 @@
   "private": true,
   "dependencies": {
     "@agent-anything/governance": "workspace:*",
-    "@agent-anything/foundation": "workspace:*"
+    "@agent-anything/agent-core": "workspace:*"
   }
 }

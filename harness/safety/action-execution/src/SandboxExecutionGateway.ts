@@ -1,8 +1,4 @@
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-  ISODateTimeString,
-} from "@agent-anything/foundation";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { ToolResult } from "@agent-anything/tools";
 import {
   createActionExecutionFailure,
@@ -56,7 +52,7 @@ export interface CreateSandboxExecutionGatewayInput {
   readonly providers?: readonly SandboxProvider[];
   readonly limits: ActionExecutionLimits;
   readonly secretResolver?: ActionSecretResolver;
-  readonly now?: () => ISODateTimeString;
+  readonly now?: () => string;
   readonly createAttemptId?: (input: {
     readonly runId: string;
     readonly actionId: string;
@@ -80,7 +76,7 @@ interface PreparedDispatchState {
   readonly toolName: string;
   readonly boundActionName: string;
   readonly invocation: DispatchSandboxActionInput["preparedInvocation"];
-  readonly deadlineAt: ISODateTimeString;
+  readonly deadlineAt: string;
   readonly interruption: InvocationInterruptionContext;
   readonly enforcement: "managed" | "external" | "disabled";
 }
@@ -108,7 +104,7 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
   private readonly executors: ReadonlyMap<string, RegisteredExecutor>;
   private readonly providers: ReadonlyMap<SandboxProviderKind, RegisteredProvider>;
   private readonly limits: ActionExecutionLimits;
-  private readonly now: () => ISODateTimeString;
+  private readonly now: () => string;
   private readonly createAttemptId: NonNullable<
     CreateSandboxExecutionGatewayInput["createAttemptId"]
   >;
@@ -257,7 +253,7 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
     readonly toolName: string;
     readonly boundActionName: string;
     readonly invocation: DispatchSandboxActionInput["preparedInvocation"];
-    readonly deadlineAt: ISODateTimeString;
+    readonly deadlineAt: string;
     readonly interruption: InvocationInterruptionContext;
   }): Promise<ActionExecutionResult> {
     const registered = this.executors.get(executorKey(input.invocation));
@@ -375,7 +371,7 @@ class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
     readonly toolName: string;
     readonly boundActionName: string;
     readonly invocation: DispatchSandboxActionInput["preparedInvocation"];
-    readonly deadlineAt: ISODateTimeString;
+    readonly deadlineAt: string;
     readonly interruption: InvocationInterruptionContext;
     readonly kind: SandboxProviderKind;
   }): Promise<ActionExecutionResult> {
@@ -880,8 +876,8 @@ function attachProviderCancellation(input: {
   readonly provider: SandboxProvider;
   readonly attempt: SandboxAttempt;
   readonly interruption: InvocationInterruptionContext;
-  readonly deadlineAt: ISODateTimeString;
-  readonly now: () => ISODateTimeString;
+  readonly deadlineAt: string;
+  readonly now: () => string;
 }) {
   let disposed = false;
   let sent = false;
@@ -922,8 +918,8 @@ function attachProviderCancellation(input: {
 function createLocalInterruption(
   upstream: InvocationInterruptionContext,
   attempt: SandboxAttempt,
-  deadlineAt: ISODateTimeString,
-  now: () => ISODateTimeString,
+  deadlineAt: string,
+  now: () => string,
 ) {
   const controller = new AbortController();
   let interruption: InvocationInterruptionRef | null = null;
@@ -1181,7 +1177,7 @@ function preparationFailed(code: string, message: string): SandboxDispatchPrepar
   });
 }
 
-function isCanonicalDateTime(input: unknown): input is ISODateTimeString {
+function isCanonicalDateTime(input: unknown): input is string {
   return typeof input === "string" &&
     !Number.isNaN(Date.parse(input)) &&
     new Date(input).toISOString() === input;

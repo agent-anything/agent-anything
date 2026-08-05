@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/foundation";
+
 import type {
   RuntimeEvent,
   RuntimeEventName,
@@ -155,10 +155,10 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
 };
 
 export function projectRuntimeEventForHost(event: RuntimeEvent): RuntimeEvent {
-  const source: Metadata = isRecord(event.payload)
-    ? event.payload as unknown as Metadata
+  const source: Readonly<Record<string, unknown>> = isRecord(event.payload)
+    ? event.payload as unknown as Readonly<Record<string, unknown>>
     : {};
-  const payload: Metadata = {};
+  const payload: Record<string, unknown> = {};
 
   for (const field of lifecycleFields[event.name]) {
     const projected = projectField(field, source[field]);
@@ -216,7 +216,7 @@ function projectField(field: string, value: unknown): unknown {
   return undefined;
 }
 
-function projectPlan(value: unknown): Metadata | undefined {
+function projectPlan(value: unknown): Readonly<Record<string, unknown>> | undefined {
   if (!isRecord(value) || !Array.isArray(value.steps)) {
     return undefined;
   }
@@ -227,7 +227,7 @@ function projectPlan(value: unknown): Metadata | undefined {
   ) {
     return undefined;
   }
-  const steps: Metadata[] = [];
+  const steps: Readonly<Record<string, unknown>>[] = [];
   for (const candidate of value.steps) {
     if (
       !isRecord(candidate) ||
@@ -248,11 +248,11 @@ function projectPlan(value: unknown): Metadata | undefined {
   });
 }
 
-function projectCancellationAttribution(value: unknown): Metadata | undefined {
+function projectCancellationAttribution(value: unknown): Readonly<Record<string, unknown>> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const attribution: Metadata = {};
+  const attribution: Record<string, unknown> = {};
   for (const field of ["requestId", "operation", "observedAt"] as const) {
     if (typeof value[field] === "string" && value[field].length > 0) {
       attribution[field] = value[field];
@@ -263,6 +263,6 @@ function projectCancellationAttribution(value: unknown): Metadata | undefined {
     : undefined;
 }
 
-function isRecord(value: unknown): value is Metadata {
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

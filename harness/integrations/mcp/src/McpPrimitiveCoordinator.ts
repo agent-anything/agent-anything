@@ -1,4 +1,4 @@
-import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
+
 import {
   deriveMcpToolParameterHeaders,
 } from "./McpHeaders.js";
@@ -281,7 +281,7 @@ export class McpPrimitiveCoordinator {
         sourceEpoch: runtime.snapshot.sourceEpoch,
         toolDescriptorFingerprint:
           tool.descriptor.descriptorFingerprint,
-      } satisfies Metadata),
+      } satisfies Readonly<Record<string, unknown>>),
     });
   }
 
@@ -627,7 +627,7 @@ export class McpPrimitiveCoordinator {
     readonly parser: (
       response: unknown,
       requestId: string,
-      receivedAt: ISODateTimeString,
+      receivedAt: string,
     ) => McpParsedListPage<T>;
   }): Promise<{
     readonly inventory: McpPrimitiveInventory<T>;
@@ -933,7 +933,7 @@ export class McpPrimitiveCoordinator {
     return value.getTime();
   }
 
-  private nowIso(): ISODateTimeString {
+  private nowIso(): string {
     return new Date(this.nowMs()).toISOString();
   }
 

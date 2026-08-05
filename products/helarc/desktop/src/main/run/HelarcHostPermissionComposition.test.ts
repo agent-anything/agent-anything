@@ -1,4 +1,3 @@
-import { createRunCancellationController } from "@agent-anything/runtime/run";
 import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,
@@ -10,7 +9,7 @@ import { createHelarcHostPermissionComposition } from "./HelarcHostPermissionCom
 
 describe("Helarc Host permission composition", () => {
   it("binds Ask for approval to the exact Run-scoped user bridge", async () => {
-    const bridge = userBridge("run.1");
+    const bridge = userBridge();
     const composition = await createHelarcHostPermissionComposition({
       ...baseInput(),
       preset: "ask_for_approval",
@@ -36,18 +35,13 @@ describe("Helarc Host permission composition", () => {
     })).rejects.toThrow("requires an explicit user approval bridge");
     await expect(createHelarcHostPermissionComposition({
       ...baseInput(),
-      preset: "ask_for_approval",
-      userApprovalBridge: userBridge("run.other"),
-    })).rejects.toThrow("Run identity does not match");
-    await expect(createHelarcHostPermissionComposition({
-      ...baseInput(),
       preset: "approve_for_me",
-      userApprovalBridge: userBridge("run.1"),
+      userApprovalBridge: userBridge(),
     })).rejects.toThrow("requires an explicit automatic reviewer");
     await expect(createHelarcHostPermissionComposition({
       ...baseInput(),
       preset: "full_access",
-      userApprovalBridge: userBridge("run.1"),
+      userApprovalBridge: userBridge(),
     })).rejects.toThrow("must not include an approval reviewer");
   });
 
@@ -91,7 +85,7 @@ describe("Helarc Host permission composition", () => {
     await expect(createHelarcHostPermissionComposition({
       ...baseInput(),
       preset: "ask_for_approval",
-      userApprovalBridge: userBridge("run.1"),
+      userApprovalBridge: userBridge(),
       sessionAuthorityPort: unavailable,
     })).rejects.toThrow("authority store unavailable");
   });
@@ -99,7 +93,7 @@ describe("Helarc Host permission composition", () => {
 
 function baseInput() {
   return {
-    runId: "run.1",
+    productRunId: "run.1",
     sessionId: "session.1",
     workspace: {
       id: "workspace.1",
@@ -113,7 +107,6 @@ function baseInput() {
     workspaceRoots: [{ rootId: "workspace.1", path: "D:\\workspace" }],
     platform: "win32" as const,
     enforcement: "disabled" as const,
-    cancellation: createRunCancellationController({ runId: "run.1" }),
     userApprovalBridge: null,
     automaticReviewer: null,
     sessionAuthorityPort: createInMemoryHostSessionAuthorityStore({ maxRecords: 64 }),
@@ -121,9 +114,8 @@ function baseInput() {
   };
 }
 
-function userBridge(runId: string) {
+function userBridge() {
   return createUserApprovalReviewBridge({
-    runId,
     descriptor: {
       id: "reviewer.user",
       kind: "user",

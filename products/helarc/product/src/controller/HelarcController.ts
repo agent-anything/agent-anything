@@ -1,15 +1,7 @@
-import type {
-  ControllerDecision,
-  ControllerInput,
-  ControllerModelItem,
-} from "@agent-anything/runtime/controller";
-import {
-  StructuredOutputError,
-  type ProviderRequestBuildContext,
-  type StructuredOutputFailure,
-} from "@agent-anything/runtime";
+import type { ControllerDecision, ControllerInput, ControllerModelItem } from "@agent-anything/agent-runtime/controller";
+import { StructuredOutputError, type ProviderRequestBuildContext, type StructuredOutputFailure } from "@agent-anything/agent-runtime/controller";
 import type { ProviderRequest, ProviderResponse } from "@agent-anything/model-interaction";
-import type { Metadata } from "@agent-anything/foundation";
+
 import {
   buildHelarcPromptAssembly,
   HELARC_ACTION_CONTRACT_VERSION,
@@ -355,9 +347,9 @@ function assertToolNameSupported(
 function createControllerTraceMetadata(
   output: HelarcProviderStructuredOutput,
   input: ControllerInput<HelarcAgentOutput>,
-): Metadata {
+): Readonly<Record<string, unknown>> {
   const toolCatalog = readHelarcToolCatalog(input);
-  const metadata: Metadata = {
+  const metadata: Record<string, unknown> = {
     source: "helarc-controller",
     controllerAction: output.action,
     promptArchitectureVersion: HELARC_PROMPT_ARCHITECTURE_VERSION,
@@ -374,7 +366,7 @@ function createControllerTraceMetadata(
     metadata.patchPath = output.change.path;
   }
 
-  return metadata;
+  return Object.freeze(metadata);
 }
 
 function readRequiredToolInput(value: Record<string, unknown>): Record<string, unknown> {

@@ -1,12 +1,7 @@
-import type { Metadata } from "@agent-anything/foundation";
+
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import { createControllerTurnTraceOperationId } from "@agent-anything/observability/tracing";
-import type {
-  Controller,
-  ControllerCallContext,
-  ControllerDecision,
-  ControllerInput,
-} from "@agent-anything/runtime/controller";
+import type { Controller, ControllerCallContext, ControllerDecision, ControllerInput } from "@agent-anything/agent-runtime/controller";
 
 export interface HelarcControllerTraceProjection {
   readonly runId: string;
@@ -72,7 +67,7 @@ function createHelarcControllerTraceProjection(
   runId: string,
   operationId: string,
   iteration: number,
-  source: Metadata,
+  source: Readonly<Record<string, unknown>>,
 ): HelarcControllerTraceProjection {
   return Object.freeze({
     runId,

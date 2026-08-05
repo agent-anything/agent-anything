@@ -151,7 +151,7 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
           ? {
               ok: true,
               taskId: result.taskId,
-              runId: result.runId,
+              productRunId: result.productRunId,
               threadId: result.threadId,
               snapshot: projectHelarcDesktopSnapshot(result.snapshot),
             }

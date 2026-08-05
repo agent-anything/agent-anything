@@ -95,6 +95,7 @@ export function discoverWorkspacePackages(repoRoot) {
       kind: expectedArchitecture.kind,
       productId: expectedArchitecture.productId,
       component: expectedArchitecture.component,
+      role: expectedArchitecture.role,
       manifest,
     });
   }
@@ -173,6 +174,11 @@ export function classifyWorkspacePackage(repoRoot, packageRoot) {
 export function expectedArchitectureForPath(repoRoot, packageRoot) {
   const path = display(repoRoot, packageRoot);
 
+  const agentCore = /^harness\/agent-core\/(contracts|runtime)$/.exec(path);
+  if (agentCore) {
+    return architecture("harness", "agent-core", null, agentCore[1]);
+  }
+
   const directHarness = /^harness\/([^/]+)$/.exec(path);
   if (directHarness) {
     return architecture("harness", directHarness[1]);
@@ -200,11 +206,13 @@ export function expectedArchitectureForPath(repoRoot, packageRoot) {
   );
 }
 
-function architecture(kind, component, productId = null) {
-  const metadata = productId === null
-    ? Object.freeze({ kind, component })
-    : Object.freeze({ kind, productId, component });
-  return Object.freeze({ kind, productId, component, metadata });
+function architecture(kind, component, productId = null, role = null) {
+  const metadata = role !== null
+    ? Object.freeze({ kind, component, role })
+    : productId === null
+      ? Object.freeze({ kind, component })
+      : Object.freeze({ kind, productId, component });
+  return Object.freeze({ kind, productId, component, role, metadata });
 }
 
 function validateArchitectureMetadata(actual, expected, manifestPath) {

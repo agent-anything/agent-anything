@@ -1,4 +1,4 @@
-import type { CancellationContext } from "@agent-anything/runtime/run";
+import type { CancellationContext } from "@agent-anything/agent-runtime/run";
 import type {
   HelarcPatchReviewBridge,
   HelarcPatchReviewDecisionSubmission,
@@ -10,7 +10,6 @@ import type {
 } from "@agent-anything/helarc";
 
 export interface CreateHelarcPatchReviewBridgeInput {
-  readonly runId: string;
   readonly onProjectionChanged?: HelarcPatchReviewProjectionListener;
 }
 
@@ -27,25 +26,36 @@ interface SubmissionLedgerEntry {
 }
 
 export function createHelarcPatchReviewBridge(
-  input: CreateHelarcPatchReviewBridgeInput,
+  input: CreateHelarcPatchReviewBridgeInput = {},
 ): HelarcPatchReviewBridge {
   return new DefaultHelarcPatchReviewBridge(input);
 }
 
 class DefaultHelarcPatchReviewBridge implements HelarcPatchReviewBridge {
-  readonly runId: string;
   private readonly listeners = new Set<HelarcPatchReviewProjectionListener>();
   private readonly submissions = new Map<string, SubmissionLedgerEntry>();
   private readonly closedReviews = new Set<string>();
   private active: ActivePatchReview | null = null;
+  private runBinding: string | null = null;
   private nextPendingVersion = 1;
   private notificationQueue: Promise<void> = Promise.resolve();
 
   constructor(input: CreateHelarcPatchReviewBridgeInput) {
-    this.runId = requireIdentity(input.runId, "Patch review bridge Run id");
     if (input.onProjectionChanged !== undefined) {
       this.listeners.add(input.onProjectionChanged);
     }
+  }
+
+  get boundRunId(): string | null {
+    return this.runBinding;
+  }
+
+  bindRun(runId: string): void {
+    const binding = requireIdentity(runId, "Patch review bridge Harness Run id");
+    if (this.runBinding !== null) {
+      throw new TypeError("Patch review bridge is already bound to a Harness Run.");
+    }
+    this.runBinding = binding;
   }
 
   getPendingProjection(): HelarcPendingPatchReviewProjection | null {
@@ -72,7 +82,12 @@ class DefaultHelarcPatchReviewBridge implements HelarcPatchReviewBridge {
     } catch {
       return failedOutcome("patch_review_state_invalid", "Patch review request is invalid.");
     }
-    if (request.runId !== this.runId || cancellation.runId !== this.runId) {
+    const boundRunId = this.runBinding;
+    if (
+      boundRunId === null ||
+      request.runId !== boundRunId ||
+      cancellation.runId !== boundRunId
+    ) {
       return failedOutcome(
         "patch_review_state_invalid",
         "Patch review Run identity does not match the active Host Run.",
@@ -156,7 +171,8 @@ class DefaultHelarcPatchReviewBridge implements HelarcPatchReviewBridge {
     const projection = active.projection;
     if (
       active.settled ||
-      submission.runId !== this.runId ||
+      this.runBinding === null ||
+      submission.runId !== this.runBinding ||
       submission.proposalId !== projection.proposalId ||
       submission.reviewId !== projection.reviewId
     ) {

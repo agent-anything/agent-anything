@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import type {
   ToolAnnotations,
   ToolJsonObject,
@@ -64,7 +64,7 @@ export interface McpParsedToolCallResult {
 export function parseMcpToolsListPage(input: {
   readonly response: unknown;
   readonly requestId: string;
-  readonly receivedAt: ISODateTimeString;
+  readonly receivedAt: string;
   readonly maxTtlMs: number;
   readonly transportKind: McpTransportKind;
 }): McpParsedListPage<McpParsedTool> {
@@ -92,7 +92,7 @@ export function parseMcpToolsListPage(input: {
 export function parseMcpResourcesListPage(input: {
   readonly response: unknown;
   readonly requestId: string;
-  readonly receivedAt: ISODateTimeString;
+  readonly receivedAt: string;
   readonly maxTtlMs: number;
 }): McpParsedListPage<McpResourceDescriptor> {
   const page = parseListPage(input, "resources/list", "resources");
@@ -118,7 +118,7 @@ export function parseMcpResourcesListPage(input: {
 export function parseMcpResourceTemplatesListPage(input: {
   readonly response: unknown;
   readonly requestId: string;
-  readonly receivedAt: ISODateTimeString;
+  readonly receivedAt: string;
   readonly maxTtlMs: number;
 }): McpParsedListPage<McpResourceTemplateDescriptor> {
   const page = parseListPage(
@@ -148,7 +148,7 @@ export function parseMcpResourceTemplatesListPage(input: {
 export function parseMcpPromptsListPage(input: {
   readonly response: unknown;
   readonly requestId: string;
-  readonly receivedAt: ISODateTimeString;
+  readonly receivedAt: string;
   readonly maxTtlMs: number;
 }): McpParsedListPage<McpPromptDescriptor> {
   const page = parseListPage(input, "prompts/list", "prompts");
@@ -218,7 +218,7 @@ export function parseMcpResourceReadResult(input: {
   readonly requestId: string;
   readonly source: McpSourceLookup;
   readonly requestedUri: string;
-  readonly receivedAt: ISODateTimeString;
+  readonly receivedAt: string;
   readonly maxTtlMs: number;
 }): McpResourceReadResult {
   const result = parseMcpOperationResponse({
@@ -302,7 +302,7 @@ function parseListPage(
   input: {
     readonly response: unknown;
     readonly requestId: string;
-    readonly receivedAt: ISODateTimeString;
+    readonly receivedAt: string;
     readonly maxTtlMs: number;
   },
   operation: string,
@@ -670,7 +670,7 @@ function parseResourceAnnotations(
     }
     priority = input.priority;
   }
-  let lastModified: ISODateTimeString | undefined;
+  let lastModified: string | undefined;
   if (input.lastModified !== undefined) {
     const value = boundedString(
       input.lastModified,

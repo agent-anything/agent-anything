@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/foundation";
+
 import type { ToolResult } from "@agent-anything/tools";
 import type { Evidence, EvidenceSensitivity } from "./Evidence.js";
 
@@ -18,7 +18,7 @@ export interface BuildEvidenceInput {
   readonly id?: string;
   readonly summary?: string;
   readonly sensitivity?: EvidenceSensitivity;
-  readonly metadata?: Readonly<Metadata>;
+  readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface EvidenceBuilderPort {

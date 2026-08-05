@@ -1,4 +1,4 @@
-import type { AgentTask } from "@agent-anything/foundation";
+import type { AgentTask } from "@agent-anything/agent-core/task";
 import {
   createHelarcRunInput,
   createHelarcTask,

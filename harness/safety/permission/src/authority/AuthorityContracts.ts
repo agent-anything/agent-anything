@@ -1,8 +1,4 @@
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-  ISODateTimeString,
-} from "@agent-anything/foundation";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { ApprovalCategory } from "../approval/ApprovalCategory.js";
 import type {
   CanonicalAdditionalPermissions,
@@ -21,7 +17,7 @@ export interface ValidatedActionAuthority {
   readonly actionFingerprint: string;
   readonly sourceRequestId: string;
   readonly grantedPermissions: GrantedPermissions | null;
-  readonly validatedAt: ISODateTimeString;
+  readonly validatedAt: string;
 }
 
 export interface ActionApprovalCoverage {
@@ -32,7 +28,7 @@ export interface ActionApprovalCoverage {
   readonly sourceRequestId: string;
   readonly grantedPermissions: GrantedPermissions | null;
   readonly status: "available" | "consumed" | "invalidated";
-  readonly createdAt: ISODateTimeString;
+  readonly createdAt: string;
 }
 
 export interface RunPermissionGrant {
@@ -41,7 +37,7 @@ export interface RunPermissionGrant {
   readonly sourceRequestId: string;
   readonly sourceActionFingerprint: string;
   readonly permissions: GrantedPermissions;
-  readonly createdAt: ISODateTimeString;
+  readonly createdAt: string;
 }
 
 export interface SessionAuthorityContext {
@@ -73,7 +69,7 @@ export interface SessionAuthorityRecord extends SessionAuthorityContext {
   readonly grantedPermissions: GrantedPermissions | null;
   readonly sourceRequestId: string;
   readonly sourceActionFingerprint: string;
-  readonly createdAt: ISODateTimeString;
+  readonly createdAt: string;
 }
 
 export interface SessionAuthorityRecordInput extends SessionAuthorityContext {
@@ -83,7 +79,7 @@ export interface SessionAuthorityRecordInput extends SessionAuthorityContext {
   readonly grantedPermissions: CanonicalAdditionalPermissions | null;
   readonly sourceRequestId: string;
   readonly sourceActionFingerprint: string;
-  readonly createdAt: ISODateTimeString;
+  readonly createdAt: string;
 }
 
 export interface SessionAuthorityLookup {

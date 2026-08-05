@@ -1,5 +1,5 @@
 import type { ManagedFileSystemMaximumAccess } from "@agent-anything/governance/managed-permission";
-import type { Metadata } from "@agent-anything/foundation";
+
 
 export const BUILT_IN_PERMISSION_PROFILE_IDS = [
   ":read-only",
@@ -75,7 +75,7 @@ export interface PermissionProfileDefinition {
     readonly unrestricted: boolean;
   };
   readonly network: NetworkPermissionPolicy;
-  readonly metadata: Metadata;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface PermissionResolutionEnvironmentInput {
@@ -124,7 +124,7 @@ export interface ResolvedPermissionProfile {
   };
   readonly network: ResolvedNetworkPermissionPolicy;
   readonly managedConstraintSetId: string;
-  readonly metadata: Readonly<Metadata>;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface PermissionProfileSafeProjection {

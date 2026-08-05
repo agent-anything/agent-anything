@@ -26,7 +26,7 @@
     }
   },
   "dependencies": {
-    "@agent-anything/foundation": "workspace:*",
+    "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/remote-integrations": "workspace:*",
     "@agent-anything/tools": "workspace:*",
     "ajv": "8.20.0"

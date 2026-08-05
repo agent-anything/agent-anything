@@ -94,7 +94,7 @@ describe("Helarc Product command dispatcher", () => {
     pending.resolve({
       ok: true,
       taskId: "task-1",
-      runId: "run-1",
+      productRunId: "run-1",
       threadId: "thread-1",
       snapshot: snapshot("running"),
     });
@@ -182,7 +182,7 @@ function createHandlers(
     "run.start": vi.fn(() => ({
       ok: true as const,
       taskId: "task-1",
-      runId: "run-1",
+      productRunId: "run-1",
       threadId: "thread-1",
       snapshot: snapshot("running"),
     })),

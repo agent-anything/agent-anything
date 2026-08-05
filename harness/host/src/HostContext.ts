@@ -1,10 +1,4 @@
-import {
-  snapshotIdentityRef,
-  snapshotRunWorkspace,
-  type IdentityRef,
-  type Metadata,
-  type RunWorkspace,
-} from "@agent-anything/foundation";
+import { snapshotIdentityRef, snapshotRunWorkspace, type IdentityRef, type RunWorkspace } from "@agent-anything/agent-core/run";
 
 export type HostWorkspaceSelection =
   | {
@@ -29,7 +23,7 @@ interface HostContextResolutionInputBase {
   readonly sessionId: string;
   readonly runId: string;
   readonly taskId: string;
-  readonly metadata: Metadata;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface HostWorkspaceResolutionInput
@@ -56,7 +50,7 @@ export interface ResolveHostRunContextInput {
   readonly sessionId: string;
   readonly runId: string;
   readonly taskId: string;
-  readonly metadata: Metadata;
+  readonly metadata: Readonly<Record<string, unknown>>;
   readonly workspaceResolver: HostWorkspaceResolver;
   readonly identityResolver: HostIdentityResolver;
   readonly workspaceSelection: HostWorkspaceSelection;

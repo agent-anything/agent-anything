@@ -1,5 +1,5 @@
 import { createCanonicalSha256Digest } from "@agent-anything/action-execution";
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import {
   normalizeHelarcThreadRecord,
   type HelarcArtifact,
@@ -22,7 +22,7 @@ export interface HelarcCommitLedgerEntry {
   readonly threadId: string;
   readonly runId: string;
   readonly fingerprint: string;
-  readonly committedAt: ISODateTimeString;
+  readonly committedAt: string;
   readonly progressSequence: number;
 }
 
@@ -44,7 +44,7 @@ interface HelarcCommitBase {
   readonly commitId: string;
   readonly threadId: string;
   readonly runId: string;
-  readonly committedAt: ISODateTimeString;
+  readonly committedAt: string;
 }
 
 export type HelarcRunStartTarget =
@@ -84,7 +84,7 @@ export interface HelarcCommitReceipt {
   readonly kind: HelarcCommitKind;
   readonly threadId: string;
   readonly runId: string;
-  readonly committedAt: ISODateTimeString;
+  readonly committedAt: string;
   readonly progressSequence: number;
 }
 
@@ -265,7 +265,8 @@ export async function applyHelarcRunProgressCommit(
     return reject(aggregate, "stale_progress", "Progress sequence is stale.");
   }
   if (
-    commit.progress.host.runId !== run.id || commit.progress.host.taskId !== run.taskId ||
+    (run.harnessRunId !== null && commit.progress.host.runId !== run.harnessRunId) ||
+    commit.progress.host.taskId !== run.taskId ||
     commit.progress.host.sessionId !== run.sessionId || commit.progress.product.runId !== run.id ||
     commit.progress.host.terminal !== null || commit.progress.product.result !== null ||
     commit.committedAt < commit.progress.recordedAt || commit.committedAt < run.updatedAt ||
@@ -275,6 +276,7 @@ export async function applyHelarcRunProgressCommit(
   }
   const updatedRun: HelarcPersistedRun = {
     ...run,
+    harnessRunId: run.harnessRunId ?? commit.progress.host.runId,
     updatedAt: commit.committedAt,
     progressSequence: commit.progressSequence,
     lastProgress: commit.progress,
@@ -307,7 +309,8 @@ export async function applyHelarcRunTerminalCommit(
   if (run === undefined) return reject(aggregate, "run_not_found", "Terminal Run was not found.");
   if (run.terminal !== null) return reject(aggregate, "run_terminal", "Run terminal is immutable.");
   if (
-    commit.terminal.host.runId !== run.id || commit.terminal.host.taskId !== run.taskId ||
+    (run.harnessRunId !== null && commit.terminal.host.runId !== run.harnessRunId) ||
+    commit.terminal.host.taskId !== run.taskId ||
     commit.terminal.host.completedAt < run.startedAt ||
     commit.committedAt < commit.terminal.host.completedAt || commit.committedAt < run.updatedAt
   ) {
@@ -340,6 +343,7 @@ export async function applyHelarcRunTerminalCommit(
 
   const updatedRun: HelarcPersistedRun = {
     ...run,
+    harnessRunId: run.harnessRunId ?? commit.terminal.host.runId,
     updatedAt: commit.committedAt,
     terminal: commit.terminal,
     artifactIds,
@@ -592,6 +596,6 @@ function hasIdentity(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function isDateTime(value: unknown): value is ISODateTimeString {
+function isDateTime(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }

@@ -1,4 +1,4 @@
-import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
+
 
 export type PatchProposalId = string;
 export type PatchReviewId = string;
@@ -42,8 +42,8 @@ export interface PatchProposal {
   operation: PatchOperation;
   summary: string;
   rationale: string;
-  createdAt: ISODateTimeString;
-  metadata: Metadata;
+  createdAt: string;
+  metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface AcceptedPatchDecision {
@@ -53,9 +53,9 @@ export interface AcceptedPatchDecision {
   reviewId: PatchReviewId;
   pendingVersion: number;
   submissionId: PatchDecisionSubmissionId;
-  decidedAt: ISODateTimeString;
+  decidedAt: string;
   reason?: string;
-  metadata: Metadata;
+  metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface RejectedPatchDecision {
@@ -65,9 +65,9 @@ export interface RejectedPatchDecision {
   reviewId: PatchReviewId;
   pendingVersion: number;
   submissionId: PatchDecisionSubmissionId;
-  decidedAt: ISODateTimeString;
+  decidedAt: string;
   reason: string;
-  metadata: Metadata;
+  metadata: Readonly<Record<string, unknown>>;
 }
 
 export type PatchDecision = AcceptedPatchDecision | RejectedPatchDecision;

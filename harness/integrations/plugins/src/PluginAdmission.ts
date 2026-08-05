@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import {
   assertCanonicalDataArray,
   assertExactDataProperties,
@@ -73,7 +73,7 @@ export interface PluginAdmissionInput {
   readonly contributions: readonly PluginContributionAdmissionInput[];
   readonly reason: string | null;
   readonly supersedesAdmissionFingerprint: string | null;
-  readonly decidedAt: ISODateTimeString;
+  readonly decidedAt: string;
 }
 
 export interface PluginAdmissionSnapshot {
@@ -87,7 +87,7 @@ export interface PluginAdmissionSnapshot {
   readonly contributions: readonly PluginContributionAdmission[];
   readonly reason: string | null;
   readonly supersedesAdmissionFingerprint: string | null;
-  readonly decidedAt: ISODateTimeString;
+  readonly decidedAt: string;
   readonly admissionFingerprint: string;
 }
 

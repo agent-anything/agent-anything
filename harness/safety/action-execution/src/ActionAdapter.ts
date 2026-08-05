@@ -4,10 +4,7 @@ import type {
   ApprovalPayloadByCategory,
   CanonicalAdditionalPermissions,
 } from "@agent-anything/permission";
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-} from "@agent-anything/foundation";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { CanonicalActionOperationInput } from "./CanonicalActionOperation.js";
 import type {
   CanonicalActorIdentity,

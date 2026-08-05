@@ -19,9 +19,7 @@ export {
 export type {
   HelarcHostRunComposition,
   HelarcHostActiveRun,
-  HelarcHostRunOutcome,
   HelarcHostRunResult,
-  HelarcHostRunStartFailureResult,
   PreparedHelarcHostRun,
   PrepareHelarcHostRunInput,
 } from "./HelarcHostRunComposition.js";

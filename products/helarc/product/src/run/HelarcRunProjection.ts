@@ -77,7 +77,8 @@ export interface HelarcRunDisplayProjection {
 }
 
 export interface HelarcRunProjection {
-  readonly runId: string;
+  readonly productRunId: string;
+  readonly harnessRunId: string;
   readonly host: HostRunProjection;
   readonly product: HelarcProductRunProjection;
   readonly display: HelarcRunDisplayProjection;
@@ -185,7 +186,7 @@ export function reduceHelarcRunProjection(
   }
   try {
     if (update.kind === "host") {
-      if (update.projection.runId !== current.runId) {
+      if (update.projection.runId !== current.harnessRunId) {
         return rejectUnified(current, "run_identity_mismatch");
       }
       if (update.projection.sequence <= current.host.sequence) {
@@ -194,7 +195,7 @@ export function reduceHelarcRunProjection(
       return appliedUnified(snapshotUnifiedProjection(update.projection, current.product));
     }
     if (update.kind === "product") {
-      if (update.projection.runId !== current.runId) {
+      if (update.projection.runId !== current.productRunId) {
         return rejectUnified(current, "run_identity_mismatch");
       }
       if (update.projection.sequence <= current.product.sequence) {
@@ -252,7 +253,8 @@ function snapshotUnifiedProjection(
 ): HelarcRunProjection {
   assertProjectionPair(host, product);
   return Object.freeze({
-    runId: host.runId,
+    productRunId: product.runId,
+    harnessRunId: host.runId,
     host,
     product,
     display: deriveHelarcRunDisplayProjection(host, product),
@@ -336,10 +338,15 @@ function isProductProjection(value: unknown): value is HelarcProductRunProjectio
 
 function isUnifiedProjection(value: unknown): value is HelarcRunProjection {
   return value !== null && typeof value === "object" &&
-    hasIdentity((value as { runId?: unknown }).runId) &&
+    hasIdentity((value as { productRunId?: unknown }).productRunId) &&
+    hasIdentity((value as { harnessRunId?: unknown }).harnessRunId) &&
     isProductProjection((value as { product?: unknown }).product) &&
+    (value as { product: HelarcProductRunProjection }).product.runId ===
+      (value as { productRunId: string }).productRunId &&
     (value as { host?: unknown }).host !== null &&
-    typeof (value as { host?: unknown }).host === "object";
+    typeof (value as { host?: unknown }).host === "object" &&
+    (value as { host: HostRunProjection }).host.runId ===
+      (value as { harnessRunId: string }).harnessRunId;
 }
 
 function assertProjectionPair(
@@ -349,9 +356,9 @@ function assertProjectionPair(
   if (
     host === null || typeof host !== "object" || !hasIdentity(host.runId) ||
     !Number.isSafeInteger(host.sequence) || host.sequence < 0 ||
-    !isProductProjection(product) || host.runId !== product.runId
+    !isProductProjection(product)
   ) {
-    throw new TypeError("Host and product projections must identify the same Run.");
+    throw new TypeError("Host and product projections must carry valid Run identities.");
   }
 }
 

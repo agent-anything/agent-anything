@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import type { McpDiscoverySnapshot } from "./McpProtocol.js";
 import type {
   McpProtocolRevision,
@@ -29,7 +29,7 @@ export interface McpActivationSnapshot extends McpActivationRef {
   readonly transport: McpTransportBindingIdentity;
   readonly transportConnectionId: string;
   readonly discovery: McpDiscoverySnapshot;
-  readonly activatedAt: ISODateTimeString;
+  readonly activatedAt: string;
 }
 
 export type McpLifecycleFailureCode =
@@ -55,7 +55,7 @@ export interface McpLifecycleFailure {
   readonly code: McpLifecycleFailureCode;
   readonly message: string;
   readonly attemptId: string | null;
-  readonly occurredAt: ISODateTimeString;
+  readonly occurredAt: string;
 }
 
 interface McpLifecycleStateBase {
@@ -68,7 +68,7 @@ interface McpLifecycleStateBase {
     | "failed"
     | "stopping"
     | "stopped";
-  readonly changedAt: ISODateTimeString;
+  readonly changedAt: string;
 }
 
 export interface McpRegisteredState extends McpLifecycleStateBase {
@@ -78,7 +78,7 @@ export interface McpRegisteredState extends McpLifecycleStateBase {
 export interface McpDiscoveringState extends McpLifecycleStateBase {
   readonly status: "discovering";
   readonly attemptId: string;
-  readonly startedAt: ISODateTimeString;
+  readonly startedAt: string;
 }
 
 export interface McpActiveState extends McpLifecycleStateBase {

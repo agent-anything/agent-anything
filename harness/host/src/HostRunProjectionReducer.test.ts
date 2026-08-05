@@ -7,10 +7,7 @@ import {
   type RuntimeEventName,
   type RuntimeEventPayloadMap,
 } from "@agent-anything/observability/events";
-import {
-  createFailedRunResult,
-  createSucceededRunResult,
-} from "@agent-anything/runtime/run";
+import { createFailedRunResult, createSucceededRunResult } from "@agent-anything/agent-runtime/run";
 import {
   createHostRunProjection,
   createHostTerminalRunProjection,

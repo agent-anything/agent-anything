@@ -1,4 +1,4 @@
-import type { ControllerInput } from "@agent-anything/runtime/controller";
+import type { ControllerInput } from "@agent-anything/agent-runtime/controller";
 import {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,
@@ -124,7 +124,7 @@ function buildUserPrompt(taskPrompt: string, input: ControllerInput): string {
     taskPrompt,
     "",
     "Conversation items:",
-    JSON.stringify(input.conversationItems),
+    JSON.stringify(input.inputItems),
     "",
     "Context messages:",
     JSON.stringify(input.context.messages),

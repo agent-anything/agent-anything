@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/foundation";
+
 import type { ApprovalCategory } from "./ApprovalCategory.js";
 import type {
   ApprovalPayloadByCategory,
@@ -164,7 +164,7 @@ function snapshotRemoteTool(
     source,
     server,
     tool,
-    safeArguments: cloneApprovalMetadata(input.safeArguments as Metadata),
+    safeArguments: cloneApprovalMetadata(input.safeArguments as Readonly<Record<string, unknown>>),
     annotations,
     supportsSessionAuthority: input.supportsSessionAuthority,
   });

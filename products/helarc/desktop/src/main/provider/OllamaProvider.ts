@@ -8,7 +8,7 @@ import {
   type ProviderRequest,
   type ProviderResponse,
 } from "@agent-anything/model-interaction";
-import type { InvocationInterruptionContext } from "@agent-anything/foundation";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
 import type { FetchLike } from "./OpenAICompatibleProvider.js";
 import { readProviderHttpFailureMetadata } from "./ProviderHttpFailureMetadata.js";
 import type { HelarcProviderConfig } from "./resolveHelarcProviderConfig.js";

@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/foundation";
+
 
 export type ApprovalsReviewer = "user" | "auto_review";
 
@@ -21,5 +21,5 @@ export interface ApprovalReviewerDescriptor {
   readonly kind: ApprovalsReviewer;
   readonly displayName: string;
   readonly source: string;
-  readonly metadata: Readonly<Metadata>;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }

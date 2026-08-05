@@ -9,7 +9,7 @@ import type {
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/model-interaction";
-import type { InvocationInterruptionContext } from "@agent-anything/foundation";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1107,21 +1107,24 @@ describe("HelarcMainController", () => {
       target: { kind: "new_thread" },
     });
     const secondSnapshot = await secondWaiting;
-    expect(secondSnapshot.run?.runId).toBe("helarc-run-2");
+    expect(secondSnapshot.run?.productRunId).toBe("helarc-run-2");
+    const secondHarnessRunId = secondSnapshot.run?.harnessRunId;
+    if (secondHarnessRunId === undefined) throw new Error("Expected active Harness Run id.");
 
     expect(dispatchCancellationCommand(
       controller,
-      "helarc-run-1",
+      "harness-run-stale",
       "host-stale-cancel-run-1",
     )).toMatchObject({
       status: "rejected",
-      runId: "helarc-run-1",
+      runId: "harness-run-stale",
       code: "host_command_run_not_active",
     });
     expect(controller.getSnapshot()).toMatchObject({
       status: "waiting_for_approval",
       run: {
-        runId: "helarc-run-2",
+        productRunId: "helarc-run-2",
+        harnessRunId: secondHarnessRunId,
         display: { status: "waiting_for_approval" },
       },
     });
@@ -1129,7 +1132,7 @@ describe("HelarcMainController", () => {
     const secondCancelled = waitForActiveRunTerminal(controller, "cancelled");
     expect(dispatchCancellationCommand(
       controller,
-      "helarc-run-2",
+      secondHarnessRunId,
       "host-cancel-run-2",
     )).toMatchObject({
       status: "handled",
@@ -1553,7 +1556,7 @@ describe("HelarcMainController", () => {
         threadSummaries: [{
           id: started.threadId,
           latestRun: {
-            runId: started.runId,
+            runId: started.productRunId,
             status: "inactive",
           },
         }],
@@ -1565,7 +1568,7 @@ describe("HelarcMainController", () => {
     await waitForSnapshot(
       activeController,
       (snapshot) =>
-        snapshot.threadSummaries[0]?.latestRun?.runId === started.runId &&
+        snapshot.threadSummaries[0]?.latestRun?.runId === started.productRunId &&
         snapshot.threadSummaries[0]?.latestRun?.status === "completed",
     );
   });
@@ -1583,7 +1586,7 @@ describe("HelarcMainController", () => {
     expect(first).toMatchObject({
       ok: true,
       taskId: "helarc-task-1",
-      runId: "helarc-run-1",
+      productRunId: "helarc-run-1",
       threadId: "helarc-thread-1",
     });
     if (!first.ok) {
@@ -1592,7 +1595,7 @@ describe("HelarcMainController", () => {
     await waitForSnapshot(
       controller,
       (snapshot) =>
-        snapshot.threadSummaries[0]?.latestRun?.runId === first.runId &&
+        snapshot.threadSummaries[0]?.latestRun?.runId === first.productRunId &&
         snapshot.threadSummaries[0]?.latestRun?.status === "completed",
     );
     await expect(controller.openThread(first.threadId)).resolves.toMatchObject({
@@ -1614,7 +1617,7 @@ describe("HelarcMainController", () => {
     expect(second).toMatchObject({
       ok: true,
       taskId: "helarc-task-2",
-      runId: "helarc-run-2",
+      productRunId: "helarc-run-2",
       threadId: "helarc-thread-1",
     });
     if (!second.ok) {
@@ -1623,7 +1626,7 @@ describe("HelarcMainController", () => {
     await waitForSnapshot(
       controller,
       (snapshot) =>
-        snapshot.threadSummaries[0]?.latestRun?.runId === second.runId &&
+        snapshot.threadSummaries[0]?.latestRun?.runId === second.productRunId &&
         snapshot.threadSummaries[0]?.latestRun?.status === "completed",
     );
 
@@ -1686,7 +1689,7 @@ describe("HelarcMainController", () => {
     await waitForSnapshot(
       controller,
       (snapshot) =>
-        snapshot.threadSummaries[0]?.latestRun?.runId === first.runId &&
+        snapshot.threadSummaries[0]?.latestRun?.runId === first.productRunId &&
         snapshot.threadSummaries[0]?.latestRun?.status === "completed",
     );
 
@@ -1704,7 +1707,7 @@ describe("HelarcMainController", () => {
     });
     expect(provider.requests).toHaveLength(1);
     await expect(threadStore.loadThread(first.threadId)).resolves.toMatchObject({
-      runs: [{ id: first.runId }],
+      runs: [{ id: first.productRunId }],
     });
   });
 

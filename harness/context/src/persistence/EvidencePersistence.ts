@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/foundation";
+
 import type { Evidence } from "../evidence/Evidence.js";
 import type { StoredEvidenceArtifact } from "./StoredEvidenceArtifact.js";
 
@@ -6,7 +6,7 @@ export interface EvidencePersistenceError {
   readonly code: string;
   readonly message: string;
   readonly retryable: boolean;
-  readonly metadata: Metadata;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export type EvidencePersistenceResult =

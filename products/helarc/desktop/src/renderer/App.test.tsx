@@ -295,7 +295,8 @@ function runProjection(input: {
         ? "runtime_cancelled" as const
         : "runtime_limit_exceeded" as const;
   return {
-    runId: "run-1",
+    productRunId: "product-run-1",
+    harnessRunId: "harness-run-1",
     display: { status, terminal, statusSource: "host" },
     host: {
       taskId: "task-1",

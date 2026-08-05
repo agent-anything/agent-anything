@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 
 export const TELEMETRY_RECORD_SCHEMA_VERSION = 1 as const;
 
@@ -160,7 +160,7 @@ interface TelemetryRecordEnvelope<TName extends TelemetryRecordName> {
   readonly runId: string;
   readonly taskId: string;
   readonly eventName: TName;
-  readonly timestamp: ISODateTimeString;
+  readonly timestamp: string;
 }
 
 export type TelemetryRecord<

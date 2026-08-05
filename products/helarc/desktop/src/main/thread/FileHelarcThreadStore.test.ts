@@ -281,6 +281,7 @@ function startCommit(id: string, timestamp = STARTED_AT): HelarcRunStartCommit {
     },
     run: {
       id: `run-${id}`,
+      harnessRunId: null,
       taskId: `task-${id}`,
       sessionId: `session-${id}`,
       threadId: `thread-${id}`,

@@ -7,7 +7,7 @@
     "architecture:check": "node scripts/check-architecture.mjs && node --test scripts/architecture/*.test.mjs",
     "build": "node scripts/clean-build-output.mjs && pnpm -r run build",
     "conformance:test": "pnpm --filter @agent-anything/host exec vitest run src/RunnerHostConformance.test.ts && pnpm --filter @agent-anything/helarc exec vitest run src/work-context/HelarcWorkContextCommit.test.ts && pnpm --filter @agent-anything/helarc-desktop exec vitest run src/main/run/HelarcHostRunComposition.test.ts src/main/HelarcMainController.test.ts src/main/HelarcDesktopProjection.test.ts src/main/ipc.test.ts src/renderer/App.test.tsx",
-    "test": "pnpm run architecture:check && pnpm -r run test",
+    "test": "pnpm run architecture:check && pnpm build && pnpm -r run test",
     "typecheck": "pnpm -r run typecheck"
   },
   "keywords": [],

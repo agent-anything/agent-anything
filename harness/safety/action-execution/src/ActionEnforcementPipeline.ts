@@ -1,18 +1,11 @@
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-  ISODateTimeString,
-} from "@agent-anything/foundation";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import { snapshotApprovalPayload } from "@agent-anything/permission/approval";
 import {
   allowsActionApproval,
   type ActionApprovalCause,
 } from "@agent-anything/permission";
 import type { ActionPolicyPort, PolicyDecision } from "@agent-anything/governance";
-import type {
-  Action,
-  ActionRejectedCode,
-} from "@agent-anything/foundation/action";
+import type { Action, ActionRejectedCode } from "@agent-anything/agent-core/action";
 import {
   createActionExecutionFailure,
   type ActionExecutionFailure,
@@ -130,12 +123,12 @@ export interface ActionEnforcementPipelineDependencies {
   readonly toolBindings: ToolActionBindingSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
   readonly policyPort: ActionPolicyPort;
-  readonly now?: () => ISODateTimeString;
+  readonly now?: () => string;
 }
 
 export class ActionEnforcementPipeline {
   private readonly adapters;
-  private readonly now: () => ISODateTimeString;
+  private readonly now: () => string;
   private readonly processedSandboxDenials = new WeakSet<object>();
 
   constructor(
@@ -360,7 +353,7 @@ export class ActionEnforcementPipeline {
           false,
         );
       }
-      let preparedAt: ISODateTimeString;
+      let preparedAt: string;
       try {
         preparedAt = validatePreparedAt(this.now());
       } catch {

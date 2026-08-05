@@ -3,8 +3,8 @@ import type {
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/model-interaction";
-import type { InvocationInterruptionContext } from "@agent-anything/foundation";
-import { createFailedRunResult } from "@agent-anything/runtime/run";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
+import { createFailedRunResult } from "@agent-anything/agent-runtime/run";
 import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "../task/index.js";
 import { createHelarcProductComposition } from "./HelarcProductComposition.js";

@@ -1,4 +1,4 @@
-import type { Controller } from "@agent-anything/runtime/controller";
+import type { Controller } from "@agent-anything/agent-runtime/controller";
 import {
   RUNTIME_EVENT_SCHEMA_VERSION,
   snapshotRuntimeEventPayload,
@@ -7,12 +7,8 @@ import {
   type RuntimeEventPayloadMap,
 } from "@agent-anything/observability/events";
 import { createControllerTurnTraceOperationId } from "@agent-anything/observability/tracing";
-import type {
-  ControllerCallContext,
-  ControllerDecision,
-  ControllerInput,
-} from "@agent-anything/runtime/controller";
-import { createRunCancellationController } from "@agent-anything/runtime/run";
+import type { ControllerCallContext, ControllerDecision, ControllerInput } from "@agent-anything/agent-runtime/controller";
+import { createRunCancellationController } from "@agent-anything/agent-runtime/run";
 import { describe, expect, it } from "vitest";
 import {
   HelarcTracingController,

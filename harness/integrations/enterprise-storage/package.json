@@ -31,7 +31,7 @@
   },
   "dependencies": {
     "@agent-anything/context": "workspace:*",
-    "@agent-anything/foundation": "workspace:*"
+    "@agent-anything/agent-core": "workspace:*"
   },
   "license": "Apache-2.0",
   "private": true

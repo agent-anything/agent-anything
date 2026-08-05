@@ -1,5 +1,5 @@
 import type { ManagedPermissionConstraints } from "@agent-anything/governance/managed-permission";
-import type { InvocationInterruptionContext } from "@agent-anything/foundation";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
 import { describe, expect, it } from "vitest";
 import { canonicalizeAdditionalPermissions } from "../approval/PermissionDelta.js";
 import {

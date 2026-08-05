@@ -236,7 +236,7 @@ export function App() {
 
   async function cancelRun() {
     const api = getHelarcApi();
-    const runId = snapshot.run?.runId;
+    const runId = snapshot.run?.harnessRunId;
     if (!api || !runId) {
       return;
     }

@@ -1,5 +1,5 @@
 import type { ManagedPermissionConstraints } from "@agent-anything/governance/managed-permission";
-import type { Metadata } from "@agent-anything/foundation";
+
 import {
   canonicalizePermissionDomains,
   canonicalizePermissionFileSystemTarget,
@@ -444,15 +444,15 @@ function maximumAccessPrecedence(value: "read" | "none"): number {
 
 function mergeMetadata(
   chain: readonly PermissionProfileDefinition[],
-): Readonly<Metadata> {
-  const result: Metadata = {};
+): Readonly<Record<string, unknown>> {
+  const result: Readonly<Record<string, unknown>> = {};
   for (const definition of chain) {
     Object.assign(result, cloneMetadata(definition.metadata));
   }
   return result;
 }
 
-function cloneMetadata(metadata: Metadata): Metadata {
+function cloneMetadata(metadata: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
   const clone = cloneMetadataValue(metadata, "metadata");
   if (!isPlainRecord(clone)) {
     throw new PermissionProfileResolutionError(

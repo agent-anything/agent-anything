@@ -1,10 +1,10 @@
-import type { Metadata } from "@agent-anything/foundation";
+
 
 export interface RedactionResult<TValue = unknown> {
   value: TValue;
   redacted: boolean;
   redactions: Redaction[];
-  metadata: Metadata;
+  metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface Redaction {

@@ -1,16 +1,16 @@
-import type { Metadata } from "@agent-anything/foundation";
+
 
 export interface ProviderResponse<TOutput = unknown> {
   readonly output: TOutput;
   readonly usage: ProviderUsage | null;
-  readonly metadata: Metadata;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface ProviderUsage {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
-  metadata: Metadata;
+  metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface ProviderFailure {
@@ -20,5 +20,5 @@ export interface ProviderFailure {
   readonly retryAfterMs?: number;
   readonly requestId?: string;
   readonly statusCode?: number;
-  readonly metadata: Metadata;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }

@@ -35,14 +35,14 @@
   },
   "dependencies": {
     "@agent-anything/action-execution": "workspace:*",
-    "@agent-anything/foundation": "workspace:*",
+    "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/tools": "workspace:*"
   },
   "devDependencies": {
     "@agent-anything/context": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/permission": "workspace:*",
-    "@agent-anything/runtime": "workspace:*"
+    "@agent-anything/agent-runtime": "workspace:*"
   },
   "license": "Apache-2.0",
   "private": true

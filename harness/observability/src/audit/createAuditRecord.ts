@@ -1,4 +1,4 @@
-import type { IdentityKind } from "@agent-anything/foundation";
+import type { IdentityKind } from "@agent-anything/agent-core/run";
 import {
   AUDIT_RECORD_SCHEMA_VERSION,
   type AuditActor,

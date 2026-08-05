@@ -1,7 +1,7 @@
-import type { Metadata } from "@agent-anything/foundation";
+
 import { ApprovalContractError } from "./ApprovalContractError.js";
 
-export function cloneApprovalMetadata(metadata: Metadata): Metadata {
+export function cloneApprovalMetadata(metadata: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
   const clone = cloneApprovalValue(metadata, "metadata");
   if (!isPlainRecord(clone)) {
     throw new ApprovalContractError(

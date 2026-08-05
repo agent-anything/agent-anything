@@ -3,9 +3,9 @@ import {
   type ApprovalCategory,
   type ApprovalReviewInput,
 } from "@agent-anything/permission";
-import type { Metadata } from "@agent-anything/foundation";
+
 import type { RuntimeEvent } from "@agent-anything/observability/events";
-import type { PlanProjection, PlanStepStatus } from "@agent-anything/runtime/plan";
+import type { PlanProjection, PlanStepStatus } from "@agent-anything/agent-runtime/plan";
 import { projectRuntimeEventForHost } from "./HostRuntimeProjection.js";
 import {
   HOST_RETRY_EVENT_LIMIT,
@@ -153,8 +153,8 @@ function applyRuntimeEvent(
   if (event.runId !== current.runId || event.taskId !== current.taskId) {
     return rejected(current, "run_identity_mismatch");
   }
-  const payload: Metadata = isRecord(event.payload)
-    ? event.payload as unknown as Metadata
+  const payload: Readonly<Record<string, unknown>> = isRecord(event.payload)
+    ? event.payload as unknown as Readonly<Record<string, unknown>>
     : {};
 
   switch (event.name) {
@@ -219,7 +219,7 @@ function applyApprovalRequested(
   current: HostRunProjection,
   sequence: number,
   event: RuntimeEvent,
-  payload: Metadata,
+  payload: Readonly<Record<string, unknown>>,
 ): HostRunProjectionReduction {
   if (current.status !== "running" && current.status !== "waiting_for_approval") {
     return rejected(current, "invalid_transition");
@@ -297,7 +297,7 @@ function applyApprovalSubmission(
 function applyApprovalResolved(
   current: HostRunProjection,
   sequence: number,
-  payload: Metadata,
+  payload: Readonly<Record<string, unknown>>,
 ): HostRunProjectionReduction {
   if (current.status !== "waiting_for_approval" || current.approval === null) {
     return rejected(current, "invalid_transition");
@@ -317,7 +317,7 @@ function applyApprovalResolved(
 function applySandboxStarted(
   current: HostRunProjection,
   sequence: number,
-  payload: Metadata,
+  payload: Readonly<Record<string, unknown>>,
 ): HostRunProjectionReduction {
   const attempt = readSandboxAttempt(payload, "running", null);
   if (attempt.enforcement !== current.enforcement.selected) {
@@ -335,7 +335,7 @@ function applySandboxStarted(
 function applySandboxResolved(
   current: HostRunProjection,
   sequence: number,
-  payload: Metadata,
+  payload: Readonly<Record<string, unknown>>,
 ): HostRunProjectionReduction {
   const outcome = readSandboxOutcome(payload.outcome);
   const attempt = readSandboxAttempt(payload, outcome, readNullableString(payload.code));
@@ -354,7 +354,7 @@ function applySandboxResolved(
 function appendRetry(
   current: HostRetryProjection | null,
   event: HostRetryEventName,
-  payload: Metadata,
+  payload: Readonly<Record<string, unknown>>,
   occurredAt: string,
 ): HostRetryProjection {
   const projection = retryEvent(event, payload, occurredAt);
@@ -382,7 +382,7 @@ function appendRetry(
 
 function retryEvent(
   event: HostRetryEventName,
-  payload: Metadata,
+  payload: Readonly<Record<string, unknown>>,
   occurredAt: string,
 ): HostRetryEventProjection {
   const owner = readRetryOwner(payload.owner);
@@ -404,7 +404,7 @@ function retryEvent(
 
 function approvalFromRuntimeEvent(
   event: RuntimeEvent,
-  payload: Metadata,
+  payload: Readonly<Record<string, unknown>>,
 ): HostPendingApprovalProjection {
   return Object.freeze({
     runId: event.runId,
@@ -444,7 +444,7 @@ function readPlan(value: unknown): HostPlanProjection {
 }
 
 function readSandboxAttempt(
-  payload: Metadata,
+  payload: Readonly<Record<string, unknown>>,
   outcome: HostSandboxAttemptProjection["outcome"],
   code: string | null,
 ): HostSandboxAttemptProjection {
@@ -588,6 +588,6 @@ function isDateTime(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
-function isRecord(value: unknown): value is Metadata {
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

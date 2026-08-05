@@ -3,22 +3,14 @@ import type {
   ApprovalReviewInput,
   ApprovalSubmissionReceipt,
 } from "@agent-anything/permission";
-import type {
-  ISODateTimeString,
-} from "@agent-anything/foundation";
+
 import type { SandboxEnforcement } from "@agent-anything/action-execution";
 import type {
   RuntimeEvent,
   RuntimeEventName,
 } from "@agent-anything/observability/events";
-import type { PlanProjection } from "@agent-anything/runtime/plan";
-import type {
-  RunCancellationSummary,
-  RunFailureCause,
-  RunFailureKind,
-  RunResult,
-  RunResultCode,
-} from "@agent-anything/runtime/run";
+import type { PlanProjection } from "@agent-anything/agent-runtime/plan";
+import type { RunCancellationSummary, RunFailureCause, RunFailureKind, RunResult, RunResultCode } from "@agent-anything/agent-runtime/run";
 
 export const HOST_RETRY_EVENT_LIMIT = 16;
 
@@ -42,7 +34,7 @@ export interface HostPendingApprovalProjection {
   readonly pendingVersion: number;
   readonly reviewer: "user" | "auto_review";
   readonly phase: "reviewing" | "submitted_for_resolution";
-  readonly requestedAt: ISODateTimeString;
+  readonly requestedAt: string;
   readonly review: ApprovalReviewInput | null;
 }
 
@@ -66,7 +58,7 @@ export interface HostRetryEventProjection {
   readonly event: HostRetryEventName;
   readonly operationId: string;
   readonly owner: HostRetryOwner;
-  readonly occurredAt: ISODateTimeString;
+  readonly occurredAt: string;
   readonly attemptNumber: number | null;
   readonly delayMs: number | null;
   readonly outcome: string | null;
@@ -128,7 +120,7 @@ export interface HostTerminalRunProjection {
   readonly taskId: string;
   readonly status: "completed" | "blocked" | "failed" | "cancelled";
   readonly code: RunResultCode | null;
-  readonly completedAt: ISODateTimeString;
+  readonly completedAt: string;
   readonly durationMs: number | null;
   readonly iterations: number | null;
   readonly actions: number | null;
@@ -146,7 +138,7 @@ export interface HostRunProjection {
   readonly runId: string;
   readonly sequence: number;
   readonly status: HostRunProjectionStatus;
-  readonly startedAt: ISODateTimeString;
+  readonly startedAt: string;
   readonly plan: HostPlanProjection | null;
   readonly approval: HostPendingApprovalProjection | null;
   readonly retry: HostRetryProjection | null;
@@ -159,20 +151,20 @@ export interface CreateHostRunProjectionInput {
   readonly sessionId: string;
   readonly taskId: string;
   readonly runId: string;
-  readonly startedAt: ISODateTimeString;
+  readonly startedAt: string;
   readonly enforcement: SandboxEnforcement;
 }
 
 export interface CreateHostTerminalRunProjectionInput<TOutput = unknown> {
   readonly runResult: RunResult<TOutput>;
-  readonly completedAt?: ISODateTimeString;
+  readonly completedAt?: string;
 }
 
 interface HostRunProjectionUpdateBase<TKind extends string> {
   readonly kind: TKind;
   readonly runId: string;
   readonly sequence: number;
-  readonly occurredAt: ISODateTimeString;
+  readonly occurredAt: string;
 }
 
 export interface HostRuntimeEventProjectionUpdate
@@ -347,7 +339,7 @@ function snapshotCancellation(
   });
 }
 
-function readDateTimeMetadata(value: unknown): ISODateTimeString | null {
+function readDateTimeMetadata(value: unknown): string | null {
   return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
 }
 

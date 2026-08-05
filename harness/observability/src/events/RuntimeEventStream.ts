@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import {
   RUNTIME_EVENT_SCHEMA_VERSION,
   type RuntimeEvent,
@@ -22,7 +22,7 @@ export type RuntimeEventIdentityFactory = (
 export interface CreateRuntimeEventStreamInput {
   readonly runId: string;
   readonly taskId: string;
-  readonly now: () => ISODateTimeString;
+  readonly now: () => string;
   readonly createEventId: RuntimeEventIdentityFactory;
   readonly publishers?: readonly RuntimeEventPublisher[];
 }
@@ -30,7 +30,7 @@ export interface CreateRuntimeEventStreamInput {
 export class RuntimeEventStream {
   private readonly runId: string;
   private readonly taskId: string;
-  private readonly now: () => ISODateTimeString;
+  private readonly now: () => string;
   private readonly createEventId: RuntimeEventIdentityFactory;
   private readonly publishers: readonly RuntimeEventPublisher[];
   private sequence = 0;
@@ -54,7 +54,7 @@ export class RuntimeEventStream {
   emit<TName extends RuntimeEventName>(
     name: TName,
     payload: RuntimeEventPayloadMap[TName],
-    occurredAt: ISODateTimeString = this.now(),
+    occurredAt: string = this.now(),
   ): RuntimeEvent<TName> {
     const nextSequence = this.sequence + 1;
     const eventId = text(
@@ -111,7 +111,7 @@ function text(candidate: unknown, field: string): string {
   return candidate;
 }
 
-function dateTime(candidate: unknown): ISODateTimeString {
+function dateTime(candidate: unknown): string {
   if (
     typeof candidate !== "string" ||
     candidate.trim().length === 0 ||

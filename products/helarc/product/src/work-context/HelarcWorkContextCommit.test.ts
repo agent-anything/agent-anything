@@ -244,6 +244,7 @@ function startCommit(): HelarcRunStartCommit {
     },
     run: {
       id: "run-1",
+      harnessRunId: null,
       taskId: "task-1",
       sessionId: "session-1",
       threadId: "thread-1",
@@ -287,7 +288,7 @@ function progressCommit(sequence: number, commitId: string): HelarcRunProgressCo
       host: {
         sessionId: "session-1",
         taskId: "task-1",
-        runId: "run-1",
+        runId: "harness-run-1",
         sequence,
         status: "running",
         startedAt: STARTED_AT,
@@ -324,7 +325,7 @@ function terminalCommit(): HelarcRunTerminalCommit {
     committedAt: COMPLETED_AT,
     terminal: {
       host: {
-        runId: "run-1",
+        runId: "harness-run-1",
         taskId: "task-1",
         status: "completed",
         code: null,

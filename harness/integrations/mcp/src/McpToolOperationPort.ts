@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/foundation";
+
 import type {
   McpSourceLookup,
   McpToolCallOutput,
@@ -17,7 +17,7 @@ export interface McpToolCallResult {
   readonly toolName: string;
   readonly isError: boolean;
   readonly output: McpToolCallOutput;
-  readonly metadata: Metadata;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface McpToolOperationPort {

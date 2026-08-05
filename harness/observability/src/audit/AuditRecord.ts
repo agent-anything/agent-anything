@@ -1,7 +1,4 @@
-import type {
-  IdentityKind,
-  ISODateTimeString,
-} from "@agent-anything/foundation";
+import type { IdentityKind } from "@agent-anything/agent-core/run";
 
 export const AUDIT_RECORD_SCHEMA_VERSION = 1 as const;
 
@@ -246,7 +243,7 @@ interface AuditRecordEnvelope<TName extends AuditRecordName> {
   readonly runId: string;
   readonly taskId: string;
   readonly eventName: TName;
-  readonly timestamp: ISODateTimeString;
+  readonly timestamp: string;
   readonly actor: AuditActor;
   readonly workspaceId: string | null;
   readonly subject: AuditSubject;

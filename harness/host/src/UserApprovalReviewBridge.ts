@@ -10,7 +10,7 @@ import {
   type ApprovalReviewOutcome,
   type ApprovalSubmissionReceipt,
 } from "@agent-anything/permission";
-import type { InvocationInterruptionContext } from "@agent-anything/foundation";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
 
 export interface UserApprovalPendingProjection extends ApprovalReviewInput {}
 
@@ -24,7 +24,6 @@ export interface UserApprovalNotificationFailure {
 }
 
 export interface CreateUserApprovalReviewBridgeInput {
-  readonly runId: string;
   readonly descriptor: ApprovalReviewerDescriptor & { readonly kind: "user" };
   readonly onProjectionChanged?: (
     projection: UserApprovalPendingProjection | null,
@@ -39,7 +38,6 @@ export type UserApprovalProjectionListener = (
 ) => void | Promise<void>;
 
 export interface UserApprovalReviewBridge extends ApprovalReviewerPort {
-  readonly runId: string;
   readonly descriptor: ApprovalReviewerDescriptor & { readonly kind: "user" };
   getPendingProjection(): UserApprovalPendingProjection | null;
   subscribe(listener: UserApprovalProjectionListener): () => void;
@@ -70,7 +68,6 @@ export function createUserApprovalReviewBridge(
 }
 
 class DefaultUserApprovalReviewBridge implements UserApprovalReviewBridge {
-  readonly runId: string;
   readonly descriptor: ApprovalReviewerDescriptor & { readonly kind: "user" };
   private readonly onNotificationFailure: CreateUserApprovalReviewBridgeInput["onNotificationFailure"];
   private readonly projectionListeners = new Set<UserApprovalProjectionListener>();
@@ -80,8 +77,6 @@ class DefaultUserApprovalReviewBridge implements UserApprovalReviewBridge {
   private active: ActiveReview | null = null;
 
   constructor(input: CreateUserApprovalReviewBridgeInput) {
-    assertIdentity(input.runId, "User approval bridge runId");
-    this.runId = input.runId;
     this.descriptor = snapshotApprovalReviewerDescriptor(
       input.descriptor,
       "user",
@@ -118,13 +113,6 @@ class DefaultUserApprovalReviewBridge implements UserApprovalReviewBridge {
         false,
       );
     }
-    if (projection.request.runId !== this.runId) {
-      return failed(
-        "approval_review_malformed",
-        "User approval bridge received a review for another Run.",
-        false,
-      );
-    }
     if (this.active !== null) {
       return failed(
         "approval_reviewer_unavailable",
@@ -146,14 +134,16 @@ class DefaultUserApprovalReviewBridge implements UserApprovalReviewBridge {
     }
     if (interruption.signal.aborted) {
       this.closedRequests.add(key);
-      return interruptionOutcome(interruption, this.runId);
+      return interruptionOutcome(interruption, projection.request.runId);
     }
 
     return new Promise<ApprovalReviewOutcome>((resolve) => {
       const onAbort = (): void => {
         const active = this.active;
         if (active === null || active.projection !== projection) return;
-        this.settleActive(interruptionOutcome(interruption, this.runId));
+        this.settleActive(
+          interruptionOutcome(interruption, projection.request.runId),
+        );
       };
       this.active = {
         projection,
@@ -212,7 +202,7 @@ class DefaultUserApprovalReviewBridge implements UserApprovalReviewBridge {
     const active = this.active;
     if (
       active === null ||
-      submission.runId !== this.runId ||
+      submission.runId !== active.projection.request.runId ||
       submission.requestId !== active.projection.request.id
     ) {
       return rejected(submission.submissionId, "approval_not_pending");

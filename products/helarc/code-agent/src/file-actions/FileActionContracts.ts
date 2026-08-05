@@ -4,7 +4,7 @@ import type {
   ActionRegistrationSnapshot,
   FileBaseline,
 } from "@agent-anything/action-execution";
-import type { RunWorkspace } from "@agent-anything/foundation";
+import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import type { ToolRegistrationSnapshot } from "@agent-anything/tools";
 import type { CodeAgentFileLimits } from "../filesystem/FileSystemContracts.js";
 

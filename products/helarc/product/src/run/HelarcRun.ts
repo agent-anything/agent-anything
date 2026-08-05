@@ -1,4 +1,4 @@
-import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
+
 import type { HelarcPermissionPreset } from "../permission/HelarcPermissionPreset.js";
 import type { HelarcProviderKind } from "../provider-profile/HelarcProviderProfile.js";
 
@@ -12,8 +12,8 @@ export interface CreateHelarcRunInput {
   providerProfileId: string;
   taskTemplateId?: string | null;
   permissionPreset?: HelarcRunPermissionPreset;
-  createdAt: ISODateTimeString;
-  metadata?: Metadata;
+  createdAt: string;
+  metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface HelarcRunInput {
@@ -24,8 +24,8 @@ export interface HelarcRunInput {
   providerProfileId: string;
   taskTemplateId: string | null;
   permissionPreset: HelarcRunPermissionPreset;
-  createdAt: ISODateTimeString;
-  metadata: Metadata;
+  createdAt: string;
+  metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface HelarcRunProviderRef {

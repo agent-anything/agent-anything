@@ -1,4 +1,4 @@
-import type { InvocationInterruptionContext } from "@agent-anything/foundation";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
 import { describe, expect, it } from "vitest";
 import type {
   ApprovalRequirement,

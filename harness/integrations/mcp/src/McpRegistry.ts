@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import {
   McpActivationError,
   type McpActivationLookup,
@@ -1049,7 +1049,7 @@ export class McpRegistry implements
     return value;
   }
 
-  private nowIso(): ISODateTimeString {
+  private nowIso(): string {
     return this.nowDate().toISOString();
   }
 }

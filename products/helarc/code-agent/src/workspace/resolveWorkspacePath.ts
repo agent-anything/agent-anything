@@ -1,8 +1,5 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type {
-  RunWorkspace,
-  WorkspaceContext,
-} from "@agent-anything/foundation";
+import type { RunWorkspace, WorkspaceContext } from "@agent-anything/agent-core/run";
 import type {
   RejectedWorkspacePath,
   ResolveWorkspacePathInput,

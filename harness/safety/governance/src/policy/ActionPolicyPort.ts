@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/foundation";
+
 import type { PolicyDecision } from "./PolicyDecision.js";
 
 export type ActionPolicyOperationKind =
@@ -38,7 +38,7 @@ export interface ActionPolicyCheckInput {
     readonly targetKeys: readonly string[];
   }[];
   readonly requestsAdditionalPermissions: boolean;
-  readonly metadata: Readonly<Metadata>;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface ActionPolicyPort {

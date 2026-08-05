@@ -13,19 +13,13 @@ import {
   createToolActionBindingSnapshot,
   type ToolActionBindingSnapshot,
 } from "@agent-anything/action-execution";
-import {
-  type Controller,
-  type RunResult,
-} from "@agent-anything/runtime";
-import type {
-  Agent,
-  AgentTask,
-  RunWorkspace,
-  WorkspaceContext,
-} from "@agent-anything/foundation";
-import type { ControllerDecision } from "@agent-anything/runtime/controller";
-import { createRunCancellationController } from "@agent-anything/runtime/run";
-import { Runner, type RunConfig } from "@agent-anything/runtime";
+import type { Controller } from "@agent-anything/agent-runtime/controller";
+import type { RunResult } from "@agent-anything/agent-runtime/run";
+import type { Agent } from "@agent-anything/agent-core/agent";
+import type { AgentTask } from "@agent-anything/agent-core/task";
+import type { RunWorkspace, WorkspaceContext } from "@agent-anything/agent-core/run";
+import type { ControllerDecision } from "@agent-anything/agent-runtime/controller";
+import { Runner, type RunConfig } from "@agent-anything/agent-runtime/runner";
 import { EvidenceBuilder } from "@agent-anything/context/evidence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
@@ -126,18 +120,17 @@ describe("code-agent command Action", () => {
 
   it("retains Run cancellation attribution while terminating a command process", async () => {
     const fixture = await createFixture();
-    const cancellation = createRunCancellationController({ runId: "run_command_cancel" });
-    const promise = runCommand(fixture, {
+    const handle = await startCommand(fixture, {
       command: process.execPath,
       args: ["-e", "setInterval(() => {}, 1000)"],
       reason: "Verify process cancellation attribution.",
-    }, cancellation);
+    });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    cancellation.requestCancellation({ origin: "user", reasonCode: "user_requested" });
-    const result = await promise;
+    handle.cancel({ origin: "user", reasonCode: "user_requested" });
+    const result = await handle.wait();
     const serialized = JSON.stringify(result);
     expect(result.status).toBe("cancelled");
-    expect(serialized).toContain("run_command_cancel");
+    expect(serialized).toContain(handle.runId);
   }, 10_000);
 });
 
@@ -170,8 +163,14 @@ async function createFixture(): Promise<Fixture> {
 async function runCommand(
   fixture: Fixture,
   input: Record<string, unknown>,
-  cancellation = createRunCancellationController({ runId: "run_command" }),
 ): Promise<RunResult<{ summary: string }>> {
+  return (await startCommand(fixture, input)).wait();
+}
+
+async function startCommand(
+  fixture: Fixture,
+  input: Record<string, unknown>,
+) {
   const capability = await createCodeAgentCommandActionCapability({
     workspace: fixture.scope,
     now: () => NOW,
@@ -205,15 +204,14 @@ async function runCommand(
     evidencePersistence: new FakeEvidencePersistencePort(),
     now: () => NOW,
   });
-  return runner.run(
+  return runner.start(
     agent(),
     {
-      runId: cancellation.context.runId,
       task: task(fixture),
-      conversationItems: [],
+      items: [],
       metadata: {},
     },
-    await runConfig(fixture, cancellation, toolBindings),
+    await runConfig(fixture, toolBindings),
   );
 }
 
@@ -271,7 +269,6 @@ function task(fixture: Fixture): AgentTask {
 
 async function runConfig(
   fixture: Fixture,
-  cancellation: ReturnType<typeof createRunCancellationController>,
   toolBindings: ToolActionBindingSnapshot,
 ): Promise<RunConfig> {
   const actionContext = await preparationContext(fixture);
@@ -325,7 +322,6 @@ async function runConfig(
     },
     audit: "optional",
     telemetry: "optional",
-    cancellation,
     cancellationLimits: {
       operationSettlementTimeoutMs: 2_000,
       processGracePeriodMs: 100,

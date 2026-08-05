@@ -119,12 +119,13 @@ function snapshotWithRun(input: { approval: unknown }): HelarcMainSnapshot {
     storedCredential: SECRET,
   };
   const run = {
-    runId: "run-1",
+    productRunId: "product-run-1",
+    harnessRunId: "harness-run-1",
     display: { status: "running", terminal: false, statusSource: "host" },
     host: {
       sessionId: "session-1",
       taskId: "task-1",
-      runId: "run-1",
+      runId: "harness-run-1",
       sequence: 1,
       status: "running",
       startedAt: "2026-07-19T00:00:00.000Z",
@@ -137,7 +138,7 @@ function snapshotWithRun(input: { approval: unknown }): HelarcMainSnapshot {
       rawRunResult: SECRET,
     },
     product: {
-      runId: "run-1",
+      runId: "product-run-1",
       sequence: 1,
       phase: { kind: "none" },
       activity: [{

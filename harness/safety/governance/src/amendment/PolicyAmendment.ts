@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 
 export type PolicyAmendmentEffect = "allow" | "forbidden";
 
@@ -37,5 +37,5 @@ export interface AppliedPolicyAmendmentRecord {
   readonly sourceRequestId: string;
   readonly sourceActionFingerprint: string;
   readonly amendment: TrustedPolicyAmendment;
-  readonly appliedAt: ISODateTimeString;
+  readonly appliedAt: string;
 }

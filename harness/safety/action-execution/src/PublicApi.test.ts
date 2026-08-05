@@ -2,7 +2,7 @@ import type {
   ActionAdapter,
   RunActionContext,
   SandboxProvider,
-} from "@agent-anything/action-execution";
+} from "./index.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as actionExecutionApi from "./index.js";
 

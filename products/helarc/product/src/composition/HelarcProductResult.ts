@@ -1,16 +1,11 @@
 import type { RuntimeEvent } from "@agent-anything/observability/events";
-import type {
-  RunResult,
-  RunResultStatus,
-} from "@agent-anything/runtime/run";
-import type {
-  AgentTask,
-  RunWorkspace,
-} from "@agent-anything/foundation";
+import type { RunResult, RunResultStatus } from "@agent-anything/agent-runtime/run";
+import type { AgentTask } from "@agent-anything/agent-core/task";
+import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import type { SandboxEnforcement } from "@agent-anything/action-execution";
 import { projectRuntimeEventForHost } from "@agent-anything/host";
 import { CODE_AGENT_RUN_COMMAND_ACTION } from "@agent-anything/helarc-code-agent/command";
-import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
+
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import type { HelarcPatchOutcome } from "../patch/HelarcPatchActionController.js";
 import type { HelarcControllerTraceProjection } from "../run/HelarcControllerTraceProjection.js";
@@ -27,11 +22,11 @@ export type HelarcPatchStatus = "proposed" | "applied" | "rejected" | "failed";
 export interface HelarcActivityItem {
   readonly id: string;
   readonly sequence: number;
-  readonly timestamp: ISODateTimeString;
+  readonly timestamp: string;
   readonly kind: string;
   readonly title: string;
   readonly detail: string | null;
-  readonly metadata: Metadata;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface HelarcProductOutput {
@@ -114,7 +109,7 @@ export function mapRuntimeEventToHelarcActivity(
 
 function controllerTraceMetadata(
   trace: HelarcControllerTraceProjection | null,
-): Metadata {
+): Readonly<Record<string, unknown>> {
   if (trace === null) return {};
   return {
     ...(trace.source === null ? {} : { source: trace.source }),
@@ -229,7 +224,7 @@ function mapRunStatus(status: RunResultStatus): HelarcProductStatus {
   return status === "succeeded" ? "completed" : status;
 }
 
-function titleForEvent(name: string, payload: Metadata): string {
+function titleForEvent(name: string, payload: Readonly<Record<string, unknown>>): string {
   switch (name) {
     case "run.started": return "Run started";
     case "run.completed": return "Run completed";
@@ -270,7 +265,7 @@ function titleForEvent(name: string, payload: Metadata): string {
   }
 }
 
-function detailForEvent(name: string, payload: Metadata): string | null {
+function detailForEvent(name: string, payload: Readonly<Record<string, unknown>>): string | null {
   if (
     (name === "tool.started" || name === "tool.finished")
     && payload.toolName === CODE_AGENT_RUN_COMMAND_ACTION
@@ -298,6 +293,6 @@ function detailForEvent(name: string, payload: Metadata): string | null {
   return null;
 }
 
-function isRecord(value: unknown): value is Metadata {
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

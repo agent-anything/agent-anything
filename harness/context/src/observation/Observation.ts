@@ -1,8 +1,4 @@
-import type {
-  ActionRejectedCode,
-  Metadata,
-  ObservationBase,
-} from "@agent-anything/foundation";
+import type { ActionRejectedCode, ObservationBase } from "@agent-anything/agent-core/action";
 import type { ToolResult } from "@agent-anything/tools";
 import type {
   ApprovalCategory,
@@ -64,7 +60,7 @@ export interface ActionFailureObservationDetail {
   readonly code: string;
   readonly message: string;
   readonly retryable: boolean;
-  readonly metadata: Readonly<Metadata>;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface ActionRejectedObservation extends ObservationBase {

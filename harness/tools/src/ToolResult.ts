@@ -1,11 +1,11 @@
-import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
+
 
 export interface ToolResultBase {
   readonly toolCallId: string;
   readonly toolName: string;
-  readonly startedAt: ISODateTimeString;
-  readonly finishedAt: ISODateTimeString;
-  readonly metadata: Readonly<Metadata>;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface SucceededToolResult<TOutput = unknown> extends ToolResultBase {
@@ -41,5 +41,5 @@ export type ToolResultStatus = ToolResult["status"];
 export interface ToolResultError {
   readonly code: string;
   readonly message: string;
-  readonly metadata?: Readonly<Metadata>;
+  readonly metadata?: Readonly<Record<string, unknown>>;
 }

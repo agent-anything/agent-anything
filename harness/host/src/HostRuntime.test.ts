@@ -5,31 +5,15 @@ import {
   type ApprovalDecisionSubmission,
   type ApprovalReviewInput,
 } from "@agent-anything/permission";
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-} from "@agent-anything/foundation";
-import type { Agent } from "@agent-anything/foundation/agent";
-import type {
-  Controller,
-  ControllerCallContext,
-  ControllerDecision,
-  ControllerInput,
-} from "@agent-anything/runtime/controller";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
+import type { Agent } from "@agent-anything/agent-core/agent";
+import type { Controller, ControllerCallContext, ControllerDecision, ControllerInput } from "@agent-anything/agent-runtime/controller";
 import { FakeRuntimeEventPublisher } from "@agent-anything/test-support";
-import {
-  createRunCancellationController,
-  type ResolvedRunPermissionConfig,
-} from "@agent-anything/runtime/run";
-import {
-  Runner,
-  type RunConfig,
-} from "@agent-anything/runtime";
+import type { CancellationContext, ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
+import { Runner, type RunConfig } from "@agent-anything/agent-runtime/runner";
 import { createEmptyToolActionBindingSnapshot } from "@agent-anything/action-execution";
 import {
   createHostRuntime,
-  type HostRunOutcome,
-  type HostRunResult,
   type HostRunStartInput,
 } from "./HostRuntime.js";
 import {
@@ -46,8 +30,8 @@ const now = "2026-07-17T00:00:00.000Z";
 describe("HostRuntime", () => {
   it("owns one invocation from running projection through exact terminal result", async () => {
     const controller = new DeferredController();
-    const runner = new Runner({ controller, now: () => now });
-    const run = vi.spyOn(runner, "run");
+    const runner = createRunner(controller);
+    const start = vi.spyOn(runner, "start");
     const runtime = createHostRuntime({
       runner,
       now: () => now,
@@ -58,13 +42,12 @@ describe("HostRuntime", () => {
 
     expect(active.sessionId).toBe("session-1");
     expect(active.runId).toBe("run-1");
-    expect(active.getProjection().status).toBe("running");
-    expect(run).toHaveBeenCalledOnce();
+    expect(active.getProjection().status).toBe("starting");
+    expect(start).toHaveBeenCalledOnce();
 
     await controller.entered;
     controller.complete("Host active Run complete");
-    const outcome = await active.result;
-    const result = requireRunResult(outcome);
+    const result = await active.result;
     unsubscribe();
 
     expect(result.runResult).toMatchObject({
@@ -82,11 +65,13 @@ describe("HostRuntime", () => {
 
   it("sends accepted cancellation to the original controller and rejects duplicates", async () => {
     const startInput = createStartInput();
+    const controller = new DeferredController();
     const runtime = createHostRuntime({
-      runner: new Runner({ controller: new DeferredController(), now: () => now }),
+      runner: createRunner(controller),
       now: () => now,
     });
     const active = runtime.start(startInput);
+    await controller.entered;
 
     const accepted = active.cancel({
       origin: "user",
@@ -101,7 +86,7 @@ describe("HostRuntime", () => {
     expect(accepted).toMatchObject({
       status: "accepted",
       cancellation: {
-        requestId: "run-1:cancellation",
+        requestId: "run-1:run_cancellation_request:1",
         origin: "user",
         reasonCode: "user_requested",
       },
@@ -110,13 +95,14 @@ describe("HostRuntime", () => {
       status: "already_requested",
       cancellation: accepted.cancellation,
     });
-    expect(startInput.runConfig.cancellation.context.signal.aborted).toBe(true);
-    expect(startInput.runConfig.cancellation.context.request?.reason).toBe(
+    expect(controller.lastContext?.cancellation.signal.aborted).toBe(true);
+    expect(controller.lastContext?.cancellation.request?.reason).toBe(
       "private cancellation text",
     );
     expect(JSON.stringify(active.getProjection())).not.toContain("private cancellation text");
 
-    const result = requireRunResult(await active.result);
+    controller.complete("Discarded after cancellation");
+    const result = await active.result;
     expect(result.runResult.status).toBe("cancelled");
     expect(active.getProjection().status).toBe("cancelled");
   });
@@ -124,7 +110,7 @@ describe("HostRuntime", () => {
   it("does not let late cancellation change a settled Run", async () => {
     const controller = new DeferredController();
     const runtime = createHostRuntime({
-      runner: new Runner({ controller, now: () => now }),
+      runner: createRunner(controller),
       now: () => now,
     });
     const active = runtime.start(createStartInput());
@@ -141,38 +127,23 @@ describe("HostRuntime", () => {
     expect(active.getProjection().status).toBe("completed");
   });
 
-  it("returns an explicit start failure without fabricating a RunResult or terminal projection", async () => {
+  it("rejects invalid composition before creating a HostActiveRun", () => {
     const invalidAgent = {
       ...createAgent(),
       instructions: 42,
     } as unknown as Agent<TestOutput>;
     const runtime = createHostRuntime({
-      runner: new Runner({ controller: new DeferredController(), now: () => now }),
+      runner: createRunner(new DeferredController()),
       now: () => now,
     });
-    const active = runtime.start(createStartInput({ agent: invalidAgent }));
-
-    expect(await active.result).toEqual({
-      kind: "start_failure",
-      sessionId: "session-1",
-      taskId: "task-1",
-      runId: "run-1",
-      code: "host_runner_start_failed",
-      occurredAt: now,
-    });
-    expect(active.getProjection()).toMatchObject({
-      status: "starting",
-      terminal: null,
-    });
-    expect(active.cancel({ origin: "host", reasonCode: "host_requested" })).toEqual({
-      status: "start_failed",
-      cancellation: null,
-    });
+    expect(() => runtime.start(createStartInput({ agent: invalidAgent })))
+      .toThrow("Agent.instructions must be text.");
+    expect(runtime.listRuns()).toEqual([]);
   });
 
   it("rejects invalid handle identities before invoking Runner", () => {
     const runtime = createHostRuntime({
-      runner: new Runner({ controller: new DeferredController(), now: () => now }),
+      runner: createRunner(new DeferredController()),
       now: () => now,
     });
 
@@ -181,13 +152,13 @@ describe("HostRuntime", () => {
     );
   });
 
-  it("requires the exact Run-bound user reviewer before invoking Runner", () => {
+  it("requires the exact configured user reviewer before invoking Runner", () => {
     const controller = new DeferredController();
-    const runner = new Runner({ controller, now: () => now });
-    const run = vi.spyOn(runner, "run");
+    const runner = createRunner(controller);
+    const start = vi.spyOn(runner, "start");
     const runtime = createHostRuntime({ runner, now: () => now });
-    const configuredBridge = createApprovalBridge("run-1");
-    const otherBridge = createApprovalBridge("run-1");
+    const configuredBridge = createApprovalBridge();
+    const otherBridge = createApprovalBridge();
     const configured = createUserReviewStartInput(configuredBridge);
     const { userApprovalReviewBridge: _omitted, ...missingBridge } = configured;
 
@@ -200,20 +171,16 @@ describe("HostRuntime", () => {
     })).toThrow("requires an explicit approval review bridge");
     expect(() => runtime.start({
       ...configured,
-      userApprovalReviewBridge: createApprovalBridge("run-other"),
-    })).toThrow("Run identity does not match");
-    expect(() => runtime.start({
-      ...configured,
       userApprovalReviewBridge: otherBridge,
     })).toThrow("does not match the configured user reviewer");
-    expect(run).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
   });
 
   it("correlates one versioned user submission with the active Host Run", async () => {
-    const bridge = createApprovalBridge("run-1");
+    const bridge = createApprovalBridge();
     const controller = new DeferredController();
     const runtime = createHostRuntime({
-      runner: new Runner({ controller, now: () => now }),
+      runner: createRunner(controller),
       now: () => now,
     });
     const active = runtime.start(createUserReviewStartInput(bridge));
@@ -257,25 +224,25 @@ describe("HostRuntime", () => {
     await expect(pendingReview).resolves.toMatchObject({ status: "decided" });
 
     controller.complete("Approved Run complete");
-    expect(requireRunResult(await active.result).runResult.status).toBe("succeeded");
+    expect((await active.result).runResult.status).toBe("succeeded");
     expect(active.submitApprovalDecision(approvalSubmission({
       submissionId: "late-submission",
     }))).toMatchObject({ code: "approval_not_pending" });
   });
 
   it("rejects post-cancellation approval without settling weaker authority", async () => {
-    const bridge = createApprovalBridge("run-1");
+    const bridge = createApprovalBridge();
     const controller = new DeferredController();
     const startInput = createUserReviewStartInput(bridge);
     const runtime = createHostRuntime({
-      runner: new Runner({ controller, now: () => now }),
+      runner: createRunner(controller),
       now: () => now,
     });
     const active = runtime.start(startInput);
     await controller.entered;
     const pendingReview = bridge.review(
       createApprovalReviewInput(),
-      runInterruptionContext(startInput.runConfig),
+      runInterruptionContext(requireControllerContext(controller).cancellation),
     );
     await flushMicrotasks();
 
@@ -288,7 +255,7 @@ describe("HostRuntime", () => {
     expect(active.submitApprovalDecision(approvalSubmission({
       submissionId: "post-cancel",
     }))).toMatchObject({ code: "approval_not_pending" });
-    expect(requireRunResult(await active.result).runResult.cancellation).toMatchObject({
+    expect((await active.result).runResult.cancellation).toMatchObject({
       origin: "user",
       reasonCode: "user_requested",
     });
@@ -308,6 +275,7 @@ describe("HostRuntime", () => {
     const runtime = createHostRuntime({
       runner: new Runner({
         controller,
+        createRunId: () => "run-1",
         runtimeEventPublisher: globalEvents,
         now: () => now,
       }),
@@ -317,9 +285,84 @@ describe("HostRuntime", () => {
     await controller.entered;
     controller.complete("Still completes");
 
-    expect(requireRunResult(await active.result).runResult.status).toBe("succeeded");
+    expect((await active.result).runResult.status).toBe("succeeded");
     expect(observed).toContain("run.started");
     expect(active.getProjection().status).toBe("completed");
+  });
+
+  it("retains the original active wrapper for reconnect and releases only terminal entries", async () => {
+    const controller = new DeferredController();
+    const runtime = createHostRuntime({
+      runner: createRunner(controller),
+      terminalRetentionLimit: 2,
+      now: () => now,
+    });
+    const active = runtime.start(createStartInput());
+
+    expect(runtime.getRun("run-1")).toBe(active);
+    expect(runtime.listRuns()).toEqual([{
+      runId: "run-1",
+      sessionId: "session-1",
+      lifecycle: "active",
+    }]);
+    expect(runtime.releaseRun("run-1")).toEqual({
+      status: "run_active",
+      runId: "run-1",
+    });
+
+    await controller.entered;
+    controller.complete("Retained terminal result");
+    await active.result;
+
+    expect(runtime.getRun("run-1")).toBe(active);
+    expect(runtime.listRuns()[0]?.lifecycle).toBe("settled");
+    expect(runtime.releaseRun("run-1")).toEqual({
+      status: "released",
+      runId: "run-1",
+    });
+    expect(runtime.getRun("run-1")).toBeNull();
+    expect(runtime.releaseRun("run-1")).toEqual({
+      status: "not_found",
+      runId: "run-1",
+    });
+  });
+
+  it("evicts the oldest terminal wrapper at the configured retention limit", async () => {
+    let sequence = 0;
+    const controller: Controller<TestOutput> = {
+      async next() {
+        return {
+          kind: "final_output",
+          output: { summary: "Done" },
+          modelItems: [],
+        };
+      },
+    };
+    const runtime = createHostRuntime({
+      runner: new Runner({
+        controller,
+        createRunId: () => {
+          sequence += 1;
+          return `run-${sequence}`;
+        },
+        now: () => now,
+      }),
+      terminalRetentionLimit: 1,
+      now: () => now,
+    });
+
+    const first = runtime.start(createStartInput());
+    await first.result;
+    const second = runtime.start(createStartInput());
+    await second.result;
+
+    expect(runtime.getRun("run-1")).toBeNull();
+    expect(runtime.getRun("run-2")).toBe(second);
+    expect(runtime.listRuns()).toEqual([{
+      runId: "run-2",
+      sessionId: "session-1",
+      lifecycle: "settled",
+    }]);
   });
 });
 
@@ -329,8 +372,10 @@ class DeferredController implements Controller {
   readonly entered = new Promise<void>((resolve) => {
     this.resolveEntered = resolve;
   });
+  lastContext: ControllerCallContext | null = null;
 
-  next(input: ControllerInput, _context: ControllerCallContext): Promise<ControllerDecision> {
+  next(input: ControllerInput, context: ControllerCallContext): Promise<ControllerDecision> {
+    this.lastContext = context;
     this.resolveEntered();
     return new Promise((resolve) => {
       this.resolveDecision = resolve;
@@ -363,16 +408,11 @@ function createStartInput(input: {
   readonly sessionId?: string;
   readonly agent?: Agent<TestOutput>;
 } = {}): HostRunStartInput<TestOutput> {
-  const cancellation = createRunCancellationController({
-    runId: "run-1",
-    now: () => now,
-  });
   return {
     sessionId: input.sessionId ?? "session-1",
     agent: input.agent ?? createAgent(),
     userApprovalReviewBridge: null,
     runInput: {
-      runId: "run-1",
       task: {
         id: "task-1",
         kind: "test.task",
@@ -380,10 +420,10 @@ function createStartInput(input: {
         createdAt: now,
         metadata: {},
       },
-      conversationItems: [],
+      items: [],
       metadata: {},
     },
-    runConfig: createRunConfig(cancellation),
+    runConfig: createRunConfig(),
   };
 }
 
@@ -433,9 +473,7 @@ function createAgent(): Agent<TestOutput> {
   };
 }
 
-function createRunConfig(
-  cancellation: ReturnType<typeof createRunCancellationController>,
-): RunConfig {
+function createRunConfig(): RunConfig {
   return {
     workspace: {
       primary: {
@@ -471,7 +509,6 @@ function createRunConfig(
     },
     audit: "optional",
     telemetry: "optional",
-    cancellation,
     cancellationLimits: {
       operationSettlementTimeoutMs: 1_000,
       processGracePeriodMs: 100,
@@ -538,18 +575,8 @@ function createTestPermissionConfig(): ResolvedRunPermissionConfig {
   };
 }
 
-function requireRunResult(
-  outcome: HostRunOutcome<TestOutput>,
-): HostRunResult<TestOutput> {
-  if (outcome.kind !== "run_result") {
-    throw new Error(`Expected RunResult, received ${outcome.kind}.`);
-  }
-  return outcome as HostRunResult<TestOutput>;
-}
-
-function createApprovalBridge(runId: string): UserApprovalReviewBridge {
+function createApprovalBridge(): UserApprovalReviewBridge {
   return createUserApprovalReviewBridge({
-    runId,
     descriptor: {
       id: "reviewer-user",
       kind: "user",
@@ -648,11 +675,11 @@ function interruptionContext(): InvocationInterruptionContext {
   return Object.freeze({ signal: new AbortController().signal, interruption: null });
 }
 
-function runInterruptionContext(runConfig: RunConfig): InvocationInterruptionContext {
+function runInterruptionContext(cancellation: CancellationContext): InvocationInterruptionContext {
   return Object.freeze({
-    signal: runConfig.cancellation.context.signal,
+    signal: cancellation.signal,
     get interruption(): InvocationInterruptionRef | null {
-      const request = runConfig.cancellation.context.request;
+      const request = cancellation.request;
       return request === null
         ? null
         : {
@@ -661,6 +688,21 @@ function runInterruptionContext(runConfig: RunConfig): InvocationInterruptionCon
           };
     },
   });
+}
+
+function createRunner(controller: Controller): Runner {
+  return new Runner({
+    controller,
+    createRunId: () => "run-1",
+    now: () => now,
+  });
+}
+
+function requireControllerContext(controller: DeferredController): ControllerCallContext {
+  if (controller.lastContext === null) {
+    throw new Error("Controller call context was not captured.");
+  }
+  return controller.lastContext;
 }
 
 async function flushMicrotasks(): Promise<void> {

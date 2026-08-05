@@ -1,4 +1,4 @@
-import { createRunCancellationController } from "@agent-anything/runtime/run";
+import { createRunCancellationController } from "@agent-anything/agent-runtime/run";
 import type {
   HelarcPatchReviewDecisionSubmission,
   HelarcPatchReviewRequest,
@@ -7,6 +7,22 @@ import { describe, expect, it } from "vitest";
 import { createHelarcPatchReviewBridge } from "./HelarcPatchReviewBridge.js";
 
 describe("HelarcPatchReviewBridge", () => {
+  it("requires one Harness Run binding before review and rejects rebinding", async () => {
+    const bridge = createHelarcPatchReviewBridge();
+
+    await expect(bridge.review(reviewRequest(), createCancellation().context))
+      .resolves.toMatchObject({
+        status: "failed",
+        code: "patch_review_state_invalid",
+      });
+
+    bridge.bindRun("run-1");
+    expect(bridge.boundRunId).toBe("run-1");
+    expect(() => bridge.bindRun("run-1")).toThrow(
+      "already bound to a Harness Run",
+    );
+  });
+
   it("keeps one immutable versioned projection and one idempotent decision", async () => {
     const bridge = createBridge();
     const cancellation = createCancellation();
@@ -156,7 +172,9 @@ describe("HelarcPatchReviewBridge", () => {
 });
 
 function createBridge() {
-  return createHelarcPatchReviewBridge({ runId: "run-1" });
+  const bridge = createHelarcPatchReviewBridge();
+  bridge.bindRun("run-1");
+  return bridge;
 }
 
 function createCancellation() {

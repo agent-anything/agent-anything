@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import type {
   ToolAnnotations,
   ToolJsonObject,
@@ -21,8 +21,8 @@ export type McpPrimitiveKind =
 export interface McpPrimitiveCache {
   readonly ttlMs: number;
   readonly scope: McpCacheScope;
-  readonly receivedAt: ISODateTimeString;
-  readonly expiresAt: ISODateTimeString;
+  readonly receivedAt: string;
+  readonly expiresAt: string;
 }
 
 export interface McpIcon {
@@ -35,7 +35,7 @@ export interface McpIcon {
 export interface McpResourceAnnotations {
   readonly audience?: readonly ("user" | "assistant")[];
   readonly priority?: number;
-  readonly lastModified?: ISODateTimeString;
+  readonly lastModified?: string;
 }
 
 export interface McpToolDescriptor {
@@ -127,7 +127,7 @@ export interface McpSourceSnapshot extends McpSourceLookup {
     McpPrimitiveInventory<McpResourceTemplateDescriptor>;
   readonly prompts: McpPrimitiveInventory<McpPromptDescriptor>;
   readonly diagnostics: readonly McpPrimitiveDiagnostic[];
-  readonly publishedAt: ISODateTimeString;
+  readonly publishedAt: string;
 }
 
 export interface McpSourceResolver {

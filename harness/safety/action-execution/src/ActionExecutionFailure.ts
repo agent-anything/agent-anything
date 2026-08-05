@@ -4,13 +4,13 @@ import type {
 } from "@agent-anything/permission";
 import type { ToolFailure } from "@agent-anything/tools";
 import type { SandboxExecutionFailure } from "./SandboxExecutionFailure.js";
-import type { Metadata } from "@agent-anything/foundation";
+
 
 export interface ActionProcessingFailure {
   readonly code: string;
   readonly message: string;
   readonly retryable: boolean;
-  readonly metadata: Readonly<Metadata>;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export type ActionExecutionFailure =

@@ -1,8 +1,8 @@
-import type { CodeAgentFileLimits } from "@agent-anything/helarc-code-agent";
-import type { CodeAgentCommandActionCapability } from "@agent-anything/helarc-code-agent/command";
-import type { CodeAgentFileActionCapability } from "@agent-anything/helarc-code-agent/filesystem";
-import type { PatchProposal } from "@agent-anything/helarc-code-agent/patch";
-import type { WorkspacePathResolution } from "@agent-anything/helarc-code-agent/workspace";
+import type { CodeAgentFileLimits } from "./index.js";
+import type { CodeAgentCommandActionCapability } from "./process/index.js";
+import type { CodeAgentFileActionCapability } from "./filesystem/index.js";
+import type { PatchProposal } from "./patch/index.js";
+import type { WorkspacePathResolution } from "./workspace/index.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as commandApi from "./process/index.js";
 import * as filesystemApi from "./filesystem/index.js";

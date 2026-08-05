@@ -2,33 +2,33 @@ export const repositoryDirectionFixtures = [
   {
     name: "Harness to Harness",
     accepted: true,
-    owner: pkg("harness", "runtime"),
-    imported: pkg("harness", "foundation"),
+    owner: pkg("harness", "agent-runtime"),
+    imported: pkg("harness", "agent-core"),
   },
   {
     name: "Harness to Product",
     accepted: false,
-    owner: pkg("harness", "runtime"),
+    owner: pkg("harness", "agent-runtime"),
     imported: productPkg("helarc", "helarc"),
   },
   {
     name: "Harness production to Test Support",
     accepted: false,
-    owner: pkg("harness", "runtime"),
+    owner: pkg("harness", "agent-runtime"),
     imported: pkg("tooling", "test-support"),
   },
   {
     name: "Harness test to Test Support",
     accepted: true,
     isTestOnly: true,
-    owner: pkg("harness", "runtime"),
+    owner: pkg("harness", "agent-runtime"),
     imported: pkg("tooling", "test-support"),
   },
   {
     name: "Product to Harness",
     accepted: true,
     owner: productPkg("helarc", "helarc"),
-    imported: pkg("harness", "runtime"),
+    imported: pkg("harness", "agent-runtime"),
   },
   {
     name: "Product component to same Product component",
@@ -53,7 +53,7 @@ export const repositoryDirectionFixtures = [
     name: "Test Support to Harness",
     accepted: true,
     owner: pkg("tooling", "test-support"),
-    imported: pkg("harness", "foundation"),
+    imported: pkg("harness", "agent-core"),
   },
   {
     name: "Test Support to Product",

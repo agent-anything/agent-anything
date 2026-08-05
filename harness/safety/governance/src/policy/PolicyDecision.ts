@@ -1,4 +1,4 @@
-import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
+
 
 export type PolicyDecisionStatus = "allowed" | "denied" | "requires_review";
 
@@ -15,6 +15,6 @@ export interface PolicyDecision {
   status: PolicyDecisionStatus;
   code?: PolicyDecisionCode;
   reason?: string;
-  decidedAt: ISODateTimeString;
-  metadata?: Metadata;
+  decidedAt: string;
+  metadata?: Readonly<Record<string, unknown>>;
 }

@@ -7,17 +7,12 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const packageExportKeys = {
-  "harness/foundation": [
-    ".",
+  "harness/agent-core/contracts": [
     "./action",
     "./agent",
-    "./artifact",
-    "./interaction",
-    "./invocation",
-    "./primitives",
+    "./input",
     "./run",
     "./task",
-    "./workspace",
   ],
   "harness/context": [
     ".",
@@ -45,7 +40,13 @@ const packageExportKeys = {
   "harness/model-interaction": ["."],
   "tooling/test-support": ["."],
   "harness/safety/action-execution": ["."],
-  "harness/runtime": [".", "./controller", "./plan", "./retry", "./run"],
+  "harness/agent-core/runtime": [
+    "./controller",
+    "./plan",
+    "./retry",
+    "./run",
+    "./runner",
+  ],
   "harness/host": ["."],
   "products/helarc/code-agent": [".", "./command", "./filesystem", "./patch", "./workspace"],
   "harness/integrations/remote": [".", "./action", "./tools"],
@@ -65,31 +66,17 @@ for (const [packagePath, expectedKeys] of Object.entries(packageExportKeys)) {
 }
 
 const expectedLowerValueExports = {
-  "@agent-anything/foundation": [
-    "findRunWorkspace",
-    "listRunWorkspaces",
-    "snapshotAgent",
-    "snapshotAgentTask",
-    "snapshotIdentityRef",
-    "snapshotRunInput",
-    "snapshotRunWorkspace",
-    "snapshotWorkspaceContext",
-  ],
-  "@agent-anything/foundation/action": [],
-  "@agent-anything/foundation/agent": ["snapshotAgent"],
-  "@agent-anything/foundation/artifact": [],
-  "@agent-anything/foundation/interaction": [],
-  "@agent-anything/foundation/invocation": [],
-  "@agent-anything/foundation/primitives": [],
-  "@agent-anything/foundation/run": ["snapshotRunInput"],
-  "@agent-anything/foundation/task": ["snapshotAgentTask"],
-  "@agent-anything/foundation/workspace": [
+  "@agent-anything/agent-core/action": [],
+  "@agent-anything/agent-core/agent": ["snapshotAgent"],
+  "@agent-anything/agent-core/input": ["snapshotRunInput"],
+  "@agent-anything/agent-core/run": [
     "findRunWorkspace",
     "listRunWorkspaces",
     "snapshotIdentityRef",
     "snapshotRunWorkspace",
     "snapshotWorkspaceContext",
   ],
+  "@agent-anything/agent-core/task": ["snapshotAgentTask"],
   "@agent-anything/context": [
     "EvidenceBuilder",
     "applyContextUpdate",
@@ -273,18 +260,18 @@ const expectedValueExports = {
     "RuntimeEventStream",
     "snapshotRuntimeEventPayload",
   ],
-  "@agent-anything/runtime/controller": [
+  "@agent-anything/agent-runtime/controller": [
     "ControllerError",
     "ProviderBackedController",
     "StructuredOutputError",
   ],
-  "@agent-anything/runtime/plan": [
+  "@agent-anything/agent-runtime/plan": [
     "abandonPlan",
     "applyPlanUpdate",
     "assertValidPlanLimits",
     "projectPlan",
   ],
-  "@agent-anything/runtime/retry": [
+  "@agent-anything/agent-runtime/retry": [
     "RetryExecutor",
     "createSystemRetryExecutor",
     "snapshotRetryEvent",
@@ -292,7 +279,7 @@ const expectedValueExports = {
     "snapshotRetryPolicy",
     "systemRetryClock",
   ],
-  "@agent-anything/runtime/run": [
+  "@agent-anything/agent-runtime/run": [
     "assertRunPermissionStateInvariant",
     "createApprovalRecordSummary",
     "createApprovalRequestSummary",
@@ -314,6 +301,9 @@ const expectedValueExports = {
     "runFailureMetadata",
     "snapshotResolvedRunPermissionConfig",
     "toRunCancellationSummary",
+  ],
+  "@agent-anything/agent-runtime/runner": [
+    "Runner",
   ],
   "@agent-anything/action-execution": [
     "ACTION_FINGERPRINT_DOMAIN",
@@ -368,43 +358,6 @@ const expectedValueExports = {
     "snapshotCapabilityEffect",
     "snapshotRunActionContext",
     "targetStateAssertionKey",
-  ],
-  "@agent-anything/runtime": [
-    "ControllerError",
-    "ProviderBackedController",
-    "RetryExecutor",
-    "Runner",
-    "StructuredOutputError",
-    "abandonPlan",
-    "applyPlanUpdate",
-    "assertRunPermissionStateInvariant",
-    "assertValidPlanLimits",
-    "createApprovalRecordSummary",
-    "createApprovalRequestSummary",
-    "createBlockedRunResult",
-    "createCancelledRunResult",
-    "createFailedRunResult",
-    "createInitialRunPermissionState",
-    "createRunCancellationController",
-    "createRunFailureCause",
-    "createSucceededRunResult",
-    "createSystemRetryExecutor",
-    "deriveApprovalReviewDeadline",
-    "deriveAuthorityCommitDeadline",
-    "deriveEffectivePermissionContext",
-    "deriveRunDeadline",
-    "isReviewCapablePolicy",
-    "projectPermissionContext",
-    "projectPlan",
-    "runFailureCode",
-    "runFailureMessage",
-    "runFailureMetadata",
-    "snapshotResolvedRunPermissionConfig",
-    "snapshotRetryEvent",
-    "snapshotRetryOperation",
-    "snapshotRetryPolicy",
-    "systemRetryClock",
-    "toRunCancellationSummary",
   ],
   "@agent-anything/host": [
     "HOST_COMMAND_REASON_MAX_LENGTH",
@@ -570,26 +523,28 @@ const expectedEnterpriseStorageValueExports = {
 };
 
 const removedOrPrivateSpecifiers = [
-  "@agent-anything/foundation/error",
-  "@agent-anything/foundation/result",
+  "@agent-anything/foundation",
+  "@agent-anything/runtime",
+  "@agent-anything/agent-core/error",
+  "@agent-anything/agent-core/result",
   "@agent-anything/testing",
   "@agent-anything/agent-runtime",
   "@agent-anything/providers",
   "@agent-anything/evidence",
   "@agent-anything/storage",
   "@agent-anything/agent-core",
+  "@agent-anything/agent-core/artifact",
+  "@agent-anything/agent-core/interaction",
+  "@agent-anything/agent-core/invocation",
+  "@agent-anything/agent-core/primitives",
+  "@agent-anything/agent-core/workspace",
   "@agent-anything/agent-core/events",
   "@agent-anything/agent-core/context",
-  "@agent-anything/agent-core/action",
-  "@agent-anything/agent-core/agent",
   "@agent-anything/agent-core/controller",
   "@agent-anything/agent-core/plan",
   "@agent-anything/agent-core/retry",
-  "@agent-anything/agent-core/run",
-  "@agent-anything/runtime/runner",
   "@agent-anything/agent-core/action-execution",
   "@agent-anything/agent-core/host",
-  "@agent-anything/agent-core/task",
   "@agent-anything/action-execution/ActionGovernanceAssessment",
   "@agent-anything/host/HostRuntime",
   "@agent-anything/governance/identity",
@@ -608,7 +563,7 @@ checkBuiltSurfaces(
     "@agent-anything/permission/approval/snapshot",
     "@agent-anything/model-interaction/ProviderAttemptInterruption",
   ],
-  join(repoRoot, "harness/runtime"),
+  join(repoRoot, "harness/agent-core/runtime"),
 );
 checkBuiltSurfaces(
   expectedValueExports,

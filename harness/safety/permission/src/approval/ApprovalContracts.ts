@@ -2,12 +2,7 @@ import type {
   ExecPolicyAmendment,
   NetworkPolicyAmendment,
 } from "@agent-anything/governance/amendment";
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-  ISODateTimeString,
-  Metadata,
-} from "@agent-anything/foundation";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type {
   ApprovalApplicabilityKey,
   RunPermissionGrant,
@@ -95,7 +90,7 @@ export interface ApprovalPayloadByCategory {
     readonly source: RemoteToolApprovalSource;
     readonly server: RemoteToolApprovalServer;
     readonly tool: RemoteToolApprovalTool;
-    readonly safeArguments: Readonly<Metadata>;
+    readonly safeArguments: Readonly<Record<string, unknown>>;
     readonly annotations: RemoteToolApprovalAnnotations;
     readonly supportsSessionAuthority: boolean;
   };
@@ -142,7 +137,7 @@ export interface ApprovalDecisionOption {
   readonly label: string;
   readonly description: string | null;
   readonly trustedProposalRef: string | null;
-  readonly metadata: Metadata;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export type ApprovalTrustedProposal =
@@ -174,8 +169,8 @@ export interface ApprovalRequirement<
     ...ApprovalDecisionOption[],
   ];
   readonly trustedProposals: readonly ApprovalTrustedProposal[];
-  readonly deadlineAt: ISODateTimeString;
-  readonly metadata: Metadata;
+  readonly deadlineAt: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface ApprovalRequestBase<
@@ -194,9 +189,9 @@ export interface ApprovalRequestBase<
     ...ApprovalDecisionOption[],
   ];
   readonly trustedProposals: readonly ApprovalTrustedProposal[];
-  readonly createdAt: ISODateTimeString;
-  readonly deadlineAt: ISODateTimeString;
-  readonly metadata: Metadata;
+  readonly createdAt: string;
+  readonly deadlineAt: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export type ApprovalRequest = {
@@ -321,8 +316,8 @@ export interface ApprovalReviewRequestBase<
     ApprovalDecisionOptionProjection,
     ...ApprovalDecisionOptionProjection[],
   ];
-  readonly createdAt: ISODateTimeString;
-  readonly deadlineAt: ISODateTimeString;
+  readonly createdAt: string;
+  readonly deadlineAt: string;
 }
 
 export type ApprovalReviewRequest = {
@@ -337,7 +332,7 @@ export interface ApprovalReviewContext {
     readonly fileSystemWrite: boolean;
     readonly network: boolean;
   };
-  readonly annotations: Readonly<Metadata>;
+  readonly annotations: Readonly<Record<string, unknown>>;
 }
 
 export interface ApprovalReviewInput {
@@ -355,7 +350,7 @@ export interface ApprovalReviewFailure {
     | "approval_review_retry_exhausted";
   readonly message: string;
   readonly retryable: boolean;
-  readonly metadata: Metadata;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export type ApprovalReviewOutcome =
@@ -414,6 +409,6 @@ export interface ApprovalRecord {
         readonly initiatingDecision: "cancel" | null;
       };
   readonly application: ApprovalApplicationOutcome;
-  readonly resolvedAt: ISODateTimeString;
-  readonly metadata: Metadata;
+  readonly resolvedAt: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }

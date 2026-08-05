@@ -1,11 +1,11 @@
-import type { ControllerInput } from "@agent-anything/runtime/controller";
+import type { ControllerInput } from "@agent-anything/agent-runtime/controller";
 import {
   CODE_AGENT_LIST_FILES_ACTION,
   CODE_AGENT_READ_FILE_ACTION,
   CODE_AGENT_SEARCH_FILES_ACTION,
 } from "@agent-anything/helarc-code-agent/filesystem";
 import { CODE_AGENT_RUN_COMMAND_ACTION } from "@agent-anything/helarc-code-agent/command";
-import type { Metadata } from "@agent-anything/foundation";
+
 import type { ToolAnnotations, ToolDescriptor } from "@agent-anything/tools";
 
 export type HelarcToolCatalogMode = "read-only" | "shell-enabled";
@@ -158,6 +158,6 @@ function inferCatalogMode(
     : "read-only";
 }
 
-function isRecord(value: unknown): value is Metadata {
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

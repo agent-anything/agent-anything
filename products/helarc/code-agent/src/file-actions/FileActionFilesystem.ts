@@ -9,7 +9,7 @@ import type {
   FileBaseline,
 } from "@agent-anything/action-execution";
 import { createCanonicalSha256Digest } from "@agent-anything/action-execution";
-import type { RunWorkspace } from "@agent-anything/foundation";
+import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import {
   resolveExistingTarget,
   resolveWritableTarget,

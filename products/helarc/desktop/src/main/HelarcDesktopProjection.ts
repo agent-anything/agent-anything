@@ -223,7 +223,8 @@ function projectProviderProfile(
 
 function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
   return {
-    runId: run.runId,
+    productRunId: run.productRunId,
+    harnessRunId: run.harnessRunId,
     display: {
       status: run.display.status,
       terminal: run.display.terminal,

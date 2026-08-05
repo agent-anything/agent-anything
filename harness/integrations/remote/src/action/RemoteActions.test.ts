@@ -10,14 +10,13 @@ import {
   createToolActionBindingSnapshot,
   type ToolActionBindingSnapshot,
 } from "@agent-anything/action-execution";
-import {
-  type Controller,
-  type RunResult,
-} from "@agent-anything/runtime";
-import type { Agent, AgentTask } from "@agent-anything/foundation";
-import type { ControllerDecision } from "@agent-anything/runtime/controller";
-import { createRunCancellationController } from "@agent-anything/runtime/run";
-import { Runner, type RunConfig } from "@agent-anything/runtime";
+import type { Controller } from "@agent-anything/agent-runtime/controller";
+import type { RunResult } from "@agent-anything/agent-runtime/run";
+import type { Agent } from "@agent-anything/agent-core/agent";
+import type { AgentTask } from "@agent-anything/agent-core/task";
+import type { ControllerDecision } from "@agent-anything/agent-runtime/controller";
+import { createRunCancellationController } from "@agent-anything/agent-runtime/run";
+import { Runner, type RunConfig } from "@agent-anything/agent-runtime/runner";
 import { EvidenceBuilder } from "@agent-anything/context/evidence";
 import type { EvidencePersistencePort } from "@agent-anything/context/persistence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
@@ -330,7 +329,7 @@ async function runRemoteAction(
   });
   return runner.run(
     agent(),
-    { runId: `run_${localToolName.replaceAll(".", "_")}`, task: task(), conversationItems: [], metadata: {} },
+    { task: task(), items: [], metadata: {} },
     await runConfig(localToolName, toolBindings),
   );
 }

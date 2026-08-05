@@ -272,7 +272,8 @@ export interface HelarcRunProductResultSnapshot {
 export type HelarcRunDisplayStatus = Exclude<HelarcMainSnapshotStatus, "idle" | "workspace_selected">;
 
 export interface HelarcRunSnapshot {
-  readonly runId: string;
+  readonly productRunId: string;
+  readonly harnessRunId: string;
   readonly display: {
     readonly status: HelarcRunDisplayStatus;
     readonly terminal: boolean;
@@ -386,7 +387,7 @@ export type HelarcStartRunResult =
   | {
       ok: true;
       taskId: string;
-      runId: string;
+      productRunId: string;
       threadId: string;
       snapshot: HelarcMainSnapshot;
     }
@@ -496,7 +497,7 @@ export type HelarcRunCancellationReceipt =
       readonly cancellation: HelarcCancellationSummarySnapshot;
     }
   | {
-      readonly status: "run_settled" | "start_failed";
+      readonly status: "run_settled";
       readonly cancellation: HelarcCancellationSummarySnapshot | null;
     };
 

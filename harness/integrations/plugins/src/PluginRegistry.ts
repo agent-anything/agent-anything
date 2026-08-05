@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { gt } from "semver";
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import {
   createPluginAdmissionSnapshot,
   type PluginAdmissionInput,
@@ -60,8 +60,8 @@ export interface PluginRecordSnapshot {
   readonly admission: PluginAdmissionSnapshot | null;
   readonly activation: PluginActivationSnapshot | null;
   readonly stateRevision: number;
-  readonly installedAt: ISODateTimeString;
-  readonly changedAt: ISODateTimeString;
+  readonly installedAt: string;
+  readonly changedAt: string;
 }
 
 export interface PluginMutationTarget {
@@ -86,7 +86,7 @@ export interface RevokePluginAdmissionInput extends PluginMutationTarget {
   readonly decisionId: string;
   readonly authorityId: string;
   readonly reason: string;
-  readonly decidedAt: ISODateTimeString;
+  readonly decidedAt: string;
 }
 
 export interface ActivatePluginInput extends PluginMutationTarget {
@@ -103,13 +103,13 @@ type PluginOperation = "activate" | "deactivate" | "disable" | "revoke";
 
 interface PluginRecord {
   readonly installationId: string;
-  readonly installedAt: ISODateTimeString;
+  readonly installedAt: string;
   manifest: PluginManifestSnapshot;
   enablement: PluginEnablement;
   admission: PluginAdmissionSnapshot | null;
   activation: PluginActivationSnapshot | null;
   stateRevision: number;
-  changedAt: ISODateTimeString;
+  changedAt: string;
   nextActivationEpoch: number;
   pendingOperation: PluginOperation | null;
 }
@@ -242,7 +242,7 @@ export class PluginRegistry implements PluginActivationResolver {
     }
     this.beginOperation(record, "disable");
     try {
-      let changedAt: ISODateTimeString;
+      let changedAt: string;
       if (record.activation !== null) {
         const settlement = await this.settleDeactivation(
           record,
@@ -734,7 +734,7 @@ export class PluginRegistry implements PluginActivationResolver {
     );
   }
 
-  private nowIso(): ISODateTimeString {
+  private nowIso(): string {
     let date: Date;
     try {
       date = this.now();

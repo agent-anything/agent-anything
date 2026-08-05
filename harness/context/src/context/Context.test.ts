@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentTask } from "@agent-anything/foundation";
+import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { ActionRejectedObservation } from "../observation/index.js";
 import {
   applyContextUpdate,

@@ -6,10 +6,7 @@ import type {
   SessionAuthorityContext,
   SessionAuthorityRecord,
 } from "@agent-anything/permission";
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-} from "@agent-anything/foundation";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import { describe, expect, it } from "vitest";
 import { createInMemoryHostPolicyAmendmentStore } from "./InMemoryHostPolicyAmendmentStore.js";
 import { createInMemoryHostSessionAuthorityStore } from "./InMemoryHostSessionAuthorityStore.js";

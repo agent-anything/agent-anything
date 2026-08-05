@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import type { McpJsonObject } from "./McpJson.js";
 import type {
   McpProtocolRevision,
@@ -29,7 +29,7 @@ export interface McpTransportOperationControl {
   readonly operationId: string;
   readonly registrationFingerprint: string;
   readonly sourceEpoch: number | null;
-  readonly deadlineAt: ISODateTimeString | null;
+  readonly deadlineAt: string | null;
   /**
    * STDIO maps abort to notifications/cancelled; Streamable HTTP closes the
    * request-scoped response stream.

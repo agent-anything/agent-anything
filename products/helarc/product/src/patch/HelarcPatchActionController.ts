@@ -1,9 +1,4 @@
-import type {
-  Controller,
-  ControllerCallContext,
-  ControllerDecision,
-  ControllerInput,
-} from "@agent-anything/runtime/controller";
+import type { Controller, ControllerCallContext, ControllerDecision, ControllerInput } from "@agent-anything/agent-runtime/controller";
 import {
   acceptPatch,
   createPatchProposal,
@@ -14,7 +9,7 @@ import {
   type PatchProposalChange,
 } from "@agent-anything/helarc-code-agent/patch";
 import { createAcceptedPatchFileAction } from "@agent-anything/helarc-code-agent/filesystem";
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import type {
   HelarcAgentOutput,
   HelarcChangeIntent,
@@ -36,7 +31,7 @@ export interface HelarcPatchActionControllerInput {
   readonly controller: Controller<HelarcAgentOutput>;
   readonly patchReviewBridge?: HelarcPatchReviewBridge;
   readonly onPhaseChanged?: (phase: HelarcProductPhase) => void;
-  readonly now?: () => ISODateTimeString;
+  readonly now?: () => string;
 }
 
 interface PendingPatchAction {

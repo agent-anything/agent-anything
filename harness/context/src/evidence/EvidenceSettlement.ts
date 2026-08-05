@@ -1,4 +1,5 @@
-import type { ArtifactRef, EvidenceRef, Metadata } from "@agent-anything/foundation";
+import type { ArtifactRef } from "@agent-anything/agent-core/run";
+import type { EvidenceRef } from "./EvidenceRef.js";
 import type { ToolResult } from "@agent-anything/tools";
 import type { ContextFailure } from "../ContextFailure.js";
 import type { Evidence } from "./Evidence.js";
@@ -219,7 +220,7 @@ function settled(
 function failed(
   code: string,
   message: string,
-  metadata: Metadata,
+  metadata: Readonly<Record<string, unknown>>,
   evidenceRefs: readonly EvidenceRef[],
   artifactRefs: readonly ArtifactRef[],
 ): EvidenceSettlementResult {
@@ -234,7 +235,7 @@ function failed(
 function contextFailure(
   code: string,
   message: string,
-  metadata: Metadata,
+  metadata: Readonly<Record<string, unknown>>,
 ): ContextFailure {
   return Object.freeze({
     code,
@@ -244,7 +245,7 @@ function contextFailure(
   });
 }
 
-function toolResultMetadata(toolResult: ToolResult): Metadata {
+function toolResultMetadata(toolResult: ToolResult): Readonly<Record<string, unknown>> {
   return Object.freeze({
     toolCallId: toolResult.toolCallId,
     toolName: toolResult.toolName,

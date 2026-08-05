@@ -1,7 +1,4 @@
-import type {
-  RunWorkspace,
-  WorkspaceTrustState,
-} from "@agent-anything/foundation";
+import type { RunWorkspace, WorkspaceTrustState } from "@agent-anything/agent-core/run";
 
 export type WorkspacePathErrorCode =
   | "workspace_missing"

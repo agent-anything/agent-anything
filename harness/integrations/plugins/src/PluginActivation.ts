@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import type {
   PluginContributionAdmission,
   PluginAdmissionSnapshot,
@@ -97,7 +97,7 @@ export interface PluginOwnerActivatedResult {
   readonly activationEpoch: number;
   readonly ownerCommitId: string;
   readonly receipts: readonly PluginOwnerActivationReceipt[];
-  readonly activatedAt: ISODateTimeString;
+  readonly activatedAt: string;
 }
 
 export interface PluginOwnerRejectedResult {
@@ -123,7 +123,7 @@ export interface PluginActivationSnapshot {
   readonly activationEpoch: number;
   readonly ownerCommitId: string;
   readonly receipts: readonly PluginOwnerActivationReceipt[];
-  readonly activatedAt: ISODateTimeString;
+  readonly activatedAt: string;
 }
 
 export interface PluginActivationLookup {
@@ -157,7 +157,7 @@ export interface PluginOwnerDeactivatedResult {
   readonly requestId: string;
   readonly activationId: string;
   readonly ownerCommitId: string;
-  readonly deactivatedAt: ISODateTimeString;
+  readonly deactivatedAt: string;
 }
 
 export type PluginOwnerDeactivationResult =

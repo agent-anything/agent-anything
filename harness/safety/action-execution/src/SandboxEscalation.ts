@@ -4,10 +4,7 @@ import {
   type ApprovalPayloadByCategory,
   type CanonicalAdditionalPermissions,
 } from "@agent-anything/permission";
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-} from "@agent-anything/foundation";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { ActionExecutionFailure } from "./ActionExecutionFailure.js";
 import { createActionExecutionFailure } from "./ActionExecutionFailure.js";
 import type { ActionDispatchPlan } from "./ActionRevalidation.js";

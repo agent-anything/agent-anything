@@ -1,6 +1,3 @@
-import {
-  createRunCancellationController,
-} from "@agent-anything/runtime/run";
 import type { ContextProjection } from "@agent-anything/context/context";
 import {
   createStaticHostIdentityResolver,
@@ -17,10 +14,7 @@ import type {
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/model-interaction";
-import type {
-  InvocationInterruptionContext,
-  RunWorkspace,
-} from "@agent-anything/foundation";
+import type { InvocationInterruptionContext, RunWorkspace } from "@agent-anything/agent-core/run";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -39,8 +33,7 @@ import { createHelarcPatchReviewBridge } from "./HelarcPatchReviewBridge.js";
 type RunHelarcTestInput = Omit<
   PrepareHelarcHostRunInput,
   | "sessionId"
-  | "runId"
-  | "cancellation"
+  | "productRunId"
   | "toolMode"
   | "permissionPreset"
   | "patchReviewBridge"
@@ -56,8 +49,7 @@ type RunHelarcTestInput = Omit<
   readonly identityResolver?: HostIdentityResolver;
   readonly identitySelection?: HostIdentitySelection;
   readonly sessionId?: string;
-  readonly runId?: string;
-  readonly cancellation?: PrepareHelarcHostRunInput["cancellation"];
+  readonly productRunId?: string;
   readonly enableShell?: boolean;
   readonly permissionPreset?: PrepareHelarcHostRunInput["permissionPreset"];
   readonly patchReviewBridge?: PrepareHelarcHostRunInput["patchReviewBridge"];
@@ -66,19 +58,14 @@ type RunHelarcTestInput = Omit<
 
 async function executeTestHostRun(input: RunHelarcTestInput) {
   const prepared = await prepareTestHostRun(input);
-  const outcome = await prepared.start().result;
-  if (outcome.kind === "start_failure") {
-    throw new Error(outcome.failure.code);
-  }
-  return outcome;
+  return prepared.start().result;
 }
 
 async function prepareTestHostRun(input: RunHelarcTestInput) {
-  const runId = input.runId ?? input.sessionId ?? input.task.id;
+  const productRunId = input.productRunId ?? input.sessionId ?? input.task.id;
   const permissionPreset = input.permissionPreset ?? "ask_for_approval";
   const userApprovalBridge = permissionPreset === "ask_for_approval"
     ? input.userApprovalBridge ?? createUserApprovalReviewBridge({
-        runId,
         descriptor: {
           id: "test-user-reviewer",
           kind: "user",
@@ -114,14 +101,14 @@ async function prepareTestHostRun(input: RunHelarcTestInput) {
       metadata: {},
     }),
     identitySelection: identitySelection ?? { kind: "anonymous" },
-    runId,
-    sessionId: input.sessionId ?? runId,
-    cancellation: input.cancellation ?? createRunCancellationController({ runId }),
+    productRunId,
+    sessionId: input.sessionId ?? productRunId,
     conversationItems: conversationItems ?? [],
     toolMode: enableShell ? "shell-enabled" : "read-only",
     permissionPreset,
     userApprovalBridge,
-    patchReviewBridge: input.patchReviewBridge ?? createHelarcPatchReviewBridge({ runId }),
+    patchReviewBridge: input.patchReviewBridge ??
+      createHelarcPatchReviewBridge(),
   });
 }
 
@@ -320,7 +307,7 @@ describe("Helarc Host Run composition", () => {
       "retry.attempt.finished",
     ]);
     expect(new Set(retryActivity.map((item) => item.metadata.operationId))).toEqual(
-      new Set(["helarc-task-1:controller:1:provider-request:1"]),
+      new Set([`${result.harnessRunId}:controller:1:provider-request:1`]),
     );
     expect(retryActivity.find((item) => item.kind === "retry.scheduled")?.metadata).toMatchObject({
       owner: "provider_request",
@@ -429,11 +416,13 @@ describe("Helarc Host Run composition", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-patch-bridge-mismatch-"));
     const provider = new ScriptedProvider([{ action: "complete", summary: "Must not run." }]);
 
+    const patchReviewBridge = createHelarcPatchReviewBridge();
+    patchReviewBridge.bindRun("run-other");
     await expect(executeReadOnlyTestHostRun({
       ...createTask(workspaceRoot),
       provider,
-      patchReviewBridge: createHelarcPatchReviewBridge({ runId: "run-other" }),
-    })).rejects.toThrow("patch review bridge Run identity does not match");
+      patchReviewBridge,
+    })).rejects.toThrow("patch review bridge must be unbound");
     expect(provider.requests).toHaveLength(0);
   });
 
@@ -599,7 +588,7 @@ describe("Helarc Host Run composition", () => {
     expect(provider.lastControllerInputPlans).toEqual([
       null,
       {
-        id: "helarc-task-1:plan:1",
+        id: `${result.harnessRunId}:plan:1`,
         version: 1,
         status: "active",
         steps: [
@@ -629,7 +618,6 @@ describe("Helarc Host Run composition", () => {
       ...createTask(workspaceRoot),
       provider,
       patchReviewBridge: automaticPatchReviewBridge(
-        "helarc-task-1",
         "accepted",
         (review) => {
         expect(review).toMatchObject({
@@ -694,7 +682,6 @@ describe("Helarc Host Run composition", () => {
       ...createTask(workspaceRoot),
       provider,
       patchReviewBridge: automaticPatchReviewBridge(
-        "helarc-task-1",
         "rejected",
         (review) => {
         expect(review).toMatchObject({
@@ -746,7 +733,6 @@ describe("Helarc Host Run composition", () => {
       ...createTask(workspaceRoot),
       provider,
       patchReviewBridge: automaticPatchReviewBridge(
-        "helarc-task-1",
         "accepted",
         async () => {
           await writeFile(targetPath, "changed\n");
@@ -777,13 +763,12 @@ describe("Helarc Host Run composition", () => {
 });
 
 function automaticPatchReviewBridge(
-  runId: string,
   decision: "accepted" | "rejected",
   onReview?: (
     review: NonNullable<ReturnType<ReturnType<typeof createHelarcPatchReviewBridge>["getPendingProjection"]>>,
   ) => void | Promise<void>,
 ) {
-  const bridge = createHelarcPatchReviewBridge({ runId });
+  const bridge = createHelarcPatchReviewBridge();
   bridge.subscribe(async (review) => {
     if (review === null || review.phase !== "reviewing") return;
     await onReview?.(review);

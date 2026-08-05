@@ -17,7 +17,7 @@ import {
   type SerializableValue,
   type TargetStateAssertion,
 } from "@agent-anything/action-execution";
-import type { InvocationInterruptionRef } from "@agent-anything/foundation";
+import type { InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { ToolJsonObject, ToolResult } from "@agent-anything/tools";
 import { createToolRegistrationSnapshot } from "@agent-anything/tools";
 import {

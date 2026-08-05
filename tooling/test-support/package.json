@@ -30,7 +30,7 @@
     "@agent-anything/observability": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/model-interaction": "workspace:*",
-    "@agent-anything/foundation": "workspace:*"
+    "@agent-anything/agent-core": "workspace:*"
   },
   "license": "Apache-2.0",
   "private": true

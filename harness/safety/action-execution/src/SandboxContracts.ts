@@ -1,8 +1,4 @@
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-  ISODateTimeString,
-} from "@agent-anything/foundation";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { ToolResult } from "@agent-anything/tools";
 import type { ActionExecutionFailure } from "./ActionExecutionFailure.js";
 import type { ActionDispatchPlan } from "./ActionRevalidation.js";
@@ -30,7 +26,7 @@ export interface SandboxAttempt {
   readonly policyId: string;
   readonly authoritySnapshotId: string;
   readonly dispatchPlanFingerprint: string;
-  readonly startedAt: ISODateTimeString;
+  readonly startedAt: string;
 }
 
 export interface CanonicalEnvironmentPolicy {
@@ -58,7 +54,7 @@ export interface SandboxPolicyEnvelope {
 export interface DispatchSandboxActionInput {
   readonly plan: ActionDispatchPlan;
   readonly preparedInvocation: PreparedActionInvocation;
-  readonly deadlineAt: ISODateTimeString;
+  readonly deadlineAt: string;
   readonly interruption: InvocationInterruptionContext;
 }
 
@@ -76,7 +72,7 @@ export interface SandboxExecutionRequest {
   readonly policy: SandboxPolicyEnvelope;
   readonly executor: ActionExecutorDescriptor;
   readonly invocation: PreparedActionInvocation;
-  readonly deadlineAt: ISODateTimeString;
+  readonly deadlineAt: string;
 }
 
 export interface SandboxCancellationRequest {
@@ -105,7 +101,7 @@ export interface SandboxEnforcementEvidence {
   readonly policyId: string;
   readonly enforcement: SandboxProviderKind;
   readonly enforcedEffectKinds: readonly CapabilityEffectKind[];
-  readonly settledAt: ISODateTimeString;
+  readonly settledAt: string;
 }
 
 export interface SandboxDenial {

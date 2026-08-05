@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import type {
   RuntimeEventName,
   RuntimeEventPayloadMap,
@@ -13,7 +13,7 @@ export interface RuntimeEventEnvelope<TName extends RuntimeEventName> {
   readonly taskId: string;
   readonly sequence: number;
   readonly name: TName;
-  readonly occurredAt: ISODateTimeString;
+  readonly occurredAt: string;
   readonly payload: RuntimeEventPayloadMap[TName];
 }
 

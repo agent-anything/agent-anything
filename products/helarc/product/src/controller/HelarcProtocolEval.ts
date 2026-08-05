@@ -1,7 +1,4 @@
-import type {
-  ControllerDecision,
-  ControllerInput,
-} from "@agent-anything/runtime/controller";
+import type { ControllerDecision, ControllerInput } from "@agent-anything/agent-runtime/controller";
 import type { ProviderResponse } from "@agent-anything/model-interaction";
 import {
   createToolRegistrationSnapshot,
@@ -162,7 +159,7 @@ function createProtocolEvalControllerInput(
       createdAt: "2026-07-08T00:00:00.000Z",
       metadata: {},
     },
-    conversationItems: [],
+    inputItems: [],
     toolSelectionId: selection.selectionId,
     toolCatalog: selection.modelCatalog,
     context: {

@@ -2,8 +2,8 @@ import type {
   HostRunProjection,
   HostTerminalRunProjection,
 } from "@agent-anything/host";
-import type { ISODateTimeString, Metadata } from "@agent-anything/foundation";
-import type { RunWorkspace } from "@agent-anything/foundation";
+
+import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import type {
   HelarcProductResult,
 } from "../composition/HelarcProductResult.js";
@@ -57,11 +57,11 @@ export interface CreateHelarcThreadInput {
   workspace: HelarcThreadWorkspaceContext;
   title: string;
   status?: HelarcThreadStatus;
-  createdAt: ISODateTimeString;
-  updatedAt: ISODateTimeString;
+  createdAt: string;
+  updatedAt: string;
   activeConversationId: string;
   latestRunId?: string | null;
-  metadata?: Metadata;
+  metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface HelarcThread {
@@ -69,29 +69,29 @@ export interface HelarcThread {
   workspace: HelarcThreadWorkspaceContext;
   title: string;
   status: HelarcThreadStatus;
-  createdAt: ISODateTimeString;
-  updatedAt: ISODateTimeString;
+  createdAt: string;
+  updatedAt: string;
   activeConversationId: string;
   latestRunId: string | null;
-  metadata: Metadata;
+  metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface CreateHelarcConversationInput {
   id: string;
   threadId: string;
-  createdAt: ISODateTimeString;
-  updatedAt: ISODateTimeString;
+  createdAt: string;
+  updatedAt: string;
   messageIds?: readonly string[];
-  metadata?: Metadata;
+  metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface HelarcConversation {
   id: string;
   threadId: string;
-  createdAt: ISODateTimeString;
-  updatedAt: ISODateTimeString;
+  createdAt: string;
+  updatedAt: string;
   messageIds: string[];
-  metadata: Metadata;
+  metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface CreateHelarcMessageInput {
@@ -100,10 +100,10 @@ export interface CreateHelarcMessageInput {
   conversationId: string;
   role: HelarcMessageRole;
   content: string;
-  createdAt: ISODateTimeString;
+  createdAt: string;
   relatedRunIds?: readonly string[];
   relatedArtifactIds?: readonly string[];
-  metadata?: Metadata;
+  metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface HelarcMessage {
@@ -112,10 +112,10 @@ export interface HelarcMessage {
   conversationId: string;
   role: HelarcMessageRole;
   content: string;
-  createdAt: ISODateTimeString;
+  createdAt: string;
   relatedRunIds: string[];
   relatedArtifactIds: string[];
-  metadata: Metadata;
+  metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface HelarcRunProviderContext {
@@ -147,12 +147,12 @@ export interface CreateHelarcPersistedRunInput {
   workspace: HelarcRunWorkspaceContext;
   provider?: HelarcRunProviderContext | null;
   permissionPreset?: HelarcRunPermissionPreset;
-  startedAt: ISODateTimeString;
-  metadata?: Metadata;
+  startedAt: string;
+  metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface HelarcRunProgressRecord {
-  readonly recordedAt: ISODateTimeString;
+  readonly recordedAt: string;
   readonly host: HostRunProjection;
   readonly product: HelarcProductRunProjection;
 }
@@ -164,6 +164,7 @@ export interface HelarcRunTerminalRecord {
 
 export interface HelarcPersistedRun {
   id: string;
+  harnessRunId: string | null;
   taskId: string;
   sessionId: string;
   threadId: string;
@@ -172,13 +173,13 @@ export interface HelarcPersistedRun {
   workspace: HelarcRunWorkspaceContext;
   provider: HelarcRunProviderContext | null;
   permissionPreset: HelarcRunPermissionPreset;
-  startedAt: ISODateTimeString;
-  updatedAt: ISODateTimeString;
+  startedAt: string;
+  updatedAt: string;
   progressSequence: number;
   lastProgress: HelarcRunProgressRecord | null;
   terminal: HelarcRunTerminalRecord | null;
   artifactIds: string[];
-  metadata: Metadata;
+  metadata: Readonly<Record<string, unknown>>;
 }
 
 export type HelarcSafeValue =
@@ -196,9 +197,9 @@ export interface CreateHelarcArtifactInput {
   kind: HelarcArtifactKind;
   title: string;
   summary?: string | null;
-  createdAt: ISODateTimeString;
+  createdAt: string;
   payload?: HelarcSafeValue;
-  metadata?: Metadata;
+  metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface HelarcArtifact {
@@ -208,9 +209,9 @@ export interface HelarcArtifact {
   kind: HelarcArtifactKind;
   title: string;
   summary: string | null;
-  createdAt: ISODateTimeString;
+  createdAt: string;
   payload: HelarcSafeValue;
-  metadata: Metadata;
+  metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface HelarcThreadRecord {
@@ -241,6 +242,7 @@ export type HelarcWorkContextErrorCode =
   | "message_timestamp_invalid"
   | "message_related_ids_invalid"
   | "run_id_required"
+  | "run_harness_id_invalid"
   | "run_task_id_required"
   | "run_session_id_required"
   | "run_thread_id_required"
@@ -488,6 +490,7 @@ export function createHelarcPersistedRun(
     ok: true,
     run: {
       id,
+      harnessRunId: null,
       taskId,
       sessionId,
       threadId,
@@ -614,6 +617,14 @@ function normalizeHelarcRunRecord(input: HelarcPersistedRun): CreateHelarcPersis
     metadata: input.metadata,
   });
   if (!base.ok) return base;
+  const harnessRunId = normalizeNullableString(input.harnessRunId);
+  if (input.harnessRunId !== null && harnessRunId === null) {
+    return reject("run_harness_id_invalid", "Harness Run id is invalid.");
+  }
+  const normalizedBase: HelarcPersistedRun = {
+    ...base.run,
+    harnessRunId,
+  };
   if (!isIsoDateTime(input.updatedAt) || input.updatedAt < input.startedAt) {
     return reject("run_timestamp_invalid", "Run update timestamp is invalid.");
   }
@@ -621,13 +632,13 @@ function normalizeHelarcRunRecord(input: HelarcPersistedRun): CreateHelarcPersis
     return reject("run_progress_invalid", "Run progress sequence is invalid.");
   }
   const progress = normalizeProgressRecord(
-    base.run,
+    normalizedBase,
     input.updatedAt,
     input.progressSequence,
     input.lastProgress,
   );
   if (!progress.ok) return progress;
-  const terminal = normalizeTerminalRecord(base.run, input.updatedAt, input.terminal);
+  const terminal = normalizeTerminalRecord(normalizedBase, input.updatedAt, input.terminal);
   if (!terminal.ok) return terminal;
   const artifactIds = normalizeIdList(input.artifactIds);
   if (!artifactIds.ok) {
@@ -640,7 +651,7 @@ function normalizeHelarcRunRecord(input: HelarcPersistedRun): CreateHelarcPersis
   return {
     ok: true,
     run: {
-      ...base.run,
+      ...normalizedBase,
       updatedAt: input.updatedAt,
       progressSequence: input.progressSequence,
       lastProgress: progress.progress,
@@ -653,7 +664,7 @@ function normalizeHelarcRunRecord(input: HelarcPersistedRun): CreateHelarcPersis
 
 function normalizeProgressRecord(
   run: HelarcPersistedRun,
-  updatedAt: ISODateTimeString,
+  updatedAt: string,
   sequence: number,
   progress: HelarcRunProgressRecord | null,
 ): { ok: true; progress: HelarcRunProgressRecord | null } |
@@ -667,7 +678,8 @@ function normalizeProgressRecord(
     progress.recordedAt > updatedAt ||
     !isHostProgressProjection(progress.host) ||
     !isProductProgressProjection(progress.product) ||
-    progress.host.runId !== run.id || progress.host.taskId !== run.taskId ||
+    run.harnessRunId === null || progress.host.runId !== run.harnessRunId ||
+    progress.host.taskId !== run.taskId ||
     progress.host.sessionId !== run.sessionId || progress.product.runId !== run.id
   ) {
     return reject("run_progress_invalid", "Run progress projection is invalid.");
@@ -681,7 +693,7 @@ function normalizeProgressRecord(
 
 function normalizeTerminalRecord(
   run: HelarcPersistedRun,
-  updatedAt: ISODateTimeString,
+  updatedAt: string,
   terminal: HelarcRunTerminalRecord | null,
 ): { ok: true; terminal: HelarcRunTerminalRecord | null } |
   { ok: false; error: HelarcWorkContextError } {
@@ -689,7 +701,8 @@ function normalizeTerminalRecord(
   const host = terminal.host;
   if (
     host === null || typeof host !== "object" ||
-    host.runId !== run.id || host.taskId !== run.taskId ||
+    run.harnessRunId === null || host.runId !== run.harnessRunId ||
+    host.taskId !== run.taskId ||
     !isIsoDateTime(host.completedAt) || host.completedAt < run.startedAt ||
     host.completedAt > updatedAt || !isHostTerminalProjection(host) ||
     !isCompatibleProductTerminal(run, host, terminal.product)

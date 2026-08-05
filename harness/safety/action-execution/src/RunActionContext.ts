@@ -1,4 +1,4 @@
-import type { IdentityRef, RunWorkspace } from "@agent-anything/foundation";
+import type { IdentityRef, RunWorkspace } from "@agent-anything/agent-core/run";
 import type { ResolvedPermissionProfile } from "@agent-anything/permission";
 import {
   createCanonicalActorIdentity,

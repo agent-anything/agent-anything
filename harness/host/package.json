@@ -28,10 +28,10 @@
   "dependencies": {
     "@agent-anything/action-execution": "workspace:*",
     "@agent-anything/observability": "workspace:*",
-    "@agent-anything/runtime": "workspace:*",
+    "@agent-anything/agent-runtime": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/permission": "workspace:*",
-    "@agent-anything/foundation": "workspace:*"
+    "@agent-anything/agent-core": "workspace:*"
   },
   "devDependencies": {
     "@agent-anything/model-interaction": "workspace:*",

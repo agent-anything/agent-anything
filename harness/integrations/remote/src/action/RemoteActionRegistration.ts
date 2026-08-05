@@ -5,7 +5,7 @@ import type {
   CanonicalRemoteServerIdentity,
   SerializableValue,
 } from "@agent-anything/action-execution";
-import type { Metadata } from "@agent-anything/foundation";
+
 import type {
   ToolAnnotations,
   ToolJsonObject,
@@ -84,7 +84,7 @@ export interface PreparedRemoteActionInvocationPayload {
   readonly timeoutMs: number | null;
 }
 
-export interface RemoteActionResultMetadata extends Metadata {
+export interface RemoteActionResultMetadata extends Readonly<Record<string, unknown>> {
   readonly remoteSourceKind: TrustedRemoteActionRegistration["source"]["kind"];
   readonly remoteSourceId: string;
   readonly remoteSourceCapabilityId: string;

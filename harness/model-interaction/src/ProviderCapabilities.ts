@@ -1,11 +1,11 @@
-import type { Metadata } from "@agent-anything/foundation";
+
 
 export interface ProviderDescriptor {
   id: string;
   name: string;
   capabilities: ProviderCapabilities;
   requestRetryScheduler: RetrySchedulerOwnership;
-  metadata: Metadata;
+  metadata: Readonly<Record<string, unknown>>;
 }
 
 export type RetrySchedulerOwnership =

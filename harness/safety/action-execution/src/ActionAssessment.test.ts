@@ -5,7 +5,7 @@ import {
   resolvePermissionProfile,
   type ActionApprovalCoverage,
 } from "@agent-anything/permission";
-import type { Action } from "@agent-anything/foundation/action";
+import type { Action } from "@agent-anything/agent-core/action";
 import {
   createToolRegistrationSnapshot,
   createToolSelectionSnapshot,

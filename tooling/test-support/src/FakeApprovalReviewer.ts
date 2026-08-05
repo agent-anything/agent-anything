@@ -6,7 +6,7 @@ import {
   type ApprovalReviewInput,
   type ApprovalReviewOutcome,
 } from "@agent-anything/permission";
-import type { InvocationInterruptionContext } from "@agent-anything/foundation";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
 
 export type FakeApprovalReviewerHandler = (
   input: ApprovalReviewInput,

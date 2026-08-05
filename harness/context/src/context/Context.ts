@@ -1,5 +1,5 @@
-import type { EvidenceRef, Metadata } from "@agent-anything/foundation";
-import type { AgentTask } from "@agent-anything/foundation";
+import type { EvidenceRef } from "../evidence/EvidenceRef.js";
+import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { ContextMessage } from "./ContextMessage.js";
 import type { Observation } from "../observation/index.js";
 
@@ -7,21 +7,21 @@ export interface Context {
   readonly messages: readonly ContextMessage[];
   readonly observations: readonly Observation[];
   readonly evidenceRefs: readonly EvidenceRef[];
-  readonly metadata: Metadata;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface ContextUpdate {
   readonly messages?: readonly ContextMessage[];
   readonly observations?: readonly Observation[];
   readonly evidenceRefs?: readonly EvidenceRef[];
-  readonly metadata?: Metadata;
+  readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface ContextProjection {
   readonly messages: readonly ContextMessage[];
   readonly observations: readonly Observation[];
   readonly evidenceRefs: readonly EvidenceRef[];
-  readonly metadata: Metadata;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export function createInitialContext(task: AgentTask): Context {

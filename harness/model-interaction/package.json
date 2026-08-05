@@ -28,6 +28,6 @@
   "license": "Apache-2.0",
   "private": true,
   "dependencies": {
-    "@agent-anything/foundation": "workspace:*"
+    "@agent-anything/agent-core": "workspace:*"
   }
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAllowAllActionPolicyPort } from "@agent-anything/governance";
-import type { InvocationInterruptionContext } from "@agent-anything/foundation";
-import type { Action } from "@agent-anything/foundation/action";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
+import type { Action } from "@agent-anything/agent-core/action";
 import {
   createToolRegistrationSnapshot,
   createToolSelectionSnapshot,

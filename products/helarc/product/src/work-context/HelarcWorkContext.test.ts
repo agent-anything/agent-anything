@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RunWorkspace } from "@agent-anything/foundation";
+import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import {
   createHelarcArtifact,
   createHelarcConversation,
@@ -266,6 +266,7 @@ function createRecord(): HelarcThreadRecord {
 function initialRun(): HelarcPersistedRun {
   return {
     id: "run-1",
+    harnessRunId: null,
     taskId: "task-1",
     sessionId: "session-1",
     threadId: "thread-1",

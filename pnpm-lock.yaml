@@ -18,11 +18,44 @@ importers:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@25.9.1)(lightningcss@1.32.0)
 
+  harness/agent-core/contracts: {}
+
+  harness/agent-core/runtime:
+    dependencies:
+      '@agent-anything/action-execution':
+        specifier: workspace:*
+        version: link:../../safety/action-execution
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../contracts
+      '@agent-anything/context':
+        specifier: workspace:*
+        version: link:../../context
+      '@agent-anything/governance':
+        specifier: workspace:*
+        version: link:../../safety/governance
+      '@agent-anything/model-interaction':
+        specifier: workspace:*
+        version: link:../../model-interaction
+      '@agent-anything/observability':
+        specifier: workspace:*
+        version: link:../../observability
+      '@agent-anything/permission':
+        specifier: workspace:*
+        version: link:../../safety/permission
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../../tools
+    devDependencies:
+      '@agent-anything/test-support':
+        specifier: workspace:*
+        version: link:../../../tooling/test-support
+
   harness/context:
     dependencies:
-      '@agent-anything/foundation':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../foundation
+        version: link:../agent-core/contracts
       '@agent-anything/permission':
         specifier: workspace:*
         version: link:../safety/permission
@@ -30,16 +63,17 @@ importers:
         specifier: workspace:*
         version: link:../tools
 
-  harness/foundation: {}
-
   harness/host:
     dependencies:
       '@agent-anything/action-execution':
         specifier: workspace:*
         version: link:../safety/action-execution
-      '@agent-anything/foundation':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../foundation
+        version: link:../agent-core/contracts
+      '@agent-anything/agent-runtime':
+        specifier: workspace:*
+        version: link:../agent-core/runtime
       '@agent-anything/governance':
         specifier: workspace:*
         version: link:../safety/governance
@@ -49,9 +83,6 @@ importers:
       '@agent-anything/permission':
         specifier: workspace:*
         version: link:../safety/permission
-      '@agent-anything/runtime':
-        specifier: workspace:*
-        version: link:../runtime
     devDependencies:
       '@agent-anything/model-interaction':
         specifier: workspace:*
@@ -62,18 +93,18 @@ importers:
 
   harness/integrations/enterprise-storage:
     dependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../../agent-core/contracts
       '@agent-anything/context':
         specifier: workspace:*
         version: link:../../context
-      '@agent-anything/foundation':
-        specifier: workspace:*
-        version: link:../../foundation
 
   harness/integrations/mcp:
     dependencies:
-      '@agent-anything/foundation':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../../foundation
+        version: link:../../agent-core/contracts
       '@agent-anything/remote-integrations':
         specifier: workspace:*
         version: link:../remote
@@ -86,9 +117,9 @@ importers:
 
   harness/integrations/plugins:
     dependencies:
-      '@agent-anything/foundation':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../../foundation
+        version: link:../../agent-core/contracts
       semver:
         specifier: 7.8.5
         version: 7.8.5
@@ -102,13 +133,16 @@ importers:
       '@agent-anything/action-execution':
         specifier: workspace:*
         version: link:../../safety/action-execution
-      '@agent-anything/foundation':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../../foundation
+        version: link:../../agent-core/contracts
       '@agent-anything/tools':
         specifier: workspace:*
         version: link:../../tools
     devDependencies:
+      '@agent-anything/agent-runtime':
+        specifier: workspace:*
+        version: link:../../agent-core/runtime
       '@agent-anything/context':
         specifier: workspace:*
         version: link:../../context
@@ -118,61 +152,27 @@ importers:
       '@agent-anything/permission':
         specifier: workspace:*
         version: link:../../safety/permission
-      '@agent-anything/runtime':
-        specifier: workspace:*
-        version: link:../../runtime
 
   harness/model-interaction:
     dependencies:
-      '@agent-anything/foundation':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../foundation
+        version: link:../agent-core/contracts
 
   harness/observability:
     dependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core/contracts
       '@agent-anything/context':
         specifier: workspace:*
         version: link:../context
-      '@agent-anything/foundation':
-        specifier: workspace:*
-        version: link:../foundation
-
-  harness/runtime:
-    dependencies:
-      '@agent-anything/action-execution':
-        specifier: workspace:*
-        version: link:../safety/action-execution
-      '@agent-anything/context':
-        specifier: workspace:*
-        version: link:../context
-      '@agent-anything/foundation':
-        specifier: workspace:*
-        version: link:../foundation
-      '@agent-anything/governance':
-        specifier: workspace:*
-        version: link:../safety/governance
-      '@agent-anything/model-interaction':
-        specifier: workspace:*
-        version: link:../model-interaction
-      '@agent-anything/observability':
-        specifier: workspace:*
-        version: link:../observability
-      '@agent-anything/permission':
-        specifier: workspace:*
-        version: link:../safety/permission
-      '@agent-anything/tools':
-        specifier: workspace:*
-        version: link:../tools
-    devDependencies:
-      '@agent-anything/test-support':
-        specifier: workspace:*
-        version: link:../../tooling/test-support
 
   harness/safety/action-execution:
     dependencies:
-      '@agent-anything/foundation':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../../foundation
+        version: link:../../agent-core/contracts
       '@agent-anything/governance':
         specifier: workspace:*
         version: link:../governance
@@ -189,24 +189,24 @@ importers:
 
   harness/safety/governance:
     dependencies:
-      '@agent-anything/foundation':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../../foundation
+        version: link:../../agent-core/contracts
 
   harness/safety/permission:
     dependencies:
-      '@agent-anything/foundation':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../../foundation
+        version: link:../../agent-core/contracts
       '@agent-anything/governance':
         specifier: workspace:*
         version: link:../governance
 
   harness/tools:
     dependencies:
-      '@agent-anything/foundation':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../foundation
+        version: link:../agent-core/contracts
     devDependencies:
       '@types/node':
         specifier: ^25.9.1
@@ -217,9 +217,9 @@ importers:
       '@agent-anything/action-execution':
         specifier: workspace:*
         version: link:../../../harness/safety/action-execution
-      '@agent-anything/foundation':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../../../harness/foundation
+        version: link:../../../harness/agent-core/contracts
       '@agent-anything/governance':
         specifier: workspace:*
         version: link:../../../harness/safety/governance
@@ -227,15 +227,15 @@ importers:
         specifier: workspace:*
         version: link:../../../harness/tools
     devDependencies:
+      '@agent-anything/agent-runtime':
+        specifier: workspace:*
+        version: link:../../../harness/agent-core/runtime
       '@agent-anything/context':
         specifier: workspace:*
         version: link:../../../harness/context
       '@agent-anything/permission':
         specifier: workspace:*
         version: link:../../../harness/safety/permission
-      '@agent-anything/runtime':
-        specifier: workspace:*
-        version: link:../../../harness/runtime
       '@agent-anything/test-support':
         specifier: workspace:*
         version: link:../../../tooling/test-support
@@ -248,12 +248,15 @@ importers:
       '@agent-anything/action-execution':
         specifier: workspace:*
         version: link:../../../harness/safety/action-execution
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../../../harness/agent-core/contracts
+      '@agent-anything/agent-runtime':
+        specifier: workspace:*
+        version: link:../../../harness/agent-core/runtime
       '@agent-anything/context':
         specifier: workspace:*
         version: link:../../../harness/context
-      '@agent-anything/foundation':
-        specifier: workspace:*
-        version: link:../../../harness/foundation
       '@agent-anything/governance':
         specifier: workspace:*
         version: link:../../../harness/safety/governance
@@ -275,9 +278,6 @@ importers:
       '@agent-anything/permission':
         specifier: workspace:*
         version: link:../../../harness/safety/permission
-      '@agent-anything/runtime':
-        specifier: workspace:*
-        version: link:../../../harness/runtime
       lucide-react:
         specifier: ^1.21.0
         version: 1.21.0(react@19.2.7)
@@ -312,9 +312,12 @@ importers:
       '@agent-anything/action-execution':
         specifier: workspace:*
         version: link:../../../harness/safety/action-execution
-      '@agent-anything/foundation':
+      '@agent-anything/agent-core':
         specifier: workspace:*
-        version: link:../../../harness/foundation
+        version: link:../../../harness/agent-core/contracts
+      '@agent-anything/agent-runtime':
+        specifier: workspace:*
+        version: link:../../../harness/agent-core/runtime
       '@agent-anything/governance':
         specifier: workspace:*
         version: link:../../../harness/safety/governance
@@ -330,9 +333,6 @@ importers:
       '@agent-anything/observability':
         specifier: workspace:*
         version: link:../../../harness/observability
-      '@agent-anything/runtime':
-        specifier: workspace:*
-        version: link:../../../harness/runtime
       '@agent-anything/tools':
         specifier: workspace:*
         version: link:../../../harness/tools
@@ -343,12 +343,12 @@ importers:
 
   tooling/test-support:
     dependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../../harness/agent-core/contracts
       '@agent-anything/context':
         specifier: workspace:*
         version: link:../../harness/context
-      '@agent-anything/foundation':
-        specifier: workspace:*
-        version: link:../../harness/foundation
       '@agent-anything/model-interaction':
         specifier: workspace:*
         version: link:../../harness/model-interaction

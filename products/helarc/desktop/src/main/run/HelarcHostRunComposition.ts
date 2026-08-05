@@ -5,16 +5,13 @@ import {
   type SandboxEnforcement,
   type SandboxProvider,
 } from "@agent-anything/action-execution";
-import type { RunResult } from "@agent-anything/runtime/run";
+import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type {
   RuntimeEvent,
   RuntimeEventPublisher,
 } from "@agent-anything/observability/events";
-import type {
-  ApprovalReviewerBinding,
-  RunCancellationController,
-} from "@agent-anything/runtime/run";
-import { Runner } from "@agent-anything/runtime";
+import type { ApprovalReviewerBinding } from "@agent-anything/agent-runtime/run";
+import { Runner } from "@agent-anything/agent-runtime/runner";
 import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,
@@ -23,7 +20,6 @@ import {
   type HostActiveRun,
   type HostIdentityResolver,
   type HostIdentitySelection,
-  type HostRunStartFailure,
   type HostTerminalRunProjection,
   type HostWorkspaceResolver,
   type HostWorkspaceSelection,
@@ -59,20 +55,14 @@ import {
 } from "@agent-anything/helarc";
 import type { SessionAuthorityPort } from "@agent-anything/permission";
 import type { Provider } from "@agent-anything/model-interaction";
-import {
-  listRunWorkspaces,
-  type AgentTask,
-  type IdentityRef,
-  type ISODateTimeString,
-  type RunInputItem,
-  type RunWorkspace,
-  type WorkspaceContext,
-} from "@agent-anything/foundation";
+import { listRunWorkspaces, type IdentityRef, type RunWorkspace, type WorkspaceContext } from "@agent-anything/agent-core/run";
+import type { AgentTask } from "@agent-anything/agent-core/task";
+import type { RunInputItem } from "@agent-anything/agent-core/input";
 import { createHelarcHostPermissionComposition } from "./HelarcHostPermissionComposition.js";
 
 export interface PrepareHelarcHostRunInput {
   readonly sessionId: string;
-  readonly runId: string;
+  readonly productRunId: string;
   readonly task: AgentTask<HelarcTaskInput>;
   readonly conversationItems: readonly RunInputItem[];
   readonly workspaceResolver: HostWorkspaceResolver;
@@ -80,7 +70,6 @@ export interface PrepareHelarcHostRunInput {
   readonly identityResolver: HostIdentityResolver;
   readonly identitySelection: HostIdentitySelection;
   readonly provider: Provider;
-  readonly cancellation: RunCancellationController;
   readonly toolMode: HelarcToolMode;
   readonly permissionPreset: HelarcPermissionPreset;
   readonly userApprovalBridge?: UserApprovalReviewBridge;
@@ -94,35 +83,27 @@ export interface PrepareHelarcHostRunInput {
   readonly commandLimits?: Partial<CodeAgentCommandLimits>;
   readonly patchReviewBridge: HelarcPatchReviewBridge;
   readonly evidencePersistence?: EvidencePersistencePort;
-  readonly now?: () => ISODateTimeString;
+  readonly now?: () => string;
 }
 
 export interface HelarcHostRunResult {
   readonly kind: "run_result";
+  readonly productRunId: string;
+  readonly harnessRunId: string;
   readonly runResult: RunResult<HelarcAgentOutput>;
   readonly terminal: HostTerminalRunProjection;
   readonly product: HelarcProductResult;
   readonly activity: readonly HelarcActivityItem[];
 }
 
-export interface HelarcHostRunStartFailureResult {
-  readonly kind: "start_failure";
-  readonly failure: HostRunStartFailure;
-  readonly activity: readonly HelarcActivityItem[];
-}
-
-export type HelarcHostRunOutcome =
-  | HelarcHostRunResult
-  | HelarcHostRunStartFailureResult;
-
 export interface HelarcHostRunComposition {
   readonly activeRun: HelarcHostActiveRun;
-  readonly result: Promise<HelarcHostRunOutcome>;
+  readonly result: Promise<HelarcHostRunResult>;
 }
 
 export interface PreparedHelarcHostRun {
   readonly sessionId: string;
-  readonly runId: string;
+  readonly productRunId: string;
   readonly workspace: RunWorkspace;
   readonly identity: IdentityRef;
   start(): HelarcHostRunComposition;
@@ -142,7 +123,7 @@ export async function prepareHelarcHostRun(
 ): Promise<PreparedHelarcHostRun> {
   const runContext = await resolveHostRunContext({
     sessionId: input.sessionId,
-    runId: input.runId,
+    runId: input.productRunId,
     taskId: input.task.id,
     metadata: { product: "helarc" },
     workspaceResolver: input.workspaceResolver,
@@ -163,7 +144,7 @@ export async function prepareHelarcHostRun(
   const enforcement = input.enforcement ?? "disabled";
   const sandboxProviders = input.sandboxProviders ?? [];
   assertSelectedSandboxProvider(enforcement, sandboxProviders);
-  assertPatchReviewBridge(input.runId, input.patchReviewBridge);
+  assertPatchReviewBridge(input.patchReviewBridge);
 
   const canonicalRoots = await createCodeAgentCanonicalWorkspaceRoots({
     workspace: runWorkspace,
@@ -171,7 +152,7 @@ export async function prepareHelarcHostRun(
   });
   const permissions = await createHelarcHostPermissionComposition({
     preset: input.permissionPreset,
-    runId: input.runId,
+    productRunId: input.productRunId,
     sessionId: input.sessionId,
     workspace,
     workspaceRoots: canonicalRoots.map((root) => ({
@@ -180,7 +161,6 @@ export async function prepareHelarcHostRun(
     })),
     platform,
     enforcement,
-    cancellation: input.cancellation,
     userApprovalBridge: input.userApprovalBridge ?? null,
     automaticReviewer: input.automaticApprovalReviewer ?? null,
     sessionAuthorityPort: input.sessionAuthorityPort ??
@@ -189,7 +169,7 @@ export async function prepareHelarcHostRun(
       createInMemoryHostPolicyAmendmentStore({ maxRecords: 64 }),
   });
   const product = await createHelarcProductComposition({
-    runId: input.runId,
+    runId: input.productRunId,
     task: input.task,
     workspace: runWorkspace,
     provider: input.provider,
@@ -251,9 +231,8 @@ export async function prepareHelarcHostRun(
     agent: product.agent,
     userApprovalReviewBridge: permissions.userApprovalBridge,
     runInput: {
-      runId: input.runId,
       task: input.task,
-      conversationItems: input.conversationItems,
+      items: input.conversationItems,
       metadata: runMetadata,
     },
     runConfig: {
@@ -290,7 +269,6 @@ export async function prepareHelarcHostRun(
       },
       audit: "optional",
       telemetry: "optional",
-      cancellation: input.cancellation,
       cancellationLimits: {
         operationSettlementTimeoutMs: 10_000,
         processGracePeriodMs: 1_000,
@@ -348,7 +326,7 @@ export async function prepareHelarcHostRun(
 
   return Object.freeze({
     sessionId: input.sessionId,
-    runId: input.runId,
+    productRunId: input.productRunId,
     workspace: runWorkspace,
     identity: runContext.identity,
     start(): HelarcHostRunComposition {
@@ -357,6 +335,7 @@ export async function prepareHelarcHostRun(
       }
       started = true;
       const hostActiveRun = runtime.start(hostRunStartInput);
+      input.patchReviewBridge.bindRun(hostActiveRun.runId);
       const activeRun = createHelarcHostActiveRun(
         hostActiveRun,
         input.patchReviewBridge,
@@ -366,17 +345,12 @@ export async function prepareHelarcHostRun(
 
       return Object.freeze({
         activeRun,
-        result: activeRun.result.then((outcome): HelarcHostRunOutcome => {
-          if (outcome.kind === "start_failure") {
-            return Object.freeze({
-              kind: "start_failure",
-              failure: outcome,
-              activity: product.getProductProjection().activity,
-            });
-          }
+        result: activeRun.result.then((outcome): HelarcHostRunResult => {
           const productResult = product.projectResult(outcome.runResult, enforcement);
           return Object.freeze({
             kind: "run_result",
+            productRunId: input.productRunId,
+            harnessRunId: outcome.runId,
             runResult: outcome.runResult,
             terminal: outcome.terminal,
             product: productResult,
@@ -417,22 +391,20 @@ function createHelarcHostActiveRun(
   });
 }
 
-function assertPatchReviewBridge(
-  runId: string,
-  bridge: HelarcPatchReviewBridge,
-): void {
+function assertPatchReviewBridge(bridge: HelarcPatchReviewBridge): void {
   if (
     bridge === null ||
     typeof bridge !== "object" ||
     typeof bridge.review !== "function" ||
+    typeof bridge.bindRun !== "function" ||
     typeof bridge.getPendingProjection !== "function" ||
     typeof bridge.subscribe !== "function" ||
     typeof bridge.submitDecision !== "function"
   ) {
     throw new TypeError("Helarc Host Run requires a Patch review bridge.");
   }
-  if (bridge.runId !== runId) {
-    throw new TypeError("Helarc patch review bridge Run identity does not match the Run.");
+  if (bridge.boundRunId !== null) {
+    throw new TypeError("Helarc patch review bridge must be unbound before Run start.");
   }
 }
 
@@ -472,7 +444,7 @@ class InMemoryHelarcEvidencePersistence implements EvidencePersistencePort {
   private readonly evidence = new Map<string, Evidence>();
   private nextId = 1;
 
-  constructor(private readonly now: (() => ISODateTimeString) | undefined) {}
+  constructor(private readonly now: (() => string) | undefined) {}
 
   async persistEvidence(evidence: Evidence): Promise<EvidencePersistenceResult> {
     this.evidence.set(evidence.id, evidence);

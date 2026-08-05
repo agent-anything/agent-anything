@@ -10,22 +10,23 @@ initial code-agent desktop stage.
 
 ## Current State
 
-- The repository is split into sixteen focused workspaces with executable dependency,
+- The repository is split into eighteen focused workspaces with executable dependency,
   source, and public API checks.
-- `foundation` provides dependency-free Agent, Task, Run, Workspace, Identity,
-  Action, Observation, Artifact, interaction, result, and technical Contracts.
+- `agent-core/contracts` provides the dependency-safe Agent Core surface for
+  Agent, Task, Run input, Run relationships, Action, Workspace, Identity, and
+  Artifact references.
+- `agent-core/runtime` owns the authoritative Runner, Agent Loop, Controller,
+  Run state and result, planning, cancellation, Retry coordination, limits,
+  and terminalization.
 - `model-interaction` owns Provider-neutral request, response, capability,
   interruption, and Retry-scheduler ownership Contracts.
-- `runtime` owns the authoritative Runner, Agent Loop, Controller, RunState,
-  planning, cancellation, Retry coordination, limits, and terminalization.
 - `context` owns active Context transitions, Observations, Evidence, and
   owner-defined Evidence persistence.
-- `agent-core` is temporarily limited to RuntimeEvent Contracts awaiting their
-  Observability package move.
 - `action-execution` provides the trusted Action preparation, assessment,
   revalidation, and Sandbox dispatch path.
-- `host` provides product-neutral active Run integration, safe projections,
-  approval bridges, and Host authority stores.
+- `host` retains and reconnects live `RunHandle` operations, provides safe
+  projections, and owns approval transport and Host authority stores without
+  becoming a second Run lifecycle owner.
 - Helarc is the main active product and has a working Electron desktop host.
 - Helarc supports workspace profiles, provider profiles, local credential storage,
   provider-backed Runs, durable Thread history, Run traces, permission-aware
@@ -74,10 +75,11 @@ Current Helarc capabilities include:
 ```text
 agent-anything/
   harness/
-    foundation/         Dependency-free Harness contracts and semantics
+    agent-core/
+      contracts/        Dependency-safe Agent Core semantic contracts
+      runtime/          Runner, Agent Loop, Run lifecycle, Controller, Plan, Retry
     context/            Context, Observation, Evidence, and persistence contracts
     model-interaction/  Provider-neutral model invocation contracts
-    runtime/            Runner, Agent Loop, Controller, Plan, Retry, Run lifecycle
     tools/              Declarative Tool registration, catalogs, and results
     safety/
       governance/       Policy and managed constraint contracts
@@ -107,16 +109,20 @@ agent-anything/
 
 Reusable Harness packages are designed to point inward:
 
-- `foundation` is dependency-free with respect to higher Harness components and
-  Products.
+- Agent Core is one semantic owner implemented through a dependency-safe
+  Contracts package and a Runtime package; the physical split remains one
+  architectural domain.
+- `agent-core/contracts` has no production dependencies and exposes only
+  focused semantic subpaths.
+- `agent-core/runtime` owns authoritative Run advancement and coordinates peer
+  component Contracts without re-exporting them.
 - `model-interaction` owns Provider-neutral invocation semantics.
 - `context` owns Context, Observation, Evidence, and narrow Evidence
   persistence semantics without becoming a general storage facade.
-- `runtime` owns authoritative Run advancement and coordinates other components
-  through their public Contracts.
 - `action-execution` owns canonical Action preparation, policy and authority
   assessment, revalidation, and the mandatory Sandbox execution gateway.
-- `host` adapts authoritative Runner execution to product-neutral application hosts.
+- `host` adapts execution-native `RunHandle` operations to product-neutral
+  application hosts and retains a bounded set of live and terminal handles.
 - focused Integration packages own MCP, Plugin, remote capability, and
   enterprise storage adapters without a generic extension owner.
 - Helarc Code Agent exposes focused workspace, filesystem, command, and patch
@@ -168,8 +174,8 @@ Build all workspace packages:
 pnpm build
 ```
 
-Build and verify the exact Foundation, Runtime, Host, Integration, and Helarc
-ESM entry points, including removed and private paths:
+Build and verify the exact Agent Core Contracts, Agent Core Runtime, Host,
+Integration, and Helarc ESM entry points, including removed and private paths:
 
 ```powershell
 pnpm run api:check
@@ -218,9 +224,11 @@ Provider timeout values use positive whole-second increments expressed in millis
 
 ## Status
 
-The repository is still pre-product-1.0. The Harness now has separate ownership
-for Agent semantics, trusted Action execution, authoritative Run advancement,
-Host integration, capabilities, and lower Contracts. Helarc exercises that graph
+The repository is still pre-product-1.0. Agent Core now owns Agent semantics and
+authoritative Run advancement as one domain. Runner exposes the same active Run
+through `RunHandle` to foreground and in-process background callers, while Host
+adds retention, reconnection, safe projection, approval transport, and Product
+correlation without duplicating execution truth. Helarc exercises that graph
 through a working Desktop Run, review, cancellation, and durable Thread workflow.
 
 Current validation commands:

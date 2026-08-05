@@ -1,0 +1,45 @@
+{
+  "name": "@agent-anything/agent-core",
+  "version": "0.0.0",
+  "description": "Dependency-safe Agent Core contracts for Agent Harness.",
+  "type": "module",
+  "exports": {
+    "./action": {
+      "types": "./src/action/index.ts",
+      "import": "./dist/action/index.js"
+    },
+    "./agent": {
+      "types": "./src/agent/index.ts",
+      "import": "./dist/agent/index.js"
+    },
+    "./input": {
+      "types": "./src/input/index.ts",
+      "import": "./dist/input/index.js"
+    },
+    "./run": {
+      "types": "./src/run/index.ts",
+      "import": "./dist/run/index.js"
+    },
+    "./task": {
+      "types": "./src/task/index.ts",
+      "import": "./dist/task/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "kind": "harness",
+      "component": "agent-core",
+      "role": "contracts"
+    }
+  },
+  "license": "Apache-2.0",
+  "private": true
+}

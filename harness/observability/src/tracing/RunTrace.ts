@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import type {
   RuntimeApprovalCategory,
   RuntimeRetryOwner,
@@ -111,8 +111,8 @@ export interface TraceSpanEnvelope<
   readonly operation: TOperation;
   readonly status: TraceSpanStatus;
   readonly code: string | null;
-  readonly startedAt: ISODateTimeString | null;
-  readonly completedAt: ISODateTimeString | null;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
   readonly links: readonly TraceLink[];
   readonly attributes: TraceAttributesFor<TOwner, TOperation>;
 }
@@ -131,8 +131,8 @@ export interface RunTrace {
   readonly taskId: string;
   readonly status: RunTraceStatus;
   readonly rootSpanId: string;
-  readonly startedAt: ISODateTimeString | null;
-  readonly completedAt: ISODateTimeString | null;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
   readonly spans: readonly TraceSpan[];
   readonly issues: readonly TraceIssue[];
 }
@@ -249,7 +249,7 @@ export interface CommittedRunItemTraceProjection {
   readonly runId: string;
   readonly sequence: number;
   readonly kind: RuntimeRunItemKind;
-  readonly createdAt: ISODateTimeString;
+  readonly createdAt: string;
 }
 
 export interface TerminalRunResultTraceProjection {

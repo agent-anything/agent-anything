@@ -1,21 +1,12 @@
-import {
-  ProviderBackedController,
-  createSystemRetryExecutor,
-  systemRetryClock,
-} from "@agent-anything/runtime";
-import type {
-  Controller,
-  RunResult,
-} from "@agent-anything/runtime";
+import { ProviderBackedController } from "@agent-anything/agent-runtime/controller";
+import { createSystemRetryExecutor, systemRetryClock } from "@agent-anything/agent-runtime/retry";
+import type { Controller } from "@agent-anything/agent-runtime/controller";
+import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
-import type {
-  Agent,
-  AgentTask,
-  ISODateTimeString,
-  Metadata,
-  RunWorkspace,
-} from "@agent-anything/foundation";
-import type { RetryClock } from "@agent-anything/runtime/retry";
+import type { Agent } from "@agent-anything/agent-core/agent";
+import type { AgentTask } from "@agent-anything/agent-core/task";
+import type { RunWorkspace } from "@agent-anything/agent-core/run";
+import type { RetryClock } from "@agent-anything/agent-runtime/retry";
 import type { SandboxEnforcement } from "@agent-anything/action-execution";
 import type { CodeAgentCommandLimits } from "@agent-anything/helarc-code-agent/command";
 import type { Provider } from "@agent-anything/model-interaction";
@@ -71,14 +62,14 @@ export interface CreateHelarcProductCompositionInput {
   readonly toolMode: HelarcToolMode;
   readonly commandLimits?: Partial<CodeAgentCommandLimits>;
   readonly patchReviewBridge?: HelarcPatchReviewBridge;
-  readonly now?: () => ISODateTimeString;
+  readonly now?: () => string;
 }
 
 export interface HelarcProductComposition {
   readonly agent: Agent<HelarcAgentOutput>;
   readonly controller: Controller<HelarcAgentOutput>;
   readonly actions: Awaited<ReturnType<typeof createHelarcActionComposition>>;
-  readonly runMetadata: Metadata;
+  readonly runMetadata: Readonly<Record<string, unknown>>;
   getProductProjection(): HelarcProductRunProjection;
   subscribeProductProjection(listener: HelarcProductRunProjectionListener): () => void;
   recordRuntimeEvent(event: RuntimeEvent): {

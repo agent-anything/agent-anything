@@ -2,10 +2,7 @@ import type {
   ApprovalDecisionSubmission,
   ApprovalReviewInput,
 } from "@agent-anything/permission";
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-} from "@agent-anything/foundation";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import { describe, expect, it } from "vitest";
 import {
   createUserApprovalReviewBridge,
@@ -15,7 +12,6 @@ import {
 describe("UserApprovalReviewBridge", () => {
   it("keeps one immutable pending projection and accepts one submission", async () => {
     const bridge = createBridge();
-    expect(bridge.runId).toBe("run.1");
     const source = reviewInput();
     const pending = bridge.review(source, interruptionContext());
 
@@ -158,7 +154,6 @@ describe("UserApprovalReviewBridge", () => {
 
 function createBridge(overrides: Record<string, unknown> = {}) {
   return createUserApprovalReviewBridge({
-    runId: "run.1",
     descriptor: {
       id: "reviewer.user",
       kind: "user",

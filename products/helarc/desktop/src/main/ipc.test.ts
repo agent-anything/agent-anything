@@ -44,7 +44,7 @@ describe("Helarc IPC", () => {
       return {
         ok: true as const,
         taskId: "task-1",
-        runId: "run-1",
+        productRunId: "run-1",
         threadId: "thread-1",
         snapshot: running,
         privateState: PRIVATE_RESULT,
@@ -82,7 +82,7 @@ describe("Helarc IPC", () => {
       result: {
         ok: true,
         taskId: "task-1",
-        runId: "run-1",
+        productRunId: "run-1",
         threadId: "thread-1",
         snapshot: { status: "running" },
       },

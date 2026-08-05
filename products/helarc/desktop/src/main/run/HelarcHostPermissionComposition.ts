@@ -1,8 +1,4 @@
-import type {
-  ApprovalReviewerBinding,
-  ResolvedRunPermissionConfig,
-  RunCancellationController,
-} from "@agent-anything/runtime/run";
+import type { ApprovalReviewerBinding, ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
 import {
   resolveHostRunPermissionConfig,
   type UserApprovalReviewBridge,
@@ -11,7 +7,7 @@ import type {
   ManagedPermissionConstraints,
   PersistentPolicyAmendmentPort,
 } from "@agent-anything/governance";
-import type { WorkspaceContext } from "@agent-anything/foundation";
+import type { WorkspaceContext } from "@agent-anything/agent-core/run";
 import {
   resolveHelarcPermissionPreset,
   type HelarcPermissionPreset,
@@ -21,20 +17,16 @@ import type {
   PermissionEnforcement,
   PermissionProfileDefinition,
 } from "@agent-anything/permission/profile";
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-} from "@agent-anything/foundation";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
 
 export interface CreateHelarcHostPermissionCompositionInput {
   readonly preset: HelarcPermissionPreset;
-  readonly runId: string;
+  readonly productRunId: string;
   readonly sessionId: string;
   readonly workspace: WorkspaceContext;
   readonly workspaceRoots: readonly { readonly rootId: string; readonly path: string }[];
   readonly platform: "win32" | "posix";
   readonly enforcement: PermissionEnforcement;
-  readonly cancellation: RunCancellationController;
   readonly userApprovalBridge: UserApprovalReviewBridge | null;
   readonly automaticReviewer: (ApprovalReviewerBinding & {
     readonly kind: "auto_review";
@@ -105,7 +97,7 @@ export async function createHelarcHostPermissionComposition(
       maxConsecutiveReviewFailures: 3,
     },
     authorityApplicationLimits: { commitTimeoutMs: 5_000 },
-    interruption: createInterruptionContext(input.cancellation),
+    interruption: createPreparationInterruptionContext(),
   });
 
   return Object.freeze({
@@ -127,11 +119,8 @@ function resolveReviewer(
     if (input.automaticReviewer !== null) {
       throw new TypeError("Ask for approval must not include an automatic reviewer.");
     }
-    if (input.userApprovalBridge.runId !== input.runId) {
-      throw new TypeError("User approval bridge Run identity does not match the composed Run.");
-    }
     return Object.freeze({
-      bindingId: `${input.runId}:reviewer:user`,
+      bindingId: `${input.productRunId}:reviewer:user`,
       kind: "user",
       reviewer: input.userApprovalBridge,
       descriptor: input.userApprovalBridge.descriptor,
@@ -189,22 +178,10 @@ function profileForPreset(
   });
 }
 
-function createInterruptionContext(
-  cancellation: RunCancellationController,
-): InvocationInterruptionContext {
+function createPreparationInterruptionContext(): InvocationInterruptionContext {
+  const controller = new AbortController();
   return Object.freeze({
-    signal: cancellation.context.signal,
-    get interruption(): InvocationInterruptionRef | null {
-      const request = cancellation.context.request;
-      return request === null
-        ? null
-        : {
-            kind: "run_cancellation",
-            cancellation: {
-              runId: request.runId,
-              requestId: request.id,
-            },
-          };
-    },
+    signal: controller.signal,
+    interruption: null,
   });
 }

@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import {
   assertCanonicalDataArray,
   assertExactDataProperties,
@@ -49,8 +49,8 @@ export interface McpDiscoverySnapshot {
   readonly cache: {
     readonly ttlMs: number;
     readonly scope: McpCacheScope;
-    readonly receivedAt: ISODateTimeString;
-    readonly expiresAt: ISODateTimeString;
+    readonly receivedAt: string;
+    readonly expiresAt: string;
   };
 }
 
@@ -91,8 +91,8 @@ export class McpOperationError extends Error {
 export interface McpOperationCache {
   readonly ttlMs: number;
   readonly scope: McpCacheScope;
-  readonly receivedAt: ISODateTimeString;
-  readonly expiresAt: ISODateTimeString;
+  readonly receivedAt: string;
+  readonly expiresAt: string;
 }
 
 export function createMcpDiscoverRequest(input: {
@@ -267,7 +267,7 @@ export function parseMcpOperationResponse(input: {
 
 export function parseMcpOperationCache(input: {
   readonly result: McpJsonObject;
-  readonly receivedAt: ISODateTimeString;
+  readonly receivedAt: string;
   readonly maxTtlMs: number;
   readonly path?: string;
 }): McpOperationCache {
@@ -309,7 +309,7 @@ export function parseMcpDiscoverResponse(input: {
   readonly requestId: string;
   readonly requiredCapabilities: readonly McpServerCapabilityId[];
   readonly maxTtlMs: number;
-  readonly receivedAt: ISODateTimeString;
+  readonly receivedAt: string;
 }): McpDiscoverySnapshot {
   try {
     assertPlainRecord(input.response, "response");

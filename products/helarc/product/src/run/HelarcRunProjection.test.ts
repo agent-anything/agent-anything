@@ -156,6 +156,10 @@ describe("Helarc unified Run projection", () => {
       host: hostProjection({ sequence: 1 }),
       product: createHelarcProductRunProjection("run-1"),
     });
+    expect(initial).toMatchObject({
+      productRunId: "run-1",
+      harnessRunId: "harness-run-1",
+    });
     const hostApplied = reduceHelarcRunProjection(initial, {
       kind: "host",
       projection: hostProjection({ sequence: 2, status: "cancelling" }),
@@ -170,6 +174,10 @@ describe("Helarc unified Run projection", () => {
       kind: "host",
       projection: hostProjection({ sequence: 1 }),
     })).toMatchObject({ status: "rejected", code: "stale_host_sequence" });
+    expect(reduceHelarcRunProjection(hostApplied.projection, {
+      kind: "host",
+      projection: hostProjection({ runId: "harness-run-other", sequence: 3 }),
+    })).toMatchObject({ status: "rejected", code: "run_identity_mismatch" });
     expect(reduceHelarcRunProjection(hostApplied.projection, {
       kind: "product",
       projection: { ...createHelarcProductRunProjection("run-other"), sequence: 1 },
@@ -208,7 +216,7 @@ function hostProjection(
     ...createHostRunProjection({
       sessionId: "session-1",
       taskId: "task-1",
-      runId: "run-1",
+      runId: "harness-run-1",
       startedAt: "2026-07-17T00:00:00.000Z",
       enforcement: "disabled",
     }),

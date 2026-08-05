@@ -14,11 +14,7 @@ import type {
   SessionAuthorityContext,
   SessionAuthorityRecord,
 } from "@agent-anything/permission";
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-  ISODateTimeString,
-} from "@agent-anything/foundation";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { ActionRuleOutcome } from "@agent-anything/governance/policy";
 import type { ActionExecutionFailure } from "./ActionExecutionFailure.js";
 import type { CanonicalEffectivePermissions } from "./CanonicalEffectivePermissions.js";
@@ -51,7 +47,7 @@ export interface ActionDispatchAuthorization {
   readonly authoritySources: readonly ActionAuthoritySource[];
   readonly actionCoverageIdToConsume: string | null;
   readonly effectivePermissions: CanonicalEffectivePermissions;
-  readonly authorizedAt: ISODateTimeString;
+  readonly authorizedAt: string;
 }
 
 export interface ActionAssessmentAuthoritySnapshot {
@@ -65,7 +61,7 @@ export interface ActionAssessmentAuthoritySnapshot {
   readonly sessionAuthorityRecords: readonly SessionAuthorityRecord[];
   readonly appliedPolicyAmendments: readonly AppliedPolicyAmendmentRecord[];
   readonly actionCoverage: readonly ActionApprovalCoverage[];
-  readonly approvalDeadlineAt: ISODateTimeString;
+  readonly approvalDeadlineAt: string;
 }
 
 export interface AssessPreparedActionInput {
@@ -122,7 +118,7 @@ export function createActionDispatchAuthorization(input: {
   readonly authoritySources: readonly ActionAuthoritySource[];
   readonly actionCoverageIdToConsume: string | null;
   readonly effectivePermissions: CanonicalEffectivePermissions;
-  readonly authorizedAt: ISODateTimeString;
+  readonly authorizedAt: string;
 }): ActionDispatchAuthorization {
   const authorization = deepFreeze({
     [actionDispatchAuthorizationBrand]: true as const,

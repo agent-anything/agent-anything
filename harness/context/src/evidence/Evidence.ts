@@ -1,4 +1,4 @@
-import type { Metadata } from "@agent-anything/foundation";
+
 import type { EvidenceSource } from "./EvidenceSource.js";
 
 export type EvidenceSensitivity = "public" | "private" | "secret" | "restricted";
@@ -9,5 +9,5 @@ export interface Evidence<TContent = unknown> {
   summary: string;
   content: TContent;
   sensitivity: EvidenceSensitivity;
-  metadata: Metadata;
+  metadata: Readonly<Record<string, unknown>>;
 }

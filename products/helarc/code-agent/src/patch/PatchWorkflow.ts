@@ -1,11 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
-import type {
-  ISODateTimeString,
-  Metadata,
-  RunWorkspace,
-} from "@agent-anything/foundation";
+import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import { FileSystemError } from "../filesystem/FileSystemError.js";
 import {
   resolveExistingTarget,
@@ -51,12 +47,12 @@ export interface CreatePatchProposalInput {
   change: PatchProposalChange;
   summary: string;
   rationale: string;
-  metadata?: Metadata;
+  metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface CreatePatchProposalOptions {
   limits?: Partial<PatchWorkflowLimits>;
-  now?: () => ISODateTimeString;
+  now?: () => string;
   createProposalId?: () => PatchProposalId;
 }
 
@@ -67,8 +63,8 @@ export interface AcceptPatchInput {
   pendingVersion: number;
   submissionId: PatchDecisionSubmissionId;
   reason?: string;
-  metadata?: Metadata;
-  now?: () => ISODateTimeString;
+  metadata?: Readonly<Record<string, unknown>>;
+  now?: () => string;
 }
 
 export interface RejectPatchInput {
@@ -78,8 +74,8 @@ export interface RejectPatchInput {
   pendingVersion: number;
   submissionId: PatchDecisionSubmissionId;
   reason: string;
-  metadata?: Metadata;
-  now?: () => ISODateTimeString;
+  metadata?: Readonly<Record<string, unknown>>;
+  now?: () => string;
 }
 
 export interface MaterializePatchReviewInput {
@@ -103,7 +99,7 @@ export interface MaterializedPatchReview {
   proposedContent: string | null;
   originalContentBytes: number | null;
   proposedContentBytes: number | null;
-  metadata: Metadata;
+  metadata: Readonly<Record<string, unknown>>;
 }
 
 export async function createPatchProposal(
@@ -568,7 +564,7 @@ function isUnsafePathCode(code: string): boolean {
   );
 }
 
-function pathMetadata(target: ExistingWorkspaceTarget): Metadata {
+function pathMetadata(target: ExistingWorkspaceTarget): Readonly<Record<string, unknown>> {
   return {
     rootName: target.resolved.rootName,
     workspaceId: target.resolved.workspaceId,
@@ -584,6 +580,6 @@ function isNodeError(error: unknown, code: string): boolean {
   );
 }
 
-function defaultNow(): ISODateTimeString {
+function defaultNow(): string {
   return new Date().toISOString();
 }

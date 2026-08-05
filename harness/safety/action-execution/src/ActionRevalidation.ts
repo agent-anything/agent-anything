@@ -1,8 +1,4 @@
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-  ISODateTimeString,
-} from "@agent-anything/foundation";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { ApprovalRequirement } from "@agent-anything/permission";
 import type { ActionRuleOutcome } from "@agent-anything/governance/policy";
 import type { ActionExecutionFailure } from "./ActionExecutionFailure.js";
@@ -51,8 +47,8 @@ export interface ActionDispatchPlan {
   readonly registration: ActionRegistration;
   readonly targetAssertions: readonly TargetStateAssertion[];
   readonly attemptOrdinal: 1 | 2;
-  readonly authorizedAt: ISODateTimeString;
-  readonly revalidatedAt: ISODateTimeString;
+  readonly authorizedAt: string;
+  readonly revalidatedAt: string;
   readonly dispatchPlanFingerprint: string;
 }
 
@@ -78,7 +74,7 @@ export async function createActionDispatchPlan(input: {
   readonly authorization: ActionDispatchAuthorization;
   readonly registration: ActionRegistration;
   readonly attemptOrdinal: 1 | 2;
-  readonly revalidatedAt: ISODateTimeString;
+  readonly revalidatedAt: string;
 }): Promise<ActionDispatchPlan> {
   const fields = {
     runId: input.prepared.action.runId,

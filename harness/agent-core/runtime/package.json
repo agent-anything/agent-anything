@@ -1,0 +1,58 @@
+{
+  "name": "@agent-anything/agent-runtime",
+  "version": "0.0.0",
+  "description": "Authoritative Run lifecycle, Agent Loop, Controller, planning, cancellation, retry, and termination for Agent Harness.",
+  "type": "module",
+  "exports": {
+    "./controller": {
+      "types": "./src/controller/index.ts",
+      "import": "./dist/controller/index.js"
+    },
+    "./plan": {
+      "types": "./src/plan/index.ts",
+      "import": "./dist/plan/index.js"
+    },
+    "./retry": {
+      "types": "./src/retry/index.ts",
+      "import": "./dist/retry/index.js"
+    },
+    "./run": {
+      "types": "./src/run/index.ts",
+      "import": "./dist/run/index.js"
+    },
+    "./runner": {
+      "types": "./src/runner/index.ts",
+      "import": "./dist/runner/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "kind": "harness",
+      "component": "agent-core",
+      "role": "runtime"
+    }
+  },
+  "dependencies": {
+    "@agent-anything/action-execution": "workspace:*",
+    "@agent-anything/context": "workspace:*",
+    "@agent-anything/governance": "workspace:*",
+    "@agent-anything/observability": "workspace:*",
+    "@agent-anything/permission": "workspace:*",
+    "@agent-anything/model-interaction": "workspace:*",
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/tools": "workspace:*"
+  },
+  "devDependencies": {
+    "@agent-anything/test-support": "workspace:*"
+  },
+  "license": "Apache-2.0",
+  "private": true
+}

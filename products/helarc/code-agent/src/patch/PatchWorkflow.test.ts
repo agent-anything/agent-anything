@@ -1,10 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-  RunWorkspace,
-  WorkspaceContext,
-} from "@agent-anything/foundation/workspace";
+import type { RunWorkspace, WorkspaceContext } from "@agent-anything/agent-core/run";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   acceptPatch,

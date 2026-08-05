@@ -26,7 +26,7 @@
     }
   },
   "dependencies": {
-    "@agent-anything/foundation": "workspace:*",
+    "@agent-anything/agent-core": "workspace:*",
     "semver": "7.8.5"
   },
   "devDependencies": {

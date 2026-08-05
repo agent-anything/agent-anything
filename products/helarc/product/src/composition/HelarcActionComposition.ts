@@ -6,7 +6,7 @@ import {
   type ActionRegistrationSnapshot,
   type ToolActionBindingSnapshot,
 } from "@agent-anything/action-execution";
-import type { RunWorkspace } from "@agent-anything/foundation";
+import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import {
   CODE_AGENT_LIST_FILES_ACTION,
   CODE_AGENT_READ_FILE_ACTION,

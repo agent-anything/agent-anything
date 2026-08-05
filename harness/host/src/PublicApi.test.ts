@@ -3,7 +3,7 @@ import type {
   HostRunProjection,
   HostRuntime,
   UserApprovalReviewBridge,
-} from "@agent-anything/host";
+} from "./index.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as hostApi from "./index.js";
 

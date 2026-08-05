@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RunWorkspace } from "@agent-anything/foundation";
+import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
 import { resolvePermissionProfile } from "@agent-anything/permission";
 import { snapshotRunActionContext, type RunActionContextInput } from "./RunActionContext.js";

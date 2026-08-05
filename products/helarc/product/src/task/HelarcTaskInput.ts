@@ -1,8 +1,4 @@
-import type {
-  AgentTask,
-  ISODateTimeString,
-  Metadata,
-} from "@agent-anything/foundation";
+import type { AgentTask } from "@agent-anything/agent-core/task";
 
 export const HELARC_TASK_KIND = "helarc.code-task";
 export const DEFAULT_HELARC_TASK_PROMPT_MAX_LENGTH = 8_000;
@@ -14,8 +10,8 @@ export interface HelarcTaskInput {
 export interface CreateHelarcTaskInput {
   taskId: string;
   prompt: string;
-  createdAt: ISODateTimeString;
-  metadata?: Metadata;
+  createdAt: string;
+  metadata?: Readonly<Record<string, unknown>>;
   promptMaxLength?: number;
 }
 

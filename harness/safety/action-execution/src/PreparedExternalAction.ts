@@ -5,8 +5,8 @@ import type {
   CanonicalAdditionalPermissions,
 } from "@agent-anything/permission";
 import { canonicalizePermissionDomain } from "@agent-anything/permission/profile";
-import type { ISODateTimeString } from "@agent-anything/foundation";
-import type { Action, ActionProvenance } from "@agent-anything/foundation/action";
+
+import type { Action, ActionProvenance } from "@agent-anything/agent-core/action";
 import {
   assertCanonicalArray,
   assertStrictRecord,
@@ -59,7 +59,7 @@ export interface PreparedExternalAction<
   readonly applicabilityKeys: readonly ApprovalApplicabilityKey[];
   readonly safeSummary: SafeActionSummary;
   readonly preparedInvocation: TInvocation;
-  readonly preparedAt: ISODateTimeString;
+  readonly preparedAt: string;
 }
 
 export interface CreatePreparedExternalActionInput<
@@ -71,7 +71,7 @@ export interface CreatePreparedExternalActionInput<
   readonly safeSummary: SafeActionSummary;
   readonly approvalPayload: ApprovalPayloadByCategory[ApprovalCategory] | null;
   readonly preparedInvocation: TInvocation;
-  readonly preparedAt: ISODateTimeString;
+  readonly preparedAt: string;
 }
 
 export function createPreparedExternalAction<
@@ -338,7 +338,7 @@ export function validateApprovalCategory(input: unknown): ApprovalCategory | nul
   return input;
 }
 
-export function validatePreparedAt(input: unknown): ISODateTimeString {
+export function validatePreparedAt(input: unknown): string {
   if (
     typeof input !== "string" ||
     input.length === 0 ||

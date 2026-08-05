@@ -14,19 +14,13 @@ import {
   createToolActionBindingSnapshot,
   type ToolActionBindingSnapshot,
 } from "@agent-anything/action-execution";
-import {
-  type Controller,
-  type RunResult,
-} from "@agent-anything/runtime";
-import type {
-  Agent,
-  AgentTask,
-  RunWorkspace,
-  WorkspaceContext,
-} from "@agent-anything/foundation";
-import type { ControllerDecision } from "@agent-anything/runtime/controller";
-import { createRunCancellationController } from "@agent-anything/runtime/run";
-import { Runner, type RunConfig } from "@agent-anything/runtime";
+import type { Controller } from "@agent-anything/agent-runtime/controller";
+import type { RunResult } from "@agent-anything/agent-runtime/run";
+import type { Agent } from "@agent-anything/agent-core/agent";
+import type { AgentTask } from "@agent-anything/agent-core/task";
+import type { RunWorkspace, WorkspaceContext } from "@agent-anything/agent-core/run";
+import type { ControllerDecision } from "@agent-anything/agent-runtime/controller";
+import { Runner, type RunConfig } from "@agent-anything/agent-runtime/runner";
 import { EvidenceBuilder } from "@agent-anything/context/evidence";
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
@@ -291,7 +285,6 @@ async function runFileAction(
     limits: { maxResultBytes: 2_000_000 },
     now: () => NOW,
   });
-  const runId = `run_${actionName.replaceAll(".", "_")}`;
   const controller = new ScriptedController(actionName, input, origin);
   const runner = new Runner({
     controller,
@@ -304,12 +297,11 @@ async function runFileAction(
   return runner.run(
     agent(actionName),
     {
-      runId,
       task: task(fixture),
-      conversationItems: [],
+      items: [],
       metadata: {},
     },
-    await runConfig(fixture, runId, toolBindings),
+    await runConfig(fixture, toolBindings),
   );
 }
 
@@ -373,7 +365,6 @@ function task(fixture: Fixture): AgentTask {
 
 async function runConfig(
   fixture: Fixture,
-  runId: string,
   toolBindings: ToolActionBindingSnapshot,
 ): Promise<RunConfig> {
   const actionContext = await actionPreparationContext(fixture);
@@ -427,7 +418,6 @@ async function runConfig(
     },
     audit: "optional",
     telemetry: "optional",
-    cancellation: createRunCancellationController({ runId }),
     cancellationLimits: {
       operationSettlementTimeoutMs: 1_000,
       processGracePeriodMs: 100,

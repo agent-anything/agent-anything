@@ -39,13 +39,13 @@ test("an unreviewed package owner fails closed", () => {
   assert.equal(expectedProductionDependencies("@agent-anything/new-package"), null);
   const violations = evaluateProductionDependency({
     owner: { name: "@agent-anything/new-package" },
-    imported: { name: "@agent-anything/foundation" },
+    imported: { name: "@agent-anything/agent-core" },
   });
   assert.equal(violations[0]?.rule, "dependency_policy_missing");
 });
 
 test("Test Support is accepted only from test sources", () => {
-  const owner = { kind: "harness", name: "@agent-anything/runtime" };
+  const owner = { kind: "harness", name: "@agent-anything/agent-runtime" };
   const imported = {
     kind: "tooling",
     name: "@agent-anything/test-support",

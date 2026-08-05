@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import type {
   RuntimeEvent,
   RuntimeEventPublisher,
@@ -45,8 +45,8 @@ interface MutableTraceSpan {
   readonly operation: string;
   status: TraceSpanStatus;
   code: string | null;
-  startedAt: ISODateTimeString | null;
-  completedAt: ISODateTimeString | null;
+  startedAt: string | null;
+  completedAt: string | null;
   readonly links: TraceLink[];
   attributes: Record<string, unknown>;
 }
@@ -1283,7 +1283,7 @@ function text(value: unknown, field: string): string {
   return value;
 }
 
-function dateTime(value: unknown, field: string): ISODateTimeString {
+function dateTime(value: unknown, field: string): string {
   if (
     typeof value !== "string" ||
     value.trim().length === 0 ||

@@ -1,9 +1,4 @@
-import type {
-  InvocationInterruptionContext,
-  InvocationInterruptionRef,
-  ISODateTimeString,
-  Metadata,
-} from "@agent-anything/foundation";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { ToolResult } from "@agent-anything/tools";
 import type { ActionExecutorDescriptor } from "./ActionRegistration.js";
 import type {
@@ -29,7 +24,7 @@ export interface ResolvedActionSecret {
 export interface ActionExecutorContext {
   readonly attempt: SandboxAttempt;
   readonly interruption: InvocationInterruptionContext;
-  readonly deadlineAt: ISODateTimeString;
+  readonly deadlineAt: string;
   readonly limits: ActionExecutionLimits;
   readonly resolvedSecrets: readonly ResolvedActionSecret[];
   readonly dispatchPermit: ActionExecutorDispatchPermit;
@@ -39,7 +34,7 @@ export interface ActionExecutorFailure {
   readonly code: string;
   readonly message: string;
   readonly effectState: "none" | "unknown";
-  readonly metadata: Readonly<Metadata>;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export type ActionExecutorResult =

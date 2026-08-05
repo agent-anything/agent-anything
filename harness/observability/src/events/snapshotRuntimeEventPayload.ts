@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 import type {
   RuntimeEventName,
   RuntimeEventPayloadMap,
@@ -516,7 +516,7 @@ function nonNegativeInteger(candidate: unknown, field: string): number {
   return candidate as number;
 }
 
-function dateTime(candidate: unknown, field: string): ISODateTimeString {
+function dateTime(candidate: unknown, field: string): string {
   if (
     typeof candidate !== "string" ||
     candidate.trim().length === 0 ||

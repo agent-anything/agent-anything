@@ -1,4 +1,4 @@
-import type { ISODateTimeString } from "@agent-anything/foundation";
+
 
 export type RuntimeRunItemKind =
   | "model_output"
@@ -310,7 +310,7 @@ export interface RetryScheduledRuntimeEventPayload
   readonly nextBudgetAttemptNumber: number;
   readonly delayMs: number;
   readonly delaySource: "calculated_backoff" | "trusted_server_delay";
-  readonly nextAttemptAt: ISODateTimeString;
+  readonly nextAttemptAt: string;
   readonly failureCategory: string;
   readonly failureCode: string;
 }
@@ -348,7 +348,7 @@ export interface RuntimeCancellationAttribution {
     | "authority_commit"
     | "tool"
     | "process";
-  readonly observedAt: ISODateTimeString;
+  readonly observedAt: string;
 }
 
 export interface RetryCancelledRuntimeEventPayload

@@ -12,24 +12,30 @@ test("discovers newly added packages from accepted workspace patterns", () => {
   withWorkspace((root) => {
     writeFileSync(
       join(root, "pnpm-workspace.yaml"),
-      'packages:\n  - "harness/*"\n',
+      'packages:\n  - "harness/agent-core/contracts"\n',
     );
-    createPackage(root, "harness/foundation", "@test/foundation", {
+    createPackage(root, "harness/agent-core/contracts", "@test/agent-core-contracts", {
       kind: "harness",
-      component: "foundation",
+      component: "agent-core",
+      role: "contracts",
     });
     assert.deepEqual(
       discoverWorkspacePackages(root).map((item) => item.name),
-      ["@test/foundation"],
+      ["@test/agent-core-contracts"],
     );
 
-    createPackage(root, "harness/runtime", "@test/runtime", {
+    writeFileSync(
+      join(root, "pnpm-workspace.yaml"),
+      'packages:\n  - "harness/agent-core/contracts"\n  - "harness/agent-core/runtime"\n',
+    );
+    createPackage(root, "harness/agent-core/runtime", "@test/agent-core-runtime", {
       kind: "harness",
-      component: "runtime",
+      component: "agent-core",
+      role: "runtime",
     });
     assert.deepEqual(
       discoverWorkspacePackages(root).map((item) => item.name),
-      ["@test/foundation", "@test/runtime"],
+      ["@test/agent-core-contracts", "@test/agent-core-runtime"],
     );
   });
 });
@@ -38,11 +44,12 @@ test("classifies direct and grouped Harness packages", () => {
   withWorkspace((root) => {
     writeFileSync(
       join(root, "pnpm-workspace.yaml"),
-      'packages:\n  - "harness/foundation"\n  - "harness/safety/*"\n',
+      'packages:\n  - "harness/agent-core/contracts"\n  - "harness/safety/*"\n',
     );
-    createPackage(root, "harness/foundation", "@test/foundation", {
+    createPackage(root, "harness/agent-core/contracts", "@test/agent-core-contracts", {
       kind: "harness",
-      component: "foundation",
+      component: "agent-core",
+      role: "contracts",
     });
     createPackage(root, "harness/safety/permission", "@test/permission", {
       kind: "harness",
@@ -50,21 +57,24 @@ test("classifies direct and grouped Harness packages", () => {
     });
 
     assert.deepEqual(
-      discoverWorkspacePackages(root).map(({ kind, component, name }) => ({
+      discoverWorkspacePackages(root).map(({ kind, component, name, role }) => ({
         kind,
         component,
         name,
+        role,
       })),
       [
         {
           kind: "harness",
-          component: "foundation",
-          name: "@test/foundation",
+          component: "agent-core",
+          name: "@test/agent-core-contracts",
+          role: "contracts",
         },
         {
           kind: "harness",
           component: "safety.permission",
           name: "@test/permission",
+          role: null,
         },
       ],
     );
@@ -149,15 +159,15 @@ test("admits only the explicit development Tooling package", () => {
 test("rejects missing, extra, and path-mismatched architecture metadata", () => {
   for (const [name, metadata] of [
     ["missing", undefined],
-    ["extra", { kind: "harness", component: "runtime", extra: true }],
-    ["mismatched", { kind: "harness", component: "foundation" }],
+    ["extra", { kind: "harness", component: "agent-core", role: "runtime", extra: true }],
+    ["mismatched", { kind: "harness", component: "runtime" }],
   ]) {
     withWorkspace((root) => {
       writeFileSync(
         join(root, "pnpm-workspace.yaml"),
-        'packages:\n  - "harness/runtime"\n',
+        'packages:\n  - "harness/agent-core/runtime"\n',
       );
-      createPackage(root, "harness/runtime", `@test/${name}`, metadata);
+      createPackage(root, "harness/agent-core/runtime", `@test/${name}`, metadata);
       assert.throws(
         () => discoverWorkspacePackages(root),
         (error) =>
