@@ -1,14 +1,18 @@
 import {
   createHostCommandDispatcher,
-  createInMemoryHostPolicyAmendmentStore,
-  createInMemoryHostSessionAuthorityStore,
-  createUserApprovalReviewBridge,
   type HostCommandDispatcher,
   type HostCommandKind,
   type HostCommandReceipt,
-  type HostTerminalRunProjection,
+} from "@agent-anything/host/transport";
+import {
+  createInMemoryHostPolicyAmendmentStore,
+  createInMemoryHostSessionAuthorityStore,
+  createUserApprovalReviewBridge,
   type UserApprovalReviewBridge,
-} from "@agent-anything/host";
+} from "@agent-anything/host/authority";
+import type {
+  HostTerminalRunProjection,
+} from "@agent-anything/host/projection";
 import {
   createHelarcProviderProfile,
   createHelarcConversation,

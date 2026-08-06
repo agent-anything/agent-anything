@@ -14,11 +14,11 @@ import type {
   HostActiveRun,
   HostRunCancellationInput,
   HostRunCancellationReceipt,
-} from "./HostRuntime.js";
+} from "../run/HostRunManager.js";
 import {
   createHostRunProjection,
   type HostRunProjection,
-} from "./HostRunProjection.js";
+} from "../projection/HostRunProjection.js";
 
 const occurredAt = "2026-08-03T00:00:00.000Z";
 

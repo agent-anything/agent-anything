@@ -1,4 +1,4 @@
-import type { HostRunProjection } from "@agent-anything/host";
+import type { HostRunProjection } from "@agent-anything/host/projection";
 import type { HelarcProductPhase } from "../composition/HelarcPatchReview.js";
 import type {
   HelarcActivityItem,

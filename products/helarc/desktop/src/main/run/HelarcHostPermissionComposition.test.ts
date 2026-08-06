@@ -2,7 +2,7 @@ import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,
   createUserApprovalReviewBridge,
-} from "@agent-anything/host";
+} from "@agent-anything/host/authority";
 import type { ApprovalReviewerPort, SessionAuthorityPort } from "@agent-anything/permission";
 import { describe, expect, it } from "vitest";
 import { createHelarcHostPermissionComposition } from "./HelarcHostPermissionComposition.js";

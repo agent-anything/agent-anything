@@ -23,9 +23,9 @@ import {
   type HostRunProjectionListener,
   type HostRunProjectionListenerFailure,
   type HostTerminalRunProjection,
-} from "./HostRunProjection.js";
-import { createHostRunProjectionStore } from "./HostRunProjectionReducer.js";
-import type { UserApprovalReviewBridge } from "./UserApprovalReviewBridge.js";
+} from "../projection/HostRunProjection.js";
+import { createHostRunProjectionStore } from "../projection/HostRunProjectionReducer.js";
+import type { UserApprovalReviewBridge } from "../authority/UserApprovalReviewBridge.js";
 
 export type HostSessionId = string;
 
@@ -69,10 +69,11 @@ export interface HostActiveRun<TOutput = unknown> {
   subscribe(listener: HostRunProjectionListener): () => void;
   submitApprovalDecision(input: ApprovalDecisionSubmission): ApprovalSubmissionReceipt;
   cancel(input: HostRunCancellationInput): HostRunCancellationReceipt;
-  readonly result: Promise<HostRunResult<TOutput>>;
+  wait(): Promise<HostRunResult<TOutput>>;
+  getResult(): HostRunResult<TOutput> | null;
 }
 
-export interface HostRuntime {
+export interface HostRunManager {
   start<TOutput>(input: HostRunStartInput<TOutput>): HostActiveRun<TOutput>;
   getRun(runId: string): HostActiveRun | null;
   listRuns(): readonly HostRunRegistryEntry[];
@@ -95,7 +96,7 @@ interface HostRunRegistration<TOutput> {
   release(): void;
 }
 
-export interface CreateHostRuntimeInput {
+export interface CreateHostRunManagerInput {
   readonly runner: Runner;
   readonly terminalRetentionLimit?: number;
   readonly now?: () => string;
@@ -106,13 +107,13 @@ export interface CreateHostRuntimeInput {
 
 type HostInvocationState = "active" | "settled";
 
-export function createHostRuntime(input: CreateHostRuntimeInput): HostRuntime {
+export function createHostRunManager(input: CreateHostRunManagerInput): HostRunManager {
   if (!input.runner || typeof input.runner.start !== "function") {
-    throw new TypeError("HostRuntime requires a Runner.");
+    throw new TypeError("HostRunManager requires a Runner.");
   }
   const terminalRetentionLimit = input.terminalRetentionLimit ?? 32;
   if (!Number.isSafeInteger(terminalRetentionLimit) || terminalRetentionLimit < 0) {
-    throw new TypeError("HostRuntime terminalRetentionLimit must be a non-negative integer.");
+    throw new TypeError("HostRunManager terminalRetentionLimit must be a non-negative integer.");
   }
   const now = input.now ?? (() => new Date().toISOString());
   const registry = new HostRunRegistry(terminalRetentionLimit);
@@ -138,7 +139,7 @@ function startHostRun<TOutput>(
   runner: Runner,
   now: () => string,
   input: HostRunStartInput<TOutput>,
-  onListenerFailure: CreateHostRuntimeInput["onProjectionListenerFailure"],
+  onListenerFailure: CreateHostRunManagerInput["onProjectionListenerFailure"],
 ): HostRunRegistration<TOutput> {
   assertStartInput(input);
   const sessionId = input.sessionId;
@@ -203,7 +204,8 @@ function startHostRun<TOutput>(
     released = true;
     unsubscribeApprovalReview();
   };
-  const result = handle.wait().then<HostRunResult<TOutput>>(
+  let terminalResult: HostRunResult<TOutput> | null = null;
+  const waitForResult = handle.wait().then<HostRunResult<TOutput>>(
     (runResult) => {
       assertRunResultIdentity(runResult, runId, taskId);
       const terminal = createHostTerminalRunProjection({
@@ -220,7 +222,7 @@ function startHostRun<TOutput>(
       if (reduction.status === "rejected") {
         throw new Error(`Host terminal projection was rejected: ${reduction.code}.`);
       }
-      return Object.freeze({
+      terminalResult = Object.freeze({
         kind: "run_result" as const,
         sessionId,
         taskId,
@@ -228,6 +230,7 @@ function startHostRun<TOutput>(
         runResult,
         terminal,
       });
+      return terminalResult;
     },
   ).finally(() => {
     invocationState = "settled";
@@ -318,7 +321,8 @@ function startHostRun<TOutput>(
         cancellation,
       });
     },
-    result,
+    wait: () => waitForResult,
+    getResult: () => terminalResult,
   });
   return Object.freeze({ activeRun, release });
 }
@@ -352,7 +356,7 @@ class HostRunRegistry {
       lifecycle: "active",
     };
     this.records.set(activeRun.runId, record);
-    void activeRun.result.then(
+    void activeRun.wait().then(
       () => this.markSettled(activeRun.runId),
       () => this.markSettled(activeRun.runId),
     );
@@ -468,7 +472,7 @@ function assertRunResultIdentity<TOutput>(
 function readNow(now: () => string): string {
   const value = now();
   if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) {
-    throw new TypeError("HostRuntime clock must return a valid date-time string.");
+    throw new TypeError("HostRunManager clock must return a valid date-time string.");
   }
   return value;
 }

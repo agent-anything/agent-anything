@@ -1,5 +1,5 @@
 import type { ApprovalReviewRequest, ApprovalSubmissionReceipt } from "@agent-anything/permission";
-import type { HostCommandReceipt } from "@agent-anything/host";
+import type { HostCommandReceipt } from "@agent-anything/host/transport";
 import type { HelarcMainSnapshot as MainSnapshot } from "./HelarcMainController.js";
 import type {
   HelarcAdditionalPermissionsSnapshot,

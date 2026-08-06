@@ -3,7 +3,7 @@ import {
   type RuntimeEvent,
 } from "@agent-anything/observability/events";
 import { describe, expect, it } from "vitest";
-import { projectRuntimeEventForHost } from "./HostRuntimeProjection.js";
+import { projectRuntimeEventForHost } from "./RuntimeEventHostProjection.js";
 
 describe("Host RuntimeEvent projection", () => {
   it("keeps reusable Controller fields and excludes Product trace vocabulary", () => {

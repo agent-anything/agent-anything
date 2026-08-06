@@ -71,6 +71,5 @@ describe("Code Agent public API", () => {
     expect(codeAgentApi).not.toHaveProperty("Runner");
     expect(codeAgentApi).not.toHaveProperty("ActionEnforcementPipeline");
     expect(codeAgentApi).not.toHaveProperty("createSandboxExecutionGateway");
-    expect(codeAgentApi).not.toHaveProperty("createHostRuntime");
   });
 });

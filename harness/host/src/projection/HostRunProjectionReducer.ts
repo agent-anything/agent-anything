@@ -6,7 +6,7 @@ import {
 
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { PlanProjection, PlanStepStatus } from "@agent-anything/agent-runtime/plan";
-import { projectRuntimeEventForHost } from "./HostRuntimeProjection.js";
+import { projectRuntimeEventForHost } from "./RuntimeEventHostProjection.js";
 import {
   HOST_RETRY_EVENT_LIMIT,
   snapshotHostCancellation,

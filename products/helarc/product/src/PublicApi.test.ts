@@ -51,6 +51,5 @@ describe("Helarc public API", () => {
     expect(helarcApi).not.toHaveProperty("Runner");
     expect(helarcApi).not.toHaveProperty("ActionEnforcementPipeline");
     expect(helarcApi).not.toHaveProperty("createSandboxExecutionGateway");
-    expect(helarcApi).not.toHaveProperty("createHostRuntime");
   });
 });

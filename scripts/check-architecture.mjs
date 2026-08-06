@@ -163,6 +163,15 @@ function checkPublicApiImport(file, owner, statement, specifier) {
         `Must import an explicit Action Execution semantic subpath instead of '${specifier}'.`,
     });
   }
+  if (specifier === "@agent-anything/host") {
+    report("host_root_import", {
+      file,
+      owner,
+      imported: packageName,
+      message:
+        `Must import an explicit Host Interface semantic subpath instead of '${specifier}'.`,
+    });
+  }
 }
 
 function checkReviewedManifests() {
@@ -238,6 +247,9 @@ function checkArchitectureSource(file, text, isTestOnly) {
     "mapHelarcActivityToRunEvent",
     "HelarcActiveRunController",
     "HostRuntimeAdapter",
+    "HostRuntime",
+    "createHostRuntime",
+    "CreateHostRuntimeInput",
     "runHelarcSession",
     "startSession",
     "cancelSession",
@@ -316,7 +328,7 @@ function checkArchitectureSource(file, text, isTestOnly) {
     rel.startsWith("products/") &&
     /\brunner\.run\s*\(/i.test(text)
   ) {
-    report("direct_runner_invocation", { file, message: "Invokes Runner directly instead of starting it through HostRuntime." });
+    report("direct_runner_invocation", { file, message: "Invokes Runner directly instead of starting it through HostRunManager." });
   }
 }
 

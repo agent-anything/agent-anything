@@ -2,12 +2,14 @@ import type { ContextProjection } from "@agent-anything/context/context";
 import {
   createStaticHostIdentityResolver,
   createStaticHostWorkspaceResolver,
-  createUserApprovalReviewBridge,
   type HostIdentityResolver,
   type HostIdentitySelection,
   type HostWorkspaceResolver,
   type HostWorkspaceSelection,
-} from "@agent-anything/host";
+} from "@agent-anything/host/context";
+import {
+  createUserApprovalReviewBridge,
+} from "@agent-anything/host/authority";
 import type { ApprovalReviewInput } from "@agent-anything/permission";
 import type {
   Provider,

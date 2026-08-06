@@ -4,7 +4,7 @@ import {
   type HostIdentityResolver,
   type HostWorkspaceResolutionInput,
   type HostWorkspaceResolver,
-} from "@agent-anything/host";
+} from "@agent-anything/host/context";
 import type {
   HelarcThreadWorkspaceContext,
   HelarcThreadWorkspaceRef,

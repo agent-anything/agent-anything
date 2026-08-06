@@ -18,13 +18,13 @@ import {
   createEmptyToolActionBindingSnapshot,
 } from "@agent-anything/action-execution/registration";
 import {
-  createHostRuntime,
+  createHostRunManager,
   type HostRunStartInput,
-} from "./HostRuntime.js";
+} from "./HostRunManager.js";
 import {
   createUserApprovalReviewBridge,
   type UserApprovalReviewBridge,
-} from "./UserApprovalReviewBridge.js";
+} from "../authority/UserApprovalReviewBridge.js";
 
 interface TestOutput {
   readonly summary: string;
@@ -32,27 +32,32 @@ interface TestOutput {
 
 const now = "2026-07-17T00:00:00.000Z";
 
-describe("HostRuntime", () => {
+describe("HostRunManager", () => {
   it("owns one invocation from running projection through exact terminal result", async () => {
     const controller = new DeferredController();
     const runner = createRunner(controller);
     const start = vi.spyOn(runner, "start");
-    const runtime = createHostRuntime({
+    const manager = createHostRunManager({
       runner,
       now: () => now,
     });
-    const active = runtime.start(createStartInput());
+    const active = manager.start(createStartInput());
     const snapshots: string[] = [];
     const unsubscribe = active.subscribe((projection) => snapshots.push(projection.status));
 
     expect(active.sessionId).toBe("session-1");
     expect(active.runId).toBe("run-1");
+    expect(active).not.toHaveProperty("result");
     expect(active.getProjection().status).toBe("starting");
     expect(start).toHaveBeenCalledOnce();
 
     await controller.entered;
     controller.complete("Host active Run complete");
-    const result = await active.result;
+    expect(active.getResult()).toBeNull();
+    const firstWait = active.wait();
+    const secondWait = active.wait();
+    expect(secondWait).toBe(firstWait);
+    const result = await firstWait;
     unsubscribe();
 
     expect(result.runResult).toMatchObject({
@@ -60,6 +65,8 @@ describe("HostRuntime", () => {
       finalOutput: { summary: "Host active Run complete" },
     });
     expect(result.terminal).toBe(active.getProjection().terminal);
+    expect(active.getResult()).toBe(result);
+    expect(await active.wait()).toBe(result);
     expect(active.getProjection()).toMatchObject({
       status: "completed",
       terminal: { status: "completed", code: null },
@@ -71,11 +78,11 @@ describe("HostRuntime", () => {
   it("sends accepted cancellation to the original controller and rejects duplicates", async () => {
     const startInput = createStartInput();
     const controller = new DeferredController();
-    const runtime = createHostRuntime({
+    const manager = createHostRunManager({
       runner: createRunner(controller),
       now: () => now,
     });
-    const active = runtime.start(startInput);
+    const active = manager.start(startInput);
     await controller.entered;
 
     const accepted = active.cancel({
@@ -107,21 +114,21 @@ describe("HostRuntime", () => {
     expect(JSON.stringify(active.getProjection())).not.toContain("private cancellation text");
 
     controller.complete("Discarded after cancellation");
-    const result = await active.result;
+    const result = await active.wait();
     expect(result.runResult.status).toBe("cancelled");
     expect(active.getProjection().status).toBe("cancelled");
   });
 
   it("does not let late cancellation change a settled Run", async () => {
     const controller = new DeferredController();
-    const runtime = createHostRuntime({
+    const manager = createHostRunManager({
       runner: createRunner(controller),
       now: () => now,
     });
-    const active = runtime.start(createStartInput());
+    const active = manager.start(createStartInput());
     await controller.entered;
     controller.complete("Already settled");
-    await active.result;
+    await active.wait();
     const sequence = active.getProjection().sequence;
 
     expect(active.cancel({ origin: "host", reasonCode: "host_requested" })).toEqual({
@@ -137,22 +144,22 @@ describe("HostRuntime", () => {
       ...createAgent(),
       instructions: 42,
     } as unknown as Agent<TestOutput>;
-    const runtime = createHostRuntime({
+    const manager = createHostRunManager({
       runner: createRunner(new DeferredController()),
       now: () => now,
     });
-    expect(() => runtime.start(createStartInput({ agent: invalidAgent })))
+    expect(() => manager.start(createStartInput({ agent: invalidAgent })))
       .toThrow("Agent.instructions must be text.");
-    expect(runtime.listRuns()).toEqual([]);
+    expect(manager.listRuns()).toEqual([]);
   });
 
   it("rejects invalid handle identities before invoking Runner", () => {
-    const runtime = createHostRuntime({
+    const manager = createHostRunManager({
       runner: createRunner(new DeferredController()),
       now: () => now,
     });
 
-    expect(() => runtime.start(createStartInput({ sessionId: " " }))).toThrow(
+    expect(() => manager.start(createStartInput({ sessionId: " " }))).toThrow(
       "sessionId must be a non-empty string",
     );
   });
@@ -161,20 +168,20 @@ describe("HostRuntime", () => {
     const controller = new DeferredController();
     const runner = createRunner(controller);
     const start = vi.spyOn(runner, "start");
-    const runtime = createHostRuntime({ runner, now: () => now });
+    const manager = createHostRunManager({ runner, now: () => now });
     const configuredBridge = createApprovalBridge();
     const otherBridge = createApprovalBridge();
     const configured = createUserReviewStartInput(configuredBridge);
     const { userApprovalReviewBridge: _omitted, ...missingBridge } = configured;
 
-    expect(() => runtime.start(
+    expect(() => manager.start(
       missingBridge as HostRunStartInput<TestOutput>,
     )).toThrow("must explicitly provide an approval review bridge or null");
-    expect(() => runtime.start({
+    expect(() => manager.start({
       ...configured,
       userApprovalReviewBridge: null,
     })).toThrow("requires an explicit approval review bridge");
-    expect(() => runtime.start({
+    expect(() => manager.start({
       ...configured,
       userApprovalReviewBridge: otherBridge,
     })).toThrow("does not match the configured user reviewer");
@@ -184,11 +191,11 @@ describe("HostRuntime", () => {
   it("correlates one versioned user submission with the active Host Run", async () => {
     const bridge = createApprovalBridge();
     const controller = new DeferredController();
-    const runtime = createHostRuntime({
+    const manager = createHostRunManager({
       runner: createRunner(controller),
       now: () => now,
     });
-    const active = runtime.start(createUserReviewStartInput(bridge));
+    const active = manager.start(createUserReviewStartInput(bridge));
     await controller.entered;
     const pendingReview = bridge.review(
       createApprovalReviewInput(),
@@ -229,7 +236,7 @@ describe("HostRuntime", () => {
     await expect(pendingReview).resolves.toMatchObject({ status: "decided" });
 
     controller.complete("Approved Run complete");
-    expect((await active.result).runResult.status).toBe("succeeded");
+    expect((await active.wait()).runResult.status).toBe("succeeded");
     expect(active.submitApprovalDecision(approvalSubmission({
       submissionId: "late-submission",
     }))).toMatchObject({ code: "approval_not_pending" });
@@ -239,11 +246,11 @@ describe("HostRuntime", () => {
     const bridge = createApprovalBridge();
     const controller = new DeferredController();
     const startInput = createUserReviewStartInput(bridge);
-    const runtime = createHostRuntime({
+    const manager = createHostRunManager({
       runner: createRunner(controller),
       now: () => now,
     });
-    const active = runtime.start(startInput);
+    const active = manager.start(startInput);
     await controller.entered;
     const pendingReview = bridge.review(
       createApprovalReviewInput(),
@@ -260,7 +267,7 @@ describe("HostRuntime", () => {
     expect(active.submitApprovalDecision(approvalSubmission({
       submissionId: "post-cancel",
     }))).toMatchObject({ code: "approval_not_pending" });
-    expect((await active.result).runResult.cancellation).toMatchObject({
+    expect((await active.wait()).runResult.cancellation).toMatchObject({
       origin: "user",
       reasonCode: "user_requested",
     });
@@ -277,7 +284,7 @@ describe("HostRuntime", () => {
       });
       throw new Error("global observer failed");
     });
-    const runtime = createHostRuntime({
+    const manager = createHostRunManager({
       runner: new Runner({
         controller,
         contextProjection: createTestContextProjection(),
@@ -287,47 +294,47 @@ describe("HostRuntime", () => {
       }),
       now: () => now,
     });
-    const active = runtime.start(createStartInput());
+    const active = manager.start(createStartInput());
     await controller.entered;
     controller.complete("Still completes");
 
-    expect((await active.result).runResult.status).toBe("succeeded");
+    expect((await active.wait()).runResult.status).toBe("succeeded");
     expect(observed).toContain("run.started");
     expect(active.getProjection().status).toBe("completed");
   });
 
   it("retains the original active wrapper for reconnect and releases only terminal entries", async () => {
     const controller = new DeferredController();
-    const runtime = createHostRuntime({
+    const manager = createHostRunManager({
       runner: createRunner(controller),
       terminalRetentionLimit: 2,
       now: () => now,
     });
-    const active = runtime.start(createStartInput());
+    const active = manager.start(createStartInput());
 
-    expect(runtime.getRun("run-1")).toBe(active);
-    expect(runtime.listRuns()).toEqual([{
+    expect(manager.getRun("run-1")).toBe(active);
+    expect(manager.listRuns()).toEqual([{
       runId: "run-1",
       sessionId: "session-1",
       lifecycle: "active",
     }]);
-    expect(runtime.releaseRun("run-1")).toEqual({
+    expect(manager.releaseRun("run-1")).toEqual({
       status: "run_active",
       runId: "run-1",
     });
 
     await controller.entered;
     controller.complete("Retained terminal result");
-    await active.result;
+    await active.wait();
 
-    expect(runtime.getRun("run-1")).toBe(active);
-    expect(runtime.listRuns()[0]?.lifecycle).toBe("settled");
-    expect(runtime.releaseRun("run-1")).toEqual({
+    expect(manager.getRun("run-1")).toBe(active);
+    expect(manager.listRuns()[0]?.lifecycle).toBe("settled");
+    expect(manager.releaseRun("run-1")).toEqual({
       status: "released",
       runId: "run-1",
     });
-    expect(runtime.getRun("run-1")).toBeNull();
-    expect(runtime.releaseRun("run-1")).toEqual({
+    expect(manager.getRun("run-1")).toBeNull();
+    expect(manager.releaseRun("run-1")).toEqual({
       status: "not_found",
       runId: "run-1",
     });
@@ -344,7 +351,7 @@ describe("HostRuntime", () => {
         };
       },
     };
-    const runtime = createHostRuntime({
+    const manager = createHostRunManager({
       runner: new Runner({
         controller,
         contextProjection: createTestContextProjection(),
@@ -358,14 +365,14 @@ describe("HostRuntime", () => {
       now: () => now,
     });
 
-    const first = runtime.start(createStartInput());
-    await first.result;
-    const second = runtime.start(createStartInput());
-    await second.result;
+    const first = manager.start(createStartInput());
+    await first.wait();
+    const second = manager.start(createStartInput());
+    await second.wait();
 
-    expect(runtime.getRun("run-1")).toBeNull();
-    expect(runtime.getRun("run-2")).toBe(second);
-    expect(runtime.listRuns()).toEqual([{
+    expect(manager.getRun("run-1")).toBeNull();
+    expect(manager.getRun("run-2")).toBe(second);
+    expect(manager.listRuns()).toEqual([{
       runId: "run-2",
       sessionId: "session-1",
       lifecycle: "settled",
@@ -588,7 +595,7 @@ function createApprovalBridge(): UserApprovalReviewBridge {
       id: "reviewer-user",
       kind: "user",
       displayName: "User",
-      source: "host-runtime-test",
+      source: "host-run-manager-test",
       metadata: {},
     },
   });

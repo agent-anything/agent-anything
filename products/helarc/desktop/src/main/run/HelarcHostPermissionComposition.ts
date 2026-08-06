@@ -1,8 +1,10 @@
 import type { ApprovalReviewerBinding, ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
 import {
   resolveHostRunPermissionConfig,
-  type UserApprovalReviewBridge,
-} from "@agent-anything/host";
+} from "@agent-anything/host/composition";
+import type {
+  UserApprovalReviewBridge,
+} from "@agent-anything/host/authority";
 import type {
   ManagedPermissionConstraints,
   PersistentPolicyAmendmentPort,

@@ -19,16 +19,22 @@ import { Runner } from "@agent-anything/agent-runtime/runner";
 import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,
-  createHostRuntime,
-  resolveHostRunContext,
+  type UserApprovalReviewBridge,
+} from "@agent-anything/host/authority";
+import {
+  createHostRunManager,
   type HostActiveRun,
+} from "@agent-anything/host/run";
+import {
+  resolveHostRunContext,
   type HostIdentityResolver,
   type HostIdentitySelection,
-  type HostTerminalRunProjection,
   type HostWorkspaceResolver,
   type HostWorkspaceSelection,
-  type UserApprovalReviewBridge,
-} from "@agent-anything/host";
+} from "@agent-anything/host/context";
+import type {
+  HostTerminalRunProjection,
+} from "@agent-anything/host/projection";
 import {
   createCodeAgentCanonicalWorkspaceRoots,
 } from "@agent-anything/helarc-code-agent/filesystem";
@@ -228,7 +234,7 @@ export async function prepareHelarcHostRun(
     runtimeEventPublisher: productRuntimeEventPublisher,
     now: input.now,
   });
-  const runtime = createHostRuntime({ runner, now: input.now });
+  const manager = createHostRunManager({ runner, now: input.now });
   const configurationFingerprint = await createCanonicalSha256Digest(
     "agent-anything.helarc.local-environment.v1",
     {
@@ -351,7 +357,7 @@ export async function prepareHelarcHostRun(
         throw new Error("Prepared Helarc Host Run can be started only once.");
       }
       started = true;
-      const hostActiveRun = runtime.start(hostRunStartInput);
+      const hostActiveRun = manager.start(hostRunStartInput);
       input.patchReviewBridge.bindRun(hostActiveRun.runId);
       const activeRun = createHelarcHostActiveRun(
         hostActiveRun,
@@ -362,7 +368,7 @@ export async function prepareHelarcHostRun(
 
       return Object.freeze({
         activeRun,
-        result: activeRun.result.then((outcome): HelarcHostRunResult => {
+        result: activeRun.wait().then((outcome): HelarcHostRunResult => {
           const productResult = product.projectResult(outcome.runResult, enforcement);
           return Object.freeze({
             kind: "run_result",
@@ -396,6 +402,8 @@ function createHelarcHostActiveRun(
     submitApprovalDecision: (input: Parameters<HostActiveRun["submitApprovalDecision"]>[0]) =>
       host.submitApprovalDecision(input),
     cancel: (input: Parameters<HostActiveRun["cancel"]>[0]) => host.cancel(input),
+    wait: () => host.wait(),
+    getResult: () => host.getResult(),
     getPatchReviewProjection: () => patchReviews.getPendingProjection(),
     getProductProjection,
     subscribeProductProjection,
@@ -404,7 +412,6 @@ function createHelarcHostActiveRun(
     ): HelarcPatchReviewSubmissionReceipt {
       return patchReviews.submitDecision(input);
     },
-    result: host.result,
   });
 }
 

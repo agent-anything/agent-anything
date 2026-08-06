@@ -1,7 +1,7 @@
 import type {
   HostRunProjection,
   HostTerminalRunProjection,
-} from "@agent-anything/host";
+} from "@agent-anything/host/projection";
 
 import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import type {

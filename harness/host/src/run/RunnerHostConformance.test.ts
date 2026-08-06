@@ -12,12 +12,12 @@ import { createSystemRetryExecutor } from "@agent-anything/agent-runtime/retry";
 import { ProviderBackedController } from "@agent-anything/agent-runtime/controller";
 import { Runner, type RunConfig } from "@agent-anything/agent-runtime/runner";
 import {
-  createHostRuntime,
-  type HostRunProjection,
+  createHostRunManager,
   type HostRunResult,
   type HostRunStartInput,
-  type HostRuntime,
+  type HostRunManager,
 } from "./index.js";
+import type { HostRunProjection } from "../projection/index.js";
 import type { RetryClock } from "@agent-anything/agent-runtime/retry";
 import type { ActionCandidate } from "@agent-anything/agent-core/action";
 import type { ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
@@ -334,7 +334,7 @@ describe("Runner and generic Host conformance", () => {
         return finalDecision(input, "Discarded after cancellation");
       },
     };
-    const runtime = createHostRuntime({
+    const manager = createHostRunManager({
       runner: new Runner({
         controller,
         contextProjection: createTestContextProjection(),
@@ -343,7 +343,7 @@ describe("Runner and generic Host conformance", () => {
       }),
       now: () => "2026-07-14T00:00:00.000Z",
     });
-    const active = runtime.start(createHostInput());
+    const active = manager.start(createHostInput());
     await controllerStarted.promise;
 
     const receipt = active.cancel({
@@ -367,7 +367,7 @@ describe("Runner and generic Host conformance", () => {
     });
 
     releaseController.resolve();
-    const outcome = await active.result;
+    const outcome = await active.wait();
 
     expect(outcome).toMatchObject({
       runResult: {
@@ -413,17 +413,17 @@ class FakeController implements Controller {
 class InMemoryHostHarness {
   readonly projections: HostRunProjection[] = [];
 
-  constructor(private readonly runtime: HostRuntime) {}
+  constructor(private readonly manager: HostRunManager) {}
 
   async run(
     input: HostRunStartInput<ConformanceOutput>,
   ): Promise<HostRunResult<ConformanceOutput>> {
-    const active = this.runtime.start(input);
+    const active = this.manager.start(input);
     this.projections.push(active.getProjection());
     const unsubscribe = active.subscribe((projection) => {
       this.projections.push(projection);
     });
-    const outcome = await active.result;
+    const outcome = await active.wait();
     unsubscribe();
     return outcome;
   }
@@ -439,7 +439,7 @@ function createHostHarness(
     createRunId: () => "run-conformance",
     now: () => "2026-07-14T00:00:00.000Z",
   });
-  return new InMemoryHostHarness(createHostRuntime({
+  return new InMemoryHostHarness(createHostRunManager({
     runner,
     now: () => "2026-07-14T00:00:00.000Z",
   }));

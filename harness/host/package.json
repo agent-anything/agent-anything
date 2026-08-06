@@ -3,12 +3,30 @@
   "version": "0.0.0",
   "description": "Product-neutral host integration, safe Run projection, approval bridge, and host authority stores for AgentAnything.",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./src/index.ts",
   "exports": {
-    ".": {
-      "types": "./src/index.ts",
-      "import": "./dist/index.js"
+    "./context": {
+      "types": "./src/context/index.ts",
+      "import": "./dist/context/index.js"
+    },
+    "./composition": {
+      "types": "./src/composition/index.ts",
+      "import": "./dist/composition/index.js"
+    },
+    "./run": {
+      "types": "./src/run/index.ts",
+      "import": "./dist/run/index.js"
+    },
+    "./projection": {
+      "types": "./src/projection/index.ts",
+      "import": "./dist/projection/index.js"
+    },
+    "./transport": {
+      "types": "./src/transport/index.ts",
+      "import": "./dist/transport/index.js"
+    },
+    "./authority": {
+      "types": "./src/authority/index.ts",
+      "import": "./dist/authority/index.js"
     }
   },
   "files": [

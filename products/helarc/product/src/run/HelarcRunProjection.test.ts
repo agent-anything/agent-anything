@@ -1,4 +1,7 @@
-import { createHostRunProjection, type HostRunProjection } from "@agent-anything/host";
+import {
+  createHostRunProjection,
+  type HostRunProjection,
+} from "@agent-anything/host/projection";
 import { describe, expect, it } from "vitest";
 import type { HelarcActivityItem, HelarcProductPhase, HelarcProductResult } from "../composition/index.js";
 import {

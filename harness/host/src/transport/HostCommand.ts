@@ -7,8 +7,8 @@ import type {
   HostActiveRun,
   HostRunCancellationInput,
   HostRunCancellationReceipt,
-} from "./HostRuntime.js";
-import type { HostRunProjection } from "./HostRunProjection.js";
+} from "../run/HostRunManager.js";
+import type { HostRunProjection } from "../projection/HostRunProjection.js";
 
 export const HOST_COMMAND_VERSION = 1 as const;
 export const HOST_COMMAND_REASON_MAX_LENGTH = 500;

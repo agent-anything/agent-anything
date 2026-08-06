@@ -1,5 +1,5 @@
 import type { HelarcPatchReviewDecisionSubmission } from "@agent-anything/helarc";
-import { HOST_COMMAND_VERSION } from "@agent-anything/host";
+import { HOST_COMMAND_VERSION } from "@agent-anything/host/transport";
 import type {
   ApprovalDecisionKind,
   ApprovalDecisionSubmission,

@@ -5,7 +5,7 @@ import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import type {
   SandboxEnforcement,
 } from "@agent-anything/action-execution/sandbox";
-import { projectRuntimeEventForHost } from "@agent-anything/host";
+import { projectRuntimeEventForHost } from "@agent-anything/host/projection";
 import { CODE_AGENT_RUN_COMMAND_ACTION } from "@agent-anything/helarc-code-agent/command";
 
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
