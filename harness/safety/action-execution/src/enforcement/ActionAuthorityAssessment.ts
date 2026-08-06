@@ -9,15 +9,15 @@ import {
   type GrantedPermissions,
 } from "@agent-anything/permission";
 import type { ActionAssessmentAuthoritySnapshot, ActionAuthoritySource } from "./ActionAssessment.js";
-import { createCanonicalEffectivePermissions } from "./CanonicalEffectivePermissions.js";
-import type { PreparedExternalAction } from "./PreparedExternalAction.js";
+import { createCanonicalEffectivePermissions } from "../canonical/CanonicalEffectivePermissions.js";
+import type { PreparedExternalAction } from "../preparation/PreparedExternalAction.js";
 import type {
   CanonicalExecutableIdentity,
   CanonicalFileSystemTarget,
   CanonicalNetworkEndpoint,
   CanonicalPathIdentity,
   CanonicalRemoteToolIdentity,
-} from "./CanonicalIdentity.js";
+} from "../canonical/CanonicalIdentity.js";
 
 export type ManagedActionCheckResult =
   | { readonly status: "allowed" }

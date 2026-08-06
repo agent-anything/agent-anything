@@ -10,8 +10,8 @@ import {
   canonicalEndpointKey,
   canonicalPathTargetKey,
   canonicalRemoteToolTargetKey,
-} from "./CanonicalIdentity.js";
-import type { PreparedExternalAction } from "./PreparedExternalAction.js";
+} from "../canonical/CanonicalIdentity.js";
+import type { PreparedExternalAction } from "../preparation/PreparedExternalAction.js";
 
 export function createActionPolicyInput(
   prepared: PreparedExternalAction,

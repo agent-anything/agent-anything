@@ -14,8 +14,10 @@ import type {
 
 import type {
   ActionEnforcementPipeline,
+} from "@agent-anything/action-execution/enforcement";
+import type {
   SandboxExecutionGateway,
-} from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/sandbox";
 import type { Controller } from "../controller/index.js";
 import type { RetryExecutor } from "../retry/RetryExecutor.js";
 import type { RunObservation } from "../run/RunObservation.js";

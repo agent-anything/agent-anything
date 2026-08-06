@@ -7,7 +7,9 @@ import type { Agent } from "@agent-anything/agent-core/agent";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import type { RetryClock } from "@agent-anything/agent-runtime/retry";
-import type { SandboxEnforcement } from "@agent-anything/action-execution";
+import type {
+  SandboxEnforcement,
+} from "@agent-anything/action-execution/sandbox";
 import type { CodeAgentCommandLimits } from "@agent-anything/helarc-code-agent/command";
 import type { Provider } from "@agent-anything/model-interaction";
 import {

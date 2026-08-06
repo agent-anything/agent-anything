@@ -10,9 +10,11 @@ import type {
 } from "@agent-anything/permission";
 import type { PolicyFailure } from "@agent-anything/governance";
 import type {
-  ActionProcessingFailure,
   SandboxExecutionFailure,
-} from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/sandbox";
+import type {
+  ActionProcessingFailure,
+} from "@agent-anything/action-execution/execution";
 import type { ToolFailure } from "@agent-anything/tools";
 
 import type { ModelFailure } from "../controller/ModelFailure.js";

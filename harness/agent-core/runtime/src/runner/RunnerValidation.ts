@@ -8,8 +8,10 @@ import { snapshotResolvedRunPermissionConfig } from "../run/index.js";
 import type { RuntimeFailure } from "../run/index.js";
 import {
   assertToolActionBindingSnapshot,
+} from "@agent-anything/action-execution/registration";
+import {
   snapshotRunActionContext,
-} from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/enforcement";
 import type { RunConfig, ValidatedRunConfig } from "./RunConfig.js";
 
 export { snapshotAgent, snapshotRunInput };

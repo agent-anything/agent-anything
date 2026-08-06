@@ -7,8 +7,10 @@ import type {
   CanonicalWorkspaceRootIdentity,
   CanonicalWorkspaceRootIdentityInput,
   FileBaseline,
-} from "@agent-anything/action-execution";
-import { createCanonicalSha256Digest } from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/canonical";
+import {
+  createCanonicalSha256Digest,
+} from "@agent-anything/action-execution/canonical";
 import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import {
   resolveExistingTarget,

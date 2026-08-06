@@ -2,10 +2,12 @@ import {
   createActionRegistrationSnapshot,
   createToolActionBindingSnapshot,
   type ActionAdapterImplementation,
-  type ActionExecutor,
   type ActionRegistrationSnapshot,
   type ToolActionBindingSnapshot,
-} from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/registration";
+import {
+  type ActionExecutor,
+} from "@agent-anything/action-execution/execution";
 import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import {
   CODE_AGENT_LIST_FILES_ACTION,

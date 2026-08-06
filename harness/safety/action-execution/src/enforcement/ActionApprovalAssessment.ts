@@ -12,10 +12,10 @@ import type {
   CanonicalAdditionalPermissions,
 } from "@agent-anything/permission";
 import type { ActionAssessmentAuthoritySnapshot } from "./ActionAssessment.js";
-import { contractError } from "./ActionContractValidation.js";
+import { contractError } from "../canonical/ActionContractValidation.js";
 import type { DerivedActionAuthority } from "./ActionAuthorityAssessment.js";
-import type { CanonicalFileOperation } from "./CanonicalActionOperation.js";
-import type { PreparedExternalAction } from "./PreparedExternalAction.js";
+import type { CanonicalFileOperation } from "../canonical/CanonicalActionOperation.js";
+import type { PreparedExternalAction } from "../preparation/PreparedExternalAction.js";
 
 export function requiredApprovalCategory(
   prepared: PreparedExternalAction,

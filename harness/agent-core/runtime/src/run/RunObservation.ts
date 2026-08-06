@@ -2,7 +2,9 @@ import type {
   ActionRejectedCode,
   ObservationBase,
 } from "@agent-anything/agent-core/action";
-import type { ActionExecutionFailure } from "@agent-anything/action-execution";
+import type {
+  ActionExecutionFailure,
+} from "@agent-anything/action-execution/execution";
 import type {
   ApprovalCategory,
   ApprovalScope,

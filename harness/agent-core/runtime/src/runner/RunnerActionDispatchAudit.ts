@@ -4,7 +4,9 @@ import {
   type AuditPort,
 } from "@agent-anything/observability";
 import type { IdentityRef, RunWorkspace } from "@agent-anything/agent-core/run";
-import type { ActionDispatchPlan } from "@agent-anything/action-execution";
+import type {
+  ActionDispatchPlan,
+} from "@agent-anything/action-execution/enforcement";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
 import type { RunFailureCause } from "../run/index.js";
 import { createRunFailureCause } from "../run/RunFailure.js";

@@ -41,13 +41,17 @@ import type {
   ActionDispatchAuthorization,
   ActionDispatchPlan,
   ActionRevalidationResult,
-  ActionExecutionResult,
-  ActionExecutionFailure,
-  ActionProcessingFailure,
   PreparedExternalAction,
+} from "@agent-anything/action-execution/enforcement";
+import type {
+  ActionExecutionResult,
   SandboxAttempt,
   SandboxExecutionFailure,
-} from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/sandbox";
+import type {
+  ActionExecutionFailure,
+  ActionProcessingFailure,
+} from "@agent-anything/action-execution/execution";
 import type { ToolFailure, ToolResult } from "@agent-anything/tools";
 import { ControllerError } from "../controller/ProviderBackedController.js";
 import type { ModelFailure } from "../controller/ModelFailure.js";

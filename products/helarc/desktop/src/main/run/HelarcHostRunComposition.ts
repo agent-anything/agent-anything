@@ -1,10 +1,14 @@
 import {
-  ActionEnforcementPipeline,
   createCanonicalSha256Digest,
+} from "@agent-anything/action-execution/canonical";
+import {
+  ActionEnforcementPipeline,
+} from "@agent-anything/action-execution/enforcement";
+import {
   createSandboxExecutionGateway,
   type SandboxEnforcement,
   type SandboxProvider,
-} from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/sandbox";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type {
   RuntimeEvent,

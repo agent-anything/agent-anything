@@ -1,4 +1,4 @@
-import type { ActionExecutorDescriptor } from "./ActionRegistration.js";
+import type { ActionExecutorDescriptor } from "../registration/ActionRegistration.js";
 
 export type SerializableValue =
   | null

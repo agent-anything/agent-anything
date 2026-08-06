@@ -1,9 +1,13 @@
 import type {
-  ActionAdapterImplementation,
-  ActionExecutor,
-  ActionRegistrationSnapshot,
   FileBaseline,
-} from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/canonical";
+import type {
+  ActionAdapterImplementation,
+  ActionRegistrationSnapshot,
+} from "@agent-anything/action-execution/registration";
+import type {
+  ActionExecutor,
+} from "@agent-anything/action-execution/execution";
 import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import type { ToolRegistrationSnapshot } from "@agent-anything/tools";
 import type {

@@ -1,11 +1,11 @@
 import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { ToolResult } from "@agent-anything/tools";
-import type { ActionExecutorDescriptor } from "./ActionRegistration.js";
+import type { ActionExecutorDescriptor } from "../registration/ActionRegistration.js";
 import type {
   ActionExecutionLimits,
   SandboxAttempt,
-} from "./SandboxContracts.js";
-import type { PreparedActionInvocation } from "./PreparedActionInvocation.js";
+} from "../sandbox/SandboxContracts.js";
+import type { PreparedActionInvocation } from "../canonical/PreparedActionInvocation.js";
 
 const actionExecutorDispatchPermitBrand: unique symbol = Symbol(
   "ActionExecutorDispatchPermit",

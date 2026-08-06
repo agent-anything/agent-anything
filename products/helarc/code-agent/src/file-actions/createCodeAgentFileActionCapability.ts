@@ -2,23 +2,27 @@ import { Buffer } from "node:buffer";
 import { lstat, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  assertActionExecutorDispatchContext,
-  createActionRegistrationSnapshot,
   createCanonicalPathIdentity,
   createCanonicalSha256Digest,
-  type ActionAdapter,
-  type ActionAdapterDescriptor,
-  type ActionAdapterPreparedData,
-  type ActionExecutor,
-  type ActionExecutorContext,
-  type ActionExecutorDescriptor,
-  type ActionExecutorResult,
   type CanonicalWorkspaceRootIdentity,
   type FileBaseline,
   type PreparedActionInvocation,
   type SerializableValue,
   type TargetStateAssertion,
-} from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/canonical";
+import {
+  createActionRegistrationSnapshot,
+  type ActionAdapter,
+  type ActionAdapterDescriptor,
+  type ActionAdapterPreparedData,
+  type ActionExecutorDescriptor,
+} from "@agent-anything/action-execution/registration";
+import {
+  assertActionExecutorDispatchContext,
+  type ActionExecutor,
+  type ActionExecutorContext,
+  type ActionExecutorResult,
+} from "@agent-anything/action-execution/execution";
 import type { ToolJsonObject, ToolResult } from "@agent-anything/tools";
 import { createToolRegistrationSnapshot } from "@agent-anything/tools";
 import type {

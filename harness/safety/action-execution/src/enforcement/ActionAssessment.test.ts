@@ -10,11 +10,19 @@ import {
   createToolRegistrationSnapshot,
   createToolSelectionSnapshot,
 } from "@agent-anything/tools";
-import type { ActionAdapter, ActionAdapterPreparedData } from "./ActionAdapter.js";
+import {
+  createActionAdapterImplementationSnapshot,
+  type ActionAdapter,
+  type ActionAdapterPreparedData,
+} from "../registration/ActionAdapter.js";
 import type { ActionAssessmentAuthoritySnapshot } from "./ActionAssessment.js";
 import { ActionEnforcementPipeline } from "./ActionEnforcementPipeline.js";
-import { createActionRegistrationSnapshot } from "./ActionRegistration.js";
-import { createToolActionBindingSnapshot } from "./ToolActionBinding.js";
+import { createActionRegistrationSnapshot } from "../registration/ActionRegistration.js";
+import { createToolActionBindingSnapshot } from "../registration/ToolActionBinding.js";
+import {
+  resolveFinalActionRevalidationTarget,
+  revalidatePreparedActionTarget,
+} from "./FinalActionRevalidation.js";
 
 const SHA_A = `sha256:${"a".repeat(64)}`;
 const SHA_B = `sha256:${"b".repeat(64)}`;
@@ -232,6 +240,28 @@ describe("fixed-order Action assessment", () => {
     });
   });
 
+  it("resolves and invokes final target revalidation without issuing a dispatch plan", async () => {
+    const fixture = createPipelineFixture(
+      processData(),
+      policy("allowed"),
+    );
+    const prepared = await prepare(fixture.pipeline);
+    const target = resolveFinalActionRevalidationTarget({
+      prepared,
+      registrations: fixture.registrations,
+      adapters: fixture.adapters,
+    });
+
+    expect(target.status).toBe("ready");
+    if (target.status !== "ready") return;
+    await expect(revalidatePreparedActionTarget(
+      target.target,
+      prepared,
+      interruption(),
+    )).resolves.toEqual({ status: "valid" });
+    expect(target).not.toHaveProperty("plan");
+  });
+
   it("repeats Policy assessment before target revalidation and creates an immutable dispatch plan", async () => {
     let policyCalls = 0;
     let targetCalls = 0;
@@ -408,6 +438,20 @@ function createPipeline(
   revalidate: ActionAdapter["revalidate"] = async () => ({ status: "valid" }),
   adapterVersion = "1",
 ) {
+  return createPipelineFixture(
+    data,
+    actionPolicy,
+    revalidate,
+    adapterVersion,
+  ).pipeline;
+}
+
+function createPipelineFixture(
+  data: ActionAdapterPreparedData,
+  actionPolicy: ActionPolicyPort,
+  revalidate: ActionAdapter["revalidate"] = async () => ({ status: "valid" }),
+  adapterVersion = "1",
+) {
   const descriptor = { id: "test.adapter", version: adapterVersion, inputSchemaVersion: "1" };
   const executor = { id: "test.executor", version: "1", invocationContractVersion: "1" };
   const registrations = createActionRegistrationSnapshot([{
@@ -415,20 +459,26 @@ function createPipeline(
     adapter: descriptor,
     executor,
   }]);
-  return new ActionEnforcementPipeline({
+  const implementations = [{
+    actionName: "test.action",
+    adapter: {
+      descriptor,
+      async prepare() { return { status: "prepared" as const, data }; },
+      revalidate,
+    },
+  }];
+  const adapters = createActionAdapterImplementationSnapshot(
+    registrations,
+    implementations,
+  );
+  const pipeline = new ActionEnforcementPipeline({
     registrations,
     toolBindings: createTestToolBindings("test.action", registrations),
-    adapters: [{
-      actionName: "test.action",
-      adapter: {
-        descriptor,
-        async prepare() { return { status: "prepared" as const, data }; },
-        revalidate,
-      },
-    }],
+    adapters: implementations,
     policyPort: actionPolicy,
     now: () => NOW,
   });
+  return { pipeline, registrations, adapters };
 }
 
 function policy(status: "allowed" | "denied" | "requires_review"): ActionPolicyPort {

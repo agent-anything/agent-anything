@@ -16,20 +16,20 @@ import {
   contractError,
   validateBoundedText,
   validateToken,
-} from "./ActionContractValidation.js";
-import type { ActionRegistration } from "./ActionRegistration.js";
-import type { ToolActionBinding } from "./ToolActionBinding.js";
-import type { CanonicalActionOperation } from "./CanonicalActionOperation.js";
-import type { CanonicalActionSubject } from "./CanonicalActionSubject.js";
+} from "../canonical/ActionContractValidation.js";
+import type { ActionRegistration } from "../registration/ActionRegistration.js";
+import type { ToolActionBinding } from "../registration/ToolActionBinding.js";
+import type { CanonicalActionOperation } from "../canonical/CanonicalActionOperation.js";
+import type { CanonicalActionSubject } from "../canonical/CanonicalActionSubject.js";
 import type {
   CanonicalActorIdentity,
   CanonicalEnvironmentIdentity,
   CanonicalWorkspaceIdentity,
-} from "./CanonicalIdentity.js";
-import type { ActionEffectSet } from "./CapabilityEffect.js";
-import type { PreparedActionInvocation } from "./PreparedActionInvocation.js";
-import type { SafeActionSummary } from "./SafeActionSummary.js";
-import type { TargetStateAssertion } from "./TargetStateAssertion.js";
+} from "../canonical/CanonicalIdentity.js";
+import type { ActionEffectSet } from "../canonical/CapabilityEffect.js";
+import type { PreparedActionInvocation } from "../canonical/PreparedActionInvocation.js";
+import type { SafeActionSummary } from "../canonical/SafeActionSummary.js";
+import type { TargetStateAssertion } from "../canonical/TargetStateAssertion.js";
 
 const preparedExternalActionBrand: unique symbol = Symbol("PreparedExternalAction");
 const preparedExternalActionInstances = new WeakSet<object>();

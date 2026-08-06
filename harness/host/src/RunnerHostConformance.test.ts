@@ -21,7 +21,9 @@ import {
 import type { RetryClock } from "@agent-anything/agent-runtime/retry";
 import type { ActionCandidate } from "@agent-anything/agent-core/action";
 import type { ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
-import { createEmptyToolActionBindingSnapshot } from "@agent-anything/action-execution";
+import {
+  createEmptyToolActionBindingSnapshot,
+} from "@agent-anything/action-execution/registration";
 import { createTestContextProjection } from "@agent-anything/test-support";
 
 interface ConformanceOutput {

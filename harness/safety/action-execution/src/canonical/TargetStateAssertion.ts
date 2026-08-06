@@ -1,7 +1,7 @@
 import type {
   ActionAdapterDescriptor,
   ActionExecutorDescriptor,
-} from "./ActionRegistration.js";
+} from "../registration/ActionRegistration.js";
 import {
   canonicalPathTargetKey,
   canonicalRemoteToolKey,

@@ -5,25 +5,25 @@ import type {
   CanonicalAdditionalPermissions,
 } from "@agent-anything/permission";
 import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
-import type { CanonicalActionOperationInput } from "./CanonicalActionOperation.js";
+import type { CanonicalActionOperationInput } from "../canonical/CanonicalActionOperation.js";
 import type {
   CanonicalActorIdentity,
   CanonicalEnvironmentIdentity,
   CanonicalWorkspaceIdentity,
-} from "./CanonicalIdentity.js";
+} from "../canonical/CanonicalIdentity.js";
 import type {
   ActionEffectSetInput,
   CapabilityEffect,
-} from "./CapabilityEffect.js";
+} from "../canonical/CapabilityEffect.js";
 import type {
   PreparedActionInvocation,
   PreparedActionInvocationInput,
-} from "./PreparedActionInvocation.js";
-import type { SafeActionSummaryInput } from "./SafeActionSummary.js";
+} from "../canonical/PreparedActionInvocation.js";
+import type { SafeActionSummaryInput } from "../canonical/SafeActionSummary.js";
 import type {
   TargetStateAssertion,
   TargetStateAssertionInput,
-} from "./TargetStateAssertion.js";
+} from "../canonical/TargetStateAssertion.js";
 import type {
   ActionAdapterDescriptor,
   ActionRegistrationSnapshot,

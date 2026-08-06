@@ -9,7 +9,7 @@ import {
   type CanonicalEnvironmentIdentityInput,
   type CanonicalWorkspaceIdentity,
   type CanonicalWorkspaceIdentityInput,
-} from "./CanonicalIdentity.js";
+} from "../canonical/CanonicalIdentity.js";
 
 export interface RunActionContextInput {
   readonly workspace: CanonicalWorkspaceIdentityInput;

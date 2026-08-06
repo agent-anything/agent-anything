@@ -14,7 +14,9 @@ import {
 } from "@agent-anything/test-support";
 import type { CancellationContext, ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
 import { Runner, type RunConfig } from "@agent-anything/agent-runtime/runner";
-import { createEmptyToolActionBindingSnapshot } from "@agent-anything/action-execution";
+import {
+  createEmptyToolActionBindingSnapshot,
+} from "@agent-anything/action-execution/registration";
 import {
   createHostRuntime,
   type HostRunStartInput,

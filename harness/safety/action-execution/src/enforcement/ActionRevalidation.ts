@@ -1,20 +1,20 @@
 import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { ApprovalRequirement } from "@agent-anything/permission";
 import type { ActionRuleOutcome } from "@agent-anything/governance/policy";
-import type { ActionExecutionFailure } from "./ActionExecutionFailure.js";
+import type { ActionExecutionFailure } from "../execution/ActionExecutionFailure.js";
 import type {
   ActionAssessmentAuthoritySnapshot,
   ActionAssessmentReviewContext,
   ActionAuthoritySource,
   ActionDispatchAuthorization,
 } from "./ActionAssessment.js";
-import type { ActionRegistration } from "./ActionRegistration.js";
-import { createCanonicalSha256Digest } from "./CanonicalEncoding.js";
-import type { CanonicalEffectivePermissions } from "./CanonicalEffectivePermissions.js";
-import type { CanonicalEnvironmentIdentity } from "./CanonicalIdentity.js";
-import type { ActionEffectSet } from "./CapabilityEffect.js";
-import type { PreparedExternalAction } from "./PreparedExternalAction.js";
-import type { TargetStateAssertion } from "./TargetStateAssertion.js";
+import type { ActionRegistration } from "../registration/ActionRegistration.js";
+import { createCanonicalSha256Digest } from "../canonical/CanonicalEncoding.js";
+import type { CanonicalEffectivePermissions } from "../canonical/CanonicalEffectivePermissions.js";
+import type { CanonicalEnvironmentIdentity } from "../canonical/CanonicalIdentity.js";
+import type { ActionEffectSet } from "../canonical/CapabilityEffect.js";
+import type { PreparedExternalAction } from "../preparation/PreparedExternalAction.js";
+import type { TargetStateAssertion } from "../canonical/TargetStateAssertion.js";
 
 const actionDispatchPlanBrand: unique symbol = Symbol("ActionDispatchPlan");
 const actionDispatchPlanInstances = new WeakSet<object>();

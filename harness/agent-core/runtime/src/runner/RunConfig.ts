@@ -4,10 +4,12 @@ import type { RetryPolicy } from "../retry/index.js";
 import type { CancellationLimits, RunCancellationController } from "../run/index.js";
 import type { ResolvedRunPermissionConfig } from "../run/index.js";
 import type {
+  ToolActionBindingSnapshot,
+} from "@agent-anything/action-execution/registration";
+import type {
   RunActionContext,
   RunActionContextInput,
-  ToolActionBindingSnapshot,
-} from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/enforcement";
 
 export type RunInfrastructureRequirement = "optional" | "required";
 

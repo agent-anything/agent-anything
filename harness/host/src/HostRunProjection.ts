@@ -4,7 +4,9 @@ import type {
   ApprovalSubmissionReceipt,
 } from "@agent-anything/permission";
 
-import type { SandboxEnforcement } from "@agent-anything/action-execution";
+import type {
+  SandboxEnforcement,
+} from "@agent-anything/action-execution/sandbox";
 import type {
   RuntimeEvent,
   RuntimeEventName,

@@ -3,7 +3,7 @@ import type {
   PermissionFailure,
 } from "@agent-anything/permission";
 import type { ToolFailure } from "@agent-anything/tools";
-import type { SandboxExecutionFailure } from "./SandboxExecutionFailure.js";
+import type { SandboxExecutionFailure } from "../sandbox/SandboxExecutionFailure.js";
 
 
 export interface ActionProcessingFailure {

@@ -1,4 +1,6 @@
-import { createCanonicalSha256Digest } from "@agent-anything/action-execution";
+import {
+  createCanonicalSha256Digest,
+} from "@agent-anything/action-execution/canonical";
 
 import {
   normalizeHelarcThreadRecord,

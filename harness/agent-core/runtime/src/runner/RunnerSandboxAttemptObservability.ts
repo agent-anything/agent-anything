@@ -10,7 +10,9 @@ import {
   type TelemetryPort,
 } from "@agent-anything/observability";
 
-import type { SandboxAttempt } from "@agent-anything/action-execution";
+import type {
+  SandboxAttempt,
+} from "@agent-anything/action-execution/sandbox";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
 import type { RunFailureCause, SandboxAttemptResolutionSummary } from "../run/index.js";
 import { createRunFailureCause } from "../run/RunFailure.js";

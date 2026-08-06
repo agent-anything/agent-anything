@@ -1,69 +1,43 @@
 import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
-import { snapshotApprovalPayload } from "@agent-anything/permission/approval";
 import {
   allowsActionApproval,
   type ActionApprovalCause,
 } from "@agent-anything/permission";
 import type { ActionPolicyPort, PolicyDecision } from "@agent-anything/governance";
-import type { Action, ActionRejectedCode } from "@agent-anything/agent-core/action";
 import {
   createActionExecutionFailure,
   type ActionExecutionFailure,
   type ActionExecutionFailureKind,
-} from "./ActionExecutionFailure.js";
+} from "../execution/ActionExecutionFailure.js";
 import {
   type ActionAdapterImplementation,
-  type ActionAdapterPreparationResult,
   type ActionAdapterRevalidationResult,
   type ActionAdapterSandboxReconciliationResult,
   createActionAdapterImplementationSnapshot,
-} from "./ActionAdapter.js";
+} from "../registration/ActionAdapter.js";
 import {
   assertStrictRecord,
   contractError,
   validateBoundedText,
   validateToken,
-} from "./ActionContractValidation.js";
+} from "../canonical/ActionContractValidation.js";
 import {
-  findActionRegistration,
-  type ActionRegistration,
   type ActionRegistrationSnapshot,
-} from "./ActionRegistration.js";
-import { createCanonicalActionOperation } from "./CanonicalActionOperation.js";
-import { assertCanonicalActionCoherence } from "./CanonicalActionCoherence.js";
-import {
-  createCanonicalActorIdentity,
-  createCanonicalEnvironmentIdentity,
-  createCanonicalWorkspaceIdentity,
-  type CanonicalActorIdentity,
-  type CanonicalEnvironmentIdentityInput,
-  type CanonicalWorkspaceIdentityInput,
-} from "./CanonicalIdentity.js";
+} from "../registration/ActionRegistration.js";
 import {
   capabilityEffectKey,
-  createActionEffectSet,
-} from "./CapabilityEffect.js";
+} from "../canonical/CapabilityEffect.js";
 import {
   createActionFingerprint,
-  createPreparedInvocationDigest,
-} from "./ActionFingerprint.js";
+} from "../canonical/ActionFingerprint.js";
 import {
-  createApprovalApplicabilityKeys,
   assertPreparedExternalAction,
-  createCanonicalActionSubject,
-  createPreparedExternalAction,
-  createPreparedActionReference,
-  snapshotCanonicalAdditionalPermissions,
   type PreparedExternalAction,
-  validateApprovalCategory,
   validatePreparedAt,
-} from "./PreparedExternalAction.js";
+} from "../preparation/PreparedExternalAction.js";
 import {
   assertPreparedInvocationMatchesExecutor,
-  createPreparedActionInvocation,
-} from "./PreparedActionInvocation.js";
-import { createSafeActionSummary } from "./SafeActionSummary.js";
-import { createTargetStateAssertions } from "./TargetStateAssertion.js";
+} from "../canonical/PreparedActionInvocation.js";
 import {
   type ActionAssessment,
   type ActionAssessmentAuthoritySnapshot,
@@ -91,32 +65,31 @@ import {
   createActionPolicyInput,
   evaluatePreparedActionRules,
 } from "./ActionGovernanceAssessment.js";
-import { createCanonicalSha256Digest } from "./CanonicalEncoding.js";
-import { assertGatewaySandboxDenial } from "./SandboxExecutionGateway.js";
+import { createCanonicalSha256Digest } from "../canonical/CanonicalEncoding.js";
+import { assertGatewaySandboxDenial } from "../sandbox/SandboxExecutionGateway.js";
 import {
   createSandboxEscalationProposal,
   type DeriveSandboxEscalationInput,
   type SandboxEscalationResult,
-} from "./SandboxEscalation.js";
+} from "../sandbox/SandboxEscalation.js";
 import {
   assertToolActionBindingSnapshot,
-  findToolActionBinding,
   type ToolActionBindingSnapshot,
-} from "./ToolActionBinding.js";
+} from "../registration/ToolActionBinding.js";
+import {
+  ActionPreparationCoordinator,
+  type ActionPreparationResult,
+  type PrepareExternalActionInput,
+} from "../preparation/ActionPreparationCoordinator.js";
+import {
+  resolveFinalActionRevalidationTarget,
+  revalidatePreparedActionTarget,
+} from "./FinalActionRevalidation.js";
 
-export interface PrepareExternalActionInput {
-  readonly action: Action;
-  readonly workspace: CanonicalWorkspaceIdentityInput;
-  readonly actor: CanonicalActorIdentity;
-  readonly environment: CanonicalEnvironmentIdentityInput;
-  readonly interruption: InvocationInterruptionContext;
-}
-
-export type ActionPreparationResult =
-  | { readonly status: "prepared"; readonly prepared: PreparedExternalAction }
-  | { readonly status: "rejected"; readonly code: ActionRejectedCode; readonly message: string }
-  | { readonly status: "failed"; readonly failure: ActionExecutionFailure }
-  | { readonly status: "interrupted"; readonly interruption: InvocationInterruptionRef };
+export type {
+  ActionPreparationResult,
+  PrepareExternalActionInput,
+} from "../preparation/ActionPreparationCoordinator.js";
 
 export interface ActionEnforcementPipelineDependencies {
   readonly registrations: ActionRegistrationSnapshot;
@@ -129,6 +102,7 @@ export interface ActionEnforcementPipelineDependencies {
 export class ActionEnforcementPipeline {
   private readonly adapters;
   private readonly now: () => string;
+  private readonly preparation;
   private readonly processedSandboxDenials = new WeakSet<object>();
 
   constructor(
@@ -148,6 +122,12 @@ export class ActionEnforcementPipeline {
       dependencies.adapters,
     );
     this.now = dependencies.now ?? (() => new Date().toISOString());
+    this.preparation = new ActionPreparationCoordinator({
+      registrations: dependencies.registrations,
+      toolBindings: dependencies.toolBindings,
+      adapters: this.adapters,
+      now: this.now,
+    });
   }
 
   get toolBindingSnapshotId(): string {
@@ -155,236 +135,7 @@ export class ActionEnforcementPipeline {
   }
 
   async prepare(input: PrepareExternalActionInput): Promise<ActionPreparationResult> {
-    const binding = findToolActionBinding(
-      this.dependencies.toolBindings,
-      input.action.name,
-      input.action.provenance.origin,
-    );
-    if (binding === undefined) {
-      return rejected(
-        "tool_not_found",
-        `Tool '${input.action.name}' is not selected for '${input.action.provenance.origin}' origin.`,
-      );
-    }
-    let action;
-    try {
-      action = createPreparedActionReference(
-        input.action,
-        this.dependencies.toolBindings.snapshotId,
-        binding,
-      );
-    } catch (error) {
-      return rejected(
-        hasDataProperty(input.action, "kind") && input.action.kind !== "tool"
-          ? "action_unsupported"
-          : "action_invalid",
-        safeValidationMessage(error, "The Action is invalid."),
-      );
-    }
-
-    const registration = findActionRegistration(
-      this.dependencies.registrations,
-      action.boundActionName,
-    );
-    if (
-      registration === undefined ||
-      registration.registrationFingerprint !==
-        binding.actionRegistrationFingerprint
-    ) {
-      return failed(
-        "tool_action_binding_invalid",
-        "The selected Tool Action binding does not match the Action registration snapshot.",
-        false,
-      );
-    }
-    const adapter = this.adapters.find(action.boundActionName);
-    if (adapter === undefined) {
-      return failed(
-        "tool_action_adapter_unavailable",
-        "The registered Action adapter is unavailable.",
-        false,
-      );
-    }
-
-    let context;
-    try {
-      context = Object.freeze({
-        workspace: createCanonicalWorkspaceIdentity(input.workspace),
-        actor: createCanonicalActorIdentity(input.actor),
-        environment: createCanonicalEnvironmentIdentity(input.environment),
-        interruption: input.interruption,
-      });
-      assertInterruptionContext(input.interruption);
-    } catch (error) {
-      return failed(
-        "tool_action_preparation_context_invalid",
-        safeValidationMessage(error, "Action preparation context is invalid."),
-        false,
-      );
-    }
-
-    const before = observeInterruption(context.interruption);
-    if (before !== null) return before;
-
-    let adapterResult: ActionAdapterPreparationResult;
-    try {
-      adapterResult = await adapter.prepare(
-        Object.freeze({
-          actionName: action.boundActionName,
-          input: input.action.input,
-        }),
-        context,
-      );
-    } catch {
-      const afterFailure = observeInterruption(context.interruption);
-      if (afterFailure !== null) return afterFailure;
-      return failed(
-        "tool_action_adapter_failed",
-        "The Action adapter failed during preparation.",
-        false,
-      );
-    }
-
-    const after = observeInterruption(context.interruption);
-    if (after !== null) return after;
-
-    try {
-      assertAdapterResult(adapterResult);
-      if (adapterResult.status === "rejected") {
-        return rejected(
-          adapterResult.code,
-          validateBoundedText(
-            adapterResult.message,
-            "adapterResult.message",
-            "canonical_contract_invalid",
-          ),
-        );
-      }
-      if (adapterResult.status === "failed") {
-        return failed(
-          validateToolFailureCode(adapterResult.code),
-          validateBoundedText(
-            adapterResult.message,
-            "adapterResult.message",
-            "canonical_contract_invalid",
-          ),
-          assertBoolean(adapterResult.retryable, "adapterResult.retryable"),
-        );
-      }
-      if (adapterResult.status === "interrupted") {
-        return interrupted(snapshotInterruption(adapterResult.interruption));
-      }
-
-      const data = adapterResult.data;
-      assertPreparedData(data);
-      const operation = createCanonicalActionOperation(data.operation);
-      const effectSet = createActionEffectSet(data.effectSet);
-      const preparedInvocation = createPreparedActionInvocation(data.preparedInvocation);
-      assertPreparedInvocationMatchesExecutor(preparedInvocation, registration.executor);
-      const requestedPermissions = snapshotCanonicalAdditionalPermissions(
-        data.requestedPermissions,
-        context.environment,
-      );
-      const targetAssertions = createTargetStateAssertions([
-        ...data.targetAssertions,
-        {
-          kind: "adapter_registration",
-          expected: registration.adapter,
-          registrationFingerprint: registration.registrationFingerprint,
-        },
-        {
-          kind: "executor_registration",
-          expected: registration.executor,
-          registrationFingerprint: registration.registrationFingerprint,
-        },
-        {
-          kind: "environment_identity",
-          expected: context.environment,
-        },
-      ]);
-      const approvalCategory = validateApprovalCategory(data.approvalCategory);
-      if ((approvalCategory === null) !== (data.approvalPayload === null)) {
-        throw contractError(
-          "canonical_contract_invalid",
-          "Approval category and category-specific payload must either both be present or both be null.",
-          "adapterResult.data.approvalPayload",
-        );
-      }
-      const approvalPayload = approvalCategory === null
-        ? null
-        : snapshotApprovalPayload(approvalCategory, data.approvalPayload!);
-      const applicabilityKeys = createApprovalApplicabilityKeys(
-        approvalCategory,
-        data.applicabilityKeys,
-      );
-      const safeSummary = createSafeActionSummary(data.safeSummary);
-      assertCanonicalActionCoherence({ operation, effectSet, targetAssertions });
-      let preparedInvocationDigest: string;
-      try {
-        preparedInvocationDigest = await createPreparedInvocationDigest(preparedInvocation);
-      } catch {
-        return failed(
-          "tool_action_fingerprint_failed",
-          "Prepared Action invocation fingerprint calculation failed.",
-          false,
-        );
-      }
-      const subject = createCanonicalActionSubject({
-        action,
-        registration,
-        workspace: context.workspace,
-        actor: context.actor,
-        environment: context.environment,
-        operation,
-        effectSet,
-        requestedPermissions,
-        approvalCategory,
-        applicabilityKeys,
-        preparedInvocationDigest,
-        targetAssertions,
-      });
-      let actionFingerprint: string;
-      try {
-        actionFingerprint = await createActionFingerprint(subject);
-      } catch {
-        return failed(
-          "tool_action_fingerprint_failed",
-          "Action fingerprint calculation failed.",
-          false,
-        );
-      }
-      let preparedAt: string;
-      try {
-        preparedAt = validatePreparedAt(this.now());
-      } catch {
-        return failed(
-          "tool_action_preparation_clock_invalid",
-          "Action preparation clock returned an invalid timestamp.",
-          false,
-        );
-      }
-
-      return Object.freeze({
-        status: "prepared" as const,
-        prepared: createPreparedExternalAction({
-          action,
-          subject,
-          actionFingerprint,
-          safeSummary,
-          approvalPayload,
-          preparedInvocation,
-          preparedAt,
-        }),
-      });
-    } catch (error) {
-      const interruption = observeInterruption(context.interruption);
-      if (interruption !== null) return interruption;
-      return failed(
-        "tool_action_adapter_contract_invalid",
-        safeValidationMessage(error, "The Action adapter returned invalid preparation data."),
-        false,
-      );
-    }
+    return this.preparation.prepare(input);
   }
 
   async assess(input: AssessPreparedActionInput): Promise<ActionAssessment> {
@@ -596,34 +347,15 @@ export class ActionEnforcementPipeline {
       );
     }
 
-    const registration = findActionRegistration(
-      this.dependencies.registrations,
-      input.prepared.action.boundActionName,
-    );
-    if (registration === undefined || !registrationMatchesPrepared(registration, input.prepared)) {
-      return revalidationInvalidated(
-        "action_registration_changed",
-        "The Action registration no longer matches the prepared subject.",
-      );
+    const targetResult = resolveFinalActionRevalidationTarget({
+      prepared: input.prepared,
+      registrations: this.dependencies.registrations,
+      adapters: this.adapters,
+    });
+    if (targetResult.status === "invalidated") {
+      return revalidationInvalidated(targetResult.code, targetResult.message);
     }
-    try {
-      assertPreparedInvocationMatchesExecutor(
-        input.prepared.preparedInvocation,
-        registration.executor,
-      );
-    } catch {
-      return revalidationInvalidated(
-        "action_executor_invocation_changed",
-        "The prepared invocation no longer matches the registered executor.",
-      );
-    }
-    const adapter = this.adapters.find(input.prepared.action.boundActionName);
-    if (adapter === undefined || !sameAdapterDescriptor(adapter.descriptor, registration.adapter)) {
-      return revalidationInvalidated(
-        "action_adapter_registration_changed",
-        "The Action adapter registration no longer matches the prepared subject.",
-      );
-    }
+    const { registration } = targetResult.target;
 
     const reassessment = await this.assess({
       prepared: input.prepared,
@@ -637,15 +369,10 @@ export class ActionEnforcementPipeline {
 
     let adapterResult: ActionAdapterRevalidationResult;
     try {
-      adapterResult = await adapter.revalidate(
-        input.prepared.preparedInvocation,
-        input.prepared.subject.targetAssertions,
-        Object.freeze({
-          workspace: input.prepared.subject.workspace,
-          actor: input.prepared.subject.identity,
-          environment: input.prepared.subject.environment,
-          interruption: input.interruption,
-        }),
+      adapterResult = await revalidatePreparedActionTarget(
+        targetResult.target,
+        input.prepared,
+        input.interruption,
       );
     } catch {
       const interrupted = observeRevalidationInterruption(input.interruption);
@@ -792,23 +519,19 @@ export class ActionEnforcementPipeline {
       );
     }
 
-    const registration = findActionRegistration(
-      this.dependencies.registrations,
-      input.prepared.action.boundActionName,
-    );
-    const adapter = this.adapters.find(input.prepared.action.boundActionName);
-    if (
-      registration === undefined ||
-      adapter === undefined ||
-      !registrationMatchesPrepared(registration, input.prepared) ||
-      !sameAdapterDescriptor(adapter.descriptor, registration.adapter)
-    ) {
+    const escalationTarget = resolveFinalActionRevalidationTarget({
+      prepared: input.prepared,
+      registrations: this.dependencies.registrations,
+      adapters: this.adapters,
+    });
+    if (escalationTarget.status === "invalidated") {
       return Object.freeze({
         status: "invalidated" as const,
         code: "action_registration_changed",
         message: "The Action registration changed before sandbox escalation.",
       });
     }
+    const { adapter } = escalationTarget.target;
     if (adapter.reconcileSandboxDenial === undefined) {
       return escalationIneligible(
         "sandbox_escalation_adapter_unsupported",
@@ -824,10 +547,10 @@ export class ActionEnforcementPipeline {
     });
     let targetResult: ActionAdapterRevalidationResult;
     try {
-      targetResult = await adapter.revalidate(
-        input.prepared.preparedInvocation,
-        input.prepared.subject.targetAssertions,
-        context,
+      targetResult = await revalidatePreparedActionTarget(
+        escalationTarget.target,
+        input.prepared,
+        input.interruption,
       );
     } catch {
       const interrupted = observeEscalationInterruption(input.interruption);
@@ -952,40 +675,6 @@ export class ActionEnforcementPipeline {
       );
     }
   }
-}
-
-function registrationMatchesPrepared(
-  registration: ActionRegistration,
-  prepared: PreparedExternalAction,
-): boolean {
-  const subject = prepared.subject;
-  return registration.actionName === prepared.action.boundActionName &&
-    registration.registrationFingerprint ===
-      prepared.action.actionRegistrationFingerprint &&
-    prepared.subject.toolBinding.snapshotId ===
-      prepared.action.toolBindingSnapshotId &&
-    prepared.subject.toolBinding.toolName === prepared.action.name &&
-    prepared.subject.toolBinding.boundActionName ===
-      prepared.action.boundActionName &&
-    prepared.subject.toolBinding.toolRegistrationFingerprint ===
-      prepared.action.toolRegistrationFingerprint &&
-    prepared.subject.toolBinding.actionRegistrationFingerprint ===
-      prepared.action.actionRegistrationFingerprint &&
-    registration.registrationFingerprint === subject.adapter.registrationFingerprint &&
-    registration.registrationFingerprint === subject.executor.registrationFingerprint &&
-    sameAdapterDescriptor(registration.adapter, subject.adapter) &&
-    registration.executor.id === subject.executor.id &&
-    registration.executor.version === subject.executor.version &&
-    registration.executor.invocationContractVersion ===
-      subject.executor.invocationContractVersion;
-}
-
-function sameAdapterDescriptor(
-  left: { readonly id: string; readonly version: string; readonly inputSchemaVersion: string },
-  right: { readonly id: string; readonly version: string; readonly inputSchemaVersion: string },
-): boolean {
-  return left.id === right.id && left.version === right.version &&
-    left.inputSchemaVersion === right.inputSchemaVersion;
 }
 
 function assertAdapterRevalidationResult(
@@ -1197,106 +886,6 @@ function assessmentFailed(
   });
 }
 
-function assertAdapterResult(input: ActionAdapterPreparationResult): void {
-  if (input?.status === "prepared") {
-    assertStrictRecord(input, "adapterResult", new Set(["status", "data"]), "canonical_contract_invalid");
-    return;
-  }
-  if (input?.status === "rejected") {
-    assertStrictRecord(
-      input,
-      "adapterResult",
-      new Set(["status", "code", "message"]),
-      "canonical_contract_invalid",
-    );
-    if (input.code !== "action_invalid" && input.code !== "action_unsupported") {
-      throw contractError(
-        "canonical_contract_invalid",
-        "Unknown adapter rejection code.",
-        "adapterResult.code",
-      );
-    }
-    return;
-  }
-  if (input?.status === "failed") {
-    assertStrictRecord(
-      input,
-      "adapterResult",
-      new Set(["status", "code", "message", "retryable"]),
-      "canonical_contract_invalid",
-    );
-    return;
-  }
-  if (input?.status === "interrupted") {
-    assertStrictRecord(
-      input,
-      "adapterResult",
-      new Set(["status", "interruption"]),
-      "canonical_contract_invalid",
-    );
-    return;
-  }
-  throw contractError(
-    "canonical_contract_invalid",
-    "Unknown Action adapter preparation result.",
-    "adapterResult.status",
-  );
-}
-
-function assertPreparedData(
-  input: Extract<ActionAdapterPreparationResult, { readonly status: "prepared" }>["data"],
-): void {
-  assertStrictRecord(
-    input,
-    "adapterResult.data",
-    new Set([
-      "operation",
-      "effectSet",
-      "requestedPermissions",
-      "targetAssertions",
-      "approvalCategory",
-      "approvalPayload",
-      "applicabilityKeys",
-      "safeSummary",
-      "preparedInvocation",
-    ]),
-    "canonical_contract_invalid",
-  );
-}
-
-function assertInterruptionContext(input: InvocationInterruptionContext): void {
-  if (
-    input === null ||
-    typeof input !== "object" ||
-    typeof input.signal?.aborted !== "boolean" ||
-    typeof input.signal?.addEventListener !== "function"
-  ) {
-    throw new TypeError("Action preparation requires an interruption context.");
-  }
-}
-
-function observeInterruption(
-  context: InvocationInterruptionContext,
-): ActionPreparationResult | null {
-  if (!context.signal.aborted) return null;
-  if (context.interruption === null) {
-    return failed(
-      "tool_action_interruption_unattributed",
-      "Action preparation was aborted without interruption attribution.",
-      false,
-    );
-  }
-  try {
-    return interrupted(snapshotInterruption(context.interruption));
-  } catch (error) {
-    return failed(
-      "tool_action_interruption_invalid",
-      safeValidationMessage(error, "Action preparation interruption attribution is invalid."),
-      false,
-    );
-  }
-}
-
 function snapshotInterruption(input: InvocationInterruptionRef): InvocationInterruptionRef {
   if (input?.kind === "run_cancellation") {
     assertStrictRecord(
@@ -1366,17 +955,6 @@ function validateToolFailureCode(input: unknown): string {
   return code;
 }
 
-function rejected(code: ActionRejectedCode, message: string): ActionPreparationResult {
-  return Object.freeze({ status: "rejected", code, message });
-}
-
-function failed(code: string, message: string, retryable: boolean): ActionPreparationResult {
-  return Object.freeze({
-    status: "failed",
-    failure: pipelineFailure("tool", code, message, retryable),
-  });
-}
-
 function pipelineFailure(
   kind: ActionExecutionFailureKind,
   code: string,
@@ -1407,19 +985,9 @@ function pipelineFailure(
   }
 }
 
-function interrupted(interruption: InvocationInterruptionRef): ActionPreparationResult {
-  return Object.freeze({ status: "interrupted", interruption });
-}
-
 function safeValidationMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.length > 0 && error.message.length <= 8_192) {
     return error.message;
   }
   return fallback;
-}
-
-function hasDataProperty(input: unknown, key: PropertyKey): input is Record<PropertyKey, unknown> {
-  if (input === null || typeof input !== "object") return false;
-  const descriptor = Object.getOwnPropertyDescriptor(input, key);
-  return descriptor !== undefined && descriptor.get === undefined && descriptor.set === undefined;
 }

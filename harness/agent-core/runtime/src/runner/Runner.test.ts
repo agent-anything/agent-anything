@@ -43,19 +43,25 @@ import type {
 import type {
   ActionAdapterPreparedData,
   ActionRegistrationSnapshot,
-} from "@agent-anything/action-execution";
-import { ActionEnforcementPipeline } from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/registration";
+import {
+  ActionEnforcementPipeline,
+} from "@agent-anything/action-execution/enforcement";
 import {
   createActionRegistrationSnapshot,
   createEmptyToolActionBindingSnapshot,
   createToolActionBindingSnapshot,
-} from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/registration";
 import {
-  assertActionExecutorDispatchContext,
   createActionEffectSet,
+} from "@agent-anything/action-execution/canonical";
+import {
   createSandboxExecutionGateway,
   type SandboxProvider,
-} from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/sandbox";
+import {
+  assertActionExecutorDispatchContext,
+} from "@agent-anything/action-execution/execution";
 import type { ResolvedRunPermissionConfig } from "../run/index.js";
 import {
   FakeApprovalReviewer,

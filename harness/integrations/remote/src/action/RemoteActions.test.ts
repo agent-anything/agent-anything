@@ -1,15 +1,21 @@
 import {
-  ActionEnforcementPipeline,
   createCanonicalActorIdentity,
   createCanonicalEnvironmentIdentity,
   createCanonicalSha256Digest,
   createCanonicalWorkspaceIdentity,
   createPreparedActionInvocation,
-  createSandboxExecutionGateway,
   createTargetStateAssertions,
+} from "@agent-anything/action-execution/canonical";
+import {
   createToolActionBindingSnapshot,
   type ToolActionBindingSnapshot,
-} from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/registration";
+import {
+  ActionEnforcementPipeline,
+} from "@agent-anything/action-execution/enforcement";
+import {
+  createSandboxExecutionGateway,
+} from "@agent-anything/action-execution/sandbox";
 import type { Controller } from "@agent-anything/agent-runtime/controller";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { Agent } from "@agent-anything/agent-core/agent";

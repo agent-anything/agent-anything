@@ -11,15 +11,19 @@ import {
   type ActionAdapterPreparedData,
   type ActionAdapterPreparationResult,
   createActionAdapterImplementationSnapshot,
-} from "./ActionAdapter.js";
-import { ActionEnforcementPipeline } from "./ActionEnforcementPipeline.js";
+} from "../registration/ActionAdapter.js";
+import { ActionEnforcementPipeline } from "../enforcement/ActionEnforcementPipeline.js";
 import {
   createActionRegistrationSnapshot,
   type ActionAdapterDescriptor,
   type ActionExecutorDescriptor,
-} from "./ActionRegistration.js";
-import type { CanonicalPathIdentityInput } from "./CanonicalIdentity.js";
-import { createToolActionBindingSnapshot } from "./ToolActionBinding.js";
+} from "../registration/ActionRegistration.js";
+import type { CanonicalPathIdentityInput } from "../canonical/CanonicalIdentity.js";
+import { createToolActionBindingSnapshot } from "../registration/ToolActionBinding.js";
+import {
+  createActionPreparationContext,
+  resolveActionPreparation,
+} from "./ActionPreparationResolution.js";
 
 const SHA_A = `sha256:${"a".repeat(64)}`;
 const SHA_B = `sha256:${"b".repeat(64)}`;
@@ -348,6 +352,47 @@ describe("Action preparation", () => {
       actionName: "codeAgent.readFile",
       adapter: createAdapter({ ...adapterDescriptor, version: "9.0.0" }),
     }])).toThrow("does not match registration");
+  });
+
+  it("resolves one immutable registration and adapter stage before preparation", () => {
+    const registrations = createRegistrations();
+    const toolBindings = createTestToolBindings(registrations);
+    const adapters = createActionAdapterImplementationSnapshot(
+      registrations,
+      [{
+        actionName: "codeAgent.readFile",
+        adapter: createAdapter(),
+      }],
+    );
+
+    const resolution = resolveActionPreparation(
+      action(),
+      registrations,
+      toolBindings,
+      adapters,
+    );
+    expect(resolution).toEqual(expect.objectContaining({
+      status: "ready",
+      action: expect.objectContaining({
+        boundActionName: "codeAgent.readFile",
+      }),
+      registration: expect.objectContaining({
+        actionName: "codeAgent.readFile",
+      }),
+    }));
+    expect(resolveActionPreparation(
+      action({ name: "codeAgent.unknown" }),
+      registrations,
+      toolBindings,
+      adapters,
+    )).toEqual(expect.objectContaining({
+      status: "rejected",
+      code: "tool_not_found",
+    }));
+
+    const context = createActionPreparationContext(createInput());
+    expect(Object.isFrozen(context)).toBe(true);
+    expect(context.workspace.workspaceId).toBe("workspace-1");
   });
 });
 

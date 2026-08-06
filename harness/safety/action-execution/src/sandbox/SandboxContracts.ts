@@ -1,12 +1,12 @@
 import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { ToolResult } from "@agent-anything/tools";
-import type { ActionExecutionFailure } from "./ActionExecutionFailure.js";
-import type { ActionDispatchPlan } from "./ActionRevalidation.js";
-import type { ActionExecutorDescriptor } from "./ActionRegistration.js";
-import type { CanonicalEffectivePermissions } from "./CanonicalEffectivePermissions.js";
-import type { CanonicalEnvironmentIdentity } from "./CanonicalIdentity.js";
-import type { ActionEffectSet, CapabilityEffect } from "./CapabilityEffect.js";
-import type { PreparedActionInvocation } from "./PreparedActionInvocation.js";
+import type { ActionExecutionFailure } from "../execution/ActionExecutionFailure.js";
+import type { ActionDispatchPlan } from "../enforcement/ActionRevalidation.js";
+import type { ActionExecutorDescriptor } from "../registration/ActionRegistration.js";
+import type { CanonicalEffectivePermissions } from "../canonical/CanonicalEffectivePermissions.js";
+import type { CanonicalEnvironmentIdentity } from "../canonical/CanonicalIdentity.js";
+import type { ActionEffectSet, CapabilityEffect } from "../canonical/CapabilityEffect.js";
+import type { PreparedActionInvocation } from "../canonical/PreparedActionInvocation.js";
 
 export type SandboxEnforcement = "managed" | "external" | "disabled";
 export type SandboxProviderKind = Exclude<SandboxEnforcement, "disabled">;

@@ -1,22 +1,26 @@
 import { basename } from "node:path";
 import {
-  assertActionExecutorDispatchContext,
-  createActionRegistrationSnapshot,
   createCanonicalExecutableIdentity,
   createCanonicalPathIdentity,
   createCanonicalSha256Digest,
-  type ActionAdapter,
-  type ActionAdapterDescriptor,
-  type ActionAdapterPreparedData,
-  type ActionExecutor,
-  type ActionExecutorContext,
-  type ActionExecutorDescriptor,
-  type ActionExecutorResult,
   type CanonicalEnvironmentIdentity,
   type PreparedActionInvocation,
   type SerializableValue,
   type TargetStateAssertion,
-} from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/canonical";
+import {
+  createActionRegistrationSnapshot,
+  type ActionAdapter,
+  type ActionAdapterDescriptor,
+  type ActionAdapterPreparedData,
+  type ActionExecutorDescriptor,
+} from "@agent-anything/action-execution/registration";
+import {
+  assertActionExecutorDispatchContext,
+  type ActionExecutor,
+  type ActionExecutorContext,
+  type ActionExecutorResult,
+} from "@agent-anything/action-execution/execution";
 import type { InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { ToolJsonObject, ToolResult } from "@agent-anything/tools";
 import { createToolRegistrationSnapshot } from "@agent-anything/tools";

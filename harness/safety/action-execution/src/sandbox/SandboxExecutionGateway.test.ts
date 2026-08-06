@@ -3,16 +3,16 @@ import type { InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import {
   assertActionExecutorDispatchContext,
   type ActionExecutor,
-} from "./ActionExecutor.js";
-import { createActionDispatchAuthorization } from "./ActionAssessment.js";
-import { createPreparedInvocationDigest } from "./ActionFingerprint.js";
-import { createActionEffectSet } from "./CapabilityEffect.js";
-import { createCanonicalEffectivePermissions } from "./CanonicalEffectivePermissions.js";
-import type { CanonicalActionSubject } from "./CanonicalActionSubject.js";
-import { createPreparedExternalAction } from "./PreparedExternalAction.js";
-import { createPreparedActionInvocation } from "./PreparedActionInvocation.js";
-import { createActionDispatchPlan } from "./ActionRevalidation.js";
-import { createActionRegistrationSnapshot } from "./ActionRegistration.js";
+} from "../execution/ActionExecutor.js";
+import { createActionDispatchAuthorization } from "../enforcement/ActionAssessment.js";
+import { createPreparedInvocationDigest } from "../canonical/ActionFingerprint.js";
+import { createActionEffectSet } from "../canonical/CapabilityEffect.js";
+import { createCanonicalEffectivePermissions } from "../canonical/CanonicalEffectivePermissions.js";
+import type { CanonicalActionSubject } from "../canonical/CanonicalActionSubject.js";
+import { createPreparedExternalAction } from "../preparation/PreparedExternalAction.js";
+import { createPreparedActionInvocation } from "../canonical/PreparedActionInvocation.js";
+import { createActionDispatchPlan } from "../enforcement/ActionRevalidation.js";
+import { createActionRegistrationSnapshot } from "../registration/ActionRegistration.js";
 import {
   createSandboxExecutionGateway,
   type CreateSandboxExecutionGatewayInput,

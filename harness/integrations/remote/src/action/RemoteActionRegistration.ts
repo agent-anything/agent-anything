@@ -1,10 +1,14 @@
 import type {
-  ActionAdapterImplementation,
-  ActionExecutor,
-  ActionRegistrationSnapshot,
   CanonicalRemoteServerIdentity,
   SerializableValue,
-} from "@agent-anything/action-execution";
+} from "@agent-anything/action-execution/canonical";
+import type {
+  ActionAdapterImplementation,
+  ActionRegistrationSnapshot,
+} from "@agent-anything/action-execution/registration";
+import type {
+  ActionExecutor,
+} from "@agent-anything/action-execution/execution";
 
 import type {
   ToolAnnotations,

@@ -5,30 +5,30 @@ import {
   type CanonicalAdditionalPermissions,
 } from "@agent-anything/permission";
 import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
-import type { ActionExecutionFailure } from "./ActionExecutionFailure.js";
-import { createActionExecutionFailure } from "./ActionExecutionFailure.js";
-import type { ActionDispatchPlan } from "./ActionRevalidation.js";
-import type { CanonicalPathIdentity } from "./CanonicalIdentity.js";
-import { assertCanonicalActionCoherence } from "./CanonicalActionCoherence.js";
+import type { ActionExecutionFailure } from "../execution/ActionExecutionFailure.js";
+import { createActionExecutionFailure } from "../execution/ActionExecutionFailure.js";
+import type { ActionDispatchPlan } from "../enforcement/ActionRevalidation.js";
+import type { CanonicalPathIdentity } from "../canonical/CanonicalIdentity.js";
+import { assertCanonicalActionCoherence } from "../canonical/CanonicalActionCoherence.js";
 import {
   addCapabilityEffect,
   capabilityEffectKey,
   type CapabilityEffect,
-} from "./CapabilityEffect.js";
-import { createActionFingerprint } from "./ActionFingerprint.js";
+} from "../canonical/CapabilityEffect.js";
+import { createActionFingerprint } from "../canonical/ActionFingerprint.js";
 import {
   createCanonicalActionSubject,
   createPreparedExternalAction,
   snapshotCanonicalAdditionalPermissions,
   type PreparedExternalAction,
-} from "./PreparedExternalAction.js";
+} from "../preparation/PreparedExternalAction.js";
 import type { SandboxDenial } from "./SandboxContracts.js";
 import {
   mergeTargetStateAssertions,
   targetStateAssertionKey,
   type TargetStateAssertion,
   type TargetStateAssertionInput,
-} from "./TargetStateAssertion.js";
+} from "../canonical/TargetStateAssertion.js";
 
 export interface DeriveSandboxEscalationInput {
   readonly prepared: PreparedExternalAction;

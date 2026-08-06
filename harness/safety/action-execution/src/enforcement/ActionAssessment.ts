@@ -16,9 +16,9 @@ import type {
 } from "@agent-anything/permission";
 import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
 import type { ActionRuleOutcome } from "@agent-anything/governance/policy";
-import type { ActionExecutionFailure } from "./ActionExecutionFailure.js";
-import type { CanonicalEffectivePermissions } from "./CanonicalEffectivePermissions.js";
-import type { PreparedExternalAction } from "./PreparedExternalAction.js";
+import type { ActionExecutionFailure } from "../execution/ActionExecutionFailure.js";
+import type { CanonicalEffectivePermissions } from "../canonical/CanonicalEffectivePermissions.js";
+import type { PreparedExternalAction } from "../preparation/PreparedExternalAction.js";
 
 const actionDispatchAuthorizationBrand: unique symbol = Symbol("ActionDispatchAuthorization");
 const actionDispatchAuthorizationInstances = new WeakSet<object>();
