@@ -44,8 +44,52 @@ for (const discovered of discoveredPackages) {
   packageByName.set(info.name, info);
 }
 
+const focusedPublicSubpaths = new Map([
+  [
+    "@agent-anything/action-execution",
+    new Set([
+      "@agent-anything/action-execution/canonical",
+      "@agent-anything/action-execution/enforcement",
+      "@agent-anything/action-execution/execution",
+      "@agent-anything/action-execution/registration",
+      "@agent-anything/action-execution/sandbox",
+    ]),
+  ],
+  [
+    "@agent-anything/context",
+    new Set([
+      "@agent-anything/context/context",
+      "@agent-anything/context/evidence",
+      "@agent-anything/context/persistence",
+    ]),
+  ],
+  [
+    "@agent-anything/host",
+    new Set([
+      "@agent-anything/host/authority",
+      "@agent-anything/host/composition",
+      "@agent-anything/host/context",
+      "@agent-anything/host/projection",
+      "@agent-anything/host/run",
+      "@agent-anything/host/transport",
+    ]),
+  ],
+  [
+    "@agent-anything/mcp",
+    new Set([
+      "@agent-anything/mcp/adapters",
+      "@agent-anything/mcp/lifecycle",
+      "@agent-anything/mcp/primitives",
+      "@agent-anything/mcp/protocol",
+      "@agent-anything/mcp/registration",
+      "@agent-anything/mcp/transport",
+    ]),
+  ],
+]);
+
 const violations = [];
 checkRepositoryTopology();
+checkPhase21Topology();
 for (const root of packageRoots) {
   for (const file of collectSourceFiles(root)) {
     checkFile(file);
@@ -129,14 +173,7 @@ function checkPublicApiImport(file, owner, statement, specifier) {
     "@agent-anything/host",
   ]);
   const packageName = parseWorkspaceSpecifier(specifier).packageName;
-  const mcpPublicSubpaths = new Set([
-    "@agent-anything/mcp/adapters",
-    "@agent-anything/mcp/lifecycle",
-    "@agent-anything/mcp/primitives",
-    "@agent-anything/mcp/protocol",
-    "@agent-anything/mcp/registration",
-    "@agent-anything/mcp/transport",
-  ]);
+  const allowedSubpaths = focusedPublicSubpaths.get(packageName);
 
   if (specifier === "@agent-anything/helarc-code-agent" && owner.name !== packageName) {
     report("capability_root_import", { file, owner, imported: packageName, message: `Must import a focused capability subpath instead of '${specifier}'.` });
@@ -189,17 +226,26 @@ function checkPublicApiImport(file, owner, statement, specifier) {
         `Must import an explicit MCP semantic subpath instead of '${specifier}'.`,
     });
   }
-  if (
-    packageName === "@agent-anything/mcp" &&
-    specifier !== "@agent-anything/mcp" &&
-    !mcpPublicSubpaths.has(specifier)
-  ) {
-    report("mcp_private_import", {
+  if (specifier === "@agent-anything/context") {
+    report("context_root_import", {
       file,
       owner,
       imported: packageName,
       message:
-        `MCP consumers must use one of the six reviewed public subpaths, not '${specifier}'.`,
+        `Must import an explicit Context semantic subpath instead of '${specifier}'.`,
+    });
+  }
+  if (
+    allowedSubpaths !== undefined &&
+    specifier !== packageName &&
+    !allowedSubpaths.has(specifier)
+  ) {
+    report("focused_package_private_import", {
+      file,
+      owner,
+      imported: packageName,
+      message:
+        `Consumers must use a reviewed public subpath of '${packageName}', not '${specifier}'.`,
     });
   }
 }
@@ -481,6 +527,75 @@ function checkRepositoryTopology() {
         file: root,
         message: `Generic repository root '${rootName}' is prohibited.`,
       });
+    }
+  }
+}
+
+function checkPhase21Topology() {
+  const areas = [
+    {
+      packagePath: "harness/safety/action-execution",
+      sourceAreas: [
+        "canonical",
+        "enforcement",
+        "execution",
+        "preparation",
+        "registration",
+        "sandbox",
+      ],
+      forbiddenPaths: ["src/index.ts"],
+    },
+    {
+      packagePath: "harness/context",
+      sourceAreas: ["context", "evidence", "persistence"],
+      forbiddenPaths: ["src/index.ts", "src/observation"],
+    },
+    {
+      packagePath: "harness/host",
+      sourceAreas: [
+        "authority",
+        "composition",
+        "context",
+        "projection",
+        "run",
+        "transport",
+      ],
+      forbiddenPaths: ["src/index.ts", "src/HostRuntime.ts"],
+    },
+    {
+      packagePath: "harness/integrations/mcp",
+      sourceAreas: [
+        "adapters",
+        "lifecycle",
+        "primitives",
+        "protocol",
+        "registration",
+        "transport",
+      ],
+      forbiddenPaths: ["src/index.ts"],
+    },
+  ];
+
+  for (const area of areas) {
+    for (const sourceArea of area.sourceAreas) {
+      const path = join(repoRoot, area.packagePath, "src", sourceArea);
+      if (!exists(path)) {
+        report("phase21_source_area_missing", {
+          file: path,
+          message:
+            `Required Phase 21 source area '${area.packagePath}/src/${sourceArea}' is missing.`,
+        });
+      }
+    }
+    for (const forbiddenPath of area.forbiddenPaths) {
+      const path = join(repoRoot, area.packagePath, forbiddenPath);
+      if (exists(path)) {
+        report("phase21_superseded_source_path", {
+          file: path,
+          message:
+            `Superseded Phase 21 source path '${area.packagePath}/${forbiddenPath}' must not exist.`,
+        });
+      }
     }
   }
 }

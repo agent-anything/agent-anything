@@ -18,6 +18,7 @@ describe("Host public API", () => {
     expectTypeOf<HostIdentityResolver>().toBeObject();
     expectTypeOf<HostSessionAuthorityComposition>().toBeObject();
     expectTypeOf<HostActiveRun>().toBeObject();
+    expectTypeOf<HostActiveRun>().not.toHaveProperty("result");
     expectTypeOf<HostRunManager>().toBeObject();
     expectTypeOf<HostRunProjection>().toBeObject();
     expectTypeOf<HostCommand>().toBeObject();

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -80,6 +80,23 @@ for (const [packagePath, expectedKeys] of Object.entries(packageExportKeys)) {
     Object.keys(manifest.exports ?? {}).sort(),
     expectedKeys,
     `${manifest.name} export keys changed without updating the public API contract`,
+  );
+}
+
+const removedGeneratedPaths = [
+  "harness/context/dist/index.js",
+  "harness/context/dist/observation",
+  "harness/host/dist/index.js",
+  "harness/host/dist/HostRuntime.js",
+  "harness/integrations/mcp/dist/index.js",
+  "harness/safety/action-execution/dist/index.js",
+];
+
+for (const removedPath of removedGeneratedPaths) {
+  assert.equal(
+    existsSync(join(repoRoot, removedPath)),
+    false,
+    `removed generated output remains: ${removedPath}`,
   );
 }
 
