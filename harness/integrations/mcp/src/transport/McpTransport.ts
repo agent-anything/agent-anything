@@ -1,9 +1,9 @@
 
-import type { McpJsonObject } from "./McpJson.js";
+import type { McpJsonObject } from "../protocol/McpJson.js";
 import type {
   McpProtocolRevision,
   McpTransportBindingIdentity,
-} from "./McpRegistration.js";
+} from "../registration/McpRegistration.js";
 
 export interface McpJsonRpcRequest {
   readonly jsonrpc: "2.0";

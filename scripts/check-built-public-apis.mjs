@@ -61,7 +61,14 @@ const packageExportKeys = {
   ],
   "products/helarc/code-agent": [".", "./command", "./filesystem", "./patch", "./workspace"],
   "harness/integrations/remote": [".", "./action", "./tools"],
-  "harness/integrations/mcp": ["."],
+  "harness/integrations/mcp": [
+    "./adapters",
+    "./lifecycle",
+    "./primitives",
+    "./protocol",
+    "./registration",
+    "./transport",
+  ],
   "harness/integrations/plugins": ["."],
   "harness/integrations/enterprise-storage": [".", "./evidence"],
   "products/helarc/product": ["."],
@@ -503,17 +510,26 @@ const expectedRemoteIntegrationValueExports = {
 };
 
 const expectedMcpValueExports = {
-  "@agent-anything/mcp": [
-    "MCP_PROTOCOL_REVISION",
-    "McpActivationError",
-    "McpOperationError",
-    "McpPrimitiveError",
-    "McpProtocolError",
-    "McpRegistrationError",
-    "McpRegistry",
+  "@agent-anything/mcp/adapters": [
     "createMcpActionCapability",
+  ],
+  "@agent-anything/mcp/lifecycle": [
+    "McpActivationError",
+    "McpRegistry",
+  ],
+  "@agent-anything/mcp/primitives": [
+    "McpPrimitiveError",
+  ],
+  "@agent-anything/mcp/protocol": [
+    "McpOperationError",
+    "McpProtocolError",
+  ],
+  "@agent-anything/mcp/registration": [
+    "MCP_PROTOCOL_REVISION",
+    "McpRegistrationError",
     "createMcpServerRegistration",
   ],
+  "@agent-anything/mcp/transport": [],
 };
 
 const expectedPluginValueExports = {
@@ -615,10 +631,15 @@ checkBuiltSurfaces(
 checkBuiltSurfaces(
   expectedMcpValueExports,
   [
+    "@agent-anything/mcp",
     "@agent-anything/mcp/McpConnectionPort",
     "@agent-anything/mcp/McpServerRegistration",
     "@agent-anything/mcp/McpToolOperationPort",
     "@agent-anything/mcp/McpToolRegistration",
+    "@agent-anything/mcp/lifecycle/McpRegistry",
+    "@agent-anything/mcp/primitives/McpPrimitiveCoordinator",
+    "@agent-anything/mcp/protocol/McpPrimitiveProtocol",
+    "@agent-anything/mcp/transport/McpTransportOperations",
   ],
   join(repoRoot, "harness/integrations/mcp"),
 );

@@ -1,9 +1,9 @@
 
-import type { McpDiscoverySnapshot } from "./McpProtocol.js";
+import type { McpDiscoverySnapshot } from "../protocol/McpProtocol.js";
 import type {
   McpProtocolRevision,
   McpTransportBindingIdentity,
-} from "./McpRegistration.js";
+} from "../registration/McpRegistration.js";
 
 export interface McpActivationRef {
   readonly serverId: string;

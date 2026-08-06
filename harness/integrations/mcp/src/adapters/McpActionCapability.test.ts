@@ -1,13 +1,13 @@
 import type { TrustedRemoteActionRegistration } from "@agent-anything/remote-integrations/action";
 import { describe, expect, it } from "vitest";
 import { createMcpActionCapability } from "./createMcpActionCapability.js";
-import { createMcpContractFingerprint } from "./McpJson.js";
-import type { McpActivationSnapshot } from "./McpLifecycle.js";
-import type { McpSourceSnapshot } from "./McpPrimitives.js";
+import { createMcpContractFingerprint } from "../protocol/McpJson.js";
+import type { McpActivationSnapshot } from "../lifecycle/McpLifecycle.js";
+import type { McpSourceSnapshot } from "../primitives/McpPrimitives.js";
 import {
   MCP_JSON_SCHEMA_2020_12,
   MCP_SCHEMA_TRANSLATION_VERSION,
-} from "./McpSchema.js";
+} from "../protocol/McpSchema.js";
 
 const SERVER_FINGERPRINT = `sha256:${"a".repeat(64)}`;
 const TRANSPORT_FINGERPRINT = `sha256:${"b".repeat(64)}`;

@@ -7,7 +7,7 @@ import {
   createMcpServerRegistration,
   MCP_PROTOCOL_REVISION,
   type McpServerRegistrationInput,
-} from "./McpRegistration.js";
+} from "../registration/McpRegistration.js";
 import { McpRegistry } from "./McpRegistry.js";
 import type {
   McpTransportCloseRequest,
@@ -19,7 +19,7 @@ import type {
   McpTransportOperationControl,
   McpTransportRequest,
   McpTransportResponseStream,
-} from "./McpTransport.js";
+} from "../transport/McpTransport.js";
 
 const NOW = "2026-08-03T04:00:00.000Z";
 

@@ -7,14 +7,14 @@ import { createRemoteActionCapability } from "@agent-anything/remote-integration
 import {
   createMcpContractFingerprint,
   snapshotMcpJsonObject,
-} from "./McpJson.js";
+} from "../protocol/McpJson.js";
 import type {
   McpSourceLookup,
   McpSourceResolver,
   McpSourceSnapshot,
   McpToolDescriptor,
-} from "./McpPrimitives.js";
-import type { McpToolOperationPort } from "./McpToolOperationPort.js";
+} from "../primitives/McpPrimitives.js";
+import type { McpToolOperationPort } from "../primitives/McpToolOperationPort.js";
 
 export interface CreateMcpActionCapabilityInput {
   readonly registration: TrustedRemoteActionRegistration;

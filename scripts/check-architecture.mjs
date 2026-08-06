@@ -129,6 +129,14 @@ function checkPublicApiImport(file, owner, statement, specifier) {
     "@agent-anything/host",
   ]);
   const packageName = parseWorkspaceSpecifier(specifier).packageName;
+  const mcpPublicSubpaths = new Set([
+    "@agent-anything/mcp/adapters",
+    "@agent-anything/mcp/lifecycle",
+    "@agent-anything/mcp/primitives",
+    "@agent-anything/mcp/protocol",
+    "@agent-anything/mcp/registration",
+    "@agent-anything/mcp/transport",
+  ]);
 
   if (specifier === "@agent-anything/helarc-code-agent" && owner.name !== packageName) {
     report("capability_root_import", { file, owner, imported: packageName, message: `Must import a focused capability subpath instead of '${specifier}'.` });
@@ -170,6 +178,28 @@ function checkPublicApiImport(file, owner, statement, specifier) {
       imported: packageName,
       message:
         `Must import an explicit Host Interface semantic subpath instead of '${specifier}'.`,
+    });
+  }
+  if (specifier === "@agent-anything/mcp") {
+    report("mcp_root_import", {
+      file,
+      owner,
+      imported: packageName,
+      message:
+        `Must import an explicit MCP semantic subpath instead of '${specifier}'.`,
+    });
+  }
+  if (
+    packageName === "@agent-anything/mcp" &&
+    specifier !== "@agent-anything/mcp" &&
+    !mcpPublicSubpaths.has(specifier)
+  ) {
+    report("mcp_private_import", {
+      file,
+      owner,
+      imported: packageName,
+      message:
+        `MCP consumers must use one of the six reviewed public subpaths, not '${specifier}'.`,
     });
   }
 }

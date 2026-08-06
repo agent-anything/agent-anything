@@ -31,13 +31,13 @@ import type {
   McpSourceLookup,
   McpToolCallOutput,
   McpToolDescriptor,
-} from "./McpPrimitives.js";
+} from "../primitives/McpPrimitives.js";
 import {
   McpOperationError,
   parseMcpOperationCache,
   parseMcpOperationResponse,
 } from "./McpProtocol.js";
-import type { McpTransportKind } from "./McpRegistration.js";
+import type { McpTransportKind } from "../registration/McpRegistration.js";
 import {
   compileMcpSchema,
   type McpCompiledSchema,

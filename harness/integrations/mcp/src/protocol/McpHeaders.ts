@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import type { McpJsonObject } from "./McpJson.js";
-import type { McpTransportKind } from "./McpRegistration.js";
+import type { McpTransportKind } from "../registration/McpRegistration.js";
 
 export type McpHeaderValueType = "string" | "integer" | "boolean";
 

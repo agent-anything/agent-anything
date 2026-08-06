@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { McpOperationError } from "./McpProtocol.js";
-import { McpRegistry } from "./McpRegistry.js";
+import { McpOperationError } from "../protocol/McpProtocol.js";
+import { McpRegistry } from "../lifecycle/McpRegistry.js";
 import {
   MCP_PROTOCOL_REVISION,
   type McpServerRegistration,
-} from "./McpRegistration.js";
+} from "../registration/McpRegistration.js";
 import type {
   McpTransportCloseRequest,
   McpTransportClosure,
@@ -15,7 +15,7 @@ import type {
   McpTransportOperationControl,
   McpTransportRequest,
   McpTransportResponseStream,
-} from "./McpTransport.js";
+} from "../transport/McpTransport.js";
 
 const NOW = "2026-08-03T04:00:00.000Z";
 const SUBSCRIPTION_ID_META_KEY =

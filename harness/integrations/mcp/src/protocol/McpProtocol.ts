@@ -19,8 +19,8 @@ import {
   type McpProtocolRevision,
   type McpServerCapabilityId,
   type McpTransportKind,
-} from "./McpRegistration.js";
-import type { McpTransportRequest } from "./McpTransport.js";
+} from "../registration/McpRegistration.js";
+import type { McpTransportRequest } from "../transport/McpTransport.js";
 
 const PROTOCOL_VERSION_META_KEY =
   "io.modelcontextprotocol/protocolVersion";

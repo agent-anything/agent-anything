@@ -9,7 +9,7 @@ import {
   validateMcpToken,
   validateNonNegativeSafeInteger,
   validatePositiveSafeInteger,
-} from "./McpJson.js";
+} from "../protocol/McpJson.js";
 
 export const MCP_PROTOCOL_REVISION = "2026-07-28" as const;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;

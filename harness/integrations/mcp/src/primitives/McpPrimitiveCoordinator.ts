@@ -1,15 +1,12 @@
 
 import {
   deriveMcpToolParameterHeaders,
-} from "./McpHeaders.js";
+} from "../protocol/McpHeaders.js";
 import {
   createMcpContractFingerprint,
-  type McpJsonObject,
   snapshotMcpJsonObject,
-  validateMcpText,
   validateMcpToken,
-} from "./McpJson.js";
-import type { McpActivationSnapshot } from "./McpLifecycle.js";
+} from "../protocol/McpJson.js";
 import {
   parseMcpPromptGetResult,
   parseMcpPromptsListPage,
@@ -18,13 +15,9 @@ import {
   parseMcpResourceTemplatesListPage,
   parseMcpToolCallResult,
   parseMcpToolsListPage,
-  type McpParsedListPage,
   type McpParsedTool,
-} from "./McpPrimitiveProtocol.js";
+} from "../protocol/McpPrimitiveProtocol.js";
 import type {
-  McpPrimitiveCache,
-  McpPrimitiveDiagnostic,
-  McpPrimitiveInventory,
   McpPromptDescriptor,
   McpPromptGetInput,
   McpPromptGetResult,
@@ -35,7 +28,6 @@ import type {
   McpSourceLookup,
   McpSourceSnapshot,
   McpSubscriptionAcknowledgement,
-  McpSubscriptionEvent,
   McpSubscriptionFilter,
   McpSubscriptionHandle,
   McpToolDescriptor,
@@ -44,57 +36,45 @@ import type {
 } from "./McpPrimitives.js";
 import {
   McpOperationError,
-  parseMcpOperationResponse,
-} from "./McpProtocol.js";
-import type { McpServerRegistration } from "./McpRegistration.js";
+} from "../protocol/McpProtocol.js";
 import type {
   McpToolCallInput,
   McpToolCallResult,
 } from "./McpToolOperationPort.js";
-import type { McpTransportResponseStream } from "./McpTransport.js";
+import type { McpTransportResponseStream } from "../transport/McpTransport.js";
+import {
+  McpPrimitiveInventoryLoader,
+  replaceInventoryItems,
+  requireFreshInventory,
+  sourceSnapshotFresh,
+  unsupportedInventory,
+} from "./McpPrimitiveInventory.js";
+import { McpPrimitiveError } from "./McpPrimitiveError.js";
+import { validateMcpPromptArguments } from "./McpPromptArguments.js";
+import {
+  createMcpResourceCacheKey,
+  getFreshMcpResourceCache,
+  invalidateMcpResourceCache,
+  validateMcpResourceUri,
+} from "./McpResourceCache.js";
+import {
+  isMcpJsonRpcResponse,
+  mcpSubscriptionFilterToJson,
+  mcpSubscriptionInterruption,
+  mcpSubscriptionInvalid,
+  nextMcpSubscriptionMessage,
+  parseMcpSubscriptionCompletion,
+  parseMcpSubscriptionNotification,
+  validateMcpAcknowledgedFilter,
+  validateMcpSubscribedEvent,
+  validateMcpSubscriptionFilter,
+} from "./McpSubscriptionProtocol.js";
+import type {
+  McpPrimitiveCoordinatorDependencies,
+  McpPrimitiveTransportLease,
+} from "./McpPrimitiveTransport.js";
 
-const MAX_LIST_PAGES = 64;
-const MAX_INVENTORY_ITEMS = 4_096;
 const SUBSCRIPTION_ACK_TIMEOUT_MS = 10_000;
-const SUBSCRIPTION_ID_META_KEY =
-  "io.modelcontextprotocol/subscriptionId";
-
-export interface McpPrimitiveTransportLease {
-  readonly registration: McpServerRegistration;
-  readonly activation: McpActivationSnapshot;
-}
-
-export interface McpPrimitiveCoordinatorDependencies {
-  getActiveLease(
-    serverId: string,
-    registrationFingerprint: string,
-  ): McpPrimitiveTransportLease | null;
-  isLeaseCurrent(lease: McpPrimitiveTransportLease): boolean;
-  request(input: {
-    readonly lease: McpPrimitiveTransportLease;
-    readonly requestId: string;
-    readonly method: string;
-    readonly params: McpJsonObject;
-    readonly name?: string;
-    readonly parameterHeaders?: Readonly<Record<string, string>>;
-    readonly sourceEpoch: number | null;
-    readonly signal?: AbortSignal;
-  }): Promise<unknown>;
-  openStream(input: {
-    readonly lease: McpPrimitiveTransportLease;
-    readonly requestId: string;
-    readonly method: "subscriptions/listen";
-    readonly params: McpJsonObject;
-    readonly sourceEpoch: number;
-    readonly signal: AbortSignal;
-  }): Promise<McpTransportResponseStream>;
-  invalidateLease(
-    lease: McpPrimitiveTransportLease,
-    error: McpOperationError,
-  ): void;
-  now(): Date;
-  createId(): string;
-}
 
 interface PublishedRuntime {
   readonly snapshot: McpSourceSnapshot;
@@ -117,36 +97,17 @@ interface SourceRecord {
   readonly subscriptions: Set<AbortController>;
 }
 
-export class McpPrimitiveError extends Error {
-  constructor(
-    readonly code:
-      | "mcp_source_unavailable"
-      | "mcp_source_stale"
-      | "mcp_source_refresh_failed"
-      | "mcp_source_refresh_cancelled"
-      | "mcp_source_refresh_stale"
-      | "mcp_inventory_ambiguous"
-      | "mcp_inventory_limit_exceeded"
-      | "mcp_primitive_not_found"
-      | "mcp_primitive_cache_expired"
-      | "mcp_tool_input_invalid"
-      | "mcp_prompt_arguments_invalid"
-      | "mcp_subscription_invalid"
-      | "mcp_subscription_lost"
-      | "mcp_operation_cancelled"
-      | "mcp_operation_timeout"
-      | "mcp_operation_failed",
-    message: string,
-  ) {
-    super(message);
-    this.name = "McpPrimitiveError";
-  }
-}
-
 export class McpPrimitiveCoordinator {
   private readonly records = new Map<string, SourceRecord>();
+  private readonly inventory: McpPrimitiveInventoryLoader;
 
-  constructor(private readonly dependencies: McpPrimitiveCoordinatorDependencies) {}
+  constructor(private readonly dependencies: McpPrimitiveCoordinatorDependencies) {
+    this.inventory = new McpPrimitiveInventoryLoader({
+      request: dependencies.request,
+      nextId: (subject) => this.nextId(subject),
+      nowIso: () => this.nowIso(),
+    });
+  }
 
   async refresh(input: RefreshMcpSourceInput): Promise<McpSourceSnapshot> {
     const lease = this.requireActiveLease(
@@ -294,9 +255,9 @@ export class McpPrimitiveCoordinator {
       this.nowMs(),
       "Resource",
     );
-    const uri = validateResourceUri(input.uri);
-    const cacheKey = resourceCacheKey(runtime.snapshot, uri);
-    const cached = getFreshResourceCache(
+    const uri = validateMcpResourceUri(input.uri);
+    const cacheKey = createMcpResourceCacheKey(runtime.snapshot, uri);
+    const cached = getFreshMcpResourceCache(
       record.resourceCache,
       cacheKey,
       this.nowMs(),
@@ -351,7 +312,7 @@ export class McpPrimitiveCoordinator {
         `MCP Prompt '${input.name}' is not in the current source snapshot.`,
       );
     }
-    const args = validatePromptArguments(prompt, input.arguments ?? {});
+    const args = validateMcpPromptArguments(prompt, input.arguments ?? {});
     const requestId = this.nextId("Prompt request");
     const response = await this.dependencies.request({
       lease,
@@ -383,7 +344,7 @@ export class McpPrimitiveCoordinator {
     input: StartMcpSubscriptionInput,
   ): Promise<McpSubscriptionHandle> {
     const { record, runtime, lease } = this.requireCurrentRuntime(input.source);
-    const requested = validateSubscriptionFilter(
+    const requested = validateMcpSubscriptionFilter(
       input.filter,
       runtime.snapshot,
     );
@@ -409,7 +370,7 @@ export class McpPrimitiveCoordinator {
         requestId: subscriptionId,
         method: "subscriptions/listen",
         params: Object.freeze({
-          notifications: subscriptionFilterToJson(requested),
+          notifications: mcpSubscriptionFilterToJson(requested),
         }),
         sourceEpoch: input.source.sourceEpoch,
         signal: controller.signal,
@@ -468,7 +429,7 @@ export class McpPrimitiveCoordinator {
       const promptsAdvertised = Object.hasOwn(capabilities, "prompts");
 
       const tools = toolsAdvertised
-        ? await this.loadInventory({
+        ? await this.inventory.load({
             lease,
             sourceEpoch: refreshSourceEpoch,
             method: "tools/list",
@@ -486,7 +447,7 @@ export class McpPrimitiveCoordinator {
           })
         : unsupportedInventory<McpParsedTool>("tools");
       const resources = resourcesAdvertised
-        ? await this.loadInventory({
+        ? await this.inventory.load({
             lease,
             sourceEpoch: refreshSourceEpoch,
             method: "resources/list",
@@ -503,7 +464,7 @@ export class McpPrimitiveCoordinator {
           })
         : unsupportedInventory<McpResourceDescriptor>("resources");
       const resourceTemplates = resourcesAdvertised
-        ? await this.loadInventory({
+        ? await this.inventory.load({
             lease,
             sourceEpoch: refreshSourceEpoch,
             method: "resources/templates/list",
@@ -523,7 +484,7 @@ export class McpPrimitiveCoordinator {
             "resourceTemplates",
           );
       const prompts = promptsAdvertised
-        ? await this.loadInventory({
+        ? await this.inventory.load({
             lease,
             sourceEpoch: refreshSourceEpoch,
             method: "prompts/list",
@@ -613,106 +574,6 @@ export class McpPrimitiveCoordinator {
     }
   }
 
-  private async loadInventory<T, D>(input: {
-    readonly lease: McpPrimitiveTransportLease;
-    readonly sourceEpoch: number | null;
-    readonly method:
-      | "tools/list"
-      | "resources/list"
-      | "resources/templates/list"
-      | "prompts/list";
-    readonly signal: AbortSignal;
-    readonly identity: (item: T) => string;
-    readonly descriptor: (item: T) => D;
-    readonly parser: (
-      response: unknown,
-      requestId: string,
-      receivedAt: string,
-    ) => McpParsedListPage<T>;
-  }): Promise<{
-    readonly inventory: McpPrimitiveInventory<T>;
-    readonly diagnostics: readonly McpPrimitiveDiagnostic[];
-  }> {
-    const items: T[] = [];
-    const diagnostics: McpPrimitiveDiagnostic[] = [];
-    const caches: McpPrimitiveCache[] = [];
-    const cursors = new Set<string>();
-    let cursor: string | null = null;
-    for (let pageIndex = 0; pageIndex < MAX_LIST_PAGES; pageIndex += 1) {
-      const requestId = this.nextId(`${input.method} request`);
-      const response = await this.dependencies.request({
-        lease: input.lease,
-        requestId,
-        method: input.method,
-        params: cursor === null
-          ? Object.freeze({})
-          : Object.freeze({ cursor }),
-        sourceEpoch: input.sourceEpoch,
-        signal: input.signal,
-      });
-      const page = input.parser(response, requestId, this.nowIso());
-      items.push(...page.items);
-      diagnostics.push(...page.diagnostics);
-      caches.push(page.cache);
-      if (items.length > MAX_INVENTORY_ITEMS) {
-        throw new McpPrimitiveError(
-          "mcp_inventory_limit_exceeded",
-          `MCP ${input.method} inventory exceeds the item limit.`,
-        );
-      }
-      if (page.nextCursor === null) break;
-      if (cursors.has(page.nextCursor)) {
-        throw new McpPrimitiveError(
-          "mcp_inventory_ambiguous",
-          `MCP ${input.method} pagination contains a cursor cycle.`,
-        );
-      }
-      cursors.add(page.nextCursor);
-      cursor = page.nextCursor;
-      if (pageIndex === MAX_LIST_PAGES - 1) {
-        throw new McpPrimitiveError(
-          "mcp_inventory_limit_exceeded",
-          `MCP ${input.method} exceeds the page limit.`,
-        );
-      }
-    }
-
-    const identities = new Set<string>();
-    for (const item of items) {
-      const identity = input.identity(item);
-      if (identities.has(identity)) {
-        throw new McpPrimitiveError(
-          "mcp_inventory_ambiguous",
-          `MCP ${input.method} contains duplicate identity '${identity}'.`,
-        );
-      }
-      identities.add(identity);
-    }
-    items.sort((left, right) =>
-      compareStrings(input.identity(left), input.identity(right))
-    );
-    const cache = aggregateCaches(caches);
-    const frozenItems = Object.freeze(items);
-    const fingerprintItems = frozenItems.map(input.descriptor);
-    const inventory: McpPrimitiveInventory<T> = Object.freeze({
-      advertised: true,
-      snapshotId: createMcpContractFingerprint(
-        "agent-anything.mcp-primitive-inventory.v1",
-        Object.freeze({
-          method: input.method,
-          items: fingerprintItems,
-          cache,
-        }),
-      ),
-      items: frozenItems,
-      cache,
-    });
-    return Object.freeze({
-      inventory,
-      diagnostics: Object.freeze(diagnostics),
-    });
-  }
-
   private async consumeSubscription(input: {
     readonly record: SourceRecord;
     readonly runtime: PublishedRuntime;
@@ -740,7 +601,7 @@ export class McpPrimitiveCoordinator {
       while (true) {
         let step: IteratorResult<unknown>;
         try {
-          step = await nextSubscriptionMessage(
+          step = await nextMcpSubscriptionMessage(
             iterator,
             input.controller.signal,
           );
@@ -751,26 +612,26 @@ export class McpPrimitiveCoordinator {
         if (step.done) break;
         const message = step.value;
         this.assertRuntimeCurrent(input.record, input.runtime, input.lease);
-        if (isJsonRpcResponse(message)) {
-          if (!acknowledged) subscriptionInvalid(
+        if (isMcpJsonRpcResponse(message)) {
+          if (!acknowledged) mcpSubscriptionInvalid(
             "MCP subscription closed before acknowledgement.",
           );
-          parseSubscriptionCompletion(message, input.subscriptionId);
+          parseMcpSubscriptionCompletion(message, input.subscriptionId);
           finalResponse = true;
           break;
         }
-        const notification = parseSubscriptionNotification(
+        const notification = parseMcpSubscriptionNotification(
           message,
           input.subscriptionId,
         );
         if (!acknowledged) {
           if (notification.method !==
             "notifications/subscriptions/acknowledged") {
-            subscriptionInvalid(
+            mcpSubscriptionInvalid(
               "MCP subscription must acknowledge before notifications.",
             );
           }
-          accepted = validateAcknowledgedFilter(
+          accepted = validateMcpAcknowledgedFilter(
             notification.params.notifications,
             input.requested,
           );
@@ -784,11 +645,13 @@ export class McpPrimitiveCoordinator {
         }
         if (notification.method ===
           "notifications/subscriptions/acknowledged") {
-          subscriptionInvalid("MCP subscription acknowledged more than once.");
+          mcpSubscriptionInvalid(
+            "MCP subscription acknowledged more than once.",
+          );
         }
-        const event = validateSubscribedEvent(notification, accepted!);
+        const event = validateMcpSubscribedEvent(notification, accepted!);
         if (event.kind === "resource-updated") {
-          invalidateResourceCache(
+          invalidateMcpResourceCache(
             input.record.resourceCache,
             input.source.sourceEpoch,
             event.uri,
@@ -805,7 +668,7 @@ export class McpPrimitiveCoordinator {
       }
       if (input.controller.signal.aborted) {
         if (!acknowledged) {
-          throw subscriptionInterruption(input.controller.signal);
+          throw mcpSubscriptionInterruption(input.controller.signal);
         }
         return;
       }
@@ -950,507 +813,6 @@ export class McpPrimitiveCoordinator {
   }
 }
 
-function unsupportedInventory<T>(
-  identity: string,
-): {
-  readonly inventory: McpPrimitiveInventory<T>;
-  readonly diagnostics: readonly McpPrimitiveDiagnostic[];
-} {
-  const inventory = Object.freeze({
-    advertised: false,
-    snapshotId: createMcpContractFingerprint(
-      "agent-anything.mcp-primitive-inventory.v1",
-      Object.freeze({ identity, advertised: false }),
-    ),
-    items: Object.freeze([]),
-    cache: null,
-  });
-  return Object.freeze({
-    inventory,
-    diagnostics: Object.freeze([]),
-  });
-}
-
-function replaceInventoryItems<T, U>(
-  inventory: McpPrimitiveInventory<T>,
-  items: readonly U[],
-): McpPrimitiveInventory<U> {
-  return Object.freeze({
-    advertised: inventory.advertised,
-    snapshotId: inventory.snapshotId,
-    items: Object.freeze([...items]),
-    cache: inventory.cache,
-  });
-}
-
-function aggregateCaches(
-  caches: readonly McpPrimitiveCache[],
-): McpPrimitiveCache {
-  if (caches.length === 0) {
-    throw new McpPrimitiveError(
-      "mcp_source_refresh_failed",
-      "MCP inventory did not produce cache metadata.",
-    );
-  }
-  const receivedAt = caches[0]!.receivedAt;
-  const receivedAtMs = Date.parse(receivedAt);
-  const expiresAtMs = Math.min(
-    ...caches.map((cache) => Date.parse(cache.expiresAt)),
-  );
-  return Object.freeze({
-    ttlMs: Math.max(0, expiresAtMs - receivedAtMs),
-    scope: caches.some((cache) => cache.scope === "private")
-      ? "private"
-      : "public",
-    receivedAt,
-    expiresAt: new Date(expiresAtMs).toISOString(),
-  });
-}
-
-function requireFreshInventory(
-  inventory: McpPrimitiveInventory<unknown>,
-  nowMs: number,
-  label: string,
-): void {
-  if (!inventory.advertised || inventory.cache === null) {
-    throw new McpPrimitiveError(
-      "mcp_source_unavailable",
-      `MCP ${label} capability is not advertised.`,
-    );
-  }
-  if (Date.parse(inventory.cache.expiresAt) <= nowMs) {
-    throw new McpPrimitiveError(
-      "mcp_primitive_cache_expired",
-      `MCP ${label} inventory cache has expired.`,
-    );
-  }
-}
-
-function sourceSnapshotFresh(
-  snapshot: McpSourceSnapshot,
-  nowMs: number,
-): boolean {
-  if (
-    Date.parse(snapshot.transportActivation.discovery.cache.expiresAt) <= nowMs
-  ) {
-    return false;
-  }
-  return [
-    snapshot.tools,
-    snapshot.resources,
-    snapshot.resourceTemplates,
-    snapshot.prompts,
-  ].every((inventory) =>
-    !inventory.advertised ||
-    (
-      inventory.cache !== null &&
-      Date.parse(inventory.cache.expiresAt) > nowMs
-    )
-  );
-}
-
-function validatePromptArguments(
-  prompt: McpPromptDescriptor,
-  input: Readonly<Record<string, string>>,
-): Readonly<Record<string, string>> {
-  if (
-    input === null ||
-    typeof input !== "object" ||
-    Array.isArray(input) ||
-    Object.getPrototypeOf(input) !== Object.prototype
-  ) {
-    throw new McpPrimitiveError(
-      "mcp_prompt_arguments_invalid",
-      "MCP Prompt arguments must be a plain object.",
-    );
-  }
-  const descriptors = new Map(
-    prompt.arguments.map((argument) => [argument.name, argument]),
-  );
-  const output: Record<string, string> = {};
-  for (const key of Reflect.ownKeys(input)) {
-    if (typeof key !== "string" || !descriptors.has(key)) {
-      throw new McpPrimitiveError(
-        "mcp_prompt_arguments_invalid",
-        "MCP Prompt arguments contain an unknown name.",
-      );
-    }
-    const property = Object.getOwnPropertyDescriptor(input, key);
-    if (
-      property === undefined ||
-      property.get !== undefined ||
-      property.set !== undefined ||
-      !property.enumerable
-    ) {
-      throw new McpPrimitiveError(
-        "mcp_prompt_arguments_invalid",
-        "MCP Prompt arguments must use enumerable data properties.",
-      );
-    }
-    output[key] = validateMcpText(
-      input[key],
-      `prompt.arguments.${key}`,
-      65_536,
-    );
-  }
-  for (const argument of prompt.arguments) {
-    if (argument.required && !Object.hasOwn(output, argument.name)) {
-      throw new McpPrimitiveError(
-        "mcp_prompt_arguments_invalid",
-        `MCP Prompt argument '${argument.name}' is required.`,
-      );
-    }
-  }
-  return Object.freeze(output);
-}
-
-function validateSubscriptionFilter(
-  input: McpSubscriptionFilter,
-  snapshot: McpSourceSnapshot,
-): McpSubscriptionFilter {
-  const capabilities =
-    snapshot.transportActivation.discovery.serverCapabilities.capabilities;
-  const tools = readCapability(capabilities, "tools");
-  const resources = readCapability(capabilities, "resources");
-  const prompts = readCapability(capabilities, "prompts");
-  const accepted: {
-    toolsListChanged?: true;
-    promptsListChanged?: true;
-    resourcesListChanged?: true;
-    resourceSubscriptions?: readonly string[];
-  } = {};
-  if (input.toolsListChanged === true) {
-    requireCapabilityFlag(tools, "listChanged", "toolsListChanged");
-    accepted.toolsListChanged = true;
-  }
-  if (input.promptsListChanged === true) {
-    requireCapabilityFlag(prompts, "listChanged", "promptsListChanged");
-    accepted.promptsListChanged = true;
-  }
-  if (input.resourcesListChanged === true) {
-    requireCapabilityFlag(resources, "listChanged", "resourcesListChanged");
-    accepted.resourcesListChanged = true;
-  }
-  if (input.resourceSubscriptions !== undefined) {
-    requireCapabilityFlag(resources, "subscribe", "resourceSubscriptions");
-    if (
-      !Array.isArray(input.resourceSubscriptions) ||
-      input.resourceSubscriptions.length === 0 ||
-      input.resourceSubscriptions.length > 256
-    ) {
-      subscriptionInvalid(
-        "MCP resource subscription filter must be bounded and non-empty.",
-      );
-    }
-    const values = new Set(
-      input.resourceSubscriptions.map(validateResourceUri),
-    );
-    accepted.resourceSubscriptions = Object.freeze([...values].sort());
-  }
-  if (Object.keys(accepted).length === 0) {
-    subscriptionInvalid("MCP subscription filter cannot be empty.");
-  }
-  return Object.freeze(accepted);
-}
-
-function validateAcknowledgedFilter(
-  input: unknown,
-  requested: McpSubscriptionFilter,
-): McpSubscriptionFilter {
-  const candidate = parseSubscriptionFilter(input);
-  if (
-    candidate.toolsListChanged === true &&
-    requested.toolsListChanged !== true ||
-    candidate.promptsListChanged === true &&
-    requested.promptsListChanged !== true ||
-    candidate.resourcesListChanged === true &&
-    requested.resourcesListChanged !== true
-  ) {
-    subscriptionInvalid(
-      "MCP subscription acknowledgement exceeds the requested filter.",
-    );
-  }
-  const requestedUris = new Set(requested.resourceSubscriptions ?? []);
-  if (
-    candidate.resourceSubscriptions?.some(
-      (uri) => !requestedUris.has(uri),
-    )
-  ) {
-    subscriptionInvalid(
-      "MCP subscription acknowledgement contains an unrequested Resource URI.",
-    );
-  }
-  return candidate;
-}
-
-function parseSubscriptionFilter(input: unknown): McpSubscriptionFilter {
-  const value = snapshotMcpJsonObject(input, "subscription.notifications");
-  const allowed = new Set([
-    "toolsListChanged",
-    "promptsListChanged",
-    "resourcesListChanged",
-    "resourceSubscriptions",
-  ]);
-  for (const key of Object.keys(value)) {
-    if (!allowed.has(key)) {
-      subscriptionInvalid("MCP subscription filter contains an unknown field.");
-    }
-  }
-  const output: {
-    toolsListChanged?: true;
-    promptsListChanged?: true;
-    resourcesListChanged?: true;
-    resourceSubscriptions?: readonly string[];
-  } = {};
-  for (
-    const field of [
-      "toolsListChanged",
-      "promptsListChanged",
-      "resourcesListChanged",
-    ] as const
-  ) {
-    if (value[field] !== undefined) {
-      if (value[field] !== true) {
-        subscriptionInvalid(
-          "MCP acknowledged filter boolean values must be true.",
-        );
-      }
-      output[field] = true;
-    }
-  }
-  if (value.resourceSubscriptions !== undefined) {
-    if (!Array.isArray(value.resourceSubscriptions)) {
-      subscriptionInvalid("MCP acknowledged Resource filter is invalid.");
-    }
-    output.resourceSubscriptions = Object.freeze(
-      value.resourceSubscriptions.map(validateResourceUri).sort(),
-    );
-  }
-  return Object.freeze(output);
-}
-
-function subscriptionFilterToJson(
-  input: McpSubscriptionFilter,
-): McpJsonObject {
-  return Object.freeze({
-    ...(input.toolsListChanged === true
-      ? { toolsListChanged: true }
-      : {}),
-    ...(input.promptsListChanged === true
-      ? { promptsListChanged: true }
-      : {}),
-    ...(input.resourcesListChanged === true
-      ? { resourcesListChanged: true }
-      : {}),
-    ...(input.resourceSubscriptions === undefined
-      ? {}
-      : { resourceSubscriptions: Object.freeze([...input.resourceSubscriptions]) }),
-  });
-}
-
-function readCapability(
-  capabilities: McpJsonObject,
-  name: string,
-): McpJsonObject | null {
-  const value = capabilities[name];
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as McpJsonObject
-    : null;
-}
-
-function requireCapabilityFlag(
-  capability: McpJsonObject | null,
-  flag: string,
-  filterName: string,
-): void {
-  if (capability?.[flag] !== true) {
-    subscriptionInvalid(
-      `MCP server did not advertise support for '${filterName}'.`,
-    );
-  }
-}
-
-function parseSubscriptionNotification(
-  input: unknown,
-  subscriptionId: string,
-): {
-  readonly method: string;
-  readonly params: McpJsonObject;
-} {
-  const message = snapshotMcpJsonObject(input, "subscription.message");
-  if (message.jsonrpc !== "2.0" || typeof message.method !== "string") {
-    subscriptionInvalid("MCP subscription notification is invalid.");
-  }
-  const params: McpJsonObject = message.params === undefined
-    ? Object.freeze({})
-    : snapshotMcpJsonObject(message.params, "subscription.message.params");
-  const meta = snapshotMcpJsonObject(
-    params._meta,
-    "subscription.message.params._meta",
-  );
-  if (meta[SUBSCRIPTION_ID_META_KEY] !== subscriptionId) {
-    subscriptionInvalid("MCP subscription notification is uncorrelated.");
-  }
-  return Object.freeze({ method: message.method, params });
-}
-
-function validateSubscribedEvent(
-  input: {
-    readonly method: string;
-    readonly params: McpJsonObject;
-  },
-  accepted: McpSubscriptionFilter,
-): McpSubscriptionEvent {
-  switch (input.method) {
-    case "notifications/tools/list_changed":
-      if (accepted.toolsListChanged !== true) break;
-      return Object.freeze({ kind: "tools-list-changed" });
-    case "notifications/prompts/list_changed":
-      if (accepted.promptsListChanged !== true) break;
-      return Object.freeze({ kind: "prompts-list-changed" });
-    case "notifications/resources/list_changed":
-      if (accepted.resourcesListChanged !== true) break;
-      return Object.freeze({ kind: "resources-list-changed" });
-    case "notifications/resources/updated": {
-      if (accepted.resourceSubscriptions === undefined) break;
-      const uri = validateResourceUri(input.params.uri);
-      if (!accepted.resourceSubscriptions.includes(uri)) break;
-      return Object.freeze({ kind: "resource-updated", uri });
-    }
-  }
-  return subscriptionInvalid(
-    "MCP subscription delivered an unrequested notification.",
-  );
-}
-
-function parseSubscriptionCompletion(
-  input: unknown,
-  subscriptionId: string,
-): void {
-  const result = parseMcpOperationResponse({
-    response: input,
-    requestId: subscriptionId,
-    operation: "subscriptions/listen",
-  });
-  if (Object.keys(result).some((key) => key !== "_meta")) {
-    subscriptionInvalid("MCP subscription completion result is invalid.");
-  }
-  const meta = snapshotMcpJsonObject(
-    result._meta,
-    "subscription.completion._meta",
-  );
-  if (meta[SUBSCRIPTION_ID_META_KEY] !== subscriptionId) {
-    subscriptionInvalid("MCP subscription completion is uncorrelated.");
-  }
-}
-
-function isJsonRpcResponse(input: unknown): boolean {
-  return input !== null &&
-    typeof input === "object" &&
-    !Array.isArray(input) &&
-    Object.hasOwn(input, "id");
-}
-
-function invalidateResourceCache(
-  cache: Map<string, McpResourceReadResult>,
-  sourceEpoch: number,
-  uri: string,
-): void {
-  const marker = `\u0000resources/read\u0000${uri}\u0000`;
-  for (const key of cache.keys()) {
-    if (key.startsWith(`${sourceEpoch}\u0000`) && key.includes(marker)) {
-      cache.delete(key);
-    }
-  }
-}
-
-function resourceCacheKey(
-  source: McpSourceSnapshot,
-  uri: string,
-): string {
-  return [
-    source.sourceEpoch,
-    source.registrationFingerprint,
-    source.authorityBindingId,
-    "resources/read",
-    uri,
-  ].join("\u0000");
-}
-
-function getFreshResourceCache(
-  cache: Map<string, McpResourceReadResult>,
-  key: string,
-  nowMs: number,
-): McpResourceReadResult | null {
-  for (const scope of ["private", "public"] as const) {
-    const scopedKey = `${key}\u0000${scope}`;
-    const candidate = cache.get(scopedKey);
-    if (candidate === undefined) continue;
-    if (Date.parse(candidate.cache.expiresAt) > nowMs) return candidate;
-    cache.delete(scopedKey);
-  }
-  return null;
-}
-
-function validateResourceUri(input: unknown): string {
-  if (
-    typeof input !== "string" ||
-    input.length === 0 ||
-    input.length > 8_192 ||
-    /[\u0000-\u001f\u007f]/.test(input)
-  ) {
-    throw new McpPrimitiveError(
-      "mcp_primitive_not_found",
-      "MCP Resource URI is invalid.",
-    );
-  }
-  try {
-    new URL(input);
-  } catch {
-    throw new McpPrimitiveError(
-      "mcp_primitive_not_found",
-      "MCP Resource URI must be absolute.",
-    );
-  }
-  return input;
-}
-
-function subscriptionInvalid(message: string): never {
-  throw new McpPrimitiveError("mcp_subscription_invalid", message);
-}
-
-function subscriptionInterruption(signal: AbortSignal): Error {
-  return signal.reason instanceof McpPrimitiveError
-    ? signal.reason
-    : new McpPrimitiveError(
-      "mcp_operation_cancelled",
-      "MCP subscription was cancelled before acknowledgement.",
-    );
-}
-
-async function nextSubscriptionMessage(
-  iterator: AsyncIterator<unknown>,
-  signal: AbortSignal,
-): Promise<IteratorResult<unknown>> {
-  if (signal.aborted) throw subscriptionInterruption(signal);
-  return new Promise<IteratorResult<unknown>>((resolve, reject) => {
-    let settled = false;
-    const settle = (callback: () => void) => {
-      if (settled) return;
-      settled = true;
-      signal.removeEventListener("abort", onAbort);
-      callback();
-    };
-    const onAbort = () =>
-      settle(() => reject(subscriptionInterruption(signal)));
-    signal.addEventListener("abort", onAbort, { once: true });
-    Promise.resolve(iterator.next()).then(
-      (value) => settle(() => resolve(value)),
-      (error) => settle(() => reject(error)),
-    );
-  });
-}
-
 function linkAbortSignal(
   source: AbortSignal | undefined,
   target: AbortController,
@@ -1463,8 +825,4 @@ function linkAbortSignal(
   }
   source.addEventListener("abort", abort, { once: true });
   return () => source.removeEventListener("abort", abort);
-}
-
-function compareStrings(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }

@@ -4,13 +4,13 @@ import type {
   ToolJsonObject,
   ToolSchemaIdentity,
 } from "@agent-anything/tools";
-import type { McpToolHeaderBinding } from "./McpHeaders.js";
+import type { McpToolHeaderBinding } from "../protocol/McpHeaders.js";
 import type {
   McpJsonObject,
   McpJsonValue,
-} from "./McpJson.js";
-import type { McpActivationSnapshot } from "./McpLifecycle.js";
-import type { McpCacheScope } from "./McpProtocol.js";
+} from "../protocol/McpJson.js";
+import type { McpActivationSnapshot } from "../lifecycle/McpLifecycle.js";
+import type { McpCacheScope } from "../protocol/McpProtocol.js";
 
 export type McpPrimitiveKind =
   | "tool"
