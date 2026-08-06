@@ -1,16 +1,22 @@
 import { describe, expect, it } from "vitest";
 import type {
   PluginAdmissionInput,
+} from "../admission/index.js";
+import { PluginAdmissionValidationError } from "../admission/index.js";
+import type {
   PluginContributionActivationPort,
-  PluginManifestInput,
   PluginOwnerActivationRequest,
   PluginOwnerActivationResult,
   PluginOwnerDeactivationRequest,
   PluginOwnerDeactivationResult,
+} from "../activation/index.js";
+import type {
+  PluginManifestInput,
+} from "../manifest/index.js";
+import type {
   PluginRecordSnapshot,
 } from "./index.js";
 import {
-  PluginAdmissionValidationError,
   PluginRegistry,
   PluginRegistryError,
 } from "./index.js";

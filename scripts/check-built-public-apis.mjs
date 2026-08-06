@@ -72,7 +72,7 @@ const packageExportKeys = {
     "./tools",
     "./workspace",
   ],
-  "harness/integrations/remote": [".", "./action", "./tools"],
+  "harness/integrations/remote": ["./action", "./tools"],
   "harness/integrations/mcp": [
     "./adapters",
     "./lifecycle",
@@ -81,8 +81,13 @@ const packageExportKeys = {
     "./registration",
     "./transport",
   ],
-  "harness/integrations/plugins": ["."],
-  "harness/integrations/enterprise-storage": [".", "./evidence"],
+  "harness/integrations/plugins": [
+    "./activation",
+    "./admission",
+    "./lifecycle",
+    "./manifest",
+  ],
+  "harness/integrations/enterprise-storage": ["./evidence"],
   "products/helarc/product": [
     ".",
     "./composition",
@@ -106,7 +111,10 @@ const removedGeneratedPaths = [
   "harness/context/dist/observation",
   "harness/host/dist/index.js",
   "harness/host/dist/HostRuntime.js",
+  "harness/integrations/enterprise-storage/dist/index.js",
   "harness/integrations/mcp/dist/index.js",
+  "harness/integrations/plugins/dist/index.js",
+  "harness/integrations/remote/dist/index.js",
   "harness/safety/action-execution/dist/index.js",
   "products/helarc/code-agent/dist/index.js",
   "products/helarc/code-agent/dist/command-actions",
@@ -572,10 +580,6 @@ const expectedValueExports = {
 };
 
 const expectedRemoteIntegrationValueExports = {
-  "@agent-anything/remote-integrations": [
-    "createRemoteActionCapability",
-    "createRemoteToolActionCapability",
-  ],
   "@agent-anything/remote-integrations/action": ["createRemoteActionCapability"],
   "@agent-anything/remote-integrations/tools": ["createRemoteToolActionCapability"],
 };
@@ -604,30 +608,32 @@ const expectedMcpValueExports = {
 };
 
 const expectedPluginValueExports = {
-  "@agent-anything/plugins": [
+  "@agent-anything/plugins/activation": [
     "PluginActivationContractError",
-    "PluginAdmissionValidationError",
-    "PluginManifestValidationError",
-    "PluginRegistry",
-    "PluginRegistryError",
-    "createPluginAdmissionSnapshot",
     "createPluginContributionSourceRef",
-    "createPluginManifestSnapshot",
     "createPluginOwnerActivationRequest",
     "createPluginOwnerDeactivationRequest",
-    "findPluginContributionAdmission",
     "settlePluginOwnerActivationResult",
     "settlePluginOwnerDeactivationResult",
+  ],
+  "@agent-anything/plugins/admission": [
+    "PluginAdmissionValidationError",
+    "createPluginAdmissionSnapshot",
+    "findPluginContributionAdmission",
+  ],
+  "@agent-anything/plugins/lifecycle": [
+    "PluginRegistry",
+    "PluginRegistryError",
+  ],
+  "@agent-anything/plugins/manifest": [
+    "PluginManifestValidationError",
+    "createPluginManifestSnapshot",
     "snapshotPluginManifestEnvironment",
     "validatePluginManifest",
   ],
 };
 
 const expectedEnterpriseStorageValueExports = {
-  "@agent-anything/enterprise-storage": [
-    "EnterpriseEvidencePersistenceAdapter",
-    "createEnterpriseEvidencePersistenceAdapter",
-  ],
   "@agent-anything/enterprise-storage/evidence": [
     "EnterpriseEvidencePersistenceAdapter",
     "createEnterpriseEvidencePersistenceAdapter",
@@ -700,6 +706,7 @@ checkBuiltSurfaces(
 checkBuiltSurfaces(
   expectedRemoteIntegrationValueExports,
   [
+    "@agent-anything/remote-integrations",
     "@agent-anything/extensions",
     "@agent-anything/extensions/action-registrations",
     "@agent-anything/extensions/enterprise-storage",
@@ -727,12 +734,20 @@ checkBuiltSurfaces(
 );
 checkBuiltSurfaces(
   expectedPluginValueExports,
-  [],
+  [
+    "@agent-anything/plugins",
+    "@agent-anything/plugins/PluginActivation",
+    "@agent-anything/plugins/PluginAdmission",
+    "@agent-anything/plugins/PluginData",
+    "@agent-anything/plugins/PluginManifest",
+    "@agent-anything/plugins/PluginRegistry",
+  ],
   join(repoRoot, "harness/integrations/plugins"),
 );
 checkBuiltSurfaces(
   expectedEnterpriseStorageValueExports,
   [
+    "@agent-anything/enterprise-storage",
     "@agent-anything/enterprise-storage/EnterpriseStoragePort",
   ],
   join(repoRoot, "harness/integrations/enterprise-storage"),

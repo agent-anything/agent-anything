@@ -9,13 +9,13 @@ import {
   validatePluginText,
   validatePluginToken,
   validateSha256Fingerprint,
-} from "./PluginData.js";
+} from "../manifest/PluginData.js";
 import {
   contributionIdentityKey,
   findPluginContribution,
   type PluginContributionKind,
-} from "./PluginContribution.js";
-import type { PluginManifestSnapshot } from "./PluginManifest.js";
+} from "../manifest/PluginContribution.js";
+import type { PluginManifestSnapshot } from "../manifest/PluginManifest.js";
 
 export interface PluginManagedPolicyTrustInput {
   readonly configurationId: string;

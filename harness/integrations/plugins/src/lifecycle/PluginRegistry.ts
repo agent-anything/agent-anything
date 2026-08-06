@@ -5,7 +5,7 @@ import {
   createPluginAdmissionSnapshot,
   type PluginAdmissionInput,
   type PluginAdmissionSnapshot,
-} from "./PluginAdmission.js";
+} from "../admission/PluginAdmission.js";
 import {
   createPluginOwnerActivationRequest,
   createPluginOwnerDeactivationRequest,
@@ -19,7 +19,7 @@ import {
   type PluginContributionActivationPort,
   type PluginOwnerActivationReceipt,
   type PluginOwnerDeactivatedResult,
-} from "./PluginActivation.js";
+} from "../activation/PluginActivation.js";
 import {
   assertExactDataProperties,
   assertPlainRecord,
@@ -27,7 +27,7 @@ import {
   validatePluginToken,
   validatePositiveSafeInteger,
   validateSha256Fingerprint,
-} from "./PluginData.js";
+} from "../manifest/PluginData.js";
 import {
   createPluginManifestSnapshot,
   snapshotPluginManifestEnvironment,
@@ -37,7 +37,7 @@ import {
   type PluginManifestInput,
   type PluginManifestSnapshot,
   type PluginManifestValidationResult,
-} from "./PluginManifest.js";
+} from "../manifest/PluginManifest.js";
 import {
   PluginRegistryError,
   type PluginRegistryErrorCode,

@@ -2,7 +2,7 @@
 import type {
   PluginContributionAdmission,
   PluginAdmissionSnapshot,
-} from "./PluginAdmission.js";
+} from "../admission/PluginAdmission.js";
 import {
   assertCanonicalDataArray,
   assertExactDataProperties,
@@ -14,14 +14,14 @@ import {
   validatePluginToken,
   validatePositiveSafeInteger,
   validateSha256Fingerprint,
-} from "./PluginData.js";
+} from "../manifest/PluginData.js";
 import {
   contributionIdentityKey,
   findPluginContribution,
   type PluginContributionDescriptor,
   type PluginContributionKind,
-} from "./PluginContribution.js";
-import type { PluginManifestSnapshot } from "./PluginManifest.js";
+} from "../manifest/PluginContribution.js";
+import type { PluginManifestSnapshot } from "../manifest/PluginManifest.js";
 
 export interface PluginContributionSourceRef {
   readonly kind: "plugin";

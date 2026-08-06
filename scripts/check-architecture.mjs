@@ -86,6 +86,28 @@ const focusedPublicSubpaths = new Map([
     ]),
   ],
   [
+    "@agent-anything/plugins",
+    new Set([
+      "@agent-anything/plugins/activation",
+      "@agent-anything/plugins/admission",
+      "@agent-anything/plugins/lifecycle",
+      "@agent-anything/plugins/manifest",
+    ]),
+  ],
+  [
+    "@agent-anything/remote-integrations",
+    new Set([
+      "@agent-anything/remote-integrations/action",
+      "@agent-anything/remote-integrations/tools",
+    ]),
+  ],
+  [
+    "@agent-anything/enterprise-storage",
+    new Set([
+      "@agent-anything/enterprise-storage/evidence",
+    ]),
+  ],
+  [
     "@agent-anything/helarc",
     new Set([
       "@agent-anything/helarc",
@@ -116,6 +138,7 @@ const focusedPublicSubpaths = new Map([
 const violations = [];
 checkRepositoryTopology();
 checkPhase21Topology();
+checkPhase22Topology();
 for (const root of packageRoots) {
   for (const file of collectSourceFiles(root)) {
     checkFile(file);
@@ -250,6 +273,19 @@ function checkPublicApiImport(file, owner, statement, specifier) {
       imported: packageName,
       message:
         `Must import an explicit MCP semantic subpath instead of '${specifier}'.`,
+    });
+  }
+  if (
+    specifier === "@agent-anything/plugins" ||
+    specifier === "@agent-anything/remote-integrations" ||
+    specifier === "@agent-anything/enterprise-storage"
+  ) {
+    report("integration_root_import", {
+      file,
+      owner,
+      imported: packageName,
+      message:
+        `Must import an explicit Integration responsibility subpath instead of '${specifier}'.`,
     });
   }
   if (specifier === "@agent-anything/context") {
@@ -620,6 +656,58 @@ function checkPhase21Topology() {
           file: path,
           message:
             `Superseded Phase 21 source path '${area.packagePath}/${forbiddenPath}' must not exist.`,
+        });
+      }
+    }
+  }
+}
+
+function checkPhase22Topology() {
+  const areas = [
+    {
+      packagePath: "harness/integrations/plugins",
+      sourceAreas: ["activation", "admission", "lifecycle", "manifest"],
+      forbiddenPaths: [
+        "src/index.ts",
+        "src/PluginActivation.ts",
+        "src/PluginAdmission.ts",
+        "src/PluginContribution.ts",
+        "src/PluginData.ts",
+        "src/PluginManifest.ts",
+        "src/PluginRegistry.ts",
+        "src/PluginRegistryError.ts",
+      ],
+    },
+    {
+      packagePath: "harness/integrations/remote",
+      sourceAreas: ["action", "tools"],
+      forbiddenPaths: ["src/index.ts"],
+    },
+    {
+      packagePath: "harness/integrations/enterprise-storage",
+      sourceAreas: ["evidence"],
+      forbiddenPaths: ["src/index.ts"],
+    },
+  ];
+
+  for (const area of areas) {
+    for (const sourceArea of area.sourceAreas) {
+      const path = join(repoRoot, area.packagePath, "src", sourceArea);
+      if (!exists(path)) {
+        report("phase22_source_area_missing", {
+          file: path,
+          message:
+            `Required Phase 22 source area '${area.packagePath}/src/${sourceArea}' is missing.`,
+        });
+      }
+    }
+    for (const forbiddenPath of area.forbiddenPaths) {
+      const path = join(repoRoot, area.packagePath, forbiddenPath);
+      if (exists(path)) {
+        report("phase22_superseded_source_path", {
+          file: path,
+          message:
+            `Superseded Phase 22 source path '${area.packagePath}/${forbiddenPath}' must not exist.`,
         });
       }
     }
