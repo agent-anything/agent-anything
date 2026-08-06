@@ -3,7 +3,7 @@ import {
   type HelarcProviderKind,
   type HelarcProviderProfile,
   type HelarcProviderProfileError,
-} from "@agent-anything/helarc";
+} from "@agent-anything/helarc/configuration";
 import {
   SerializedAtomicFile,
   type AtomicFileTransaction,

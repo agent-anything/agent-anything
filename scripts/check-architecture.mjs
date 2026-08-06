@@ -85,6 +85,32 @@ const focusedPublicSubpaths = new Map([
       "@agent-anything/mcp/transport",
     ]),
   ],
+  [
+    "@agent-anything/helarc",
+    new Set([
+      "@agent-anything/helarc",
+      "@agent-anything/helarc/configuration",
+      "@agent-anything/helarc/work-context",
+      "@agent-anything/helarc/run",
+      "@agent-anything/helarc/composition",
+    ]),
+  ],
+  [
+    "@agent-anything/helarc-code-agent",
+    new Set([
+      "@agent-anything/helarc-code-agent/task",
+      "@agent-anything/helarc-code-agent/controller",
+      "@agent-anything/helarc-code-agent/prompt",
+      "@agent-anything/helarc-code-agent/tools",
+      "@agent-anything/helarc-code-agent/task-templates",
+      "@agent-anything/helarc-code-agent/workspace",
+      "@agent-anything/helarc-code-agent/filesystem",
+      "@agent-anything/helarc-code-agent/file-actions",
+      "@agent-anything/helarc-code-agent/command",
+      "@agent-anything/helarc-code-agent/patch",
+      "@agent-anything/helarc-code-agent/observability",
+    ]),
+  ],
 ]);
 
 const violations = [];

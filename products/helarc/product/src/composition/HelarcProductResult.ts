@@ -7,10 +7,9 @@ import type {
 } from "@agent-anything/action-execution/sandbox";
 import { projectRuntimeEventForHost } from "@agent-anything/host/projection";
 import { CODE_AGENT_RUN_COMMAND_ACTION } from "@agent-anything/helarc-code-agent/command";
-
-import type { HelarcAgentOutput } from "../controller/HelarcController.js";
-import type { HelarcPatchOutcome } from "../patch/HelarcPatchActionController.js";
-import type { HelarcControllerTraceProjection } from "../run/HelarcControllerTraceProjection.js";
+import type { HelarcAgentOutput } from "@agent-anything/helarc-code-agent/controller";
+import type { HelarcPatchOutcome } from "@agent-anything/helarc-code-agent/patch";
+import type { HelarcControllerTraceProjection } from "@agent-anything/helarc-code-agent/observability";
 
 export type HelarcProductStatus =
   | "completed"
@@ -74,7 +73,9 @@ export function projectHelarcProductResult(
   }
 
   return Object.freeze({
-    status: patchOutcome?.productStatus ?? mapRunStatus(runResult.status),
+    status: patchOutcome === null
+      ? mapRunStatus(runResult.status)
+      : mapPatchOutcomeStatus(patchOutcome.status),
     output: Object.freeze({
       taskId: task.id,
       workspaceId: workspace.primary.id,
@@ -86,6 +87,12 @@ export function projectHelarcProductResult(
       safeErrors: Object.freeze(safeErrors.map((error) => Object.freeze({ ...error }))),
     }),
   });
+}
+
+function mapPatchOutcomeStatus(
+  status: HelarcPatchOutcome["status"],
+): HelarcProductStatus {
+  return status;
 }
 
 export function mapRuntimeEventToHelarcActivity(

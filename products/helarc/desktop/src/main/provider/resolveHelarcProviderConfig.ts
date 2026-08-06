@@ -1,4 +1,4 @@
-import { createHelarcProviderProfile, type HelarcProviderKind, type HelarcProviderProfile } from "@agent-anything/helarc";
+import { createHelarcProviderProfile, type HelarcProviderKind, type HelarcProviderProfile } from "@agent-anything/helarc/configuration";
 
 export interface HelarcProviderConfig {
   providerKind: HelarcProviderKind;

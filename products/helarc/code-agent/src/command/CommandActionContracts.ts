@@ -14,7 +14,7 @@ import type {
   CodeAgentCommandLimits,
   ProcessTerminationLimits,
   RunCommandOutput,
-} from "../process/ProcessContracts.js";
+} from "./ProcessContracts.js";
 
 export const CODE_AGENT_RUN_COMMAND_ACTION = "codeAgent.runCommand";
 

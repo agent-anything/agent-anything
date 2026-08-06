@@ -11,27 +11,33 @@ import type {
   SandboxEnforcement,
 } from "@agent-anything/action-execution/sandbox";
 import type { CodeAgentCommandLimits } from "@agent-anything/helarc-code-agent/command";
-import type { Provider } from "@agent-anything/model-interaction";
 import {
   buildHelarcProviderRequest,
   HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
   parseHelarcProviderResponse,
   type HelarcAgentOutput,
   type HelarcChangeIntent,
-} from "../controller/HelarcController.js";
-import { HELARC_ACTION_CONTRACT_VERSION } from "../controller/HelarcPromptAssembly.js";
+} from "@agent-anything/helarc-code-agent/controller";
+import { HELARC_ACTION_CONTRACT_VERSION } from "@agent-anything/helarc-code-agent/prompt";
 import {
   createHelarcToolCatalogMetadata,
   HELARC_TOOL_CATALOG_METADATA_KEY,
-} from "../controller/HelarcToolCatalog.js";
+} from "@agent-anything/helarc-code-agent/tools";
 import {
   HelarcTracingController,
   projectHelarcControllerTraceForEvent,
   type HelarcControllerTraceProjection,
-} from "../run/HelarcControllerTraceProjection.js";
-import { HelarcPatchActionController } from "../patch/HelarcPatchActionController.js";
-import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
-import type { HelarcPatchReviewBridge } from "./HelarcPatchReview.js";
+} from "@agent-anything/helarc-code-agent/observability";
+import {
+  HelarcPatchActionController,
+  type HelarcPatchActionState,
+} from "@agent-anything/helarc-code-agent/patch";
+import type { HelarcTaskInput } from "@agent-anything/helarc-code-agent/task";
+import type { Provider } from "@agent-anything/model-interaction";
+import type {
+  HelarcPatchReviewBridge,
+  HelarcProductPhase,
+} from "./HelarcPatchReview.js";
 import { createHelarcActionComposition } from "./HelarcActionComposition.js";
 import {
   projectHelarcProductResult,
@@ -134,9 +140,12 @@ export async function createHelarcProductComposition(
   );
   const patchController = new HelarcPatchActionController({
     controller: providerController,
-    patchReviewBridge: input.patchReviewBridge,
-    onPhaseChanged: (phase) => {
-      publishProductUpdate({ kind: "phase_changed", phase });
+    patchReviewPort: input.patchReviewBridge,
+    onStateChanged: (state) => {
+      const phase = productPhaseForPatchState(state);
+      if (phase !== null) {
+        publishProductUpdate({ kind: "phase_changed", phase });
+      }
     },
     now: input.now,
   });
@@ -212,6 +221,24 @@ function createHelarcRetryClock(
   return now === undefined
     ? systemRetryClock
     : Object.freeze({ now: () => new Date(now()) });
+}
+
+function productPhaseForPatchState(
+  state: HelarcPatchActionState,
+): HelarcProductPhase | null {
+  if (state.kind === "reviewing") {
+    return null;
+  }
+  if (state.kind === "none") {
+    return Object.freeze({ kind: "none" });
+  }
+  return Object.freeze({
+    kind: "patch_action_submitted",
+    runId: state.runId,
+    proposalId: state.proposalId,
+    reviewId: state.reviewId,
+    pendingVersion: state.pendingVersion,
+  });
 }
 
 function createHelarcAgent(): Agent<HelarcAgentOutput> {

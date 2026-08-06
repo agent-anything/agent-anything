@@ -6,7 +6,7 @@ import type {
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
 import { createFailedRunResult } from "@agent-anything/agent-runtime/run";
 import { describe, expect, it } from "vitest";
-import { createHelarcTask } from "../task/index.js";
+import { createHelarcTask } from "@agent-anything/helarc-code-agent/task";
 import { createHelarcProductComposition } from "./HelarcProductComposition.js";
 
 describe("HelarcProductComposition", () => {

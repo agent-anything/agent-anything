@@ -46,9 +46,9 @@ import {
   CODE_AGENT_UPDATE_FILE_ACTION,
   type CodeAgentFileActionName,
   createAcceptedPatchFileAction,
-  createCodeAgentCanonicalWorkspaceRoots,
   createCodeAgentFileActionCapability,
 } from "./index.js";
+import { createCodeAgentCanonicalWorkspaceRoots } from "../filesystem/index.js";
 
 const NOW = "2026-07-16T00:00:00.000Z";
 

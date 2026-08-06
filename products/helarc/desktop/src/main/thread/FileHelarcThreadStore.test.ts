@@ -2,7 +2,7 @@ import type {
   HelarcRunProgressCommit,
   HelarcRunStartCommit,
   HelarcRunTerminalCommit,
-} from "@agent-anything/helarc";
+} from "@agent-anything/helarc/work-context";
 import {
   mkdtemp,
   readFile,

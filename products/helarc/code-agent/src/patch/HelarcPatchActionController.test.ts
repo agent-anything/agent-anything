@@ -4,18 +4,18 @@ import {
   createRunCancellationController,
   type RunObservation,
 } from "@agent-anything/agent-runtime/run";
-import type {
-  HelarcPatchReviewBridge,
-  HelarcPatchReviewDecisionSubmission,
-  HelarcPatchReviewRequest,
-} from "../composition/HelarcPatchReview.js";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { HelarcAgentOutput } from "../controller/index.js";
 import { createHelarcTask } from "../task/index.js";
-import { HelarcPatchActionController } from "./HelarcPatchActionController.js";
+import {
+  HelarcPatchActionController,
+  type HelarcPatchReviewDecision,
+  type HelarcPatchReviewPort,
+} from "./HelarcPatchActionController.js";
+import type { MaterializedPatchReview } from "./PatchWorkflow.js";
 
 const roots: string[] = [];
 
@@ -36,8 +36,8 @@ describe("HelarcPatchActionController", () => {
       kind: "actions",
       actions: [{ name: "codeAgent.updateFile" }],
     });
-    expect(controller.getProductPhase()).toMatchObject({
-      kind: "patch_action_submitted",
+    expect(controller.getPatchState()).toMatchObject({
+      kind: "action_submitted",
       runId: "run-1",
       pendingVersion: 1,
     });
@@ -47,9 +47,9 @@ describe("HelarcPatchActionController", () => {
       createCallContext(),
     );
     expect(settled.kind).toBe("final_output");
-    expect(controller.getProductPhase()).toEqual({ kind: "none" });
+    expect(controller.getPatchState()).toEqual({ kind: "none" });
     expect(controller.getPatchOutcome()).toMatchObject({
-      productStatus: "failed",
+      status: "failed",
       patchStatus: "failed",
       appliedPath: null,
       errors: [{ code: "permission_denied" }],
@@ -67,7 +67,7 @@ describe("HelarcPatchActionController", () => {
     );
 
     expect(controller.getPatchOutcome()).toMatchObject({
-      productStatus: "failed",
+      status: "failed",
       patchStatus: "failed",
       appliedPath: null,
       errors: [{ code: "filesystem_write_failed", message: "Write failed." }],
@@ -78,7 +78,7 @@ describe("HelarcPatchActionController", () => {
 function createController(): HelarcPatchActionController {
   return new HelarcPatchActionController({
     controller: new ProposalController(),
-    patchReviewBridge: new AcceptingReviewBridge(),
+    patchReviewPort: new AcceptingReviewPort(),
     now: () => "2026-07-17T00:00:00.000Z",
   });
 }
@@ -102,19 +102,9 @@ class ProposalController implements Controller<HelarcAgentOutput> {
   }
 }
 
-class AcceptingReviewBridge implements HelarcPatchReviewBridge {
-  readonly runId = "run-1";
-
-  getPendingProjection() {
-    return null;
-  }
-
-  subscribe() {
-    return () => undefined;
-  }
-
-  async review(request: HelarcPatchReviewRequest) {
-    const submission: HelarcPatchReviewDecisionSubmission = {
+class AcceptingReviewPort implements HelarcPatchReviewPort {
+  async review(request: MaterializedPatchReview) {
+    const submission: HelarcPatchReviewDecision = {
       submissionId: "submission-1",
       runId: request.runId,
       proposalId: request.proposalId,
@@ -124,14 +114,6 @@ class AcceptingReviewBridge implements HelarcPatchReviewBridge {
       reason: "Accept in product test.",
     };
     return { status: "decided" as const, submission };
-  }
-
-  submitDecision() {
-    return {
-      status: "rejected" as const,
-      submissionId: "",
-      code: "patch_review_not_pending" as const,
-    };
   }
 }
 

@@ -8,7 +8,7 @@ import {
   type HelarcRunTerminalCommit,
   type HelarcThreadAggregate,
   type HelarcThreadRecord,
-} from "@agent-anything/helarc";
+} from "@agent-anything/helarc/work-context";
 import {
   createHelarcThreadSummary,
   sortHelarcThreadRecords,

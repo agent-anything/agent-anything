@@ -8,7 +8,7 @@ import {
 import type {
   HelarcThreadWorkspaceContext,
   HelarcThreadWorkspaceRef,
-} from "@agent-anything/helarc";
+} from "@agent-anything/helarc/work-context";
 import type { RunWorkspace, WorkspaceContext } from "@agent-anything/agent-core/run";
 import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, normalize } from "node:path";

@@ -24,8 +24,8 @@ import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   createHelarcActionComposition,
-  createHelarcTask,
-} from "@agent-anything/helarc";
+} from "@agent-anything/helarc/composition";
+import { createHelarcTask } from "@agent-anything/helarc-code-agent/task";
 import {
   prepareHelarcHostRun,
   type PrepareHelarcHostRunInput,

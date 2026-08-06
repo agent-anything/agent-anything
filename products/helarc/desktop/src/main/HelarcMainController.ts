@@ -15,29 +15,20 @@ import type {
 } from "@agent-anything/host/projection";
 import {
   createHelarcProviderProfile,
+  type HelarcProviderProfile,
+  type HelarcWorkspaceProfile,
+} from "@agent-anything/helarc/configuration";
+import {
   createHelarcConversation,
   createHelarcMessage,
   createHelarcArtifact,
   createHelarcPersistedRun,
   createHelarcThread,
-  createBuiltInHelarcTaskTemplates,
-  createHelarcRunProjection,
   deriveHelarcPersistedRunStatus,
   projectHelarcRunWorkspaceContext,
-  reduceHelarcRunProjection,
-  type HelarcPatchReviewDecisionSubmission,
-  type HelarcPendingPatchReviewProjection,
-  type HelarcProviderProfile,
-  type HelarcRunProjection,
-  type HelarcRunProjectionUpdate,
-  type HelarcProductResult,
   type HelarcRunProgressCommit,
-  type HelarcRunPermissionPreset,
-  type HelarcRunProviderRef,
   type HelarcRunStartCommit,
   type HelarcRunTerminalCommit,
-  type HelarcTaskInputError,
-  type HelarcTaskTemplate,
   type HelarcArtifact,
   type HelarcMessage,
   type HelarcPersistedRunStatus,
@@ -45,8 +36,25 @@ import {
   type HelarcThreadWorkspaceContext,
   type HelarcWorkContextError,
   type HelarcPersistedRun,
-  type HelarcWorkspaceProfile,
-} from "@agent-anything/helarc";
+} from "@agent-anything/helarc/work-context";
+import {
+  createHelarcRunProjection,
+  reduceHelarcRunProjection,
+  type HelarcRunPermissionPreset,
+  type HelarcRunProjection,
+  type HelarcRunProjectionUpdate,
+  type HelarcRunProviderRef,
+} from "@agent-anything/helarc/run";
+import type {
+  HelarcPatchReviewDecisionSubmission,
+  HelarcPendingPatchReviewProjection,
+  HelarcProductResult,
+} from "@agent-anything/helarc/composition";
+import {
+  createBuiltInHelarcTaskTemplates,
+  type HelarcTaskTemplate,
+} from "@agent-anything/helarc-code-agent/task-templates";
+import type { HelarcTaskInputError } from "@agent-anything/helarc-code-agent/task";
 import type { RunInputItem } from "@agent-anything/agent-core/input";
 import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import type { Provider } from "@agent-anything/model-interaction";

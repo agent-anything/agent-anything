@@ -55,7 +55,7 @@ import {
   inspectPreparedFileSystemTarget,
   prepareFileSystemTarget,
   type PreparedFileSystemTarget,
-} from "./FileActionFilesystem.js";
+} from "../filesystem/FileSystemTarget.js";
 
 const ADAPTER_DESCRIPTOR: ActionAdapterDescriptor = Object.freeze({
   id: "code-agent.file.adapter",

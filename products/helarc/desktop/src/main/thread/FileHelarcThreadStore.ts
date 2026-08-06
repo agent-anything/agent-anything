@@ -10,7 +10,7 @@ import {
   type HelarcThreadAggregate,
   type HelarcThreadRecord,
   type HelarcWorkContextCommitStore,
-} from "@agent-anything/helarc";
+} from "@agent-anything/helarc/work-context";
 import {
   SerializedAtomicFile,
   type AtomicFileTransaction,

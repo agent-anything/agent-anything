@@ -2,7 +2,7 @@ import { createRunCancellationController } from "@agent-anything/agent-runtime/r
 import type {
   HelarcPatchReviewDecisionSubmission,
   HelarcPatchReviewRequest,
-} from "@agent-anything/helarc";
+} from "@agent-anything/helarc/composition";
 import { describe, expect, it } from "vitest";
 import { createHelarcPatchReviewBridge } from "./HelarcPatchReviewBridge.js";
 

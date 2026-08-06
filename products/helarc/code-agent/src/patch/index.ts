@@ -35,3 +35,12 @@ export type {
   RejectPatchInput,
 } from "./PatchWorkflow.js";
 export { PatchWorkflowError } from "./PatchWorkflowError.js";
+export type {
+  HelarcPatchActionControllerInput,
+  HelarcPatchActionState,
+  HelarcPatchOutcome,
+  HelarcPatchReviewDecision,
+  HelarcPatchReviewPort,
+  HelarcPatchReviewResolution,
+} from "./HelarcPatchActionController.js";
+export { HelarcPatchActionController } from "./HelarcPatchActionController.js";

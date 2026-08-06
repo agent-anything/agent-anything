@@ -1,6 +1,6 @@
 
-import type { HelarcPermissionPreset } from "../permission/HelarcPermissionPreset.js";
-import type { HelarcProviderKind } from "../provider-profile/HelarcProviderProfile.js";
+import type { HelarcPermissionPreset } from "../configuration/HelarcPermissionPreset.js";
+import type { HelarcProviderKind } from "../configuration/HelarcProviderProfile.js";
 
 export type HelarcRunPermissionPreset = HelarcPermissionPreset;
 

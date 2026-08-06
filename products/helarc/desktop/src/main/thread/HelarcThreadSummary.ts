@@ -3,7 +3,7 @@ import {
   type HelarcPersistedRunStatus,
   type HelarcThread,
   type HelarcThreadRecord,
-} from "@agent-anything/helarc";
+} from "@agent-anything/helarc/work-context";
 
 export interface HelarcThreadSummary {
   id: string;

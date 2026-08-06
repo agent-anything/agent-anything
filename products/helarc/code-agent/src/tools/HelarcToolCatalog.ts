@@ -3,8 +3,8 @@ import {
   CODE_AGENT_LIST_FILES_ACTION,
   CODE_AGENT_READ_FILE_ACTION,
   CODE_AGENT_SEARCH_FILES_ACTION,
-} from "@agent-anything/helarc-code-agent/filesystem";
-import { CODE_AGENT_RUN_COMMAND_ACTION } from "@agent-anything/helarc-code-agent/command";
+} from "../file-actions/FileActionContracts.js";
+import { CODE_AGENT_RUN_COMMAND_ACTION } from "../command/CommandActionContracts.js";
 
 import type { ToolAnnotations, ToolDescriptor } from "@agent-anything/tools";
 

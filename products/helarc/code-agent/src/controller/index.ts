@@ -11,26 +11,11 @@ export {
   HELARC_CONTROLLER_ACTIONS,
 } from "./HelarcActionContract.js";
 export type {
-  HelarcToolDescriptorSummary,
-  HelarcToolCatalog,
-  HelarcToolCatalogItem,
-  HelarcToolCatalogMetadata,
-  HelarcToolCatalogMode,
-} from "./HelarcToolCatalog.js";
-export {
-  buildHelarcToolCatalogText,
-  createDefaultHelarcToolCatalog,
-  createHelarcToolCatalogFromDescriptors,
-  createHelarcToolCatalogMetadata,
-  HELARC_TOOL_CATALOG_METADATA_KEY,
-  readHelarcToolCatalog,
-} from "./HelarcToolCatalog.js";
-export type {
   HelarcAgentOutput,
   HelarcChangeIntent,
   HelarcChangeOperationKind,
-  HelarcProviderStructuredOutput,
   HelarcControllerParseErrorCode,
+  HelarcProviderStructuredOutput,
 } from "./HelarcController.js";
 export {
   buildHelarcProviderRequest,
@@ -41,16 +26,9 @@ export {
   parseStructuredOutput,
 } from "./HelarcController.js";
 export type {
-  HelarcPromptAssemblyInput,
-  HelarcPromptAssemblyResult,
-  HelarcPromptAssemblyVersions,
-  HelarcPromptSection,
-  HelarcPromptSectionId,
-} from "./HelarcPromptAssembly.js";
-export {
-  buildHelarcPromptAssembly,
-  HELARC_ACTION_CONTRACT_VERSION,
-  HELARC_PROMPT_ARCHITECTURE_VERSION,
-  HELARC_TOOL_CATALOG_VERSION,
-} from "./HelarcPromptAssembly.js";
+  HelarcProtocolEvalExpectedResult,
+  HelarcProtocolEvalFixture,
+  HelarcProtocolEvalResult,
+} from "./HelarcProtocolEval.js";
+export { runHelarcProtocolEvalFixture } from "./HelarcProtocolEval.js";
 export { createHelarcContextProjector } from "./HelarcContextProjector.js";

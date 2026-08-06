@@ -7,7 +7,7 @@ import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import type {
   HelarcProductResult,
 } from "../composition/HelarcProductResult.js";
-import type { HelarcProviderKind } from "../provider-profile/HelarcProviderProfile.js";
+import type { HelarcProviderKind } from "../configuration/HelarcProviderProfile.js";
 import type { HelarcRunPermissionPreset } from "../run/HelarcRun.js";
 import type { HelarcProductRunProjection } from "../run/HelarcRunProjection.js";
 

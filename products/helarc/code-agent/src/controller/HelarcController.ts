@@ -7,8 +7,8 @@ import {
   HELARC_ACTION_CONTRACT_VERSION,
   HELARC_PROMPT_ARCHITECTURE_VERSION,
   HELARC_TOOL_CATALOG_VERSION,
-} from "./HelarcPromptAssembly.js";
-import { readHelarcToolCatalog } from "./HelarcToolCatalog.js";
+} from "../prompt/HelarcPromptAssembly.js";
+import { readHelarcToolCatalog } from "../tools/HelarcToolCatalog.js";
 
 export const HELARC_CONTROLLER_CAPABILITY = "helarc.code-agent.turn";
 export const HELARC_CONTROLLER_OUTPUT_MAX_LENGTH = 64_000;

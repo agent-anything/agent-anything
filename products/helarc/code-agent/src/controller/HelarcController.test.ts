@@ -18,18 +18,22 @@ import {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,
   buildHelarcProviderRequest,
-  buildHelarcPromptAssembly,
   createHelarcActionContract,
-  createHelarcToolCatalogMetadata,
-  HELARC_ACTION_CONTRACT_VERSION,
   HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
-  HELARC_TOOL_CATALOG_METADATA_KEY,
   HelarcControllerParseError,
   parseHelarcProviderResponse,
   parseStructuredOutput,
   type HelarcAgentOutput,
   type HelarcControllerParseErrorCode,
 } from "./index.js";
+import {
+  buildHelarcPromptAssembly,
+  HELARC_ACTION_CONTRACT_VERSION,
+} from "../prompt/index.js";
+import {
+  createHelarcToolCatalogMetadata,
+  HELARC_TOOL_CATALOG_METADATA_KEY,
+} from "../tools/index.js";
 
 describe("Helarc controller", () => {
   it("builds a provider request from the current Runner state", () => {

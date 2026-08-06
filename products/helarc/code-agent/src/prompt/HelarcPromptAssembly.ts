@@ -2,13 +2,13 @@ import type { ControllerInput } from "@agent-anything/agent-runtime/controller";
 import {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,
-} from "./HelarcActionContract.js";
+} from "../controller/HelarcActionContract.js";
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
 import {
   buildHelarcToolCatalogText,
   readHelarcToolCatalog,
   type HelarcToolCatalog,
-} from "./HelarcToolCatalog.js";
+} from "../tools/HelarcToolCatalog.js";
 
 export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v1";
 export const HELARC_ACTION_CONTRACT_VERSION = "helarc-action-v1";

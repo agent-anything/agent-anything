@@ -64,14 +64,16 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
   "@agent-anything/helarc-code-agent": [
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",
+    "@agent-anything/context",
     "@agent-anything/governance",
+    "@agent-anything/model-interaction",
+    "@agent-anything/observability",
+    "@agent-anything/agent-runtime",
     "@agent-anything/tools",
   ],
   "@agent-anything/helarc": [
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",
-    "@agent-anything/context",
-    "@agent-anything/governance",
     "@agent-anything/helarc-code-agent",
     "@agent-anything/host",
     "@agent-anything/model-interaction",

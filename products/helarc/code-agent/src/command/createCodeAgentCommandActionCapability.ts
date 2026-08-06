@@ -28,13 +28,13 @@ import {
   executeProcess,
   type CapturedProcessOutput,
   type ProcessExecutionOutcome,
-} from "../process/ProcessExecutor.js";
-import { parseCommandInput } from "../process/CommandInput.js";
-import { resolveCommandLimits } from "../process/CommandLimits.js";
+} from "./ProcessExecutor.js";
+import { parseCommandInput } from "./CommandInput.js";
+import { resolveCommandLimits } from "./CommandLimits.js";
 import {
   inspectPreparedFileSystemTarget,
   prepareFileSystemTarget,
-} from "../file-actions/FileActionFilesystem.js";
+} from "../filesystem/FileSystemTarget.js";
 import {
   CODE_AGENT_RUN_COMMAND_ACTION,
   type CodeAgentCommandActionCapability,

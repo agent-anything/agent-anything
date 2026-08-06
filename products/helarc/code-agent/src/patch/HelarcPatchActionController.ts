@@ -1,36 +1,80 @@
 import type { Controller, ControllerCallContext, ControllerDecision, ControllerInput } from "@agent-anything/agent-runtime/controller";
+import type { CancellationContext } from "@agent-anything/agent-runtime/run";
 import {
   acceptPatch,
   createPatchProposal,
   materializePatchReview,
-  PatchWorkflowError,
   rejectPatch,
   type MaterializedPatchReview,
   type PatchProposalChange,
-} from "@agent-anything/helarc-code-agent/patch";
-import { createAcceptedPatchFileAction } from "@agent-anything/helarc-code-agent/filesystem";
+} from "./PatchWorkflow.js";
+import { PatchWorkflowError } from "./PatchWorkflowError.js";
+import { createAcceptedPatchFileAction } from "../file-actions/index.js";
 
 import type {
   HelarcAgentOutput,
   HelarcChangeIntent,
 } from "../controller/HelarcController.js";
-import type {
-  HelarcPatchReviewBridge,
-  HelarcPatchReviewRequest,
-  HelarcProductPhase,
-} from "../composition/HelarcPatchReview.js";
 
 export interface HelarcPatchOutcome {
-  readonly productStatus: "completed" | "rejected" | "failed" | "blocked";
+  readonly status: "completed" | "rejected" | "failed" | "blocked";
   readonly patchStatus: "proposed" | "applied" | "rejected" | "failed";
   readonly appliedPath: string | null;
   readonly errors: readonly { readonly code: string; readonly message: string }[];
 }
 
+export interface HelarcPatchReviewDecision {
+  readonly submissionId: string;
+  readonly runId: string;
+  readonly proposalId: string;
+  readonly reviewId: string;
+  readonly pendingVersion: number;
+  readonly decision: "accepted" | "rejected";
+  readonly reason: string | null;
+}
+
+export type HelarcPatchReviewResolution =
+  | {
+      readonly status: "decided";
+      readonly submission: HelarcPatchReviewDecision;
+    }
+  | {
+      readonly status: "interrupted";
+      readonly cancellationRequestId: string;
+    }
+  | {
+      readonly status: "failed";
+      readonly code: "patch_review_unavailable" | "patch_review_state_invalid";
+      readonly message: string;
+    };
+
+export interface HelarcPatchReviewPort {
+  review(
+    review: MaterializedPatchReview,
+    cancellation: CancellationContext,
+  ): Promise<HelarcPatchReviewResolution>;
+}
+
+export type HelarcPatchActionState =
+  | { readonly kind: "none" }
+  | {
+      readonly kind: "reviewing";
+      readonly runId: string;
+      readonly proposalId: string;
+      readonly reviewId: string;
+    }
+  | {
+      readonly kind: "action_submitted";
+      readonly runId: string;
+      readonly proposalId: string;
+      readonly reviewId: string;
+      readonly pendingVersion: number;
+    };
+
 export interface HelarcPatchActionControllerInput {
   readonly controller: Controller<HelarcAgentOutput>;
-  readonly patchReviewBridge?: HelarcPatchReviewBridge;
-  readonly onPhaseChanged?: (phase: HelarcProductPhase) => void;
+  readonly patchReviewPort?: HelarcPatchReviewPort;
+  readonly onStateChanged?: (state: HelarcPatchActionState) => void;
   readonly now?: () => string;
 }
 
@@ -43,7 +87,7 @@ interface PendingPatchAction {
 export class HelarcPatchActionController implements Controller<HelarcAgentOutput> {
   private pending: PendingPatchAction | null = null;
   private outcome: HelarcPatchOutcome | null = null;
-  private phase: HelarcProductPhase = Object.freeze({ kind: "none" });
+  private state: HelarcPatchActionState = Object.freeze({ kind: "none" });
 
   constructor(private readonly input: HelarcPatchActionControllerInput) {}
 
@@ -51,11 +95,8 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
     return this.outcome;
   }
 
-  getProductPhase(): HelarcProductPhase {
-    const pendingReview = this.input.patchReviewBridge?.getPendingProjection() ?? null;
-    return pendingReview === null
-      ? this.phase
-      : Object.freeze({ kind: "waiting_for_patch_review", review: pendingReview });
+  getPatchState(): HelarcPatchActionState {
+    return this.state;
   }
 
   async next(
@@ -80,7 +121,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
   ): Promise<ControllerDecision<HelarcAgentOutput>> {
     const output = decision.output;
     if (output.kind !== "propose") return decision;
-    if (this.input.patchReviewBridge === undefined) {
+    if (this.input.patchReviewPort === undefined) {
       this.outcome = patchOutcome("blocked", "proposed", null, [{
         code: "patch_review_unavailable",
         message: "Patch review bridge is unavailable.",
@@ -97,16 +138,22 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
         rationale: output.summary,
         metadata: { product: "helarc" },
       }, { now: this.input.now });
-      const review = toReviewRequest(await materializePatchReview({
+      const review = await materializePatchReview({
         patch: proposed,
         workspace: controllerInput.workspace,
+      });
+      this.setState(Object.freeze({
+        kind: "reviewing",
+        runId: review.runId,
+        proposalId: review.proposalId,
+        reviewId: review.reviewId,
       }));
-      const reviewOutcome = await this.input.patchReviewBridge.review(
+      const reviewOutcome = await this.input.patchReviewPort.review(
         review,
         context.cancellation,
       );
       if (reviewOutcome.status === "interrupted") {
-        this.setPhase(Object.freeze({ kind: "none" }));
+        this.setState(Object.freeze({ kind: "none" }));
         return Object.freeze({
           kind: "stop" as const,
           reason: "Patch review was interrupted by Run cancellation.",
@@ -114,7 +161,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
         });
       }
       if (reviewOutcome.status === "failed") {
-        this.setPhase(Object.freeze({ kind: "none" }));
+        this.setState(Object.freeze({ kind: "none" }));
         this.outcome = patchOutcome("failed", "failed", null, [{
           code: reviewOutcome.code,
           message: reviewOutcome.message,
@@ -137,7 +184,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
           ...decisionInput,
           reason: reviewDecision.reason ?? "Patch proposal rejected.",
         });
-        this.setPhase(Object.freeze({ kind: "none" }));
+        this.setState(Object.freeze({ kind: "none" }));
         this.outcome = patchOutcome("rejected", "rejected", null, []);
         return completeDecision(output.summary, decision.modelItems);
       }
@@ -153,8 +200,8 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
         summary: output.summary,
         path: proposed.proposal.operation.path,
       });
-      this.setPhase(Object.freeze({
-        kind: "patch_action_submitted",
+      this.setState(Object.freeze({
+        kind: "action_submitted",
         runId: reviewDecision.runId,
         proposalId: reviewDecision.proposalId,
         reviewId: reviewDecision.reviewId,
@@ -192,7 +239,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
       candidate.kind === "tool_result" && candidate.result.toolName === pending.actionName,
     );
     this.pending = null;
-    this.setPhase(Object.freeze({ kind: "none" }));
+    this.setState(Object.freeze({ kind: "none" }));
     if (observation?.kind === "tool_result" && observation.result.status === "succeeded") {
       this.outcome = patchOutcome("completed", "applied", pending.path, []);
     } else {
@@ -209,9 +256,9 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
     })]);
   }
 
-  private setPhase(phase: HelarcProductPhase): void {
-    this.phase = phase;
-    this.input.onPhaseChanged?.(phase);
+  private setState(state: HelarcPatchActionState): void {
+    this.state = state;
+    this.input.onStateChanged?.(state);
   }
 }
 
@@ -230,13 +277,13 @@ function completeDecision(
 }
 
 function patchOutcome(
-  productStatus: HelarcPatchOutcome["productStatus"],
+  status: HelarcPatchOutcome["status"],
   patchStatus: HelarcPatchOutcome["patchStatus"],
   appliedPath: string | null,
   errors: readonly { readonly code: string; readonly message: string }[],
 ): HelarcPatchOutcome {
   return Object.freeze({
-    productStatus,
+    status,
     patchStatus,
     appliedPath,
     errors: Object.freeze(errors.map((error) => Object.freeze({ ...error }))),
@@ -251,24 +298,6 @@ function toPatchProposalChange(change: HelarcChangeIntent): PatchProposalChange 
         path: change.path,
         proposedContent: change.content ?? "",
       };
-}
-
-function toReviewRequest(review: MaterializedPatchReview): HelarcPatchReviewRequest {
-  return {
-    runId: review.runId,
-    proposalId: review.proposalId,
-    reviewId: review.reviewId,
-    rootName: review.rootName,
-    workspaceId: review.workspaceId,
-    path: review.path,
-    operation: review.operation,
-    summary: review.summary,
-    rationale: review.rationale,
-    originalContent: review.originalContent,
-    proposedContent: review.proposedContent,
-    originalContentBytes: review.originalContentBytes,
-    proposedContentBytes: review.proposedContentBytes,
-  };
 }
 
 function observationCode(observation: ControllerInput["context"]["observations"][number] | undefined): string {

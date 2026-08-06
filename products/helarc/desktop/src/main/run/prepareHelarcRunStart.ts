@@ -1,24 +1,32 @@
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import {
-  createHelarcRunInput,
-  createHelarcTask,
   selectHelarcProviderProfile,
-  selectHelarcTaskTemplate,
   selectHelarcWorkspaceProfile,
   type HelarcProviderProfile,
   type HelarcProviderProfileErrorCode,
+  type HelarcWorkspaceProfile,
+  type HelarcWorkspaceProfileErrorCode,
+} from "@agent-anything/helarc/configuration";
+import {
+  createHelarcRunInput,
   type HelarcRunInput,
   type HelarcRunContractErrorCode,
   type HelarcRunPermissionPreset,
   type HelarcRunProviderRef,
+} from "@agent-anything/helarc/run";
+import type {
+  HelarcThreadWorkspaceContext,
+} from "@agent-anything/helarc/work-context";
+import {
+  createHelarcTask,
   type HelarcTaskInput,
   type HelarcTaskInputErrorCode,
+} from "@agent-anything/helarc-code-agent/task";
+import {
+  selectHelarcTaskTemplate,
   type HelarcTaskTemplate,
   type HelarcTaskTemplateErrorCode,
-  type HelarcWorkspaceProfile,
-  type HelarcWorkspaceProfileErrorCode,
-  type HelarcThreadWorkspaceContext,
-} from "@agent-anything/helarc";
+} from "@agent-anything/helarc-code-agent/task-templates";
 
 export interface PrepareHelarcRunStartInput {
   runId: string;

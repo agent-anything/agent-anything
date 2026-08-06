@@ -17,7 +17,7 @@ import {
   CODE_AGENT_UPDATE_FILE_ACTION,
   CODE_AGENT_DELETE_FILE_ACTION,
   createCodeAgentFileActionCapability,
-} from "@agent-anything/helarc-code-agent/filesystem";
+} from "@agent-anything/helarc-code-agent/file-actions";
 import {
   CODE_AGENT_RUN_COMMAND_ACTION,
   createCodeAgentCommandActionCapability,

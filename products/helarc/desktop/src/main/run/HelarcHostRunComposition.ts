@@ -39,6 +39,11 @@ import {
   createCodeAgentCanonicalWorkspaceRoots,
 } from "@agent-anything/helarc-code-agent/filesystem";
 import type { CodeAgentCommandLimits } from "@agent-anything/helarc-code-agent/command";
+import {
+  createHelarcContextProjector,
+  type HelarcAgentOutput,
+} from "@agent-anything/helarc-code-agent/controller";
+import type { HelarcTaskInput } from "@agent-anything/helarc-code-agent/task";
 import { EvidenceBuilder, type Evidence } from "@agent-anything/context/evidence";
 import type {
   EvidencePersistencePort,
@@ -49,21 +54,20 @@ import {
   type PersistentPolicyAmendmentPort,
 } from "@agent-anything/governance";
 import {
-  createHelarcContextProjector,
   createHelarcProductComposition,
   type HelarcActivityItem,
-  type HelarcAgentOutput,
   type HelarcPatchReviewBridge,
   type HelarcPatchReviewDecisionSubmission,
   type HelarcPatchReviewSubmissionReceipt,
   type HelarcPendingPatchReviewProjection,
-  type HelarcProductRunProjection,
-  type HelarcProductRunProjectionListener,
-  type HelarcPermissionPreset,
   type HelarcProductResult,
-  type HelarcTaskInput,
   type HelarcToolMode,
-} from "@agent-anything/helarc";
+} from "@agent-anything/helarc/composition";
+import type {
+  HelarcProductRunProjection,
+  HelarcProductRunProjectionListener,
+} from "@agent-anything/helarc/run";
+import type { HelarcPermissionPreset } from "@agent-anything/helarc/configuration";
 import type { SessionAuthorityPort } from "@agent-anything/permission";
 import type { Provider } from "@agent-anything/model-interaction";
 import { listRunWorkspaces, type IdentityRef, type RunWorkspace, type WorkspaceContext } from "@agent-anything/agent-core/run";

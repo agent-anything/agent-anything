@@ -15,7 +15,7 @@ import {
   createHelarcToolCatalogMetadata,
   HELARC_TOOL_CATALOG_METADATA_KEY,
   type HelarcToolCatalogMode,
-} from "./HelarcToolCatalog.js";
+} from "../tools/HelarcToolCatalog.js";
 
 export type HelarcProtocolEvalExpectedResult =
   | {

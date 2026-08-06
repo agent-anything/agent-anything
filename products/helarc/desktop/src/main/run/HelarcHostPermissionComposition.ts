@@ -13,7 +13,7 @@ import type { WorkspaceContext } from "@agent-anything/agent-core/run";
 import {
   resolveHelarcPermissionPreset,
   type HelarcPermissionPreset,
-} from "@agent-anything/helarc";
+} from "@agent-anything/helarc/configuration";
 import type { SessionAuthorityPort } from "@agent-anything/permission";
 import type {
   PermissionEnforcement,

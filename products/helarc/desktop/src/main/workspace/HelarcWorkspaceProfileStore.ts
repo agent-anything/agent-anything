@@ -2,7 +2,7 @@ import {
   createHelarcWorkspaceProfile,
   selectHelarcWorkspaceProfile,
   type HelarcWorkspaceProfile,
-} from "@agent-anything/helarc";
+} from "@agent-anything/helarc/configuration";
 import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { basename, isAbsolute, normalize } from "node:path";

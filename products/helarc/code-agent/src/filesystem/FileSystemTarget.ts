@@ -15,8 +15,8 @@ import type { RunWorkspace } from "@agent-anything/agent-core/run";
 import {
   resolveExistingTarget,
   resolveWritableTarget,
-} from "../filesystem/FileSystemBoundary.js";
-import type { CodeAgentPreparedFileOperation } from "./FileActionContracts.js";
+} from "./FileSystemBoundary.js";
+import type { CodeAgentPreparedFileOperation } from "../file-actions/FileActionContracts.js";
 
 type FileSystemPlatform = "win32" | "posix";
 

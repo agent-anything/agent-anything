@@ -35,7 +35,7 @@ import {
 } from "@agent-anything/test-support";
 import { createToolSelectionSnapshot } from "@agent-anything/tools";
 import { describe, expect, it } from "vitest";
-import { createCodeAgentCanonicalWorkspaceRoots } from "../file-actions/index.js";
+import { createCodeAgentCanonicalWorkspaceRoots } from "../filesystem/index.js";
 import {
   CODE_AGENT_RUN_COMMAND_ACTION,
   createCodeAgentCommandActionCapability,

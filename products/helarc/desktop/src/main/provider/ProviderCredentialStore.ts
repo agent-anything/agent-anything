@@ -1,4 +1,4 @@
-import type { HelarcProviderCredentialStatus } from "@agent-anything/helarc";
+import type { HelarcProviderCredentialStatus } from "@agent-anything/helarc/configuration";
 import { join, resolve } from "node:path";
 import {
   SerializedAtomicFile,

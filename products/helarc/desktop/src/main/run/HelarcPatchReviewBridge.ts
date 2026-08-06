@@ -7,7 +7,7 @@ import type {
   HelarcPatchReviewRequest,
   HelarcPatchReviewSubmissionReceipt,
   HelarcPendingPatchReviewProjection,
-} from "@agent-anything/helarc";
+} from "@agent-anything/helarc/composition";
 
 export interface CreateHelarcPatchReviewBridgeInput {
   readonly onProjectionChanged?: HelarcPatchReviewProjectionListener;

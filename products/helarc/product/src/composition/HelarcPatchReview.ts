@@ -1,5 +1,8 @@
 import type { CancellationContext } from "@agent-anything/agent-runtime/run";
-import type { MaterializedPatchReview } from "@agent-anything/helarc-code-agent/patch";
+import type {
+  HelarcPatchReviewPort,
+  MaterializedPatchReview,
+} from "@agent-anything/helarc-code-agent/patch";
 
 export interface HelarcPatchReviewRequest {
   readonly runId: string;
@@ -70,7 +73,7 @@ export type HelarcPatchReviewProjectionListener = (
   projection: HelarcPendingPatchReviewProjection | null,
 ) => void | Promise<void>;
 
-export interface HelarcPatchReviewBridge {
+export interface HelarcPatchReviewBridge extends HelarcPatchReviewPort {
   readonly boundRunId: string | null;
   bindRun(runId: string): void;
   getPendingProjection(): HelarcPendingPatchReviewProjection | null;

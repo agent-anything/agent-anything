@@ -16,5 +16,4 @@ export type {
   DeleteFileOutput,
 } from "./FileActionContracts.js";
 export { createCodeAgentFileActionCapability } from "./createCodeAgentFileActionCapability.js";
-export { createCodeAgentCanonicalWorkspaceRoots } from "./FileActionFilesystem.js";
 export { createAcceptedPatchFileAction } from "./createAcceptedPatchFileAction.js";
