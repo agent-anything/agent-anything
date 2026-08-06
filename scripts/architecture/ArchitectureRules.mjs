@@ -115,6 +115,12 @@ export const REVIEWED_PRODUCTION_DEPENDENCIES = Object.freeze({
   ...TOOLING_PRODUCTION_DEPENDENCIES,
 });
 
+const PRODUCT_COMPONENT_ORDER = Object.freeze({
+  "code-agent": 0,
+  product: 1,
+  desktop: 2,
+});
+
 export function evaluateRepositoryDirection({
   owner,
   imported,
@@ -159,7 +165,7 @@ export function evaluateRepositoryDirection({
       owner.productId &&
       owner.productId === imported.productId
     ) {
-      return [];
+      return evaluateProductComponentDirection(owner, imported);
     }
     return [violation(
       "repository_direction",
@@ -170,6 +176,21 @@ export function evaluateRepositoryDirection({
   return [violation(
     "repository_kind_unknown",
     `Package '${owner.name}' has unsupported repository kind '${owner.kind}'.`,
+  )];
+}
+
+function evaluateProductComponentDirection(owner, imported) {
+  const ownerOrder = PRODUCT_COMPONENT_ORDER[owner.component];
+  const importedOrder = PRODUCT_COMPONENT_ORDER[imported.component];
+  if (ownerOrder === undefined || importedOrder === undefined) {
+    return [];
+  }
+  if (importedOrder <= ownerOrder) {
+    return [];
+  }
+  return [violation(
+    "product_component_direction",
+    `Product component '${owner.component}' must not depend on higher component '${imported.component}'.`,
   )];
 }
 

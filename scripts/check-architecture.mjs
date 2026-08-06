@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 import {
   evaluateProductionDependency,
@@ -36,6 +36,7 @@ for (const discovered of discoveredPackages) {
     name: packageJson.name,
     kind: discovered.kind,
     productId: discovered.productId,
+    component: discovered.component,
     exports: exportedSpecifiers(packageJson),
     dependencies: new Set(Object.keys(packageJson.dependencies ?? {})),
     devDependencies: new Set(Object.keys(packageJson.devDependencies ?? {})),
@@ -338,6 +339,13 @@ function checkReviewedManifests() {
 function checkArchitectureSource(file, text, isTestOnly) {
   const rel = display(file);
   checkDesktopSafeSurface(rel, text);
+  if (rel.includes("/src/common/")) {
+    report("temporary_common_source", {
+      file,
+      message:
+        "A common source area is temporary migration staging and must not remain after Phase 22.",
+    });
+  }
   if (
     rel.startsWith("harness/agent-core/contracts/src/internal/") ||
     rel.startsWith("harness/agent-core/contracts/src/result/")
@@ -591,6 +599,25 @@ function checkRepositoryTopology() {
       });
     }
   }
+  for (const info of packageInfo.values()) {
+    const ownerName = basename(info.root).toLowerCase();
+    if (ownerName === "common") {
+      report("temporary_common_package", {
+        file: info.root,
+        owner: info,
+        message:
+          "A common package is temporary migration staging and must not remain after Phase 22.",
+      });
+    }
+    if (ownerName === "core" || ownerName === "shared") {
+      report("generic_semantic_owner_unreviewed", {
+        file: info.root,
+        owner: info,
+        message:
+          `Generic package '${ownerName}' requires an accepted semantic scope and an explicit architecture rule before it can enter the workspace.`,
+      });
+    }
+  }
 }
 
 function checkPhase21Topology() {
@@ -634,6 +661,15 @@ function checkPhase21Topology() {
         "registration",
         "transport",
       ],
+      allowedSourceEntries: [
+        "PublicApi.test.ts",
+        "adapters",
+        "lifecycle",
+        "primitives",
+        "protocol",
+        "registration",
+        "transport",
+      ],
       forbiddenPaths: ["src/index.ts"],
     },
   ];
@@ -659,14 +695,90 @@ function checkPhase21Topology() {
         });
       }
     }
+    if (area.allowedSourceEntries !== undefined) {
+      const sourceRoot = join(repoRoot, area.packagePath, "src");
+      const actualEntries = sourceTopologyEntries(sourceRoot);
+      const allowedEntries = [...area.allowedSourceEntries].sort();
+      if (JSON.stringify(actualEntries) !== JSON.stringify(allowedEntries)) {
+        report("phase21_source_topology_changed", {
+          file: sourceRoot,
+          message:
+            `Reviewed source entries must be exactly: ${allowedEntries.join(", ")}.`,
+        });
+      }
+    }
   }
 }
 
 function checkPhase22Topology() {
   const areas = [
     {
+      packagePath: "products/helarc/code-agent",
+      sourceAreas: [
+        "command",
+        "controller",
+        "file-actions",
+        "filesystem",
+        "observability",
+        "patch",
+        "prompt",
+        "task",
+        "task-templates",
+        "tools",
+        "workspace",
+      ],
+      allowedSourceEntries: [
+        "PublicApi.test.ts",
+        "command",
+        "controller",
+        "file-actions",
+        "filesystem",
+        "observability",
+        "patch",
+        "prompt",
+        "task",
+        "task-templates",
+        "tools",
+        "workspace",
+      ],
+      forbiddenPaths: [
+        "src/index.ts",
+        "src/command-actions",
+        "src/process",
+      ],
+    },
+    {
+      packagePath: "products/helarc/product",
+      sourceAreas: ["composition", "configuration", "run", "work-context"],
+      allowedSourceEntries: [
+        "HelarcProduct.test.ts",
+        "HelarcProduct.ts",
+        "PublicApi.test.ts",
+        "composition",
+        "configuration",
+        "index.ts",
+        "run",
+        "work-context",
+      ],
+      forbiddenPaths: [
+        "src/controller",
+        "src/patch",
+        "src/permission",
+        "src/provider-profile",
+        "src/task",
+        "src/task-template",
+        "src/workspace-profile",
+      ],
+    },
+    {
       packagePath: "harness/integrations/plugins",
       sourceAreas: ["activation", "admission", "lifecycle", "manifest"],
+      allowedSourceEntries: [
+        "activation",
+        "admission",
+        "lifecycle",
+        "manifest",
+      ],
       forbiddenPaths: [
         "src/index.ts",
         "src/PluginActivation.ts",
@@ -681,11 +793,13 @@ function checkPhase22Topology() {
     {
       packagePath: "harness/integrations/remote",
       sourceAreas: ["action", "tools"],
+      allowedSourceEntries: ["action", "tools"],
       forbiddenPaths: ["src/index.ts"],
     },
     {
       packagePath: "harness/integrations/enterprise-storage",
       sourceAreas: ["evidence"],
+      allowedSourceEntries: ["evidence"],
       forbiddenPaths: ["src/index.ts"],
     },
   ];
@@ -711,7 +825,37 @@ function checkPhase22Topology() {
         });
       }
     }
+    const sourceRoot = join(repoRoot, area.packagePath, "src");
+    const actualEntries = sourceTopologyEntries(sourceRoot);
+    const allowedEntries = [...area.allowedSourceEntries].sort();
+    if (JSON.stringify(actualEntries) !== JSON.stringify(allowedEntries)) {
+      report("phase22_source_topology_changed", {
+        file: sourceRoot,
+        message:
+          `Phase 22 source entries must be exactly: ${allowedEntries.join(", ")}.`,
+      });
+    }
   }
+}
+
+function sourceTopologyEntries(sourceRoot) {
+  return readdirSync(sourceRoot, { withFileTypes: true })
+    .filter((entry) =>
+      !entry.isDirectory() || directoryContainsEntries(join(sourceRoot, entry.name)))
+    .map((entry) => entry.name)
+    .sort();
+}
+
+function directoryContainsEntries(directory) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      return true;
+    }
+    if (directoryContainsEntries(join(directory, entry.name))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function checkRelativeImport(file, owner, specifier) {

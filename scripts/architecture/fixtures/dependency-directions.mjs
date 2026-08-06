@@ -31,10 +31,28 @@ export const repositoryDirectionFixtures = [
     imported: pkg("harness", "agent-runtime"),
   },
   {
-    name: "Product component to same Product component",
+    name: "Product Desktop to Product Model",
     accepted: true,
-    owner: productPkg("helarc", "helarc-desktop"),
-    imported: productPkg("helarc", "helarc"),
+    owner: productPkg("helarc", "helarc-desktop", "desktop"),
+    imported: productPkg("helarc", "helarc", "product"),
+  },
+  {
+    name: "Product Model to Code Agent",
+    accepted: true,
+    owner: productPkg("helarc", "helarc", "product"),
+    imported: productPkg("helarc", "helarc-code-agent", "code-agent"),
+  },
+  {
+    name: "Code Agent to Product Model",
+    accepted: false,
+    owner: productPkg("helarc", "helarc-code-agent", "code-agent"),
+    imported: productPkg("helarc", "helarc", "product"),
+  },
+  {
+    name: "Product Model to Desktop",
+    accepted: false,
+    owner: productPkg("helarc", "helarc", "product"),
+    imported: productPkg("helarc", "helarc-desktop", "desktop"),
   },
   {
     name: "Product to another Product",
@@ -67,6 +85,6 @@ function pkg(kind, name) {
   return { kind, name: `@agent-anything/${name}` };
 }
 
-function productPkg(productId, name) {
-  return { ...pkg("product", name), productId };
+function productPkg(productId, name, component = null) {
+  return { ...pkg("product", name), productId, component };
 }
