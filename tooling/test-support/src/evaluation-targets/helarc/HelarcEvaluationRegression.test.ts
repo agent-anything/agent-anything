@@ -16,8 +16,9 @@ describe("Helarc Phase26 accepted Evaluation baseline", () => {
       candidate,
     );
 
-    expect(comparison.status).toBe("equivalent");
-    if (comparison.status !== "equivalent") return;
+    if (comparison.status !== "equivalent") {
+      throw new Error(`Accepted baseline mismatch: ${comparison.differences.join(", ")}`);
+    }
     expect(comparison.pairedComparisons).toHaveLength(4);
     expect(comparison.pairedComparisons.every((item) =>
       item.pairs.length === 10 && item.exclusions.length === 0)).toBe(true);

@@ -56,6 +56,36 @@ describe("Evaluation Trial execution", () => {
   });
 
   it.each([
+    "runtime",
+    "model",
+    "provider",
+    "approval",
+    "permission",
+    "policy",
+    "action_execution",
+    "sandbox",
+    "tool",
+    "context",
+    "audit",
+    "telemetry",
+    "product",
+  ])("preserves the observed %s failure owner without reclassification", async (owner) => {
+    const fixture = createTrialFixture({
+      targetOutcome: "failed",
+      targetOwner: owner,
+      targetCode: `${owner}_failed`,
+    });
+    const result = await fixture.execution.run(control());
+
+    expect(result.status).toBe("completed");
+    expect(fixture.targetRecords.records[0].outcome).toMatchObject({
+      status: "failed",
+      owner,
+      code: `${owner}_failed`,
+    });
+  });
+
+  it.each([
     ["invalid", "invalid"],
     ["environment_failed", "infrastructure_failed"],
     ["invocation_failed", "invocation_failed"],
@@ -136,6 +166,19 @@ describe("Evaluation Trial execution", () => {
       ...valid,
       outcome: { ...valid.outcome, data: { rootPath: "D:/private/workspace" } },
     })).toThrow(/rootPath/);
+  });
+
+  it("rejects an invalid Trial protocol before execution", () => {
+    const valid = createTrial("protocol");
+
+    expect(() => createEvaluationTrial({
+      ...valid,
+      repetitionOrdinal: 0,
+    })).toThrow(/repetitionOrdinal/);
+    expect(() => createEvaluationTrial({
+      ...valid,
+      environmentProtocolRef: { id: "environment-protocol", revision: "" },
+    })).toThrow(/revision/);
   });
 
   it("classifies an invalid Capture revision as capture infrastructure failure", async () => {
@@ -308,6 +351,8 @@ function createTrialFixture(options: {
     | "capture_failed"
     | "cleanup_partial";
   readonly targetOutcome?: "succeeded" | "failed";
+  readonly targetOwner?: string;
+  readonly targetCode?: string | null;
   readonly target?: EvaluationTargetPort;
   readonly deadline?: EvaluationDeadlinePort;
   readonly captureRefRevision?: string;
@@ -351,7 +396,12 @@ function createTrialFixture(options: {
       if (options.scenario === "invocation_failed") {
         return { status: "failed", failure: failure("evaluation_invocation_failed", "invocation") };
       }
-      return observedResult(trial, options.targetOutcome ?? "succeeded");
+      return observedResult(
+        trial,
+        options.targetOutcome ?? "succeeded",
+        options.targetOwner,
+        options.targetCode,
+      );
     },
   };
   const capture: EvaluationCapturePort = {
@@ -480,6 +530,8 @@ function createPolicy(): EvaluationCapturePolicy {
 function observedResult(
   trial: EvaluationTrial,
   status: "succeeded" | "failed" = "succeeded",
+  owner: string = status === "failed" ? "provider" : "product",
+  code: string | null = status === "failed" ? "provider_request_failed" : null,
 ) {
   return {
     status: "observed" as const,
@@ -490,8 +542,8 @@ function observedResult(
       caseRef: trial.caseRef,
       outcome: {
         status,
-        owner: status === "failed" ? "provider" : "product",
-        code: status === "failed" ? "provider_request_failed" : null,
+        owner,
+        code,
         summary: status,
         data: {},
       },

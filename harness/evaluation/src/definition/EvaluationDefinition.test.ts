@@ -14,6 +14,28 @@ import {
 const CREATED_AT = "2026-08-01T00:00:00.000Z";
 
 describe("Evaluation definitions", () => {
+  it("rejects invalid Objective and Case contracts before execution", () => {
+    const objective = createObjective();
+    const caseDefinition = createCase("case", "regression", "internal");
+
+    expect(() => createEvaluationObjective({
+      ...objective,
+      name: "",
+    })).toThrow(/name/);
+    expect(() => createEvaluationObjective({
+      ...objective,
+      dimensions: [],
+    })).toThrow(/dimensions/);
+    expect(() => createEvaluationCase({
+      ...caseDefinition,
+      budget: { ...caseDefinition.budget, maximumDurationMs: 0 },
+    })).toThrow(/maximumDurationMs/);
+    expect(() => createEvaluationCase({
+      ...caseDefinition,
+      graderRefs: [],
+    })).toThrow(/graderRefs/);
+  });
+
   it("snapshots JSON-safe values canonically and rejects mutable object kinds", () => {
     const source = { z: [1, { ok: true }], a: "value" };
     const snapshot = snapshotEvaluationData(source);

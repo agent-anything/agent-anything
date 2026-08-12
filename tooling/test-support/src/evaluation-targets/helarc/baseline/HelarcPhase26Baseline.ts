@@ -5,7 +5,7 @@ import type {
   HelarcEvaluationCaseResult,
 } from "../HelarcEvaluationExecution.js";
 
-const TARGET_REVISION = "v1-win32-x64-node24";
+const TARGET_REVISION = "v2-win32-x64-node24";
 
 const TARGET_REF = ref("helarc.phase26.target", TARGET_REVISION);
 const REPORT_REF = ref("helarc.phase26.report.baseline", TARGET_REVISION);
@@ -32,7 +32,7 @@ const CASE_BLUEPRINTS = Object.freeze([
       "operation_settlement_missing",
       "operation_settlement_missing",
     ]),
-    semanticDigest: "bf3fe0cf32b9dc81d4718d36f5e0dd7a13c751c5c3a841da19aac9335f59d831",
+    semanticDigest: "39ba1fdc4f0f7cf0a7448709adac4f3d5e9654660f39b436d34b87e5b3a13c68",
     latency: 100,
     retryCount: 0,
   }),
@@ -154,7 +154,7 @@ export const HELARC_PHASE26_ACCEPTED_BASELINE = deepFreeze({
   kind: "helarc_deterministic_system_baseline_signature",
   corpusRevision: "phase26-corpus-v1",
   targetSnapshotRef: TARGET_REF,
-  targetManifestDigest: "787a38024a1773692198eea9ece045aded06233904457ed3bab22f718ace1570",
+  targetManifestDigest: "de0b62d128f7350f5c4e3a578454b03da807b337a6f254cb6e0c7df6e246d120",
   campaignRef: ref("helarc.phase26.campaign"),
   reportRef: REPORT_REF,
   acceptanceRef: ref("helarc.phase26.baseline-acceptance", TARGET_REVISION),

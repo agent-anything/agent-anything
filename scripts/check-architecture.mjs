@@ -11,6 +11,9 @@ import {
   WorkspaceDiscoveryError,
   discoverWorkspacePackages,
 } from "./architecture/WorkspaceDiscovery.mjs";
+import {
+  evaluateRepositoryCommands,
+} from "./architecture/RepositoryCommands.mjs";
 
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 let discoveredPackages;
@@ -156,6 +159,7 @@ const focusedPublicSubpaths = new Map([
 ]);
 
 const violations = [];
+checkRootCommands();
 checkRepositoryTopology();
 checkPhase21Topology();
 checkPhase22Topology();
@@ -175,6 +179,18 @@ if (violations.length > 0) {
 }
 
 console.log("Architecture check passed.");
+
+function checkRootCommands() {
+  const manifestFile = join(repoRoot, "package.json");
+  const rootManifest = readJson(manifestFile);
+  for (const issue of evaluateRepositoryCommands(rootManifest)) {
+    report(issue.rule, {
+      file: manifestFile,
+      owner: "agent-anything",
+      message: issue.message,
+    });
+  }
+}
 
 function report(rule, { file = null, owner = null, imported = null, message }) {
   const resolvedOwner = typeof owner === "string"

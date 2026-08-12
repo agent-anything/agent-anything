@@ -165,7 +165,7 @@ execution, approval, Retry, Sandbox attempts, Helarc projection, and atomic Thre
 commits:
 
 ```powershell
-pnpm run conformance:test
+pnpm run test:conformance
 ```
 
 Build all workspace packages:
@@ -235,7 +235,7 @@ Current validation commands:
 
 ```powershell
 pnpm run architecture:check
-pnpm run conformance:test
+pnpm run test:conformance
 pnpm run typecheck
 pnpm run test
 pnpm run build

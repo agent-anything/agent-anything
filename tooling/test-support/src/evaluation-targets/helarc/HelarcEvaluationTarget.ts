@@ -188,8 +188,9 @@ export function createHelarcEvaluationTargetAdapter(
           ),
         });
       }
+      let root: string | null = null;
       try {
-        const root = await mkdtemp(join(tmpdir(), "agent-anything-helarc-eval-"));
+        root = await mkdtemp(join(tmpdir(), "agent-anything-helarc-eval-"));
         for (const file of caseDefinition.fixture.files) {
           const target = resolveFixturePath(root, file.path);
           await mkdir(dirname(target), { recursive: true });
@@ -220,6 +221,9 @@ export function createHelarcEvaluationTargetAdapter(
         });
         return Object.freeze({ status: "prepared" as const, lease });
       } catch {
+        if (root !== null) {
+          await rm(root, { recursive: true, force: true }).catch(() => undefined);
+        }
         return Object.freeze({
           status: "failed" as const,
           failure: evaluationFailure(
@@ -642,7 +646,7 @@ function targetObservation(
     caseRef: trial.caseRef,
     outcome: Object.freeze({
       status,
-      owner: "helarc.product",
+      owner: targetOutcomeOwner(material),
       code: material.runResult.code ?? material.product.output.safeErrors[0]?.code ?? null,
       summary: `Helarc Product settled as ${material.product.status}.`,
       data: Object.freeze({
@@ -662,6 +666,56 @@ function targetObservation(
     limitations: Object.freeze([TARGET_LIMITATION]),
     metadata: Object.freeze({ adapter: "helarc-phase26", scenario: material.caseDefinition.scenario }),
   });
+}
+
+function targetOutcomeOwner(
+  material: HelarcEvaluationCaptureMaterial,
+): string {
+  if (material.runResult.failure !== null) {
+    return material.runResult.failure.kind;
+  }
+  if (material.runResult.status === "cancelled") {
+    return "runtime";
+  }
+  if (material.runResult.status === "blocked") {
+    return blockedRunOutcomeOwner(material.runResult.items) ?? "runtime";
+  }
+  return "helarc.product";
+}
+
+function blockedRunOutcomeOwner(
+  items: RunResult<HelarcAgentOutput>["items"],
+): string | null {
+  for (const item of [...items].reverse()) {
+    if (item.kind === "action_assessed" && item.assessment.owner !== null) {
+      return item.assessment.owner;
+    }
+    if (item.kind === "action_invalidated") {
+      return item.invalidation.owner;
+    }
+    if (item.kind !== "observation") continue;
+    const observation = item.observation;
+    if (observation.kind === "action_denied") {
+      return observation.owner;
+    }
+    if (observation.kind === "action_failure") {
+      return observation.failure.kind;
+    }
+    if (
+      observation.kind === "approval_declined" ||
+      observation.kind === "approval_policy_rejected" ||
+      observation.kind === "approval_limit_reached"
+    ) {
+      return "permission";
+    }
+    if (
+      observation.kind === "approval_review_failed" ||
+      observation.kind === "approval_application_failed"
+    ) {
+      return "approval";
+    }
+  }
+  return null;
 }
 
 function captureHelarcMaterial(

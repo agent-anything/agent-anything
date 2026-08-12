@@ -31,6 +31,11 @@ describe("Evaluation Capture", () => {
       ["outcome", "captured"],
       ["usage", "missing"],
     ]);
+    expect(result.capture.slots.map((slot) => slot.retention)).toEqual([
+      "report",
+      "campaign",
+    ]);
+    expect(result.capture.sensitivities).toEqual(["internal", "public"]);
     expect(result.capture.measurements).toEqual([]);
     expect(projectEvaluationCapture(result.capture).slots[0]).not.toHaveProperty("value");
   });
@@ -118,6 +123,55 @@ describe("Evaluation Capture", () => {
 
     expect(result.status).toBe("failed");
     expect(JSON.stringify(result.capture)).not.toContain("secret");
+  });
+
+  it("fails closed for schema, sensitivity, size, and mandatory-redaction violations", () => {
+    const valid = captured("outcome", { status: "succeeded" });
+    const candidates: readonly EvaluationCaptureContribution[] = [
+      { ...valid, schemaRef: schema("wrong-schema") },
+      { ...valid, sensitivity: "private" },
+      {
+        ...valid,
+        content: {
+          kind: "inline",
+          value: { payload: "x".repeat(2_048) },
+        },
+      },
+      {
+        ...valid,
+        status: "redacted",
+        content: null,
+        reason: {
+          code: "capture_redacted",
+          message: "The mandatory value was redacted.",
+          sourceOwner: "product",
+          details: {},
+        },
+      },
+    ];
+
+    for (const contribution of candidates) {
+      const result = assembleEvaluationCapture({
+        ref: ref("capture"),
+        trialRef: ref("trial"),
+        targetSnapshotRef: ref("target"),
+        caseRef: ref("case"),
+        policy: createPolicy(),
+        environmentRef: ref("environment"),
+        contributions: [contribution],
+        measurements: [],
+        startedAt: TIME,
+        completedAt: TIME,
+        limitations: [],
+        metadata: {},
+      });
+
+      expect(result.status).toBe("failed");
+      expect(result.capture.status).toBe("failed");
+      expect(result.capture.failures.map((failure) => failure.code)).toContain(
+        "evaluation_capture_failed",
+      );
+    }
   });
 });
 
