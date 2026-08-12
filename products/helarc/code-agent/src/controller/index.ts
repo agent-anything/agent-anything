@@ -25,10 +25,4 @@ export {
   parseHelarcProviderResponse,
   parseStructuredOutput,
 } from "./HelarcController.js";
-export type {
-  HelarcProtocolEvalExpectedResult,
-  HelarcProtocolEvalFixture,
-  HelarcProtocolEvalResult,
-} from "./HelarcProtocolEval.js";
-export { runHelarcProtocolEvalFixture } from "./HelarcProtocolEval.js";
 export { createHelarcContextProjector } from "./HelarcContextProjector.js";

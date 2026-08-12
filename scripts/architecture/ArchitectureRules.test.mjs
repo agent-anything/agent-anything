@@ -59,3 +59,22 @@ test("Test Support is accepted only from test sources", () => {
     [],
   );
 });
+
+test("Test Support may import Helarc only from the exact Evaluation target source", () => {
+  const owner = { kind: "tooling", name: "@agent-anything/test-support" };
+  const imported = {
+    kind: "product",
+    name: "@agent-anything/helarc",
+    productId: "helarc",
+  };
+  assert.deepEqual(evaluateRepositoryDirection({
+    owner,
+    imported,
+    sourcePath: "tooling/test-support/src/evaluation-targets/helarc/HelarcEvaluationTarget.ts",
+  }), []);
+  assert.equal(evaluateRepositoryDirection({
+    owner,
+    imported,
+    sourcePath: "tooling/test-support/src/FakeHelarcProduct.ts",
+  })[0]?.rule, "tooling_direction");
+});

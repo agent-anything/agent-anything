@@ -32,7 +32,7 @@ initial code-agent desktop stage.
   provider-backed Runs, durable Thread history, Run traces, permission-aware
   Actions, and reviewable changes.
 - Helarc's agent behavior foundation includes prompt sections, a Controller action
-  contract, a dynamic tool catalog, provider response recovery, protocol eval
+  contract, a dynamic tool catalog, provider response recovery, deterministic system evaluation
   fixtures, and renderer-safe trace projection.
 
 ## Products

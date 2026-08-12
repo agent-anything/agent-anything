@@ -102,13 +102,27 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
 
 export const TOOLING_PRODUCTION_DEPENDENCIES = Object.freeze({
   "@agent-anything/test-support": [
+    "@agent-anything/action-execution",
+    "@agent-anything/agent-runtime",
     "@agent-anything/context",
     "@agent-anything/agent-core",
+    "@agent-anything/evaluation",
+    "@agent-anything/governance",
+    "@agent-anything/helarc",
+    "@agent-anything/helarc-code-agent",
+    "@agent-anything/host",
     "@agent-anything/model-interaction",
     "@agent-anything/observability",
     "@agent-anything/permission",
   ],
 });
+
+const HELARC_EVALUATION_TARGET_SOURCE_PREFIX =
+  "tooling/test-support/src/evaluation-targets/helarc/";
+const HELARC_EVALUATION_TARGET_PRODUCT_DEPENDENCIES = new Set([
+  "@agent-anything/helarc",
+  "@agent-anything/helarc-code-agent",
+]);
 
 export const REVIEWED_PRODUCTION_DEPENDENCIES = Object.freeze({
   ...HARNESS_PRODUCTION_DEPENDENCIES,
@@ -126,6 +140,7 @@ export function evaluateRepositoryDirection({
   owner,
   imported,
   isTestOnly = false,
+  sourcePath = "",
 }) {
   if (owner.name === imported.name) return [];
 
@@ -145,9 +160,19 @@ export function evaluateRepositoryDirection({
 
   if (owner.kind === "tooling") {
     if (imported.kind === "harness") return [];
+    if (
+      owner.name === "@agent-anything/test-support" &&
+      imported.kind === "product" &&
+      HELARC_EVALUATION_TARGET_PRODUCT_DEPENDENCIES.has(imported.name) &&
+      normalizeSourcePath(sourcePath).startsWith(
+        HELARC_EVALUATION_TARGET_SOURCE_PREFIX,
+      )
+    ) {
+      return [];
+    }
     return [violation(
       "tooling_direction",
-      `Tooling package must not depend on ${imported.kind} package '${imported.name}'.`,
+      `Tooling package must not depend on ${imported.kind} package '${imported.name}' from '${normalizeSourcePath(sourcePath) || "an unspecified source"}'.`,
     )];
   }
 
@@ -222,6 +247,10 @@ function label(owner) {
   if (owner.kind === "harness") return "Harness package";
   if (owner.kind === "product") return "Product package";
   return `Package '${owner.name}'`;
+}
+
+function normalizeSourcePath(sourcePath) {
+  return sourcePath.replaceAll("\\", "/").replace(/^\.\//, "");
 }
 
 function violation(rule, message) {

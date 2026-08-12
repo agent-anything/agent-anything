@@ -46,7 +46,7 @@ const packageExportKeys = {
     "./trial",
   ],
   "harness/model-interaction": ["."],
-  "tooling/test-support": ["."],
+  "tooling/test-support": [".", "./evaluation-targets/helarc"],
   "harness/safety/action-execution": [
     "./canonical",
     "./enforcement",
@@ -328,6 +328,18 @@ const expectedLowerValueExports = {
     "createTestContextProjection",
     "createTestIdentityContextProjector",
   ],
+  "@agent-anything/test-support/evaluation-targets/helarc": [
+    "HELARC_EVALUATION_CORPUS_REVISION",
+    "HELARC_EVALUATION_TARGET_ADAPTER_REVISION",
+    "HELARC_EVALUATION_TIME",
+    "HELARC_PHASE26_ACCEPTED_BASELINE",
+    "adaptHelarcExternalBenchmarkManifest",
+    "compareHelarcEvaluationBaseline",
+    "createHelarcEvaluationCorpus",
+    "createHelarcEvaluationTargetAdapter",
+    "projectHelarcEvaluationBaselineSignature",
+    "runHelarcEvaluationBaselineCandidate",
+  ],
 };
 
 const expectedValueExports = {
@@ -493,7 +505,6 @@ const expectedValueExports = {
     "createHelarcContextProjector",
     "parseHelarcProviderResponse",
     "parseStructuredOutput",
-    "runHelarcProtocolEvalFixture",
   ],
   "@agent-anything/helarc-code-agent/prompt": [
     "HELARC_ACTION_CONTRACT_VERSION",
@@ -742,6 +753,17 @@ const removedOrPrivateSpecifiers = [
   "@agent-anything/helarc-code-agent/command-actions",
   "@agent-anything/helarc-code-agent/process",
 ];
+
+if (process.argv.includes("--helarc-evaluation-target-only")) {
+  const specifier = "@agent-anything/test-support/evaluation-targets/helarc";
+  checkBuiltSurfaces(
+    { [specifier]: expectedValueExports[specifier] },
+    [`${specifier}/internal`],
+    join(repoRoot, "tooling/test-support"),
+  );
+  console.log("Built Helarc Evaluation target public API check passed.");
+  process.exit(0);
+}
 
 if (process.argv.includes("--evaluation-only")) {
   checkBuiltSurfaces(

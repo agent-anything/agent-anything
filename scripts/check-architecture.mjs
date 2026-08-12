@@ -47,6 +47,12 @@ for (const discovered of discoveredPackages) {
 
 const focusedPublicSubpaths = new Map([
   [
+    "@agent-anything/test-support",
+    new Set([
+      "@agent-anything/test-support/evaluation-targets/helarc",
+    ]),
+  ],
+  [
     "@agent-anything/evaluation",
     new Set([
       "@agent-anything/evaluation/campaign",
@@ -572,6 +578,7 @@ function checkWorkspaceImport({ file, owner, imported, isTestOnly }) {
       owner,
       imported: importedPackage,
       isTestOnly,
+      sourcePath: rel,
     })) {
       report(result.rule, { file, owner, imported: importedPackage, message: result.message });
     }

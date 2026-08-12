@@ -30,7 +30,6 @@ describe("Code Agent public API", () => {
       "createHelarcContextProjector",
       "parseHelarcProviderResponse",
       "parseStructuredOutput",
-      "runHelarcProtocolEvalFixture",
     ]);
     expect(Object.keys(promptApi).sort()).toEqual([
       "HELARC_ACTION_CONTRACT_VERSION",

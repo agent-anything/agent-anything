@@ -9,6 +9,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"
+    },
+    "./evaluation-targets/helarc": {
+      "types": "./src/evaluation-targets/helarc/index.ts",
+      "import": "./dist/evaluation-targets/helarc/index.js"
     }
   },
   "files": [
@@ -17,7 +21,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "test:evaluation": "vitest run src/evaluation-targets/helarc/HelarcEvaluationRegression.test.ts",
+    "evaluation:baseline:candidate": "node scripts/emit-helarc-evaluation-baseline.mjs"
   },
   "agentAnything": {
     "architecture": {
@@ -26,11 +32,21 @@
     }
   },
   "dependencies": {
+    "@agent-anything/action-execution": "workspace:*",
+    "@agent-anything/agent-runtime": "workspace:*",
+    "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/context": "workspace:*",
-    "@agent-anything/observability": "workspace:*",
-    "@agent-anything/permission": "workspace:*",
+    "@agent-anything/evaluation": "workspace:*",
+    "@agent-anything/governance": "workspace:*",
+    "@agent-anything/helarc": "workspace:*",
+    "@agent-anything/helarc-code-agent": "workspace:*",
+    "@agent-anything/host": "workspace:*",
     "@agent-anything/model-interaction": "workspace:*",
-    "@agent-anything/agent-core": "workspace:*"
+    "@agent-anything/observability": "workspace:*",
+    "@agent-anything/permission": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1"
   },
   "license": "Apache-2.0",
   "private": true

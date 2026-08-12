@@ -11,3 +11,8 @@ packages:
   - "harness/integrations/*"
   - "products/helarc/*"
   - "tooling/test-support"
+
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  esbuild: true
