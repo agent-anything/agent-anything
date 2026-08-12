@@ -35,6 +35,16 @@ const packageExportKeys = {
     "./telemetry",
     "./tracing",
   ],
+  "harness/evaluation": [
+    "./campaign",
+    "./capture",
+    "./definition",
+    "./grading",
+    "./metrics",
+    "./persistence",
+    "./report",
+    "./trial",
+  ],
   "harness/model-interaction": ["."],
   "tooling/test-support": ["."],
   "harness/safety/action-execution": [
@@ -579,6 +589,65 @@ const expectedValueExports = {
   ],
 };
 
+const expectedEvaluationValueExports = {
+  "@agent-anything/evaluation/definition": [
+    "EvaluationContractError",
+    "createEvaluationCase",
+    "createEvaluationFailure",
+    "createEvaluationObjective",
+    "createEvaluationRecordRef",
+    "createEvaluationSchemaRef",
+    "createEvaluationSuite",
+    "createEvaluationTargetSnapshot",
+    "isEvaluationRefEqual",
+    "snapshotEvaluationData",
+  ],
+  "@agent-anything/evaluation/campaign": [
+    "EvaluationCampaignExecution",
+    "createEvaluationCampaign",
+    "createInitialEvaluationCampaignSnapshot",
+    "planEvaluationTrials",
+  ],
+  "@agent-anything/evaluation/trial": [
+    "EvaluationTrialExecution",
+    "createEvaluationTargetObservation",
+    "createEvaluationTrial",
+    "createInitialEvaluationTrialSnapshot",
+    "isEvaluationTrialTerminal",
+    "projectEvaluationTrial",
+  ],
+  "@agent-anything/evaluation/capture": [
+    "assembleEvaluationCapture",
+    "createEvaluationCapturePolicy",
+    "projectEvaluationCapture",
+  ],
+  "@agent-anything/evaluation/grading": [
+    "DeterministicEvaluationGrader",
+    "EvaluationGradingExecution",
+    "ReferenceEvaluationGrader",
+    "createEvaluationCriterion",
+    "createEvaluationGrade",
+    "createEvaluationGraderDefinition",
+  ],
+  "@agent-anything/evaluation/metrics": [
+    "aggregateEvaluationMetric",
+    "comparePairedEvaluationSamples",
+    "createEvaluationMetricDefinition",
+    "evaluateEvaluationMetricGate",
+  ],
+  "@agent-anything/evaluation/report": [
+    "createEvaluationBaselineAcceptance",
+    "createEvaluationReport",
+    "projectEvaluationReportForPublication",
+  ],
+  "@agent-anything/evaluation/persistence": [
+    "EvaluationPersistenceError",
+    "appendEvaluationRecord",
+    "commitEvaluationSnapshot",
+    "createEvaluationQueryProjection",
+  ],
+};
+
 const expectedRemoteIntegrationValueExports = {
   "@agent-anything/remote-integrations/action": ["createRemoteActionCapability"],
   "@agent-anything/remote-integrations/tools": ["createRemoteToolActionCapability"],
@@ -674,6 +743,19 @@ const removedOrPrivateSpecifiers = [
   "@agent-anything/helarc-code-agent/process",
 ];
 
+if (process.argv.includes("--evaluation-only")) {
+  checkBuiltSurfaces(
+    expectedEvaluationValueExports,
+    [
+      "@agent-anything/evaluation",
+      "@agent-anything/evaluation/internal",
+    ],
+    join(repoRoot, "harness/evaluation"),
+  );
+  console.log("Built Evaluation public API check passed.");
+  process.exit(0);
+}
+
 if (process.argv.includes("--helarc-only")) {
   checkBuiltSurfaces(
     expectedValueExports,
@@ -697,6 +779,14 @@ checkBuiltSurfaces(
     "@agent-anything/context/observation",
   ],
   join(repoRoot, "harness/agent-core/runtime"),
+);
+checkBuiltSurfaces(
+  expectedEvaluationValueExports,
+  [
+    "@agent-anything/evaluation",
+    "@agent-anything/evaluation/internal",
+  ],
+  join(repoRoot, "harness/evaluation"),
 );
 checkBuiltSurfaces(
   expectedValueExports,

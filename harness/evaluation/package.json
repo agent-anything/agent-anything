@@ -1,0 +1,59 @@
+{
+  "name": "@agent-anything/evaluation",
+  "version": "0.0.0",
+  "description": "Provider-neutral evaluation contracts and execution for Agent Harness.",
+  "type": "module",
+  "exports": {
+    "./definition": {
+      "types": "./src/definition/index.ts",
+      "import": "./dist/definition/index.js"
+    },
+    "./campaign": {
+      "types": "./src/campaign/index.ts",
+      "import": "./dist/campaign/index.js"
+    },
+    "./trial": {
+      "types": "./src/trial/index.ts",
+      "import": "./dist/trial/index.js"
+    },
+    "./capture": {
+      "types": "./src/capture/index.ts",
+      "import": "./dist/capture/index.js"
+    },
+    "./grading": {
+      "types": "./src/grading/index.ts",
+      "import": "./dist/grading/index.js"
+    },
+    "./metrics": {
+      "types": "./src/metrics/index.ts",
+      "import": "./dist/metrics/index.js"
+    },
+    "./report": {
+      "types": "./src/report/index.ts",
+      "import": "./dist/report/index.js"
+    },
+    "./persistence": {
+      "types": "./src/persistence/index.ts",
+      "import": "./dist/persistence/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "kind": "harness",
+      "component": "evaluation"
+    }
+  },
+  "license": "Apache-2.0",
+  "private": true,
+  "dependencies": {
+    "@agent-anything/agent-core": "workspace:*"
+  }
+}

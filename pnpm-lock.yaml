@@ -60,6 +60,12 @@ importers:
         specifier: workspace:*
         version: link:../tools
 
+  harness/evaluation:
+    dependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core/contracts
+
   harness/host:
     dependencies:
       '@agent-anything/action-execution':

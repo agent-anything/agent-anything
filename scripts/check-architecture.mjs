@@ -47,6 +47,19 @@ for (const discovered of discoveredPackages) {
 
 const focusedPublicSubpaths = new Map([
   [
+    "@agent-anything/evaluation",
+    new Set([
+      "@agent-anything/evaluation/campaign",
+      "@agent-anything/evaluation/capture",
+      "@agent-anything/evaluation/definition",
+      "@agent-anything/evaluation/grading",
+      "@agent-anything/evaluation/metrics",
+      "@agent-anything/evaluation/persistence",
+      "@agent-anything/evaluation/report",
+      "@agent-anything/evaluation/trial",
+    ]),
+  ],
+  [
     "@agent-anything/action-execution",
     new Set([
       "@agent-anything/action-execution/canonical",

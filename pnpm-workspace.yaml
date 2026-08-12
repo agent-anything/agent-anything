@@ -3,6 +3,7 @@ packages:
   - "harness/model-interaction"
   - "harness/context"
   - "harness/observability"
+  - "harness/evaluation"
   - "harness/agent-core/runtime"
   - "harness/tools"
   - "harness/host"
