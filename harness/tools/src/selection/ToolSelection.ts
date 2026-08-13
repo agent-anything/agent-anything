@@ -1,288 +1,222 @@
-import {
-  createToolCatalogSnapshot,
-  type ToolCatalogSnapshot,
-} from "../catalog/ToolCatalog.js";
-import { createToolContractIdentity } from "../identity/ToolIdentity.js";
-import type {
-  RegisteredTool,
-  ToolRegistrationSnapshot,
-} from "../registration/ToolRegistration.js";
+import type { OperationCatalogSnapshot } from "@agent-anything/operation-catalog/catalog";
+import { operationRevisionKey } from "@agent-anything/operation-catalog/identity";
+import type { ToolCatalogSnapshot, ToolDescriptor } from "../catalog/index.js";
+import { createToolCatalogSnapshot } from "../catalog/index.js";
+import { createToolContractIdentity, toolRevisionKey, type ToolRevisionRef } from "../identity/index.js";
+import type { RegisteredTool, ToolRegistrationSnapshot } from "../registration/index.js";
 
 export type ToolRequestOrigin = "model" | "workflow";
 
 export interface ToolSelectionInput {
-  readonly toolName: string;
+  readonly tool: ToolRevisionRef;
   readonly origins: readonly ToolRequestOrigin[];
 }
 
 export interface SelectedTool {
   readonly registration: RegisteredTool;
-  readonly origins: readonly [ToolRequestOrigin, ...ToolRequestOrigin[]];
+  readonly origins: readonly ToolRequestOrigin[];
 }
 
-export interface ToolSelectionSnapshot {
-  readonly schemaVersion: 1;
+export interface ToolSelectionRevision {
+  readonly schemaVersion: 2;
   readonly selectionId: string;
-  readonly registrationSnapshotId: string;
+  readonly revision: string;
+  readonly toolCatalogId: string;
+  readonly operationCatalogId: string;
+  readonly operationCatalogRevision: string;
   readonly tools: readonly SelectedTool[];
-  readonly modelCatalog: ToolCatalogSnapshot;
 }
 
-export type ToolSelectionValidationCode =
-  | "tool_selection_invalid"
-  | "tool_selection_duplicate"
-  | "tool_selection_unknown"
-  | "tool_selection_origin_invalid";
+export interface ToolExposureProof {
+  readonly id: string;
+  readonly selectionRevision: string;
+  readonly consumer: "controller";
+  readonly controllerRequestId: string;
+  readonly exposedTools: readonly ToolRevisionRef[];
+  readonly catalog: ToolCatalogSnapshot;
+}
 
 export class ToolSelectionValidationError extends TypeError {
-  constructor(
-    readonly code: ToolSelectionValidationCode,
-    message: string,
-    readonly path: string,
-  ) {
+  constructor(readonly code: string, message: string) {
     super(message);
     this.name = "ToolSelectionValidationError";
   }
 }
 
-export function createToolSelectionSnapshot(
+export function createFixedLocalToolSelection(
   registrations: ToolRegistrationSnapshot,
+  operationCatalog: OperationCatalogSnapshot,
   inputs: readonly ToolSelectionInput[],
-): ToolSelectionSnapshot {
-  assertRegistrationSnapshot(registrations);
-  assertCanonicalArray(inputs);
-
-  const byName = new Map(
-    registrations.registrations.map((registration) => [
-      registration.descriptor.name,
-      registration,
-    ]),
-  );
-  const selectedNames = new Set<string>();
-  const tools = inputs.map((input, index) => {
-    const path = `selection[${index}]`;
-    assertSelectionInput(input, path);
-    if (selectedNames.has(input.toolName)) {
-      throw selectionError(
-        "tool_selection_duplicate",
-        `Tool is selected more than once: ${input.toolName}.`,
-        `${path}.toolName`,
-      );
-    }
-    selectedNames.add(input.toolName);
-    const registration = byName.get(input.toolName);
-    if (registration === undefined) {
-      throw selectionError(
-        "tool_selection_unknown",
-        `Selected Tool is not registered: ${input.toolName}.`,
-        `${path}.toolName`,
-      );
-    }
-    const origins = snapshotOrigins(input.origins, `${path}.origins`);
+): ToolSelectionRevision {
+  if (registrations.operationCatalogId !== operationCatalog.id || registrations.operationCatalogRevision !== operationCatalog.revision) {
+    throw invalid("tool_selection_catalog_mismatch", "Tool and Operation catalog snapshots do not match.");
+  }
+  const selectedKeys = new Set<string>();
+  const tools = inputs.map((input) => {
+    const key = toolRevisionKey(input.tool);
+    if (selectedKeys.has(key)) throw invalid("tool_selection_duplicate", `Tool revision '${key}' is selected more than once.`);
+    selectedKeys.add(key);
+    const registration = registrations.registrations.find((candidate) => toolRevisionKey(candidate.descriptor.ref) === key);
+    if (registration === undefined) throw invalid("tool_selection_unknown", `Tool revision '${key}' is not admitted.`);
+    if (registration.descriptor.retirement !== null) throw invalid("tool_selection_retired", `Tool revision '${key}' is retired.`);
+    const origins = snapshotOrigins(input.origins);
+    if (origins.some((origin) => !registration.allowedOrigins.includes(origin))) throw invalid("tool_selection_origin_invalid", `Tool revision '${key}' is not admitted for every selected origin.`);
     return Object.freeze({ registration, origins });
   });
-  tools.sort((left, right) => compareStrings(
-    left.registration.descriptor.name,
-    right.registration.descriptor.name,
-  ));
-  const frozenTools = Object.freeze(tools);
-  const selectionIdentityFields = Object.freeze({
-    registrationSnapshotId: registrations.snapshotId,
-    tools: frozenTools.map((tool) => Object.freeze({
-      registrationFingerprint: tool.registration.registrationFingerprint,
-      origins: tool.origins,
+  tools.sort((left, right) => toolRevisionKey(left.registration.descriptor.ref).localeCompare(toolRevisionKey(right.registration.descriptor.ref)));
+  const frozen = Object.freeze(tools);
+  const selectionId = createToolContractIdentity("agent-anything.fixed-local-tool-selection.v2", {
+    toolCatalogId: registrations.toolCatalog.catalogId,
+    operationCatalogId: operationCatalog.id,
+    operationCatalogRevision: operationCatalog.revision,
+    tools: frozen.map((selected) => ({
+      tool: selected.registration.descriptor.ref,
+      origins: selected.origins,
     })),
   });
   return Object.freeze({
-    schemaVersion: 1 as const,
-    selectionId: createToolContractIdentity(
-      "agent-anything.tool-selection.v1",
-      selectionIdentityFields,
-    ),
-    registrationSnapshotId: registrations.snapshotId,
-    tools: frozenTools,
-    modelCatalog: createToolCatalogSnapshot(
-      frozenTools
-        .filter((tool) => tool.origins.includes("model"))
-        .map((tool) => tool.registration.descriptor),
-    ),
+    schemaVersion: 2 as const,
+    selectionId,
+    revision: selectionId,
+    toolCatalogId: registrations.toolCatalog.catalogId,
+    operationCatalogId: operationCatalog.id,
+    operationCatalogRevision: operationCatalog.revision,
+    tools: frozen,
+  });
+}
+
+export function createControllerToolExposureProof(
+  selection: ToolSelectionRevision,
+  controllerRequestId: string,
+): ToolExposureProof {
+  const modelTools = selection.tools.filter((selected) => selected.origins.includes("model"));
+  const exposedTools = Object.freeze(modelTools.map((selected) => selected.registration.descriptor.ref));
+  const catalog = createToolCatalogSnapshot(modelTools.map((selected) => descriptorInput(selected.registration.descriptor)));
+  const id = createToolContractIdentity("agent-anything.controller-tool-exposure.v1", {
+    selectionRevision: selection.revision,
+    controllerRequestId,
+    exposedTools,
+  });
+  return Object.freeze({
+    id,
+    selectionRevision: selection.revision,
+    consumer: "controller" as const,
+    controllerRequestId: token(controllerRequestId),
+    exposedTools,
+    catalog,
+  });
+}
+
+export function snapshotToolSelectionRevision(
+  input: ToolSelectionRevision,
+): ToolSelectionRevision {
+  if (input === null || typeof input !== "object" || input.schemaVersion !== 2) {
+    throw invalid("tool_selection_invalid", "Tool selection must use schema version 2.");
+  }
+  if (!Array.isArray(input.tools)) {
+    throw invalid("tool_selection_invalid", "Tool selection entries must be an array.");
+  }
+  const keys = new Set<string>();
+  const tools = input.tools.map((selected) => {
+    if (selected === null || typeof selected !== "object") {
+      throw invalid("tool_selection_invalid", "A selected Tool entry must be an object.");
+    }
+    const descriptor = createToolCatalogSnapshot([
+      descriptorInput(selected.registration.descriptor),
+    ]).tools[0]!;
+    const key = toolRevisionKey(descriptor.ref);
+    if (keys.has(key)) {
+      throw invalid("tool_selection_duplicate", `Tool revision '${key}' is selected more than once.`);
+    }
+    keys.add(key);
+    const registration = selected.registration;
+    if (
+      registration.descriptor.fingerprint !== descriptor.fingerprint ||
+      operationRevisionKey(registration.operation.operation.ref) !==
+        operationRevisionKey(descriptor.operationBinding.operation) ||
+      registration.operation.binding.ref.revision !== descriptor.operationBinding.revision
+    ) {
+      throw invalid("tool_selection_invalid", `Tool revision '${key}' has an incoherent registration.`);
+    }
+    const allowedOrigins = snapshotOrigins(registration.allowedOrigins);
+    const registrationBase = Object.freeze({
+      admissionId: token(registration.admissionId),
+      descriptor,
+      operation: registration.operation,
+      allowedOrigins,
+      admittedAt: token(registration.admittedAt),
+    });
+    if (
+      registration.registrationFingerprint !==
+      createToolContractIdentity("agent-anything.tool-registration.v2", registrationBase)
+    ) {
+      throw invalid("tool_selection_invalid", `Tool revision '${key}' has an invalid registration fingerprint.`);
+    }
+    const origins = snapshotOrigins(selected.origins);
+    if (origins.some((origin) => !allowedOrigins.includes(origin))) {
+      throw invalid("tool_selection_origin_invalid", `Tool revision '${key}' is selected for an unadmitted origin.`);
+    }
+    return Object.freeze({
+      registration: Object.freeze({ ...registrationBase, registrationFingerprint: registration.registrationFingerprint }),
+      origins,
+    });
+  });
+  tools.sort((left, right) => toolRevisionKey(left.registration.descriptor.ref).localeCompare(toolRevisionKey(right.registration.descriptor.ref)));
+  const frozen = Object.freeze(tools);
+  const expectedId = createToolContractIdentity("agent-anything.fixed-local-tool-selection.v2", {
+    toolCatalogId: token(input.toolCatalogId),
+    operationCatalogId: token(input.operationCatalogId),
+    operationCatalogRevision: token(input.operationCatalogRevision),
+    tools: frozen.map((selected) => ({
+      tool: selected.registration.descriptor.ref,
+      origins: selected.origins,
+    })),
+  });
+  if (
+    token(input.selectionId) !== expectedId ||
+    token(input.revision) !== expectedId
+  ) {
+    throw invalid("tool_selection_invalid", "Tool selection identity does not match its immutable contents.");
+  }
+  return Object.freeze({
+    schemaVersion: 2,
+    selectionId: expectedId,
+    revision: expectedId,
+    toolCatalogId: input.toolCatalogId,
+    operationCatalogId: input.operationCatalogId,
+    operationCatalogRevision: input.operationCatalogRevision,
+    tools: frozen,
   });
 }
 
 export function findSelectedTool(
-  snapshot: ToolSelectionSnapshot,
-  toolName: string,
+  selection: ToolSelectionRevision,
+  refOrName: ToolRevisionRef | string,
   origin: ToolRequestOrigin,
 ): SelectedTool | undefined {
-  return snapshot.tools.find((tool) =>
-    tool.registration.descriptor.name === toolName &&
-    tool.origins.includes(origin)
-  );
+  return selection.tools.find((selected) => {
+    const matches = typeof refOrName === "string"
+      ? selected.registration.descriptor.name === refOrName
+      : toolRevisionKey(selected.registration.descriptor.ref) === toolRevisionKey(refOrName);
+    return matches && selected.origins.includes(origin);
+  });
 }
 
-function assertRegistrationSnapshot(
-  input: ToolRegistrationSnapshot,
-): void {
-  if (
-    input === null ||
-    typeof input !== "object" ||
-    input.schemaVersion !== 1 ||
-    typeof input.snapshotId !== "string" ||
-    !Array.isArray(input.registrations) ||
-    !Object.isFrozen(input) ||
-    !Object.isFrozen(input.registrations)
-  ) {
-    throw selectionError(
-      "tool_selection_invalid",
-      "Tool selection requires an immutable ToolRegistrationSnapshot.",
-      "registrations",
-    );
-  }
+function descriptorInput(descriptor: ToolDescriptor) {
+  const { fingerprint: _fingerprint, ...input } = descriptor;
+  return input;
 }
 
-function assertCanonicalArray(input: unknown): asserts input is readonly unknown[] {
-  if (!Array.isArray(input)) {
-    throw selectionError(
-      "tool_selection_invalid",
-      "Tool selection input must be an array.",
-      "selection",
-    );
-  }
-  for (const key of Reflect.ownKeys(input)) {
-    if (typeof key !== "string" || (key !== "length" && !/^(0|[1-9][0-9]*)$/.test(key))) {
-      throw selectionError(
-        "tool_selection_invalid",
-        "Tool selection input contains an unsupported property.",
-        `selection.${String(key)}`,
-      );
-    }
-    if (key !== "length") assertDataProperty(input, key, `selection[${key}]`);
-  }
-  for (let index = 0; index < input.length; index += 1) {
-    if (!Object.hasOwn(input, index)) {
-      throw selectionError(
-        "tool_selection_invalid",
-        "Tool selection input cannot be sparse.",
-        `selection[${index}]`,
-      );
-    }
-  }
+function snapshotOrigins(input: readonly ToolRequestOrigin[]): readonly ToolRequestOrigin[] {
+  if (!Array.isArray(input) || input.length === 0 || input.some((origin) => origin !== "model" && origin !== "workflow")) throw invalid("tool_selection_origin_invalid", "Selection requires model, workflow, or both origins.");
+  return Object.freeze([...new Set(input)].sort());
 }
 
-function assertSelectionInput(
-  input: unknown,
-  path: string,
-): asserts input is ToolSelectionInput {
-  if (
-    input === null ||
-    typeof input !== "object" ||
-    Array.isArray(input) ||
-    Object.getPrototypeOf(input) !== Object.prototype
-  ) {
-    throw selectionError(
-      "tool_selection_invalid",
-      `Tool selection entry must be a plain object at ${path}.`,
-      path,
-    );
-  }
-  const candidate = input as Record<string, unknown>;
-  const keys = Reflect.ownKeys(candidate);
-  if (
-    keys.length !== 2 ||
-    !keys.includes("toolName") ||
-    !keys.includes("origins")
-  ) {
-    throw selectionError(
-      "tool_selection_invalid",
-      `Tool selection entry has unsupported fields at ${path}.`,
-      path,
-    );
-  }
-  assertDataProperty(candidate, "toolName", `${path}.toolName`);
-  assertDataProperty(candidate, "origins", `${path}.origins`);
-  if (
-    typeof candidate.toolName !== "string" ||
-    candidate.toolName.length === 0 ||
-    candidate.toolName !== candidate.toolName.trim()
-  ) {
-    throw selectionError(
-      "tool_selection_invalid",
-      "Selected Tool name must be non-empty canonical text.",
-      `${path}.toolName`,
-    );
-  }
+function token(input: unknown): string {
+  if (typeof input !== "string" || input.length === 0 || input !== input.trim()) throw invalid("tool_selection_invalid", "A canonical token is required.");
+  return input;
 }
 
-function snapshotOrigins(
-  input: readonly ToolRequestOrigin[],
-  path: string,
-): readonly [ToolRequestOrigin, ...ToolRequestOrigin[]] {
-  if (!Array.isArray(input) || input.length === 0) {
-    throw selectionError(
-      "tool_selection_origin_invalid",
-      "A selected Tool requires at least one request origin.",
-      path,
-    );
-  }
-  const origins = input.map((origin, index) => {
-    if (origin !== "model" && origin !== "workflow") {
-      throw selectionError(
-        "tool_selection_origin_invalid",
-        "Tool request origin must be model or workflow.",
-        `${path}[${index}]`,
-      );
-    }
-    return origin;
-  }).sort(compareOrigins);
-  if (new Set(origins).size !== origins.length) {
-    throw selectionError(
-      "tool_selection_origin_invalid",
-      "Tool request origins cannot contain duplicates.",
-      path,
-    );
-  }
-  return Object.freeze(origins) as readonly [
-    ToolRequestOrigin,
-    ...ToolRequestOrigin[],
-  ];
-}
-
-function assertDataProperty(
-  input: object,
-  key: PropertyKey,
-  path: string,
-): void {
-  const descriptor = Object.getOwnPropertyDescriptor(input, key);
-  if (
-    descriptor === undefined ||
-    descriptor.get !== undefined ||
-    descriptor.set !== undefined ||
-    !descriptor.enumerable
-  ) {
-    throw selectionError(
-      "tool_selection_invalid",
-      `Tool selection requires an enumerable data property at ${path}.`,
-      path,
-    );
-  }
-}
-
-function compareOrigins(
-  left: ToolRequestOrigin,
-  right: ToolRequestOrigin,
-): number {
-  const order: Record<ToolRequestOrigin, number> = { model: 0, workflow: 1 };
-  return order[left] - order[right];
-}
-
-function compareStrings(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function selectionError(
-  code: ToolSelectionValidationCode,
-  message: string,
-  path: string,
-): ToolSelectionValidationError {
-  return new ToolSelectionValidationError(code, message, path);
+function invalid(code: string, message: string): ToolSelectionValidationError {
+  return new ToolSelectionValidationError(code, message);
 }

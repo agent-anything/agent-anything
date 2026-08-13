@@ -1,5 +1,5 @@
 
-import type { ToolResult } from "@agent-anything/tools";
+import type { ToolResult } from "@agent-anything/tools/result";
 
 export interface RemoteToolResult<TOutput = unknown> {
   remoteCallId: string;

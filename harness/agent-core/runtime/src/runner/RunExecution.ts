@@ -1,113 +1,120 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
-import type { Action, ActionCandidate } from "@agent-anything/agent-core/action";
-import type { ArtifactRef } from "@agent-anything/agent-core/run";
-import type { EvidenceRef } from "@agent-anything/context/evidence";
+import { toAgentRevisionRef } from "@agent-anything/agent-core/agent";
+import type { ControllerTurnRef, InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import type { RunInput } from "@agent-anything/agent-core/input";
+import type { RunActionProvenance, RunActionRef } from "@agent-anything/agent-core/run-action";
+import {
+  applyContextUpdate,
+  createInitialContext,
+  ContextProjectionError,
+  type Context,
+  type ContextProjection,
+} from "@agent-anything/context/context";
 import {
   RuntimeEventStream,
-  type AuditFailure,
   type ObservabilityRecordContext,
   type RunTraceAssembler,
   type RunTraceObserver,
   type RuntimeEventName,
   type RuntimeEventPayloadMap,
   type RuntimeEventPublisher,
-  type TelemetryFailure,
 } from "@agent-anything/observability";
-import type {
-  AppliedPolicyAmendmentRecord,
-  PolicyFailure,
-} from "@agent-anything/governance";
 import {
-  createApprovalRequest,
-  projectApprovalReviewRequest,
-  validateApprovalDecision,
-  type ApprovalRecord,
-  type ApprovalFailure,
-  type ApprovalRequirement,
-  type ApprovalRequest,
-  type ApprovalReviewContext,
-  type ApprovalReviewFailure,
-  type ApprovalReviewInput,
-  type ApprovalScope,
-  type PermissionResolutionEnvironmentInput,
-  type PermissionFailure,
-  type SessionAuthorityRecord,
-  type ValidatedApprovalDecision,
-} from "@agent-anything/permission";
+  findRegisteredOperation,
+  type OperationRequestOrigin,
+  type RegisteredOperation,
+} from "@agent-anything/operation-catalog/catalog";
 import type {
-  ActionAssessment,
-  ActionAssessmentReviewContext,
-  ActionDispatchAuthorization,
-  ActionDispatchPlan,
-  ActionRevalidationResult,
-  PreparedExternalAction,
+  ResolvedOperationBinding,
+} from "@agent-anything/operation-catalog/binding";
+import type {
+  OperationCorrelation,
+  OperationInvocationContext,
+  OperationInvocationRef,
+  OperationRevisionRef,
+} from "@agent-anything/operation-catalog/identity";
+import {
+  createOperationResult,
+  type OperationFailure,
+  type OperationResult,
+} from "@agent-anything/operation-catalog/result";
+import { CompositeExecution } from "@agent-anything/operation-composition/execution";
+import type { CompositeResult } from "@agent-anything/operation-composition/result";
+import {
+  ActionExecutionCoordinator,
+  type ActionApprovalResolutionPort,
+  type ActionExecutionObserver,
+  type ActionExecutionResult,
 } from "@agent-anything/action-execution/enforcement";
-import type {
-  ActionExecutionResult,
-  SandboxAttempt,
-  SandboxExecutionFailure,
-} from "@agent-anything/action-execution/sandbox";
-import type {
-  ActionExecutionFailure,
-  ActionProcessingFailure,
-} from "@agent-anything/action-execution/execution";
-import type { ToolFailure, ToolResult } from "@agent-anything/tools";
-import { ControllerError } from "../controller/ProviderBackedController.js";
-import type { ModelFailure } from "../controller/ModelFailure.js";
-import type { ControllerDecision, ControllerInput } from "../controller/index.js";
+import { createActionPermissionAssessmentPort } from "@agent-anything/permission/authority";
 import {
-  applyContextUpdate,
-  ContextProjectionError,
-  type Context,
-  type ContextFailure,
-} from "@agent-anything/context/context";
-import { abandonPlan, applyPlanUpdate, type Plan, type PlanLifecycleChange } from "../plan/index.js";
+  APPROVAL_INTERACTION_PROTOCOL,
+  createApprovalInteractionPresentation,
+  createApprovalInteractionProtocol,
+  createApprovalRequest,
+  validateApprovalDecision,
+  type ApprovalApplicationOutcome,
+  type ApprovalInteractionResolution,
+  type ApprovalInteractionSubject,
+  type ApprovalReviewInput,
+  type ValidatedApprovalDecision,
+} from "@agent-anything/permission/approval";
 import type {
-  ActionDeniedObservation,
-  ActionFailureObservation,
-  ActionRejectedObservation,
-  ApprovalDeclinedObservation,
-  ApprovalLimitReachedObservation,
-  ApprovalPolicyRejectedObservation,
-  ApprovalReviewFailedObservation,
-  ApprovalApplicationFailedObservation,
-  PermissionsGrantedObservation,
-  PlanUpdateResultObservation,
-  RunObservation,
-  ToolResultObservation,
-} from "../run/RunObservation.js";
-import type { RunBlockedCode, RunFailureCause, RunFailureCode, RunFailureKind, RunFinalizationContext, RunCancellationRequest, RuntimeFailure } from "../run/index.js";
-import { toRunCancellationSummary } from "../run/index.js";
+  CapturedInteractionProtocol,
+  InteractionSubmissionInput,
+  InteractionSubmissionOutcome,
+  PendingInteractionRef,
+} from "@agent-anything/interaction/coordination";
+import type { InteractionTerminalRecord } from "@agent-anything/interaction/records";
 import {
+  adaptToolSemanticResult,
+  type ToolResult,
+} from "@agent-anything/tools/result";
+import { materializeToolCall, type ToolCall } from "@agent-anything/tools/invocation";
+import { createControllerToolExposureProof } from "@agent-anything/tools/selection";
+import {
+  ControllerError,
+  validateControllerDecision,
+  type ControllerDecision,
+  type InteractionRequestCandidate,
+  type OperationRequestCandidate,
+  type ProgressionCandidate,
+  type SameRunHandoffRequest,
+} from "../controller/index.js";
+import {
+  abandonPlan,
+  applyPlanUpdate,
+  projectPlan,
+} from "../plan/index.js";
+import { snapshotRetryEvent, type RetryEventSink } from "../retry/index.js";
+import {
+  createBlockedRunResult,
+  createCancelledRunResult,
+  createFailedRunResult,
   createRunFailureCause,
-  runFailureCode,
-} from "../run/RunFailure.js";
-import { createRunFinalizationContext } from "./RunFinalization.js";
+  createRunObservation,
+  createSucceededRunResult,
+  deriveActiveRunStatus,
+  toRunCancellationSummary,
+  type PendingRunSubject,
+  type RunFailureCause,
+  type RunFailureCode,
+  type RunItemPayload,
+  type RunObservation,
+  type RunResult,
+  type RunState,
+  type RuntimeRunAction,
+} from "../run/index.js";
+import type { RunExecutionUpdate } from "./RunHandle.js";
 import type { ResolvedRunConfig } from "./RunConfig.js";
-import type { ActionAssessedSummary, ActionInvalidatedSummary, ActionPreparedSummary, ApprovalRequestedRunItem, RunItem, RunItemBase, SandboxAttemptResolutionSummary, SandboxAttemptSummary } from "../run/index.js";
-import { createBlockedRunResult, createCancelledRunResult, createFailedRunResult, createSucceededRunResult, type RunResult } from "../run/index.js";
 import type {
   ResolvedRunnerDependencies,
-  RunnerDependencies,
 } from "./RunnerDependencies.js";
-import { recordRunnerLifecycle } from "./RunnerObservability.js";
 import {
-  validateControllerDecision,
-} from "./RunnerValidation.js";
-import type { RunCounters, RunState } from "../run/index.js";
-import { assertRunPermissionStateInvariant, deriveEffectivePermissionContext, projectPermissionContext, type PendingApproval, type RunPermissionState } from "../run/index.js";
-import { deriveApprovalReviewDeadline, deriveAuthorityCommitDeadline, deriveRunDeadline } from "../run/index.js";
-import { snapshotRetryEvent, type RetryEvent, type RetryEventSink } from "../retry/index.js";
-import {
-  executeApprovalReviewer,
-  type ApprovalReviewerExecutionResult,
-} from "./ApprovalReviewerExecution.js";
-import {
-  allowsExplicitPermissionRequest,
-  createPermissionRequestDecisionContract,
-  preparePermissionRequestAction,
-} from "./PermissionRequestAction.js";
+  executeControllerOperation,
+  prepareControllerOperation,
+  type PreparedControllerOperation,
+} from "./ControllerOperation.js";
 import {
   applyCommittedPolicyAmendment,
   applyCommittedSessionAuthority,
@@ -115,1844 +122,1931 @@ import {
   consumeActionApprovalCoverage,
 } from "./RunApprovalAuthority.js";
 import {
-  beginApprovalAuthorityApplication,
-  beginApprovalReview,
-  settleApproval,
-  type ApprovalSettlementCounterEffect,
-} from "./RunApprovalLifecycle.js";
+  deriveApprovalReviewDeadline,
+  deriveAuthorityCommitDeadline,
+} from "../run/index.js";
 import {
-  recordApprovalRequestAudit,
-  recordApprovalValidatedDecisionAudit,
-} from "./RunnerApprovalAudit.js";
-import { recordApprovalResolution } from "./RunnerApprovalObservability.js";
-import { createApprovalRecordSummary, createApprovalRequestSummary } from "../run/index.js";
-import {
-  authorityCommitOwner,
   executeAuthorityCommit,
   isDurableAuthorityDecision,
-  type AuthorityCommitExecutionResult,
-  type AuthorityCommitOwner,
 } from "./AuthorityCommitExecution.js";
-import { recordActionDispatchAuthorizationAudit } from "./RunnerActionDispatchAudit.js";
-import {
-  recordSandboxAttemptResolved,
-  recordSandboxAttemptStarted,
-} from "./RunnerSandboxAttemptObservability.js";
-import {
-  completeRunnerTrace,
-  createRunnerTraceAssembler,
-} from "./RunnerTracing.js";
-import {
-  classifyToolResult,
-  settleToolResultEvidence,
-  type ToolResultClassification,
-} from "@agent-anything/context/evidence";
-import type { RunExecutionUpdate } from "./RunHandle.js";
-import { executeControllerOperation } from "./ControllerOperation.js";
-import { routeRunAction } from "./RunActionRouter.js";
+import { executeApprovalReviewer } from "./ApprovalReviewerExecution.js";
 import { createInitialRunState } from "./RunInitialization.js";
+import { createRunFinalizationContext } from "./RunFinalization.js";
 import {
   OperationSettlementTimeoutError,
   RunInterruptionCoordinator,
-  type ActiveRunOperationKind,
 } from "./RunInterruptionCoordinator.js";
-import {
-  evaluateRunDurationLimit,
-  evaluateRunLoopLimits,
-} from "./RunLoopLimits.js";
-
-type RunItemDraft<TOutput> = (base: RunItemBase) => RunItem<TOutput>;
+import { RunInteractionCoordinator, type RuntimeInteractionSettlement } from "./RunInteractionCoordinator.js";
+import { evaluateRunLoopLimits } from "./RunLoopLimits.js";
+import { recordRunnerLifecycle } from "./RunnerObservability.js";
+import { completeRunnerTrace, createRunnerTraceAssembler } from "./RunnerTracing.js";
+import { RunStateWriter } from "./RunStateWriter.js";
 
 type TerminalCandidate<TOutput> =
-  | {
-      readonly status: "succeeded";
-      readonly output: NonNullable<TOutput>;
-    }
-  | {
-      readonly status: "blocked";
-      readonly code: RunBlockedCode;
-      readonly reason: string;
-    }
+  | { readonly status: "succeeded"; readonly output: TOutput }
+  | { readonly status: "blocked"; readonly code: "runtime_no_safe_path" }
   | {
       readonly status: "failed";
       readonly code: RunFailureCode;
       readonly failure: RunFailureCause;
-      readonly relatedFailures: readonly RunFailureCause[];
-      readonly cancellationRequest: RunCancellationRequest | null;
+      readonly relatedFailures?: readonly RunFailureCause[];
     }
-  | {
-      readonly status: "cancelled";
-      readonly cancellationRequest: RunCancellationRequest;
-    };
+  | { readonly status: "cancelled" };
 
-interface ProcessActionResult {
-  readonly invalidatesBatch: boolean;
-  readonly terminalResult: RunResult<unknown> | null;
+interface CandidateBasis<TOutput> {
+  readonly turn: ControllerTurnRef;
+  readonly runRevision: number;
+  readonly activeAgent: Agent<TOutput>;
+  readonly projection: ContextProjection<RunObservation>;
+  readonly exposure: ReturnType<typeof createControllerToolExposureProof>;
 }
 
-interface ExternalApprovalResult extends ProcessActionResult {
-  readonly authorityApplied: boolean;
+interface OperationExecutionOutcome {
+  readonly result: OperationResult;
+  readonly toolResult: ToolResult | null;
 }
 
-type ExternalActionRevalidationOutcome =
-  | { readonly kind: "result"; readonly result: ActionRevalidationResult }
-  | { readonly kind: "processed"; readonly processed: ProcessActionResult };
-
-interface ApprovalOperationInput {
-  readonly action: Action;
-  readonly request: ApprovalRequest;
-  readonly cwd: string;
-  readonly environment: PermissionResolutionEnvironmentInput;
-  readonly reviewContext: ApprovalReviewContext;
+interface QueuedInteractionSettlement {
+  readonly pending: PendingInteractionRef;
+  readonly terminal: InteractionTerminalRecord;
+  readonly settlement: RuntimeInteractionSettlement;
+  readonly action: RuntimeRunAction | null;
 }
-
-type RetryEventAcceptance =
-  | { readonly kind: "controller" }
-  | {
-      readonly kind: "approval_reviewer";
-      readonly requestId: string;
-      readonly pendingVersion: number;
-      readonly operationId: string;
-    };
 
 export class RunExecution<TOutput> {
-  private state!: RunState<TOutput>;
-  private startedAtMs = 0;
-  private terminalResult: RunResult<TOutput> | null = null;
-  private eventStream!: RuntimeEventStream;
-  private traceAssembler: RunTraceAssembler | null = null;
+  private readonly startedAt: string;
+  private readonly startedAtMs: number;
+  private readonly writer: RunStateWriter<TOutput>;
+  private readonly interactions: RunInteractionCoordinator;
+  private readonly eventStream: RuntimeEventStream;
+  private readonly traceAssembler: RunTraceAssembler | null;
   private readonly interruptionCoordinator: RunInterruptionCoordinator;
+  private readonly actionExecution: ActionExecutionCoordinator | null;
+  private activeAgent: Agent<TOutput>;
+  private terminalResult: RunResult<TOutput> | null = null;
+  private emittedItemCount = 0;
+  private descendantCount = 0;
+  private nextInteractionRequest = 1;
+  private readonly identitySequences = new Map<
+    Parameters<ResolvedRunnerDependencies["createId"]>[0]["kind"],
+    number
+  >();
+  private readonly childHandles = new Set<import("./RunHandle.js").RunHandle>();
+  private readonly interactionActions = new Map<string, RuntimeRunAction>();
+  private readonly interactionSettlements: QueuedInteractionSettlement[] = [];
+  private retryProjection: import("./RunHandle.js").RunRetryProjection | null = null;
 
   constructor(
     private readonly runId: string,
     private readonly dependencies: ResolvedRunnerDependencies,
-    private readonly agent: Agent<TOutput>,
+    agent: Agent<TOutput>,
     private readonly input: RunInput,
     private readonly config: ResolvedRunConfig,
-    private readonly runtimeEventPublishers: readonly RuntimeEventPublisher[],
-    private readonly runTraceObservers: readonly RunTraceObserver[],
+    runtimeEventPublishers: readonly RuntimeEventPublisher[],
+    runTraceObservers: readonly RunTraceObserver[],
+    actionExecutionObserver: ActionExecutionObserver | undefined,
     private readonly onUpdate: (update: RunExecutionUpdate<TOutput>) => void,
   ) {
+    this.startedAt = this.now();
+    this.startedAtMs = Date.parse(this.startedAt);
+    this.activeAgent = agent;
+    this.traceAssembler = createRunnerTraceAssembler({
+      runId,
+      taskId: input.task.id,
+      observers: runTraceObservers,
+      createId: dependencies.createId,
+    });
+    this.eventStream = new RuntimeEventStream({
+      runId,
+      taskId: input.task.id,
+      now: dependencies.now,
+      createEventId: ({ sequence }) => dependencies.createId({
+        kind: "runtime_event",
+        runId,
+        sequence,
+      }),
+      publishers: Object.freeze([
+        ...runtimeEventPublishers,
+        ...(this.traceAssembler === null ? [] : [this.traceAssembler]),
+      ]),
+    });
+    const initial = createInitialRunState({
+      runId,
+      agent,
+      input,
+      config,
+      startedAt: this.startedAt,
+    });
+    this.writer = new RunStateWriter(
+      initial,
+      dependencies.now,
+      dependencies.createId,
+      (state) => this.onStateCommitted(state),
+    );
+
+    const approvalProtocol = createApprovalInteractionProtocol({
+      validateDecision: (subject, submission, request) =>
+        this.validateApprovalDecision(subject, submission, request.id),
+      applyDecision: (subject, resolution, request) =>
+        this.applyApprovalDecision(subject, resolution, request.id),
+    }) as unknown as CapturedInteractionProtocol;
+    this.interactions = new RunInteractionCoordinator({
+      runId,
+      registry: dependencies.interactions,
+      localProtocols: Object.freeze([approvalProtocol]),
+      now: dependencies.now,
+      createId: (kind, sequence) => dependencies.createId({ kind, runId, sequence }),
+      onOpened: (pending) => this.openPendingInteraction(pending),
+      onSettled: (pending, terminal, settlement) =>
+        this.queueInteractionSettlement(pending, terminal, settlement),
+    });
+
     this.interruptionCoordinator = new RunInterruptionCoordinator({
       cancellation: config.cancellation.context,
-      operationSettlementTimeoutMs:
-        config.cancellationLimits.operationSettlementTimeoutMs,
-      now: () => this.now(),
-      onCancellationObserved: (request) => {
-        if (
-          this.state !== undefined &&
-          (
-            this.state.status === "initializing" ||
-            this.state.status === "running"
-          )
-        ) {
-          this.enterCancelling(request);
-        }
-      },
+      operationSettlementTimeoutMs: config.cancellationLimits.operationSettlementTimeoutMs,
+      now: dependencies.now,
+      onCancellationObserved: (request) => this.enterCancelling(request),
     });
+
+    const actionComposition = dependencies.operations.actionExecution;
+    this.actionExecution = actionComposition === undefined
+      ? null
+      : new ActionExecutionCoordinator({
+          ...actionComposition,
+          permission: createActionPermissionAssessmentPort({
+            now: dependencies.now,
+            consumeCoverage: (coverageId) => this.consumeApprovalCoverage(coverageId),
+          }),
+          approval: this.createActionApprovalPort(),
+          observer: composeActionExecutionObservers(
+            actionComposition.observer,
+            actionExecutionObserver,
+          ),
+          now: dependencies.now,
+          createId: (kind) => `${this.id("action")}:${kind}`,
+        });
+  }
+
+  submitInteraction(input: InteractionSubmissionInput): InteractionSubmissionOutcome {
+    const local = this.interactions.submit(input);
+    if (local.status !== "rejected" || local.code !== "interaction_not_pending") {
+      return local;
+    }
+    for (const child of this.childHandles) {
+      const outcome = child.submitInteraction(input);
+      if (outcome.status !== "rejected" || outcome.code !== "interaction_not_pending") {
+        return outcome;
+      }
+    }
+    return local;
   }
 
   async run(): Promise<RunResult<TOutput>> {
+    this.interruptionCoordinator.start();
     try {
-      const result = await this.runInternal();
-      completeRunnerTrace(this.traceAssembler, result);
-      return result;
+      this.writer.commitState(() => Object.freeze({ status: "running" as const }));
+      this.emit("run.started", {
+        status: "running",
+        activeAgentId: this.activeAgent.id,
+      }, this.startedAt);
+      const startFailures = await this.recordLifecycle("started");
+      if (startFailures.length > 0) {
+        return await this.settle({
+          status: "failed",
+          code: "required_finalization_failed",
+          failure: startFailures[0]!,
+          relatedFailures: startFailures.slice(1),
+        });
+      }
+
+      while (this.terminalResult === null) {
+        this.drainInteractionSettlements();
+        if (this.config.cancellation.context.request !== null) {
+          return await this.settle({ status: "cancelled" });
+        }
+        const state = this.writer.getSnapshot();
+        const violation = evaluateRunLoopLimits({
+          counters: state.counters,
+          limits: this.config.limits,
+          deadlineAt: state.deadlineAt,
+          now: this.now(),
+          cancellationRequested: false,
+        });
+        if (violation !== null) {
+          return await this.settle({
+            status: "failed",
+            code: violation.code,
+            failure: runtimeFailure(violation.code, violation.message, violation.metadata),
+          });
+        }
+
+        const decision = await this.nextDecision();
+        const settlementsAfterDecision = this.drainInteractionSettlements();
+        if (this.config.cancellation.context.request !== null) {
+          return await this.settle({ status: "cancelled" });
+        }
+        if (settlementsAfterDecision > 0) {
+          continue;
+        }
+        if (decision.decision.kind === "propose_completion") {
+          return await this.settle({
+            status: "succeeded",
+            output: decision.decision.output,
+          });
+        }
+        if (decision.decision.kind === "propose_stop") {
+          return await this.settle({
+            status: "blocked",
+            code: "runtime_no_safe_path",
+          });
+        }
+
+        const basis: CandidateBasis<TOutput> = {
+          turn: decision.turn,
+          runRevision: decision.basisRevision,
+          activeAgent: decision.agent,
+          projection: decision.prepared.context,
+          exposure: decision.prepared.input.toolExposure,
+        };
+        for (let index = 0; index < decision.decision.candidates.length; index += 1) {
+          if (this.config.cancellation.context.request !== null) break;
+          if (this.drainInteractionSettlements() > 0) break;
+          const invalidatesRemainder = await this.processCandidate(
+            decision.decision.candidates[index]!,
+            index,
+            basis,
+          );
+          if (this.terminalResult !== null) return this.terminalResult;
+          if (invalidatesRemainder) break;
+        }
+      }
+      return this.terminalResult;
     } catch (error) {
-      return this.settleUnexpectedFailure(error);
+      if (this.terminalResult !== null) return this.terminalResult;
+      if (this.config.cancellation.context.request !== null &&
+          !(error instanceof OperationSettlementTimeoutError)) {
+        return await this.settle({ status: "cancelled" });
+      }
+      return await this.settle(this.failureFromError(error));
     } finally {
+      this.interactions.close();
       this.interruptionCoordinator.dispose();
     }
   }
 
-  private async runInternal(): Promise<RunResult<TOutput>> {
-    this.traceAssembler = createRunnerTraceAssembler({
-      runId: this.runId,
-      taskId: this.input.task.id,
-      observers: this.runTraceObservers,
-      createId: this.dependencies.createId,
+  private async nextDecision(): Promise<{
+    readonly decision: ControllerDecision<TOutput>;
+    readonly turn: ControllerTurnRef;
+    readonly basisRevision: number;
+    readonly agent: Agent<TOutput>;
+    readonly prepared: PreparedControllerOperation<TOutput>;
+  }> {
+    const state = this.writer.getSnapshot();
+    const iteration = state.counters.controllerTurns + 1;
+    const turn: ControllerTurnRef = Object.freeze({
+      run: state.run,
+      id: this.id("controller_turn", iteration),
+      sequence: iteration,
     });
-    this.eventStream = new RuntimeEventStream({
-      runId: this.runId,
-      taskId: this.input.task.id,
-      now: this.dependencies.now,
-      createEventId: ({ runId, sequence }) => {
-        const id = this.dependencies.createId({
-          kind: "runtime_event",
-          runId,
-          sequence,
-        });
-        assertNonEmpty(id, "runtime_event id");
-        return id;
-      },
-      publishers: this.traceAssembler === null
-        ? this.runtimeEventPublishers
-        : Object.freeze([
-            this.traceAssembler,
-            ...this.runtimeEventPublishers,
-          ]),
-    });
-
-    const startedAt = this.now();
-    this.startedAtMs = Date.parse(startedAt);
-    this.state = createInitialRunState({
-      runId: this.runId,
-      agent: this.agent,
-      input: this.input,
+    const exposure = createControllerToolExposureProof(
+      this.config.tools,
+      turn.id,
+    );
+    const prepared = prepareControllerOperation({
+      agent: this.activeAgent,
+      runInput: this.input,
       config: this.config,
-      startedAt,
+      state,
+      iteration,
+      exposure,
+      contextProjection: this.dependencies.contextProjection,
     });
-    this.interruptionCoordinator.start();
-
-    if (this.cancellationRequest() !== null) {
-      return this.cancelRun();
-    }
-
-    if (this.state.status !== "initializing") {
-      throw new Error(`Run cannot start its loop from ${this.state.status}.`);
-    }
-    this.replaceState(freezeState({
-      ...this.state,
-      status: "running",
-      code: null,
-      finalOutput: null,
-      failure: null,
-      relatedFailures: Object.freeze([]) as readonly [],
-      cancellationRequest: null,
-    }));
-    this.emit("run.started", {
-      status: "running",
-      activeAgentId: this.state.activeAgentId,
-    });
-
-    const startFailures = await this.recordLifecycle("started");
-    if (startFailures.length > 0) {
-      const cancellationRequest = this.cancellationRequest();
-      if (cancellationRequest !== null) {
-        this.enterCancelling(cancellationRequest);
-      }
-      const [failure, ...relatedFailures] = startFailures;
-      return this.terminalize({
-        status: "failed",
-        code: failureCode(failure),
-        failure,
-        relatedFailures: Object.freeze(relatedFailures),
-        cancellationRequest,
-      }, new Set(startFailures.map((cause) => cause.kind)));
-    }
-
-    if (this.cancellationRequest() !== null) {
-      return this.cancelRun();
-    }
-
-    while (this.isRunning()) {
-      const limitError = this.checkLoopLimits();
-      if (limitError !== null) {
-        return this.fail(limitError);
-      }
-
-      this.replaceState(freezeState({
-        ...this.state,
-        counters: freezeCounters({
-          ...this.state.counters,
-          iterations: this.state.counters.iterations + 1,
+    this.emit("controller.started", { turnId: turn.id, iteration });
+    try {
+      const candidate = await this.interruptionCoordinator.execute(
+        "controller",
+        () => executeControllerOperation({
+          dependencies: this.dependencies,
+          prepared,
+          config: this.config,
+          retryEvents: this.retryEvents(),
+        }),
+        state.deadlineAt,
+      );
+      const decision = validateControllerDecision(candidate, prepared.input);
+      this.writer.commit({
+        kind: "controller_turn",
+        turn,
+        status: "decided",
+        decisionKind: decision.kind,
+        modelItems: decision.modelItems,
+        failure: null,
+      }, (current) => Object.freeze({
+        counters: Object.freeze({
+          ...current.counters,
+          controllerTurns: iteration,
         }),
       }));
-      const iteration = this.state.counters.iterations;
-      this.emit("controller.started", { iteration });
-
-      let decision: ControllerDecision<unknown>;
-      try {
-        decision = await this.awaitInterruptibleOperation(
-          "controller",
-          () => executeControllerOperation({
-            controller: this.dependencies.controller,
-            agent: this.agent,
-            input: this.input,
-            config: this.config,
-            state: this.state,
-            deadlineAt: this.runDeadlineAt(),
-            retryEvents: this.createRetryEventSink({ kind: "controller" }),
-            contextProjection: this.dependencies.contextProjection,
-          }),
-        );
-      } catch (error) {
-        if (error instanceof OperationSettlementTimeoutError) {
-          this.emit("controller.finished", {
-            iteration,
-            status: "failed",
-            code: "runtime_cancellation_settlement_timeout",
-            decisionKind: null,
-          });
-          return this.fail(
-            cancellationSettlementRunFailure(error),
-            "runtime_cancellation_settlement_timeout",
-          );
-        }
-        if (error instanceof ContextProjectionError) {
-          this.emit("controller.finished", {
-            iteration,
-            status: "failed",
-            code: "context_projection_failed",
-            decisionKind: null,
-          });
-          return this.fail(
-            createRunFailureCause("context", error.failure),
-            "context_projection_failed",
-          );
-        }
-        if (
-          error instanceof ControllerError &&
-          error.operationSettlement === "settled_failure"
-        ) {
-          this.emit("controller.finished", {
-            iteration,
-            status: "failed",
-            code: error.failure.failure.code,
-            decisionKind: null,
-          });
-          return this.fail(
-            error.failure,
-            failureCode(error.failure),
-          );
-        }
-        if (this.cancellationRequest() !== null) {
-          this.emit("controller.finished", {
-            iteration,
-            status: "cancelled",
-            code: null,
-            decisionKind: null,
-          });
-          return this.cancelRun();
-        }
-
-        const failure = controllerRunFailure(error);
-        this.emit("controller.finished", {
-          iteration,
-          status: "failed",
-          code: runFailureCode(failure),
-          decisionKind: null,
-        });
-        return this.fail(failure, failureCode(failure));
-      }
-
-      if (this.cancellationRequest() !== null) {
-        this.emit("controller.finished", {
-          iteration,
-          status: "cancelled",
-          code: null,
-          decisionKind: null,
-        });
-        return this.cancelRun();
-      }
-
-      const controllerDurationError = this.checkDurationLimit();
-      if (controllerDurationError !== null) {
-        this.emit("controller.finished", {
-          iteration,
-          status: "failed",
-          code: runFailureCode(controllerDurationError),
-          decisionKind: null,
-        });
-        return this.fail(controllerDurationError);
-      }
-
-      const malformedDecision = validateControllerDecision(decision);
-      if (malformedDecision !== null) {
-        const error = runFailure(
-          "model",
-          "model_output_invalid",
-          malformedDecision,
-          false,
-        );
-        this.emit("controller.finished", {
-          iteration,
-          status: "failed",
-          code: runFailureCode(error),
-          decisionKind: null,
-        });
-        return this.fail(error, "model_output_invalid");
-      }
-
-      this.commitRunning(
-        decision.modelItems.map((modelItem) => (base) => Object.freeze({
-          ...base,
-          kind: "model_output" as const,
-          modelItem: Object.freeze({
-            ...modelItem,
-            metadata: Object.freeze({ ...modelItem.metadata }),
-          }),
-        })),
-      );
       this.emit("controller.finished", {
+        turnId: turn.id,
         iteration,
-        status: "succeeded",
+        status: "decided",
         code: null,
         decisionKind: decision.kind,
       });
-
-      if (decision.kind === "final_output") {
-        let validation;
-        try {
-          validation = this.agent.output.validate(decision.output);
-        } catch (error) {
-          return this.fail(runFailure(
-            "model",
-            "model_output_invalid",
-            "Agent output validation failed.",
-            false,
-            errorMetadata(error),
-          ), "model_output_invalid");
-        }
-
-        if (!validation.valid || validation.output === null || validation.output === undefined) {
-          return this.fail(runFailure(
-            "model",
-            "model_output_invalid",
-            validation.valid
-              ? "Agent output must be non-null."
-              : validation.message,
-            false,
-          ), "model_output_invalid");
-        }
-
-        return this.terminalize({
-          status: "succeeded",
-          output: validation.output as NonNullable<TOutput>,
-        });
-      }
-
-      if (decision.kind === "stop") {
-        return this.terminalize({
-          status: "blocked",
-          code: "runtime_no_safe_path",
-          reason: decision.reason,
-        });
-      }
-
-      if (
-        this.state.counters.actions + decision.actions.length >
-        this.config.limits.maxActions
-      ) {
-        return this.fail(limitRunFailure("Run exceeded maxActions.", {
-          maxActions: this.config.limits.maxActions,
-          attemptedActions: this.state.counters.actions + decision.actions.length,
-        }));
-      }
-
-      const actions = this.materializeActions(decision.actions, iteration);
-      for (const action of actions) {
-        if (this.cancellationRequest() !== null) {
-          return this.cancelRun();
-        }
-
-        const durationError = this.checkDurationLimit();
-        if (durationError !== null) {
-          return this.fail(durationError);
-        }
-
-        const processed = await this.processAction(action);
-        if (processed.terminalResult !== null) {
-          return processed.terminalResult as RunResult<TOutput>;
-        }
-        if (processed.invalidatesBatch) {
-          break;
-        }
-      }
-    }
-
-    if (this.terminalResult === null) {
-      throw new Error("Runner left its active loop without a terminal result.");
-    }
-    return this.terminalResult;
-  }
-
-  private isRunning(): boolean {
-    return this.state.status === "running";
-  }
-
-  private materializeActions(
-    candidates: readonly ActionCandidate[],
-    iteration: number,
-  ): readonly Action[] {
-    const firstSequence = this.state.counters.actions + 1;
-    const actions = candidates.map((candidate, index) => {
-      const sequence = firstSequence + index;
       return Object.freeze({
-        id: this.createId("action", sequence),
-        runId: this.state.runId,
-        sequence,
-        kind: candidate.kind,
-        name: candidate.name,
-        input: candidate.input,
-        provenance: Object.freeze({
-          origin: candidate.origin,
-          modelItemId: candidate.modelItemId,
-          controllerIteration: iteration,
-        }),
+        decision,
+        turn,
+        basisRevision: state.revision,
+        agent: this.activeAgent,
+        prepared,
       });
-    });
-
-    this.commitRunning(
-      actions.map((action) => (base) => Object.freeze({
-        ...base,
-        kind: "action" as const,
-        action,
-      })),
-      {
-        counters: freezeCounters({
-          ...this.state.counters,
-          actions: this.state.counters.actions + actions.length,
+    } catch (error) {
+      if (this.config.cancellation.context.request !== null) throw error;
+      const terminal = this.failureFromError(error);
+      this.writer.commit({
+        kind: "controller_turn",
+        turn,
+        status: "failed",
+        decisionKind: null,
+        modelItems: Object.freeze([]),
+        failure: terminal.failure,
+      }, (current) => Object.freeze({
+        counters: Object.freeze({
+          ...current.counters,
+          controllerTurns: iteration,
         }),
-      },
-    );
-    return Object.freeze(actions);
+      }));
+      this.emit("controller.finished", {
+        turnId: turn.id,
+        iteration,
+        status: "failed",
+        code: terminal.failure.failure.code,
+        decisionKind: null,
+      });
+      throw error;
+    }
   }
 
-  private async processAction(action: Action): Promise<ProcessActionResult> {
-    switch (routeRunAction(action)) {
-      case "plan_update":
-        return this.processPlanUpdate(action);
-      case "tool":
-        return this.processToolAction(
-          action as Action & { readonly kind: "tool" },
+  private async processCandidate(
+    candidate: ProgressionCandidate,
+    index: number,
+    basis: CandidateBasis<TOutput>,
+  ): Promise<boolean> {
+    const state = this.writer.getSnapshot();
+    if (state.counters.runActions >= this.config.limits.maxActions) {
+      await this.settle({
+        status: "failed",
+        code: "runtime_limit_exceeded",
+        failure: runtimeFailure(
+          "runtime_limit_exceeded",
+          "Run exceeded maxActions.",
+          { maxActions: this.config.limits.maxActions },
+        ),
+      });
+      return true;
+    }
+    const reservedId = candidate.kind === "operation_request"
+      ? this.id("operation_invocation")
+      : candidate.kind === "interaction_request"
+        ? this.id("interaction_request", this.nextInteractionRequest++)
+        : null;
+    const action = this.materializeControllerRunAction(
+      candidate,
+      index,
+      basis,
+      reservedId,
+    );
+
+    switch (candidate.kind) {
+      case "state_transition":
+        return candidate.transition === "plan_update"
+          ? (await this.applyPlanCandidate(action, candidate.input), false)
+          : this.applyHandoffCandidate(action, candidate.input, basis);
+      case "interaction_request":
+        return this.applyInteractionCandidate(action, candidate, reservedId!);
+      case "operation_request": {
+        const outcome = await this.executeOperationCandidate(
+          action,
+          candidate,
+          reservedId!,
+          basis.exposure,
         );
-      case "permission_request":
-        return this.processPermissionRequest(
-          action as Action & { readonly kind: "permission_request" },
-        );
-      case "unsupported":
-        break;
+        if (outcome !== null) {
+          this.commitOperationObservation(action, outcome);
+          if (outcome.result.status === "unknown_effect") {
+            await this.settle({
+              status: "failed",
+              code: "unknown_effect",
+              failure: createRunFailureCause("operation", outcome.result.failure),
+            });
+            return true;
+          }
+        }
+        return false;
+      }
+    }
+  }
+
+  private materializeControllerRunAction(
+    candidate: ProgressionCandidate,
+    candidateIndex: number,
+    basis: CandidateBasis<TOutput>,
+    reservedId: string | null,
+  ): RuntimeRunAction {
+    const state = this.writer.getSnapshot();
+    const sequence = state.counters.runActions + 1;
+    const ref = Object.freeze({
+      run: state.run,
+      id: this.id("run_action", sequence),
+      sequence,
+    });
+    const subject = candidate.kind === "state_transition"
+      ? Object.freeze({
+          kind: "state_transition" as const,
+          transition: candidate.transition,
+        })
+      : candidate.kind === "operation_request"
+        ? Object.freeze({
+            kind: "operation" as const,
+            invocationId: reservedId,
+            requestOrigin: candidate.origin,
+          })
+        : Object.freeze({
+            kind: "interaction" as const,
+            request: Object.freeze({
+              id: reservedId!,
+              protocol: candidate.protocol,
+              requestVersion: candidate.requestVersion,
+              subject: candidate.subjectRef,
+            }),
+          });
+    const action: RuntimeRunAction = Object.freeze({
+      ref,
+      provenance: Object.freeze({
+        kind: "controller" as const,
+        turn: basis.turn,
+        candidateIndex,
+      }),
+      subject,
+      basis: Object.freeze({
+        runRevision: basis.runRevision,
+        activeAgentId: basis.activeAgent.id,
+        controllerProjectionRevision: String(basis.runRevision),
+      }),
+      materializedAt: this.now(),
+    });
+    this.writer.commit({ kind: "run_action", action }, (current) => Object.freeze({
+      counters: Object.freeze({
+        ...current.counters,
+        runActions: sequence,
+      }),
+    }));
+    return action;
+  }
+
+  private materializeWorkflowRunAction(input: {
+    readonly operation: OperationRevisionRef;
+    readonly invocationId: string;
+    readonly compositeId: string;
+    readonly nodeId: string;
+  }): RuntimeRunAction {
+    const state = this.writer.getSnapshot();
+    const sequence = state.counters.runActions + 1;
+    const ref = Object.freeze({
+      run: state.run,
+      id: this.id("run_action", sequence),
+      sequence,
+    });
+    const provenance: RunActionProvenance = Object.freeze({
+      kind: "trusted_workflow",
+      workflow: Object.freeze({ owner: "operation-composition", invocationId: input.compositeId }),
+      nodeRef: input.nodeId,
+    });
+    const action: RuntimeRunAction = Object.freeze({
+      ref,
+      provenance,
+      subject: Object.freeze({
+        kind: "operation",
+        invocationId: input.invocationId,
+        requestOrigin: "composite",
+      }),
+      basis: Object.freeze({
+        runRevision: state.revision,
+        activeAgentId: state.activeAgent.id,
+        controllerProjectionRevision: null,
+      }),
+      materializedAt: this.now(),
+    });
+    this.writer.commit({ kind: "run_action", action }, (current) => Object.freeze({
+      counters: Object.freeze({ ...current.counters, runActions: sequence }),
+    }));
+    return action;
+  }
+
+  private async applyPlanCandidate(action: RuntimeRunAction, candidate: unknown): Promise<void> {
+    const state = this.writer.getSnapshot();
+    const result = state.plan === null
+      ? applyPlanUpdate({
+          currentPlan: null,
+          newPlanId: this.id("plan"),
+          candidate,
+          limits: this.config.limits.plan,
+          now: this.now(),
+        })
+      : applyPlanUpdate({
+          currentPlan: state.plan,
+          candidate,
+          limits: this.config.limits.plan,
+          now: this.now(),
+        });
+    if (result.status === "applied") {
+      this.writer.commit({
+        kind: "state_transition",
+        transition: "plan",
+        previousRevision: state.plan?.version ?? null,
+        plan: projectPlan(result.plan),
+      }, () => Object.freeze({ plan: result.plan }));
+    }
+    this.commitObservation(action, {
+      kind: "plan_update",
+      result: result.observation,
+    }, [], "runtime");
+  }
+
+  private async applyHandoffCandidate(
+    action: RuntimeRunAction,
+    request: SameRunHandoffRequest,
+    basis: CandidateBasis<TOutput>,
+  ): Promise<boolean> {
+    const state = this.writer.getSnapshot();
+    const rejected = (code: string): boolean => {
+      this.commitObservation(action, {
+        kind: "handoff",
+        status: "rejected",
+        code,
+      }, [], "agent-runtime");
+      return true;
+    };
+    if (
+      request.expectedRunRevision !== basis.runRevision ||
+      !sameAgentRef(request.currentAgent, basis.activeAgent) ||
+      !sameAgentRef(request.currentAgent, state.activeAgent)
+    ) return rejected("handoff_basis_stale");
+    if (sameAgentRef(request.currentAgent, request.targetAgent)) {
+      return rejected("handoff_target_unchanged");
+    }
+    if (this.dependencies.agents === undefined) {
+      return rejected("handoff_agent_resolver_unavailable");
+    }
+    const resolution = await this.dependencies.agents.resolve(request.targetAgent);
+    if (
+      resolution.status !== "admitted" ||
+      resolution.agent === null ||
+      resolution.admissionEvidenceRef !== request.admissionEvidenceRef ||
+      !sameAgentRef(resolution.agent, request.targetAgent)
+    ) return rejected(resolution.code ?? "handoff_agent_not_admitted");
+
+    const previous = state.activeAgent;
+    const nextAgent = resolution.agent as Agent<TOutput>;
+    const nextContext = handoffContext(
+      request.transferPolicy,
+      state.context,
+      basis.projection,
+      this.input,
+    );
+    this.activeAgent = nextAgent;
+    this.writer.commit({
+      kind: "state_transition",
+      transition: "active_agent",
+      previousAgent: previous,
+      activeAgent: toAgentRevisionRef(nextAgent),
+      reason: request.reason,
+    }, () => Object.freeze({
+      activeAgent: toAgentRevisionRef(nextAgent),
+      context: nextContext,
+    }));
+    this.commitObservation(action, {
+      kind: "handoff",
+      status: "applied",
+      code: null,
+    }, [{
+      owner: "agent-runtime",
+      kind: "agent_admission_evidence",
+      id: request.admissionEvidenceRef,
+      revision: request.targetAgent.revision,
+    }], "agent-runtime");
+    return true;
+  }
+
+  private async applyInteractionCandidate(
+    action: RuntimeRunAction,
+    candidate: InteractionRequestCandidate,
+    requestId: string,
+  ): Promise<boolean> {
+    const opened = this.interactions.open({
+      requestId,
+      protocol: candidate.protocol,
+      subject: candidate.subject,
+      subjectRef: candidate.subjectRef,
+      correlation: this.runActionCorrelation(action),
+      parentRunAction: action.ref,
+      presentation: candidate.presentation,
+      requestVersion: candidate.requestVersion,
+      expiresAt: candidate.expiresAt,
+      blockingScope: candidate.blockingScope,
+      createdAt: this.now(),
+    });
+    if (opened.status !== "opened") {
+      this.commitObservation(action, {
+        kind: "interaction",
+        owner: opened.owner,
+        status: "failed",
+        value: Object.freeze({ code: opened.code }),
+      }, [], opened.owner);
+      return candidate.blockingScope !== "none";
+    }
+    this.interactionActions.set(interactionRequestKey(opened.pending.request), action);
+    if (candidate.blockingScope === "none") return false;
+    const settlement = await opened.completion;
+    this.drainInteractionSettlements();
+    if (this.interactionActions.delete(interactionRequestKey(opened.pending.request))) {
+      this.commitInteractionObservation(action, settlement);
+    }
+    return true;
+  }
+
+  private async executeOperationCandidate(
+    action: RuntimeRunAction,
+    candidate: OperationRequestCandidate,
+    invocationId: string,
+    exposure: ReturnType<typeof createControllerToolExposureProof>,
+  ): Promise<OperationExecutionOutcome | null> {
+    let operation = candidate.origin === "controller_protocol"
+      ? candidate.operation
+      : null;
+    let request = candidate.origin === "controller_protocol"
+      ? candidate.request
+      : null;
+    let toolCall: ToolCall | null = null;
+    if (candidate.origin === "tool_request") {
+      const materialized = materializeToolCall({
+        candidate: candidate.tool,
+        selection: this.config.tools,
+        exposure,
+        parentRunAction: action.ref,
+        toolCallId: this.id("tool_call"),
+        createdAt: this.now(),
+        validateInput: this.dependencies.operations.validateToolInput,
+      });
+      if (materialized.status === "rejected") {
+        this.commitRejectedOperation(action, "tools", materialized.code, materialized.message);
+        return null;
+      }
+      toolCall = materialized.call;
+      operation = toolCall.operationRevision;
+      request = toolCall.input;
+    }
+    const executed = await this.executeOperation({
+      action,
+      operation: operation!,
+      request,
+      requestOrigin: candidate.origin === "tool_request" ? "tool_request" : "controller_protocol",
+      invocationId,
+      parentInvocation: null,
+      basis: toolCall ?? candidate,
+    });
+    if (executed === null) return null;
+    const toolResult = toolCall === null
+      ? null
+      : adaptToolResult(toolCall, executed);
+    return Object.freeze({ result: executed, toolResult });
+  }
+
+  private async executeOperation(input: {
+    readonly action: RuntimeRunAction;
+    readonly operation: OperationRevisionRef;
+    readonly request: unknown;
+    readonly requestOrigin: OperationRequestOrigin;
+    readonly invocationId: string;
+    readonly parentInvocation: OperationInvocationRef | null;
+    readonly basis: unknown;
+  }): Promise<OperationResult | null> {
+    const registration = findRegisteredOperation(
+      this.dependencies.operations.catalog,
+      input.operation,
+    );
+    if (registration === undefined) {
+      this.commitRejectedOperation(
+        input.action,
+        "operation-catalog",
+        "operation_not_registered",
+        "The requested Operation revision is not registered.",
+      );
+      return null;
+    }
+    if (registration.retirement !== null) {
+      this.commitRejectedOperation(
+        input.action,
+        "operation-catalog",
+        "operation_retired",
+        "The requested Operation revision is retired.",
+      );
+      return null;
+    }
+    if (!registration.allowedRequestOrigins.includes(input.requestOrigin)) {
+      this.commitRejectedOperation(
+        input.action,
+        "operation-catalog",
+        "operation_request_origin_denied",
+        "The requested origin is not admitted for this Operation revision.",
+      );
+      return null;
+    }
+    const invocation: OperationInvocationRef = Object.freeze({
+      id: input.invocationId,
+      operation: registration.operation.ref,
+    });
+    const context: OperationInvocationContext = Object.freeze({
+      invocation,
+      correlation: this.runActionCorrelation(input.action),
+      parentInvocation: input.parentInvocation,
+      interruption: this.invocationInterruption(),
+    });
+    const resolution = await this.dependencies.operations.bindings.resolve({
+      operation: registration,
+      context,
+      request: input.request,
+      basis: input.basis,
+    });
+    if (resolution.status !== "resolved") {
+      const result = this.operationFailureResult(
+        registration,
+        invocation,
+        "unavailable",
+        "operation-catalog",
+        resolution.code,
+        this.now(),
+        this.now(),
+      );
+      this.emitOperation(registration, resolutionBindingKind(registration), context, result);
+      return result;
+    }
+    const binding = resolution.binding;
+    if (!bindingMatchesResolution(registration, context, binding)) {
+      const result = this.operationFailureResult(
+        registration,
+        invocation,
+        "invalid",
+        "operation-catalog",
+        "operation_binding_mismatch",
+        this.now(),
+        this.now(),
+      );
+      this.emitOperation(registration, binding.kind, context, result);
+      return result;
     }
 
-    const observation = Object.freeze({
-      ...this.createObservationBase(action),
-      kind: "action_rejected" as const,
-      code: "action_unsupported" as const,
-      message: `Action ${action.kind}:${action.name} is not supported by this Runner slice.`,
-    });
-    return this.commitActionObservation(observation, true, true);
-  }
-
-  private async processPermissionRequest(
-    action: Action & { readonly kind: "permission_request" },
-  ): Promise<ProcessActionResult> {
-    if (action.name !== "request_permissions") {
-      return this.rejectPermissionRequestAction(
-        action,
-        "Only permission_request:request_permissions is supported.",
+    const startedAt = this.now();
+    this.emit("operation.started", {
+      invocationId: invocation.id,
+      operationNamespace: invocation.operation.operation.namespace,
+      operationName: invocation.operation.operation.name,
+      operationRevision: invocation.operation.revision,
+      semanticOwner: registration.operation.semanticOwner,
+      bindingKind: binding.kind,
+      correlationKind: context.correlation.kind,
+      parentInvocationId: context.parentInvocation?.id ?? null,
+      parentRunActionId: input.action.ref.id,
+    }, startedAt);
+    let result: OperationResult;
+    try {
+      const execute = () => this.executeResolvedBinding(
+        registration,
+        input.action,
+        binding,
+        context,
+        startedAt,
+      );
+      result = input.parentInvocation === null
+        ? await this.interruptionCoordinator.execute(
+            "tool",
+            execute,
+            this.writer.getSnapshot().deadlineAt,
+          )
+        : await execute();
+    } catch (error) {
+      if (error instanceof OperationSettlementTimeoutError) throw error;
+      result = this.operationFailureResult(
+        registration,
+        invocation,
+        this.config.cancellation.context.request === null ? "failed" : "cancelled",
+        "agent-runtime",
+        this.config.cancellation.context.request === null
+          ? "operation_execution_failed"
+          : "operation_cancelled",
+        startedAt,
+        this.now(),
       );
     }
-    const prepared = preparePermissionRequestAction({
-      actionInput: action.input,
-      config: this.config.permissions,
-    });
-    if (prepared.status === "invalid") {
-      return this.rejectPermissionRequestAction(action, prepared.message);
-    }
+    this.emit("operation.finished", {
+      invocationId: invocation.id,
+      status: result.status,
+      code: result.failure?.code ?? null,
+      resultId: result.ref.id,
+      lowerResultRefs: Object.freeze(result.lowerRefs.map((reference) => reference.id)),
+    }, result.finishedAt);
+    return result;
+  }
 
-    const createdAt = this.now();
-    const requestId = this.createId(
-      "approval_request",
-      this.state.permission.counters.lastPendingVersion + 1,
-    );
-    const deadlineAt = deriveApprovalReviewDeadline({
-      runDeadlineAt: this.runDeadlineAt(),
-      reviewStartedAt: createdAt,
-      reviewTimeoutMs: this.config.permissions.reviewer?.reviewTimeoutMs ?? null,
-    });
-    if (Date.parse(deadlineAt) <= Date.parse(createdAt)) {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(limitRunFailure(
-          "Run deadline elapsed before approval review could start.",
-          { requestId, deadlineAt },
-        )),
-      };
+  private async executeResolvedBinding(
+    registration: RegisteredOperation,
+    action: RuntimeRunAction,
+    binding: ResolvedOperationBinding,
+    context: OperationInvocationContext,
+    startedAt: string,
+  ): Promise<OperationResult> {
+    switch (binding.kind) {
+      case "internal": {
+        const handler = this.dependencies.operations.internalHandlers.find(
+          (candidate) => candidate.id === binding.handlerId,
+        );
+        if (handler === undefined) {
+          return this.operationFailureResult(
+            registration,
+            binding.invocation,
+            "unavailable",
+            "agent-runtime",
+            "internal_operation_handler_unavailable",
+            startedAt,
+            this.now(),
+          );
+        }
+        const result = await handler.execute({
+          runId: this.runId,
+          parentRunAction: action.ref,
+          binding,
+          deadlineAt: this.writer.getSnapshot().deadlineAt,
+          interruption: context.interruption,
+        });
+        if (
+          result.ref.invocation.id !== binding.invocation.id ||
+          result.binding.revision !== binding.binding.revision ||
+          result.semanticOwner !== registration.operation.semanticOwner
+        ) {
+          return this.operationFailureResult(
+            registration,
+            binding.invocation,
+            "invalid",
+            "agent-runtime",
+            "internal_operation_result_mismatch",
+            startedAt,
+            this.now(),
+          );
+        }
+        return result;
+      }
+      case "direct":
+      case "hosted":
+        return this.executeCanonicalAction(registration, action, binding, context, startedAt);
+      case "composite":
+        return this.executeComposite(registration, action, binding, context, startedAt);
+      case "descendant_agent":
+        return this.executeDescendant(registration, action, binding, context, startedAt);
     }
-    const decisionContract = createPermissionRequestDecisionContract({
-      requestId,
-      prepared: prepared.request,
-      config: this.config.permissions,
+  }
+
+  private async executeCanonicalAction(
+    registration: RegisteredOperation,
+    action: RuntimeRunAction,
+    binding: Extract<ResolvedOperationBinding, { readonly kind: "direct" | "hosted" }>,
+    context: OperationInvocationContext,
+    startedAt: string,
+  ): Promise<OperationResult> {
+    if (this.actionExecution === null || this.config.actionExecution === null) {
+      return this.operationFailureResult(
+        registration,
+        binding.invocation,
+        "unavailable",
+        "action-execution",
+        "action_execution_unavailable",
+        startedAt,
+        this.now(),
+      );
+    }
+    const outcome = await this.actionExecution.execute({
+      action: Object.freeze({ id: this.id("action") }),
+      parentRunAction: action.ref,
+      runId: this.runId,
+      binding,
+      securityContext: this.config.actionExecution.securityContext,
+      policyContext: Object.freeze({
+        policySnapshotId: this.config.actionExecution.policySnapshotId,
+        workspaceTrustState: this.config.actionExecution.securityContext.workspace?.trustState ?? null,
+        identityId: this.config.identity.id,
+        environmentId: this.config.actionExecution.securityContext.environment.environmentId,
+        metadata: this.config.actionExecution.metadata,
+      }),
+      permissionContext: () => this.actionPermissionContext(),
+      enforcement: this.config.actionExecution.enforcement,
+      interruption: context.interruption,
+      deadlineAt: this.writer.getSnapshot().deadlineAt,
+      maxAttempts: this.config.retry.action.maxAttempts,
     });
+    if (outcome.status === "pending_interaction") {
+      return this.operationFailureResult(
+        registration,
+        binding.invocation,
+        "failed",
+        "action-execution",
+        "action_approval_not_coordinated",
+        startedAt,
+        this.now(),
+      );
+    }
+    return operationResultFromAction(
+      registration,
+      binding,
+      outcome,
+      startedAt,
+      this.now(),
+      this.id("operation_result"),
+    );
+  }
+
+  private async executeComposite(
+    registration: RegisteredOperation,
+    action: RuntimeRunAction,
+    binding: Extract<ResolvedOperationBinding, { readonly kind: "composite" }>,
+    context: OperationInvocationContext,
+    startedAt: string,
+  ): Promise<OperationResult> {
+    const resolved = this.dependencies.operations.composite?.resolve(
+      binding.compositeDefinitionRef,
+    ) ?? null;
+    if (resolved === null || resolved.definition.retiredAt !== null) {
+      return this.operationFailureResult(
+        registration,
+        binding.invocation,
+        "unavailable",
+        "operation-composition",
+        "composite_definition_unavailable",
+        startedAt,
+        this.now(),
+      );
+    }
+    const compositeId = this.id("composite");
+    const pending: PendingRunSubject = Object.freeze({
+      kind: "composite",
+      compositeId,
+      nodeId: "aggregate",
+      branchId: action.ref.id,
+      required: true,
+      openedInRunRevision: this.writer.getSnapshot().revision,
+    });
+    this.addPending(pending);
+    try {
+      const execution = new CompositeExecution(
+        compositeId,
+        resolved.definition,
+        {
+          ...resolved.execution,
+          now: this.dependencies.now,
+          children: {
+            start: async (child) => {
+              const invocationId = this.id("operation_invocation");
+              const childAction = this.materializeWorkflowRunAction({
+                operation: child.node.operation,
+                invocationId,
+                compositeId,
+                nodeId: child.node.id,
+              });
+              const result = await this.executeOperation({
+                action: childAction,
+                operation: child.node.operation,
+                request: child.request,
+                requestOrigin: "trusted_workflow",
+                invocationId,
+                parentInvocation: binding.invocation,
+                basis: child,
+              });
+              if (result === null) {
+                throw new Error("Composite child Operation was rejected before materialization.");
+              }
+              this.commitOperationObservation(childAction, { result, toolResult: null });
+              return Object.freeze({ runAction: childAction.ref, result });
+            },
+          },
+        },
+      );
+      const result = await execution.run(binding.request, context.interruption);
+      return operationResultFromComposite(
+        registration,
+        binding,
+        result,
+        startedAt,
+        this.now(),
+        this.id("operation_result"),
+      );
+    } finally {
+      this.removePending(pending, "resolved", null);
+    }
+  }
+
+  private async executeDescendant(
+    registration: RegisteredOperation,
+    action: RuntimeRunAction,
+    binding: Extract<ResolvedOperationBinding, { readonly kind: "descendant_agent" }>,
+    context: OperationInvocationContext,
+    startedAt: string,
+  ): Promise<OperationResult> {
+    if (
+      this.dependencies.operations.descendants === undefined ||
+      this.descendantCount >= this.config.limits.maxDescendantRuns ||
+      this.config.descendantDepth >= this.config.limits.maxDescendantDepth
+    ) {
+      return this.operationFailureResult(
+        registration,
+        binding.invocation,
+        "unavailable",
+        "agent-runtime",
+        "descendant_run_unavailable",
+        startedAt,
+        this.now(),
+      );
+    }
+    const prepared = await this.dependencies.operations.descendants.prepare({
+      parentRunId: this.runId,
+      parentRunAction: action.ref,
+      targetAgent: binding.agentRef,
+      delegatedInput: binding.request,
+      parentConfig: this.config,
+    });
+    if (!sameAgentRef(prepared.agent, binding.agentRef)) {
+      return this.operationFailureResult(
+        registration,
+        binding.invocation,
+        "invalid",
+        "agent-runtime",
+        "descendant_agent_mismatch",
+        startedAt,
+        this.now(),
+      );
+    }
+    this.descendantCount += 1;
+    const relationId = this.id("descendant_relation");
+    const childRunner = new (await import("./Runner.js")).Runner({
+      ...this.dependencies,
+      createRunId: () => `${relationId}:run`,
+    });
+    const child = childRunner.start(prepared.agent, prepared.input, {
+      ...prepared.config,
+      descendantDepth: this.config.descendantDepth + 1,
+    });
+    this.childHandles.add(child);
+    const pending: PendingRunSubject = Object.freeze({
+      kind: "descendant_run",
+      relationId,
+      childRunId: child.runId,
+      branchId: action.ref.id,
+      required: true,
+      openedInRunRevision: this.writer.getSnapshot().revision,
+    });
+    this.addPending(pending);
+    const cancelChild = (): void => {
+      const request = this.config.cancellation.context.request;
+      if (request !== null) {
+        child.cancel({
+          origin: "parent_run",
+          reasonCode: "parent_run_cancelled",
+          parentRunId: this.runId,
+        });
+      }
+    };
+    this.config.cancellation.context.signal.addEventListener("abort", cancelChild, { once: true });
+    const unsubscribe = child.subscribe(() => this.publishCurrentState());
+    try {
+      const childResult = await child.wait();
+      const mapped = prepared.mapResult(childResult);
+      return createOperationResult({
+        ref: Object.freeze({ invocation: binding.invocation, id: this.id("operation_result") }),
+        binding: binding.binding,
+        semanticOwner: registration.operation.semanticOwner,
+        status: mapped.status,
+        output: mapped.output,
+        failure: mapped.failure,
+        startedAt,
+        finishedAt: this.now(),
+        lowerRefs: Object.freeze([{
+          owner: "agent-runtime",
+          kind: "descendant_run_result",
+          id: childResult.runId,
+          revision: String(childResult.items.at(-1)?.committedInRevision ?? 0),
+        }]),
+        metadata: Object.freeze({
+          relationId,
+          contextManifestRef: prepared.contextManifestRef,
+          visibility: prepared.visibility,
+        }),
+      } as OperationResult);
+    } finally {
+      unsubscribe();
+      this.childHandles.delete(child);
+      this.config.cancellation.context.signal.removeEventListener("abort", cancelChild);
+      this.removePending(pending, "resolved", null);
+    }
+  }
+
+  private commitOperationObservation(
+    action: RuntimeRunAction,
+    outcome: OperationExecutionOutcome,
+  ): void {
+    const lowerRefs = [
+      {
+        owner: outcome.result.semanticOwner,
+        kind: "operation_result",
+        id: outcome.result.ref.id,
+        revision: outcome.result.binding.revision,
+      },
+      ...(outcome.toolResult === null
+        ? []
+        : [{
+            owner: "tools",
+            kind: "tool_result",
+            id: outcome.toolResult.toolCall.toolCallId,
+            revision: outcome.toolResult.toolCall.toolRevision.revision,
+          }]),
+    ];
+    this.commitObservation(action, {
+      kind: "operation",
+      result: outcome.result,
+      toolResult: outcome.toolResult,
+    }, lowerRefs, outcome.result.semanticOwner);
+  }
+
+  private commitRejectedOperation(
+    action: RuntimeRunAction,
+    owner: string,
+    code: string,
+    message: string,
+  ): void {
+    this.commitObservation(action, {
+      kind: "operation_rejected",
+      owner,
+      code,
+      message,
+    }, [], owner);
+  }
+
+  private commitInteractionObservation(
+    action: RuntimeRunAction,
+    settlement: RuntimeInteractionSettlement,
+  ): void {
+    if (settlement.status === "resolved") {
+      this.commitObservation(action, {
+        kind: "interaction",
+        owner: settlement.outcome.request.protocol.owner,
+        status: "resolved",
+        value: settlement.applicationValue,
+      }, [{
+        owner: settlement.outcome.request.protocol.owner,
+        kind: "interaction_resolution",
+        id: settlement.outcome.resolution.resolutionId,
+        revision: settlement.outcome.resolution.resolutionRevision,
+      }], settlement.outcome.request.protocol.owner);
+      return;
+    }
+    this.commitObservation(action, {
+      kind: "interaction",
+      owner: settlement.owner,
+      status: settlement.status,
+      value: Object.freeze({ code: settlement.code }),
+    }, [], settlement.owner);
+  }
+
+  private commitObservation(
+    action: RuntimeRunAction,
+    payload: RunObservation["payload"],
+    lowerRefs: RunObservation["lowerRefs"],
+    owner: string,
+  ): void {
+    const state = this.writer.getSnapshot();
+    const sequence = state.counters.observations + 1;
+    const observation = createRunObservation({
+      id: this.id("observation", sequence),
+      runId: this.runId,
+      actionId: action.ref.id,
+      kind: payload.kind,
+      createdAt: this.now(),
+      metadata: Object.freeze({}),
+      owner,
+      runAction: action.ref,
+      lowerRefs: Object.freeze([...lowerRefs]),
+      payload,
+    });
+    const failed = observationFailed(observation);
+    this.writer.commit({ kind: "observation", observation }, (current) => Object.freeze({
+      context: applyContextUpdate(current.context, {
+        observations: Object.freeze([observation]),
+      }),
+      counters: Object.freeze({
+        ...current.counters,
+        observations: sequence,
+        consecutiveActionFailures: failed
+          ? current.counters.consecutiveActionFailures + 1
+          : 0,
+      }),
+    }));
+  }
+
+  private openPendingInteraction(pending: PendingInteractionRef): void {
+    const value: PendingRunSubject = Object.freeze({
+      kind: "interaction",
+      interaction: pending,
+      branchId: pending.request.id,
+      required: pending.blockingScope !== "none",
+      openedInRunRevision: this.writer.getSnapshot().revision,
+    });
+    this.writer.commit({
+      kind: "pending_transition",
+      transition: "opened",
+      pending: value,
+      recordRef: pending.request.id,
+    }, (current) => {
+      const nextPending = Object.freeze([...current.pending, value]);
+      return Object.freeze({
+        pending: nextPending,
+        status: deriveActiveStatus(current.status, nextPending),
+      });
+    });
+    this.emit("interaction.opened", {
+      requestId: pending.request.id,
+      protocolOwner: pending.request.protocol.owner,
+      protocolKind: pending.request.protocol.kind,
+      protocolRevision: pending.request.protocol.revision,
+      subjectOwner: pending.request.subject.owner,
+      subjectKind: pending.request.subject.kind,
+      subjectId: pending.request.subject.id,
+      subjectRevision: pending.request.subject.revision,
+      blockingScope: pending.blockingScope,
+      pendingVersion: pending.request.requestVersion,
+      parentRunActionId: findParentRunActionId(this.writer.getSnapshot(), pending.request.id),
+    });
+  }
+
+  private settlePendingInteraction(
+    pending: PendingInteractionRef,
+    terminal: InteractionTerminalRecord,
+    settlement: RuntimeInteractionSettlement,
+  ): void {
+    const state = this.writer.getSnapshot();
+    const current = state.pending.find((candidate) =>
+      candidate.kind === "interaction" && sameInteractionRequest(
+        candidate.interaction.request,
+        pending.request,
+      )
+    );
+    if (current === undefined) return;
+    const transition = terminal.kind;
+    const recordRef = terminalRecordRef(terminal);
+    this.writer.commit({
+      kind: "pending_transition",
+      transition,
+      pending: current,
+      recordRef,
+    }, (snapshot) => {
+      const nextPending = Object.freeze(snapshot.pending.filter((candidate) => candidate !== current));
+      return Object.freeze({
+        pending: nextPending,
+        status: deriveActiveStatus(snapshot.status, nextPending),
+      });
+    });
+    this.emit("interaction.settled", {
+      requestId: pending.request.id,
+      pendingVersion: pending.request.requestVersion,
+      lifecycle: settlement.status,
+      code: settlement.status === "resolved" ? null : settlement.code,
+      terminalRecordId: recordRef,
+    });
+  }
+
+  private queueInteractionSettlement(
+    pending: PendingInteractionRef,
+    terminal: InteractionTerminalRecord,
+    settlement: RuntimeInteractionSettlement,
+  ): void {
+    const key = interactionRequestKey(pending.request);
+    this.interactionSettlements.push(Object.freeze({
+      pending,
+      terminal,
+      settlement,
+      action: this.interactionActions.get(key) ?? null,
+    }));
+    this.interactionActions.delete(key);
+  }
+
+  private drainInteractionSettlements(): number {
+    let count = 0;
+    while (this.interactionSettlements.length > 0) {
+      const queued = this.interactionSettlements.shift()!;
+      this.settlePendingInteraction(queued.pending, queued.terminal, queued.settlement);
+      if (queued.action !== null) {
+        this.commitInteractionObservation(queued.action, queued.settlement);
+      }
+      count += 1;
+    }
+    return count;
+  }
+
+  private addPending(pending: PendingRunSubject): void {
+    this.writer.commit({
+      kind: "pending_transition",
+      transition: "opened",
+      pending,
+      recordRef: null,
+    }, (current) => {
+      const next = Object.freeze([...current.pending, pending]);
+      return Object.freeze({ pending: next, status: deriveActiveStatus(current.status, next) });
+    });
+  }
+
+  private removePending(
+    pending: PendingRunSubject,
+    transition: "resolved" | "cancelled" | "failed" | "invalidated" | "expired",
+    recordRef: string | null,
+  ): void {
+    const current = this.writer.getSnapshot();
+    if (!current.pending.includes(pending)) return;
+    this.writer.commit({
+      kind: "pending_transition",
+      transition,
+      pending,
+      recordRef,
+    }, (state) => {
+      const next = Object.freeze(state.pending.filter((candidate) => candidate !== pending));
+      return Object.freeze({ pending: next, status: deriveActiveStatus(state.status, next) });
+    });
+  }
+
+  private createActionApprovalPort(): ActionApprovalResolutionPort {
+    return Object.freeze({
+      resolve: async (
+        input: Parameters<ActionApprovalResolutionPort["resolve"]>[0],
+      ) => {
+        const reviewer = this.config.permissions.reviewer;
+        if (reviewer === null) {
+          return Object.freeze({
+            status: "failed" as const,
+            code: "approval_reviewer_unavailable",
+          });
+        }
+        const activity = this.writer.getSnapshot().permission.approvalActivity;
+        const fingerprint = input.assessment.requirement.subject.actionFingerprint;
+        const byFingerprint = activity.requestsByActionFingerprint[fingerprint] ?? 0;
+        const limits = this.config.permissions.approvalLimits;
+        if (
+          activity.requestCount >= limits.maxRequestsPerRun ||
+          byFingerprint >= limits.maxRequestsPerActionFingerprint ||
+          activity.consecutiveDeclines >= limits.maxConsecutiveDeclines ||
+          activity.consecutiveReviewFailures >= limits.maxConsecutiveReviewFailures
+        ) {
+          return Object.freeze({ status: "denied" as const, code: "approval_limit_reached" });
+        }
+        if (input.parentRunAction === null) {
+          return Object.freeze({ status: "failed" as const, code: "approval_parent_action_missing" });
+        }
+        const requestId = this.id("interaction_request", this.nextInteractionRequest++);
+        const pendingVersion = 1;
+        const createdAt = this.now();
+        this.updateApprovalActivity((current) => ({
+          ...current,
+          requestCount: current.requestCount + 1,
+          requestsByActionFingerprint: Object.freeze({
+            ...current.requestsByActionFingerprint,
+            [fingerprint]: byFingerprint + 1,
+          }),
+        }));
+        const opened = this.interactions.open({
+          requestId,
+          protocol: APPROVAL_INTERACTION_PROTOCOL,
+          subject: Object.freeze({
+            requirement: input.assessment.requirement,
+            pendingVersion,
+            createdAt,
+          } satisfies ApprovalInteractionSubject),
+          subjectRef: Object.freeze({
+            owner: "permission",
+            kind: "approval",
+            id: input.action.id,
+            revision: fingerprint,
+          }),
+          correlation: this.runActionCorrelationByRef(input.parentRunAction),
+          parentRunAction: input.parentRunAction,
+          presentation: createApprovalInteractionPresentation({
+            requestId,
+            requirement: input.assessment.requirement,
+            createdAt,
+          }),
+          requestVersion: pendingVersion,
+          expiresAt: input.assessment.requirement.deadlineAt,
+          blockingScope: "run",
+          createdAt,
+        });
+        if (opened.status !== "opened") {
+          this.updateApprovalActivity((current) => ({
+            ...current,
+            consecutiveReviewFailures: current.consecutiveReviewFailures + 1,
+          }));
+          return Object.freeze({ status: "failed" as const, code: opened.code });
+        }
+
+        if (reviewer.kind === "auto_review") {
+          const review: ApprovalReviewInput = Object.freeze({
+            request: opened.envelope.presentation as ApprovalReviewInput["request"],
+            pendingVersion,
+            context: Object.freeze({
+              workspaceTrustState: this.config.workspace?.primary.trustState ?? null,
+              ruleOutcome: "none",
+              currentAuthority: Object.freeze({
+                fileSystemRead: this.writer.getSnapshot().permission.runPermissionGrants.length > 0,
+                fileSystemWrite: this.writer.getSnapshot().permission.runPermissionGrants.length > 0,
+                network: this.writer.getSnapshot().permission.runPermissionGrants.length > 0,
+              }),
+              annotations: Object.freeze({}),
+            }),
+          });
+          const reviewStartedAt = this.now();
+          const reviewResult = await executeApprovalReviewer({
+            reviewer,
+            review,
+            operationId: `${requestId}:review`,
+            startedAt: reviewStartedAt,
+            deadlineAt: deriveApprovalReviewDeadline({
+              runDeadlineAt: this.writer.getSnapshot().deadlineAt,
+              reviewStartedAt,
+              reviewTimeoutMs: reviewer.reviewTimeoutMs,
+            }),
+            retryPolicy: this.config.retry.providerRequest,
+            retryExecutor: this.dependencies.retryExecutor,
+            cancellation: this.config.cancellation.context,
+            events: this.retryEvents(),
+            now: this.dependencies.now,
+          });
+          if (reviewResult.kind === "failed") {
+            this.interactions.fail(opened.pending.request, "permission", reviewResult.failure.code);
+            this.updateApprovalActivity((current) => ({
+              ...current,
+              consecutiveReviewFailures: current.consecutiveReviewFailures + 1,
+            }));
+          } else if (reviewResult.kind === "cancelled") {
+            this.interactions.invalidate(opened.pending.request, "approval_review_cancelled");
+          } else {
+            this.interactions.submit({
+              request: opened.pending.request,
+              submissionId: reviewResult.outcome.submission.submissionId,
+              contentDigest: approvalSubmissionDigest(reviewResult.outcome.submission),
+              payload: reviewResult.outcome.submission,
+              receivedAt: this.now(),
+            });
+          }
+        }
+        const settlement = await opened.completion;
+        this.drainInteractionSettlements();
+        if (settlement.status !== "resolved") {
+          return Object.freeze({
+            status: settlement.status === "expired" || settlement.status === "invalidated" || settlement.status === "cancelled"
+              ? settlement.status
+              : "failed",
+            code: settlement.code,
+          }) as Awaited<ReturnType<ActionApprovalResolutionPort["resolve"]>>;
+        }
+        const resolution = settlement.resolutionValue as ApprovalInteractionResolution;
+        if (resolution.decision.kind === "decline") {
+          this.updateApprovalActivity((current) => ({
+            ...current,
+            consecutiveDeclines: current.consecutiveDeclines + 1,
+            consecutiveReviewFailures: 0,
+          }));
+          return Object.freeze({ status: "denied" as const, code: "approval_declined" });
+        }
+        if (resolution.decision.kind === "cancel") {
+          this.config.cancellation.requestCancellation({
+            origin: "approval",
+            reasonCode: "approval_cancelled",
+            approvalRequestId: requestId,
+          });
+          return Object.freeze({ status: "cancelled" as const, code: "approval_cancelled" });
+        }
+        const application = settlement.applicationValue as ApprovalApplicationOutcome;
+        if (application.kind !== "applied") {
+          return Object.freeze({
+            status: application.kind === "interrupted" ? "interrupted" :
+              application.kind === "outcome_unknown" ? "unknown_effect" : "failed",
+            code: "code" in application ? application.code : "approval_authority_not_applied",
+          });
+        }
+        this.updateApprovalActivity((current) => ({
+          ...current,
+          consecutiveDeclines: 0,
+          consecutiveReviewFailures: 0,
+        }));
+        return Object.freeze({
+          status: "applied" as const,
+          approvalRecordId: settlement.outcome.resolution.resolutionId,
+          authoritySnapshotId: `run-permission:${this.writer.getSnapshot().revision}`,
+        });
+      },
+    });
+  }
+
+  private validateApprovalDecision(
+    subject: ApprovalInteractionSubject,
+    submission: import("@agent-anything/permission/approval").ApprovalDecisionSubmission,
+    requestId: string,
+  ): ValidatedApprovalDecision {
     const request = createApprovalRequest({
       id: requestId,
-      createdAt,
-      requirement: {
-        category: "permissions",
-        subject: {
-          runId: this.state.runId,
-          actionId: action.id,
-          actionFingerprint: prepared.request.actionFingerprint,
-          environmentId: prepared.request.environment.environmentId,
-          applicabilityKeys: [],
-        },
-        reason: prepared.request.reason,
-        payload: {
-          permissions: prepared.request.permissions,
-          cwd: prepared.request.cwd,
-          cwdDisplay: prepared.request.cwdDisplay,
-          environmentId: prepared.request.environment.environmentId,
-        },
-        decisionOptions: decisionContract.decisionOptions,
-        trustedProposals: decisionContract.trustedProposals,
-        deadlineAt,
-        metadata: {},
-      },
+      requirement: subject.requirement,
+      createdAt: subject.createdAt,
     });
-
-    if (prepared.status === "managed_denied") {
-      const observation: ApprovalPolicyRejectedObservation = Object.freeze({
-        ...this.createObservationBase(action),
-        kind: "approval_policy_rejected",
-        requestId: request.id,
-        category: request.category,
-        code: prepared.code,
-        message: prepared.message,
-      });
-      return this.commitActionObservation(observation, true, true);
-    }
-    if (!allowsExplicitPermissionRequest(this.config.permissions.approvalPolicy)) {
-      const observation: ApprovalPolicyRejectedObservation = Object.freeze({
-        ...this.createObservationBase(action),
-        kind: "approval_policy_rejected",
-        requestId: request.id,
-        category: request.category,
-        code: "approval_policy_rejected",
-        message: "The active Approval Policy does not allow explicit permission requests.",
-      });
-      return this.commitActionObservation(observation, true, true);
-    }
-
-    return this.processApprovalOperation({
-      action,
-      request,
-      cwd: prepared.request.cwd,
-      environment: prepared.request.environment,
-      reviewContext: this.createApprovalReviewContext({
-        ruleOutcome: "none",
-        annotations: Object.freeze({ rootId: prepared.request.rootId }),
+    const profile = this.config.permissions.permissionProfile;
+    const cwd = profile.workspaceRoots[0]?.canonicalPath ??
+      (profile.platform === "win32" ? "C:/" : "/");
+    const result = validateApprovalDecision({
+      request: request as import("@agent-anything/permission/approval").ApprovalRequest,
+      pendingVersion: subject.pendingVersion,
+      submission,
+      cwd,
+      environment: Object.freeze({
+        environmentId: profile.environmentId,
+        platform: profile.platform,
+        workspaceRoots: Object.freeze(profile.workspaceRoots.map((root) => Object.freeze({
+          rootId: root.rootId,
+          path: root.canonicalPath,
+        }))),
       }),
-    });
-  }
-
-  private async processApprovalOperation(
-    input: ApprovalOperationInput,
-  ): Promise<ProcessActionResult> {
-    const { action, request } = input;
-    const createdAt = request.createdAt;
-    if (Date.parse(request.deadlineAt) <= Date.parse(this.now())) {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(limitRunFailure(
-          "Run deadline elapsed before approval review could start.",
-          { requestId: request.id, deadlineAt: request.deadlineAt },
-        )),
-      };
-    }
-    const limit = this.approvalRequestLimit(request.actionFingerprint);
-    if (limit !== null) {
-      const observation: ApprovalLimitReachedObservation = Object.freeze({
-        ...this.createObservationBase(action),
-        kind: "approval_limit_reached",
-        requestId: request.id,
-        category: request.category,
-        ...limit,
-      });
-      return this.commitActionObservation(observation, true, true);
-    }
-    if (
-      this.state.permission.counters.consecutiveReviewFailures >=
-      this.config.permissions.approvalLimits.maxConsecutiveReviewFailures
-    ) {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(runFailure(
-          "approval",
-          "approval_review_failure_limit_exceeded",
-          "Approval reviewer failure circuit is open.",
-          false,
-          { requestId: request.id },
-        ), "approval_review_failure_limit_exceeded"),
-      };
-    }
-
-    const reviewer = this.config.permissions.reviewer;
-    if (reviewer === null) {
-      const observation: ApprovalReviewFailedObservation = Object.freeze({
-        ...this.createObservationBase(action),
-        kind: "approval_review_failed",
-        requestId: request.id,
-        category: request.category,
-        code: "approval_reviewer_unavailable",
-        message: "No approval reviewer is available.",
-        retryable: false,
-      });
-      return this.commitActionObservation(observation, true, true);
-    }
-
-    const pendingVersion = this.state.permission.counters.lastPendingVersion + 1;
-    const pending: PendingApproval & { readonly phase: "reviewing" } = Object.freeze({
-      phase: "reviewing",
-      request,
-      reviewerBindingId: reviewer.bindingId,
-      reviewer: reviewer.kind,
-      reviewOperationId: this.createId("approval_review_operation", pendingVersion),
-      version: pendingVersion,
-      createdAt,
-    });
-    const requestedItem = this.enterApprovalReview(pending);
-
-    const requestAuditError = await recordApprovalRequestAudit({
-      request,
-      pendingVersion,
-      taskId: this.state.taskId,
-      workspace: this.config.workspace,
-      identity: this.config.identity,
-      timestamp: this.now(),
-      requirement: this.config.audit,
-      signal: this.config.cancellation.context.signal,
-      port: this.dependencies.auditPort,
-    });
-    if (this.cancellationRequest() !== null) {
-      return this.settleCancelledApproval(null);
-    }
-    if (requestAuditError !== null) {
-      const record = this.createApprovalRecord(
-        {
-          kind: "request_failure",
-          owner: "audit",
-          code: runFailureCode(requestAuditError),
-        },
-        { kind: "not_applied", code: runFailureCode(requestAuditError) },
-      );
-      const settlementFailures = await this.settlePendingApproval(
-        record,
-        "neutral",
-        null,
-        true,
-        this.state.permission,
-        new Set(["audit"]),
-      );
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.failMany(
-          asFailureTuple([requestAuditError, ...settlementFailures]),
-          "audit_required_failed",
-        ),
-      };
-    }
-    this.publishItems([requestedItem]);
-    this.emitApprovalRequested(requestedItem);
-
-    let review: ApprovalReviewerExecutionResult;
-    try {
-      review = await this.awaitInterruptibleOperation(
-        "approval_reviewer",
-        () => this.executeApprovalReview(input.reviewContext),
-        pending.request.deadlineAt,
-      );
-    } catch (error) {
-      if (error instanceof OperationSettlementTimeoutError) {
-        const cancellation = this.cancellationRequest();
-        let settlementFailures: RunFailureCause[];
-        if (cancellation !== null) {
-          settlementFailures = await this.settlePendingApproval(
-            this.createApprovalRecord({
-              kind: "run_cancelled",
-              cancellationRequestId: cancellation.id,
-              initiatingDecision: null,
-            }, { kind: "not_applicable" }),
-            "neutral",
-            null,
-            true,
-          );
-          this.enterCancelling(cancellation);
-        } else {
-          settlementFailures = await this.settlePendingApproval(
-            this.createApprovalRecord({
-              kind: "review_failure",
-              failure: approvalReviewFailure(
-                "approval_review_timeout",
-                "Approval reviewer did not settle after its deadline.",
-                false,
-              ),
-            }, { kind: "not_applicable" }),
-            "review_failure",
-            null,
-            true,
-          );
-        }
-        const settlementError = approvalSettlementRunFailure(error);
-        return {
-          invalidatesBatch: true,
-          terminalResult: await this.failMany(
-            asFailureTuple([settlementError, ...settlementFailures]),
-            "approval_cancellation_unconfirmed",
-          ),
-        };
-      }
-      const failure = approvalReviewFailure(
-        "approval_review_failed",
-        "Approval review operation failed.",
-        false,
-      );
-      return this.settleReviewFailure(failure);
-    }
-
-    if (this.cancellationRequest() !== null || review.kind === "cancelled") {
-      return this.settleCancelledApproval(null);
-    }
-    if (review.kind === "failed") {
-      return this.settleReviewFailure(review.failure);
-    }
-
-    const validatedAt = this.now();
-    const validation = validateApprovalDecision({
-      request,
-      pendingVersion,
-      submission: review.outcome.submission,
-      cwd: input.cwd,
-      environment: input.environment,
       managedConstraints: this.config.permissions.managedConstraints,
-      identities: {
-        actionAuthorityId: this.createId("action_authority", pendingVersion),
-        runPermissionGrantId: this.createId("run_permission_grant", pendingVersion),
-        sessionAuthorityRecordId: this.createId("session_authority_record", pendingVersion),
-      },
-      validatedAt,
-    });
-    if (validation.status === "invalid") {
-      return this.settleReviewFailure(approvalReviewFailure(
-        "approval_review_malformed",
-        validation.message,
-        false,
-      ));
-    }
-    return this.applyValidatedPermissionDecision(validation.decision, review.outcome.rationale);
-  }
-
-  private rejectPermissionRequestAction(
-    action: Action,
-    message: string,
-  ): Promise<ProcessActionResult> {
-    const observation: ActionRejectedObservation = Object.freeze({
-      ...this.createObservationBase(action),
-      kind: "action_rejected",
-      code: "action_invalid",
-      message,
-    });
-    return this.commitActionObservation(observation, true, true);
-  }
-
-  private approvalRequestLimit(
-    actionFingerprint: string,
-  ): Pick<ApprovalLimitReachedObservation, "limit" | "current" | "maximum"> | null {
-    const counters = this.state.permission.counters;
-    const limits = this.config.permissions.approvalLimits;
-    if (counters.totalRequests >= limits.maxRequestsPerRun) {
-      return {
-        limit: "requests_per_run",
-        current: counters.totalRequests,
-        maximum: limits.maxRequestsPerRun,
-      };
-    }
-    const fingerprintCount = counters.requestsByActionFingerprint.find(
-      (entry) => entry.actionFingerprint === actionFingerprint,
-    )?.count ?? 0;
-    if (fingerprintCount >= limits.maxRequestsPerActionFingerprint) {
-      return {
-        limit: "requests_per_action_fingerprint",
-        current: fingerprintCount,
-        maximum: limits.maxRequestsPerActionFingerprint,
-      };
-    }
-    if (counters.consecutiveDeclines >= limits.maxConsecutiveDeclines) {
-      return {
-        limit: "consecutive_declines",
-        current: counters.consecutiveDeclines,
-        maximum: limits.maxConsecutiveDeclines,
-      };
-    }
-    return null;
-  }
-
-  private enterApprovalReview(
-    pending: PendingApproval & { readonly phase: "reviewing" },
-  ): ApprovalRequestedRunItem {
-    if (this.state.status !== "running") {
-      throw new Error(`Cannot request approval while Run is ${this.state.status}.`);
-    }
-    const permission = beginApprovalReview({
-      permission: this.state.permission,
-      pending,
-    });
-    const items = this.materializeItems([(base) => Object.freeze({
-      ...base,
-      kind: "approval_requested" as const,
-      request: createApprovalRequestSummary(pending.request),
-      pendingVersion: pending.version,
-      reviewer: pending.reviewer,
-      reviewOperationId: pending.reviewOperationId,
-    })]);
-    this.replaceState(freezeState({
-      ...this.state,
-      status: "waiting_for_approval",
-      permission: permission as RunPermissionState & { readonly pendingApproval: PendingApproval },
-      items: Object.freeze([...this.state.items, ...items]),
-    }));
-    const item = items[0];
-    if (item === undefined || item.kind !== "approval_requested") {
-      throw new Error("Approval request transition did not materialize its RunItem.");
-    }
-    return item;
-  }
-
-  private emitApprovalRequested(
-    item: ApprovalRequestedRunItem,
-  ): void {
-    this.emit("approval.requested", {
-      requestId: item.request.requestId,
-      actionId: item.request.actionId,
-      actionFingerprint: item.request.actionFingerprint,
-      category: item.request.category,
-      pendingVersion: item.pendingVersion,
-      reviewer: item.reviewer,
-      phase: "reviewing",
-      reviewOperationId: item.reviewOperationId,
-    });
-  }
-
-  private async executeApprovalReview(
-    reviewContext: ApprovalReviewContext,
-  ): Promise<ApprovalReviewerExecutionResult> {
-    const pending = this.requirePendingApproval();
-    const reviewer = this.config.permissions.reviewer;
-    if (reviewer === null) {
-      return { kind: "failed", failure: approvalReviewFailure(
-        "approval_reviewer_unavailable",
-        "Approval reviewer became unavailable.",
-        false,
-      ) };
-    }
-    const reviewInput: ApprovalReviewInput = Object.freeze({
-      request: projectApprovalReviewRequest(pending.request),
-      pendingVersion: pending.version,
-      context: reviewContext,
-    });
-    return executeApprovalReviewer({
-      reviewer,
-      review: reviewInput,
-      operationId: pending.reviewOperationId,
-      startedAt: pending.createdAt,
-      deadlineAt: pending.request.deadlineAt,
-      retryPolicy: this.config.retry.approvalsReviewer,
-      retryExecutor: this.dependencies.retryExecutor,
-      cancellation: this.config.cancellation.context,
-      events: this.createRetryEventSink({
-        kind: "approval_reviewer",
-        requestId: pending.request.id,
-        pendingVersion: pending.version,
-        operationId: pending.reviewOperationId,
+      identities: Object.freeze({
+        actionAuthorityId: this.id("authority_record"),
+        runPermissionGrantId: this.id("authority_record"),
+        sessionAuthorityRecordId: this.id("authority_record"),
       }),
-      now: () => this.now(),
+      validatedAt: this.now(),
     });
+    if (result.status !== "valid") throw new TypeError(result.message);
+    return result.decision;
   }
 
-  private createApprovalReviewContext(input: {
-    readonly ruleOutcome: ApprovalReviewContext["ruleOutcome"];
-    readonly currentAuthority?: ApprovalReviewContext["currentAuthority"];
-    readonly annotations: ApprovalReviewContext["annotations"];
-  }): ApprovalReviewContext {
-    const permissionProjection = projectPermissionContext(
-      this.config.permissions,
-      this.state.permission,
-    );
-    return Object.freeze({
-      workspaceTrustState: this.config.workspace?.primary.trustState ?? null,
-      ruleOutcome: input.ruleOutcome,
-      currentAuthority: input.currentAuthority ?? Object.freeze({
-        fileSystemRead: permissionProjection.authority.hasAdditionalFileSystemRead,
-        fileSystemWrite: permissionProjection.authority.hasAdditionalFileSystemWrite,
-        network: permissionProjection.authority.hasAdditionalNetwork,
-      }),
-      annotations: Object.freeze({ ...input.annotations }),
+  private async applyApprovalDecision(
+    subject: ApprovalInteractionSubject,
+    resolution: ApprovalInteractionResolution,
+    requestId: string,
+  ): Promise<ApprovalApplicationOutcome> {
+    const immediate = applyImmediateApprovalAuthority({
+      permission: this.writer.getSnapshot().permission,
+      decision: resolution.decision,
     });
-  }
-
-  private async applyValidatedPermissionDecision(
-    decision: ValidatedApprovalDecision,
-    rationale: string | null,
-  ): Promise<ProcessActionResult> {
-    const pendingAtValidation = this.requirePendingApproval();
-    const auditError = await recordApprovalValidatedDecisionAudit({
-      request: pendingAtValidation.request,
-      pendingVersion: pendingAtValidation.version,
-      decision,
-      taskId: this.state.taskId,
-      workspace: this.config.workspace,
-      identity: this.config.identity,
-      timestamp: this.now(),
-      requirement: this.config.audit,
-      signal: this.config.cancellation.context.signal,
-      port: this.dependencies.auditPort,
-    });
-    if (this.cancellationRequest() !== null) {
-      return this.settleCancelledApproval(null);
+    if (immediate.status === "applied") {
+      this.writer.commitState(() => Object.freeze({ permission: immediate.permission }));
+      return immediate.application;
     }
-    if (auditError !== null) {
-      const record = this.createApprovalRecord(
-        { kind: "decision", decision },
-        { kind: "not_applied", code: runFailureCode(auditError) },
-      );
-      const settlementErrors = await this.settlePendingApproval(
-        record,
-        "neutral",
-        null,
-        true,
-        this.state.permission,
-        new Set(["audit"]),
-      );
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.failMany(
-          asFailureTuple([auditError, ...settlementErrors]),
-          "audit_required_failed",
-        ),
-      };
-    }
-
-    if (decision.kind === "cancel") {
-      const pending = this.requirePendingApproval();
-      this.config.cancellation.requestCancellation({
-        origin: "approval",
-        reasonCode: "approval_cancelled",
-        reason: rationale ?? undefined,
-        approvalRequestId: pending.request.id,
-      });
-      return this.settleCancelledApproval("cancel");
-    }
-    if (decision.kind === "decline") {
-      const record = this.createApprovalRecord(
-        { kind: "decision", decision },
-        { kind: "not_applicable" },
-      );
-      const pending = this.requirePendingApproval();
-      const observation: ApprovalDeclinedObservation = Object.freeze({
-        ...this.createObservationBaseFromPending(pending),
-        kind: "approval_declined",
-        requestId: pending.request.id,
-        category: pending.request.category,
-        reason: decision.reason,
-      });
-      const settlementErrors = await this.settlePendingApproval(
-        record,
-        "declined",
-        observation,
-        true,
-      );
-      return {
-        invalidatesBatch: true,
-        terminalResult: settlementErrors.length === 0
-          ? null
-          : await this.failMany(asFailureTuple(settlementErrors)),
-      };
-    }
-
-    const authorityOperationId = this.createId(
-      "authority_operation",
-      this.requirePendingApproval().version,
-    );
-    if (this.state.status !== "waiting_for_approval") {
-      throw new Error("Approval authority application requires a waiting Run.");
-    }
-    const waitingState = this.state;
-    this.replaceState(freezeState({
-      ...waitingState,
-      permission: beginApprovalAuthorityApplication({
-        permission: waitingState.permission,
-        decision,
-        authorityOperationId,
-      }) as RunPermissionState & { readonly pendingApproval: PendingApproval },
-    }));
-    const applied = applyImmediateApprovalAuthority({
-      permission: this.state.permission,
-      decision,
-    });
-    if (applied.status === "deferred") {
-      if (!isDurableAuthorityDecision(decision)) {
-        throw new Error("A deferred approval decision has no durable authority operation.");
-      }
-      const applying = this.requirePendingApproval();
-      if (applying.phase !== "applying_authority") {
-        throw new Error("Durable authority application requires an applying PendingApproval.");
-      }
-      const commitStartedAt = this.now();
-      const commitDeadlineAt = deriveAuthorityCommitDeadline({
-        runDeadlineAt: this.runDeadlineAt(),
-        commitStartedAt,
-        commitTimeoutMs: this.config.permissions.authorityApplicationLimits.commitTimeoutMs,
-      });
-      let result: AuthorityCommitExecutionResult;
-      try {
-        result = await this.awaitInterruptibleOperation(
-          "authority_commit",
-          () => executeAuthorityCommit({
-            decision,
-            pending: applying,
-            config: this.config.permissions,
-            cancellation: this.config.cancellation.context,
-            startedAt: commitStartedAt,
-            deadlineAt: commitDeadlineAt,
-            policyAmendmentRecordId: this.createId(
-              "policy_amendment_record",
-              applying.version,
-            ),
-            now: () => this.now(),
-          }),
-          commitDeadlineAt,
-        );
-      } catch (error) {
-        if (error instanceof OperationSettlementTimeoutError) {
-          return this.settleUnconfirmedAuthorityCommit(
-            decision,
-            applying,
-            commitDeadlineAt,
-            error,
-          );
-        }
-        throw error;
-      }
-      return this.settleAuthorityCommit(decision, result);
-    }
-    if (applied.status === "not_applicable") {
-      throw new Error("A non-authority approval decision reached authority application.");
-    }
-    const pending = this.requirePendingApproval();
-    const record = this.createApprovalRecord(
-      { kind: "decision", decision },
-      applied.application,
-    );
-    const grant = decision.kind === "grantPermissions" &&
-        decision.authority.scope === "run"
-      ? decision.authority.grant
-      : null;
-    const observation: PermissionsGrantedObservation | null = grant === null
-      ? null
-      : Object.freeze({
-          ...this.createObservationBaseFromPending(pending),
-          kind: "permissions_granted" as const,
-          requestId: pending.request.id,
-          category: pending.request.category,
-          scope: "run" as const,
-          summary: Object.freeze({
-            fileSystemReadTargetCount: grant.permissions.fileSystem?.read?.length ?? 0,
-            fileSystemWriteTargetCount: grant.permissions.fileSystem?.write?.length ?? 0,
-            networkEnabled: grant.permissions.network?.enabled === true,
-            networkDomainCount: grant.permissions.network?.domains?.length ?? 0,
-          }),
-        });
-    const settlementErrors = await this.settlePendingApproval(
-      record,
-      "applied",
-      observation,
-      false,
-      applied.permission,
-    );
-    return {
-      invalidatesBatch: true,
-      terminalResult: settlementErrors.length === 0
-        ? null
-        : await this.failMany(asFailureTuple(settlementErrors)),
-    };
-  }
-
-  private async settleAuthorityCommit(
-    decision: ValidatedApprovalDecision,
-    result: AuthorityCommitExecutionResult,
-  ): Promise<ProcessActionResult> {
-    const pending = this.requirePendingApproval();
-    if (result.kind === "applied") {
-      const permission = result.application.target === "session_authority"
-        ? applyCommittedSessionAuthority({
-            permission: this.state.permission,
-            record: result.record as SessionAuthorityRecord,
-          })
-        : applyCommittedPolicyAmendment({
-            permission: this.state.permission,
-            record: result.record as AppliedPolicyAmendmentRecord,
-          });
-      const observation = result.application.target === "session_authority" &&
-          "grantedPermissions" in result.record && result.record.grantedPermissions !== null
-        ? this.createSessionPermissionsGrantedObservation(pending, result.record)
-        : null;
-      const record = this.createApprovalRecord(
-        { kind: "decision", decision },
-        result.application,
-      );
-      const settlementErrors = await this.settlePendingApproval(
-        record,
-        "applied",
-        observation,
-        false,
-        permission,
-      );
-      if (settlementErrors.length > 0) {
-        return {
-          invalidatesBatch: true,
-          terminalResult: await this.failMany(asFailureTuple(settlementErrors)),
-        };
-      }
-      return this.finishAuthoritySettlement(result, true);
-    }
-
-    const record = this.createApprovalRecord(
-      { kind: "decision", decision },
-      result.application,
-    );
-    const observation: ApprovalApplicationFailedObservation = Object.freeze({
-      ...this.createObservationBaseFromPending(pending),
-      kind: "approval_application_failed",
-      requestId: pending.request.id,
-      category: pending.request.category,
-      scope: result.scope,
-      code: result.kind === "interrupted"
-        ? authorityInterruptionCode(result.owner)
-        : result.code,
-      message: result.kind === "interrupted"
-        ? "Authority application was interrupted before durable commit."
-        : result.message,
-    });
-    const settlementErrors = await this.settlePendingApproval(
-      record,
-      "neutral",
-      observation,
-      true,
-    );
-    if (settlementErrors.length > 0) {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.failMany(asFailureTuple(settlementErrors)),
-      };
-    }
-    return this.finishAuthoritySettlement(result, false);
-  }
-
-  private settleUnconfirmedAuthorityCommit(
-    decision: ValidatedApprovalDecision,
-    pending: PendingApproval & { readonly phase: "applying_authority" },
-    deadlineAt: string,
-    error: OperationSettlementTimeoutError,
-  ): Promise<ProcessActionResult> {
-    if (!isDurableAuthorityDecision(decision)) {
-      throw new Error("An unconfirmed authority commit requires a durable decision.");
-    }
-    const owner = authorityCommitOwner(decision);
-    const cancellation = this.cancellationRequest();
-    const interruption = error.interruptionKind === "run_cancellation" && cancellation !== null
-      ? Object.freeze({
-          kind: "run_cancellation" as const,
-          cancellation: Object.freeze({
-            runId: cancellation.runId,
-            requestId: cancellation.id,
-          }),
-        })
-      : Object.freeze({
-          kind: "operation_deadline" as const,
-          deadline: Object.freeze({
-            operationId: pending.authorityOperationId,
-            deadlineAt,
-          }),
-        });
-    const result: Extract<
-      AuthorityCommitExecutionResult,
-      { readonly kind: "outcome_unknown" }
-    > = Object.freeze({
-      kind: "outcome_unknown" as const,
-      owner,
-      scope: owner === "permission" ? "session" as const : "persistent" as const,
-      commitId: `${pending.authorityOperationId}:commit`,
-      deadlineAt,
-      interruption,
-      code: owner === "permission"
-        ? "session_authority_commit_outcome_unknown"
-        : "policy_amendment_commit_outcome_unknown",
-      message: error.message,
-      application: Object.freeze({
-        kind: "outcome_unknown" as const,
-        code: owner === "permission"
-          ? "session_authority_commit_outcome_unknown"
-          : "policy_amendment_commit_outcome_unknown",
-      }),
-    });
-    return this.settleAuthorityCommit(decision, result);
-  }
-
-  private createSessionPermissionsGrantedObservation(
-    pending: PendingApproval,
-    record: SessionAuthorityRecord,
-  ): PermissionsGrantedObservation {
-    const permissions = record.grantedPermissions!;
-    return Object.freeze({
-      ...this.createObservationBaseFromPending(pending),
-      kind: "permissions_granted",
-      requestId: pending.request.id,
-      category: pending.request.category,
-      scope: "session",
-      summary: Object.freeze({
-        fileSystemReadTargetCount: permissions.fileSystem?.read?.length ?? 0,
-        fileSystemWriteTargetCount: permissions.fileSystem?.write?.length ?? 0,
-        networkEnabled: permissions.network?.enabled === true,
-        networkDomainCount: permissions.network?.domains?.length ?? 0,
-      }),
-    });
-  }
-
-  private async finishAuthoritySettlement(
-    result: AuthorityCommitExecutionResult,
-    applied: boolean,
-  ): Promise<ProcessActionResult> {
-    const cancellation = this.cancellationRequest();
-    if (cancellation !== null) {
-      if (result.kind === "outcome_unknown") {
-        this.enterCancelling(cancellation);
-        return {
-          invalidatesBatch: true,
-          terminalResult: await this.fail(
-            authorityCommitRunFailure(result),
-            authorityCommitFailureCode(result.owner, true),
-          ),
-        };
-      }
-      return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
-    }
-
-    if (result.kind === "outcome_unknown") {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(
-          authorityCommitRunFailure(result),
-          authorityCommitFailureCode(result.owner, true),
-        ),
-      };
-    }
-    if (result.interruption?.kind === "operation_deadline") {
-      if (result.deadlineAt === this.runDeadlineAt()) {
-        return {
-          invalidatesBatch: true,
-          terminalResult: await this.fail(limitRunFailure(
-            "Run deadline elapsed during authority application.",
-            { commitId: result.commitId, deadlineAt: result.deadlineAt },
-          )),
-        };
-      }
-      if (applied) {
-        return {
-          invalidatesBatch: true,
-          terminalResult: await this.fail(
-            runFailure(
-              result.owner,
-              authorityCommitFailureCode(result.owner, false),
-              "Authority was durably committed, but completion was confirmed after its operation deadline.",
-              false,
-              { commitId: result.commitId, deadlineAt: result.deadlineAt },
-            ),
-            authorityCommitFailureCode(result.owner, false),
-          ),
-        };
-      }
-    }
-    return { invalidatesBatch: true, terminalResult: null };
-  }
-
-  private async settleReviewFailure(
-    failure: ApprovalReviewFailure,
-  ): Promise<ProcessActionResult> {
-    const pending = this.requirePendingApproval();
-    const record = this.createApprovalRecord(
-      { kind: "review_failure", failure },
-      { kind: "not_applicable" },
-    );
-    const observation: ApprovalReviewFailedObservation = Object.freeze({
-      ...this.createObservationBaseFromPending(pending),
-      kind: "approval_review_failed",
-      requestId: pending.request.id,
-      category: pending.request.category,
-      code: failure.code,
-      message: failure.message,
-      retryable: failure.retryable,
-    });
-    const settlementErrors = await this.settlePendingApproval(
-      record,
-      "review_failure",
-      observation,
-      true,
-    );
-    if (settlementErrors.length > 0) {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.failMany(asFailureTuple(settlementErrors)),
-      };
-    }
-    if (
-      failure.code === "approval_review_timeout" &&
-      pending.request.deadlineAt === this.runDeadlineAt()
-    ) {
-      const terminalResult = await this.fail(limitRunFailure(
-        "Run deadline elapsed during approval review.",
-        { requestId: pending.request.id, deadlineAt: pending.request.deadlineAt },
-      ));
-      return { invalidatesBatch: true, terminalResult };
-    }
-    if (
-      this.state.permission.counters.consecutiveReviewFailures >=
-      this.config.permissions.approvalLimits.maxConsecutiveReviewFailures
-    ) {
-      const terminalResult = await this.fail(runFailure(
-        "approval",
-        "approval_review_failure_limit_exceeded",
-        "Approval reviewer failure circuit limit was reached.",
-        false,
-        { requestId: pending.request.id },
-      ), "approval_review_failure_limit_exceeded");
-      return { invalidatesBatch: true, terminalResult };
-    }
-    return { invalidatesBatch: true, terminalResult: null };
-  }
-
-  private async settleCancelledApproval(
-    initiatingDecision: "cancel" | null,
-  ): Promise<ProcessActionResult> {
-    const cancellation = this.cancellationRequest();
-    if (cancellation === null) {
-      throw new Error("Approval cancellation requires an accepted Run cancellation.");
-    }
-    const record = this.createApprovalRecord({
-      kind: "run_cancelled",
-      cancellationRequestId: cancellation.id,
-      initiatingDecision,
-    }, { kind: "not_applicable" });
-    const settlementErrors = await this.settlePendingApproval(
-      record,
-      "neutral",
-      null,
-      true,
-    );
-    if (settlementErrors.length > 0) {
-      this.enterCancelling(cancellation);
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.failMany(asFailureTuple(settlementErrors)),
-      };
-    }
-    return {
-      invalidatesBatch: true,
-      terminalResult: await this.cancelRun(),
-    };
-  }
-
-  private async settlePendingApproval(
-    record: ApprovalRecord,
-    counterEffect: ApprovalSettlementCounterEffect,
-    observation: RunObservation | null,
-    failed: boolean,
-    permissionBase: RunPermissionState = this.state.permission,
-    skipKinds: ReadonlySet<RunFailureKind> = new Set(),
-  ): Promise<RunFailureCause[]> {
-    if (this.state.status !== "waiting_for_approval") {
-      throw new Error(`Cannot settle approval while Run is ${this.state.status}.`);
-    }
-    const permission = settleApproval({
-      permission: permissionBase,
-      record,
-      counterEffect,
-    });
-    const summary = createApprovalRecordSummary(record);
-    const drafts: RunItemDraft<TOutput>[] = [
-      (base) => Object.freeze({
-        ...base,
-        kind: "approval_resolved" as const,
-        record: summary,
-      }),
-      ...(observation === null ? [] : [observationDraft<TOutput>(observation)]),
-    ];
-    const items = this.materializeItems(drafts);
-    const context = observation === null
-      ? this.state.context
-      : applyContextUpdate(this.state.context, {
-          observations: [observation],
-          metadata: { lastActionId: observation.actionId },
-        });
-    this.replaceState(freezeState({
-      ...this.state,
-      status: "running",
-      permission,
-      context,
-      counters: nextActionCounters(this.state.counters, failed),
-      items: Object.freeze([...this.state.items, ...items]),
-    }));
-    const recordingStartedAt = this.now();
-    const scope = createRunFinalizationContext({
-      runId: this.state.runId,
-      cancellation: this.cancellationRequest() === null
-        ? null
-        : toRunCancellationSummary(this.cancellationRequest()!),
-      timeoutMs: this.config.cancellationLimits.finalizationTimeoutMs,
-      startedAt: recordingStartedAt,
-    });
-    let failures: RunFailureCause[];
-    try {
-      failures = await recordApprovalResolution({
-        runId: record.runId,
-        summary,
-        taskId: this.state.taskId,
-        workspace: this.config.workspace,
-        identity: this.config.identity,
-        timestamp: recordingStartedAt,
-        counters: permission.counters,
-        auditRequirement: this.config.audit,
-        telemetryRequirement: this.config.telemetry,
-        context: Object.freeze({
-          purpose: "runtime" as const,
-          signal: scope.context.signal,
-          deadlineAt: scope.context.deadlineAt,
-        }),
-        auditPort: this.dependencies.auditPort,
-        telemetryPort: this.dependencies.telemetryPort,
-        skipKinds,
-      });
-    } finally {
-      scope.dispose();
-    }
-    if (failures.length === 0 && skipKinds.size === 0) {
-      this.publishItems(items);
-      this.emitApprovalResolved(summary);
-    }
-    return failures;
-  }
-
-  private emitApprovalResolved(
-    summary: ReturnType<typeof createApprovalRecordSummary>,
-  ): void {
-    this.emit("approval.resolved", {
-      requestId: summary.requestId,
-      actionId: summary.actionId,
-      actionFingerprint: summary.actionFingerprint,
-      pendingVersion: summary.pendingVersion,
-      reviewer: summary.reviewer,
-      resolutionKind: summary.resolutionKind,
-      decisionKind: summary.decisionKind,
-      applicationKind: summary.applicationKind,
-      code: summary.code,
-      authorityRecordIds: summary.authorityRecordIds,
-    });
-  }
-
-  private createApprovalRecord(
-    resolution: ApprovalRecord["resolution"],
-    application: ApprovalRecord["application"],
-  ): ApprovalRecord {
-    const pending = this.requirePendingApproval();
-    return deepFreezeValue({
-      id: this.createId("approval_record", pending.version),
-      runId: pending.request.runId,
-      requestId: pending.request.id,
-      actionId: pending.request.actionId,
-      actionFingerprint: pending.request.actionFingerprint,
-      pendingVersion: pending.version,
-      reviewer: pending.reviewer,
-      resolution,
-      application,
-      resolvedAt: this.now(),
-      metadata: {},
-    });
-  }
-
-  private requirePendingApproval(): PendingApproval {
-    if (
-      this.state.status !== "waiting_for_approval" ||
-      this.state.permission.pendingApproval === null
-    ) {
-      throw new Error("Run has no active PendingApproval.");
-    }
-    return this.state.permission.pendingApproval;
-  }
-
-  private createObservationBaseFromPending(pending: PendingApproval) {
-    const actionItem = this.state.items.find(
-      (item) => item.kind === "action" && item.action.id === pending.request.actionId,
-    );
-    if (actionItem === undefined || actionItem.kind !== "action") {
-      throw new Error("PendingApproval has no authoritative Action RunItem.");
-    }
-    return {
-      id: this.createId("observation", actionItem.action.sequence),
-      runId: pending.request.runId,
-      actionId: pending.request.actionId,
-      createdAt: this.now(),
-      metadata: Object.freeze({
-        actionKind: actionItem.action.kind,
-        actionName: actionItem.action.name,
-      }),
-    };
-  }
-
-  private async processToolAction(
-    action: Action & { readonly kind: "tool" },
-  ): Promise<ProcessActionResult> {
-    if (this.dependencies.actionEnforcementPipeline === undefined) {
-      const observation: ActionRejectedObservation = Object.freeze({
-        ...this.createObservationBase(action),
-        kind: "action_rejected",
-        code: "action_unsupported",
-        message: "This Runner has no canonical Action pipeline.",
-      });
-      return this.commitActionObservation(observation, true, true);
-    }
-
-    this.emit("tool.started", {
-      actionId: action.id,
-      toolName: action.name,
-    });
-
-    return this.processExternalToolAction(action);
-  }
-
-  private async processExternalToolAction(
-    action: Action & { readonly kind: "tool" },
-  ): Promise<ProcessActionResult> {
-    const pipeline = this.dependencies.actionEnforcementPipeline;
-    const context = this.config.actionContext;
-    if (pipeline === undefined || context === null) {
-      throw new Error("External Action processing requires a complete pipeline composition.");
-    }
-
-    let preparation;
-    try {
-      preparation = await this.awaitInterruptibleOperation(
-        "tool",
-        () => pipeline.prepare({
-          action,
-          workspace: {
-            workspaceId: context.workspace.workspaceId,
-            trustState: context.workspace.trustState,
-            roots: context.workspace.roots.map((root) => ({
-              rootId: root.rootId,
-              platform: root.platform,
-              path: root.canonicalPath,
-              resolvedPath: root.resolvedPath ?? root.canonicalPath,
-              resolutionFingerprint: root.resolutionFingerprint,
-            })),
-          },
-          actor: context.actor,
-          environment: context.environment,
-          interruption: this.createActionInterruptionContext(),
-        }),
-        this.runDeadlineAt(),
-      );
-    } catch (error) {
-      return this.handleActionPipelineOperationError(action, error, "preparation");
-    }
-
-    if (preparation.status === "rejected") {
-      const observation: ActionRejectedObservation = Object.freeze({
-        ...this.createObservationBase(action),
-        kind: "action_rejected",
-        code: preparation.code,
-        message: preparation.message,
-      });
-      return this.commitActionObservation(observation, true, true);
-    }
-    if (preparation.status === "failed") {
-      return this.commitActionFailure(action, preparation.failure);
-    }
-    if (preparation.status === "interrupted") {
-      return this.handleActionInterruption(action);
-    }
-
-    this.recordActionPrepared(preparation.prepared);
-    return this.assessPreparedExternalAction(action, preparation.prepared, 1);
-  }
-
-  private async assessPreparedExternalAction(
-    action: Action & { readonly kind: "tool" },
-    prepared: PreparedExternalAction,
-    attemptOrdinal: 1 | 2,
-  ): Promise<ProcessActionResult> {
-    const pipeline = this.dependencies.actionEnforcementPipeline;
-    if (pipeline === undefined) {
-      throw new Error("Prepared Action assessment requires ActionEnforcementPipeline.");
-    }
-
-    while (this.isRunning()) {
-      const assessmentStartedAt = this.now();
-      const approvalDeadlineAt = deriveApprovalReviewDeadline({
-        runDeadlineAt: this.runDeadlineAt(),
-        reviewStartedAt: assessmentStartedAt,
-        reviewTimeoutMs: this.config.permissions.reviewer?.reviewTimeoutMs ?? null,
-      });
-      let assessment: ActionAssessment;
-      try {
-        assessment = await this.awaitInterruptibleOperation(
-          "tool",
-          () => pipeline.assess({
-            prepared,
-            authority: this.createActionAssessmentAuthority(approvalDeadlineAt),
-            interruption: this.createActionInterruptionContext(),
-          }),
-          this.runDeadlineAt(),
-        );
-      } catch (error) {
-        return this.handleActionPipelineOperationError(action, error, "assessment");
-      }
-
-      this.recordActionAssessed(prepared, assessment);
-
-      if (assessment.status === "approval_required") {
-        const result = await this.processExternalActionApproval(
-          action,
-          assessment.requirement,
-          assessment.reviewContext,
-          assessmentStartedAt,
-        );
-        if (result.terminalResult !== null || !result.authorityApplied) return result;
-        continue;
-      }
-      if (assessment.status !== "authorized") {
-        return this.commitActionAssessment(action, prepared, assessment);
-      }
-
-      const revalidationOutcome = await this.revalidatePreparedExternalAction(
-        action,
-        prepared,
-        assessment.authorization,
-        attemptOrdinal,
-      );
-      if (revalidationOutcome.kind === "processed") return revalidationOutcome.processed;
-      const revalidation = revalidationOutcome.result;
-      if (revalidation.status === "approval_required") {
-        const result = await this.processExternalActionApproval(
-          action,
-          revalidation.requirement,
-          revalidation.reviewContext,
-          this.now(),
-        );
-        if (result.terminalResult !== null || !result.authorityApplied) return result;
-        continue;
-      }
-      if (revalidation.status !== "ready") {
-        return this.commitActionRevalidation(action, prepared, revalidation);
-      }
-      return this.commitActionDispatchPlan(action, prepared, revalidation.plan);
-    }
-
-    if (this.cancellationRequest() !== null) {
-      return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
-    }
-    throw new Error("Prepared Action assessment left the running lifecycle unexpectedly.");
-  }
-
-  private async processExternalActionApproval(
-    action: Action & { readonly kind: "tool" },
-    requirement: ApprovalRequirement,
-    reviewContext: ActionAssessmentReviewContext,
-    createdAt: string,
-  ): Promise<ExternalApprovalResult> {
-    const requestOrdinal = this.state.permission.counters.lastPendingVersion + 1;
-    const request = createApprovalRequest({
-      id: this.createId("approval_request", requestOrdinal),
-      createdAt,
-      requirement,
-    }) as ApprovalRequest;
-    const result = await this.processApprovalOperation({
-      action,
-      request,
-      cwd: this.actionDecisionCwd(),
-      environment: this.actionDecisionEnvironment(),
-      reviewContext: this.createApprovalReviewContext({
-        ruleOutcome: reviewContext.ruleOutcome,
-        currentAuthority: reviewContext.currentAuthority,
-        annotations: Object.freeze({ source: "external_action" }),
-      }),
-    });
-    if (result.terminalResult !== null) {
-      return Object.freeze({ ...result, authorityApplied: false });
-    }
-    const record = this.state.permission.approvalRecords.find(
-      (candidate) => candidate.requestId === request.id,
-    );
-    return Object.freeze({
-      ...result,
-      invalidatesBatch: true,
-      authorityApplied: record?.application.kind === "applied",
-    });
-  }
-
-  private async revalidatePreparedExternalAction(
-    action: Action & { readonly kind: "tool" },
-    prepared: PreparedExternalAction,
-    authorization: ActionDispatchAuthorization,
-    attemptOrdinal: 1 | 2,
-  ): Promise<ExternalActionRevalidationOutcome> {
-    const pipeline = this.dependencies.actionEnforcementPipeline;
-    if (pipeline === undefined) {
-      throw new Error("Prepared Action revalidation requires ActionEnforcementPipeline.");
+    if (immediate.status === "not_applicable") return immediate.application;
+    if (!isDurableAuthorityDecision(resolution.decision)) {
+      return Object.freeze({ kind: "not_applied", code: "approval_authority_invalid" });
     }
     const startedAt = this.now();
-    const approvalDeadlineAt = deriveApprovalReviewDeadline({
-      runDeadlineAt: this.runDeadlineAt(),
-      reviewStartedAt: startedAt,
-      reviewTimeoutMs: this.config.permissions.reviewer?.reviewTimeoutMs ?? null,
+    const result = await executeAuthorityCommit({
+      decision: resolution.decision,
+      pending: Object.freeze({
+        requestId,
+        actionFingerprint: subject.requirement.subject.actionFingerprint,
+        authorityOperationId: resolution.resolutionId,
+      }),
+      config: this.config.permissions,
+      cancellation: this.config.cancellation.context,
+      startedAt,
+      deadlineAt: deriveAuthorityCommitDeadline({
+        runDeadlineAt: this.writer.getSnapshot().deadlineAt,
+        commitStartedAt: startedAt,
+        commitTimeoutMs: this.config.permissions.authorityApplicationLimits.commitTimeoutMs,
+      }),
+      policyAmendmentRecordId: this.id("authority_record"),
+      now: this.dependencies.now,
+    });
+    if (result.kind === "applied") {
+      const permission = result.owner === "permission"
+        ? applyCommittedSessionAuthority({
+            permission: this.writer.getSnapshot().permission,
+            record: result.record as import("@agent-anything/permission").SessionAuthorityRecord,
+          })
+        : applyCommittedPolicyAmendment({
+            permission: this.writer.getSnapshot().permission,
+            record: result.record as import("@agent-anything/governance").AppliedPolicyAmendmentRecord,
+          });
+      this.writer.commitState(() => Object.freeze({ permission }));
+    }
+    return result.application;
+  }
+
+  private consumeApprovalCoverage(coverageId: string): boolean {
+    const current = this.writer.getSnapshot().permission;
+    const coverage = current.actionCoverage.find((candidate) => candidate.id === coverageId);
+    if (coverage === undefined) return false;
+    const result = consumeActionApprovalCoverage({
+      permission: current,
+      coverageId,
+      runId: coverage.runId,
+      actionId: coverage.actionId,
+      actionFingerprint: coverage.actionFingerprint,
+    });
+    if (result.status !== "consumed") return false;
+    this.writer.commitState(() => Object.freeze({ permission: result.permission }));
+    return true;
+  }
+
+  private actionPermissionContext() {
+    const state = this.writer.getSnapshot();
+    return Object.freeze({
+      authoritySnapshotId: `run-permission:${state.revision}`,
+      profile: this.config.permissions.permissionProfile,
+      approvalPolicy: this.config.permissions.approvalPolicy,
+      actionCoverage: state.permission.actionCoverage,
+      runGrants: state.permission.runPermissionGrants,
+      sessionAuthority: state.permission.sessionAuthorityRecords,
+      sessionAuthorityContext: this.config.permissions.sessionAuthority?.context ?? null,
+    });
+  }
+
+  private updateApprovalActivity(
+    update: (current: RunState["permission"]["approvalActivity"]) =>
+      RunState["permission"]["approvalActivity"],
+  ): void {
+    this.writer.commitState((state) => Object.freeze({
+      permission: Object.freeze({
+        ...state.permission,
+        approvalActivity: Object.freeze(update(state.permission.approvalActivity)),
+      }),
+    }));
+  }
+
+  private enterCancelling(request: import("../run/index.js").RunCancellationRequest): void {
+    const state = this.writer.getSnapshot();
+    if (!isActiveStatus(state.status)) return;
+    const summary = toRunCancellationSummary(request);
+    this.writer.commit({
+      kind: "cancellation_transition",
+      transition: "requested",
+      cancellation: summary,
+    }, () => Object.freeze({
+      status: "cancelling" as const,
+      cancellationRequest: request,
+    }));
+    this.interactions.cancelAll(request.id);
+  }
+
+  private async settle(candidate: TerminalCandidate<TOutput>): Promise<RunResult<TOutput>> {
+    if (this.terminalResult !== null) return this.terminalResult;
+    this.interactions.close();
+    this.drainInteractionSettlements();
+    let terminal = candidate;
+    const stateBeforeFinalization = this.writer.getSnapshot();
+    if (stateBeforeFinalization.plan?.status === "active") {
+      const abandoned = abandonPlan({
+        plan: stateBeforeFinalization.plan,
+        terminalStatus: terminal.status,
+        reasonCode: terminal.status === "failed" || terminal.status === "blocked"
+          ? terminal.code
+          : terminal.status === "cancelled"
+            ? "runtime_cancelled"
+            : null,
+        now: this.now(),
+      });
+      if (abandoned.status === "abandoned") {
+        this.writer.commit({
+          kind: "state_transition",
+          transition: "plan",
+          previousRevision: stateBeforeFinalization.plan.version,
+          plan: projectPlan(abandoned.plan),
+        }, () => Object.freeze({ plan: abandoned.plan }));
+      }
+    }
+
+    const finalization = createRunFinalizationContext({
+      runId: this.runId,
+      cancellation: this.config.cancellation.context.request === null
+        ? null
+        : toRunCancellationSummary(this.config.cancellation.context.request),
+      timeoutMs: this.config.cancellationLimits.finalizationTimeoutMs,
+      startedAt: this.now(),
     });
     try {
-      const result = await this.awaitInterruptibleOperation(
-        "tool",
-        () => pipeline.revalidate({
-          prepared,
-          authorization,
-          authority: this.createActionAssessmentAuthority(approvalDeadlineAt),
-          interruption: this.createActionInterruptionContext(),
-          attemptOrdinal,
-        }),
-        this.runDeadlineAt(),
+      const failures = await this.recordLifecycle(
+        terminal.status,
+        new Set(),
+        finalizationObservabilityContext(finalization.context),
       );
-      return Object.freeze({ kind: "result" as const, result });
-    } catch (error) {
-      const handled = await this.handleActionPipelineOperationError(
-        action,
-        error,
-        "revalidation",
-      );
-      return Object.freeze({ kind: "processed" as const, processed: handled });
+      if (failures.length > 0) {
+        terminal = {
+          status: "failed",
+          code: "required_finalization_failed",
+          failure: failures[0]!,
+          relatedFailures: failures.slice(1),
+        };
+      }
+    } finally {
+      finalization.dispose();
     }
+
+    const completedAt = this.now();
+    const cancellationRequest = this.config.cancellation.context.request;
+    const payload: RunItemPayload<TOutput> = terminal.status === "succeeded"
+      ? {
+          kind: "terminal_transition",
+          status: "succeeded",
+          code: null,
+          output: terminal.output,
+          failure: null,
+        }
+      : terminal.status === "blocked"
+        ? {
+            kind: "terminal_transition",
+            status: "blocked",
+            code: terminal.code,
+            output: null,
+            failure: null,
+          }
+        : terminal.status === "cancelled"
+          ? {
+              kind: "terminal_transition",
+              status: "cancelled",
+              code: "runtime_cancelled",
+              output: null,
+              failure: null,
+            }
+          : {
+              kind: "terminal_transition",
+              status: "failed",
+              code: terminal.code,
+              output: null,
+              failure: terminal.failure,
+            };
+    this.writer.commit(payload, () => terminalStatePatch(
+      terminal,
+      cancellationRequest,
+      completedAt,
+    ));
+    const state = this.writer.getSnapshot();
+    const base = {
+      runId: this.runId,
+      taskId: state.taskId,
+      startingAgent: state.startingAgent,
+      finalActiveAgent: state.activeAgent,
+      startedAt: state.startedAt,
+      completedAt,
+      items: state.items,
+      evidenceRefs: state.evidenceRefs,
+      artifactRefs: state.artifactRefs,
+      metadata: state.metadata,
+    };
+    const result = terminal.status === "succeeded"
+      ? createSucceededRunResult(base, terminal.output)
+      : terminal.status === "blocked"
+        ? createBlockedRunResult<TOutput>(base, terminal.code)
+        : terminal.status === "cancelled"
+          ? createCancelledRunResult<TOutput>(
+              base,
+              toRunCancellationSummary(requireCancellation(cancellationRequest)),
+            )
+          : createFailedRunResult<TOutput>(
+              base,
+              terminal.code,
+              terminal.failure,
+              terminal.relatedFailures ?? [],
+              cancellationRequest === null ? null : toRunCancellationSummary(cancellationRequest),
+            );
+    this.terminalResult = result;
+    this.emitTerminal(result);
+    completeRunnerTrace(this.traceAssembler, result);
+    this.publishCurrentState();
+    return result;
   }
 
-  private createActionAssessmentAuthority(approvalDeadlineAt: string) {
-    const effective = deriveEffectivePermissionContext(
-      this.config.permissions,
-      this.state.permission,
-    );
-    return Object.freeze({
-      profile: effective.profile,
-      approvalPolicy: this.config.permissions.approvalPolicy,
-      managedConstraints: this.config.permissions.managedConstraints,
-      execRules: this.config.permissions.rules,
-      networkRules: this.config.permissions.networkRules,
-      runPermissionGrants: effective.runPermissionGrants,
-      sessionAuthorityContext: this.config.permissions.sessionAuthority?.context ?? null,
-      sessionAuthorityRecords: effective.sessionAuthorityRecords,
-      appliedPolicyAmendments: effective.appliedPolicyAmendments,
-      actionCoverage: this.state.permission.actionCoverage,
-      approvalDeadlineAt,
+  private failureFromError(error: unknown): Extract<TerminalCandidate<TOutput>, { readonly status: "failed" }> {
+    if (error instanceof ContextProjectionError) {
+      return {
+        status: "failed",
+        code: "context_projection_failed",
+        failure: createRunFailureCause("context", error.failure),
+      };
+    }
+    if (error instanceof ControllerError) {
+      return {
+        status: "failed",
+        code: "controller_failed",
+        failure: createRunFailureCause(error.failure.kind, error.failure.failure),
+      } as Extract<TerminalCandidate<TOutput>, { readonly status: "failed" }>;
+    }
+    if (error instanceof OperationSettlementTimeoutError) {
+      return {
+        status: "failed",
+        code: "unknown_effect",
+        failure: runtimeFailure(
+          "runtime_operation_settlement_unconfirmed",
+          error.message,
+          { operation: error.operation, interruptionKind: error.interruptionKind },
+        ),
+      };
+    }
+    return {
+      status: "failed",
+      code: "runtime_execution_failed",
+      failure: runtimeFailure(
+        "runtime_execution_failed",
+        error instanceof Error ? error.message : "Agent Runtime execution failed.",
+        error instanceof Error ? { causeName: error.name } : {},
+      ),
+    };
+  }
+
+  private operationFailureResult(
+    registration: RegisteredOperation,
+    invocation: OperationInvocationRef,
+    status: Exclude<OperationResult["status"], "succeeded" | "partial">,
+    owner: string,
+    code: string,
+    startedAt: string,
+    finishedAt: string,
+  ): OperationResult {
+    return createOperationResult({
+      ref: Object.freeze({ invocation, id: this.id("operation_result") }),
+      binding: registration.binding.ref,
+      semanticOwner: registration.operation.semanticOwner,
+      status,
+      output: null,
+      failure: operationFailure(owner, code),
+      startedAt,
+      finishedAt,
+      lowerRefs: Object.freeze([]),
+      metadata: Object.freeze({}),
     });
   }
 
-  private createActionInterruptionContext() {
-    const cancellation = this.config.cancellation.context;
+  private emitOperation(
+    registration: RegisteredOperation,
+    bindingKind: ResolvedOperationBinding["kind"],
+    context: OperationInvocationContext,
+    result: OperationResult,
+  ): void {
+    this.emit("operation.started", {
+      invocationId: context.invocation.id,
+      operationNamespace: context.invocation.operation.operation.namespace,
+      operationName: context.invocation.operation.operation.name,
+      operationRevision: context.invocation.operation.revision,
+      semanticOwner: registration.operation.semanticOwner,
+      bindingKind,
+      correlationKind: context.correlation.kind,
+      parentInvocationId: context.parentInvocation?.id ?? null,
+      parentRunActionId: context.correlation.kind === "run_action"
+        ? context.correlation.runAction.id
+        : null,
+    }, result.startedAt);
+    this.emit("operation.finished", {
+      invocationId: context.invocation.id,
+      status: result.status,
+      code: result.failure?.code ?? null,
+      resultId: result.ref.id,
+      lowerResultRefs: Object.freeze([]),
+    }, result.finishedAt);
+  }
+
+  private runActionCorrelation(action: RuntimeRunAction): OperationCorrelation {
     return Object.freeze({
-      signal: cancellation.signal,
+      kind: "run_action",
+      run: action.ref.run,
+      runAction: action.ref,
+      provenance: action.provenance,
+      materializationRevision: action.basis.runRevision,
+    });
+  }
+
+  private runActionCorrelationByRef(ref: RunActionRef): OperationCorrelation {
+    const item = this.writer.getSnapshot().items.find(
+      (candidate) => candidate.payload.kind === "run_action" &&
+        candidate.payload.action.ref.id === ref.id,
+    );
+    if (item?.payload.kind !== "run_action") {
+      throw new TypeError("Approval parent RunAction is not committed in this Run.");
+    }
+    return this.runActionCorrelation(item.payload.action);
+  }
+
+  private invocationInterruption(): InvocationInterruptionContext {
+    const context = this.config.cancellation.context;
+    return Object.freeze({
+      signal: context.signal,
       get interruption() {
-        const request = cancellation.request;
-        return request === null
+        const request = context.request;
+        return request === null || !context.signal.aborted
           ? null
           : Object.freeze({
               kind: "run_cancellation" as const,
@@ -1965,1865 +2059,121 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private actionDecisionEnvironment(): PermissionResolutionEnvironmentInput {
-    const profile = this.config.permissions.permissionProfile;
+  private retryEvents(): RetryEventSink {
     return Object.freeze({
-      environmentId: profile.environmentId,
-      platform: profile.platform,
-      workspaceRoots: Object.freeze(profile.workspaceRoots.map((root) => Object.freeze({
-        rootId: root.rootId,
-        path: root.canonicalPath,
-      }))),
-    });
-  }
-
-  private actionDecisionCwd(): string {
-    const root = this.config.permissions.permissionProfile.workspaceRoots[0];
-    if (root === undefined) throw new Error("Action approval requires a resolved workspace root.");
-    return root.canonicalPath;
-  }
-
-  private recordActionPrepared(prepared: PreparedExternalAction): void {
-    if (this.state.status !== "running") return;
-    const summary: ActionPreparedSummary = Object.freeze({
-      actionId: prepared.action.id,
-      actionFingerprint: prepared.actionFingerprint,
-      category: prepared.safeSummary.kind,
-      effectCount: prepared.subject.effectSet.kind === "effects"
-        ? prepared.subject.effectSet.values.length
-        : 0,
-      targetAssertionCount: prepared.subject.targetAssertions.length,
-    });
-    this.commitRunning([(base) => Object.freeze({
-      ...base,
-      kind: "action_prepared" as const,
-      prepared: summary,
-    })]);
-    this.emit("action.prepared", summary);
-  }
-
-  private recordActionAssessed(
-    prepared: PreparedExternalAction,
-    assessment: ActionAssessment,
-  ): void {
-    if (this.state.status !== "running") return;
-    const summary: ActionAssessedSummary = Object.freeze({
-      actionId: prepared.action.id,
-      actionFingerprint: prepared.actionFingerprint,
-      status: assessment.status,
-      owner: assessment.status === "denied"
-        ? assessment.owner
-        : assessment.status === "invalidated"
-        ? "tool"
-        : assessment.status === "failed"
-        ? assessment.failure.kind === "policy" ||
-            assessment.failure.kind === "permission" ||
-            assessment.failure.kind === "tool"
-          ? assessment.failure.kind
-          : null
-        : null,
-      code: assessment.status === "denied" || assessment.status === "invalidated"
-        ? assessment.code
-        : assessment.status === "failed"
-        ? assessment.failure.failure.code
-        : null,
-    });
-    this.commitRunning([(base) => Object.freeze({
-      ...base,
-      kind: "action_assessed" as const,
-      assessment: summary,
-    })]);
-    this.emit("action.assessed", summary);
-  }
-
-  private recordActionInvalidated(
-    prepared: PreparedExternalAction,
-    phase: ActionInvalidatedSummary["phase"],
-    owner: ActionInvalidatedSummary["owner"],
-    code: string,
-  ): void {
-    if (this.state.status !== "running") return;
-    const summary: ActionInvalidatedSummary = Object.freeze({
-      actionId: prepared.action.id,
-      actionFingerprint: prepared.actionFingerprint,
-      phase,
-      owner,
-      code,
-    });
-    this.commitRunning([(base) => Object.freeze({
-      ...base,
-      kind: "action_invalidated" as const,
-      invalidation: summary,
-    })]);
-    this.emit("action.invalidated", summary);
-  }
-
-  private commitActionAssessment(
-    action: Action,
-    prepared: PreparedExternalAction,
-    assessment: Exclude<
-      ActionAssessment,
-      { readonly status: "approval_required" | "authorized" }
-    >,
-  ): Promise<ProcessActionResult> {
-    if (assessment.status === "denied") {
-      const observation: ActionDeniedObservation = Object.freeze({
-        ...this.createObservationBase(action),
-        kind: "action_denied",
-        owner: assessment.owner,
-        code: assessment.code,
-        message: assessment.message,
-      });
-      return this.commitActionObservation(observation, true, true);
-    }
-    if (assessment.status === "invalidated") {
-      this.recordActionInvalidated(prepared, "assessment", "tool", assessment.code);
-      const observation: ActionDeniedObservation = Object.freeze({
-        ...this.createObservationBase(action),
-        kind: "action_denied",
-        owner: "tool",
-        code: assessment.code,
-        message: assessment.message,
-      });
-      return this.commitActionObservation(observation, true, true);
-    }
-    if (assessment.status === "failed") {
-      return this.commitActionFailure(action, assessment.failure);
-    }
-    if (assessment.status === "interrupted") {
-      return this.handleActionInterruption(action);
-    }
-
-    return this.handleActionInterruption(action);
-  }
-
-  private commitActionRevalidation(
-    action: Action,
-    prepared: PreparedExternalAction,
-    revalidation: Exclude<
-      ActionRevalidationResult,
-      { readonly status: "approval_required" | "ready" }
-    >,
-  ): Promise<ProcessActionResult> {
-    if (revalidation.status === "denied") {
-      const observation: ActionDeniedObservation = Object.freeze({
-        ...this.createObservationBase(action),
-        kind: "action_denied",
-        owner: revalidation.owner,
-        code: revalidation.code,
-        message: revalidation.message,
-      });
-      return this.commitActionObservation(observation, true, true);
-    }
-    if (revalidation.status === "invalidated") {
-      this.recordActionInvalidated(prepared, "revalidation", "tool", revalidation.code);
-      const observation: ActionDeniedObservation = Object.freeze({
-        ...this.createObservationBase(action),
-        kind: "action_denied",
-        owner: "tool",
-        code: revalidation.code,
-        message: revalidation.message,
-      });
-      return this.commitActionObservation(observation, true, true);
-    }
-    if (revalidation.status === "failed") {
-      return this.commitActionFailure(action, revalidation.failure);
-    }
-    return this.handleActionInterruption(action);
-  }
-
-  private async commitActionDispatchPlan(
-    action: Action & { readonly kind: "tool" },
-    prepared: PreparedExternalAction,
-    plan: ActionDispatchPlan,
-  ): Promise<ProcessActionResult> {
-    if (this.cancellationRequest() !== null) {
-      return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
-    }
-
-    if (plan.actionCoverageIdToConsume !== null) {
-      const consumed = consumeActionApprovalCoverage({
-        permission: this.state.permission,
-        coverageId: plan.actionCoverageIdToConsume,
-        runId: plan.runId,
-        actionId: plan.actionId,
-        actionFingerprint: plan.actionFingerprint,
-      });
-      if (consumed.status === "rejected") {
-        this.recordActionInvalidated(prepared, "dispatch", "permission", consumed.code);
-        const observation: ActionDeniedObservation = Object.freeze({
-          ...this.createObservationBase(action),
-          kind: "action_denied",
-          owner: "permission",
-          code: consumed.code,
-          message: "The exact Action approval coverage is unavailable for dispatch.",
-        });
-        return this.commitActionObservation(observation, true, true);
-      }
-      if (this.state.status !== "running" || consumed.permission.pendingApproval !== null) {
-        throw new Error("Action coverage can be consumed only while the Run is active.");
-      }
-      this.replaceState(freezeState({
-        ...this.state,
-        permission: Object.freeze({
-          ...consumed.permission,
-          pendingApproval: null,
-        }),
-      }));
-    }
-
-    if (this.cancellationRequest() !== null) {
-      return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
-    }
-
-    let auditFailure: RunFailureCause | null;
-    try {
-      auditFailure = await this.awaitInterruptibleOperation(
-        "tool",
-        () => recordActionDispatchAuthorizationAudit({
-          plan,
-          taskId: this.state.taskId,
-          workspace: this.config.workspace,
-          identity: this.config.identity,
-          timestamp: this.now(),
-          requirement: this.config.audit,
-          signal: this.config.cancellation.context.signal,
-          ...(this.dependencies.auditPort === undefined
-            ? {}
-            : { port: this.dependencies.auditPort }),
-        }),
-        this.runDeadlineAt(),
-      );
-    } catch (error) {
-      if (error instanceof OperationSettlementTimeoutError) {
-        return {
-          invalidatesBatch: true,
-          terminalResult: await this.fail(
-            cancellationSettlementRunFailure(error),
-            "runtime_cancellation_settlement_timeout",
-          ),
-        };
-      }
-      if (this.cancellationRequest() !== null) {
-        return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
-      }
-      auditFailure = runFailure(
-        "audit",
-        "audit_required_failed",
-        "Action dispatch authorization Audit failed unexpectedly.",
-        false,
-        { actionId: action.id },
-      );
-    }
-    if (auditFailure !== null) {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(auditFailure, "audit_required_failed"),
-      };
-    }
-    if (this.cancellationRequest() !== null) {
-      return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
-    }
-
-    const gateway = this.dependencies.sandboxExecutionGateway;
-    if (gateway === undefined) {
-      throw new Error("Authorized Action dispatch requires SandboxExecutionGateway.");
-    }
-    let sandboxPreparation;
-    try {
-      sandboxPreparation = await this.awaitInterruptibleOperation(
-        "tool",
-        () => gateway.prepare({
-          plan,
-          preparedInvocation: prepared.preparedInvocation,
-          deadlineAt: this.runDeadlineAt(),
-          interruption: this.createActionInterruptionContext(),
-        }),
-        this.runDeadlineAt(),
-      );
-    } catch (error) {
-      return this.handleActionPipelineOperationError(action, error, "dispatch");
-    }
-    if (sandboxPreparation.status === "failed") {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(
-          actionExecutionRunFailure(sandboxPreparation.failure),
-          "sandbox_enforcement_failed",
-        ),
-      };
-    }
-    if (sandboxPreparation.status === "interrupted") {
-      return this.handleActionInterruption(action);
-    }
-
-    const sandboxAttempt = sandboxPreparation.prepared.attempt;
-    let startFailures: readonly RunFailureCause[];
-    try {
-      startFailures = await this.awaitInterruptibleOperation(
-        "tool",
-        () => recordSandboxAttemptStarted({
-          attempt: sandboxAttempt,
-          taskId: this.state.taskId,
-          workspace: this.config.workspace,
-          identity: this.config.identity,
-          timestamp: this.now(),
-          auditRequirement: this.config.audit,
-          telemetryRequirement: this.config.telemetry,
-          signal: this.config.cancellation.context.signal,
-          ...(this.dependencies.auditPort === undefined
-            ? {}
-            : { auditPort: this.dependencies.auditPort }),
-          ...(this.dependencies.telemetryPort === undefined
-            ? {}
-            : { telemetryPort: this.dependencies.telemetryPort }),
-        }),
-        this.runDeadlineAt(),
-      );
-    } catch (error) {
-      return this.handleActionPipelineOperationError(action, error, "dispatch");
-    }
-    if (startFailures.length > 0) {
-      const failure = startFailures[0]!;
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(
-          failure,
-          infrastructureFailureCode(failure),
-        ),
-      };
-    }
-    this.commitAndPublishSettledToolState([
-      (base) => Object.freeze({
-        ...base,
-        kind: "sandbox_attempt_started" as const,
-        attempt: sandboxAttemptSummary(sandboxAttempt),
-      }),
-    ], {});
-    this.emit("sandbox.attempt.started", {
-      actionId: sandboxAttempt.actionId,
-      attemptId: sandboxAttempt.id,
-      ordinal: sandboxAttempt.ordinal,
-      enforcement: sandboxAttempt.enforcement,
-    });
-
-    let execution: ActionExecutionResult;
-    try {
-      execution = await this.awaitInterruptibleOperation(
-        "tool",
-        () => gateway.execute(sandboxPreparation.prepared),
-        this.runDeadlineAt(),
-        true,
-      );
-    } catch (error) {
-      return this.handleActionPipelineOperationError(action, error, "dispatch");
-    }
-
-    let toolResultClassification: ToolResultClassification | null = null;
-    let retainedToolOutcome: {
-      readonly observation: ToolResultObservation | null;
-      readonly items: readonly RunItem<TOutput>[];
-      readonly counters: RunCounters;
-    } | null = null;
-    if (execution.status === "executed") {
-      const classification = classifyToolResult(execution.toolResult);
-      toolResultClassification = classification;
-      const observation = this.createExternalToolResultObservation(action, execution);
-      retainedToolOutcome = Object.freeze({
-        observation,
-        ...this.retainExternalToolOutcome(action, observation, classification.failed),
-      });
-    }
-
-    const resolution = sandboxAttemptResolution(sandboxAttempt, execution, this.now());
-    const resolutionItems = this.commitSettledToolState([
-      (base) => Object.freeze({
-        ...base,
-        kind: "sandbox_attempt_resolved" as const,
-        resolution,
-      }),
-    ], {});
-
-    let resolutionFailures: readonly RunFailureCause[];
-    try {
-      resolutionFailures = await this.awaitInterruptibleOperation(
-        "tool",
-        () => recordSandboxAttemptResolved({
-          attempt: sandboxAttempt,
-          resolution,
-          taskId: this.state.taskId,
-          workspace: this.config.workspace,
-          identity: this.config.identity,
-          timestamp: resolution.settledAt,
-          auditRequirement: this.config.audit,
-          telemetryRequirement: this.config.telemetry,
-          signal: new AbortController().signal,
-          ...(this.dependencies.auditPort === undefined
-            ? {}
-            : { auditPort: this.dependencies.auditPort }),
-          ...(this.dependencies.telemetryPort === undefined
-            ? {}
-            : { telemetryPort: this.dependencies.telemetryPort }),
-        }),
-        this.runDeadlineAt(),
-        true,
-      );
-    } catch (error) {
-      if (error instanceof OperationSettlementTimeoutError) {
-        this.publishSandboxAttemptResolution(resolutionItems, resolution);
-        if (execution.status === "executed" && retainedToolOutcome !== null) {
-          this.publishExternalToolOutcome(
-            action,
-            execution,
-            retainedToolOutcome.items,
-            retainedToolOutcome.observation,
-            [],
-            { status: "failed", code: "runtime_cancellation_settlement_timeout" },
-          );
-        }
-        return {
-          invalidatesBatch: true,
-          terminalResult: await this.fail(
-            cancellationSettlementRunFailure(error),
-            "runtime_cancellation_settlement_timeout",
-          ),
-        };
-      }
-      resolutionFailures = Object.freeze([runFailure(
-        "runtime",
-        "runtime_action_dispatch_failed",
-        "Sandbox attempt settlement failed unexpectedly.",
-        false,
-        { actionId: action.id, attemptId: sandboxAttempt.id },
-      )]);
-    }
-    this.publishSandboxAttemptResolution(resolutionItems, resolution);
-    if (resolutionFailures.length > 0) {
-      const failure = resolutionFailures[0]!;
-      if (execution.status === "executed" && retainedToolOutcome !== null) {
-        this.publishExternalToolOutcome(
-          action,
-          execution,
-          retainedToolOutcome.items,
-          retainedToolOutcome.observation,
-          [],
-          { status: "failed", code: runFailureCode(failure) },
-        );
-      }
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(
-          failure,
-          infrastructureFailureCode(failure),
-        ),
-      };
-    }
-
-    if (execution.status === "executed") {
-      if (toolResultClassification === null) {
-        throw new Error("Executed Action lost its validated ToolResult classification.");
-      }
-      if (retainedToolOutcome === null) {
-        throw new Error("Executed Action lost its retained ToolResult state.");
-      }
-      return this.settleExecutedActionResult(
-        action,
-        execution,
-        toolResultClassification,
-        retainedToolOutcome,
-      );
-    }
-    if (execution.status === "sandbox_denied") {
-      return this.processSandboxDenial(action, prepared, plan, execution);
-    }
-    if (execution.status === "sandbox_unavailable") {
-      const error = runFailure(
-        "sandbox",
-        execution.code,
-        "The selected sandbox enforcement could not execute the Action.",
-        false,
-        {
-          actionId: action.id,
-          attemptId: execution.attempt.id,
-          stage: execution.stage,
-          effectState: execution.effectState,
-        },
-      );
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(error, "sandbox_enforcement_failed"),
-      };
-    }
-    if (execution.status === "interrupted") {
-      return this.handleActionInterruption(action, execution.interruption);
-    }
-    if (
-      execution.effectState === "unknown" ||
-      execution.failure.failure.code === "tool_result_invalid"
-    ) {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(
-          actionExecutionRunFailure(execution.failure),
-          "tool_execution_failed",
-        ),
-      };
-    }
-    if (execution.failure.kind === "tool") {
-      return this.commitActionFailure(action, execution.failure);
-    }
-    return {
-      invalidatesBatch: true,
-      terminalResult: await this.fail(
-        actionExecutionRunFailure(execution.failure),
-        "sandbox_enforcement_failed",
-      ),
-    };
-  }
-
-  private publishSandboxAttemptResolution(
-    items: readonly RunItem<TOutput>[],
-    resolution: SandboxAttemptResolutionSummary,
-  ): void {
-    this.publishItems(items);
-    this.emit("sandbox.attempt.resolved", {
-      actionId: resolution.actionId,
-      attemptId: resolution.attemptId,
-      ordinal: resolution.ordinal,
-      enforcement: resolution.enforcement,
-      outcome: resolution.outcome,
-      code: resolution.code,
-    }, resolution.settledAt);
-  }
-
-  private async settleExecutedActionResult(
-    action: Action & { readonly kind: "tool" },
-    execution: Extract<ActionExecutionResult, { readonly status: "executed" }>,
-    classification: ToolResultClassification,
-    retained: {
-      readonly observation: ToolResultObservation | null;
-      readonly items: readonly RunItem<TOutput>[];
-      readonly counters: RunCounters;
-    },
-  ): Promise<ProcessActionResult> {
-    const evidenceBuilder = this.dependencies.evidenceBuilder;
-    const evidencePersistence = this.dependencies.evidencePersistence;
-    if (evidenceBuilder === undefined || evidencePersistence === undefined) {
-      throw new Error("Complete Action result settlement dependencies are unavailable.");
-    }
-
-    let settlement;
-    try {
-      settlement = await this.awaitInterruptibleOperation(
-        "tool",
-        () => settleToolResultEvidence({
-          actionId: action.id,
-          toolResult: execution.toolResult,
-          evidenceBuilder,
-          persistence: evidencePersistence,
-          isInterrupted: () => this.cancellationRequest() !== null,
-        }),
-        this.runDeadlineAt(),
-        true,
-      );
-    } catch (error) {
-      if (error instanceof OperationSettlementTimeoutError) {
-        this.publishExternalToolOutcome(action, execution, retained.items, retained.observation, [], {
-          status: "failed",
-          code: "runtime_cancellation_settlement_timeout",
-        });
-        return {
-          invalidatesBatch: true,
-          terminalResult: await this.fail(
-            cancellationSettlementRunFailure(error),
-            "runtime_cancellation_settlement_timeout",
-          ),
-        };
-      }
-      settlement = Object.freeze({
-        status: "failed" as const,
-        evidenceRefs: Object.freeze([]),
-        artifactRefs: Object.freeze([]),
-        failure: contextFailure(
-          "context_evidence_creation_failed",
-          "Action result settlement failed unexpectedly.",
-          { actionId: action.id },
-        ),
-      });
-    }
-
-    const contextWithEvidence = applyContextUpdate(this.state.context, {
-      observations: [],
-      evidenceRefs: settlement.evidenceRefs,
-      metadata: {
-        lastActionId: action.id,
-        lastControllerIteration: action.provenance.controllerIteration,
-      },
-    });
-    this.commitSettledToolState([], {
-      context: contextWithEvidence,
-      evidenceRefs: settlement.evidenceRefs,
-      artifactRefs: settlement.artifactRefs,
-    });
-    this.publishExternalToolOutcome(
-      action,
-      execution,
-      retained.items,
-      retained.observation,
-      settlement.evidenceRefs,
-      settlement.status === "failed"
-        ? { status: "failed", code: settlement.failure.code }
-        : {
-            status: classification.failed ? "failed" : "succeeded",
-            code: toolResultErrorCode(execution.toolResult),
-          },
-    );
-
-    if (settlement.status === "failed") {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(
-          createRunFailureCause("context", settlement.failure),
-          settlement.failure.code === "context_evidence_persistence_failed"
-            ? "storage_write_failed"
-            : "tool_execution_failed",
-        ),
-      };
-    }
-    if (settlement.status === "interrupted" || this.cancellationRequest() !== null) {
-      return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
-    }
-    if (
-      retained.counters.consecutiveActionFailures >
-        this.config.limits.maxConsecutiveActionFailures
-    ) {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(limitRunFailure(
-          "Run exceeded maxConsecutiveActionFailures.",
-          {
-            maxConsecutiveActionFailures:
-              this.config.limits.maxConsecutiveActionFailures,
-            actualConsecutiveActionFailures:
-              retained.counters.consecutiveActionFailures,
-          },
-        )),
-      };
-    }
-    return { invalidatesBatch: true, terminalResult: null };
-  }
-
-  private createExternalToolResultObservation(
-    action: Action,
-    execution: Extract<ActionExecutionResult, { readonly status: "executed" }>,
-  ): ToolResultObservation {
-    const base = this.createObservationBase(action);
-    return Object.freeze({
-      ...base,
-      kind: "tool_result" as const,
-      result: execution.toolResult,
-      metadata: Object.freeze({
-        ...base.metadata,
-        toolName: execution.toolResult.toolName,
-        toolResultStatus: execution.toolResult.status,
-        sandboxAttemptId: execution.attempt.id,
-        sandboxEnforcement: execution.attempt.enforcement,
-        sandboxIsolation: execution.isolation,
-      }),
-    });
-  }
-
-  private retainExternalToolOutcome(
-    action: Action,
-    observation: RunObservation | null,
-    failed: boolean,
-  ): { readonly items: readonly RunItem<TOutput>[]; readonly counters: RunCounters } {
-    const context = applyContextUpdate(this.state.context, {
-      observations: observation === null ? [] : [observation],
-      evidenceRefs: [],
-      metadata: {
-        lastActionId: action.id,
-        lastControllerIteration: action.provenance.controllerIteration,
-      },
-    });
-    const counters = nextActionCounters(this.state.counters, failed);
-    const items = observation === null
-      ? Object.freeze([])
-      : this.materializeItems([observationDraft<TOutput>(observation)]);
-    this.replaceState(freezeState({
-      ...this.state,
-      context,
-      counters,
-      items: Object.freeze([...this.state.items, ...items]),
-    }));
-    return Object.freeze({ items, counters });
-  }
-
-  private publishExternalToolOutcome(
-    action: Action,
-    execution: Extract<ActionExecutionResult, { readonly status: "executed" }>,
-    items: readonly RunItem<TOutput>[],
-    observation: RunObservation | null,
-    evidenceRefs: readonly EvidenceRef[],
-    outcome: { readonly status: "succeeded" | "failed"; readonly code: string | null },
-  ): void {
-    this.publishItems(items);
-    if (observation !== null) {
-      this.publishObservationNotifications(observation, evidenceRefs);
-    }
-    this.emit("tool.finished", {
-      actionId: action.id,
-      toolName: execution.toolResult.toolName,
-      status: outcome.status,
-      code: outcome.code,
-      toolResultStatus: execution.toolResult.status,
-      durationMs: Math.max(
-        0,
-        Date.parse(execution.toolResult.finishedAt) - Date.parse(execution.toolResult.startedAt),
-      ),
-    });
-  }
-
-  private async processSandboxDenial(
-    action: Action & { readonly kind: "tool" },
-    prepared: PreparedExternalAction,
-    plan: ActionDispatchPlan,
-    execution: Extract<ActionExecutionResult, { readonly status: "sandbox_denied" }>,
-  ): Promise<ProcessActionResult> {
-    if (plan.attemptOrdinal === 2) {
-      return this.commitSandboxDenialObservation(
-        action,
-        execution.denial.code,
-        execution.denial.message,
-      );
-    }
-    const pipeline = this.dependencies.actionEnforcementPipeline;
-    if (pipeline === undefined) {
-      throw new Error("Sandbox denial processing requires ActionEnforcementPipeline.");
-    }
-    let escalation;
-    try {
-      escalation = await this.awaitInterruptibleOperation(
-        "tool",
-        () => pipeline.deriveEscalation({
-          prepared,
-          plan,
-          denial: execution.denial,
-          interruption: this.createActionInterruptionContext(),
-        }),
-        this.runDeadlineAt(),
-      );
-    } catch (error) {
-      return this.handleActionPipelineOperationError(action, error, "escalation");
-    }
-    if (escalation.status === "eligible") {
-      const proposal = escalation.proposal;
-      const deniedEffectKind = execution.denial.deniedEffect.kind;
-      if (deniedEffectKind !== "file_system" && deniedEffectKind !== "network") {
-        throw new Error(
-          "Sandbox escalation can only be proposed for file-system or network effects.",
-        );
-      }
-      this.commitAndPublishSettledToolState([
-        (base) => Object.freeze({
-          ...base,
-          kind: "sandbox_escalation_proposed" as const,
-          previousAttemptId: proposal.previousAttemptId,
-          actionId: action.id,
-          previousActionFingerprint: proposal.previousActionFingerprint,
-          nextActionFingerprint: proposal.prepared.actionFingerprint,
-          deniedEffectKind,
-        }),
-      ], {});
-      this.emit("sandbox.escalation.proposed", {
-        actionId: action.id,
-        previousAttemptId: proposal.previousAttemptId,
-        previousActionFingerprint: proposal.previousActionFingerprint,
-        nextActionFingerprint: proposal.prepared.actionFingerprint,
-        deniedEffectKind,
-      });
-      return this.assessPreparedExternalAction(action, proposal.prepared, 2);
-    }
-    if (escalation.status === "ineligible" || escalation.status === "invalidated") {
-      if (escalation.status === "invalidated") {
-        this.recordActionInvalidated(prepared, "revalidation", "tool", escalation.code);
-      }
-      return this.commitSandboxDenialObservation(
-        action,
-        escalation.code,
-        escalation.message,
-      );
-    }
-    if (escalation.status === "interrupted") {
-      return this.handleActionInterruption(action);
-    }
-    return {
-      invalidatesBatch: true,
-      terminalResult: await this.fail(
-        actionExecutionRunFailure(escalation.failure),
-        "tool_sandbox_escalation_failed",
-      ),
-    };
-  }
-
-  private commitSandboxDenialObservation(
-    action: Action,
-    code: string,
-    message: string,
-  ): Promise<ProcessActionResult> {
-    const observation: ActionDeniedObservation = Object.freeze({
-      ...this.createObservationBase(action),
-      kind: "action_denied",
-      owner: "sandbox",
-      code,
-      message,
-    });
-    return this.commitActionObservation(observation, true, true);
-  }
-
-  private commitActionFailure(
-    action: Action,
-    failure: ActionExecutionFailure,
-  ): Promise<ProcessActionResult> {
-    const observation: ActionFailureObservation = Object.freeze({
-      ...this.createObservationBase(action),
-      kind: "action_failure",
-      failure,
-    });
-    return this.commitActionObservation(observation, true, true);
-  }
-
-  private handleActionInterruption(
-    action: Action,
-    interruption?: Extract<ActionExecutionResult, { readonly status: "interrupted" }>["interruption"],
-  ): Promise<ProcessActionResult> {
-    if (this.cancellationRequest() !== null) {
-      return this.cancelRun().then((terminalResult) => ({
-        invalidatesBatch: true,
-        terminalResult,
-      }));
-    }
-    if (interruption?.kind === "operation_deadline") {
-      return this.commitActionFailure(action, actionFailure(
-        "tool",
-        "tool_timeout",
-        "Action execution exceeded its operation deadline.",
-        false,
-        {
-          actionId: action.id,
-          operationId: interruption.deadline.operationId,
-          deadlineAt: interruption.deadline.deadlineAt,
-        },
-      ));
-    }
-    if (interruption?.kind === "run_cancellation") {
-      return this.fail(runFailure(
-        "tool",
-        "tool_cancellation_unconfirmed",
-        "Action reported Run cancellation without a matching active request.",
-        false,
-        {
-          actionId: action.id,
-          reportedRunId: interruption.cancellation.runId,
-          reportedRequestId: interruption.cancellation.requestId,
-        },
-      ), "tool_cancellation_unconfirmed").then((terminalResult) => ({
-        invalidatesBatch: true,
-        terminalResult,
-      }));
-    }
-    return this.commitActionFailure(action, actionFailure(
-      "action_execution",
-      "runtime_action_interrupted",
-      "Action processing was interrupted before execution.",
-      false,
-      { actionId: action.id },
-    ));
-  }
-
-  private async handleActionPipelineOperationError(
-    action: Action,
-    error: unknown,
-    phase: "preparation" | "assessment" | "revalidation" | "dispatch" | "escalation",
-  ): Promise<ProcessActionResult> {
-    if (error instanceof OperationSettlementTimeoutError) {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(
-          cancellationSettlementRunFailure(error),
-          "runtime_cancellation_settlement_timeout",
-        ),
-      };
-    }
-    if (this.cancellationRequest() !== null) {
-      return { invalidatesBatch: true, terminalResult: await this.cancelRun() };
-    }
-    return this.commitActionFailure(action, actionFailure(
-      "action_execution",
-      `runtime_action_${phase}_failed`,
-      `Action ${phase} failed unexpectedly.`,
-      false,
-      { actionId: action.id },
-    ));
-  }
-
-  private async processPlanUpdate(action: Action): Promise<ProcessActionResult> {
-    const now = this.now();
-    const result = this.state.plan === null
-      ? applyPlanUpdate({
-          currentPlan: null,
-          newPlanId: this.createId("plan", 1),
-          candidate: action.input,
-          limits: this.config.limits.plan,
-          now,
-        })
-      : applyPlanUpdate({
-          currentPlan: this.state.plan,
-          candidate: action.input,
-          limits: this.config.limits.plan,
-          now,
-        });
-    const observation: PlanUpdateResultObservation = Object.freeze({
-      ...this.createObservationBase(action),
-      kind: "plan_update",
-      result: result.observation,
-    });
-    const failed = result.status === "rejected";
-    const context = applyContextUpdate(this.state.context, {
-      observations: [observation],
-      metadata: {
-        lastActionId: action.id,
-        lastControllerIteration: action.provenance.controllerIteration,
-      },
-    });
-    const counters = nextActionCounters(this.state.counters, failed);
-    const drafts = [
-      ...result.lifecycle.map((change) => planLifecycleDraft<TOutput>(change)),
-      observationDraft<TOutput>(observation),
-    ];
-
-    this.commitRunning(drafts, {
-      context,
-      plan: result.plan,
-      counters,
-    });
-
-    if (counters.consecutiveActionFailures > this.config.limits.maxConsecutiveActionFailures) {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(limitRunFailure(
-          "Run exceeded maxConsecutiveActionFailures.",
-          {
-            maxConsecutiveActionFailures:
-              this.config.limits.maxConsecutiveActionFailures,
-            actualConsecutiveActionFailures: counters.consecutiveActionFailures,
-          },
-        )),
-      };
-    }
-
-    return { invalidatesBatch: failed, terminalResult: null };
-  }
-
-  private async commitActionObservation(
-    observation: RunObservation,
-    failed: boolean,
-    invalidatesBatch: boolean,
-  ): Promise<ProcessActionResult> {
-    const context = applyContextUpdate(this.state.context, {
-      observations: [observation],
-      metadata: { lastActionId: observation.actionId },
-    });
-    const counters = nextActionCounters(this.state.counters, failed);
-    this.commitRunning([observationDraft<TOutput>(observation)], {
-      context,
-      counters,
-    });
-    this.publishObservationNotifications(observation, []);
-
-    if (counters.consecutiveActionFailures > this.config.limits.maxConsecutiveActionFailures) {
-      return {
-        invalidatesBatch: true,
-        terminalResult: await this.fail(limitRunFailure(
-          "Run exceeded maxConsecutiveActionFailures.",
-          {
-            maxConsecutiveActionFailures:
-              this.config.limits.maxConsecutiveActionFailures,
-            actualConsecutiveActionFailures: counters.consecutiveActionFailures,
-          },
-        )),
-      };
-    }
-
-    return { invalidatesBatch, terminalResult: null };
-  }
-
-  private publishObservationNotifications(
-    observation: RunObservation,
-    evidenceRefs: readonly EvidenceRef[],
-  ): void {
-    const outcome = observationNotificationOutcome(observation);
-    this.emit("observation.created", {
-      actionId: observation.actionId,
-      observationId: observation.id,
-      status: outcome.status,
-      code: outcome.code,
-    });
-    this.emit("context.updated", {
-      observationId: observation.id,
-    });
-    for (const evidenceId of evidenceRefs) {
-      this.emit("evidence.created", {
-        actionId: observation.actionId,
-        evidenceId,
-      });
-    }
-  }
-
-  private createObservationBase(action: Action) {
-    return {
-      id: this.createId("observation", action.sequence),
-      runId: this.state.runId,
-      actionId: action.id,
-      createdAt: this.now(),
-      metadata: Object.freeze({
-        actionKind: action.kind,
-        actionName: action.name,
-        controllerIteration: action.provenance.controllerIteration,
-      }),
-    };
-  }
-
-  private checkLoopLimits(): RunFailureCause | null {
-    const violation = evaluateRunLoopLimits({
-      counters: this.state.counters,
-      limits: this.config.limits,
-      startedAtMs: this.startedAtMs,
-      nowMs: Date.parse(this.now()),
-      cancellationRequested: this.cancellationRequest() !== null,
-    });
-    return violation === null
-      ? null
-      : limitRunFailure(violation.message, violation.metadata);
-  }
-
-  private checkDurationLimit(): RunFailureCause | null {
-    const violation = evaluateRunDurationLimit({
-      limits: this.config.limits,
-      startedAtMs: this.startedAtMs,
-      nowMs: Date.parse(this.now()),
-    });
-    return violation === null
-      ? null
-      : limitRunFailure(violation.message, violation.metadata);
-  }
-
-  private runDeadlineAt(): string {
-    return deriveRunDeadline(this.state.startedAt, this.config.limits.maxDurationMs);
-  }
-
-  private fail(
-    failure: RunFailureCause,
-    code: RunFailureCode = failureCode(failure),
-    skipKinds: ReadonlySet<RunFailureKind> = new Set(),
-  ): Promise<RunResult<TOutput>> {
-    return this.terminalize({
-      status: "failed",
-      code,
-      failure,
-      relatedFailures: Object.freeze([]),
-      cancellationRequest: this.state.status === "cancelling"
-        ? this.state.cancellationRequest
-        : null,
-    }, skipKinds);
-  }
-
-  private failMany(
-    failures: readonly [RunFailureCause, ...RunFailureCause[]],
-    code: RunFailureCode = failureCode(failures[0]),
-  ): Promise<RunResult<TOutput>> {
-    const [failure, ...relatedFailures] = failures;
-    return this.terminalize({
-      status: "failed",
-      code,
-      failure,
-      relatedFailures: Object.freeze(relatedFailures),
-      cancellationRequest: this.cancellationRequest(),
-    }, new Set(failures.map((cause) => cause.kind)));
-  }
-
-  private cancelRun(): Promise<RunResult<TOutput>> {
-    const request = this.cancellationRequest();
-    if (request === null) {
-      throw new Error("Cannot cancel a Run without an accepted cancellation request.");
-    }
-    this.enterCancelling(request);
-    return this.terminalize({ status: "cancelled", cancellationRequest: request });
-  }
-
-  private enterCancelling(request: RunCancellationRequest): void {
-    if (this.state.status === "cancelling") {
-      return;
-    }
-    if (this.state.status !== "initializing" && this.state.status !== "running") {
-      throw new Error(`Run cannot enter cancelling from ${this.state.status}.`);
-    }
-
-    const summary = toRunCancellationSummary(request);
-    const item = this.materializeItems([
-      (base) => Object.freeze({
-        ...base,
-        kind: "run_cancellation_requested" as const,
-        request: summary,
-      }),
-    ]);
-    this.replaceState(freezeState({
-      ...this.state,
-      status: "cancelling",
-      code: null,
-      finalOutput: null,
-      failure: null,
-      relatedFailures: Object.freeze([]) as readonly [],
-      cancellationRequest: request,
-      items: Object.freeze([...this.state.items, ...item]),
-    }));
-    this.publishItems(item);
-  }
-
-  private async terminalize(
-    initial: TerminalCandidate<TOutput>,
-    skipKinds: ReadonlySet<RunFailureKind> = new Set(),
-  ): Promise<RunResult<TOutput>> {
-    if (this.terminalResult !== null) {
-      return this.terminalResult;
-    }
-
-    let candidate = this.reconcileTerminalCancellation(initial);
-    const firstFinalization = await this.finalizeCandidate(candidate, skipKinds);
-    candidate = firstFinalization.candidate;
-
-    if (!firstFinalization.failed) {
-      const correctedCandidate = this.reconcileTerminalCancellation(candidate);
-      if (correctedCandidate.status !== candidate.status) {
-        candidate = (
-          await this.finalizeCandidate(correctedCandidate, skipKinds)
-        ).candidate;
-      }
-    }
-
-    const completedAt = this.now();
-    const completedAtMs = Date.parse(completedAt);
-    const metadata = Object.freeze({
-      ...this.state.metadata,
-      startedAt: this.state.startedAt,
-      completedAt,
-      durationMs: Math.max(0, completedAtMs - this.startedAtMs),
-      iterations: this.state.counters.iterations,
-      actions: this.state.counters.actions,
-      consecutiveActionFailures: this.state.counters.consecutiveActionFailures,
-      startingAgentId: this.state.startingAgentId,
-      activeAgentId: this.state.activeAgentId,
-    });
-
-    let plan = this.state.plan;
-    const drafts: RunItemDraft<TOutput>[] = [];
-    if (plan !== null && plan.status === "active") {
-      const abandoned = abandonPlan({
-        plan,
-        terminalStatus: candidate.status,
-        reasonCode: candidate.status === "succeeded"
-          ? null
-          : candidate.status === "cancelled"
-            ? "runtime_cancelled"
-            : candidate.code,
-        now: completedAt,
-      });
-      plan = abandoned.plan;
-      drafts.push(...abandoned.lifecycle.map((change) => planLifecycleDraft<TOutput>(change)));
-    }
-
-    if (candidate.status === "succeeded") {
-      drafts.push((base) => Object.freeze({
-        ...base,
-        kind: "final_output" as const,
-        output: candidate.output,
-      }));
-    } else if (candidate.status === "blocked") {
-      drafts.push(
-        (base) => Object.freeze({
-          ...base,
-          kind: "stop" as const,
-          reason: candidate.reason,
-        }),
-        (base) => Object.freeze({
-          ...base,
-          kind: "run_blocked" as const,
-          code: candidate.code,
-        }),
-      );
-    } else if (candidate.status === "failed") {
-      drafts.push((base) => Object.freeze({
-        ...base,
-        kind: "run_failed" as const,
-        code: candidate.code,
-        failure: candidate.failure,
-        relatedFailures: candidate.relatedFailures,
-      }));
-    } else {
-      drafts.push((base) => Object.freeze({
-        ...base,
-        kind: "run_cancelled" as const,
-        cancellation: toRunCancellationSummary(candidate.cancellationRequest),
-        completedAt,
-      }));
-    }
-
-    const items = this.materializeItems(drafts);
-    const allItems = Object.freeze([...this.state.items, ...items]);
-    const permission = this.state.permission;
-    if (permission.pendingApproval !== null) {
-      throw new Error("Run cannot terminalize while approval is pending.");
-    }
-    const base = {
-      ...this.state,
-      permission,
-      plan,
-      items: allItems,
-      metadata,
-    };
-
-    if (candidate.status === "succeeded") {
-      this.replaceState(freezeState({
-        ...base,
-        status: "succeeded",
-        code: null,
-        finalOutput: candidate.output,
-        failure: null,
-        relatedFailures: Object.freeze([]) as readonly [],
-        cancellationRequest: null,
-      }));
-    } else if (candidate.status === "blocked") {
-      this.replaceState(freezeState({
-        ...base,
-        status: "blocked",
-        code: candidate.code,
-        finalOutput: null,
-        failure: null,
-        relatedFailures: Object.freeze([]) as readonly [],
-        cancellationRequest: null,
-      }));
-    } else if (candidate.status === "failed") {
-      this.replaceState(freezeState({
-        ...base,
-        status: "failed",
-        code: candidate.code,
-        finalOutput: null,
-        failure: candidate.failure,
-        relatedFailures: candidate.relatedFailures,
-        cancellationRequest: candidate.cancellationRequest,
-      }));
-    } else {
-      this.replaceState(freezeState({
-        ...base,
-        status: "cancelled",
-        code: "runtime_cancelled",
-        finalOutput: null,
-        failure: null,
-        relatedFailures: Object.freeze([]) as readonly [],
-        cancellationRequest: candidate.cancellationRequest,
-      }));
-    }
-
-    this.publishItems(items);
-    const terminalEventSummary = {
-      durationMs: Math.max(0, completedAtMs - this.startedAtMs),
-      itemCount: this.state.items.length,
-      evidenceCount: this.state.evidenceRefs.length,
-      artifactCount: this.state.artifactRefs.length,
-      errorCodes: Object.freeze(
-        [...new Set(
-          this.state.failure === null
-            ? []
-            : [
-                runFailureCode(this.state.failure),
-                ...this.state.relatedFailures.map(runFailureCode),
-              ],
-        )],
-      ),
-    };
-    if (candidate.status === "succeeded") {
-      this.emit("run.completed", {
-        status: "succeeded",
-        code: null,
-        ...terminalEventSummary,
-      });
-    } else if (candidate.status === "blocked") {
-      this.emit("run.blocked", {
-        status: "blocked",
-        code: candidate.code,
-        ...terminalEventSummary,
-      });
-    } else if (candidate.status === "failed") {
-      this.emit("run.failed", {
-        status: "failed",
-        code: candidate.code,
-        ...terminalEventSummary,
-      });
-    } else {
-      this.emit("run.cancelled", {
-        status: "cancelled",
-        code: "runtime_cancelled",
-        ...terminalEventSummary,
-      });
-    }
-    this.terminalResult = this.createResult();
-    this.publishOperationUpdate(this.terminalResult);
-    return this.terminalResult;
-  }
-
-  private reconcileTerminalCancellation(
-    candidate: TerminalCandidate<TOutput>,
-  ): TerminalCandidate<TOutput> {
-    const acceptedCancellation = this.cancellationRequest();
-    if (
-      acceptedCancellation === null ||
-      (candidate.status === "failed" && candidate.cancellationRequest !== null)
-    ) {
-      return candidate;
-    }
-
-    this.enterCancelling(acceptedCancellation);
-    return {
-      status: "cancelled",
-      cancellationRequest: acceptedCancellation,
-    };
-  }
-
-  private async finalizeCandidate(
-    candidate: TerminalCandidate<TOutput>,
-    skipKinds: ReadonlySet<RunFailureKind>,
-  ): Promise<{
-    readonly candidate: TerminalCandidate<TOutput>;
-    readonly failed: boolean;
-  }> {
-    const scope = createRunFinalizationContext({
-      runId: this.state.runId,
-      cancellation: terminalCancellationSummary(candidate),
-      timeoutMs: this.config.cancellationLimits.finalizationTimeoutMs,
-      startedAt: this.now(),
-    });
-
-    let finalizationFailures: RunFailureCause[];
-    try {
-      finalizationFailures = await this.recordLifecycle(
-        candidate.status,
-        skipKinds,
-        finalizationObservabilityContext(scope.context),
-      );
-    } finally {
-      scope.dispose();
-    }
-
-    if (finalizationFailures.length === 0) {
-      return { candidate, failed: false };
-    }
-
-    const acceptedCancellation = this.cancellationRequest();
-    const cancellationRequest = candidate.status === "cancelled"
-      ? candidate.cancellationRequest
-      : candidate.status === "failed" && candidate.cancellationRequest !== null
-        ? candidate.cancellationRequest
-        : acceptedCancellation;
-
-    if (candidate.status === "failed") {
-      return {
-        candidate: {
-          ...candidate,
-          relatedFailures: Object.freeze([
-            ...candidate.relatedFailures,
-            ...finalizationFailures,
-          ]),
-          cancellationRequest,
-        },
-        failed: true,
-      };
-    }
-
-    const [failure, ...relatedFailures] = finalizationFailures;
-    return {
-      candidate: {
-        status: "failed",
-        code: failureCode(failure),
-        failure,
-        relatedFailures: Object.freeze(relatedFailures),
-        cancellationRequest,
-      },
-      failed: true,
-    };
-  }
-
-  private createResult(): RunResult<TOutput> {
-    const base = {
-      runId: this.state.runId,
-      taskId: this.state.taskId,
-      items: this.state.items,
-      evidenceRefs: this.state.evidenceRefs,
-      artifactRefs: this.state.artifactRefs,
-      metadata: this.state.metadata,
-    };
-
-    switch (this.state.status) {
-      case "succeeded":
-        return createSucceededRunResult(base, this.state.finalOutput);
-      case "blocked":
-        return createBlockedRunResult(base, this.state.code);
-      case "failed":
-        return createFailedRunResult(
-          base,
-          this.state.code,
-          this.state.failure,
-          this.state.relatedFailures,
-          this.state.cancellationRequest === null
-            ? null
-            : toRunCancellationSummary(this.state.cancellationRequest),
-        );
-      case "cancelled":
-        return createCancelledRunResult(
-          base,
-          toRunCancellationSummary(this.state.cancellationRequest),
-        );
-      default:
-        throw new Error(`RunResult cannot be created from ${this.state.status}.`);
-    }
-  }
-
-  private async settleUnexpectedFailure(error: unknown): Promise<RunResult<TOutput>> {
-    if (this.terminalResult !== null) {
-      return this.terminalResult;
-    }
-    const failure = createRunFailureCause("runtime", {
-      code: "runtime_execution_failed",
-      message: error instanceof Error
-        ? error.message
-        : "Agent Core execution failed unexpectedly.",
-      retryable: false,
-      metadata: Object.freeze({}),
-    });
-    if (
-      this.state !== undefined &&
-      (
-        this.state.status === "initializing" ||
-        this.state.status === "running" ||
-        this.state.status === "cancelling"
-      )
-    ) {
-      try {
-        return await this.terminalize({
-          status: "failed",
-          code: "runtime_execution_failed",
-          failure,
-          relatedFailures: Object.freeze([]),
-          cancellationRequest: this.cancellationRequest(),
-        });
-      } catch {
-        // The emergency result below still settles the accepted Run operation.
-      }
-    } else if (this.state !== undefined) {
-      try {
-        this.terminalResult = this.createResult();
-        this.publishOperationUpdate(this.terminalResult);
-        return this.terminalResult;
-      } catch {
-        // Fall through to a minimal result if terminal materialization failed.
-      }
-    }
-
-    const now = this.now();
-    const item: RunItem<TOutput> = Object.freeze({
-      id: this.dependencies.createId({
-        kind: "run_item",
-        runId: this.runId,
-        sequence: 1,
-      }),
-      runId: this.runId,
-      sequence: 1,
-      createdAt: now,
-      metadata: Object.freeze({}),
-      kind: "run_failed",
-      code: "runtime_execution_failed",
-      failure,
-      relatedFailures: Object.freeze([]),
-    });
-    this.terminalResult = createFailedRunResult(
-      {
-        runId: this.runId,
-        taskId: this.input.task.id,
-        items: [item],
-        metadata: Object.freeze({
-          ...this.input.metadata,
-          completedAt: now,
-          iterations: 0,
-          actions: 0,
-        }),
-      },
-      "runtime_execution_failed",
-      failure,
-    );
-    this.publishOperationUpdate(this.terminalResult);
-    return this.terminalResult;
-  }
-
-  private commitRunning(
-    drafts: readonly RunItemDraft<TOutput>[],
-    update: {
-      readonly context?: Context<RunObservation>;
-      readonly plan?: Plan | null;
-      readonly counters?: RunCounters;
-      readonly evidenceRefs?: readonly EvidenceRef[];
-      readonly artifactRefs?: readonly ArtifactRef[];
-    } = {},
-  ): void {
-    if (this.state.status !== "running") {
-      throw new Error(`Cannot commit active work while Run is ${this.state.status}.`);
-    }
-    const items = this.materializeItems(drafts);
-    this.replaceState(freezeState({
-      ...this.state,
-      context: update.context ?? this.state.context,
-      plan: update.plan === undefined ? this.state.plan : update.plan,
-      counters: update.counters ?? this.state.counters,
-      evidenceRefs: appendUnique(this.state.evidenceRefs, update.evidenceRefs ?? []),
-      artifactRefs: appendUnique(this.state.artifactRefs, update.artifactRefs ?? []),
-      items: Object.freeze([...this.state.items, ...items]),
-    }));
-    this.publishItems(items);
-  }
-
-  private commitSettledToolState(
-    drafts: readonly RunItemDraft<TOutput>[],
-    update: {
-      readonly context?: Context<RunObservation>;
-      readonly counters?: RunCounters;
-      readonly evidenceRefs?: readonly EvidenceRef[];
-      readonly artifactRefs?: readonly ArtifactRef[];
-    },
-  ): readonly RunItem<TOutput>[] {
-    if (this.state.status !== "running" && this.state.status !== "cancelling") {
-      throw new Error(`Cannot commit a settled Tool outcome while Run is ${this.state.status}.`);
-    }
-    const items = this.materializeItems(drafts);
-    this.replaceState(freezeState({
-      ...this.state,
-      context: update.context ?? this.state.context,
-      counters: update.counters ?? this.state.counters,
-      evidenceRefs: appendUnique(this.state.evidenceRefs, update.evidenceRefs ?? []),
-      artifactRefs: appendUnique(this.state.artifactRefs, update.artifactRefs ?? []),
-      items: Object.freeze([...this.state.items, ...items]),
-    }));
-    return items;
-  }
-
-  private commitAndPublishSettledToolState(
-    drafts: readonly RunItemDraft<TOutput>[],
-    update: {
-      readonly context?: Context<RunObservation>;
-      readonly counters?: RunCounters;
-      readonly evidenceRefs?: readonly EvidenceRef[];
-      readonly artifactRefs?: readonly ArtifactRef[];
-    },
-  ): readonly RunItem<TOutput>[] {
-    const items = this.commitSettledToolState(drafts, update);
-    this.publishItems(items);
-    return items;
-  }
-
-  private createRetryEventSink(
-    acceptance: RetryEventAcceptance,
-  ): RetryEventSink {
-    return Object.freeze({
-      emit: (event: RetryEvent) => {
-        if (this.acceptsRetryEvent(acceptance, event)) {
-          this.commitRetryEvent(event);
-        }
+      emit: (candidate: import("../retry/index.js").RetryEvent) => {
+        this.recordRetry(snapshotRetryEvent(candidate, this.runId));
+        this.publishCurrentState();
       },
     });
   }
 
-  private acceptsRetryEvent(
-    acceptance: RetryEventAcceptance,
-    event: RetryEvent,
-  ): boolean {
-    if (acceptance.kind === "controller") {
-      return this.interruptionCoordinator.isActive("controller") &&
-        this.state.status === "running";
-    }
-    const pending = this.state.permission.pendingApproval;
-    return this.interruptionCoordinator.isActive("approval_reviewer") &&
-      this.state.status === "waiting_for_approval" &&
-      pending?.phase === "reviewing" &&
-      pending.request.id === acceptance.requestId &&
-      pending.version === acceptance.pendingVersion &&
-      pending.reviewOperationId === acceptance.operationId &&
-      event.operationId === acceptance.operationId;
+  private recordRetry(event: import("../retry/index.js").RetryEvent): void {
+    const current = this.retryProjection ?? Object.freeze({
+      attemptCount: 0,
+      scheduledCount: 0,
+      fallbackCount: 0,
+      exhaustedCount: 0,
+      cancellationCount: 0,
+      omittedEventCount: 0,
+      recentEvents: Object.freeze([]),
+    });
+    const events = [...current.recentEvents, event];
+    const omitted = Math.max(0, events.length - 16);
+    this.retryProjection = Object.freeze({
+      attemptCount: current.attemptCount + (event.type === "retry_attempt_started" ? 1 : 0),
+      scheduledCount: current.scheduledCount + (event.type === "retry_scheduled" ? 1 : 0),
+      fallbackCount: current.fallbackCount + (event.type === "retry_fallback_selected" ? 1 : 0),
+      exhaustedCount: current.exhaustedCount + (event.type === "retry_exhausted" ? 1 : 0),
+      cancellationCount: current.cancellationCount + (event.type === "retry_cancelled" ? 1 : 0),
+      omittedEventCount: current.omittedEventCount + omitted,
+      recentEvents: Object.freeze(events.slice(omitted)),
+    });
   }
 
-  private commitRetryEvent(candidate: RetryEvent): void {
-    if (
-      this.state.status !== "running" &&
-      this.state.status !== "waiting_for_approval" &&
-      this.state.status !== "cancelling"
-    ) {
-      throw new Error(`Cannot commit Retry history while Run is ${this.state.status}.`);
-    }
-    const retry = snapshotRetryEvent(candidate, this.state.runId);
-    const items = this.materializeItems([
-      (base) => Object.freeze({
-        ...base,
-        kind: retry.type,
-        retry,
-      }) as RunItem<TOutput>,
-    ]);
-    this.replaceState(freezeState({
-      ...this.state,
-      items: Object.freeze([...this.state.items, ...items]),
-    }));
-    this.publishItems(items);
-    this.emitRetryEvent(retry);
-  }
-
-  private emitRetryEvent(retry: RetryEvent): void {
-    const base = {
-      operationId: retry.operationId,
-      owner: retry.owner,
-    };
-    switch (retry.type) {
-      case "retry_attempt_started":
-        this.emit("retry.attempt.started", {
-          ...base,
-          attemptId: retry.attemptId,
-          budgetId: retry.budgetId,
-          attemptNumber: retry.attemptNumber,
-          budgetAttemptNumber: retry.budgetAttemptNumber,
-          maxBudgetAttempts: retry.maxBudgetAttempts,
-        }, retry.occurredAt);
-        return;
-      case "retry_attempt_finished":
-        this.emit("retry.attempt.finished", {
-          ...base,
-          attemptId: retry.attemptId,
-          budgetId: retry.budgetId,
-          attemptNumber: retry.attemptNumber,
-          budgetAttemptNumber: retry.budgetAttemptNumber,
-          durationMs: retry.durationMs,
-          outcome: retry.outcome,
-          failureCategory: retry.failureCategory ?? null,
-          failureCode: retry.failureCode ?? null,
-          next: retry.next,
-        }, retry.occurredAt);
-        return;
-      case "retry_scheduled":
-        this.emit("retry.scheduled", {
-          ...base,
-          afterAttemptId: retry.afterAttemptId,
-          budgetId: retry.budgetId,
-          retryNumber: retry.retryNumber,
-          nextAttemptNumber: retry.nextAttemptNumber,
-          nextBudgetAttemptNumber: retry.nextBudgetAttemptNumber,
-          delayMs: retry.delayMs,
-          delaySource: retry.delaySource,
-          nextAttemptAt: retry.nextAttemptAt,
-          failureCategory: retry.failureCategory,
-          failureCode: retry.failureCode,
-        }, retry.occurredAt);
-        return;
-      case "retry_fallback_selected":
-        this.emit("retry.fallback.selected", {
-          ...base,
-          fromLegId: retry.fromLegId,
-          toLegId: retry.toLegId,
-          fromBudgetId: retry.fromBudgetId,
-          toBudgetId: retry.toBudgetId,
-          fromTransport: retry.fromTransport,
-          toTransport: retry.toTransport,
-          fallbackNumber: retry.fallbackNumber,
-          reasonCode: retry.reasonCode,
-          nextAttemptNumber: retry.nextAttemptNumber,
-        }, retry.occurredAt);
-        return;
-      case "retry_exhausted":
-        this.emit("retry.exhausted", {
-          ...base,
-          finalBudgetId: retry.finalBudgetId,
-          reason: retry.reason,
-          totalAttempts: retry.totalAttempts,
-          totalRetryDelayMs: retry.totalRetryDelayMs,
-          lastFailureCategory: retry.lastFailureCategory,
-          lastFailureCode: retry.lastFailureCode,
-        }, retry.occurredAt);
-        return;
-      case "retry_cancelled":
-        this.emit("retry.cancelled", {
-          ...base,
-          phase: retry.phase,
-          budgetId: retry.budgetId,
-          attemptId: retry.attemptId,
-          attemptNumber: retry.attemptNumber,
-          attribution: {
-            requestId: retry.attribution.requestId,
-            operation: retry.attribution.operation,
-            observedAt: retry.attribution.observedAt,
-          },
-        }, retry.occurredAt);
-        return;
-    }
-  }
-
-  private materializeItems(
-    drafts: readonly RunItemDraft<TOutput>[],
-  ): readonly RunItem<TOutput>[] {
-    const firstSequence = this.state.items.length + 1;
-    return Object.freeze(drafts.map((draft, index) => {
-      const sequence = firstSequence + index;
-      const base: RunItemBase = Object.freeze({
-        id: this.createId("run_item", sequence),
-        runId: this.state.runId,
-        sequence,
-        createdAt: this.now(),
-        metadata: Object.freeze({}),
-      });
-      return draft(base);
-    }));
-  }
-
-  private publishItems(items: readonly RunItem<TOutput>[]): void {
-    for (const item of items) {
+  private onStateCommitted(state: RunState<TOutput>): void {
+    while (this.emittedItemCount < state.items.length) {
+      const item = state.items[this.emittedItemCount++]!;
       this.emit("run.item.appended", {
-        itemId: item.id,
-        itemKind: item.kind,
-        itemSequence: item.sequence,
-      });
-      this.publishPlanItem(item);
+        itemId: item.ref.id,
+        itemKind: item.payload.kind,
+        itemSequence: item.ref.sequence,
+      }, item.createdAt);
     }
+    this.publishCurrentState();
   }
 
-  private publishPlanItem(item: RunItem<TOutput>): void {
-    switch (item.kind) {
-      case "plan_created":
-        this.emit("plan.created", {
-          plan: item.plan,
-        });
-        return;
-      case "plan_updated":
-        this.emit("plan.updated", {
-          plan: item.plan,
-          previousVersion: item.previousVersion,
-          transition: item.transition,
-        });
-        return;
-      case "plan_completed":
-        this.emit("plan.completed", {
-          plan: item.plan,
-        });
-        return;
-      case "plan_abandoned":
-        this.emit("plan.abandoned", {
-          plan: item.plan,
-          terminalStatus: item.terminalStatus,
-          reasonCode: item.reasonCode,
-        });
-        return;
-      default:
-        return;
-    }
-  }
-
-  private replaceState(next: RunState<TOutput>): void {
-    if (this.state !== undefined) {
-      assertStateTransition(this.state, next);
-    }
-    this.state = next;
-    this.publishOperationUpdate(null);
-  }
-
-  private publishOperationUpdate(result: RunResult<TOutput> | null): void {
-    if (this.state === undefined && result === null) {
-      return;
-    }
-    const lastItem = result?.items.at(-1) ?? this.state?.items.at(-1);
-    this.onUpdate({
-      status: result?.status ?? this.state.status,
-      lastRunItemSequence: lastItem?.sequence ?? 0,
-      result,
-    });
-  }
-
-  private cancellationRequest(): RunCancellationRequest | null {
-    return this.config?.cancellation.context.request ?? null;
-  }
-
-  private async awaitInterruptibleOperation<TValue>(
-    kind: ActiveRunOperationKind,
-    execute: () => Promise<TValue>,
-    interruptionDeadlineAt: string | null = null,
-    allowInterruptedStart = false,
-  ): Promise<TValue> {
-    return this.interruptionCoordinator.execute(
-      kind,
-      execute,
-      interruptionDeadlineAt,
-      allowInterruptedStart,
+  private publishCurrentState(): void {
+    const state = this.writer.getSnapshot();
+    const childPending = [...this.childHandles].flatMap((handle) =>
+      handle.getSnapshot().pendingInteractions
     );
-  }
-
-  private createId(kind: Parameters<ResolvedRunnerDependencies["createId"]>[0]["kind"], sequence: number): string {
-    const id = this.dependencies.createId({ kind, runId: this.state.runId, sequence });
-    assertNonEmpty(id, `${kind} id`);
-    return id;
-  }
-
-  private now(): string {
-    const value = this.dependencies.now();
-    if (typeof value !== "string" || value.trim().length === 0 || !Number.isFinite(Date.parse(value))) {
-      throw new TypeError("Runner clock must return a valid ISO date-time string.");
-    }
-    return value;
+    this.onUpdate({
+      status: state.status,
+      lastRunItemSequence: state.items.at(-1)?.ref.sequence ?? 0,
+      plan: state.plan === null ? null : projectPlan(state.plan),
+      retry: this.retryProjection,
+      pendingInteractions: Object.freeze([
+        ...this.interactions.getPendingProjections(),
+        ...childPending,
+      ]),
+      result: this.terminalResult,
+    });
   }
 
   private emit<TName extends RuntimeEventName>(
     name: TName,
     payload: RuntimeEventPayloadMap[TName],
-    occurredAt?: string,
+    occurredAt = this.now(),
   ): void {
     try {
-      this.eventStream.emit(name, payload, occurredAt ?? this.now());
+      this.eventStream.emit(name, payload, occurredAt);
     } catch {
-      // Runtime notifications are non-authoritative; RunState remains the source of truth.
+      // Notifications remain non-authoritative.
     }
+  }
+
+  private emitTerminal(result: RunResult<TOutput>): void {
+    const payload = {
+      status: result.status,
+      code: result.code,
+      durationMs: Math.max(0, Date.parse(result.completedAt) - this.startedAtMs),
+      itemCount: result.items.length,
+      evidenceCount: result.evidenceRefs.length,
+      artifactCount: result.artifactRefs.length,
+      errorCodes: Object.freeze(result.failure === null
+        ? []
+        : [result.failure.failure.code, ...result.relatedFailures.map((failure) => failure.failure.code)]),
+    };
+    if (result.status === "succeeded") this.emit("run.completed", { ...payload, status: "succeeded", code: null });
+    else if (result.status === "blocked") this.emit("run.blocked", { ...payload, status: "blocked", code: result.code });
+    else if (result.status === "cancelled") this.emit("run.cancelled", { ...payload, status: "cancelled", code: result.code });
+    else this.emit("run.failed", { ...payload, status: "failed", code: result.code });
   }
 
   private async recordLifecycle(
     phase: "started" | "succeeded" | "blocked" | "failed" | "cancelled",
-    skipKinds: ReadonlySet<RunFailureKind> = new Set(),
+    skipKinds = new Set<import("../run/index.js").RunFailureKind>(),
     context: ObservabilityRecordContext = this.runtimeObservabilityContext(),
   ): Promise<RunFailureCause[]> {
-    const timestamp = this.now();
+    const state = this.writer.getSnapshot();
     return recordRunnerLifecycle({
       phase,
-      runId: this.state.runId,
-      taskId: this.state.taskId,
-      agentId: this.state.activeAgentId,
+      runId: this.runId,
+      taskId: state.taskId,
+      agentId: state.activeAgent.id,
       startedAtMs: this.startedAtMs,
-      timestamp,
-      counters: this.state.counters,
-      itemCount: this.state.items.length,
+      timestamp: this.now(),
+      counters: state.counters,
+      itemCount: state.items.length,
       workspace: this.config.workspace,
       identity: this.config.identity,
       auditRequirement: this.config.audit,
       telemetryRequirement: this.config.telemetry,
+      context,
       auditPort: this.dependencies.auditPort,
       telemetryPort: this.dependencies.telemetryPort,
       skipKinds,
-      context,
     });
   }
 
@@ -3834,10 +2184,329 @@ export class RunExecution<TOutput> {
       deadlineAt: null,
     });
   }
+
+  private id(kind: Parameters<ResolvedRunnerDependencies["createId"]>[0]["kind"], sequence?: number): string {
+    const current = this.identitySequences.get(kind) ?? 0;
+    const next = sequence ?? current + 1;
+    this.identitySequences.set(kind, Math.max(current, next));
+    return this.dependencies.createId({
+      kind,
+      runId: this.runId,
+      sequence: next,
+    });
+  }
+
+  private now(): string {
+    const value = this.dependencies.now();
+    if (
+      typeof value !== "string" ||
+      value.trim().length === 0 ||
+      !Number.isFinite(Date.parse(value))
+    ) throw new TypeError("Runner clock must return an ISO date-time.");
+    return value;
+  }
+}
+
+function terminalStatePatch<TOutput>(
+  terminal: TerminalCandidate<TOutput>,
+  cancellationRequest: import("../run/index.js").RunCancellationRequest | null,
+  completedAt: string,
+): Readonly<Record<string, unknown>> {
+  if (terminal.status === "succeeded") return Object.freeze({
+    status: "succeeded",
+    code: null,
+    finalOutput: terminal.output,
+    failure: null,
+    relatedFailures: Object.freeze([]),
+    cancellationRequest: null,
+    completedAt,
+    pending: Object.freeze([]),
+  });
+  if (terminal.status === "blocked") return Object.freeze({
+    status: "blocked",
+    code: terminal.code,
+    finalOutput: null,
+    failure: null,
+    relatedFailures: Object.freeze([]),
+    cancellationRequest: null,
+    completedAt,
+    pending: Object.freeze([]),
+  });
+  if (terminal.status === "cancelled") return Object.freeze({
+    status: "cancelled",
+    code: "runtime_cancelled",
+    finalOutput: null,
+    failure: null,
+    relatedFailures: Object.freeze([]),
+    cancellationRequest: requireCancellation(cancellationRequest),
+    completedAt,
+    pending: Object.freeze([]),
+  });
+  return Object.freeze({
+    status: "failed",
+    code: terminal.code,
+    finalOutput: null,
+    failure: terminal.failure,
+    relatedFailures: Object.freeze([...(terminal.relatedFailures ?? [])]),
+    cancellationRequest,
+    completedAt,
+    pending: Object.freeze([]),
+  });
+}
+
+function runtimeFailure(
+  code: string,
+  message: string,
+  metadata: Readonly<Record<string, unknown>> = {},
+): Extract<RunFailureCause, { readonly kind: "runtime" }> {
+  return createRunFailureCause("runtime", Object.freeze({
+    code,
+    message,
+    retryable: false,
+    metadata: Object.freeze({ ...metadata }),
+  }));
+}
+
+function operationFailure(owner: string, code: string, message = code): OperationFailure {
+  return Object.freeze({
+    owner,
+    code,
+    message,
+    retryable: false,
+    metadata: Object.freeze({}),
+  });
+}
+
+function operationResultFromAction(
+  registration: RegisteredOperation,
+  binding: Extract<ResolvedOperationBinding, { readonly kind: "direct" | "hosted" }>,
+  outcome: Extract<ActionExecutionResult, { readonly status: "settled" }>,
+  startedAt: string,
+  finishedAt: string,
+  resultId: string,
+): OperationResult {
+  const semantic = outcome.semanticResult;
+  const failure = semantic.failure === null
+    ? null
+    : operationFailure(semantic.failure.owner, semantic.failure.code, semantic.failure.message);
+  return createOperationResult({
+    ref: Object.freeze({ invocation: binding.invocation, id: resultId }),
+    binding: binding.binding,
+    semanticOwner: registration.operation.semanticOwner,
+    status: semantic.status,
+    output: semantic.output,
+    failure,
+    startedAt,
+    finishedAt,
+    lowerRefs: Object.freeze([{
+      owner: "canonical-action",
+      kind: "action_settlement",
+      id: outcome.settlement.ref.id,
+      revision: outcome.settlement.subject === null
+        ? null
+        : String(outcome.settlement.subject.revision),
+    }]),
+    metadata: Object.freeze({
+      actionId: outcome.settlement.action.id,
+      effectCertainty: outcome.settlement.effectCertainty,
+      completionExtent: outcome.settlement.completionExtent,
+    }),
+  } as OperationResult);
+}
+
+function operationResultFromComposite(
+  registration: RegisteredOperation,
+  binding: Extract<ResolvedOperationBinding, { readonly kind: "composite" }>,
+  result: CompositeResult,
+  startedAt: string,
+  finishedAt: string,
+  resultId: string,
+): OperationResult {
+  const status = result.status;
+  return createOperationResult({
+    ref: Object.freeze({ invocation: binding.invocation, id: resultId }),
+    binding: binding.binding,
+    semanticOwner: registration.operation.semanticOwner,
+    status,
+    output: result.output,
+    failure: result.failure === null
+      ? null
+      : operationFailure("operation-composition", result.failure.code, result.failure.message),
+    startedAt,
+    finishedAt,
+    lowerRefs: Object.freeze(result.children.flatMap((child) =>
+      child.result === null ? [] : [{
+        owner: child.result.semanticOwner,
+        kind: "operation_result",
+        id: child.result.ref.id,
+        revision: child.result.binding.revision,
+      }]
+    )),
+    metadata: Object.freeze({
+      compositeId: result.compositeId,
+      childCount: result.children.length,
+    }),
+  } as OperationResult);
+}
+
+function adaptToolResult(call: ToolCall, result: OperationResult): ToolResult | null {
+  try {
+    return adaptToolSemanticResult(call, {
+      operationInvocation: result.ref.invocation,
+      status: result.status === "timed_out" ? "timeout" : result.status,
+      output: result.output,
+      error: result.failure === null
+        ? null
+        : Object.freeze({
+            code: result.failure.code,
+            message: result.failure.message,
+            metadata: result.failure.metadata,
+          }),
+      startedAt: result.startedAt,
+      finishedAt: result.finishedAt,
+      metadata: result.metadata,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function observationFailed(observation: RunObservation): boolean {
+  switch (observation.payload.kind) {
+    case "operation":
+      return observation.payload.result.status !== "succeeded" &&
+        observation.payload.result.status !== "partial";
+    case "operation_rejected":
+      return true;
+    case "handoff":
+      return observation.payload.status !== "applied";
+    case "interaction":
+      return observation.payload.status !== "resolved";
+    case "plan_update":
+      return observation.payload.result.status === "rejected";
+  }
+}
+
+function bindingMatchesResolution(
+  registration: RegisteredOperation,
+  context: OperationInvocationContext,
+  binding: ResolvedOperationBinding,
+): boolean {
+  return binding.kind === registration.binding.kind &&
+    binding.invocation.id === context.invocation.id &&
+    binding.invocation.operation.revision === context.invocation.operation.revision &&
+    binding.binding.revision === registration.binding.ref.revision &&
+    binding.resolverRevision === registration.binding.resolverRevision &&
+    binding.correlation.kind === context.correlation.kind;
+}
+
+function resolutionBindingKind(registration: RegisteredOperation): ResolvedOperationBinding["kind"] {
+  return registration.binding.kind;
+}
+
+function sameAgentRef(
+  left: { readonly id: string; readonly revision: string },
+  right: { readonly id: string; readonly revision: string },
+): boolean {
+  return left.id === right.id && left.revision === right.revision;
+}
+
+function handoffContext(
+  policy: SameRunHandoffRequest["transferPolicy"],
+  current: Context<RunObservation>,
+  projection: ContextProjection<RunObservation>,
+  input: RunInput,
+): Context<RunObservation> {
+  if (policy === "all_context") return current;
+  if (policy === "fresh_context") return createInitialContext(input.task);
+  return Object.freeze({
+    messages: Object.freeze([...projection.messages]),
+    observations: Object.freeze([...projection.observations]),
+    evidenceRefs: Object.freeze([...projection.evidenceRefs]),
+    metadata: Object.freeze({ ...projection.metadata }),
+  });
+}
+
+function deriveActiveStatus(
+  status: RunState["status"],
+  pending: readonly PendingRunSubject[],
+): RunState["status"] {
+  if (!isActiveStatus(status)) return status;
+  return deriveActiveRunStatus({ pending, progressableBranchIds: Object.freeze([]) });
+}
+
+function isActiveStatus(status: RunState["status"]): boolean {
+  return status === "initializing" || status === "running" || status === "waiting";
+}
+
+function sameInteractionRequest(
+  left: import("@agent-anything/interaction/protocol").InteractionRequestRef,
+  right: import("@agent-anything/interaction/protocol").InteractionRequestRef,
+): boolean {
+  return left.id === right.id &&
+    left.requestVersion === right.requestVersion &&
+    left.protocol.owner === right.protocol.owner &&
+    left.protocol.kind === right.protocol.kind &&
+    left.protocol.revision === right.protocol.revision &&
+    left.subject.owner === right.subject.owner &&
+    left.subject.kind === right.subject.kind &&
+    left.subject.id === right.subject.id &&
+    left.subject.revision === right.subject.revision;
+}
+
+function interactionRequestKey(
+  request: import("@agent-anything/interaction/protocol").InteractionRequestRef,
+): string {
+  return [
+    request.protocol.owner,
+    request.protocol.kind,
+    request.protocol.revision,
+    request.id,
+    request.requestVersion,
+    request.subject.owner,
+    request.subject.kind,
+    request.subject.id,
+    request.subject.revision,
+  ].join(":");
+}
+
+function terminalRecordRef(record: InteractionTerminalRecord): string {
+  return record.kind === "resolved"
+    ? record.resolution.resolutionId
+    : record.kind === "failed"
+      ? record.failureRef
+      : `${record.request.id}:${record.kind}`;
+}
+
+function findParentRunActionId(
+  state: RunState,
+  interactionRequestId: string,
+): string | null {
+  for (const item of state.items) {
+    if (
+      item.payload.kind === "run_action" &&
+      item.payload.action.subject.kind === "interaction" &&
+      item.payload.action.subject.request?.id === interactionRequestId
+    ) return item.payload.action.ref.id;
+  }
+  return null;
+}
+
+function requireCancellation(
+  request: import("../run/index.js").RunCancellationRequest | null,
+): import("../run/index.js").RunCancellationRequest {
+  if (request === null) throw new TypeError("Cancelled Run requires a cancellation request.");
+  return request;
+}
+
+function approvalSubmissionDigest(
+  submission: import("@agent-anything/permission/approval").ApprovalDecisionSubmission,
+): string {
+  return JSON.stringify(submission);
 }
 
 function finalizationObservabilityContext(
-  context: RunFinalizationContext,
+  context: import("../run/index.js").RunFinalizationContext,
 ): ObservabilityRecordContext {
   return Object.freeze({
     purpose: "finalization",
@@ -3846,467 +2515,27 @@ function finalizationObservabilityContext(
   });
 }
 
-function approvalReviewFailure(
-  code: ApprovalReviewFailure["code"],
-  message: string,
-  retryable: boolean,
-): ApprovalReviewFailure {
-  return Object.freeze({
-    code,
-    message,
-    retryable,
-    metadata: Object.freeze({}),
-  });
-}
-
-function authorityCommitFailureCode(
-  owner: AuthorityCommitOwner,
-  unconfirmed: boolean,
-): RunFailureCode {
-  if (owner === "permission") {
-    return unconfirmed
-      ? "session_authority_commit_unconfirmed"
-      : "session_authority_commit_failed";
-  }
-  return unconfirmed
-    ? "policy_amendment_commit_unconfirmed"
-    : "policy_amendment_commit_failed";
-}
-
-function authorityInterruptionCode(owner: AuthorityCommitOwner): string {
-  return owner === "permission"
-    ? "session_authority_commit_interrupted"
-    : "policy_amendment_commit_interrupted";
-}
-
-function authorityCommitRunFailure(
-  result: Extract<AuthorityCommitExecutionResult, { readonly kind: "outcome_unknown" }>,
-): RunFailureCause {
-  return runFailure(
-    result.owner,
-    result.code,
-    result.message,
-    false,
-    { commitId: result.commitId, deadlineAt: result.deadlineAt },
+function composeActionExecutionObservers(
+  configured: ActionExecutionObserver | undefined,
+  invocation: ActionExecutionObserver | undefined,
+): ActionExecutionObserver | undefined {
+  const observers = [invocation, configured].filter(
+    (observer, index, values): observer is ActionExecutionObserver =>
+      observer !== undefined && values.indexOf(observer) === index,
   );
-}
-
-function deepFreezeValue<T>(value: T): T {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
-    return value;
-  }
-  for (const child of Object.values(value)) deepFreezeValue(child);
-  return Object.freeze(value);
-}
-
-function terminalCancellationSummary(
-  candidate: TerminalCandidate<unknown>,
-) {
-  if (candidate.status === "cancelled") {
-    return toRunCancellationSummary(candidate.cancellationRequest);
-  }
-  if (candidate.status === "failed" && candidate.cancellationRequest !== null) {
-    return toRunCancellationSummary(candidate.cancellationRequest);
-  }
-  return null;
-}
-
-function planLifecycleDraft<TOutput>(
-  change: PlanLifecycleChange,
-): RunItemDraft<TOutput> {
-  switch (change.kind) {
-    case "created":
-      return (base) => Object.freeze({
-        ...base,
-        kind: "plan_created",
-        plan: change.plan,
-        explanation: change.explanation,
-      });
-    case "updated":
-      return (base) => Object.freeze({
-        ...base,
-        kind: "plan_updated",
-        previousVersion: change.previousVersion,
-        plan: change.plan,
-        transition: change.transition,
-        explanation: change.explanation,
-      });
-    case "completed":
-      return (base) => Object.freeze({
-        ...base,
-        kind: "plan_completed",
-        plan: change.plan,
-      });
-    case "abandoned":
-      return (base) => Object.freeze({
-        ...base,
-        kind: "plan_abandoned",
-        plan: change.plan,
-        terminalStatus: change.terminalStatus,
-        reasonCode: change.reasonCode,
-      });
-  }
-}
-
-function observationDraft<TOutput>(
-  observation: RunObservation,
-): RunItemDraft<TOutput> {
-  return (base) => Object.freeze({
-    ...base,
-    kind: "observation",
-    observation,
-  });
-}
-
-function observationNotificationOutcome(
-  observation: RunObservation,
-): Pick<
-  RuntimeEventPayloadMap["observation.created"],
-  "status" | "code"
-> {
-  switch (observation.kind) {
-    case "tool_result":
-      return {
-        status: observation.result.status,
-        code: toolResultErrorCode(observation.result),
-      };
-    case "action_denied":
-      return { status: "denied", code: observation.code };
-    case "action_failure":
-      return {
-        status: "failed",
-        code: observation.failure.failure.code,
-      };
-    case "action_rejected":
-      return { status: "rejected", code: observation.code };
-    case "approval_declined":
-      return { status: "declined", code: null };
-    case "approval_policy_rejected":
-    case "approval_review_failed":
-    case "approval_application_failed":
-      return { status: "failed", code: observation.code };
-    case "approval_limit_reached":
-      return { status: "limit_reached", code: observation.limit };
-    case "permissions_granted":
-      return { status: "granted", code: null };
-    case "plan_update":
-      return { status: "updated", code: null };
-  }
-}
-
-function nextActionCounters(current: RunCounters, failed: boolean): RunCounters {
-  return freezeCounters({
-    ...current,
-    consecutiveActionFailures: failed
-      ? current.consecutiveActionFailures + 1
-      : 0,
-  });
-}
-
-function controllerRunFailure(error: unknown): RunFailureCause {
-  if (error instanceof ControllerError) {
-    return error.failure.kind === "model"
-      ? createRunFailureCause("model", error.failure.failure)
-      : createRunFailureCause("provider", error.failure.failure);
-  }
-  return runFailure(
-    "model",
-    "model_output_invalid",
-    "Controller failed to produce a valid decision.",
-    false,
-    errorMetadata(error),
-  );
-}
-
-function limitRunFailure(message: string, metadata: Readonly<Record<string, unknown>>): RunFailureCause {
-  return runFailure("runtime", "runtime_limit_exceeded", message, false, metadata);
-}
-
-function cancellationSettlementRunFailure(
-  error: OperationSettlementTimeoutError,
-): RunFailureCause {
-  return runFailure(
-    "runtime",
-    "runtime_cancellation_settlement_timeout",
-    error.message,
-    false,
-    {
-      operation: error.operation,
-      operationStartedAt: error.startedAt,
-      settlementTimeoutMs: error.timeoutMs,
-    },
-  );
-}
-
-function approvalSettlementRunFailure(
-  error: OperationSettlementTimeoutError,
-): RunFailureCause {
-  return runFailure(
-    "approval",
-    "approval_cancellation_unconfirmed",
-    error.message,
-    false,
-    {
-      operation: error.operation,
-      operationStartedAt: error.startedAt,
-      settlementTimeoutMs: error.timeoutMs,
-    },
-  );
-}
-
-type BasicRunFailureKind = Exclude<RunFailureKind, "provider">;
-
-function runFailure(
-  kind: BasicRunFailureKind,
-  code: string,
-  message: string,
-  retryable: boolean,
-  metadata: Readonly<Record<string, unknown>> = {},
-): RunFailureCause {
-  const failure = Object.freeze({
-    code,
-    message,
-    retryable,
-    metadata: Object.freeze({ ...metadata }),
-  });
-  switch (kind) {
-    case "runtime":
-      return createRunFailureCause("runtime", failure satisfies RuntimeFailure);
-    case "model":
-      return createRunFailureCause("model", failure satisfies ModelFailure);
-    case "approval":
-      return createRunFailureCause("approval", failure satisfies ApprovalFailure);
-    case "permission":
-      return createRunFailureCause("permission", failure satisfies PermissionFailure);
-    case "policy":
-      return createRunFailureCause("policy", failure satisfies PolicyFailure);
-    case "action_execution":
-      return createRunFailureCause(
-        "action_execution",
-        failure satisfies ActionProcessingFailure,
-      );
-    case "sandbox":
-      return createRunFailureCause("sandbox", Object.freeze({
-        ...failure,
-        effectState: metadata.effectState === "unknown" ? "unknown" : "none",
-      }) satisfies SandboxExecutionFailure);
-    case "tool":
-      return createRunFailureCause("tool", failure satisfies ToolFailure);
-    case "context":
-      return createRunFailureCause("context", failure satisfies ContextFailure);
-    case "audit":
-      return createRunFailureCause("audit", failure satisfies AuditFailure);
-    case "telemetry":
-      return createRunFailureCause("telemetry", failure satisfies TelemetryFailure);
-  }
-}
-
-function contextFailure(
-  code: string,
-  message: string,
-  metadata: Readonly<Record<string, unknown>> = {},
-): ContextFailure {
-  return Object.freeze({
-    code,
-    message,
-    retryable: false,
-    metadata: Object.freeze({ ...metadata }),
-  });
-}
-
-function actionFailure(
-  kind: "action_execution" | "tool",
-  code: string,
-  message: string,
-  retryable: boolean,
-  metadata: Readonly<Record<string, unknown>> = {},
-): ActionExecutionFailure {
-  const failure = Object.freeze({
-    code,
-    message,
-    retryable,
-    metadata: Object.freeze({ ...metadata }),
-  });
-  return kind === "action_execution"
-    ? Object.freeze({
-        kind: "action_execution" as const,
-        failure: failure satisfies ActionProcessingFailure,
-      })
+  return observers.length === 0
+    ? undefined
     : Object.freeze({
-        kind: "tool" as const,
-        failure: failure satisfies ToolFailure,
+        observe(notification: Parameters<ActionExecutionObserver["observe"]>[0]) {
+          for (const observer of observers) {
+            try {
+              void Promise.resolve(observer.observe(notification)).catch(
+                () => undefined,
+              );
+            } catch {
+              // One observer cannot affect execution or another observer.
+            }
+          }
+        },
       });
-}
-
-function actionExecutionRunFailure(
-  failure: ActionExecutionFailure,
-): RunFailureCause {
-  switch (failure.kind) {
-    case "action_execution":
-      return createRunFailureCause("action_execution", failure.failure);
-    case "policy":
-      return createRunFailureCause("policy", failure.failure);
-    case "permission":
-      return createRunFailureCause("permission", failure.failure);
-    case "sandbox":
-      return createRunFailureCause("sandbox", failure.failure);
-    case "tool":
-      return createRunFailureCause("tool", failure.failure);
-  }
-}
-
-function errorMetadata(error: unknown): Readonly<Record<string, unknown>> {
-  return error instanceof Error ? { causeName: error.name } : {};
-}
-
-function sandboxAttemptSummary(attempt: SandboxAttempt): SandboxAttemptSummary {
-  return Object.freeze({
-    attemptId: attempt.id,
-    actionId: attempt.actionId,
-    actionFingerprint: attempt.actionFingerprint,
-    ordinal: attempt.ordinal,
-    enforcement: attempt.enforcement,
-    policyId: attempt.policyId,
-    authoritySnapshotId: attempt.authoritySnapshotId,
-    dispatchPlanFingerprint: attempt.dispatchPlanFingerprint,
-    startedAt: attempt.startedAt,
-  });
-}
-
-function sandboxAttemptResolution(
-  attempt: SandboxAttempt,
-  execution: ActionExecutionResult,
-  settledAt: string,
-): SandboxAttemptResolutionSummary {
-  switch (execution.status) {
-    case "executed":
-      return Object.freeze({
-        attemptId: attempt.id,
-        actionId: attempt.actionId,
-        ordinal: attempt.ordinal,
-        enforcement: attempt.enforcement,
-        outcome: execution.status,
-        code: toolResultErrorCode(execution.toolResult),
-        effectState: null,
-        settledAt,
-      });
-    case "sandbox_denied":
-      return Object.freeze({
-        attemptId: attempt.id,
-        actionId: attempt.actionId,
-        ordinal: attempt.ordinal,
-        enforcement: attempt.enforcement,
-        outcome: execution.status,
-        code: execution.denial.code,
-        effectState: execution.denial.effectState,
-        settledAt,
-      });
-    case "sandbox_unavailable":
-      return Object.freeze({
-        attemptId: attempt.id,
-        actionId: attempt.actionId,
-        ordinal: attempt.ordinal,
-        enforcement: attempt.enforcement,
-        outcome: execution.status,
-        code: execution.code,
-        effectState: execution.effectState,
-        settledAt,
-      });
-    case "interrupted":
-      return Object.freeze({
-        attemptId: attempt.id,
-        actionId: attempt.actionId,
-        ordinal: attempt.ordinal,
-        enforcement: attempt.enforcement,
-        outcome: execution.status,
-        code: execution.interruption.kind,
-        effectState: null,
-        settledAt,
-      });
-    case "failed":
-      return Object.freeze({
-        attemptId: attempt.id,
-        actionId: attempt.actionId,
-        ordinal: attempt.ordinal,
-        enforcement: attempt.enforcement,
-        outcome: execution.status,
-        code: execution.failure.failure.code,
-        effectState: execution.effectState,
-        settledAt,
-      });
-  }
-}
-
-function toolResultErrorCode(result: ToolResult): string | null {
-  return result.status === "succeeded" ? null : result.error.code;
-}
-
-function infrastructureFailureCode(failure: RunFailureCause): RunFailureCode {
-  return failure.kind === "audit"
-    ? "audit_required_failed"
-    : failure.kind === "telemetry"
-    ? "telemetry_required_failed"
-    : failureCode(failure);
-}
-
-function failureCode(failure: RunFailureCause): RunFailureCode {
-  return runFailureCode(failure) as RunFailureCode;
-}
-
-function asFailureTuple(
-  failures: readonly RunFailureCause[],
-): readonly [RunFailureCause, ...RunFailureCause[]] {
-  if (failures.length === 0) {
-    throw new TypeError("At least one RunFailureCause is required.");
-  }
-  return Object.freeze([...failures]) as unknown as readonly [
-    RunFailureCause,
-    ...RunFailureCause[],
-  ];
-}
-
-function assertStateTransition<TOutput>(
-  current: RunState<TOutput>,
-  next: RunState<TOutput>,
-): void {
-  if (current.runId !== next.runId || current.taskId !== next.taskId) {
-    throw new Error("RunState identity cannot change.");
-  }
-  const terminal = current.status === "succeeded" || current.status === "blocked" ||
-    current.status === "failed" || current.status === "cancelled";
-  if (terminal) {
-    throw new Error(`Terminal RunState ${current.status} cannot transition.`);
-  }
-  if (current.status === "cancelling" && next.status !== "cancelling" &&
-      next.status !== "cancelled" && next.status !== "failed") {
-    throw new Error(`Cancelling RunState cannot transition to ${next.status}.`);
-  }
-}
-
-function freezeState<TOutput>(state: RunState<TOutput>): RunState<TOutput> {
-  assertRunPermissionStateInvariant(state.permission, state.status);
-  return Object.freeze(state);
-}
-
-function freezeCounters(counters: RunCounters): RunCounters {
-  return Object.freeze({ ...counters });
-}
-
-function appendUnique<TValue>(
-  current: readonly TValue[],
-  next: readonly TValue[],
-): readonly TValue[] {
-  const values = [...current];
-  for (const value of next) {
-    if (!values.includes(value)) {
-      values.push(value);
-    }
-  }
-  return Object.freeze(values);
-}
-
-function assertNonEmpty(value: unknown, field: string): asserts value is string {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new TypeError(`${field} must be a non-empty string.`);
-  }
 }

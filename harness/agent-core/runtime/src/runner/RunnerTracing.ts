@@ -46,10 +46,10 @@ export function completeRunnerTrace(
   try {
     assembler.complete({
       items: result.items.map((item) => Object.freeze({
-        id: item.id,
-        runId: item.runId,
-        sequence: item.sequence,
-        kind: item.kind,
+        id: item.ref.id,
+        runId: item.ref.run.id,
+        sequence: item.ref.sequence,
+        kind: item.payload.kind,
         createdAt: item.createdAt,
       })),
       result: Object.freeze({

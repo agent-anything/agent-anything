@@ -1,10 +1,11 @@
 import {
-  snapshotApprovalDecisionSubmission,
-  type ApprovalDecisionSubmission,
-  type ApprovalSubmissionReceipt,
-} from "@agent-anything/permission";
+  snapshotInteractionRequestRef,
+  type InteractionRequestRef,
+} from "@agent-anything/interaction/protocol";
+import type { InteractionSubmissionOutcome } from "@agent-anything/interaction/coordination";
 import type {
   HostActiveRun,
+  HostInteractionSubmission,
   HostRunCancellationInput,
   HostRunCancellationReceipt,
 } from "../run/HostRunManager.js";
@@ -13,15 +14,11 @@ import type { HostRunProjection } from "../projection/HostRunProjection.js";
 export const HOST_COMMAND_VERSION = 1 as const;
 export const HOST_COMMAND_REASON_MAX_LENGTH = 500;
 export const HOST_COMMAND_RECEIPT_LIMIT = 4_096;
-const HOST_COMMAND_PERMISSION_ENTRY_LIMIT = 256;
-const HOST_COMMAND_PERMISSION_TEXT_MAX_LENGTH = 2_048;
+export const HOST_INTERACTION_PAYLOAD_MAX_BYTES = 262_144;
 
-export type HostCommandKind = "run.cancel" | "approval.submit";
+export type HostCommandKind = "run.cancel" | "interaction.submit";
 
-export interface HostCommandEnvelope<
-  TKind extends HostCommandKind,
-  TPayload,
-> {
+export interface HostCommandEnvelope<TKind extends HostCommandKind, TPayload> {
   readonly version: typeof HOST_COMMAND_VERSION;
   readonly commandId: string;
   readonly runId: string;
@@ -33,13 +30,10 @@ export interface HostRunCancellationCommandPayload {
   readonly reason: string | null;
 }
 
-export interface HostApprovalSubmissionCommandPayload {
+export interface HostInteractionSubmissionCommandPayload {
+  readonly request: InteractionRequestRef;
   readonly submissionId: string;
-  readonly requestId: string;
-  readonly pendingVersion: number;
-  readonly optionId: string;
-  readonly grantedPermissions: ApprovalDecisionSubmission["grantedPermissions"];
-  readonly reason: string | null;
+  readonly payload: unknown;
 }
 
 export type HostRunCancellationCommand = HostCommandEnvelope<
@@ -47,14 +41,12 @@ export type HostRunCancellationCommand = HostCommandEnvelope<
   HostRunCancellationCommandPayload
 >;
 
-export type HostApprovalSubmissionCommand = HostCommandEnvelope<
-  "approval.submit",
-  HostApprovalSubmissionCommandPayload
+export type HostInteractionSubmissionCommand = HostCommandEnvelope<
+  "interaction.submit",
+  HostInteractionSubmissionCommandPayload
 >;
 
-export type HostCommand =
-  | HostRunCancellationCommand
-  | HostApprovalSubmissionCommand;
+export type HostCommand = HostRunCancellationCommand | HostInteractionSubmissionCommand;
 
 export type HostCommandRejectionCode =
   | "host_command_invalid"
@@ -80,10 +72,10 @@ export interface HostRunCancellationCommandReceipt
   readonly projection: HostRunProjection;
 }
 
-export interface HostApprovalSubmissionCommandReceipt
-  extends HostCommandReceiptBase<"approval.submit"> {
+export interface HostInteractionSubmissionCommandReceipt
+  extends HostCommandReceiptBase<"interaction.submit"> {
   readonly status: "handled";
-  readonly result: ApprovalSubmissionReceipt;
+  readonly result: InteractionSubmissionOutcome;
   readonly projection: HostRunProjection;
 }
 
@@ -99,18 +91,12 @@ export interface HostCommandRejectedReceipt {
 
 export type HostCommandReceipt =
   | HostRunCancellationCommandReceipt
-  | HostApprovalSubmissionCommandReceipt
+  | HostInteractionSubmissionCommandReceipt
   | HostCommandRejectedReceipt;
 
 export type HostCommandCancellationAttribution =
-  | {
-      readonly origin: "user";
-      readonly reasonCode: "user_requested";
-    }
-  | {
-      readonly origin: "host";
-      readonly reasonCode: "host_requested";
-    };
+  | { readonly origin: "user"; readonly reasonCode: "user_requested" }
+  | { readonly origin: "host"; readonly reasonCode: "host_requested" };
 
 export interface CreateHostCommandDispatcherInput {
   readonly resolveActiveRun: (runId: string) => HostActiveRun | null;
@@ -119,10 +105,7 @@ export interface CreateHostCommandDispatcherInput {
 }
 
 export interface HostCommandDispatcher {
-  dispatch(
-    candidate: unknown,
-    expectedKind: HostCommandKind,
-  ): HostCommandReceipt;
+  dispatch(candidate: unknown, expectedKind: HostCommandKind): HostCommandReceipt;
 }
 
 interface HostCommandLedgerEntry {
@@ -142,24 +125,16 @@ export function createHostCommandDispatcher(
     throw new TypeError("Host command receipt limit must be a positive integer.");
   }
   const ledger = new Map<string, HostCommandLedgerEntry>();
-
   return Object.freeze({
-    dispatch(
-      candidate: unknown,
-      expectedKind: HostCommandKind,
-    ): HostCommandReceipt {
+    dispatch(candidate: unknown, expectedKind: HostCommandKind): HostCommandReceipt {
       assertHostCommandKind(expectedKind, "expected Host command kind");
       let command: HostCommand;
       try {
         command = snapshotHostCommand(candidate);
       } catch (error) {
-        return rejectedReceipt(
-          candidate,
-          validationCode(error),
-        );
+        return rejectedReceipt(candidate, validationCode(error));
       }
-
-      const fingerprint = JSON.stringify(command);
+      const fingerprint = canonicalString(command);
       const previous = ledger.get(command.commandId);
       if (previous !== undefined) {
         return previous.fingerprint === fingerprint
@@ -169,16 +144,9 @@ export function createHostCommandDispatcher(
       if (ledger.size >= maxReceipts) {
         return rejectedReceipt(command, "host_command_ledger_full");
       }
-
-      let receipt: HostCommandReceipt;
-      if (command.kind !== expectedKind) {
-        receipt = rejectedReceipt(command, "host_command_kind_mismatch");
-      } else {
-        receipt = dispatchValidatedCommand(
-          input,
-          command,
-        );
-      }
+      const receipt = command.kind === expectedKind
+        ? dispatchValidatedCommand(input, command)
+        : rejectedReceipt(command, "host_command_kind_mismatch");
       ledger.set(command.commandId, Object.freeze({ fingerprint, receipt }));
       return receipt;
     },
@@ -187,11 +155,7 @@ export function createHostCommandDispatcher(
 
 export function snapshotHostCommand(candidate: unknown): HostCommand {
   assertRecord(candidate, "Host command");
-  assertExactKeys(
-    candidate,
-    ["version", "commandId", "runId", "kind", "payload"],
-    "Host command",
-  );
+  assertExactKeys(candidate, ["version", "commandId", "runId", "kind", "payload"], "Host command");
   if (candidate.version !== HOST_COMMAND_VERSION) {
     throw new HostCommandValidationError(
       "host_command_version_unsupported",
@@ -201,23 +165,21 @@ export function snapshotHostCommand(candidate: unknown): HostCommand {
   const commandId = identity(candidate.commandId, "Host command commandId");
   const runId = identity(candidate.runId, "Host command runId");
   assertHostCommandKind(candidate.kind, "Host command kind");
-
   if (candidate.kind === "run.cancel") {
     return Object.freeze({
       version: HOST_COMMAND_VERSION,
       commandId,
       runId,
-      kind: candidate.kind,
+      kind: "run.cancel" as const,
       payload: snapshotCancellationPayload(candidate.payload),
     });
   }
-
   return Object.freeze({
     version: HOST_COMMAND_VERSION,
     commandId,
     runId,
-    kind: candidate.kind,
-    payload: snapshotApprovalPayload(candidate.payload, runId),
+    kind: "interaction.submit" as const,
+    payload: snapshotInteractionPayload(candidate.payload),
   });
 }
 
@@ -234,14 +196,11 @@ function dispatchValidatedCommand(
   if (activeRun === null || activeRun.runId !== command.runId) {
     return rejectedReceipt(command, "host_command_run_not_active");
   }
-
   try {
     if (command.kind === "run.cancel") {
       const cancellation: HostRunCancellationInput = {
         ...input.cancellationAttribution,
-        ...(command.payload.reason === null
-          ? {}
-          : { reason: command.payload.reason }),
+        ...(command.payload.reason === null ? {} : { reason: command.payload.reason }),
       };
       return Object.freeze({
         version: HOST_COMMAND_VERSION,
@@ -253,151 +212,47 @@ function dispatchValidatedCommand(
         projection: activeRun.getProjection(),
       });
     }
-
-    const submission: ApprovalDecisionSubmission = {
-      runId: command.runId,
-      ...command.payload,
-    };
+    const submission: HostInteractionSubmission = command.payload;
     return Object.freeze({
       version: HOST_COMMAND_VERSION,
       commandId: command.commandId,
       runId: command.runId,
       kind: command.kind,
       status: "handled",
-      result: activeRun.submitApprovalDecision(submission),
+      result: activeRun.submitInteraction(submission),
       projection: activeRun.getProjection(),
     });
   } catch {
-    return rejectedReceipt(
-      command,
-      "host_command_failed",
-      safeProjection(activeRun),
-    );
+    return rejectedReceipt(command, "host_command_failed", safeProjection(activeRun));
   }
 }
 
-function snapshotCancellationPayload(
-  candidate: unknown,
-): HostRunCancellationCommandPayload {
+function snapshotCancellationPayload(candidate: unknown): HostRunCancellationCommandPayload {
   assertRecord(candidate, "Host cancellation payload");
   assertExactKeys(candidate, ["reason"], "Host cancellation payload");
-  return Object.freeze({
-    reason: nullableReason(candidate.reason, "Host cancellation reason"),
-  });
+  return Object.freeze({ reason: nullableReason(candidate.reason, "Host cancellation reason") });
 }
 
-function snapshotApprovalPayload(
-  candidate: unknown,
-  runId: string,
-): HostApprovalSubmissionCommandPayload {
-  assertRecord(candidate, "Host approval payload");
-  assertExactKeys(
-    candidate,
-    [
-      "submissionId",
-      "requestId",
-      "pendingVersion",
-      "optionId",
-      "grantedPermissions",
-      "reason",
-    ],
-    "Host approval payload",
-  );
-  assertAdditionalPermissions(candidate.grantedPermissions);
-  let submission: ApprovalDecisionSubmission;
+function snapshotInteractionPayload(candidate: unknown): HostInteractionSubmissionCommandPayload {
+  assertRecord(candidate, "Host Interaction payload");
+  assertExactKeys(candidate, ["request", "submissionId", "payload"], "Host Interaction payload");
+  const payload = canonicalValue(candidate.payload);
+  if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > HOST_INTERACTION_PAYLOAD_MAX_BYTES) {
+    throw new HostCommandValidationError(
+      "host_command_invalid",
+      "Host Interaction payload exceeds the configured limit.",
+    );
+  }
   try {
-    submission = snapshotApprovalDecisionSubmission({
-      runId,
-      submissionId: candidate.submissionId,
-      requestId: candidate.requestId,
-      pendingVersion: candidate.pendingVersion,
-      optionId: candidate.optionId,
-      grantedPermissions: candidate.grantedPermissions,
-      reason: candidate.reason,
-    } as ApprovalDecisionSubmission);
+    return Object.freeze({
+      request: snapshotInteractionRequestRef(candidate.request as InteractionRequestRef),
+      submissionId: identity(candidate.submissionId, "Host Interaction submissionId"),
+      payload: deepFreeze(payload),
+    });
   } catch {
     throw new HostCommandValidationError(
       "host_command_invalid",
-      "Host approval payload is invalid.",
-    );
-  }
-  nullableReason(submission.reason, "Host approval reason");
-  return Object.freeze({
-    submissionId: submission.submissionId,
-    requestId: submission.requestId,
-    pendingVersion: submission.pendingVersion,
-    optionId: submission.optionId,
-    grantedPermissions: submission.grantedPermissions,
-    reason: submission.reason,
-  });
-}
-
-function assertAdditionalPermissions(candidate: unknown): void {
-  if (candidate === null) return;
-  assertRecord(candidate, "Host approval grantedPermissions");
-  assertExactSubsetKeys(
-    candidate,
-    ["fileSystem", "network"],
-    "Host approval grantedPermissions",
-  );
-
-  if ("fileSystem" in candidate) {
-    assertRecord(candidate.fileSystem, "Host approval fileSystem permissions");
-    assertExactSubsetKeys(
-      candidate.fileSystem,
-      ["read", "write"],
-      "Host approval fileSystem permissions",
-    );
-    if ("read" in candidate.fileSystem) {
-      assertBoundedTextArray(
-        candidate.fileSystem.read,
-        "Host approval fileSystem read permissions",
-      );
-    }
-    if ("write" in candidate.fileSystem) {
-      assertBoundedTextArray(
-        candidate.fileSystem.write,
-        "Host approval fileSystem write permissions",
-      );
-    }
-  }
-
-  if ("network" in candidate) {
-    assertRecord(candidate.network, "Host approval network permissions");
-    assertExactSubsetKeys(
-      candidate.network,
-      ["enabled", "domains"],
-      "Host approval network permissions",
-    );
-    if (typeof candidate.network.enabled !== "boolean") {
-      throw new HostCommandValidationError(
-        "host_command_invalid",
-        "Host approval network enabled flag is invalid.",
-      );
-    }
-    if ("domains" in candidate.network) {
-      assertBoundedTextArray(
-        candidate.network.domains,
-        "Host approval network domains",
-      );
-    }
-  }
-}
-
-function assertBoundedTextArray(candidate: unknown, field: string): void {
-  if (
-    !Array.isArray(candidate) ||
-    candidate.length > HOST_COMMAND_PERMISSION_ENTRY_LIMIT ||
-    candidate.some(
-      (item) =>
-        typeof item !== "string" ||
-        item.length === 0 ||
-        item.length > HOST_COMMAND_PERMISSION_TEXT_MAX_LENGTH,
-    )
-  ) {
-    throw new HostCommandValidationError(
-      "host_command_invalid",
-      `${field} is invalid.`,
+      "Host Interaction payload is invalid.",
     );
   }
 }
@@ -408,12 +263,11 @@ function rejectedReceipt(
   projection: HostRunProjection | null = null,
 ): HostCommandRejectedReceipt {
   const record = isRecord(candidate) ? candidate : {};
-  const kind = isHostCommandKind(record.kind) ? record.kind : null;
   return Object.freeze({
     version: HOST_COMMAND_VERSION,
     commandId: typeof record.commandId === "string" ? record.commandId : "",
     runId: typeof record.runId === "string" ? record.runId : "",
-    kind,
+    kind: isHostCommandKind(record.kind) ? record.kind : null,
     status: "rejected",
     code,
     projection,
@@ -429,40 +283,27 @@ function safeProjection(activeRun: HostActiveRun): HostRunProjection | null {
 }
 
 function validationCode(error: unknown): HostCommandRejectionCode {
-  return error instanceof HostCommandValidationError
-    ? error.code
-    : "host_command_invalid";
+  return error instanceof HostCommandValidationError ? error.code : "host_command_invalid";
 }
 
 class HostCommandValidationError extends TypeError {
-  constructor(
-    readonly code: HostCommandRejectionCode,
-    message: string,
-  ) {
+  constructor(readonly code: HostCommandRejectionCode, message: string) {
     super(message);
     this.name = "HostCommandValidationError";
   }
 }
 
-function assertCancellationAttribution(
-  candidate: HostCommandCancellationAttribution,
-): void {
+function assertCancellationAttribution(candidate: HostCommandCancellationAttribution): void {
   if (
-    candidate === null ||
-    typeof candidate !== "object" ||
+    candidate === null || typeof candidate !== "object" ||
     !(
-      (candidate.origin === "user" && candidate.reasonCode === "user_requested") ||
-      (candidate.origin === "host" && candidate.reasonCode === "host_requested")
+      candidate.origin === "user" && candidate.reasonCode === "user_requested" ||
+      candidate.origin === "host" && candidate.reasonCode === "host_requested"
     )
-  ) {
-    throw new TypeError("Host command cancellation attribution is invalid.");
-  }
+  ) throw new TypeError("Host command cancellation attribution is invalid.");
 }
 
-function assertHostCommandKind(
-  value: unknown,
-  field: string,
-): asserts value is HostCommandKind {
+function assertHostCommandKind(value: unknown, field: string): asserts value is HostCommandKind {
   if (!isHostCommandKind(value)) {
     throw new HostCommandValidationError(
       "host_command_kind_unsupported",
@@ -472,32 +313,19 @@ function assertHostCommandKind(
 }
 
 function isHostCommandKind(value: unknown): value is HostCommandKind {
-  return value === "run.cancel" || value === "approval.submit";
+  return value === "run.cancel" || value === "interaction.submit";
 }
 
 function nullableReason(value: unknown, field: string): string | null {
-  if (value === null) {
-    return null;
-  }
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > HOST_COMMAND_REASON_MAX_LENGTH
-  ) {
-    throw new HostCommandValidationError(
-      "host_command_invalid",
-      `${field} is invalid.`,
-    );
+  if (value === null) return null;
+  if (typeof value !== "string" || value.length === 0 || value.length > HOST_COMMAND_REASON_MAX_LENGTH) {
+    throw new HostCommandValidationError("host_command_invalid", `${field} is invalid.`);
   }
   return value;
 }
 
 function identity(value: unknown, field: string): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    /\s/.test(value)
-  ) {
+  if (typeof value !== "string" || value.length === 0 || /\s/.test(value)) {
     throw new HostCommandValidationError(
       "host_command_invalid",
       `${field} must be a non-empty identity.`,
@@ -506,15 +334,9 @@ function identity(value: unknown, field: string): string {
   return value;
 }
 
-function assertRecord(
-  value: unknown,
-  field: string,
-): asserts value is Record<string, unknown> {
+function assertRecord(value: unknown, field: string): asserts value is Record<string, unknown> {
   if (!isRecord(value) || Array.isArray(value)) {
-    throw new HostCommandValidationError(
-      "host_command_invalid",
-      `${field} must be an object.`,
-    );
+    throw new HostCommandValidationError("host_command_invalid", `${field} must be an object.`);
   }
 }
 
@@ -522,17 +344,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function assertExactKeys(
-  value: Record<string, unknown>,
-  keys: readonly string[],
-  field: string,
-): void {
+function assertExactKeys(value: Record<string, unknown>, keys: readonly string[], field: string): void {
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
-  if (
-    actual.length !== expected.length ||
-    actual.some((key, index) => key !== expected[index])
-  ) {
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
     throw new HostCommandValidationError(
       "host_command_invalid",
       `${field} contains unsupported fields.`,
@@ -540,15 +355,29 @@ function assertExactKeys(
   }
 }
 
-function assertExactSubsetKeys(
-  value: Record<string, unknown>,
-  allowedKeys: readonly string[],
-  field: string,
-): void {
-  if (Object.keys(value).some((key) => !allowedKeys.includes(key))) {
-    throw new HostCommandValidationError(
-      "host_command_invalid",
-      `${field} contains unsupported fields.`,
+function canonicalString(value: unknown): string {
+  return JSON.stringify(canonicalValue(value));
+}
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (isRecord(value) && !Array.isArray(value)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, canonicalValue(child)]),
     );
   }
+  if (
+    value === null || typeof value === "string" || typeof value === "boolean" ||
+    typeof value === "number" && Number.isFinite(value)
+  ) return value;
+  throw new HostCommandValidationError("host_command_invalid", "Host command contains non-canonical data.");
+}
+
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) deepFreeze(child, seen);
+  return Object.freeze(value);
 }

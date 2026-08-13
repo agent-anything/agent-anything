@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
-import type { RunWorkspace } from "@agent-anything/agent-core/run";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import { FileSystemError } from "../filesystem/FileSystemError.js";
 import {
   resolveExistingTarget,
@@ -42,7 +42,7 @@ export type PatchProposalChange =
 
 export interface CreatePatchProposalInput {
   runId: string;
-  workspace: RunWorkspace | null;
+  workspace: WorkspaceSelection | null;
   rootName?: string;
   change: PatchProposalChange;
   summary: string;
@@ -80,7 +80,7 @@ export interface RejectPatchInput {
 
 export interface MaterializePatchReviewInput {
   patch: ProposedPatchStatus;
-  workspace: RunWorkspace | null;
+  workspace: WorkspaceSelection | null;
   limits?: Partial<PatchWorkflowLimits>;
   createReviewId?: (proposal: PatchProposal) => PatchReviewId;
 }
@@ -323,7 +323,7 @@ async function createOperation(
 }
 
 async function readExistingPatchTarget(
-  workspace: RunWorkspace | null,
+  workspace: WorkspaceSelection | null,
   rootName: string | undefined,
   path: string,
   limits: PatchWorkflowLimits,

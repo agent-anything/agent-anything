@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ApprovalReviewInput } from "@agent-anything/permission";
+import type { RunOperationSnapshot } from "@agent-anything/agent-runtime/runner";
+import { createSucceededRunResult } from "@agent-anything/agent-runtime/run";
 import {
   RUNTIME_EVENT_SCHEMA_VERSION,
   snapshotRuntimeEventPayload,
@@ -7,11 +8,10 @@ import {
   type RuntimeEventName,
   type RuntimeEventPayloadMap,
 } from "@agent-anything/observability/events";
-import { createFailedRunResult, createSucceededRunResult } from "@agent-anything/agent-runtime/run";
+import type { InteractionRequestRef } from "@agent-anything/interaction/protocol";
 import {
   createHostRunProjection,
   createHostTerminalRunProjection,
-  HOST_RETRY_EVENT_LIMIT,
   type HostRunProjection,
   type HostRunProjectionUpdate,
 } from "./HostRunProjection.js";
@@ -20,313 +20,191 @@ import {
   reduceHostRunProjection,
 } from "./HostRunProjectionReducer.js";
 
-const now = "2026-07-17T00:00:00.000Z";
-const later = "2026-07-17T00:00:01.000Z";
-
 describe("HostRunProjectionReducer", () => {
-  it("projects start, user approval submission, resolution, and terminal result in order", () => {
+  it("moves from starting to running only on confirmed run.started and terminalizes from RunResult", () => {
     let projection = initialProjection();
     projection = apply(projection, runtimeUpdate(1, "run.started", {
       status: "running",
       activeAgentId: "agent-1",
     }));
-    projection = apply(projection, runtimeUpdate(2, "approval.requested", {
-      requestId: "approval-1",
-      actionId: "action-1",
-      actionFingerprint: sha("a"),
-      category: "networkAccess",
-      pendingVersion: 1,
-      reviewer: "user",
-      phase: "reviewing",
-      reviewOperationId: "review-operation-1",
-    }));
-
-    expect(projection).toMatchObject({
-      sequence: 2,
-      status: "waiting_for_approval",
-      approval: {
-        requestId: "approval-1",
-        phase: "reviewing",
-        review: null,
-      },
-    });
-
-    projection = apply(projection, {
-      kind: "approval_review_available",
-      runId: "run-1",
-      sequence: 3,
-      occurredAt: now,
-      review: approvalReview(),
-    });
-    projection = apply(projection, {
-      kind: "approval_submission_accepted",
-      runId: "run-1",
-      sequence: 4,
-      occurredAt: now,
-      receipt: {
-        status: "accepted_for_resolution",
-        submissionId: "submission-1",
-        runId: "run-1",
-        requestId: "approval-1",
-        pendingVersion: 1,
-      },
-    });
-
-    expect(projection.approval).toMatchObject({
-      phase: "submitted_for_resolution",
-      review: { request: { payload: { host: "example.com" } } },
-    });
-    expect(projection.status).toBe("waiting_for_approval");
-    expect(Object.isFrozen(projection.approval)).toBe(true);
-
-    projection = apply(projection, runtimeUpdate(5, "approval.resolved", {
-      requestId: "approval-1",
-      actionId: "action-1",
-      actionFingerprint: sha("a"),
-      pendingVersion: 1,
-      reviewer: "user",
-      resolutionKind: "decision",
-      decisionKind: "accept",
-      applicationKind: "applied",
-      code: null,
-      authorityRecordIds: [],
-    }));
-    expect(projection).toMatchObject({ status: "running", approval: null });
+    expect(projection).toMatchObject({ sequence: 1, status: "running" });
 
     const terminal = createHostTerminalRunProjection({
-      runResult: createSucceededRunResult({
-        runId: "run-1",
-        taskId: "task-1",
-        metadata: {
-          completedAt: later,
-          durationMs: 1_000,
-          iterations: 2,
-          actions: 1,
-          privatePrompt: "must not survive",
-        },
-      }, { summary: "private final output" }),
+      runResult: succeededResult(),
+      completedAt: LATER,
     });
     projection = apply(projection, {
       kind: "terminal_result",
       runId: "run-1",
-      sequence: 6,
-      occurredAt: later,
+      sequence: 2,
+      occurredAt: LATER,
       terminal,
     });
 
     expect(projection).toMatchObject({
       status: "completed",
       terminal: {
+        runId: "run-1",
         code: null,
-        durationMs: 1_000,
-        iterations: 2,
-        actions: 1,
+        itemCount: 0,
       },
     });
-    expect(JSON.stringify(projection)).not.toContain("private");
-    expect(Object.isFrozen(projection)).toBe(true);
+    expect(JSON.stringify(projection)).not.toContain("private final output");
   });
 
-  it("keeps a complete bounded Plan projection and rejects version regression", () => {
-    let projection = apply(
-      initialProjection(),
-      runtimeUpdate(1, "run.started", {
-        status: "running",
-        activeAgentId: "agent-1",
-      }),
-    );
-    projection = apply(projection, runtimeUpdate(2, "plan.created", {
+  it("projects Plan and generic pending Interaction only from RunHandle snapshots", () => {
+    let projection = apply(initialProjection(), runtimeUpdate(1, "run.started", {
+      status: "running",
+      activeAgentId: "agent-1",
+    }));
+    projection = apply(projection, runOperationUpdate(2, {
+      sequence: 1,
+      status: "waiting",
       plan: {
         id: "plan-1",
         version: 1,
         status: "active",
         steps: [{ step: "Inspect files", status: "in_progress" }],
       },
-    }));
-    projection = apply(projection, runtimeUpdate(3, "plan.updated", {
-      previousVersion: 1,
-      transition: "updated",
-      plan: {
-        id: "plan-1",
-        version: 2,
-        status: "active",
-        steps: [
-          { step: "Inspect files", status: "completed" },
-          { step: "Run tests", status: "in_progress" },
-        ],
-      },
-    }));
-
-    expect(projection.plan).toEqual({
-      id: "plan-1",
-      version: 2,
-      status: "active",
-      steps: [
-        { step: "Inspect files", status: "completed" },
-        { step: "Run tests", status: "in_progress" },
-      ],
-    });
-    expect(JSON.stringify(projection.plan)).not.toContain("private");
-
-    const regression = reduceHostRunProjection(
-      projection,
-      runtimeUpdate(4, "plan.updated", {
-        previousVersion: 1,
-        transition: "updated",
-        plan: {
-          id: "plan-1",
-          version: 1,
-          status: "active",
-          steps: [{ step: "Old step", status: "in_progress" }],
+      pendingInteractions: [{
+        envelope: {
+          request: REQUEST,
+          presentation: { title: "Approve Action" },
+          disclosureClass: "public",
+          expiresAt: null,
         },
-      }),
-    );
-    expect(regression).toMatchObject({
-      status: "rejected",
-      code: "plan_version_regression",
-      projection: { sequence: 3 },
+        blockingScope: "run",
+      }],
+    }));
+
+    expect(projection).toMatchObject({
+      status: "waiting",
+      runOperationSequence: 1,
+      plan: { id: "plan-1", version: 1 },
+      pendingInteractions: [{
+        request: REQUEST,
+        phase: "pending",
+        blockingScope: "run",
+      }],
     });
+    projection = apply(projection, {
+      kind: "interaction_submission_accepted",
+      runId: "run-1",
+      sequence: 3,
+      occurredAt: NOW,
+      receipt: {
+        receiptId: "interaction-receipt-1",
+        request: REQUEST,
+        submissionId: "submission-1",
+        status: "accepted_for_resolution",
+        recordedAt: NOW,
+      },
+    });
+    expect(projection.pendingInteractions[0]?.phase).toBe("submitted_for_resolution");
+
+    projection = apply(projection, runOperationUpdate(4, {
+      sequence: 2,
+      status: "running",
+      plan: projection.plan,
+      pendingInteractions: [],
+    }));
+    expect(projection).toMatchObject({ status: "running", pendingInteractions: [] });
   });
 
-  it("retains bounded Retry progress and honest disabled-enforcement outcome", () => {
-    let projection = apply(
-      initialProjection(),
-      runtimeUpdate(1, "run.started", {
-        status: "running",
-        activeAgentId: "agent-1",
-      }),
-    );
-
-    for (let index = 1; index <= HOST_RETRY_EVENT_LIMIT + 2; index += 1) {
-      projection = apply(projection, runtimeUpdate(index + 1, "retry.attempt.started", {
-        operationId: `operation-${index}`,
-        owner: "provider_request",
-        attemptId: `attempt-${index}`,
-        budgetId: `budget-${index}`,
-        attemptNumber: index,
-        budgetAttemptNumber: 1,
-        maxBudgetAttempts: 1,
-      }));
-    }
-
-    expect(projection.retry).toMatchObject({
-      attemptCount: HOST_RETRY_EVENT_LIMIT + 2,
-      omittedEventCount: 2,
+  it("projects canonical Action attempt and settlement without executor payload", () => {
+    let projection = apply(initialProjection(), runtimeUpdate(1, "run.started", {
+      status: "running",
+      activeAgentId: "agent-1",
+    }));
+    projection = apply(projection, {
+      kind: "action_execution",
+      runId: "run-1",
+      sequence: 2,
+      occurredAt: NOW,
+      notification: {
+        kind: "attempt_started",
+        runId: "run-1",
+        actionId: "action-1",
+        attemptId: "attempt-1",
+        ordinal: 1,
+        enforcement: "disabled",
+        occurredAt: NOW,
+      },
     });
-    expect(projection.retry?.recentEvents).toHaveLength(HOST_RETRY_EVENT_LIMIT);
-    expect(JSON.stringify(projection.retry)).not.toContain("private");
-
-    const startedSequence = HOST_RETRY_EVENT_LIMIT + 4;
-    projection = apply(projection, runtimeUpdate(startedSequence, "sandbox.attempt.started", {
-      actionId: "action-1",
-      attemptId: "sandbox-attempt-1",
-      ordinal: 1,
-      enforcement: "disabled",
-    }));
-    projection = apply(projection, runtimeUpdate(startedSequence + 1, "sandbox.attempt.resolved", {
-      actionId: "action-1",
-      attemptId: "sandbox-attempt-1",
-      ordinal: 1,
-      enforcement: "disabled",
-      outcome: "executed",
-      code: null,
-    }));
+    projection = apply(projection, {
+      kind: "action_execution",
+      runId: "run-1",
+      sequence: 3,
+      occurredAt: LATER,
+      notification: {
+        kind: "settled",
+        runId: "run-1",
+        actionId: "action-1",
+        settlementId: "settlement-1",
+        status: "succeeded",
+        attemptCount: 1,
+        enforcement: "disabled",
+        causeOwner: null,
+        causeRef: null,
+        occurredAt: LATER,
+      },
+    });
 
     expect(projection.enforcement).toEqual({
       selected: "disabled",
       status: "unisolated",
       attemptCount: 1,
-      escalationCount: 0,
       latestAttempt: {
-        attemptId: "sandbox-attempt-1",
+        attemptId: "attempt-1",
         actionId: "action-1",
         ordinal: 1,
         enforcement: "disabled",
-        outcome: "executed",
+        outcome: "succeeded",
         code: null,
       },
     });
-    expect(JSON.stringify(projection.enforcement)).not.toContain("private");
+    expect(JSON.stringify(projection.enforcement)).not.toContain("payload");
   });
 
-  it("projects failed terminal results without error messages, metadata, or final output", () => {
-    const result = createFailedRunResult(
-      {
-        runId: "run-1",
-        taskId: "task-1",
-        metadata: {
-          completedAt: later,
-          durationMs: 1_000,
-          iterations: 1,
-          actions: 0,
-          prompt: "private prompt",
-        },
-      },
-      "provider_request_failed",
-      {
-        kind: "provider",
-        failure: {
-          category: "transport",
-          code: "provider_request_failed",
-          message: "private provider failure",
-          metadata: { credential: "private credential" },
-        },
-      },
-    );
-    const terminal = createHostTerminalRunProjection({ runResult: result });
-
-    expect(terminal).toMatchObject({
-      status: "failed",
-      code: "provider_request_failed",
-      failure: {
-        kind: "provider",
-        code: "provider_request_failed",
-        retryable: null,
-      },
-      relatedFailures: [],
-    });
-    expect(JSON.stringify(terminal)).not.toContain("private");
-    expect(JSON.stringify(terminal)).not.toContain("credential");
-  });
-
-  it("rejects stale, cross-Run, and post-terminal updates without mutation", () => {
-    const initial = initialProjection();
-    const started = apply(initial, runtimeUpdate(1, "run.started", {
+  it("rejects stale, cross-Run, regressed, and post-terminal updates by identity", () => {
+    const started = apply(initialProjection(), runtimeUpdate(1, "run.started", {
       status: "running",
       activeAgentId: "agent-1",
     }));
-
     expect(reduceHostRunProjection(
       started,
-      runtimeUpdate(1, "controller.started", { iteration: 1 }),
+      runtimeUpdate(1, "controller.started", { turnId: "turn-1", iteration: 1 }),
     )).toMatchObject({ status: "rejected", code: "stale_sequence" });
     expect(reduceHostRunProjection(
       started,
-      runtimeUpdate(2, "controller.started", { iteration: 1 }, "run-2"),
+      runtimeUpdate(2, "controller.started", { turnId: "turn-1", iteration: 1 }, "run-2"),
     )).toMatchObject({ status: "rejected", code: "run_identity_mismatch" });
+    expect(reduceHostRunProjection(
+      started,
+      runOperationUpdate(2, { sequence: 0, status: "running" }),
+    )).toMatchObject({ status: "applied" });
+    const advanced = apply(started, runOperationUpdate(2, { sequence: 2, status: "running" }));
+    expect(reduceHostRunProjection(
+      advanced,
+      runOperationUpdate(3, { sequence: 1, status: "running" }),
+    )).toMatchObject({ status: "rejected", code: "run_operation_sequence_regression" });
 
-    const terminal = createHostTerminalRunProjection({
-      runResult: createSucceededRunResult(
-        { runId: "run-1", taskId: "task-1" },
-        { summary: "done" },
-      ),
-      completedAt: later,
-    });
-    const completed = apply(started, {
+    const terminal = createHostTerminalRunProjection({ runResult: succeededResult() });
+    const completed = apply(advanced, {
       kind: "terminal_result",
       runId: "run-1",
-      sequence: 2,
-      occurredAt: later,
+      sequence: 3,
+      occurredAt: LATER,
       terminal,
     });
     const postTerminal = reduceHostRunProjection(
       completed,
-      runtimeUpdate(3, "controller.started", { iteration: 2 }),
+      runtimeUpdate(4, "controller.started", { turnId: "turn-2", iteration: 2 }),
     );
     expect(postTerminal).toMatchObject({
       status: "rejected",
       code: "invalid_transition",
-      projection: { sequence: 2, status: "completed" },
+      projection: { sequence: 3, status: "completed" },
     });
     expect(postTerminal.projection).toBe(completed);
   });
@@ -358,10 +236,6 @@ describe("HostRunProjectionReducer", () => {
       error: listenerFailure,
     });
     expect(delivered).toHaveBeenCalledWith(store.getProjection());
-    expect(store.getProjection().status).toBe("running");
-
-    store.apply(runtimeUpdate(1, "controller.started", { iteration: 1 }));
-    expect(delivered).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -370,7 +244,7 @@ function initialProjection(): HostRunProjection {
     sessionId: "session-1",
     taskId: "task-1",
     runId: "run-1",
-    startedAt: now,
+    startedAt: NOW,
     enforcement: "disabled",
   });
 }
@@ -394,75 +268,65 @@ function runtimeUpdate<TName extends RuntimeEventName>(
     kind: "runtime_event",
     runId: eventRunId,
     sequence,
-    occurredAt: now,
+    occurredAt: NOW,
     event: {
       schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
       id: `event-${sequence}`,
       runId: eventRunId,
-      name,
       taskId: "task-1",
       sequence,
-      occurredAt: now,
+      name,
+      occurredAt: NOW,
       payload: snapshotRuntimeEventPayload(name, payload),
-    } as unknown as RuntimeEvent,
+    } as RuntimeEvent,
   };
 }
 
-function approvalReview(): ApprovalReviewInput {
+function runOperationUpdate(
+  sequence: number,
+  overrides: Partial<RunOperationSnapshot>,
+): HostRunProjectionUpdate {
   return {
-    request: {
-      id: "approval-1",
+    kind: "run_operation",
+    runId: "run-1",
+    sequence,
+    occurredAt: NOW,
+    snapshot: {
       runId: "run-1",
-      actionId: "action-1",
-      actionFingerprint: sha("a"),
-      category: "networkAccess",
-      reason: "Allow a network request.",
-      subject: {
-        runId: "run-1",
-        actionId: "action-1",
-        actionFingerprint: sha("a"),
-        environmentId: "environment-1",
-        applicabilityKeyCount: 1,
-      },
-      payload: {
-        host: "example.com",
-        port: 443,
-        protocol: "https",
-        actionSummary: "Connect to example.com.",
-      },
-      decisionOptions: [
-        {
-          id: "accept",
-          kind: "accept",
-          scope: "action",
-          label: "Allow",
-          description: null,
-        },
-        {
-          id: "decline",
-          kind: "decline",
-          scope: null,
-          label: "Decline",
-          description: null,
-        },
-      ],
-      createdAt: now,
-      deadlineAt: later,
-    },
-    pendingVersion: 1,
-    context: {
-      workspaceTrustState: "trusted",
-      ruleOutcome: "prompt",
-      currentAuthority: {
-        fileSystemRead: true,
-        fileSystemWrite: false,
-        network: false,
-      },
-      annotations: {},
+      sequence: 1,
+      status: "running",
+      lastRunItemSequence: 0,
+      plan: null,
+      retry: null,
+      pendingInteractions: [],
+      result: null,
+      ...overrides,
     },
   };
 }
 
-function sha(character: string): string {
-  return `sha256:${character.repeat(64)}`;
+function succeededResult() {
+  return createSucceededRunResult({
+    runId: "run-1",
+    taskId: "task-1",
+    startingAgent: { id: "agent-1", revision: "1" },
+    finalActiveAgent: { id: "agent-1", revision: "1" },
+    startedAt: NOW,
+    completedAt: LATER,
+    metadata: { durationMs: 1_000, privatePrompt: "must not survive" },
+  }, { summary: "private final output" });
 }
+
+const REQUEST: InteractionRequestRef = Object.freeze({
+  id: "interaction-1",
+  protocol: Object.freeze({ owner: "permission", kind: "approval", revision: "1" }),
+  requestVersion: 1,
+  subject: Object.freeze({
+    owner: "canonical-action",
+    kind: "action-subject",
+    id: "action-1",
+    revision: "1",
+  }),
+});
+const NOW = "2026-08-13T00:00:00.000Z";
+const LATER = "2026-08-13T00:00:01.000Z";

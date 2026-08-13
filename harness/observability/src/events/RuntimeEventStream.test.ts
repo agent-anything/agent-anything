@@ -4,94 +4,74 @@ import { RUNTIME_EVENT_SCHEMA_VERSION } from "./RuntimeEvent.js";
 import type { ControllerFinishedRuntimeEventPayload } from "./RuntimeEventPayload.js";
 import { RuntimeEventStream } from "./RuntimeEventStream.js";
 
-const occurredAt = "2026-08-03T00:00:00.000Z";
-
 describe("RuntimeEventStream", () => {
-  it("materializes one Run-scoped event snapshot before fan-out", () => {
+  it("materializes one bounded Run-scoped snapshot before fan-out", () => {
     const first: RuntimeEvent[] = [];
     const second: RuntimeEvent[] = [];
-    const firstPublisher: RuntimeEventPublisher = {
-      publish(event) {
-        first.push(event);
-      },
-    };
-    const secondPublisher: RuntimeEventPublisher = {
-      publish(event) {
-        second.push(event);
-      },
-    };
-    const stream = createStream([firstPublisher, secondPublisher]);
+    const stream = createStream([
+      { publish: (event) => first.push(event) },
+      { publish: (event) => second.push(event) },
+    ]);
+
     const event = stream.emit("controller.finished", {
+      turnId: "turn-1",
       iteration: 1,
-      status: "succeeded",
+      status: "decided",
       code: null,
-      decisionKind: "actions",
-      controllerAction: "product-only-field",
+      decisionKind: "advance",
+      rawModelOutput: "must-not-escape",
     } as ControllerFinishedRuntimeEventPayload);
 
     expect(event).toEqual({
       schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
-      id: "run-1:runtime_event:1",
+      id: "run-1:runtime-event:1",
       runId: "run-1",
       taskId: "task-1",
       sequence: 1,
       name: "controller.finished",
-      occurredAt,
+      occurredAt: NOW,
       payload: {
+        turnId: "turn-1",
         iteration: 1,
-        status: "succeeded",
+        status: "decided",
         code: null,
-        decisionKind: "actions",
+        decisionKind: "advance",
       },
     });
     expect(first[0]).toBe(event);
     expect(second[0]).toBe(event);
     expect(Object.isFrozen(event)).toBe(true);
     expect(Object.isFrozen(event.payload)).toBe(true);
-    expect(event.payload).not.toHaveProperty("controllerAction");
+    expect(event.payload).not.toHaveProperty("rawModelOutput");
   });
 
-  it("deeply snapshots payloads and isolates publisher mutation failures", () => {
-    const steps = [{ step: "Inspect", status: "in_progress" as const }];
-    const first: RuntimeEvent[] = [];
-    const second: RuntimeEvent[] = [];
+  it("copies nested lists and isolates one publisher failure from the next", () => {
+    const lowerResultRefs = ["action-settlement-1"];
+    const delivered: RuntimeEvent[] = [];
     const stream = createStream([
       {
         publish(event) {
-          first.push(event);
-          Object.defineProperty(event.payload, "productTrace", {
-            value: "not-allowed",
-          });
+          Object.defineProperty(event.payload, "productTrace", { value: "forbidden" });
         },
       },
-      {
-        publish(event) {
-          second.push(event);
-        },
-      },
+      { publish: (event) => delivered.push(event) },
     ]);
 
-    const event = stream.emit("plan.created", {
-      plan: {
-        id: "plan-1",
-        version: 1,
-        status: "active",
-        steps,
-      },
+    const event = stream.emit("operation.finished", {
+      invocationId: "operation-invocation-1",
+      status: "succeeded",
+      code: null,
+      resultId: "operation-result-1",
+      lowerResultRefs,
     });
-    steps[0] = { step: "Mutated", status: "completed" };
+    lowerResultRefs[0] = "mutated";
 
-    expect(first[0]).toBe(event);
-    expect(second[0]).toBe(event);
-    expect(event.payload.plan.steps).toEqual([
-      { step: "Inspect", status: "in_progress" },
-    ]);
-    expect(Object.isFrozen(event.payload.plan)).toBe(true);
-    expect(Object.isFrozen(event.payload.plan.steps)).toBe(true);
-    expect(Object.isFrozen(event.payload.plan.steps[0])).toBe(true);
+    expect(delivered).toEqual([event]);
+    expect(event.payload.lowerResultRefs).toEqual(["action-settlement-1"]);
+    expect(Object.isFrozen(event.payload.lowerResultRefs)).toBe(true);
   });
 
-  it("allocates one monotonic sequence and delivers a duplicate publisher once", () => {
+  it("allocates one monotonic sequence and de-duplicates publisher identity", () => {
     const events: RuntimeEvent[] = [];
     const publisher: RuntimeEventPublisher = {
       publish(event) {
@@ -100,15 +80,12 @@ describe("RuntimeEventStream", () => {
     };
     const stream = createStream([publisher, publisher]);
 
-    stream.emit("run.started", {
-      status: "running",
-      activeAgentId: "agent-1",
-    });
-    stream.emit("controller.started", { iteration: 1 });
+    stream.emit("run.started", { status: "running", activeAgentId: "agent-1" });
+    stream.emit("controller.started", { turnId: "turn-1", iteration: 1 });
 
     expect(events.map((event) => [event.id, event.sequence])).toEqual([
-      ["run-1:runtime_event:1", 1],
-      ["run-1:runtime_event:2", 2],
+      ["run-1:runtime-event:1", 1],
+      ["run-1:runtime-event:2", 2],
     ]);
   });
 });
@@ -119,9 +96,10 @@ function createStream(
   return new RuntimeEventStream({
     runId: "run-1",
     taskId: "task-1",
-    now: () => occurredAt,
-    createEventId: ({ runId, sequence }) =>
-      `${runId}:runtime_event:${sequence}`,
+    now: () => NOW,
+    createEventId: ({ runId, sequence }) => `${runId}:runtime-event:${sequence}`,
     publishers,
   });
 }
+
+const NOW = "2026-08-13T00:00:00.000Z";

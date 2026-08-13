@@ -12,10 +12,9 @@ import {
   type SessionAuthorityRecord,
   type ValidatedApprovalDecision,
 } from "@agent-anything/permission";
-import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/control";
 import type { CancellationContext } from "../run/index.js";
 import type { ResolvedRunPermissionConfig } from "../run/index.js";
-import type { PendingApproval } from "../run/index.js";
 
 type SessionAuthorityDecision =
   | Extract<ValidatedApprovalDecision, { readonly kind: "acceptForSession" }>
@@ -67,7 +66,11 @@ export type AuthorityCommitExecutionResult =
 
 export interface ExecuteAuthorityCommitInput {
   readonly decision: DurableAuthorityDecision;
-  readonly pending: PendingApproval & { readonly phase: "applying_authority" };
+  readonly pending: {
+    readonly requestId: string;
+    readonly actionFingerprint: string;
+    readonly authorityOperationId: string;
+  };
   readonly config: ResolvedRunPermissionConfig;
   readonly cancellation: CancellationContext;
   readonly startedAt: string;
@@ -213,8 +216,8 @@ async function executePersistentCommit(
   const expected: AppliedPolicyAmendmentRecord = deepFreeze({
     id: input.policyAmendmentRecordId,
     proposalRef: input.decision.trustedProposalRef,
-    sourceRequestId: input.pending.request.id,
-    sourceActionFingerprint: input.pending.request.actionFingerprint,
+    sourceRequestId: input.pending.requestId,
+    sourceActionFingerprint: input.pending.actionFingerprint,
     amendment,
     appliedAt,
   });

@@ -4,10 +4,6 @@
   "description": "Trusted external Action preparation, assessment, revalidation, and sandbox execution for AgentAnything.",
   "type": "module",
   "exports": {
-    "./canonical": {
-      "types": "./src/canonical/index.ts",
-      "import": "./dist/canonical/index.js"
-    },
     "./registration": {
       "types": "./src/registration/index.ts",
       "import": "./dist/registration/index.js"
@@ -23,6 +19,10 @@
     "./execution": {
       "types": "./src/execution/index.ts",
       "import": "./dist/execution/index.js"
+    },
+    "./coordination": {
+      "types": "./src/coordination/index.ts",
+      "import": "./dist/coordination/index.js"
     }
   },
   "files": [
@@ -40,10 +40,11 @@
     }
   },
   "dependencies": {
+    "@agent-anything/canonical-action": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/agent-core": "workspace:*",
-    "@agent-anything/tools": "workspace:*"
+    "@agent-anything/operation-catalog": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.9.1"

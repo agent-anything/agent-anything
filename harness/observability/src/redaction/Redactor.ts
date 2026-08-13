@@ -1,14 +1,14 @@
-import type { EvidenceSensitivity } from "@agent-anything/context/evidence";
-
 import { defaultRedactionRules } from "./defaultRules.js";
 import type { Redaction, RedactionResult } from "./RedactionResult.js";
 import type { RedactionRule } from "./RedactionRule.js";
 
 export interface RedactInput<TValue = unknown> {
   value: TValue;
-  sensitivity?: EvidenceSensitivity;
+  sensitivity?: DataSensitivity;
   metadata?: Readonly<Record<string, unknown>>;
 }
+
+export type DataSensitivity = "public" | "private" | "secret" | "restricted";
 
 export interface RedactorInput {
   rules?: RedactionRule[];

@@ -5,6 +5,11 @@ export type {
   ControllerInput,
   ControllerModelItem,
   ControllerRetryContext,
+  InteractionRequestCandidate,
+  OperationRequestCandidate,
+  ProgressionCandidate,
+  SameRunHandoffRequest,
+  StateTransitionCandidate,
 } from "./Controller.js";
 export type {
   BuildProviderRequest,
@@ -16,6 +21,7 @@ export type {
 export {
   ControllerError,
   ProviderBackedController,
+  validateControllerDecision,
 } from "./ProviderBackedController.js";
 export type {
   ProviderRequestBuildContext,

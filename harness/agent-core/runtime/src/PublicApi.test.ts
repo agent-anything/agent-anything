@@ -16,6 +16,7 @@ describe("Agent Core Runtime public API", () => {
       "ControllerError",
       "ProviderBackedController",
       "StructuredOutputError",
+      "validateControllerDecision",
     ]);
     expect(Object.keys(planApi).sort()).toEqual([
       "abandonPlan",
@@ -33,20 +34,21 @@ describe("Agent Core Runtime public API", () => {
     ]);
     expect(Object.keys(runApi).sort()).toEqual([
       "assertRunPermissionStateInvariant",
-      "createApprovalRecordSummary",
-      "createApprovalRequestSummary",
       "createBlockedRunResult",
       "createCancelledRunResult",
       "createFailedRunResult",
       "createInitialRunPermissionState",
       "createRunCancellationController",
       "createRunFailureCause",
+      "createRunObservation",
       "createSucceededRunResult",
+      "deriveActiveRunStatus",
       "deriveApprovalReviewDeadline",
       "deriveAuthorityCommitDeadline",
       "deriveEffectivePermissionContext",
       "deriveRunDeadline",
       "isReviewCapablePolicy",
+      "projectPendingRunSubject",
       "projectPermissionContext",
       "runFailureCode",
       "runFailureMessage",

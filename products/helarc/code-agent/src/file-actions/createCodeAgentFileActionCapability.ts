@@ -9,22 +9,25 @@ import {
   type PreparedActionInvocation,
   type SerializableValue,
   type TargetStateAssertion,
-} from "@agent-anything/action-execution/canonical";
+} from "@agent-anything/canonical-action/subject";
+import {
+  type ActionAdapter,
+  type ActionAdapterPreparedData,
+} from "@agent-anything/action-execution/registration";
 import {
   createActionRegistrationSnapshot,
-  type ActionAdapter,
   type ActionAdapterDescriptor,
-  type ActionAdapterPreparedData,
   type ActionExecutorDescriptor,
-} from "@agent-anything/action-execution/registration";
+} from "@agent-anything/canonical-action/registration";
 import {
   assertActionExecutorDispatchContext,
   type ActionExecutor,
   type ActionExecutorContext,
   type ActionExecutorResult,
 } from "@agent-anything/action-execution/execution";
-import type { ToolJsonObject, ToolResult } from "@agent-anything/tools";
-import { createToolRegistrationSnapshot } from "@agent-anything/tools";
+import type { ToolJsonObject } from "@agent-anything/tools/catalog";
+import { createToolRegistrationSnapshot } from "@agent-anything/tools/registration";
+import type { ToolResult } from "@agent-anything/tools/result";
 import type {
   FileSearchMatch,
   ListFilesOutput,

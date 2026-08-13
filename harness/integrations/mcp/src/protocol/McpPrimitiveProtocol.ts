@@ -2,7 +2,7 @@
 import type {
   ToolAnnotations,
   ToolJsonObject,
-} from "@agent-anything/tools";
+} from "@agent-anything/tools/catalog";
 import { createMcpToolHeaderBindings } from "./McpHeaders.js";
 import {
   assertCanonicalDataArray,

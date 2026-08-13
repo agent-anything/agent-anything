@@ -1,6 +1,6 @@
 import {
   createCanonicalSha256Digest,
-} from "@agent-anything/action-execution/canonical";
+} from "@agent-anything/canonical-action/subject";
 import {
   ActionEnforcementPipeline,
 } from "@agent-anything/action-execution/enforcement";
@@ -70,7 +70,9 @@ import type {
 import type { HelarcPermissionPreset } from "@agent-anything/helarc/configuration";
 import type { SessionAuthorityPort } from "@agent-anything/permission";
 import type { Provider } from "@agent-anything/model-interaction";
-import { listRunWorkspaces, type IdentityRef, type RunWorkspace, type WorkspaceContext } from "@agent-anything/agent-core/run";
+import type { IdentityRef } from "@agent-anything/agent-core/run";
+import type { WorkspaceIdentity } from "@agent-anything/workspace/identity";
+import { listSelectedWorkspaces, type WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { RunInputItem } from "@agent-anything/agent-core/input";
 import { createHelarcHostPermissionComposition } from "./HelarcHostPermissionComposition.js";
@@ -119,7 +121,7 @@ export interface HelarcHostRunComposition {
 export interface PreparedHelarcHostRun {
   readonly sessionId: string;
   readonly productRunId: string;
-  readonly workspace: RunWorkspace;
+  readonly workspace: WorkspaceSelection;
   readonly identity: IdentityRef;
   start(): HelarcHostRunComposition;
 }
@@ -437,9 +439,9 @@ function assertPatchReviewBridge(bridge: HelarcPatchReviewBridge): void {
 }
 
 function resolvePermissionWorkspaceRoots(
-  workspace: RunWorkspace,
+  workspace: WorkspaceSelection,
 ): Array<{ rootId: string; path: string }> {
-  const roots = listRunWorkspaces(workspace).map((candidate) => ({
+  const roots = listSelectedWorkspaces(workspace).map((candidate) => ({
     rootId: candidate.id,
     path: requireWorkspacePath(candidate),
   }));
@@ -449,7 +451,7 @@ function resolvePermissionWorkspaceRoots(
   return roots;
 }
 
-function requireWorkspacePath(workspace: WorkspaceContext): string {
+function requireWorkspacePath(workspace: WorkspaceIdentity): string {
   if (workspace.rootRef === null || workspace.rootRef.trim().length === 0) {
     throw new TypeError(`Workspace '${workspace.id}' has no filesystem root.`);
   }

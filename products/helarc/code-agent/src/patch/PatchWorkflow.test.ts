@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RunWorkspace, WorkspaceContext } from "@agent-anything/agent-core/run";
+import type { WorkspaceIdentity } from "@agent-anything/workspace/identity";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   acceptPatch,
@@ -100,7 +101,7 @@ describe("PatchWorkflow", () => {
 
     const review = await materializePatchReview({
       patch: proposed,
-      workspace: createRunWorkspace(),
+      workspace: createWorkspaceSelection(),
       createReviewId: () => "review-1",
     });
 
@@ -131,7 +132,7 @@ describe("PatchWorkflow", () => {
 
     await expect(materializePatchReview({
       patch: proposed,
-      workspace: createRunWorkspace(),
+      workspace: createWorkspaceSelection(),
     })).rejects.toMatchObject({
       name: "PatchWorkflowError",
       code: "patch_stale",
@@ -230,7 +231,7 @@ describe("PatchWorkflow", () => {
 
     await expect(materializePatchReview({
       patch: malformed,
-      workspace: createRunWorkspace(),
+      workspace: createWorkspaceSelection(),
     })).rejects.toMatchObject({ code: "patch_state_invalid" });
     await expect(readFile(join(codeRoot, "src", "existing.txt"), "utf8"))
       .resolves.toBe("before\n");
@@ -240,7 +241,7 @@ describe("PatchWorkflow", () => {
         ...proposed,
         proposal: { ...proposed.proposal, runId: "" },
       },
-      workspace: createRunWorkspace(),
+      workspace: createWorkspaceSelection(),
     })).rejects.toMatchObject({ code: "patch_state_invalid" });
   });
 
@@ -261,7 +262,7 @@ describe("PatchWorkflow", () => {
     });
     await expect(materializePatchReview({
       patch: proposed,
-      workspace: createRunWorkspace(),
+      workspace: createWorkspaceSelection(),
       limits: { maxContentBytes: 4 },
     })).rejects.toMatchObject({ code: "patch_state_invalid" });
   });
@@ -273,7 +274,7 @@ describe("PatchWorkflow", () => {
   function proposalInput(change: PatchProposalChange) {
     return {
       runId: "run-1",
-      workspace: createRunWorkspace(),
+      workspace: createWorkspaceSelection(),
       change,
       summary: "Test patch",
       rationale: "Exercise the patch workflow.",
@@ -298,7 +299,7 @@ describe("PatchWorkflow", () => {
     };
   }
 
-  function createRunWorkspace(workspaceId = "workspace-code"): RunWorkspace {
+  function createWorkspaceSelection(workspaceId = "workspace-code"): WorkspaceSelection {
     return {
       primary: createWorkspace(workspaceId, codeRoot),
       additional: [],
@@ -306,7 +307,7 @@ describe("PatchWorkflow", () => {
   }
 });
 
-function createWorkspace(id: string, rootRef: string): WorkspaceContext {
+function createWorkspace(id: string, rootRef: string): WorkspaceIdentity {
   return {
     id,
     name: id,

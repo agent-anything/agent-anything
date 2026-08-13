@@ -16,7 +16,7 @@ import {
   type SessionAuthorityContext,
   type SessionAuthorityPort,
 } from "@agent-anything/permission";
-import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { isReviewCapablePolicy, type ApprovalLimits, type ApprovalReviewerBinding, type AuthorityApplicationLimits, type ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
 
 export interface HostPermissionProfileSelection {
@@ -144,12 +144,27 @@ function snapshotReviewer(
   reviewer: ApprovalReviewerBinding | null,
 ): ApprovalReviewerBinding | null {
   if (reviewer === null) return null;
+  if (reviewer.kind === "user") {
+    return Object.freeze({
+      bindingId: reviewer.bindingId,
+      kind: "user" as const,
+      descriptor: Object.freeze({
+        ...reviewer.descriptor,
+        kind: "user" as const,
+        metadata: deepFreeze(structuredClone(reviewer.descriptor.metadata)),
+      }),
+    });
+  }
   return Object.freeze({
-    ...reviewer,
+    bindingId: reviewer.bindingId,
+    kind: "auto_review" as const,
+    reviewer: reviewer.reviewer,
     descriptor: Object.freeze({
       ...reviewer.descriptor,
+      kind: "auto_review" as const,
       metadata: deepFreeze(structuredClone(reviewer.descriptor.metadata)),
     }),
+    reviewTimeoutMs: reviewer.reviewTimeoutMs,
   });
 }
 

@@ -5,7 +5,7 @@ import {
   createCanonicalWorkspaceIdentity,
   createPreparedActionInvocation,
   createTargetStateAssertions,
-} from "@agent-anything/action-execution/canonical";
+} from "@agent-anything/canonical-action/subject";
 import {
   createToolActionBindingSnapshot,
   type ToolActionBindingSnapshot,
@@ -28,7 +28,7 @@ import type { EvidencePersistencePort } from "@agent-anything/context/persistenc
 import { createAllowAllActionPolicyPort, type ManagedPermissionConstraints } from "@agent-anything/governance";
 import type { ApprovalReviewerPort } from "@agent-anything/permission";
 import { resolvePermissionProfile } from "@agent-anything/permission/profile";
-import { createToolSelectionSnapshot } from "@agent-anything/tools";
+import { createToolSelectionSnapshot } from "@agent-anything/tools/selection";
 import { createTestContextProjection } from "@agent-anything/test-support";
 import { describe, expect, it, vi } from "vitest";
 import { createRemoteToolActionCapability } from "../tools/index.js";

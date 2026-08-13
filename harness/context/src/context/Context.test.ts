@@ -1,4 +1,4 @@
-import type { ObservationBase } from "@agent-anything/agent-core/action";
+import type { ContextObservation } from "./Context.js";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import { describe, expect, it } from "vitest";
 import {
@@ -6,7 +6,7 @@ import {
   createInitialContext,
 } from "./Context.js";
 
-interface TestObservation extends ObservationBase {
+interface TestObservation extends ContextObservation {
   readonly kind: "test_result";
   readonly value: string;
 }

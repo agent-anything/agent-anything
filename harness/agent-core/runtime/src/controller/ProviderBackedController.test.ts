@@ -20,7 +20,7 @@ import {
 } from "../run/index.js";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { ControllerCallContext, ControllerDecision, ControllerInput } from "./Controller.js";
-import { createToolCatalogSnapshot } from "@agent-anything/tools";
+import { createToolCatalogSnapshot } from "@agent-anything/tools/catalog";
 import {
   ControllerError,
   ProviderBackedController,
@@ -57,7 +57,7 @@ describe("ProviderBackedController", () => {
     const result = await controller.next(createControllerInput(), callContext());
 
     expect(result).toEqual({
-      kind: "final_output",
+      kind: "propose_completion",
       output: { summary: "Done" },
       modelItems: [modelItem("model_item_1", { summary: "Done" })],
     });
@@ -68,24 +68,30 @@ describe("ProviderBackedController", () => {
     expect(Object.isFrozen(result.modelItems)).toBe(true);
   });
 
-  it("preserves ordered actions and validates their model-item references", async () => {
+  it("preserves ordered candidates and validates their model-item references", async () => {
     const provider = new FakeProvider({
       results: [succeededResult({ action: "tools" })],
     });
     const controller = createController(provider, {
       parseResponse() {
         return {
-          kind: "actions",
-          actions: [
+          kind: "advance",
+          candidates: [
             {
-              kind: "tool",
-              name: "workspace.readFile",
-              input: { path: "README.md" },
+              kind: "operation_request",
+              origin: "tool_request",
+              tool: {
+                name: "workspace.readFile",
+                revision: null,
+                input: { path: "README.md" },
+                origin: "model",
+                controllerRequestId: null,
+              },
               modelItemId: "model_item_1",
             },
             {
-              kind: "internal",
-              name: "plan.update",
+              kind: "state_transition",
+              transition: "plan_update",
               input: { step: "Inspect README" },
               modelItemId: "model_item_2",
             },
@@ -100,15 +106,15 @@ describe("ProviderBackedController", () => {
 
     const result = await controller.next(createControllerInput(), callContext());
 
-    expect(result.kind).toBe("actions");
-    if (result.kind !== "actions") {
-      throw new Error("Expected actions decision.");
+    expect(result.kind).toBe("advance");
+    if (result.kind !== "advance") {
+      throw new Error("Expected advance decision.");
     }
-    expect(result.actions.map((action) => action.name)).toEqual([
-      "workspace.readFile",
-      "plan.update",
+    expect(result.candidates.map((candidate) => candidate.kind)).toEqual([
+      "operation_request",
+      "state_transition",
     ]);
-    expect(result.actions.map((action) => action.modelItemId)).toEqual([
+    expect(result.candidates.map((candidate) => candidate.modelItemId)).toEqual([
       "model_item_1",
       "model_item_2",
     ]);
@@ -120,7 +126,7 @@ describe("ProviderBackedController", () => {
       {
         parseResponse() {
           return {
-            kind: "stop",
+            kind: "propose_stop",
             reason: "  No safe next action.  ",
             modelItems: [modelItem("model_item_1", { action: "stop" })],
           };
@@ -131,7 +137,7 @@ describe("ProviderBackedController", () => {
     await expect(
       controller.next(createControllerInput(), callContext()),
     ).resolves.toMatchObject({
-      kind: "stop",
+      kind: "propose_stop",
       reason: "No safe next action.",
     });
   });
@@ -230,7 +236,7 @@ describe("ProviderBackedController", () => {
       }),
     );
 
-    expect(result).toMatchObject({ kind: "final_output", output: { summary: "Recovered" } });
+    expect(result).toMatchObject({ kind: "propose_completion", output: { summary: "Recovered" } });
     expect(buildRequest).toHaveBeenCalledTimes(1);
     expect(requests).toHaveLength(2);
     expect(requests[0]).not.toBe(requests[1]);
@@ -654,7 +660,7 @@ describe("ProviderBackedController", () => {
     );
 
     expect(decision).toMatchObject({
-      kind: "final_output",
+      kind: "propose_completion",
       output: { summary: "Recovered" },
     });
     expect(provider.requests()).toHaveLength(2);
@@ -716,7 +722,7 @@ describe("ProviderBackedController", () => {
 
     expect(provider.requests()).toHaveLength(2);
     expect(decision).toMatchObject({
-      kind: "final_output",
+      kind: "propose_completion",
       output: { summary: "Recovered" },
     });
   });
@@ -1214,7 +1220,7 @@ function correctionError(
 
 function finalDecision(output: unknown): ControllerDecision<TestOutput> {
   return {
-    kind: "final_output",
+    kind: "propose_completion",
     output: output as TestOutput,
     modelItems: [modelItem("model_item_1", output)],
   };

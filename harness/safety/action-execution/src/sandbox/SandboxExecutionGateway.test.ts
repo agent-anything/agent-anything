@@ -1,661 +1,186 @@
 import { describe, expect, it, vi } from "vitest";
-import type { InvocationInterruptionRef } from "@agent-anything/agent-core/run";
+import type { ActionExecutorDescriptor } from "@agent-anything/canonical-action/registration";
+import { createPreparedActionInvocation } from "@agent-anything/canonical-action/subject";
 import {
   assertActionExecutorDispatchContext,
   type ActionExecutor,
 } from "../execution/ActionExecutor.js";
-import { createActionDispatchAuthorization } from "../enforcement/ActionAssessment.js";
-import { createPreparedInvocationDigest } from "../canonical/ActionFingerprint.js";
-import { createActionEffectSet } from "../canonical/CapabilityEffect.js";
-import { createCanonicalEffectivePermissions } from "../canonical/CanonicalEffectivePermissions.js";
-import type { CanonicalActionSubject } from "../canonical/CanonicalActionSubject.js";
-import { createPreparedExternalAction } from "../preparation/PreparedExternalAction.js";
-import { createPreparedActionInvocation } from "../canonical/PreparedActionInvocation.js";
-import { createActionDispatchPlan } from "../enforcement/ActionRevalidation.js";
-import { createActionRegistrationSnapshot } from "../registration/ActionRegistration.js";
-import {
-  createSandboxExecutionGateway,
-  type CreateSandboxExecutionGatewayInput,
-} from "./SandboxExecutionGateway.js";
 import type {
-  SandboxExecutionGateway,
+  SandboxExecutionRequest,
   SandboxProvider,
 } from "./SandboxContracts.js";
-
-const NOW = "2026-07-16T00:00:00.000Z";
-const DEADLINE = "2026-07-16T00:01:00.000Z";
-const SHA_A = `sha256:${"a".repeat(64)}`;
-const SHA_B = `sha256:${"b".repeat(64)}`;
-const executorDescriptor = Object.freeze({
-  id: "test.executor",
-  version: "1",
-  invocationContractVersion: "1",
-});
-const adapterDescriptor = Object.freeze({
-  id: "test.adapter",
-  version: "1",
-  inputSchemaVersion: "1",
-});
+import { createSandboxExecutionGateway } from "./SandboxExecutionGateway.js";
 
 describe("SandboxExecutionGateway", () => {
-  it("executes explicit disabled enforcement through the private permit and reports unisolated", async () => {
-    const fixture = await createFixture("disabled");
-    let observedPolicyId = "";
-    const executor = createExecutor((context) => {
+  it("dispatches disabled enforcement only through a gateway-created executor permit", async () => {
+    const execute = vi.fn<ActionExecutor["execute"]>(async (_invocation, context) => {
       assertActionExecutorDispatchContext(context);
-      observedPolicyId = context.attempt.policyId;
+      return {
+        status: "completed",
+        effectState: "settled",
+        payload: { content: "hello" },
+      };
     });
-    const gateway = createGateway(fixture, { executors: [executor] });
-
-    const result = await prepareAndExecute(gateway, dispatchInput(fixture));
-
-    expect(result).toMatchObject({
-      status: "executed",
-      isolation: "unisolated",
-      enforcementEvidence: null,
-      attempt: {
-        enforcement: "disabled",
-        ordinal: 1,
-        authoritySnapshotId: "authority-1",
-      },
-      toolResult: { status: "succeeded", output: { ok: true } },
-    });
-    expect(observedPolicyId).toMatch(/^sha256:[0-9a-f]{64}$/);
-  });
-
-  it("prepares without executing and consumes the prepared dispatch exactly once", async () => {
-    const fixture = await createFixture("disabled");
-    const execute = vi.fn();
-    const gateway = createGateway(fixture, {
+    const gateway = createSandboxExecutionGateway({
       executors: [createExecutor(execute)],
     });
 
-    const preparation = await gateway.prepare(dispatchInput(fixture));
-    expect(preparation.status).toBe("ready");
-    expect(execute).not.toHaveBeenCalled();
-    if (preparation.status !== "ready") throw new Error("Sandbox preparation failed.");
+    const result = await gateway.execute(createRequest());
 
-    await expect(gateway.execute(Object.freeze({ ...preparation.prepared }))).resolves
-      .toMatchObject({
-        status: "failed",
-        failure: {
-          kind: "sandbox",
-          failure: { code: "sandbox_prepared_dispatch_invalid" },
-        },
-      });
-    expect(execute).not.toHaveBeenCalled();
-
-    await expect(gateway.execute(preparation.prepared)).resolves.toMatchObject({
-      status: "executed",
-    });
-    await expect(gateway.execute(preparation.prepared)).resolves.toMatchObject({
-      status: "failed",
-      failure: {
-        kind: "sandbox",
-        failure: { code: "sandbox_prepared_dispatch_consumed" },
+    expect(result).toMatchObject({
+      status: "settled",
+      isolation: "unisolated",
+      outcome: {
+        status: "completed",
+        effectState: "settled",
+        payload: { content: "hello" },
+      },
+      enforcementEvidence: {
+        providerId: "action-execution.disabled-passthrough",
+        enforcement: "disabled",
       },
     });
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects a copied dispatch plan and never reaches the executor", async () => {
-    const fixture = await createFixture("disabled");
-    const execute = vi.fn();
-    const gateway = createGateway(fixture, {
-      executors: [createExecutor(execute)],
-    });
+  it("fails closed before dispatch when the exact executor revision is unavailable", async () => {
+    const gateway = createSandboxExecutionGateway({ executors: [] });
 
-    const result = await prepareAndExecute(gateway, {
-      ...dispatchInput(fixture),
-      plan: Object.freeze({ ...fixture.plan }),
-    });
-
-    expect(result).toMatchObject({
-      status: "failed",
-      failure: {
-        kind: "sandbox",
-        failure: { code: "sandbox_dispatch_invalid" },
-      },
-    });
-    expect(execute).not.toHaveBeenCalled();
-  });
-
-  it("rejects an invocation whose payload no longer matches the plan digest", async () => {
-    const fixture = await createFixture("disabled");
-    const execute = vi.fn();
-    const gateway = createGateway(fixture, {
-      executors: [createExecutor(execute)],
-    });
-    const changed = createPreparedActionInvocation({
-      contractVersion: "1",
-      executorId: executorDescriptor.id,
-      executorVersion: executorDescriptor.version,
-      payload: { changed: true },
-    });
-
-    const result = await prepareAndExecute(gateway, {
-      ...dispatchInput(fixture),
-      preparedInvocation: changed,
-    });
-
-    expect(result).toMatchObject({
-      status: "failed",
-      failure: {
-        kind: "sandbox",
-        failure: { code: "sandbox_dispatch_invalid" },
-      },
-    });
-    expect(execute).not.toHaveBeenCalled();
-  });
-
-  it("does not downgrade managed enforcement when no provider is configured", async () => {
-    const fixture = await createFixture("managed");
-    const execute = vi.fn();
-    const gateway = createGateway(fixture, {
-      executors: [createExecutor(execute)],
-    });
-
-    const result = await prepareAndExecute(gateway, dispatchInput(fixture));
-
-    expect(result).toMatchObject({
+    await expect(gateway.execute(createRequest())).resolves.toMatchObject({
       status: "sandbox_unavailable",
-      code: "sandbox_provider_unavailable",
-      stage: "setup",
-      effectState: "none",
-      attempt: { enforcement: "managed" },
-    });
-    expect(execute).not.toHaveBeenCalled();
-  });
-
-  it("rejects unsupported provider capabilities before provider execution", async () => {
-    const fixture = await createFixture("managed", true);
-    const execute = vi.fn();
-    const provider = createProvider({
-      supportedPolicyVersions: [1],
-      supportedEffectKinds: [],
-      execute,
-    });
-    const gateway = createGateway(fixture, {
-      executors: [],
-      providers: [provider],
-    });
-
-    const result = await prepareAndExecute(gateway, dispatchInput(fixture));
-
-    expect(result).toMatchObject({
-      status: "sandbox_unavailable",
-      code: "sandbox_effect_kind_unsupported",
       stage: "capability_check",
+      code: "sandbox_executor_unavailable",
       effectState: "none",
     });
-    expect(execute).not.toHaveBeenCalled();
   });
 
-  it("uses a data-only provider request and validates correlated enforcement evidence", async () => {
-    const fixture = await createFixture("external", true);
-    let serialized = "";
-    const provider = createProvider({
-      kind: "external",
-      supportedPolicyVersions: [1],
-      supportedEffectKinds: ["network"],
-      async execute(request) {
-        serialized = JSON.stringify(request);
-        return {
-          status: "executed",
-          toolResult: toolResult(request.attempt.actionId),
-          enforcementEvidence: {
-            providerId: "test.provider",
-            providerVersion: "1",
-            policyId: request.policy.policyId,
-            enforcement: "external",
-            enforcedEffectKinds: ["network"],
-            settledAt: NOW,
-          },
-        };
+  it("fails closed before provider dispatch when managed enforcement is unsupported", async () => {
+    const providerExecute = vi.fn<SandboxProvider["execute"]>();
+    const provider: SandboxProvider = {
+      kind: "managed",
+      descriptor: {
+        id: "test.sandbox",
+        version: "1",
+        kind: "managed",
+        supportedPolicyVersions: [2],
+        supportedEffectFamilies: ["filesystem"],
       },
-    });
-    const gateway = createGateway(fixture, {
-      executors: [],
-      providers: [provider],
-    });
-
-    const result = await prepareAndExecute(gateway, dispatchInput(fixture));
-
-    expect(result).toMatchObject({
-      status: "executed",
-      isolation: "enforced",
-      enforcementEvidence: {
-        providerId: "test.provider",
-        enforcement: "external",
-      },
-    });
-    expect(JSON.parse(serialized)).toMatchObject({
-      attempt: { enforcement: "external" },
-      policy: {
-        schemaVersion: 1,
-        defaultDisposition: "deny",
-        enforcement: "external",
-        authorizedEffects: { kind: "effects" },
-      },
-      executor: executorDescriptor,
-      invocation: { payload: { value: 1 } },
-    });
-    expect(serialized).not.toContain("AbortSignal");
-  });
-
-  it("sends one explicit correlated cancellation message to an active provider", async () => {
-    const fixture = await createFixture("managed");
-    const controller = new AbortController();
-    let settle!: (value: ReturnType<typeof interruptedProviderResult>) => void;
-    let markStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    const execution = new Promise<ReturnType<typeof interruptedProviderResult>>((resolve) => {
-      settle = resolve;
-    });
-    const cancellations: unknown[] = [];
-    const provider = createProvider({
-      supportedPolicyVersions: [1],
-      supportedEffectKinds: [],
-      execute: async () => {
-        markStarted();
-        return execution;
-      },
-      async cancel(request) {
-        cancellations.push(request);
-        settle(interruptedProviderResult(request.interruption));
+      execute: providerExecute,
+      async cancel() {
         return { status: "accepted" };
       },
-    });
-    const gateway = createGateway(fixture, {
-      executors: [],
+    };
+    const gateway = createSandboxExecutionGateway({
+      executors: [createExecutor()],
       providers: [provider],
     });
-    const resultPromise = prepareAndExecute(gateway, {
-      ...dispatchInput(fixture),
-      interruption: Object.freeze({ signal: controller.signal, interruption: null }),
-    });
-    await started;
-    controller.abort(Object.freeze({ id: "cancel-1", runId: "run-1" }));
 
-    const result = await resultPromise;
-
-    expect(result).toMatchObject({
-      status: "interrupted",
-      interruption: {
-        kind: "run_cancellation",
-        cancellation: { runId: "run-1", requestId: "cancel-1" },
-      },
-    });
-    expect(cancellations).toEqual([expect.objectContaining({
-      attemptId: expect.any(String),
-      runId: "run-1",
-      actionId: "action-1",
-    })]);
-  });
-
-  it.each(["failed", "timeout"] as const)(
-    "rejects a %s ToolResult that also carries output",
-    async (status) => {
-      const fixture = await createFixture("disabled");
-      const gateway = createGateway(fixture, {
-        executors: [createRawExecutor((_context) => ({
-          status: "executed",
-          toolResult: {
-            ...toolResult("action-1"),
-            status,
-            output: { mustNotExist: true },
-            error: {
-              code: `tool_${status}`,
-              message: `Tool ${status}.`,
-              metadata: {},
-            },
-          },
-        }))],
+    await expect(gateway.execute(createRequest("managed", ["filesystem"])))
+      .resolves.toMatchObject({
+        status: "sandbox_unavailable",
+        stage: "capability_check",
+        code: "sandbox_policy_unsupported",
+        effectState: "none",
       });
-
-      const result = await prepareAndExecute(gateway, dispatchInput(fixture));
-
-      expect(result).toMatchObject({
-        status: "failed",
-        effectState: "unknown",
-        failure: {
-          kind: "tool",
-          failure: { code: "tool_result_invalid" },
-        },
-      });
-    },
-  );
-
-  it("preserves an executor-settled interruption outside ToolResult", async () => {
-    const fixture = await createFixture("disabled");
-    const gateway = createGateway(fixture, {
-      executors: [createRawExecutor((context) => ({
-        status: "interrupted",
-        interruption: {
-          kind: "run_cancellation",
-          cancellation: {
-            runId: context.attempt.runId,
-            requestId: "cancel-1",
-          },
-        },
-      }))],
-    });
-
-    await expect(prepareAndExecute(gateway, dispatchInput(fixture))).resolves.toMatchObject({
-      status: "interrupted",
-      attempt: {
-        runId: "run-1",
-        actionId: "action-1",
-      },
-      interruption: {
-        kind: "run_cancellation",
-        cancellation: {
-          runId: "run-1",
-          requestId: "cancel-1",
-        },
-      },
-    });
+    expect(providerExecute).not.toHaveBeenCalled();
   });
 
-  it("preserves an executor failure with unknown external effect state", async () => {
-    const fixture = await createFixture("disabled");
-    const failure = {
-      code: "tool_settlement_unknown",
-      message: "The executor could not confirm whether the external effect settled.",
-      effectState: "unknown",
-      metadata: { stage: "settlement" },
-    } as const;
-    const gateway = createGateway(fixture, {
-      executors: [createRawExecutor(() => ({
-        status: "failed",
-        failure,
-      }))],
+  it("rejects an oversized physical result with unknown effect state", async () => {
+    const execute = vi.fn<ActionExecutor["execute"]>(async () => ({
+      status: "completed",
+      effectState: "settled",
+      payload: { content: "too large" },
+    }));
+    const gateway = createSandboxExecutionGateway({
+      executors: [createExecutor(execute)],
     });
-
-    const result = await prepareAndExecute(gateway, dispatchInput(fixture));
-
-    expect(result).toMatchObject({
-      status: "failed",
-      effectState: "unknown",
-      failure: {
-        kind: "tool",
-        failure: {
-          code: "tool_settlement_unknown",
-          metadata: { stage: "settlement" },
-        },
+    const base = createRequest();
+    const request: SandboxExecutionRequest = {
+      ...base,
+      policy: {
+        ...base.policy,
+        resourceLimits: { maxResultBytes: 2 },
       },
-    });
-    expect(result).not.toHaveProperty("toolResult");
-    if (result.status !== "failed") throw new Error("Expected executor failure.");
-    expect(result.failure.failure.metadata).not.toBe(failure.metadata);
-    expect(Object.isFrozen(result.failure.failure.metadata)).toBe(true);
-  });
+    };
 
-  it("distinguishes a malformed executor result from a malformed ToolResult", async () => {
-    const fixture = await createFixture("disabled");
-    const gateway = createGateway(fixture, {
-      executors: [createRawExecutor(() => ({
-        status: "failed",
-        failure: {
-          code: "tool_failed",
-          message: "Failure metadata is missing.",
-          effectState: "none",
-        },
-      }))],
-    });
-
-    await expect(prepareAndExecute(gateway, dispatchInput(fixture))).resolves.toMatchObject({
-      status: "failed",
-      effectState: "unknown",
-      failure: {
-        kind: "tool",
-        failure: { code: "tool_executor_result_invalid" },
-      },
-    });
-  });
-
-  it("requires a local executor only when the selected disabled endpoint dispatches", async () => {
-    const fixture = await createFixture("disabled");
-    const gateway = createGateway(fixture, { executors: [] });
-    await expect(prepareAndExecute(gateway, dispatchInput(fixture))).resolves.toMatchObject({
+    await expect(gateway.execute(request)).resolves.toMatchObject({
       status: "sandbox_unavailable",
-      code: "sandbox_executor_unavailable",
-      stage: "setup",
-      effectState: "none",
+      stage: "settlement",
+      code: "executor_physical_outcome_invalid",
+      effectState: "unknown",
     });
-    const executor = createExecutor();
-    expect(() => createGateway(fixture, { executors: [executor, executor] })).toThrow(
-      /Duplicate ActionExecutor implementation/,
-    );
   });
 });
 
-async function createFixture(
-  enforcement: "managed" | "external" | "disabled",
-  networkEffect = false,
-) {
-  const registrations = createActionRegistrationSnapshot([{
-    actionName: "test.action",
-    adapter: adapterDescriptor,
-    executor: executorDescriptor,
-  }]);
-  const invocation = createPreparedActionInvocation({
-    contractVersion: "1",
-    executorId: executorDescriptor.id,
-    executorVersion: executorDescriptor.version,
-    payload: { value: 1 },
-  });
-  const effectSet = networkEffect
-    ? createActionEffectSet({
-        kind: "effects",
-        values: [{
-          kind: "network",
-          operation: "connect",
-          endpoints: [{
-            transport: "tcp",
-            host: "api.example.com",
-            port: 443,
-            applicationProtocol: "https",
-          }],
-        }],
-      })
-    : createActionEffectSet({ kind: "effect_free" });
-  const effectivePermissions = createCanonicalEffectivePermissions({
-    enforcement,
-    fileSystem: { read: { kind: "none" }, write: { kind: "none" } },
-    process: { spawn: { kind: "none" } },
-    network: {
-      connect: networkEffect
-        ? {
-            kind: "restricted",
-            values: [{
-              transport: "tcp",
-              host: "api.example.com",
-              port: 443,
-              applicationProtocol: "https",
-            }],
-          }
-        : { kind: "none" },
-    },
-    remoteTool: { invoke: { kind: "none" } },
-  });
-  const subject = deepFreeze({
-    schemaVersion: 1 as const,
-    action: { runId: "run-1", actionId: "action-1", actionName: "test.action" },
-    adapter: {
-      ...adapterDescriptor,
-      registrationFingerprint: registrations.registrations[0]!.registrationFingerprint,
-    },
-    executor: {
-      id: executorDescriptor.id,
-      version: executorDescriptor.version,
-      invocationContractVersion: executorDescriptor.invocationContractVersion,
-      registrationFingerprint: registrations.registrations[0]!.registrationFingerprint,
-    },
-    workspace: { workspaceId: "workspace-1", trustState: "trusted", roots: [] },
-    identity: { identityId: "user-1", kind: "user" },
-    environment: {
-      environmentId: "local-test",
-      platform: "win32",
-      configurationFingerprint: SHA_B,
-    },
-    operation: {
-      kind: "skill",
-      operation: "invoke",
-      skillId: "test.skill",
-      skillVersion: "1",
-      sourceFingerprint: SHA_A,
-      action: "test",
-      argumentsDigest: SHA_B,
-    },
-    effectSet,
-    requestedPermissions: null,
-    approvalContext: null,
-    preparedInvocationDigest: await createPreparedInvocationDigest(invocation),
-    targetAssertions: [],
-  }) as unknown as CanonicalActionSubject;
-  const prepared = createPreparedExternalAction({
-    action: Object.freeze({
-      id: "action-1",
-      runId: "run-1",
-      sequence: 1,
-      kind: "tool",
-      name: "test.action",
-      provenance: Object.freeze({ modelItemId: "model-1", controllerIteration: 1 }),
-    }),
-    subject,
-    actionFingerprint: SHA_A,
-    safeSummary: Object.freeze({ kind: "computation", headline: "Test Action" }),
-    approvalPayload: null,
-    preparedInvocation: invocation,
-    preparedAt: NOW,
-  });
-  const authorization = createActionDispatchAuthorization({
-    prepared,
-    authoritySnapshotId: "authority-1",
-    policyDecision: { checkId: "policy-1", status: "allowed", decidedAt: NOW },
-    ruleOutcome: "none",
-    authoritySources: [],
-    actionCoverageIdToConsume: null,
-    effectivePermissions,
-    authorizedAt: NOW,
-  });
-  const plan = await createActionDispatchPlan({
-    prepared,
-    authorization,
-    registration: registrations.registrations[0]!,
-    attemptOrdinal: 1,
-    revalidatedAt: NOW,
-  });
-  return { registrations, invocation, plan };
-}
-
-function createGateway(
-  fixture: Awaited<ReturnType<typeof createFixture>>,
-  overrides: Partial<CreateSandboxExecutionGatewayInput>,
-): SandboxExecutionGateway {
-  return createSandboxExecutionGateway({
-    registrations: fixture.registrations,
-    executors: overrides.executors ?? [createExecutor()],
-    providers: overrides.providers ?? [],
-    limits: { maxResultBytes: 64 * 1024 },
-    now: () => NOW,
-  });
-}
-
 function createExecutor(
-  beforeReturn: (context: Parameters<ActionExecutor["execute"]>[1]) => void = () => {},
+  execute: ActionExecutor["execute"] = async () => ({
+    status: "completed",
+    effectState: "settled",
+    payload: { content: "hello" },
+  }),
 ): ActionExecutor {
   return {
-    descriptor: executorDescriptor,
-    async execute(_invocation, context) {
-      beforeReturn(context);
-      return {
-        status: "executed",
-        toolResult: toolResult(context.attempt.actionId),
-      };
+    descriptor: EXECUTOR,
+    validatePayload(candidate): candidate is { content: string } {
+      return typeof candidate === "object" && candidate !== null &&
+        "content" in candidate && typeof candidate.content === "string";
     },
+    execute,
   };
 }
 
-function createRawExecutor(
-  createResult: (
-    context: Parameters<ActionExecutor["execute"]>[1],
-  ) => unknown,
-): ActionExecutor {
+function createRequest(
+  enforcement: "managed" | "disabled" = "disabled",
+  effectFamilies: readonly string[] = [],
+): SandboxExecutionRequest {
   return {
-    descriptor: executorDescriptor,
-    async execute(_invocation, context) {
-      return createResult(context) as never;
+    attempt: {
+      action: { id: "action-1" },
+      id: "attempt-1",
+      ordinal: 1,
+      runId: "run-1",
+      actionFingerprint: SHA_A,
+      enforcement,
+      policyId: "policy-1",
+      authoritySnapshotId: "authority-1",
+      dispatchPlanFingerprint: SHA_B,
+      actionRegistrationFingerprint: SHA_C,
+      startedAt: NOW,
     },
-  };
-}
-
-function createProvider(input: {
-  readonly kind?: "managed" | "external";
-  readonly supportedPolicyVersions: readonly number[];
-  readonly supportedEffectKinds: readonly ("file_system" | "process" | "network" | "remote_tool")[];
-  readonly execute?: SandboxProvider["execute"];
-  readonly cancel?: SandboxProvider["cancel"];
-}): SandboxProvider {
-  const kind = input.kind ?? "managed";
-  return {
-    kind,
-    descriptor: {
-      id: "test.provider",
-      version: "1",
-      kind,
-      supportedPolicyVersions: input.supportedPolicyVersions,
-      supportedEffectKinds: input.supportedEffectKinds,
+    policy: {
+      schemaVersion: 1,
+      policyId: "policy-1",
+      actionFingerprint: SHA_A,
+      authoritySnapshotId: "authority-1",
+      enforcement,
+      defaultDisposition: "deny",
+      effectFamilies,
+      resourceLimits: { maxResultBytes: 64 * 1024 },
+      allowedSecretReferences: [],
     },
-    execute: input.execute ?? (async () => {
-      throw new Error("Provider execute was not expected.");
+    executor: EXECUTOR,
+    actionRegistrationFingerprint: SHA_C,
+    invocation: createPreparedActionInvocation({
+      contractVersion: EXECUTOR.invocationContractVersion,
+      executorId: EXECUTOR.id,
+      executorVersion: EXECUTOR.version,
+      payload: { path: "D:/workspace/README.md" },
     }),
-    cancel: input.cancel ?? (async () => ({ status: "already_settled" })),
-  };
-}
-
-function dispatchInput(fixture: Awaited<ReturnType<typeof createFixture>>) {
-  return {
-    plan: fixture.plan,
-    preparedInvocation: fixture.invocation,
-    deadlineAt: DEADLINE,
-    interruption: Object.freeze({
+    deadlineAt: "2026-08-13T00:01:00.000Z",
+    interruption: {
       signal: new AbortController().signal,
       interruption: null,
-    }),
+    },
   };
 }
 
-async function prepareAndExecute(
-  gateway: SandboxExecutionGateway,
-  input: ReturnType<typeof dispatchInput>,
-) {
-  const preparation = await gateway.prepare(input);
-  if (preparation.status !== "ready") return preparation;
-  return gateway.execute(preparation.prepared);
-}
-
-function toolResult(actionId: string) {
-  return {
-    toolCallId: actionId,
-    toolName: "test.action",
-    status: "succeeded" as const,
-    output: { ok: true },
-    startedAt: NOW,
-    finishedAt: NOW,
-    metadata: {},
-  };
-}
-
-function interruptedProviderResult(interruption: InvocationInterruptionRef) {
-  return { status: "interrupted" as const, interruption };
-}
-
-function deepFreeze<T>(value: T): T {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
-  for (const child of Object.values(value)) deepFreeze(child);
-  return Object.freeze(value);
-}
+const EXECUTOR: ActionExecutorDescriptor = Object.freeze({
+  id: "test.executor",
+  version: "1",
+  invocationContractVersion: "1",
+  physicalPayloadSchemaRevision: "payload-1",
+});
+const NOW = "2026-08-13T00:00:00.000Z";
+const SHA_A = `sha256:${"a".repeat(64)}`;
+const SHA_B = `sha256:${"b".repeat(64)}`;
+const SHA_C = `sha256:${"c".repeat(64)}`;

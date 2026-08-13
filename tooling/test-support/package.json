@@ -20,7 +20,9 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:harness": "tsc -p tsconfig.harness.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:harness": "tsc -p tsconfig.harness.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:evaluation": "vitest run src/evaluation-targets/helarc/HelarcEvaluationRegression.test.ts",
     "evaluation:baseline:candidate": "node scripts/emit-helarc-evaluation-baseline.mjs"
@@ -33,6 +35,7 @@
   },
   "dependencies": {
     "@agent-anything/action-execution": "workspace:*",
+    "@agent-anything/canonical-action": "workspace:*",
     "@agent-anything/agent-runtime": "workspace:*",
     "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/context": "workspace:*",
@@ -43,7 +46,8 @@
     "@agent-anything/host": "workspace:*",
     "@agent-anything/model-interaction": "workspace:*",
     "@agent-anything/observability": "workspace:*",
-    "@agent-anything/permission": "workspace:*"
+    "@agent-anything/permission": "workspace:*",
+    "@agent-anything/workspace": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.9.1"

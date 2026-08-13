@@ -1,24 +1,18 @@
-export {
-  createControllerTurnTraceOperationId,
-  RUN_TRACE_SCHEMA_VERSION,
-} from "./RunTrace.js";
+export { createControllerTurnTraceOperationId, RUN_TRACE_SCHEMA_VERSION } from "./RunTrace.js";
 export type {
-  ActionProcessingTraceAttributes,
-  ApprovalReviewTraceAttributes,
   CommittedRunItemTraceProjection,
   CompleteRunTraceInput,
   ControllerTurnTraceAttributes,
   CreateRunTraceAssemblerInput,
-  RetryAttemptTraceAttributes,
+  InteractionTraceAttributes,
+  OperationTraceAttributes,
   RunTrace,
   RunTraceObserver,
   RunTraceSpanIdentityFactory,
   RunTraceSpanIdentityInput,
   RunTraceStatus,
   RuntimeRunTraceAttributes,
-  SandboxAttemptTraceAttributes,
   TerminalRunResultTraceProjection,
-  ToolExecutionTraceAttributes,
   TraceAttributeMap,
   TraceAttributesFor,
   TraceIssue,

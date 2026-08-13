@@ -68,13 +68,15 @@
   "private": true,
   "dependencies": {
     "@agent-anything/action-execution": "workspace:*",
+    "@agent-anything/canonical-action": "workspace:*",
     "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/context": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/model-interaction": "workspace:*",
     "@agent-anything/observability": "workspace:*",
     "@agent-anything/agent-runtime": "workspace:*",
-    "@agent-anything/tools": "workspace:*"
+    "@agent-anything/tools": "workspace:*",
+    "@agent-anything/workspace": "workspace:*"
   },
   "devDependencies": {
     "@agent-anything/permission": "workspace:*",

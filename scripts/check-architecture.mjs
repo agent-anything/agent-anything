@@ -71,11 +71,53 @@ const focusedPublicSubpaths = new Map([
   [
     "@agent-anything/action-execution",
     new Set([
-      "@agent-anything/action-execution/canonical",
       "@agent-anything/action-execution/enforcement",
       "@agent-anything/action-execution/execution",
       "@agent-anything/action-execution/registration",
       "@agent-anything/action-execution/sandbox",
+      "@agent-anything/action-execution/coordination",
+    ]),
+  ],
+  [
+    "@agent-anything/workspace",
+    new Set([
+      "@agent-anything/workspace/identity",
+      "@agent-anything/workspace/selection",
+    ]),
+  ],
+  [
+    "@agent-anything/operation-catalog",
+    new Set([
+      "@agent-anything/operation-catalog/identity",
+      "@agent-anything/operation-catalog/catalog",
+      "@agent-anything/operation-catalog/binding",
+      "@agent-anything/operation-catalog/result",
+    ]),
+  ],
+  [
+    "@agent-anything/canonical-action",
+    new Set([
+      "@agent-anything/canonical-action/subject",
+      "@agent-anything/canonical-action/assessment",
+      "@agent-anything/canonical-action/settlement",
+      "@agent-anything/canonical-action/registration",
+      "@agent-anything/canonical-action/lifecycle",
+    ]),
+  ],
+  [
+    "@agent-anything/interaction",
+    new Set([
+      "@agent-anything/interaction/protocol",
+      "@agent-anything/interaction/coordination",
+      "@agent-anything/interaction/records",
+    ]),
+  ],
+  [
+    "@agent-anything/operation-composition",
+    new Set([
+      "@agent-anything/operation-composition/definition",
+      "@agent-anything/operation-composition/execution",
+      "@agent-anything/operation-composition/result",
     ]),
   ],
   [
@@ -163,6 +205,7 @@ checkRootCommands();
 checkRepositoryTopology();
 checkPhase21Topology();
 checkPhase22Topology();
+checkPhase27Topology();
 for (const root of packageRoots) {
   for (const file of collectSourceFiles(root)) {
     checkFile(file);
@@ -395,6 +438,7 @@ function checkArchitectureSource(file, text, isTestOnly) {
     !isTestOnly &&
     rel.startsWith("harness/agent-core/runtime/src/runner/") &&
     rel !== "harness/agent-core/runtime/src/runner/RunExecution.ts" &&
+    rel !== "harness/agent-core/runtime/src/runner/RunStateWriter.ts" &&
     (
       /\bthis\.state\s*=/.test(text) ||
       /\breplaceState\s*\(/.test(text)
@@ -403,7 +447,7 @@ function checkArchitectureSource(file, text, isTestOnly) {
     report("run_state_writer", {
       file,
       message:
-        "Only RunExecution may replace authoritative RunState inside Agent Core Runtime.",
+        "Only RunExecution and its private invocation-local RunStateWriter may replace authoritative RunState inside Agent Core Runtime.",
     });
   }
   const legacySymbols = [
@@ -659,18 +703,6 @@ function checkRepositoryTopology() {
 function checkPhase21Topology() {
   const areas = [
     {
-      packagePath: "harness/safety/action-execution",
-      sourceAreas: [
-        "canonical",
-        "enforcement",
-        "execution",
-        "preparation",
-        "registration",
-        "sandbox",
-      ],
-      forbiddenPaths: ["src/index.ts"],
-    },
-    {
       packagePath: "harness/context",
       sourceAreas: ["context", "evidence", "persistence"],
       forbiddenPaths: ["src/index.ts", "src/observation"],
@@ -869,6 +901,132 @@ function checkPhase22Topology() {
         file: sourceRoot,
         message:
           `Phase 22 source entries must be exactly: ${allowedEntries.join(", ")}.`,
+      });
+    }
+  }
+}
+
+function checkPhase27Topology() {
+  const areas = [
+    {
+      packagePath: "harness/workspace",
+      allowedSourceEntries: [
+        "WorkspaceContracts.test.ts",
+        "identity",
+        "internal",
+        "selection",
+      ],
+    },
+    {
+      packagePath: "harness/agent-core/contracts",
+      allowedSourceEntries: [
+        "AgentCoreContracts.test.ts",
+        "agent",
+        "control",
+        "input",
+        "run",
+        "run-action",
+        "run-item",
+        "task",
+        "validation.ts",
+      ],
+      forbiddenPaths: ["src/action", "src/run/InvocationInterruption.ts", "src/run/Workspace.ts"],
+    },
+    {
+      packagePath: "harness/operation-catalog",
+      allowedSourceEntries: [
+        "OperationCatalog.test.ts",
+        "binding",
+        "catalog",
+        "identity",
+        "internal",
+        "result",
+      ],
+    },
+    {
+      packagePath: "harness/safety/canonical-action",
+      allowedSourceEntries: ["assessment", "lifecycle", "registration", "settlement", "subject"],
+    },
+    {
+      packagePath: "harness/interaction",
+      allowedSourceEntries: [
+        "InteractionContracts.test.ts",
+        "coordination",
+        "internal",
+        "protocol",
+        "records",
+      ],
+    },
+    {
+      packagePath: "harness/tools",
+      allowedSourceEntries: [
+        "PublicApi.test.ts",
+        "activation",
+        "catalog",
+        "identity",
+        "invocation",
+        "registration",
+        "result",
+        "selection",
+      ],
+      forbiddenPaths: ["src/index.ts", "src/ToolFailure.ts"],
+    },
+    {
+      packagePath: "harness/safety/action-execution",
+      allowedSourceEntries: [
+        "PublicApi.test.ts",
+        "coordination",
+        "enforcement",
+        "execution",
+        "internal",
+        "registration",
+        "sandbox",
+      ],
+      forbiddenPaths: ["src/canonical", "src/preparation", "src/index.ts"],
+    },
+    {
+      packagePath: "harness/operation-composition",
+      allowedSourceEntries: ["definition", "execution", "result"],
+    },
+    {
+      packagePath: "harness/agent-core/runtime",
+      allowedSourceEntries: [
+        "PublicApi.test.ts",
+        "controller",
+        "plan",
+        "retry",
+        "run",
+        "runner",
+      ],
+      forbiddenPaths: [
+        "src/runner/PermissionRequestAction.ts",
+        "src/runner/RunActionRouter.ts",
+        "src/runner/RunApprovalLifecycle.ts",
+        "src/runner/RuntimeActionRecord.ts",
+      ],
+    },
+  ];
+
+  for (const area of areas) {
+    for (const forbiddenPath of area.forbiddenPaths ?? []) {
+      const path = join(repoRoot, area.packagePath, forbiddenPath);
+      if (
+        exists(path) &&
+        (!statSync(path).isDirectory() || directoryContainsEntries(path))
+      ) {
+        report("phase27_superseded_source_path", {
+          file: path,
+          message: `Superseded Phase 27 source path '${area.packagePath}/${forbiddenPath}' must not exist.`,
+        });
+      }
+    }
+    const sourceRoot = join(repoRoot, area.packagePath, "src");
+    const actualEntries = sourceTopologyEntries(sourceRoot);
+    const allowedEntries = [...area.allowedSourceEntries].sort();
+    if (JSON.stringify(actualEntries) !== JSON.stringify(allowedEntries)) {
+      report("phase27_source_topology_changed", {
+        file: sourceRoot,
+        message: `Phase 27 source entries must be exactly: ${allowedEntries.join(", ")}.`,
       });
     }
   }

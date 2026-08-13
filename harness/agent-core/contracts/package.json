@@ -4,10 +4,6 @@
   "description": "Dependency-safe Agent Core contracts for Agent Harness.",
   "type": "module",
   "exports": {
-    "./action": {
-      "types": "./src/action/index.ts",
-      "import": "./dist/action/index.js"
-    },
     "./agent": {
       "types": "./src/agent/index.ts",
       "import": "./dist/agent/index.js"
@@ -19,6 +15,18 @@
     "./run": {
       "types": "./src/run/index.ts",
       "import": "./dist/run/index.js"
+    },
+    "./run-action": {
+      "types": "./src/run-action/index.ts",
+      "import": "./dist/run-action/index.js"
+    },
+    "./run-item": {
+      "types": "./src/run-item/index.ts",
+      "import": "./dist/run-item/index.js"
+    },
+    "./control": {
+      "types": "./src/control/index.ts",
+      "import": "./dist/control/index.js"
     },
     "./task": {
       "types": "./src/task/index.ts",
@@ -41,5 +49,8 @@
     }
   },
   "license": "Apache-2.0",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "@agent-anything/workspace": "workspace:*"
+  }
 }

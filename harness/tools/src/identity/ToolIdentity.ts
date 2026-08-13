@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
 
+export type {
+  ToolKey,
+  ToolOperationBindingRef,
+  ToolRevisionRef,
+  ToolSchemaRevisionRefs,
+  ToolSourceRef,
+} from "./ToolRevision.js";
+export { toolRevisionKey } from "./ToolRevision.js";
+
 export function createToolContractIdentity(
   domain: string,
   value: unknown,

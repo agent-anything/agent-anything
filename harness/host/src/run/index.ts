@@ -2,6 +2,7 @@ export {
   createHostRunManager,
   type CreateHostRunManagerInput,
   type HostActiveRun,
+  type HostInteractionSubmission,
   type HostRunCancellationInput,
   type HostRunCancellationReceipt,
   type HostRunManager,

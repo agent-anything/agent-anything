@@ -1,11 +1,11 @@
 import type {
   CanonicalRemoteServerIdentity,
   SerializableValue,
-} from "@agent-anything/action-execution/canonical";
+} from "@agent-anything/canonical-action/subject";
 import type {
   ActionAdapterImplementation,
-  ActionRegistrationSnapshot,
 } from "@agent-anything/action-execution/registration";
+import type { ActionRegistrationSnapshot } from "@agent-anything/canonical-action/registration";
 import type {
   ActionExecutor,
 } from "@agent-anything/action-execution/execution";
@@ -13,11 +13,10 @@ import type {
 import type {
   ToolAnnotations,
   ToolJsonObject,
-  ToolRegistrationSnapshot,
-  ToolResult,
-  ToolSchemaIdentity,
-  ToolSourceRef,
-} from "@agent-anything/tools";
+} from "@agent-anything/tools/catalog";
+import type { ToolSchemaIdentity, ToolSourceRef } from "@agent-anything/tools/identity";
+import type { ToolRegistrationSnapshot } from "@agent-anything/tools/registration";
+import type { ToolResult } from "@agent-anything/tools/result";
 
 export interface TrustedRemoteActionRegistration {
   readonly localToolName: string;

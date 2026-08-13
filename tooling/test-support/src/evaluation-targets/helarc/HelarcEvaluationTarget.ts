@@ -12,7 +12,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import {
   createCanonicalSha256Digest,
-} from "@agent-anything/action-execution/canonical";
+} from "@agent-anything/canonical-action/subject";
 import {
   ActionEnforcementPipeline,
 } from "@agent-anything/action-execution/enforcement";
@@ -21,7 +21,7 @@ import {
 } from "@agent-anything/action-execution/sandbox";
 import { Runner } from "@agent-anything/agent-runtime/runner";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
-import type { RunWorkspace } from "@agent-anything/agent-core/run";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import {
   assembleEvaluationCapture,
   type EvaluationCapture,
@@ -352,7 +352,7 @@ async function invokeHelarcTarget(
   });
   if (!taskResult.ok) throw new TypeError(taskResult.error.message);
 
-  const workspace: RunWorkspace = Object.freeze({
+  const workspace: WorkspaceSelection = Object.freeze({
     primary: Object.freeze({
       id: `${trial.ref.id}.workspace`,
       name: "Phase26 fixture",
@@ -726,7 +726,7 @@ function captureHelarcMaterial(
   const runItems = material.runResult.items;
   const actionNames = runItems
     .filter((item) => item.kind === "action")
-    .map((item) => item.kind === "action" ? item.action.name : "")
+    .map((item) => item.kind === "action" ? item.action.subject.name : "")
     .sort();
   const retryCount = runItems.filter((item) => item.kind === "retry_scheduled").length;
   const totalUsage = material.caseDefinition.script.responses
@@ -956,7 +956,7 @@ interface EvaluationPermissionInput {
   readonly preset: HelarcPermissionPreset;
   readonly productRunId: string;
   readonly sessionId: string;
-  readonly workspace: RunWorkspace;
+  readonly workspace: WorkspaceSelection;
   readonly workspaceRoots: readonly { readonly rootId: string; readonly path: string }[];
   readonly platform: "win32" | "posix";
   readonly identityId: string;

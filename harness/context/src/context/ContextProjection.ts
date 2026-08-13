@@ -1,7 +1,6 @@
-import type { ObservationBase } from "@agent-anything/agent-core/action";
 import type { EvidenceRef } from "../evidence/EvidenceRef.js";
 import type { ContextFailure } from "./ContextFailure.js";
-import type { Context } from "./Context.js";
+import type { Context, ContextObservation } from "./Context.js";
 import type { ContextMessage } from "./ContextMessage.js";
 
 export type ContextProjectionPurpose = "model" | "workflow";
@@ -23,7 +22,7 @@ export interface ContextProjectionRequest {
 }
 
 export interface ContextProjection<
-  TObservation extends ObservationBase = ObservationBase,
+  TObservation extends ContextObservation = ContextObservation,
 > {
   readonly messages: readonly ContextMessage[];
   readonly observations: readonly TObservation[];
@@ -32,15 +31,15 @@ export interface ContextProjection<
 }
 
 export interface ContextProjectorInput<
-  TObservation extends ObservationBase,
+  TObservation extends ContextObservation,
 > {
   readonly context: Context<TObservation>;
   readonly request: ContextProjectionRequest;
 }
 
 export interface ContextProjectorPort<
-  TObservation extends ObservationBase,
-  TProjectedObservation extends ObservationBase = TObservation,
+  TObservation extends ContextObservation,
+  TProjectedObservation extends ContextObservation = TObservation,
 > {
   project(
     input: ContextProjectorInput<TObservation>,
@@ -58,7 +57,7 @@ export class ContextProjectionError extends Error {
 }
 
 export function snapshotContextProjection<
-  TObservation extends ObservationBase,
+  TObservation extends ContextObservation,
 >(input: {
   readonly projection: ContextProjection<TObservation>;
   readonly request: ContextProjectionRequest;
@@ -272,7 +271,7 @@ export function snapshotContextProjectionRequest(
 }
 
 function assertProjectedObservation(
-  observation: ObservationBase,
+  observation: ContextObservation,
   runId: string,
 ): void {
   if (

@@ -1,83 +1,44 @@
-import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
+import type { ActionAttemptRef } from "@agent-anything/canonical-action/subject";
+import type {
+  ActionExecutorDescriptor,
+} from "@agent-anything/canonical-action/registration";
 import {
-  createActionExecutionFailure,
-  type ActionExecutionFailureKind,
-} from "../execution/ActionExecutionFailure.js";
-import {
+  assertActionExecutorDispatchContext,
   createActionExecutorDispatchPermit,
   type ActionExecutor,
-  type ActionExecutorContext,
+  type PhysicalAttemptOutcome,
   type ResolvedActionSecret,
 } from "../execution/ActionExecutor.js";
-import type { ActionRegistrationSnapshot } from "../registration/ActionRegistration.js";
 import type {
-  ActionExecutionLimits,
-  ActionExecutionResult,
-  CapabilityEffectKind,
-  DispatchSandboxActionInput,
-  SandboxAttempt,
+  SandboxCancellationRequest,
+  SandboxCancellationResult,
+  SandboxEnforcementEvidence,
   SandboxExecutionGateway,
   SandboxExecutionRequest,
-  SandboxPolicyEnvelope,
-  PreparedSandboxDispatch,
-  SandboxDispatchPreparationResult,
+  SandboxExecutionResult,
   SandboxProvider,
   SandboxProviderKind,
 } from "./SandboxContracts.js";
-import {
-  settleExecutorResult,
-  settleProviderResult,
-} from "./SandboxResultSettlement.js";
-import { prepareSandboxDispatch } from "./SandboxDispatchPreparation.js";
-import {
-  createExecutorRegistry,
-  createProviderRegistry,
-  executorKey,
-  type RegisteredExecutor,
-  type RegisteredProvider,
-} from "./SandboxRegistration.js";
-import {
-  MissingSecretResolverError,
-  resolveActionSecrets,
-  type ActionSecretResolver,
-  type ResolveActionSecretsInput,
-} from "./SandboxSecretResolution.js";
-import {
-  attachProviderCancellation,
-  createLocalInterruption,
-  observeSandboxInterruption,
-} from "./SandboxInterruption.js";
 
-export type {
-  ActionSecretResolver,
-  ResolveActionSecretsInput,
-} from "./SandboxSecretResolution.js";
-
-export { assertGatewaySandboxDenial } from "./SandboxResultSettlement.js";
-
-export interface CreateSandboxExecutionGatewayInput {
-  readonly registrations: ActionRegistrationSnapshot;
-  readonly executors: readonly ActionExecutor[];
-  readonly providers?: readonly SandboxProvider[];
-  readonly limits: ActionExecutionLimits;
-  readonly secretResolver?: ActionSecretResolver;
-  readonly now?: () => string;
-  readonly createAttemptId?: (input: {
-    readonly runId: string;
-    readonly actionId: string;
-    readonly ordinal: 1 | 2;
-  }) => string;
+export interface ResolveActionSecretsInput {
+  readonly attempt: ActionAttemptRef;
+  readonly references: readonly string[];
 }
 
-interface PreparedDispatchState {
-  readonly attempt: SandboxAttempt;
-  readonly policy: SandboxPolicyEnvelope;
-  readonly toolName: string;
-  readonly boundActionName: string;
-  readonly invocation: DispatchSandboxActionInput["preparedInvocation"];
-  readonly deadlineAt: string;
-  readonly interruption: InvocationInterruptionContext;
+export interface ActionSecretResolver {
+  resolve(input: ResolveActionSecretsInput): Promise<readonly ResolvedActionSecret[]>;
+}
+
+export interface CreateSandboxExecutionGatewayInput {
+  readonly executors: readonly ActionExecutor[];
+  readonly providers?: readonly SandboxProvider[];
+  readonly secretResolver?: ActionSecretResolver;
+}
+
+interface ActiveAttempt {
   readonly enforcement: "managed" | "external" | "disabled";
+  readonly provider: SandboxProvider | null;
+  settled: boolean;
 }
 
 export function createSandboxExecutionGateway(
@@ -87,338 +48,389 @@ export function createSandboxExecutionGateway(
 }
 
 class DefaultSandboxExecutionGateway implements SandboxExecutionGateway {
-  private readonly executors: ReadonlyMap<string, RegisteredExecutor>;
-  private readonly providers: ReadonlyMap<SandboxProviderKind, RegisteredProvider>;
-  private readonly limits: ActionExecutionLimits;
-  private readonly now: () => string;
-  private readonly createAttemptId: NonNullable<
-    CreateSandboxExecutionGatewayInput["createAttemptId"]
-  >;
-  private readonly preparedDispatches = new WeakMap<object, PreparedDispatchState>();
-  private readonly consumedDispatches = new WeakSet<object>();
+  private readonly executors: ReadonlyMap<string, ActionExecutor>;
+  private readonly providers: ReadonlyMap<SandboxProviderKind, SandboxProvider>;
+  private readonly attempts = new Map<string, ActiveAttempt>();
 
   constructor(private readonly input: CreateSandboxExecutionGatewayInput) {
-    this.limits = snapshotLimits(input.limits);
-    this.executors = createExecutorRegistry(input.registrations, input.executors);
-    this.providers = createProviderRegistry(input.providers ?? []);
-    this.now = input.now ?? (() => new Date().toISOString());
-    this.createAttemptId = input.createAttemptId ?? ((identity) =>
-      `${identity.runId}:sandbox_attempt:${identity.actionId}:${identity.ordinal}`);
+    this.executors = captureExecutors(input.executors);
+    this.providers = captureProviders(input.providers ?? []);
   }
 
-  async prepare(
-    input: DispatchSandboxActionInput,
-  ): Promise<SandboxDispatchPreparationResult> {
-    const stage = await prepareSandboxDispatch({
-      dispatch: input,
-      limits: this.limits,
-      now: this.now,
-      createAttemptId: this.createAttemptId,
-    });
-    if (stage.status === "failed") {
-      return preparationFailed(stage.code, stage.message);
-    }
-    if (stage.status === "interrupted") {
-      return Object.freeze({
-        status: "interrupted" as const,
-        interruption: stage.interruption,
-      });
-    }
-    const { attempt, policy, invocation } = stage;
-    const prepared = Object.freeze({ attempt });
-    this.preparedDispatches.set(prepared, Object.freeze({
-      attempt,
-      policy,
-      toolName: input.plan.actionName,
-      boundActionName: input.plan.registration.actionName,
-      invocation,
-      deadlineAt: input.deadlineAt,
-      interruption: input.interruption,
-      enforcement: input.plan.enforcement,
-    }));
-    return Object.freeze({ status: "ready" as const, prepared });
-  }
-
-  async execute(prepared: PreparedSandboxDispatch): Promise<ActionExecutionResult> {
-    if (
-      prepared === null ||
-      typeof prepared !== "object" ||
-      !Object.isFrozen(prepared)
-    ) {
-      return failed(null, "sandbox_prepared_dispatch_invalid", "Prepared sandbox dispatch is invalid.");
-    }
-    const state = this.preparedDispatches.get(prepared);
-    if (state === undefined) {
-      return failed(null, "sandbox_prepared_dispatch_invalid", "Prepared sandbox dispatch is not owned by this gateway.");
-    }
-    if (this.consumedDispatches.has(prepared)) {
-      return failed(state.attempt, "sandbox_prepared_dispatch_consumed", "Prepared sandbox dispatch is single-use.");
-    }
-    this.consumedDispatches.add(prepared);
-
-    const interruption = observeSandboxInterruption(
-      state.interruption,
-      state.attempt.runId,
-    );
-    if (interruption.status === "invalid") {
-      return failed(
-        state.attempt,
-        "sandbox_interruption_unattributed",
-        interruption.message,
-      );
-    }
-    if (interruption.status === "interrupted") {
-      return Object.freeze({
-        status: "interrupted" as const,
-        attempt: state.attempt,
-        interruption: interruption.interruption,
-      });
-    }
-
-    if (state.enforcement === "disabled") {
-      return this.dispatchDisabled(state);
-    }
-    return this.dispatchProvider({ ...state, kind: state.enforcement });
-  }
-
-  private async dispatchDisabled(input: {
-    readonly attempt: SandboxAttempt;
-    readonly policy: SandboxPolicyEnvelope;
-    readonly toolName: string;
-    readonly boundActionName: string;
-    readonly invocation: DispatchSandboxActionInput["preparedInvocation"];
-    readonly deadlineAt: string;
-    readonly interruption: InvocationInterruptionContext;
-  }): Promise<ActionExecutionResult> {
-    const registered = this.executors.get(executorKey(input.invocation));
-    if (registered === undefined) {
+  async execute(request: SandboxExecutionRequest): Promise<SandboxExecutionResult> {
+    const attemptKey = actionAttemptKey(request.attempt);
+    if (this.attempts.has(attemptKey)) {
       return unavailable(
-        input.attempt,
-        "sandbox_executor_unavailable",
-        "setup",
-        "none",
-      );
-    }
-
-    let secrets: readonly ResolvedActionSecret[];
-    try {
-      secrets = await resolveActionSecrets(
-        this.input.secretResolver,
-        input.attempt,
-        input.policy.allowedSecretReferences,
-      );
-    } catch (error) {
-      return unavailable(
-        input.attempt,
-        error instanceof MissingSecretResolverError
-          ? "sandbox_secret_resolver_unavailable"
-          : "sandbox_secret_resolution_failed",
-        "setup",
-        "none",
-      );
-    }
-
-    const local = createLocalInterruption(
-      input.interruption,
-      input.attempt,
-      input.deadlineAt,
-      this.now,
-    );
-    if (local.interruption !== null) {
-      local.dispose();
-      return Object.freeze({
-        status: "interrupted" as const,
-        attempt: input.attempt,
-        interruption: local.interruption,
-      });
-    }
-
-    const context: ActionExecutorContext = Object.freeze({
-      attempt: input.attempt,
-      interruption: Object.freeze({
-        signal: local.signal,
-        get interruption() {
-          return local.interruption;
-        },
-      }),
-      deadlineAt: input.deadlineAt,
-      limits: this.limits,
-      resolvedSecrets: secrets,
-      dispatchPermit: createActionExecutorDispatchPermit(),
-    });
-
-    try {
-      const result = await registered.executor.execute(input.invocation, context);
-      return settleExecutorResult({
-        result,
-        attempt: input.attempt,
-        boundActionName: input.boundActionName,
-        toolName: input.toolName,
-        maxResultBytes: this.limits.maxResultBytes,
-      });
-    } catch (error) {
-      return failed(
-        input.attempt,
-        "tool_executor_failed",
-        safeMessage(error, "ActionExecutor failed without a settled result."),
-        "tool",
-        "unknown",
-      );
-    } finally {
-      local.dispose();
-    }
-  }
-
-  private async dispatchProvider(input: {
-    readonly attempt: SandboxAttempt;
-    readonly policy: SandboxPolicyEnvelope;
-    readonly toolName: string;
-    readonly boundActionName: string;
-    readonly invocation: DispatchSandboxActionInput["preparedInvocation"];
-    readonly deadlineAt: string;
-    readonly interruption: InvocationInterruptionContext;
-    readonly kind: SandboxProviderKind;
-  }): Promise<ActionExecutionResult> {
-    const registered = this.providers.get(input.kind);
-    if (registered === undefined) {
-      return unavailable(input.attempt, "sandbox_provider_unavailable", "setup", "none");
-    }
-    const requiredKinds = requiredEffectKinds(input.policy);
-    if (!registered.descriptor.supportedPolicyVersions.includes(1)) {
-      return unavailable(
-        input.attempt,
-        "sandbox_policy_version_unsupported",
-        "capability_check",
-        "none",
-      );
-    }
-    if (requiredKinds.some((kind) =>
-      !registered.descriptor.supportedEffectKinds.includes(kind))) {
-      return unavailable(
-        input.attempt,
-        "sandbox_effect_kind_unsupported",
-        "capability_check",
-        "none",
-      );
-    }
-
-    const request: SandboxExecutionRequest = deepFreeze({
-      attempt: input.attempt,
-      policy: input.policy,
-      executor: {
-        id: input.invocation.executorId,
-        version: input.invocation.executorVersion,
-        invocationContractVersion: input.invocation.contractVersion,
-      },
-      invocation: input.invocation,
-      deadlineAt: input.deadlineAt,
-    });
-    const cancellation = attachProviderCancellation({
-      provider: registered.provider,
-      attempt: input.attempt,
-      interruption: input.interruption,
-      deadlineAt: input.deadlineAt,
-      now: this.now,
-    });
-    try {
-      const providerResult = await registered.provider.execute(request);
-      return settleProviderResult({
-        result: providerResult,
-        attempt: input.attempt,
-        boundActionName: input.boundActionName,
-        toolName: input.toolName,
-        descriptor: registered.descriptor,
-        requiredKinds,
-        maxResultBytes: this.limits.maxResultBytes,
-      });
-    } catch (error) {
-      return unavailable(
-        input.attempt,
-        "sandbox_provider_dispatch_failed",
+        request,
         "dispatch",
+        "sandbox_attempt_already_submitted",
         "unknown",
       );
+    }
+    const executor = this.executors.get(executorKey(request.executor));
+    if (executor === undefined || !sameExecutor(executor.descriptor, request.executor)) {
+      return unavailable(
+        request,
+        "capability_check",
+        "sandbox_executor_unavailable",
+        "none",
+      );
+    }
+    const validation = validateRequest(request);
+    if (validation !== null) {
+      return unavailable(request, "capability_check", validation, "none");
+    }
+    const provider = request.policy.enforcement === "disabled"
+      ? null
+      : this.providers.get(request.policy.enforcement);
+    if (request.policy.enforcement !== "disabled" && provider === undefined) {
+      return unavailable(
+        request,
+        "capability_check",
+        "sandbox_provider_unavailable",
+        "none",
+      );
+    }
+    const active: ActiveAttempt = {
+      enforcement: request.policy.enforcement,
+      provider: provider ?? null,
+      settled: false,
+    };
+    this.attempts.set(attemptKey, active);
+
+    try {
+      if (request.policy.enforcement === "disabled") {
+        return await this.executeUnisolated(request, executor);
+      }
+      if (!providerSupports(provider!, request)) {
+        return unavailable(
+          request,
+          "capability_check",
+          "sandbox_policy_unsupported",
+          "none",
+        );
+      }
+      let result;
+      try {
+        result = await provider!.execute(request);
+      } catch {
+        return unavailable(
+          request,
+          "dispatch",
+          "sandbox_provider_failed",
+          "unknown",
+        );
+      }
+      if (result.status === "enforcement_failed") {
+        return unavailable(
+          request,
+          result.stage,
+          result.code,
+          result.effectState,
+        );
+      }
+      const invalid = validateProviderSettlement(request, result.enforcementEvidence);
+      if (invalid !== null || !validateOutcome(result.outcome, executor, request)) {
+        return unavailable(
+          request,
+          "settlement",
+          invalid ?? "sandbox_physical_outcome_invalid",
+          "unknown",
+        );
+      }
+      return Object.freeze({
+        status: "settled" as const,
+        attempt: request.attempt,
+        outcome: freezeOutcome(result.outcome),
+        isolation: "enforced" as const,
+        enforcementEvidence: Object.freeze(result.enforcementEvidence),
+      });
     } finally {
-      cancellation.dispose();
+      active.settled = true;
     }
   }
-}
 
-function requiredEffectKinds(policy: SandboxPolicyEnvelope): readonly CapabilityEffectKind[] {
-  if (policy.authorizedEffects.kind === "effect_free") return Object.freeze([]);
-  return Object.freeze([...new Set(
-    policy.authorizedEffects.values.map((effect) => effect.kind),
-  )].sort());
-}
-
-function snapshotLimits(input: ActionExecutionLimits): ActionExecutionLimits {
-  if (!Number.isSafeInteger(input?.maxResultBytes) || input.maxResultBytes < 1) {
-    throw new TypeError("ActionExecutionLimits.maxResultBytes must be positive.");
+  async cancel(input: SandboxCancellationRequest): Promise<SandboxCancellationResult> {
+    const active = this.attempts.get(actionAttemptKey(input.attempt));
+    if (active === undefined) {
+      return Object.freeze({
+        status: "unavailable" as const,
+        code: "sandbox_attempt_unknown",
+      });
+    }
+    if (active.settled) {
+      return Object.freeze({ status: "already_settled" as const });
+    }
+    if (active.provider === null) {
+      return Object.freeze({ status: "accepted" as const });
+    }
+    try {
+      return await active.provider.cancel(input);
+    } catch {
+      return Object.freeze({
+        status: "unavailable" as const,
+        code: "sandbox_cancellation_failed",
+      });
+    }
   }
-  return Object.freeze({ maxResultBytes: input.maxResultBytes });
+
+  private async executeUnisolated(
+    request: SandboxExecutionRequest,
+    executor: ActionExecutor,
+  ): Promise<SandboxExecutionResult> {
+    let resolvedSecrets: readonly ResolvedActionSecret[] = [];
+    if (request.invocation.secretReferences.length > 0) {
+      if (this.input.secretResolver === undefined) {
+        return unavailable(
+          request,
+          "setup",
+          "sandbox_secret_resolver_unavailable",
+          "none",
+        );
+      }
+      try {
+        resolvedSecrets = await this.input.secretResolver.resolve({
+          attempt: request.attempt,
+          references: request.invocation.secretReferences,
+        });
+      } catch {
+        return unavailable(
+          request,
+          "setup",
+          "sandbox_secret_resolution_failed",
+          "none",
+        );
+      }
+      if (!sameSecretReferences(request.invocation.secretReferences, resolvedSecrets)) {
+        return unavailable(
+          request,
+          "setup",
+          "sandbox_secret_resolution_invalid",
+          "none",
+        );
+      }
+    }
+
+    let outcome: PhysicalAttemptOutcome;
+    try {
+      const context = Object.freeze({
+        attempt: request.attempt,
+        interruption: request.interruption,
+        deadlineAt: request.deadlineAt,
+        limits: request.policy.resourceLimits,
+        resolvedSecrets: Object.freeze([...resolvedSecrets]),
+        dispatchPermit: createActionExecutorDispatchPermit(),
+      });
+      assertActionExecutorDispatchContext(context);
+      outcome = await executor.execute(request.invocation, context);
+    } catch {
+      return unavailable(
+        request,
+        "dispatch",
+        "executor_dispatch_failed",
+        "unknown",
+      );
+    }
+    if (!validateOutcome(outcome, executor, request)) {
+      return unavailable(
+        request,
+        "settlement",
+        "executor_physical_outcome_invalid",
+        "unknown",
+      );
+    }
+    const settledAt = new Date().toISOString();
+    return Object.freeze({
+      status: "settled" as const,
+      attempt: request.attempt,
+      outcome: freezeOutcome(outcome),
+      isolation: "unisolated" as const,
+      enforcementEvidence: Object.freeze({
+        providerId: "action-execution.disabled-passthrough",
+        providerVersion: "1",
+        policyId: request.policy.policyId,
+        enforcement: "disabled" as const,
+        enforcedEffectFamilies: Object.freeze([...request.policy.effectFamilies]),
+        settledAt,
+      }),
+    });
+  }
+}
+
+function captureExecutors(
+  input: readonly ActionExecutor[],
+): ReadonlyMap<string, ActionExecutor> {
+  if (!Array.isArray(input)) throw new TypeError("Sandbox executors must be an array.");
+  const result = new Map<string, ActionExecutor>();
+  for (const executor of input) {
+    const key = executorKey(executor.descriptor);
+    if (result.has(key)) throw new TypeError(`Duplicate Action Executor: ${key}.`);
+    if (typeof executor.validatePayload !== "function" || typeof executor.execute !== "function") {
+      throw new TypeError(`Action Executor '${key}' is incomplete.`);
+    }
+    result.set(key, Object.freeze({
+      descriptor: Object.freeze({ ...executor.descriptor }),
+      validatePayload: executor.validatePayload.bind(executor),
+      execute: executor.execute.bind(executor),
+    }));
+  }
+  return result;
+}
+
+function captureProviders(
+  input: readonly SandboxProvider[],
+): ReadonlyMap<SandboxProviderKind, SandboxProvider> {
+  if (!Array.isArray(input)) throw new TypeError("Sandbox providers must be an array.");
+  const result = new Map<SandboxProviderKind, SandboxProvider>();
+  for (const provider of input) {
+    if (provider.kind !== "managed" && provider.kind !== "external") {
+      throw new TypeError("Sandbox provider kind is unsupported.");
+    }
+    if (provider.descriptor.kind !== provider.kind || result.has(provider.kind)) {
+      throw new TypeError(`Duplicate or incoherent Sandbox provider: ${provider.kind}.`);
+    }
+    result.set(provider.kind, provider);
+  }
+  return result;
+}
+
+function validateRequest(request: SandboxExecutionRequest): string | null {
+  if (
+    request.policy.schemaVersion !== 1 ||
+    request.policy.defaultDisposition !== "deny" ||
+    request.policy.actionFingerprint !== request.attempt.actionFingerprint ||
+    request.policy.authoritySnapshotId !== request.attempt.authoritySnapshotId ||
+    request.policy.policyId !== request.attempt.policyId ||
+    request.policy.enforcement !== request.attempt.enforcement ||
+    request.actionRegistrationFingerprint !==
+      request.attempt.actionRegistrationFingerprint ||
+    request.invocation.executorId !== request.executor.id ||
+    request.invocation.executorVersion !== request.executor.version ||
+    request.invocation.contractVersion !== request.executor.invocationContractVersion
+  ) {
+    return "sandbox_request_incoherent";
+  }
+  if (
+    !Number.isSafeInteger(request.attempt.ordinal) ||
+    request.attempt.ordinal < 1 ||
+    !Number.isSafeInteger(request.policy.resourceLimits.maxResultBytes) ||
+    request.policy.resourceLimits.maxResultBytes < 1 ||
+    Number.isNaN(Date.parse(request.deadlineAt))
+  ) {
+    return "sandbox_request_invalid";
+  }
+  return null;
+}
+
+function providerSupports(
+  provider: SandboxProvider,
+  request: SandboxExecutionRequest,
+): boolean {
+  return provider.descriptor.supportedPolicyVersions.includes(request.policy.schemaVersion) &&
+    request.policy.effectFamilies.every((family) =>
+      provider.descriptor.supportedEffectFamilies.includes(family)
+    );
+}
+
+function validateProviderSettlement(
+  request: SandboxExecutionRequest,
+  evidence: SandboxEnforcementEvidence,
+): string | null {
+  if (
+    evidence.policyId !== request.policy.policyId ||
+    evidence.enforcement !== request.policy.enforcement ||
+    evidence.enforcedEffectFamilies.length !== request.policy.effectFamilies.length ||
+    request.policy.effectFamilies.some((family) =>
+      !evidence.enforcedEffectFamilies.includes(family)
+    ) ||
+    Number.isNaN(Date.parse(evidence.settledAt))
+  ) {
+    return "sandbox_enforcement_evidence_invalid";
+  }
+  return null;
+}
+
+function validateOutcome(
+  outcome: PhysicalAttemptOutcome,
+  executor: ActionExecutor,
+  request: SandboxExecutionRequest,
+): boolean {
+  if (outcome === null || typeof outcome !== "object") return false;
+  if (outcome.status === "completed") {
+    if (!executor.validatePayload(outcome.payload)) return false;
+    return serializedSize(outcome.payload) <= request.policy.resourceLimits.maxResultBytes;
+  }
+  if (outcome.status === "denied") return outcome.effectState === "none";
+  if (outcome.status === "interrupted" || outcome.status === "timed_out") {
+    return ["none", "settled", "unknown"].includes(outcome.effectState);
+  }
+  if (outcome.status === "failed") {
+    return ["none", "settled", "unknown"].includes(outcome.effectState);
+  }
+  return false;
+}
+
+function freezeOutcome<TPayload>(
+  outcome: PhysicalAttemptOutcome<TPayload>,
+): PhysicalAttemptOutcome<TPayload> {
+  return deepFreeze(outcome);
 }
 
 function unavailable(
-  attempt: SandboxAttempt,
-  code: string,
+  request: SandboxExecutionRequest,
   stage: "capability_check" | "setup" | "dispatch" | "settlement",
+  code: string,
   effectState: "none" | "unknown",
-): ActionExecutionResult {
+): SandboxExecutionResult {
   return Object.freeze({
     status: "sandbox_unavailable" as const,
-    attempt,
+    attempt: request.attempt,
     code,
     stage,
     effectState,
   });
 }
 
-function failed(
-  attempt: SandboxAttempt | null,
-  code: string,
-  message: string,
-  owner: Extract<ActionExecutionFailureKind, "sandbox" | "tool"> = "sandbox",
-  effectState: "none" | "unknown" = "none",
-): ActionExecutionResult {
-  const base = Object.freeze({
-    code,
-    message,
-    retryable: false,
-    metadata: Object.freeze({}),
-  });
-  return Object.freeze({
-    status: "failed" as const,
-    attempt,
-    effectState,
-    failure: owner === "sandbox"
-      ? createActionExecutionFailure("sandbox", Object.freeze({
-          ...base,
-          effectState,
-        }))
-      : createActionExecutionFailure("tool", base),
-  });
+function sameSecretReferences(
+  expected: readonly string[],
+  actual: readonly ResolvedActionSecret[],
+): boolean {
+  if (actual.length !== expected.length) return false;
+  const expectedSet = new Set(expected);
+  return actual.every((secret) =>
+    expectedSet.has(secret.reference) && typeof secret.value === "string"
+  ) && new Set(actual.map((secret) => secret.reference)).size === actual.length;
 }
 
-function preparationFailed(code: string, message: string): SandboxDispatchPreparationResult {
-  return Object.freeze({
-    status: "failed" as const,
-    failure: createActionExecutionFailure("sandbox", Object.freeze({
-      code,
-      message,
-      retryable: false,
-      effectState: "none",
-      metadata: Object.freeze({}),
-    })),
-  });
+function sameExecutor(
+  left: ActionExecutorDescriptor,
+  right: ActionExecutorDescriptor,
+): boolean {
+  return left.id === right.id &&
+    left.version === right.version &&
+    left.invocationContractVersion === right.invocationContractVersion &&
+    left.physicalPayloadSchemaRevision === right.physicalPayloadSchemaRevision;
 }
 
-function safeMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message.length > 0 ? error.message : fallback;
+function executorKey(descriptor: ActionExecutorDescriptor): string {
+  return `${descriptor.id}@${descriptor.version}#${descriptor.invocationContractVersion}:${descriptor.physicalPayloadSchemaRevision}`;
 }
 
-function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
-  if (typeof value !== "object" || value === null || seen.has(value)) return value;
-  seen.add(value);
-  for (const child of Object.values(value)) deepFreeze(child, seen);
-  return Object.freeze(value);
+function actionAttemptKey(attempt: ActionAttemptRef): string {
+  return `${attempt.action.id}:${attempt.ordinal}:${attempt.id}`;
+}
+
+function serializedSize(input: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(input), "utf8");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function deepFreeze<T>(input: T, seen = new WeakSet<object>()): T {
+  if (input === null || typeof input !== "object" || seen.has(input)) return input;
+  seen.add(input);
+  for (const value of Object.values(input)) deepFreeze(value, seen);
+  return Object.freeze(input);
 }

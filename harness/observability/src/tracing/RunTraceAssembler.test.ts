@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { RuntimeEvent } from "../events/RuntimeEvent.js";
 import type { ControllerFinishedRuntimeEventPayload } from "../events/RuntimeEventPayload.js";
 import { RuntimeEventStream } from "../events/RuntimeEventStream.js";
 import {
@@ -9,11 +8,8 @@ import {
 } from "./RunTrace.js";
 import { RunTraceAssembler } from "./RunTraceAssembler.js";
 
-const startedAt = "2026-08-03T00:00:00.000Z";
-const completedAt = "2026-08-03T00:00:01.000Z";
-
 describe("RunTraceAssembler", () => {
-  it("assembles an immutable complete trace from exact event and result facts", async () => {
+  it("assembles the reusable Run, Controller, Operation, and Interaction catalog", () => {
     const observed: RunTrace[] = [];
     const assembler = createAssembler([{
       observe(trace) {
@@ -25,19 +21,61 @@ describe("RunTraceAssembler", () => {
     stream.emit("run.started", {
       status: "running",
       activeAgentId: "agent-1",
-    }, startedAt);
-    stream.emit("controller.started", { iteration: 1 }, startedAt);
-    stream.emit("controller.finished", {
+    }, STARTED_AT);
+    stream.emit("controller.started", {
+      turnId: "turn-1",
       iteration: 1,
+    }, STARTED_AT);
+    stream.emit("controller.finished", {
+      turnId: "turn-1",
+      iteration: 1,
+      status: "decided",
+      code: null,
+      decisionKind: "advance",
+    }, COMPLETED_AT);
+    stream.emit("operation.started", {
+      invocationId: "operation-invocation-1",
+      operationNamespace: "code",
+      operationName: "read-file",
+      operationRevision: "1",
+      semanticOwner: "code-agent",
+      bindingKind: "direct",
+      correlationKind: "run_action",
+      parentInvocationId: null,
+      parentRunActionId: "run-action-1",
+    }, STARTED_AT);
+    stream.emit("operation.finished", {
+      invocationId: "operation-invocation-1",
       status: "succeeded",
       code: null,
-      decisionKind: "actions",
-    }, completedAt);
+      resultId: "operation-result-1",
+      lowerResultRefs: ["action-settlement-1"],
+    }, COMPLETED_AT);
+    stream.emit("interaction.opened", {
+      requestId: "interaction-1",
+      protocolOwner: "permission",
+      protocolKind: "approval",
+      protocolRevision: "1",
+      subjectOwner: "canonical-action",
+      subjectKind: "action-subject",
+      subjectId: "action-1",
+      subjectRevision: "1",
+      blockingScope: "run",
+      pendingVersion: 1,
+      parentRunActionId: "run-action-1",
+    }, STARTED_AT);
+    stream.emit("interaction.settled", {
+      requestId: "interaction-1",
+      pendingVersion: 1,
+      lifecycle: "resolved",
+      code: null,
+      terminalRecordId: "interaction-terminal-1",
+    }, COMPLETED_AT);
     stream.emit("run.item.appended", {
       itemId: "item-1",
-      itemKind: "model_output",
+      itemKind: "run_action",
       itemSequence: 1,
-    }, completedAt);
+    }, COMPLETED_AT);
     stream.emit("run.completed", {
       status: "succeeded",
       code: null,
@@ -46,97 +84,74 @@ describe("RunTraceAssembler", () => {
       evidenceCount: 0,
       artifactCount: 0,
       errorCodes: [],
-    }, completedAt);
+    }, COMPLETED_AT);
 
     const trace = assembler.complete({
       items: [{
         id: "item-1",
         runId: "run-1",
         sequence: 1,
-        kind: "model_output",
-        createdAt: completedAt,
+        kind: "run_action",
+        createdAt: COMPLETED_AT,
       }],
-      result: terminalResult({
-        status: "succeeded",
-        code: null,
-        itemCount: 1,
-      }),
+      result: terminalResult({ status: "succeeded", code: null, itemCount: 1 }),
     });
-    await Promise.resolve();
 
     expect(trace).toMatchObject({
       schemaVersion: RUN_TRACE_SCHEMA_VERSION,
-      traceId: "trace-1",
-      runId: "run-1",
-      taskId: "task-1",
       status: "complete",
-      startedAt,
-      completedAt,
+      startedAt: STARTED_AT,
+      completedAt: COMPLETED_AT,
       issues: [],
     });
-    expect(trace.spans).toHaveLength(2);
-    expect(trace.spans[0]).toMatchObject({
-      owner: "runtime",
-      operation: "run",
-      operationId: "run-1",
-      status: "succeeded",
-      attributes: {
-        activeAgentId: "agent-1",
-        terminalCode: null,
-        itemCount: 1,
-      },
-    });
-    expect(trace.spans[1]).toMatchObject({
+    expect(trace.spans.map((span) => [span.owner, span.operation, span.status]))
+      .toEqual([
+        ["runtime", "run", "succeeded"],
+        ["controller", "turn", "succeeded"],
+        ["operation", "operation", "succeeded"],
+        ["interaction", "interaction", "succeeded"],
+      ]);
+    expect(trace.spans[2]).toMatchObject({
       parentSpanId: trace.rootSpanId,
-      owner: "controller",
-      operation: "turn",
-      operationId: "controller-turn:1",
-      status: "succeeded",
-      startedAt,
-      completedAt,
+      operationId: "operation-invocation-1",
       attributes: {
-        iteration: 1,
-        decisionKind: "actions",
+        semanticOwner: "code-agent",
+        resultId: "operation-result-1",
+        resultStatus: "succeeded",
       },
+      links: expect.arrayContaining([{
+        kind: "operation_result",
+        id: "operation-result-1",
+      }]),
     });
-    expect(trace.spans[0]?.links).toContainEqual({
-      kind: "run_item",
-      id: "item-1",
-    });
+    expect(trace.spans[0]?.links).toEqual(expect.arrayContaining([
+      { kind: "run_item", id: "item-1" },
+      { kind: "run_result", id: "run-1" },
+    ]));
     expect(Object.isFrozen(trace)).toBe(true);
     expect(Object.isFrozen(trace.spans)).toBe(true);
-    expect(Object.isFrozen(trace.spans[0]?.attributes)).toBe(true);
-    expect(Object.isFrozen(trace.spans[0]?.links)).toBe(true);
     expect(observed.at(-1)).toBe(trace);
   });
 
-  it("keeps settlement-only operations unknown and reports incompleteness", () => {
+  it("retains a Controller settlement without a start as an explicit unknown span", () => {
     const assembler = createAssembler();
     const stream = createStream(assembler);
-
     stream.emit("run.started", {
       status: "running",
       activeAgentId: "agent-1",
-    }, startedAt);
+    }, STARTED_AT);
     stream.emit("controller.finished", {
+      turnId: "turn-1",
       iteration: 1,
-      status: "succeeded",
-      code: null,
-      decisionKind: "final_output",
-    }, completedAt);
-    stream.emit("run.completed", {
-      status: "succeeded",
-      code: null,
-      durationMs: 1_000,
-      itemCount: 0,
-      evidenceCount: 0,
-      artifactCount: 0,
-      errorCodes: [],
-    }, completedAt);
+      status: "failed",
+      code: "controller_failed",
+      decisionKind: null,
+    }, COMPLETED_AT);
+    stream.emit("run.failed", terminalEvent("failed", "controller_failed"), COMPLETED_AT);
 
     const trace = assembler.complete({
       items: [],
-      result: terminalResult({ status: "succeeded", code: null }),
+      result: terminalResult({ status: "failed", code: "controller_failed" }),
     });
 
     expect(trace.status).toBe("incomplete");
@@ -146,252 +161,74 @@ describe("RunTraceAssembler", () => {
       operationId: "controller-turn:1",
     });
     expect(trace.spans[1]).toMatchObject({
+      owner: "controller",
       status: "unknown",
       startedAt: null,
-      completedAt,
+      completedAt: COMPLETED_AT,
     });
   });
 
-  it("uses the closed Action, approval, Sandbox, Tool, and Retry span catalog", () => {
+  it("marks an open Operation unknown when terminal assembly lacks settlement", () => {
     const assembler = createAssembler();
     const stream = createStream(assembler);
-
     stream.emit("run.started", {
       status: "running",
       activeAgentId: "agent-1",
-    }, startedAt);
-    stream.emit("tool.started", {
-      actionId: "action-1",
-      toolName: "codeAgent.readFile",
-    }, startedAt);
-    stream.emit("action.prepared", {
-      actionId: "action-1",
-      actionFingerprint: "fingerprint-1",
-      category: "file_system",
-      effectCount: 1,
-      targetAssertionCount: 1,
-    }, startedAt);
-    stream.emit("action.assessed", {
-      actionId: "action-1",
-      actionFingerprint: "fingerprint-1",
-      status: "approval_required",
-      owner: null,
-      code: null,
-    }, startedAt);
-    stream.emit("approval.requested", {
-      requestId: "approval-1",
-      actionId: "action-1",
-      actionFingerprint: "fingerprint-1",
-      category: "fileChange",
-      pendingVersion: 1,
-      reviewer: "user",
-      phase: "reviewing",
-      reviewOperationId: "approval-review-1",
-    }, startedAt);
-    stream.emit("approval.resolved", {
-      requestId: "approval-1",
-      actionId: "action-1",
-      actionFingerprint: "fingerprint-1",
-      pendingVersion: 1,
-      reviewer: "user",
-      resolutionKind: "decision",
-      decisionKind: "accept",
-      applicationKind: "applied",
-      code: null,
-      authorityRecordIds: [],
-    }, completedAt);
-    stream.emit("sandbox.attempt.started", {
-      actionId: "action-1",
-      attemptId: "sandbox-1",
-      ordinal: 1,
-      enforcement: "managed",
-    }, startedAt);
-    stream.emit("sandbox.attempt.resolved", {
-      actionId: "action-1",
-      attemptId: "sandbox-1",
-      ordinal: 1,
-      enforcement: "managed",
-      outcome: "executed",
-      code: null,
-    }, completedAt);
-    stream.emit("observation.created", {
-      actionId: "action-1",
-      observationId: "observation-1",
-      status: "succeeded",
-      code: null,
-    }, completedAt);
-    stream.emit("tool.finished", {
-      actionId: "action-1",
-      toolName: "codeAgent.readFile",
-      status: "succeeded",
-      code: null,
-      toolResultStatus: "succeeded",
-      durationMs: 25,
-    }, completedAt);
-    stream.emit("retry.attempt.started", {
-      operationId: "provider-request-1",
-      owner: "provider_request",
-      attemptId: "retry-attempt-1",
-      budgetId: "budget-1",
-      attemptNumber: 1,
-      budgetAttemptNumber: 1,
-      maxBudgetAttempts: 2,
-    }, startedAt);
-    stream.emit("retry.attempt.finished", {
-      operationId: "provider-request-1",
-      owner: "provider_request",
-      attemptId: "retry-attempt-1",
-      budgetId: "budget-1",
-      attemptNumber: 1,
-      budgetAttemptNumber: 1,
-      durationMs: 50,
-      outcome: "succeeded",
-      failureCategory: null,
-      failureCode: null,
-      next: "return_to_owner",
-    }, completedAt);
-
-    const trace = assembler.getSnapshot();
-    expect(trace.status).toBe("active");
-    expect(trace.issues).toEqual([]);
-    expect(trace.spans.map((span) => [span.owner, span.operation, span.status]))
-      .toEqual([
-        ["runtime", "run", "running"],
-        ["tool", "execution", "succeeded"],
-        ["action", "processing", "succeeded"],
-        ["approval", "review", "succeeded"],
-        ["sandbox", "attempt", "succeeded"],
-        ["retry", "attempt", "succeeded"],
-      ]);
-    const rootSpan = trace.spans.find((span) => span.owner === "runtime");
-    const toolSpan = trace.spans.find((span) => span.owner === "tool");
-    const actionSpan = trace.spans.find((span) => span.owner === "action");
-    expect(toolSpan?.parentSpanId).toBe(rootSpan?.spanId);
-    expect(actionSpan?.parentSpanId).toBe(toolSpan?.spanId);
-    expect(trace.spans.find((span) => span.owner === "approval")?.parentSpanId)
-      .toBe(actionSpan?.spanId);
-    expect(trace.spans.find((span) => span.owner === "sandbox")?.parentSpanId)
-      .toBe(actionSpan?.spanId);
-    expect(trace.spans.find((span) => span.owner === "retry")?.parentSpanId)
-      .toBe(rootSpan?.spanId);
-    expect(trace.spans.find((span) => span.owner === "tool")?.attributes)
-      .toMatchObject({
-        actionId: "action-1",
-        toolName: "codeAgent.readFile",
-        resultStatus: "succeeded",
-        reportedDurationMs: 25,
-      });
-    expect(trace.spans.find((span) => span.owner === "retry")?.attributes)
-      .toMatchObject({
-        retryOperationId: "provider-request-1",
-        retryOwner: "provider_request",
-        maxBudgetAttempts: 2,
-        outcome: "succeeded",
-      });
-  });
-
-  it("settles Tool execution without inventing Action processing when preparation never succeeds", () => {
-    const assembler = createAssembler();
-    const stream = createStream(assembler);
-
-    stream.emit("run.started", {
-      status: "running",
-      activeAgentId: "agent-1",
-    }, startedAt);
-    stream.emit("tool.started", {
-      actionId: "action-1",
-      toolName: "codeAgent.writeFile",
-    }, startedAt);
-    stream.emit("tool.finished", {
-      actionId: "action-1",
-      toolName: "codeAgent.writeFile",
-      status: "failed",
-      code: "action_preparation_failed",
-      toolResultStatus: "failed",
-      durationMs: 10,
-    }, completedAt);
-
-    const trace = assembler.getSnapshot();
-    expect(trace.issues).toEqual([]);
-    expect(trace.spans.filter((span) => span.owner === "action")).toEqual([]);
-    expect(trace.spans.find((span) => span.owner === "tool")).toMatchObject({
-      parentSpanId: trace.rootSpanId,
-      status: "failed",
-      code: "action_preparation_failed",
-    });
-  });
-
-  it("does not invent terminal timing or committed-item correlation", () => {
-    const assembler = createAssembler();
-    const stream = createStream(assembler);
-
-    stream.emit("run.started", {
-      status: "running",
-      activeAgentId: "agent-1",
-    }, startedAt);
+    }, STARTED_AT);
+    stream.emit("operation.started", {
+      invocationId: "operation-invocation-1",
+      operationNamespace: "code",
+      operationName: "search",
+      operationRevision: "1",
+      semanticOwner: "code-agent",
+      bindingKind: "internal",
+      correlationKind: "run_action",
+      parentInvocationId: null,
+      parentRunActionId: "run-action-1",
+    }, STARTED_AT);
+    stream.emit("run.failed", terminalEvent("failed", "runtime_failed"), COMPLETED_AT);
 
     const trace = assembler.complete({
-      items: [{
-        id: "item-1",
-        runId: "run-1",
-        sequence: 1,
-        kind: "run_failed",
-        createdAt: completedAt,
-      }],
-      result: terminalResult({
-        status: "failed",
-        code: "provider_request_failed",
-        itemCount: 1,
-        errorCodes: ["provider_request_failed"],
-      }),
+      items: [],
+      result: terminalResult({ status: "failed", code: "runtime_failed" }),
     });
 
-    expect(trace.status).toBe("incomplete");
-    expect(trace.completedAt).toBeNull();
-    expect(trace.spans[0]).toMatchObject({
-      status: "failed",
-      code: "provider_request_failed",
+    expect(trace.issues).toContainEqual({
+      code: "operation_settlement_missing",
+      sourceId: null,
+      operationId: "operation-invocation-1",
+    });
+    expect(trace.spans[1]).toMatchObject({
+      owner: "operation",
+      status: "unknown",
+      startedAt: STARTED_AT,
       completedAt: null,
     });
-    expect(trace.issues.map((issue) => issue.code)).toEqual(
-      expect.arrayContaining([
-        "run_item_event_missing",
-        "terminal_event_missing",
-      ]),
-    );
   });
 
-  it("rejects cross-Run and regressed event input without replacing known facts", () => {
+  it("rejects foreign and regressed events without replacing accepted facts", () => {
     const assembler = createAssembler();
-    const ownStream = createStream(assembler);
-    ownStream.emit("run.started", {
+    createStream(assembler).emit("run.started", {
       status: "running",
       activeAgentId: "agent-1",
-    }, startedAt);
+    }, STARTED_AT);
+    const foreign = createStream(undefined, "run-2").emit("controller.started", {
+      turnId: "foreign-turn",
+      iteration: 1,
+    }, COMPLETED_AT);
+    assembler.publish(foreign);
+    const regressed = createStream(undefined).emit("run.started", {
+      status: "running",
+      activeAgentId: "different-agent",
+    }, COMPLETED_AT);
+    assembler.publish(regressed);
 
-    const foreignEvent = createStream(undefined, "run-2").emit(
-      "controller.started",
-      { iteration: 1 },
-      startedAt,
-    );
-    expect(() => assembler.publish(foreignEvent)).toThrow(/another Run/);
-
-    const regressed = createStream(undefined).emit(
-      "run.started",
-      { status: "running", activeAgentId: "agent-1" },
-      startedAt,
-    );
-    expect(() => assembler.publish(regressed)).toThrow(/regresses/);
-    expect(assembler.getSnapshot()).toMatchObject({
-      status: "incomplete",
-      startedAt,
-    });
-    expect(assembler.getSnapshot().issues.map((issue) => issue.code)).toEqual(
-      expect.arrayContaining([
-        "run_identity_mismatch",
-        "event_sequence_regression",
-      ]),
-    );
+    const trace = assembler.getSnapshot();
+    expect(trace.spans[0]?.attributes).toMatchObject({ activeAgentId: "agent-1" });
+    expect(trace.issues.map((issue) => issue.code)).toEqual([
+      "run_identity_mismatch",
+      "event_sequence_regression",
+    ]);
   });
 
   it("accepts a later ordered event only with an explicit sequence-gap issue", () => {
@@ -399,32 +236,25 @@ describe("RunTraceAssembler", () => {
     createStream(assembler).emit("run.started", {
       status: "running",
       activeAgentId: "agent-1",
-    }, startedAt);
+    }, STARTED_AT);
     const source = createStream(undefined);
-    source.emit("run.started", {
-      status: "running",
-      activeAgentId: "agent-1",
-    }, startedAt);
-    source.emit("plan.created", {
-      plan: {
-        id: "plan-1",
-        version: 1,
-        status: "active",
-        steps: [],
-      },
-    }, startedAt);
-    const later = source.emit(
-      "controller.started",
-      { iteration: 1 },
-      startedAt,
-    );
+    source.emit("run.started", { status: "running", activeAgentId: "agent-1" });
+    source.emit("run.item.appended", {
+      itemId: "item-ignored",
+      itemKind: "state_transition",
+      itemSequence: 1,
+    });
+    const later = source.emit("controller.started", {
+      turnId: "turn-1",
+      iteration: 1,
+    });
 
     assembler.publish(later);
 
     expect(assembler.getSnapshot().issues).toContainEqual({
       code: "event_sequence_gap",
       sourceId: "event-3",
-      operationId: "controller-turn:1",
+      operationId: null,
     });
     expect(assembler.getSnapshot().spans[1]).toMatchObject({
       operationId: "controller-turn:1",
@@ -432,7 +262,7 @@ describe("RunTraceAssembler", () => {
     });
   });
 
-  it("redacts undeclared Product data and isolates sync and async observers", async () => {
+  it("redacts undeclared Product data and isolates every observer", async () => {
     const observed: RunTrace[] = [];
     const observers: RunTraceObserver[] = [
       { observe() { throw new Error("sync observer failed"); } },
@@ -442,32 +272,27 @@ describe("RunTraceAssembler", () => {
     const assembler = createAssembler(observers);
     const stream = createStream(assembler);
 
-    expect(() => stream.emit("controller.started", { iteration: 1 }, startedAt))
-      .not.toThrow();
-    expect(observed).toHaveLength(0);
-    expect(() => stream.emit("controller.finished", {
+    stream.emit("controller.started", { turnId: "turn-1", iteration: 1 }, STARTED_AT);
+    stream.emit("controller.finished", {
+      turnId: "turn-1",
       iteration: 1,
-      status: "succeeded",
+      status: "decided",
       code: null,
-      decisionKind: "actions",
+      decisionKind: "propose_completion",
       rawPrompt: "secret",
-      promptArchitectureVersion: "product-only",
-    } as ControllerFinishedRuntimeEventPayload, completedAt)).not.toThrow();
+    } as ControllerFinishedRuntimeEventPayload, COMPLETED_AT);
     await Promise.resolve();
 
-    const span = assembler.getSnapshot().spans[1];
+    expect(observed).toHaveLength(2);
+    const span = observed.at(-1)?.spans[1];
     expect(span?.attributes).toEqual({
+      turnId: "turn-1",
       iteration: 1,
-      decisionKind: "actions",
+      decisionKind: "propose_completion",
       code: null,
     });
     expect(span?.attributes).not.toHaveProperty("rawPrompt");
-    expect(span?.attributes).not.toHaveProperty("promptArchitectureVersion");
-    expect(observed).toHaveLength(2);
-    expect(() => Object.assign(
-      span?.attributes as object,
-      { rawPrompt: "mutated" },
-    )).toThrow();
+    expect(Object.isFrozen(span?.attributes)).toBe(true);
   });
 });
 
@@ -490,17 +315,31 @@ function createStream(
   return new RuntimeEventStream({
     runId,
     taskId: "task-1",
-    now: () => startedAt,
+    now: () => STARTED_AT,
     createEventId: ({ sequence }) => `event-${sequence}`,
     publishers: publisher === undefined ? [] : [publisher],
   });
+}
+
+function terminalEvent(
+  status: "failed" | "blocked" | "cancelled",
+  code: string,
+) {
+  return {
+    status,
+    code,
+    durationMs: 1_000,
+    itemCount: 0,
+    evidenceCount: 0,
+    artifactCount: 0,
+    errorCodes: [code],
+  } as const;
 }
 
 function terminalResult(input: {
   readonly status: "succeeded" | "blocked" | "failed" | "cancelled";
   readonly code: string | null;
   readonly itemCount?: number;
-  readonly errorCodes?: readonly string[];
 }) {
   return {
     runId: "run-1",
@@ -510,6 +349,9 @@ function terminalResult(input: {
     itemCount: input.itemCount ?? 0,
     evidenceCount: 0,
     artifactCount: 0,
-    errorCodes: input.errorCodes ?? [],
+    errorCodes: input.code === null ? [] : [input.code],
   } as const;
 }
+
+const STARTED_AT = "2026-08-13T00:00:00.000Z";
+const COMPLETED_AT = "2026-08-13T00:00:01.000Z";

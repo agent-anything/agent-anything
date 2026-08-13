@@ -42,13 +42,18 @@
   },
   "dependencies": {
     "@agent-anything/action-execution": "workspace:*",
+    "@agent-anything/canonical-action": "workspace:*",
     "@agent-anything/context": "workspace:*",
     "@agent-anything/governance": "workspace:*",
+    "@agent-anything/interaction": "workspace:*",
     "@agent-anything/observability": "workspace:*",
+    "@agent-anything/operation-catalog": "workspace:*",
+    "@agent-anything/operation-composition": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/model-interaction": "workspace:*",
     "@agent-anything/agent-core": "workspace:*",
-    "@agent-anything/tools": "workspace:*"
+    "@agent-anything/tools": "workspace:*",
+    "@agent-anything/workspace": "workspace:*"
   },
   "devDependencies": {
     "@agent-anything/test-support": "workspace:*"

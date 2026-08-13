@@ -1,7 +1,7 @@
 export type RunLifecycleStatus =
   | "initializing"
   | "running"
-  | "waiting_for_approval"
+  | "waiting"
   | "cancelling"
   | "succeeded"
   | "blocked"

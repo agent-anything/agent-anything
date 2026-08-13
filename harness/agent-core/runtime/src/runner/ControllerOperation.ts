@@ -5,78 +5,102 @@ import {
   snapshotContextProjection,
   type ContextProjection,
 } from "@agent-anything/context/context";
+import type { ToolExposureProof } from "@agent-anything/tools/selection";
 import {
-  type Controller,
   type ControllerDecision,
   type ControllerInput,
 } from "../controller/index.js";
 import { projectPlan } from "../plan/index.js";
 import {
+  projectPendingRunSubject,
   projectPermissionContext,
+  type RunObservation,
   type RunState,
 } from "../run/index.js";
 import type { RetryEventSink } from "../retry/index.js";
 import type { ResolvedRunConfig } from "./RunConfig.js";
-import type { RunnerContextProjection } from "./RunnerDependencies.js";
-import type { RunObservation } from "../run/RunObservation.js";
+import type {
+  ResolvedRunnerDependencies,
+  RunnerContextProjection,
+} from "./RunnerDependencies.js";
 
-export interface ExecuteControllerOperationInput<TOutput> {
-  readonly controller: Controller<unknown>;
+export interface PreparedControllerOperation<TOutput> {
+  readonly input: ControllerInput<TOutput>;
+  readonly context: ContextProjection<RunObservation>;
+  readonly deadlineAt: string;
+}
+
+export interface PrepareControllerOperationInput<TOutput> {
   readonly agent: Agent<TOutput>;
-  readonly input: RunInput;
+  readonly runInput: RunInput;
   readonly config: ResolvedRunConfig;
   readonly state: RunState<TOutput>;
-  readonly deadlineAt: string;
-  readonly retryEvents: RetryEventSink;
+  readonly iteration: number;
+  readonly exposure: ToolExposureProof;
   readonly contextProjection: RunnerContextProjection;
 }
 
-export function executeControllerOperation<TOutput>(
-  input: ExecuteControllerOperationInput<TOutput>,
-): Promise<ControllerDecision<unknown>> {
-  return input.controller.next(
-    createControllerInput(input),
+export function prepareControllerOperation<TOutput>(
+  input: PrepareControllerOperationInput<TOutput>,
+): PreparedControllerOperation<TOutput> {
+  const context = createContextProjection(input);
+  const pendingApprovalCount = input.state.pending.filter(
+    (candidate) =>
+      candidate.kind === "interaction" &&
+      candidate.interaction.request.protocol.owner === "permission" &&
+      candidate.interaction.request.protocol.kind === "approval",
+  ).length;
+  return Object.freeze({
+    context,
+    deadlineAt: input.state.deadlineAt,
+    input: Object.freeze({
+      runId: input.state.run.id,
+      iteration: input.iteration,
+      agent: input.agent,
+      task: input.runInput.task,
+      inputItems: input.runInput.items,
+      toolExposure: input.exposure,
+      context,
+      plan: input.state.plan === null ? null : projectPlan(input.state.plan),
+      permission: projectPermissionContext(
+        input.config.permissions,
+        input.state.permission,
+        pendingApprovalCount,
+      ),
+      pending: Object.freeze(input.state.pending.map(projectPendingRunSubject)),
+      workspace: input.config.workspace,
+      identity: input.config.identity,
+      metadata: Object.freeze({ ...input.state.metadata }),
+    }),
+  });
+}
+
+export function executeControllerOperation<TOutput>(input: {
+  readonly dependencies: ResolvedRunnerDependencies;
+  readonly prepared: PreparedControllerOperation<TOutput>;
+  readonly config: ResolvedRunConfig;
+  readonly retryEvents: RetryEventSink;
+}): Promise<ControllerDecision<TOutput>> {
+  return input.dependencies.controller.next(
+    input.prepared.input,
     Object.freeze({
       cancellation: input.config.cancellation.context,
       retry: Object.freeze({
         providerRequest: input.config.retry.providerRequest,
         structuredOutput: input.config.retry.structuredOutput,
-        deadlineAt: input.deadlineAt,
+        deadlineAt: input.prepared.deadlineAt,
         events: input.retryEvents,
       }),
     }),
-  );
-}
-
-function createControllerInput<TOutput>(
-  input: ExecuteControllerOperationInput<TOutput>,
-): ControllerInput<unknown> {
-  return Object.freeze({
-    runId: input.state.runId,
-    iteration: input.state.counters.iterations,
-    agent: input.agent,
-    task: input.input.task,
-    inputItems: input.input.items,
-    toolCatalog: input.config.toolBindings.toolCatalog,
-    toolSelectionId: input.config.toolBindings.toolSelectionId,
-    context: createContextProjection(input),
-    plan: input.state.plan === null ? null : projectPlan(input.state.plan),
-    permission: projectPermissionContext(
-      input.config.permissions,
-      input.state.permission,
-    ),
-    workspace: input.config.workspace,
-    identity: input.config.identity,
-    metadata: Object.freeze({ ...input.state.metadata }),
-  });
+  ) as Promise<ControllerDecision<TOutput>>;
 }
 
 function createContextProjection<TOutput>(
-  input: ExecuteControllerOperationInput<TOutput>,
+  input: PrepareControllerOperationInput<TOutput>,
 ): ContextProjection<RunObservation> {
   const request = Object.freeze({
-    runId: input.state.runId,
-    controllerIteration: input.state.counters.iterations,
+    runId: input.state.run.id,
+    controllerIteration: input.iteration,
     purpose: input.contextProjection.purpose,
     limits: input.contextProjection.limits,
   });
@@ -87,9 +111,7 @@ function createContextProjection<TOutput>(
       request,
     });
   } catch (error) {
-    if (error instanceof ContextProjectionError) {
-      throw error;
-    }
+    if (error instanceof ContextProjectionError) throw error;
     throw new ContextProjectionError(Object.freeze({
       code: "context_projection_failed",
       message: "Context projector failed.",
@@ -99,20 +121,17 @@ function createContextProjection<TOutput>(
       }),
     }));
   }
-  const projection = snapshotContextProjection({
-    projection: projected,
-    request,
-  });
-  assertProjectionDerivation(input.state.context, projection);
+  const projection = snapshotContextProjection({ projection: projected, request });
+  assertProjectionDerivation(input.state, projection);
   return projection;
 }
 
 function assertProjectionDerivation(
-  context: RunState["context"],
+  state: RunState,
   projection: ContextProjection<RunObservation>,
 ): void {
   const observations = new Map(
-    context.observations.map((observation) => [observation.id, observation]),
+    state.context.observations.map((observation) => [observation.id, observation]),
   );
   for (const projected of projection.observations) {
     const source = observations.get(projected.id);
@@ -130,7 +149,7 @@ function assertProjectionDerivation(
   }
 
   const messages = new Map(
-    context.messages.map((message) => [message.id, message]),
+    state.context.messages.map((message) => [message.id, message]),
   );
   for (const projected of projection.messages) {
     const source = messages.get(projected.id);
@@ -140,11 +159,8 @@ function assertProjectionDerivation(
       );
     }
   }
-
-  const evidenceRefs = new Set(context.evidenceRefs);
-  if (
-    projection.evidenceRefs.some((reference) => !evidenceRefs.has(reference))
-  ) {
+  const evidenceRefs = new Set(state.context.evidenceRefs);
+  if (projection.evidenceRefs.some((reference) => !evidenceRefs.has(reference))) {
     throw projectionDerivationError(
       "Context projector fabricated an Evidence reference.",
     );

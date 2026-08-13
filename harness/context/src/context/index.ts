@@ -1,5 +1,6 @@
 export type {
   Context,
+  ContextObservation,
   ContextUpdate,
 } from "./Context.js";
 export {

@@ -1,4 +1,4 @@
-import type { InvocationInterruptionRef } from "@agent-anything/agent-core/run";
+import type { InvocationInterruptionRef } from "@agent-anything/agent-core/control";
 import type {
   AdditionalPermissions,
   CanonicalAdditionalPermissions,

@@ -5,15 +5,21 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/model-interaction";
-import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
-import type { ActionCandidate, ActionKind } from "@agent-anything/agent-core/action";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/control";
 import type { RetryAttemptContext, RetryClock } from "../retry/index.js";
 import { RetryExecutor } from "../retry/RetryExecutor.js";
 import type { RetryClassification, RetryFailure } from "../retry/index.js";
 import type { RetryExhaustedEvent } from "../retry/index.js";
 import type { RetryOperation } from "../retry/index.js";
 import type { ModelFailure } from "./ModelFailure.js";
-import type { Controller, ControllerCallContext, ControllerDecision, ControllerInput, ControllerModelItem } from "./Controller.js";
+import type {
+  Controller,
+  ControllerCallContext,
+  ControllerDecision,
+  ControllerInput,
+  ControllerModelItem,
+  ProgressionCandidate,
+} from "./Controller.js";
 import {
   StructuredOutputError,
   snapshotStructuredOutputFailure,
@@ -242,7 +248,7 @@ export class ProviderBackedController<TOutput = unknown>
           try {
             this.assertOutputLength(response);
             const parsed = await this.parseResponse(response, controllerInput);
-            const decision = validateDecision(parsed, controllerInput);
+            const decision = validateControllerDecision(parsed, controllerInput);
             const interruptedAfterValidation = structuredOutputInterruption(
               attempt,
               callContext,
@@ -508,7 +514,7 @@ export class ProviderBackedController<TOutput = unknown>
   }
 }
 
-function validateDecision<TOutput>(
+export function validateControllerDecision<TOutput>(
   candidate: ControllerDecision<TOutput>,
   input: ControllerInput<TOutput>,
 ): ControllerDecision<TOutput> {
@@ -520,7 +526,7 @@ function validateDecision<TOutput>(
   const modelItemIds = new Set(modelItems.map((item) => item.id));
 
   switch (candidate.kind) {
-    case "final_output": {
+    case "propose_completion": {
       let validation;
       try {
         validation = input.agent.output.validate(candidate.output);
@@ -540,22 +546,22 @@ function validateDecision<TOutput>(
       }
 
       return Object.freeze({
-        kind: "final_output",
+        kind: "propose_completion",
         output: validation.output,
         modelItems,
       });
     }
 
-    case "actions":
+    case "advance":
       return Object.freeze({
-        kind: "actions",
-        actions: validateActions(candidate.actions, modelItemIds),
+        kind: "advance",
+        candidates: validateCandidates(candidate.candidates, modelItemIds),
         modelItems,
       });
 
-    case "stop":
+    case "propose_stop":
       return Object.freeze({
-        kind: "stop",
+        kind: "propose_stop",
         reason: nonEmptyDecisionText(candidate.reason),
         modelItems,
       });
@@ -597,50 +603,185 @@ function validateModelItems(candidate: unknown): readonly ControllerModelItem[] 
   return Object.freeze(items);
 }
 
-function validateActions(
+function validateCandidates(
   candidate: unknown,
   modelItemIds: ReadonlySet<string>,
-): readonly [ActionCandidate, ...ActionCandidate[]] {
+): readonly [ProgressionCandidate, ...ProgressionCandidate[]] {
   if (!Array.isArray(candidate) || candidate.length === 0) {
-    throw decisionContractError("controller_actions_required");
+    throw decisionContractError("controller_candidates_required");
   }
 
-  const actions = candidate.map((action) => {
-    if (!isRecord(action)) {
-      throw decisionContractError("controller_action_invalid");
+  const candidates = candidate.map((progression) => {
+    if (!isRecord(progression)) {
+      throw decisionContractError("controller_candidate_invalid");
     }
 
-    const kind = validateActionKind(action.kind);
-    const modelItemId = nonEmptyDecisionText(action.modelItemId);
+    const modelItemId = nonEmptyDecisionText(progression.modelItemId);
     if (!modelItemIds.has(modelItemId)) {
-      throw decisionContractError("controller_action_provenance_invalid");
+      throw decisionContractError("controller_candidate_provenance_invalid");
     }
-
-    return Object.freeze({
-      kind,
-      name: nonEmptyDecisionText(action.name),
-      input: action.input,
-      origin: "model" as const,
-      modelItemId,
-    });
+    return validateProgressionCandidate(progression, modelItemId);
   });
 
-  return Object.freeze(actions) as unknown as readonly [
-    ActionCandidate,
-    ...ActionCandidate[],
+  validateCandidateOrdering(candidates);
+  return Object.freeze(candidates) as unknown as readonly [
+    ProgressionCandidate,
+    ...ProgressionCandidate[],
   ];
 }
 
-function validateActionKind(candidate: unknown): ActionKind {
-  if (
-    candidate !== "internal" &&
-    candidate !== "tool" &&
-    candidate !== "permission_request"
-  ) {
-    throw decisionContractError("controller_action_kind_invalid");
+function validateProgressionCandidate(
+  candidate: Record<string, unknown>,
+  modelItemId: string,
+): ProgressionCandidate {
+  if (candidate.kind === "state_transition") {
+    if (candidate.transition === "plan_update") {
+      return Object.freeze({
+        kind: "state_transition" as const,
+        transition: "plan_update" as const,
+        input: candidate.input,
+        modelItemId,
+      });
+    }
+    if (candidate.transition === "handoff" && isRecord(candidate.input)) {
+      const currentAgent = validateAgentRevisionRef(candidate.input.currentAgent);
+      const targetAgent = validateAgentRevisionRef(candidate.input.targetAgent);
+      const transferPolicy = candidate.input.transferPolicy;
+      if (
+        transferPolicy !== "all_context" &&
+        transferPolicy !== "bounded_context" &&
+        transferPolicy !== "fresh_context"
+      ) throw decisionContractError("controller_handoff_transfer_invalid");
+      const expectedRunRevision = candidate.input.expectedRunRevision;
+      if (!Number.isSafeInteger(expectedRunRevision) || (expectedRunRevision as number) < 0) {
+        throw decisionContractError("controller_handoff_revision_invalid");
+      }
+      return Object.freeze({
+        kind: "state_transition" as const,
+        transition: "handoff" as const,
+        input: Object.freeze({
+          expectedRunRevision: expectedRunRevision as number,
+          currentAgent,
+          targetAgent,
+          reason: nonEmptyDecisionText(candidate.input.reason),
+          transferPolicy,
+          admissionEvidenceRef: nonEmptyDecisionText(candidate.input.admissionEvidenceRef),
+        }),
+        modelItemId,
+      });
+    }
+    throw decisionContractError("controller_state_transition_invalid");
   }
+  if (candidate.kind === "operation_request") {
+    if (candidate.origin === "controller_protocol") {
+      return Object.freeze({
+        kind: "operation_request" as const,
+        origin: "controller_protocol" as const,
+        operation: validateOperationRevisionRef(candidate.operation),
+        request: candidate.request,
+        modelItemId,
+      });
+    }
+    if (candidate.origin === "tool_request" && isRecord(candidate.tool)) {
+      const revision = candidate.tool.revision;
+      if (revision !== null && typeof revision !== "string") {
+        throw decisionContractError("controller_tool_revision_invalid");
+      }
+      return Object.freeze({
+        kind: "operation_request" as const,
+        origin: "tool_request" as const,
+        tool: Object.freeze({
+          name: nonEmptyDecisionText(candidate.tool.name),
+          revision: revision as string | null,
+          input: candidate.tool.input,
+          origin: "model" as const,
+          controllerRequestId: typeof candidate.tool.controllerRequestId === "string"
+            ? candidate.tool.controllerRequestId
+            : null,
+        }),
+        modelItemId,
+      });
+    }
+    throw decisionContractError("controller_operation_request_invalid");
+  }
+  if (candidate.kind === "interaction_request") {
+    const blockingScope = candidate.blockingScope;
+    if (blockingScope !== "none" && blockingScope !== "branch" && blockingScope !== "run") {
+      throw decisionContractError("controller_interaction_blocking_scope_invalid");
+    }
+    const requestVersion = candidate.requestVersion;
+    if (!Number.isSafeInteger(requestVersion) || (requestVersion as number) < 1) {
+      throw decisionContractError("controller_interaction_version_invalid");
+    }
+    const expiresAt = candidate.expiresAt;
+    if (expiresAt !== null && (typeof expiresAt !== "string" || Number.isNaN(Date.parse(expiresAt)))) {
+      throw decisionContractError("controller_interaction_expiry_invalid");
+    }
+    return Object.freeze({
+      kind: "interaction_request" as const,
+      protocol: validateProtocolRef(candidate.protocol),
+      subject: candidate.subject,
+      subjectRef: validateSubjectRef(candidate.subjectRef),
+      presentation: candidate.presentation,
+      blockingScope: blockingScope as "none" | "branch" | "run",
+      requestVersion: requestVersion as number,
+      expiresAt: expiresAt as string | null,
+      modelItemId,
+    });
+  }
+  throw decisionContractError("controller_candidate_kind_invalid");
+}
 
-  return candidate;
+function validateCandidateOrdering(candidates: readonly ProgressionCandidate[]): void {
+  if (candidates.filter((item) => item.kind === "state_transition" && item.transition === "plan_update").length > 1) {
+    throw decisionContractError("controller_plan_candidate_duplicated");
+  }
+  const handoffIndex = candidates.findIndex((item) => item.kind === "state_transition" && item.transition === "handoff");
+  const suspendingIndex = candidates.findIndex((item) => item.kind === "interaction_request" && item.blockingScope !== "none");
+  if (handoffIndex >= 0 && handoffIndex !== candidates.length - 1) {
+    throw decisionContractError("controller_handoff_must_be_last");
+  }
+  if (suspendingIndex >= 0 && suspendingIndex !== candidates.length - 1) {
+    throw decisionContractError("controller_suspending_interaction_must_be_last");
+  }
+  if (handoffIndex >= 0 && suspendingIndex >= 0) {
+    throw decisionContractError("controller_handoff_interaction_conflict");
+  }
+}
+
+function validateAgentRevisionRef(value: unknown): { readonly id: string; readonly revision: string } {
+  if (!isRecord(value)) throw decisionContractError("controller_agent_revision_invalid");
+  return Object.freeze({ id: nonEmptyDecisionText(value.id), revision: nonEmptyDecisionText(value.revision) });
+}
+
+function validateOperationRevisionRef(value: unknown): import("@agent-anything/operation-catalog/identity").OperationRevisionRef {
+  if (!isRecord(value) || !isRecord(value.operation)) throw decisionContractError("controller_operation_revision_invalid");
+  return Object.freeze({
+    operation: Object.freeze({
+      namespace: nonEmptyDecisionText(value.operation.namespace),
+      name: nonEmptyDecisionText(value.operation.name),
+    }),
+    revision: nonEmptyDecisionText(value.revision),
+  });
+}
+
+function validateProtocolRef(value: unknown): import("@agent-anything/interaction/protocol").InteractionProtocolRef {
+  if (!isRecord(value)) throw decisionContractError("controller_interaction_protocol_invalid");
+  return Object.freeze({
+    owner: nonEmptyDecisionText(value.owner),
+    kind: nonEmptyDecisionText(value.kind),
+    revision: nonEmptyDecisionText(value.revision),
+  });
+}
+
+function validateSubjectRef(value: unknown): import("@agent-anything/interaction/protocol").InteractionSubjectRef {
+  if (!isRecord(value)) throw decisionContractError("controller_interaction_subject_invalid");
+  return Object.freeze({
+    owner: nonEmptyDecisionText(value.owner),
+    kind: nonEmptyDecisionText(value.kind),
+    id: nonEmptyDecisionText(value.id),
+    revision: nonEmptyDecisionText(value.revision),
+  });
 }
 
 function nonEmptyDecisionText(candidate: unknown): string {

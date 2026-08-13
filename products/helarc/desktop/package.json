@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@agent-anything/action-execution": "workspace:*",
+    "@agent-anything/canonical-action": "workspace:*",
     "@agent-anything/observability": "workspace:*",
     "@agent-anything/context": "workspace:*",
     "@agent-anything/agent-runtime": "workspace:*",
@@ -43,6 +44,7 @@
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/model-interaction": "workspace:*",
     "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/workspace": "workspace:*",
     "lucide-react": "^1.21.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"

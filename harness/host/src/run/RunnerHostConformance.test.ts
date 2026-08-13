@@ -1,562 +1,252 @@
 import { describe, expect, it } from "vitest";
-import type {
-  Provider,
-  ProviderCallResult,
-  ProviderRequest,
-} from "@agent-anything/model-interaction";
-import { resolvePermissionProfile } from "@agent-anything/permission";
-import type { ManagedPermissionConstraints } from "@agent-anything/governance";
 import type { Agent } from "@agent-anything/agent-core/agent";
-import type { Controller, ControllerCallContext, ControllerDecision, ControllerInput } from "@agent-anything/agent-runtime/controller";
-import { createSystemRetryExecutor } from "@agent-anything/agent-runtime/retry";
-import { ProviderBackedController } from "@agent-anything/agent-runtime/controller";
-import { Runner, type RunConfig } from "@agent-anything/agent-runtime/runner";
+import type { RunInput } from "@agent-anything/agent-core/input";
 import {
-  createHostRunManager,
-  type HostRunResult,
-  type HostRunStartInput,
-  type HostRunManager,
-} from "./index.js";
-import type { HostRunProjection } from "../projection/index.js";
-import type { RetryClock } from "@agent-anything/agent-runtime/retry";
-import type { ActionCandidate } from "@agent-anything/agent-core/action";
-import type { ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
+  createInteractionProtocolRegistrySnapshot,
+} from "@agent-anything/interaction/coordination";
 import {
-  createEmptyToolActionBindingSnapshot,
-} from "@agent-anything/action-execution/registration";
+  createOperationBindingResolverSnapshot,
+} from "@agent-anything/operation-catalog/binding";
+import {
+  createOperationCatalogSnapshot,
+} from "@agent-anything/operation-catalog/catalog";
+import {
+  createFixedLocalToolSelection,
+} from "@agent-anything/tools/selection";
+import {
+  createToolRegistrationSnapshot,
+} from "@agent-anything/tools/registration";
+import {
+  resolvePermissionProfile,
+  type ResolvedRunPermissionConfig,
+} from "@agent-anything/permission";
+import type { ManagedPermissionConstraints } from "@agent-anything/governance";
+import type {
+  Controller,
+  ControllerDecision,
+  ControllerInput,
+} from "@agent-anything/agent-runtime/controller";
+import {
+  Runner,
+  type RunConfig,
+  type RunnerOperationComposition,
+} from "@agent-anything/agent-runtime/runner";
 import { createTestContextProjection } from "@agent-anything/test-support";
+import { createHostRunManager } from "./HostRunManager.js";
 
-interface ConformanceOutput {
+interface TestOutput {
   readonly summary: string;
 }
 
-type ControllerStep = (
-  input: ControllerInput,
-  context: ControllerCallContext,
-) => ControllerDecision | Promise<ControllerDecision>;
-
 describe("Runner and generic Host conformance", () => {
-  it("preserves direct completion through the generic Host adapter", async () => {
-    const controller = new FakeController([
-      (input) => finalDecision(input, "Direct completion"),
-    ]);
-    const harness = createHostHarness(controller);
+  it("preserves exact successful RunResult through the Host wrapper", async () => {
+    const manager = createManager(new CompletionController());
+    const active = manager.start(startInput());
 
-    const result = await harness.run(createHostInput());
+    const outcome = await active.wait();
 
-    expect(result).toMatchObject({
-      terminal: { status: "completed" },
+    expect(outcome).toMatchObject({
+      runId: "run-host-conformance",
+      terminal: { status: "completed", code: null },
       runResult: {
         status: "succeeded",
-        finalOutput: { summary: "Direct completion" },
+        finalOutput: { summary: "Done" },
+        startingAgent: { id: "agent-1", revision: "1" },
+        finalActiveAgent: { id: "agent-1", revision: "1" },
       },
     });
-    expect(result.terminal).toBe(harness.projections.at(-1)?.terminal);
-    expect(harness.projections[0]?.status).toBe("starting");
-    expect(harness.projections.at(-1)?.status).toBe("completed");
+    expect(outcome.terminal).toBe(active.getProjection().terminal);
+    expect(active.getResult()).toBe(outcome);
   });
 
-  it("preserves Runner-owned Provider retry history through the generic Host", async () => {
-    const controller = new FakeController([
-      async (input, context) => {
-        const operationId = `${input.runId}:controller:1:provider-request:1`;
-        const budgetId = `${operationId}:budget:1`;
-        const attemptId = `${operationId}:attempt:1`;
-        await context.retry.events.emit({
-          type: "retry_attempt_started",
-          runId: input.runId,
-          operationId,
-          owner: "provider_request",
-          occurredAt: "2026-07-14T00:00:00.000Z",
-          attemptId,
-          budgetId,
-          attemptNumber: 1,
-          budgetAttemptNumber: 1,
-          maxBudgetAttempts: 1,
-        });
-        await context.retry.events.emit({
-          type: "retry_attempt_finished",
-          runId: input.runId,
-          operationId,
-          owner: "provider_request",
-          occurredAt: "2026-07-14T00:00:00.000Z",
-          attemptId,
-          budgetId,
-          attemptNumber: 1,
-          budgetAttemptNumber: 1,
-          durationMs: 0,
-          outcome: "succeeded",
-          next: "return_to_owner",
-        });
-        return finalDecision(input, "Completed with retry history");
-      },
-    ]);
-
-    const harness = createHostHarness(controller);
-    const result = await harness.run(createHostInput());
-
-    expect(result.terminal).toBe(harness.projections.at(-1)?.terminal);
-    expect(result.runResult.items.map((item) => item.kind)).toEqual([
-      "retry_attempt_started",
-      "retry_attempt_finished",
-      "model_output",
-      "final_output",
-    ]);
-    expect(result.runResult.items[0]).toMatchObject({
-      retry: {
-        operationId: "run-conformance:controller:1:provider-request:1",
-        attemptId: "run-conformance:controller:1:provider-request:1:attempt:1",
-      },
-    });
-  });
-
-  it("carries real Provider Retry through Controller, Runner, and the safe Host projection", async () => {
-    const provider = new RetryOnceProvider();
-    const clock = fixedRetryClock();
-    const controller = new ProviderBackedController<ConformanceOutput>({
-      provider,
-      buildRequest: () => ({
-        messages: [{ role: "user", content: "Complete the conformance task.", metadata: {} }],
-        capability: "agent-control",
-        metadata: {},
-      }),
-      parseResponse: (_response, input) => finalDecision(
-        input,
-        "Recovered through the generic Host",
-      ),
-      structuredOutputContractId: "conformance-output-v1",
-      maxProviderOutputLength: 10_000,
-      retryExecutor: createSystemRetryExecutor(clock),
-      retryClock: clock,
-    });
-    const harness = createHostHarness(controller);
-    const input = createHostInput({
-      retry: {
-        providerRequest: {
-          maxRetries: 1,
-          delay: {
-            kind: "exponential_jitter",
-            baseDelayMs: 0,
-            maxDelayMs: 0,
-            multiplier: 2,
-            jitterRatio: 0.1,
-          },
-          retryableCategories: ["transport"],
-          serverDelay: { mode: "ignore" },
-        },
-        structuredOutput: disabledRetryConfiguration().structuredOutput,
-        approvalsReviewer: disabledRetryConfiguration().approvalsReviewer,
-      },
-    });
-
-    const result = await harness.run(input);
-
-    expect(result).toMatchObject({
-      terminal: { status: "completed" },
-      runResult: {
-        status: "succeeded",
-        finalOutput: { summary: "Recovered through the generic Host" },
-      },
-    });
-    expect(provider.requests).toHaveLength(2);
-    expect(result.runResult.items.map((item) => item.kind)).toEqual([
-      "retry_attempt_started",
-      "retry_attempt_started",
-      "retry_attempt_finished",
-      "retry_scheduled",
-      "retry_attempt_started",
-      "retry_attempt_finished",
-      "retry_attempt_finished",
-      "model_output",
-      "final_output",
-    ]);
-
-    const retryEvents = (
-      harness.projections.at(-1)?.retry?.recentEvents ?? []
-    ).filter((event) => event.owner === "provider_request");
-    expect(retryEvents.map((event) => event.event)).toEqual([
-      "retry.attempt.started",
-      "retry.attempt.finished",
-      "retry.scheduled",
-      "retry.attempt.started",
-      "retry.attempt.finished",
-    ]);
-    expect(JSON.stringify(retryEvents)).not.toContain("secret transport details");
-    expect(retryEvents.every((event) => Object.isFrozen(event))).toBe(true);
-  });
-
-  it("carries one Plan through creation, completion, reactivation, and terminal abandonment", async () => {
-    const controller = new FakeController([
-      (input) => actionsDecision(input, [{
-        kind: "internal",
-        name: "update_plan",
-        input: {
-          explanation: "Start with inspection.",
-          plan: [{ step: "Inspect resource", status: "in_progress" }],
-        },
-      }]),
-      (input) => actionsDecision(input, [{
-        kind: "internal",
-        name: "update_plan",
-        input: {
-          explanation: "Inspection is complete.",
-          plan: [{ step: "Inspect resource", status: "completed" }],
-        },
-      }]),
-      (input) => actionsDecision(input, [{
-        kind: "internal",
-        name: "update_plan",
-        input: {
-          explanation: "New work was discovered.",
-          plan: [
-            { step: "Inspect resource", status: "completed" },
-            { step: "Verify discovery", status: "in_progress" },
-          ],
-        },
-      }]),
-      (input) => finalDecision(input, "Plan lifecycle complete"),
-    ]);
-
-    const harness = createHostHarness(controller);
-    const result = await harness.run(createHostInput());
-
-    expect(result.runResult.status).toBe("succeeded");
-    expect(controller.calls.map((call) => call.plan?.status ?? null)).toEqual([
-      null,
-      "active",
-      "completed",
-      "active",
-    ]);
-    expect(controller.calls.map((call) => call.plan?.version ?? null)).toEqual([
-      null,
-      1,
-      2,
-      3,
-    ]);
-    expect(result.runResult.items.map((item) => item.kind)).toEqual([
-      "model_output",
-      "action",
-      "plan_created",
-      "observation",
-      "model_output",
-      "action",
-      "plan_updated",
-      "plan_completed",
-      "observation",
-      "model_output",
-      "action",
-      "plan_updated",
-      "observation",
-      "model_output",
-      "plan_abandoned",
-      "final_output",
-    ]);
-  });
-
-  it("returns an invalid Plan update as a recoverable Observation", async () => {
-    const controller = new FakeController([
-      (input) => actionsDecision(input, [{
-        kind: "internal",
-        name: "update_plan",
-        input: {
-          plan: [
-            { step: "First concurrent step", status: "in_progress" },
-            { step: "Second concurrent step", status: "in_progress" },
-          ],
-        },
-      }]),
-      (input) => {
-        expect(input.plan).toBeNull();
-        expect(input.context.observations.at(-1)).toMatchObject({
-          kind: "plan_update",
-          result: {
-            status: "rejected",
-            code: "plan_invalid",
-          },
-        });
-        return finalDecision(input, "Recovered after invalid Plan");
-      },
-    ]);
-
-    const harness = createHostHarness(controller);
-    const result = await harness.run(createHostInput());
-
-    expect(result).toMatchObject({
-      terminal: { status: "completed" },
-      runResult: {
-        status: "succeeded",
-        finalOutput: { summary: "Recovered after invalid Plan" },
-      },
-    });
-    expect(result.runResult.items.map((item) => item.kind)).toEqual([
-      "model_output",
-      "action",
-      "observation",
-      "model_output",
-      "final_output",
-    ]);
-  });
-
-  it("projects Controller stop as blocked while preserving the exact RunResult", async () => {
-    const controller = new FakeController([
-      (input) => ({
-        kind: "stop",
-        reason: "No safe path remains.",
-        modelItems: [modelItem(input, { action: "stop" })],
-      }),
-    ]);
-
-    const harness = createHostHarness(controller);
-    const result = await harness.run(createHostInput());
-
-    expect(result).toMatchObject({
-      terminal: { status: "blocked" },
-      runResult: {
-        status: "blocked",
-        code: "runtime_no_safe_path",
-      },
-    });
-    expect(result.terminal).toBe(harness.projections.at(-1)?.terminal);
-    expect(result.runResult.items.map((item) => item.kind)).toEqual([
-      "model_output",
-      "stop",
-      "run_blocked",
-    ]);
-  });
-
-  it("carries accepted Host cancellation through Runner and the terminal projection", async () => {
-    const controllerStarted = createDeferred<void>();
-    const releaseController = createDeferred<void>();
-    const controller: Controller<ConformanceOutput> = {
+  it("preserves accepted cancellation through Runner and terminal Host projection", async () => {
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const controller: Controller<TestOutput> = {
       async next(input) {
-        controllerStarted.resolve();
-        await releaseController.promise;
-        return finalDecision(input, "Discarded after cancellation");
+        entered.resolve();
+        await release.promise;
+        return completionDecision(input, "Discarded after cancellation");
       },
     };
-    const manager = createHostRunManager({
-      runner: new Runner({
-        controller,
-        contextProjection: createTestContextProjection(),
-        createRunId: () => "run-conformance",
-        now: () => "2026-07-14T00:00:00.000Z",
-      }),
-      now: () => "2026-07-14T00:00:00.000Z",
-    });
-    const active = manager.start(createHostInput());
-    await controllerStarted.promise;
+    const active = createManager(controller).start(startInput());
+    await entered.promise;
 
-    const receipt = active.cancel({
-      origin: "user",
-      reasonCode: "user_requested",
-    });
+    const receipt = active.cancel({ origin: "user", reasonCode: "user_requested" });
+    release.resolve();
+    const outcome = await active.wait();
 
     expect(receipt).toMatchObject({
       status: "accepted",
-      cancellation: {
-        origin: "user",
-        reasonCode: "user_requested",
-      },
+      cancellation: { origin: "user", reasonCode: "user_requested" },
     });
-    expect(active.getProjection()).toMatchObject({
-      status: "cancelling",
-      cancellation: {
-        origin: "user",
-        reasonCode: "user_requested",
-      },
-    });
-
-    releaseController.resolve();
-    const outcome = await active.wait();
-
     expect(outcome).toMatchObject({
       runResult: {
         status: "cancelled",
         code: "runtime_cancelled",
-        cancellation: {
-          origin: "user",
-          reasonCode: "user_requested",
-        },
+        cancellation: { origin: "user", reasonCode: "user_requested" },
       },
-      terminal: {
-        status: "cancelled",
-        code: "runtime_cancelled",
-      },
+      terminal: { status: "cancelled", code: "runtime_cancelled" },
     });
     expect(outcome.terminal).toBe(active.getProjection().terminal);
-    expect(outcome.runResult.items.map((item) => item.kind)).toEqual([
-      "run_cancellation_requested",
-      "run_cancelled",
-    ]);
   });
-
 });
 
-class FakeController implements Controller {
-  readonly calls: ControllerInput[] = [];
-
-  constructor(private readonly steps: ControllerStep[]) {}
-
-  async next(
-    input: ControllerInput,
-    context: ControllerCallContext,
-  ): Promise<ControllerDecision> {
-    this.calls.push(input);
-    const step = this.steps.shift();
-    if (!step) {
-      throw new Error("FakeController has no remaining decision.");
-    }
-    return step(input, context);
+class CompletionController implements Controller<TestOutput> {
+  async next(input: ControllerInput<TestOutput>): Promise<ControllerDecision<TestOutput>> {
+    return completionDecision(input, "Done");
   }
 }
 
-class InMemoryHostHarness {
-  readonly projections: HostRunProjection[] = [];
-
-  constructor(private readonly manager: HostRunManager) {}
-
-  async run(
-    input: HostRunStartInput<ConformanceOutput>,
-  ): Promise<HostRunResult<ConformanceOutput>> {
-    const active = this.manager.start(input);
-    this.projections.push(active.getProjection());
-    const unsubscribe = active.subscribe((projection) => {
-      this.projections.push(projection);
-    });
-    const outcome = await active.wait();
-    unsubscribe();
-    return outcome;
-  }
-
-}
-
-function createHostHarness(
-  controller: Controller,
-): InMemoryHostHarness {
+function createManager(controller: Controller<TestOutput>) {
   const runner = new Runner({
     controller,
     contextProjection: createTestContextProjection(),
-    createRunId: () => "run-conformance",
-    now: () => "2026-07-14T00:00:00.000Z",
+    operations: emptyOperations(),
+    interactions: createInteractionProtocolRegistrySnapshot("interaction-registry-1", []),
+    createRunId: () => "run-host-conformance",
+    now: () => NOW,
   });
-  return new InMemoryHostHarness(createHostRunManager({
-    runner,
-    now: () => "2026-07-14T00:00:00.000Z",
-  }));
+  return createHostRunManager({ runner, now: () => NOW });
 }
 
-function createHostInput(input: {
-  limits?: Partial<Omit<RunConfig["limits"], "plan">>;
-  retry?: RunConfig["retry"];
-} = {}): HostRunStartInput<ConformanceOutput> {
+function emptyOperations(): RunnerOperationComposition {
+  const catalog = createOperationCatalogSnapshot({
+    id: "operation-catalog-1",
+    revision: "1",
+    entries: [],
+  });
+  return Object.freeze({
+    catalog,
+    bindings: createOperationBindingResolverSnapshot("operation-bindings-1", []),
+    validateToolInput: () => true,
+    internalHandlers: Object.freeze([]),
+  });
+}
+
+function startInput() {
+  const operations = emptyOperations();
+  const registrations = createToolRegistrationSnapshot(operations.catalog, []);
   return {
-    sessionId: "session-conformance",
+    sessionId: "session-1",
     agent: createAgent(),
-    userApprovalReviewBridge: null,
-    runInput: {
-      task: {
-        id: "task-conformance",
-        kind: "conformance.task",
-        input: { prompt: "Exercise generic Runner behavior." },
-        createdAt: "2026-07-14T00:00:00.000Z",
-        metadata: {},
+    runInput: createRunInput(),
+    runConfig: createRunConfig(
+      createFixedLocalToolSelection(registrations, operations.catalog, []),
+    ),
+  };
+}
+
+function createAgent(): Agent<TestOutput> {
+  return {
+    id: "agent-1",
+    revision: "1",
+    name: "Host Conformance Agent",
+    instructions: "Complete the task.",
+    output: {
+      validate(candidate) {
+        if (
+          typeof candidate === "object" && candidate !== null &&
+          "summary" in candidate && typeof candidate.summary === "string"
+        ) return { valid: true, output: { summary: candidate.summary } };
+        return { valid: false, message: "Output requires summary." };
       },
-      items: [],
+    },
+    metadata: {},
+  };
+}
+
+function createRunInput(): RunInput {
+  return {
+    task: {
+      id: "task-1",
+      kind: "test.host-conformance",
+      input: {},
+      createdAt: NOW,
       metadata: {},
     },
-    runConfig: {
-      workspace: {
-        primary: {
-          id: "workspace-conformance",
-          name: "Conformance workspace",
-          rootRef: "workspace://conformance",
-          trustState: "trusted",
-          source: "conformance",
-          policyRefs: [],
-          metadata: {},
-        },
-        additional: [],
-      },
-      identity: {
-        id: "identity-conformance",
-        kind: "anonymous",
-        displayName: "Conformance identity",
+    items: [{
+      id: "message-1",
+      kind: "message",
+      role: "user",
+      content: "Complete the task.",
+      createdAt: NOW,
+      metadata: {},
+    }],
+    metadata: {},
+  };
+}
+
+function createRunConfig(tools: RunConfig["tools"]): RunConfig {
+  return {
+    workspace: {
+      primary: {
+        id: "workspace-1",
+        name: "Test workspace",
+        rootRef: "workspace://root",
+        trustState: "trusted",
+        source: "test",
+        policyRefs: [],
         metadata: {},
       },
-      actionContext: null,
-      permissions: createTestPermissionConfig(),
-      toolBindings: createEmptyToolActionBindingSnapshot(),
-      limits: {
-        maxIterations: 5,
-        maxActions: 5,
-        maxConsecutiveActionFailures: 1,
-        maxDurationMs: 5_000,
-        ...input.limits,
-        plan: {
-          maxSteps: 5,
-          maxStepLength: 100,
-          maxExplanationLength: 200,
-        },
-      },
-      audit: "optional",
-      telemetry: "optional",
-      cancellationLimits: {
-        operationSettlementTimeoutMs: 1_000,
-        processGracePeriodMs: 100,
-        processForceKillTimeoutMs: 500,
-        finalizationTimeoutMs: 1_000,
-      },
-      retry: input.retry ?? disabledRetryConfiguration(),
+      additional: [],
+    },
+    identity: {
+      id: "user-1",
+      kind: "user",
+      displayName: "Test User",
       metadata: {},
     },
-  };
-}
-
-function fixedRetryClock(): RetryClock {
-  const value = "2026-07-14T00:00:00.000Z";
-  return {
-    now: () => new Date(value),
-  };
-}
-
-function disabledRetryConfiguration(): RunConfig["retry"] {
-  const policy = {
-    maxRetries: 0,
-    delay: {
-      kind: "exponential_jitter" as const,
-      baseDelayMs: 0,
-      maxDelayMs: 0,
-      multiplier: 2 as const,
-      jitterRatio: 0.1 as const,
+    permissions: permissionConfig(),
+    tools,
+    actionExecution: null,
+    limits: {
+      maxIterations: 4,
+      maxActions: 4,
+      maxConsecutiveActionFailures: 2,
+      maxDurationMs: 5_000,
+      maxPendingInteractions: 2,
+      maxDescendantRuns: 1,
+      maxDescendantDepth: 1,
+      plan: {
+        maxSteps: 4,
+        maxStepLength: 100,
+        maxExplanationLength: 200,
+      },
     },
-    retryableCategories: [] as string[],
-    serverDelay: { mode: "ignore" as const },
-  };
-  return {
-    providerRequest: policy,
-    structuredOutput: policy,
-    approvalsReviewer: policy,
+    audit: "optional",
+    telemetry: "optional",
+    cancellationLimits: {
+      operationSettlementTimeoutMs: 1_000,
+      processGracePeriodMs: 100,
+      processForceKillTimeoutMs: 500,
+      finalizationTimeoutMs: 1_000,
+    },
+    retry: {
+      providerRequest: disabledRetryPolicy(),
+      structuredOutput: disabledRetryPolicy(),
+      action: { maxAttempts: 1 },
+    },
+    metadata: {},
   };
 }
 
-function createTestPermissionConfig(): ResolvedRunPermissionConfig {
+function permissionConfig(): ResolvedRunPermissionConfig {
   const managedConstraints: ManagedPermissionConstraints = {
-    constraintSetId: "conformance-managed",
+    constraintSetId: "host-conformance",
     selectableProfiles: { allowedProfileIds: null, deniedProfileIds: [] },
     fileSystem: [],
     network: { enabled: null, allowedDomains: [], deniedDomains: [] },
-    allowUnenforcedExecution: false,
+    allowUnenforcedExecution: true,
   };
   return {
     permissionProfile: resolvePermissionProfile({
       profileId: ":read-only",
       profiles: [],
       environment: {
-        environmentId: "conformance-local",
+        environmentId: "local",
         platform: "win32",
-        workspaceRoots: [
-          { rootId: "workspace-conformance", path: "C:/workspace" },
-        ],
+        workspaceRoots: [{ rootId: "workspace-1", path: "D:/workspace" }],
       },
       managedConstraints,
     }),
@@ -568,118 +258,52 @@ function createTestPermissionConfig(): ResolvedRunPermissionConfig {
     sessionAuthority: null,
     persistentPolicyAmendments: null,
     approvalLimits: {
-      maxRequestsPerRun: 8,
+      maxRequestsPerRun: 4,
       maxRequestsPerActionFingerprint: 2,
-      maxConsecutiveDeclines: 3,
-      maxConsecutiveReviewFailures: 3,
+      maxConsecutiveDeclines: 2,
+      maxConsecutiveReviewFailures: 2,
     },
     authorityApplicationLimits: { commitTimeoutMs: 1_000 },
   };
 }
 
-function createAgent(): Agent<ConformanceOutput> {
+function disabledRetryPolicy() {
   return {
-    id: "agent-conformance",
-    name: "Conformance Agent",
-    instructions: "Complete the conformance task.",
-    output: {
-      validate(candidate) {
-        if (
-          typeof candidate === "object" &&
-          candidate !== null &&
-          "summary" in candidate &&
-          typeof candidate.summary === "string"
-        ) {
-          return { valid: true, output: { summary: candidate.summary } };
-        }
-        return { valid: false, message: "Conformance output requires summary." };
-      },
+    maxRetries: 0,
+    delay: {
+      kind: "exponential_jitter" as const,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      multiplier: 2,
+      jitterRatio: 0.1,
     },
-    metadata: {},
+    retryableCategories: [] as string[],
+    serverDelay: { mode: "ignore" as const },
   };
 }
 
-function finalDecision(
-  input: ControllerInput,
+function completionDecision(
+  input: ControllerInput<TestOutput>,
   summary: string,
-): ControllerDecision {
+): ControllerDecision<TestOutput> {
   return {
-    kind: "final_output",
+    kind: "propose_completion",
     output: { summary },
-    modelItems: [modelItem(input, { action: "complete", summary })],
+    modelItems: [{
+      id: `${input.runId}:model:${input.iteration}`,
+      kind: "assistant_message",
+      content: { summary },
+      metadata: {},
+    }],
   };
 }
 
-function actionsDecision(
-  input: ControllerInput,
-  candidates: readonly Omit<ActionCandidate, "modelItemId" | "origin">[],
-): ControllerDecision {
-  const model = modelItem(input, { action: "actions" });
-  const actions = candidates.map((candidate) => ({
-    ...candidate,
-    origin: "model" as const,
-    modelItemId: model.id,
-  })) as [ActionCandidate, ...ActionCandidate[]];
-  return {
-    kind: "actions",
-    actions,
-    modelItems: [model],
-  };
-}
-
-function modelItem(input: ControllerInput, content: unknown) {
-  return {
-    id: `${input.runId}:model:${input.iteration}`,
-    kind: "assistant_action",
-    content,
-    metadata: {},
-  };
-}
-
-class RetryOnceProvider implements Provider {
-  readonly descriptor = {
-    id: "retry-once-conformance-provider",
-    name: "Retry Once Conformance Provider",
-    capabilities: {
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: false,
-    },
-    requestRetryScheduler: { kind: "harness" as const },
-    metadata: {},
-  };
-  readonly requests: ProviderRequest[] = [];
-
-  async send(request: ProviderRequest): Promise<ProviderCallResult> {
-    this.requests.push(request);
-    if (this.requests.length === 1) {
-      return {
-        kind: "failed",
-        failure: {
-          category: "transport",
-          code: "provider_unavailable",
-          message: "secret transport details",
-          metadata: { rawError: "secret transport details" },
-        },
-      };
-    }
-    return {
-      kind: "succeeded",
-      response: {
-        output: { summary: "Recovered through the generic Host" },
-        usage: null,
-        metadata: {},
-      },
-    };
-  }
-}
-
-function createDeferred<TValue>() {
-  let resolve!: (value: TValue | PromiseLike<TValue>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<TValue>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
   });
-  return { promise, resolve, reject };
+  return { promise, resolve };
 }
+
+const NOW = "2026-08-13T00:00:00.000Z";

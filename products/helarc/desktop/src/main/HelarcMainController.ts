@@ -25,7 +25,7 @@ import {
   createHelarcPersistedRun,
   createHelarcThread,
   deriveHelarcPersistedRunStatus,
-  projectHelarcRunWorkspaceContext,
+  projectHelarcWorkspaceSelectionIdentity,
   type HelarcRunProgressCommit,
   type HelarcRunStartCommit,
   type HelarcRunTerminalCommit,
@@ -33,7 +33,7 @@ import {
   type HelarcMessage,
   type HelarcPersistedRunStatus,
   type HelarcThreadRecord,
-  type HelarcThreadWorkspaceContext,
+  type HelarcThreadWorkspaceIdentity,
   type HelarcWorkContextError,
   type HelarcPersistedRun,
 } from "@agent-anything/helarc/work-context";
@@ -56,7 +56,7 @@ import {
 } from "@agent-anything/helarc-code-agent/task-templates";
 import type { HelarcTaskInputError } from "@agent-anything/helarc-code-agent/task";
 import type { RunInputItem } from "@agent-anything/agent-core/input";
-import type { RunWorkspace } from "@agent-anything/agent-core/run";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { Provider } from "@agent-anything/model-interaction";
 import { basename, isAbsolute, normalize } from "node:path";
 import type { HelarcProductRunStartTarget } from "../shared/HelarcDesktopCommand.js";
@@ -1076,8 +1076,8 @@ export class HelarcMainController {
     runId: string;
     target: HelarcRunStartCommitTarget;
     startedAt: string;
-    threadWorkspace: HelarcThreadWorkspaceContext;
-    runWorkspace: RunWorkspace;
+    threadWorkspace: HelarcThreadWorkspaceIdentity;
+    runWorkspace: WorkspaceSelection;
     provider: HelarcRunProviderRef;
     permissionPreset: HelarcRunPermissionPreset;
   }): { ok: true; commit: HelarcRunStartCommit } | { ok: false; error: HelarcWorkContextError } {
@@ -1105,7 +1105,7 @@ export class HelarcMainController {
       threadId,
       triggeringMessageId: messageId,
       triggerMessageRole: "user",
-      workspace: projectHelarcRunWorkspaceContext({
+      workspace: projectHelarcWorkspaceSelectionIdentity({
         workspace: input.runWorkspace,
         threadWorkspace: input.threadWorkspace,
       }),

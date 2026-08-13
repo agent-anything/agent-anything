@@ -7,7 +7,8 @@ import {
   type TelemetryFailure,
   type TelemetryPort,
 } from "@agent-anything/observability";
-import type { IdentityRef, RunWorkspace } from "@agent-anything/agent-core/run";
+import type { IdentityRef } from "@agent-anything/agent-core/run";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { RunCounters, RunFailureCause, RunFailureKind } from "../run/index.js";
 import { createRunFailureCause } from "../run/RunFailure.js";
 import type { RunInfrastructureRequirement } from "./RunConfig.js";
@@ -25,7 +26,7 @@ export interface RecordRunnerLifecycleInput {
   readonly timestamp: string;
   readonly counters: RunCounters;
   readonly itemCount: number;
-  readonly workspace: RunWorkspace | null;
+  readonly workspace: WorkspaceSelection | null;
   readonly identity: IdentityRef;
   readonly auditRequirement: RunInfrastructureRequirement;
   readonly telemetryRequirement: RunInfrastructureRequirement;
@@ -151,8 +152,8 @@ function createRunnerLifecycleAuditRecord(input: RecordRunnerLifecycleInput) {
   };
   const payload = {
     activeAgentId: input.agentId,
-    iterations: input.counters.iterations,
-    actions: input.counters.actions,
+    iterations: input.counters.controllerTurns,
+    actions: input.counters.runActions,
     itemCount: input.itemCount,
   };
   switch (input.phase) {
@@ -209,8 +210,8 @@ function createRunnerLifecycleTelemetryRecord(
     timestamp: input.timestamp,
     durationMs: Math.max(0, Date.parse(input.timestamp) - input.startedAtMs),
     counters: {
-      iterations: input.counters.iterations,
-      actions: input.counters.actions,
+      iterations: input.counters.controllerTurns,
+      actions: input.counters.runActions,
       items: input.itemCount,
     },
   };

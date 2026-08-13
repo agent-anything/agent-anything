@@ -1,4 +1,5 @@
-import { snapshotIdentityRef, snapshotRunWorkspace, type IdentityRef, type RunWorkspace } from "@agent-anything/agent-core/run";
+import { snapshotIdentityRef, type IdentityRef } from "@agent-anything/agent-core/run";
+import { snapshotWorkspaceSelection, type WorkspaceSelection } from "@agent-anything/workspace/selection";
 
 export type HostWorkspaceSelection =
   | {
@@ -37,7 +38,7 @@ export interface HostIdentityResolutionInput
 }
 
 export interface HostWorkspaceResolver {
-  resolve(input: HostWorkspaceResolutionInput): Promise<RunWorkspace | null>;
+  resolve(input: HostWorkspaceResolutionInput): Promise<WorkspaceSelection | null>;
 }
 
 export interface HostIdentityResolver {
@@ -59,7 +60,7 @@ export interface ResolveHostRunContextInput {
 }
 
 export interface ResolvedHostRunContext {
-  readonly workspace: RunWorkspace | null;
+  readonly workspace: WorkspaceSelection | null;
   readonly identity: IdentityRef;
 }
 
@@ -162,11 +163,11 @@ export async function resolveHostRunContext(
 }
 
 export function createStaticHostWorkspaceResolver(
-  workspace: RunWorkspace | null,
+  workspace: WorkspaceSelection | null,
 ): HostWorkspaceResolver {
-  const snapshot = workspace === null ? null : snapshotRunWorkspace(workspace);
+  const snapshot = workspace === null ? null : snapshotWorkspaceSelection(workspace);
   return Object.freeze({
-    async resolve(): Promise<RunWorkspace | null> {
+    async resolve(): Promise<WorkspaceSelection | null> {
       return snapshot;
     },
   });
@@ -186,8 +187,8 @@ export function createStaticHostIdentityResolver(
 async function resolveWorkspace(
   resolver: HostWorkspaceResolver,
   input: HostWorkspaceResolutionInput,
-): Promise<RunWorkspace | null> {
-  let candidate: RunWorkspace | null;
+): Promise<WorkspaceSelection | null> {
+  let candidate: WorkspaceSelection | null;
   try {
     candidate = await resolver.resolve(input);
   } catch (error) {
@@ -204,7 +205,7 @@ async function resolveWorkspace(
     return null;
   }
   try {
-    return snapshotRunWorkspace(candidate);
+    return snapshotWorkspaceSelection(candidate);
   } catch {
     throw new HostContextResolutionError(
       "host_workspace_resolution_invalid",
@@ -246,7 +247,7 @@ function snapshotWorkspaceResolutionInput(
 ): HostWorkspaceResolutionInput {
   return Object.freeze({
     ...correlation,
-    selection: snapshotWorkspaceSelection(selection),
+    selection: snapshotHostWorkspaceSelection(selection),
   });
 }
 
@@ -298,7 +299,7 @@ function snapshotResolutionInputBase(
   });
 }
 
-function snapshotWorkspaceSelection(
+function snapshotHostWorkspaceSelection(
   selection: HostWorkspaceSelection,
 ): HostWorkspaceSelection {
   if (!isRecord(selection)) {

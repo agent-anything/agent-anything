@@ -1,5 +1,9 @@
 packages:
+  - "harness/workspace"
   - "harness/agent-core/contracts"
+  - "harness/operation-catalog"
+  - "harness/operation-composition"
+  - "harness/interaction"
   - "harness/model-interaction"
   - "harness/context"
   - "harness/observability"

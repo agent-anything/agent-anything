@@ -1,57 +1,64 @@
+import type {
+  ActionSubjectRevisionRef,
+  CanonicalActionSubjectRevision,
+} from "@agent-anything/canonical-action/subject";
 
-import type { PolicyDecision } from "./PolicyDecision.js";
-
-export type ActionPolicyOperationKind =
-  | "file_system"
-  | "process"
-  | "network"
-  | "remote_tool"
-  | "skill";
-
-export type ActionPolicyEffectKind =
-  | "file_system_read"
-  | "file_system_write"
-  | "process_spawn"
-  | "network_connect"
-  | "remote_tool_invoke";
-
-export interface ActionPolicyCheckInput {
-  readonly kind: "prepared_action";
-  readonly checkId: string;
-  readonly runId: string;
-  readonly actionId: string;
-  readonly actionName: string;
-  readonly actionFingerprint: string;
-  readonly workspaceId: string;
-  readonly workspaceTrustState: "trusted" | "restricted" | "unknown";
-  readonly identity: {
-    readonly kind: "user" | "service" | "anonymous";
-    readonly id: string;
-  };
+export interface ActionPolicyContext {
+  readonly policySnapshotId: string;
+  readonly workspaceTrustState: "trusted" | "restricted" | "unknown" | null;
+  readonly identityId: string | null;
   readonly environmentId: string;
-  readonly operation: {
-    readonly kind: ActionPolicyOperationKind;
-    readonly targetKeys: readonly string[];
-  };
-  readonly effects: readonly {
-    readonly kind: ActionPolicyEffectKind;
-    readonly targetKeys: readonly string[];
-  }[];
-  readonly requestsAdditionalPermissions: boolean;
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
-export interface ActionPolicyPort {
-  evaluate(input: ActionPolicyCheckInput): Promise<PolicyDecision>;
+export interface ActionPolicyCheckInput {
+  readonly checkId: string;
+  readonly subject: CanonicalActionSubjectRevision;
+  readonly context: ActionPolicyContext;
 }
 
-export function createAllowAllActionPolicyPort(): ActionPolicyPort {
+export type ActionPolicyAssessment =
+  | {
+      readonly status: "allowed" | "review_required" | "denied";
+      readonly owner: "governance";
+      readonly subject: ActionSubjectRevisionRef;
+      readonly checkId: string;
+      readonly recordId: string;
+      readonly revision: string;
+      readonly code: string | null;
+      readonly reason: string | null;
+      readonly decidedAt: string;
+    }
+  | {
+      readonly status: "failed" | "interrupted";
+      readonly owner: "governance";
+      readonly subject: ActionSubjectRevisionRef;
+      readonly checkId: string;
+      readonly code: string;
+      readonly message: string;
+      readonly decidedAt: string;
+    };
+
+export interface ActionPolicyPort {
+  evaluate(input: ActionPolicyCheckInput): Promise<ActionPolicyAssessment>;
+}
+
+export function createAllowAllActionPolicyPort(
+  now: () => string = () => new Date().toISOString(),
+): ActionPolicyPort {
   return Object.freeze({
-    async evaluate(input: ActionPolicyCheckInput) {
+    async evaluate(input: ActionPolicyCheckInput): Promise<ActionPolicyAssessment> {
+      const decidedAt = now();
       return Object.freeze({
-        checkId: input.checkId,
         status: "allowed" as const,
-        decidedAt: new Date().toISOString(),
+        owner: "governance" as const,
+        subject: input.subject.ref,
+        checkId: input.checkId,
+        recordId: `policy:${input.checkId}`,
+        revision: input.context.policySnapshotId,
+        code: null,
+        reason: null,
+        decidedAt,
       });
     },
   });

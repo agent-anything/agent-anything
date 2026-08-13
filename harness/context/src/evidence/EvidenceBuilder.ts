@@ -1,28 +1,24 @@
-
-import type { ToolResult } from "@agent-anything/tools";
 import type { Evidence, EvidenceSensitivity } from "./Evidence.js";
+import type { EvidenceContribution } from "./EvidenceSource.js";
 
-export type EvidenceEligibleToolResult<TOutput = unknown> = Extract<
-  ToolResult<TOutput>,
-  { readonly status: "succeeded" | "partial" }
+export type ConservativeEvidenceSensitivity = Exclude<
+  EvidenceSensitivity,
+  "public"
 >;
-
-export type ConservativeEvidenceSensitivity = Exclude<EvidenceSensitivity, "public">;
 
 export interface EvidenceSensitivityPolicy {
   readonly unclassifiedSensitivity: ConservativeEvidenceSensitivity;
 }
 
 export interface BuildEvidenceInput {
-  readonly toolResult: EvidenceEligibleToolResult;
+  readonly contribution: EvidenceContribution;
   readonly id?: string;
-  readonly summary?: string;
   readonly sensitivity?: EvidenceSensitivity;
   readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface EvidenceBuilderPort {
-  buildFromToolResult(input: BuildEvidenceInput): readonly Evidence[];
+  build(input: BuildEvidenceInput): readonly Evidence[];
 }
 
 export class EvidenceBuilder implements EvidenceBuilderPort {
@@ -43,40 +39,96 @@ export class EvidenceBuilder implements EvidenceBuilderPort {
     });
   }
 
-  buildFromToolResult(input: BuildEvidenceInput): readonly Evidence[] {
-    const { toolResult } = input;
+  build(input: BuildEvidenceInput): readonly Evidence[] {
+    const contribution = snapshotEvidenceContribution(input.contribution);
     const sensitivity = input.sensitivity === undefined
       ? this.#sensitivityPolicy.unclassifiedSensitivity
       : requireSensitivity(input.sensitivity);
     return Object.freeze([
       Object.freeze({
-        id: input.id ?? createEvidenceId(toolResult),
-        source: Object.freeze({
-          kind: "toolResult" as const,
-          toolCallId: toolResult.toolCallId,
-          toolName: toolResult.toolName,
-          metadata: Object.freeze({ ...toolResult.metadata }),
-        }),
-        summary: input.summary ?? createSummary(toolResult),
-        content: toolResult.output,
+        id: input.id ?? createEvidenceId(contribution),
+        source: contribution.source,
+        summary: contribution.summary,
+        content: contribution.content,
         sensitivity,
         metadata: Object.freeze({
           ...input.metadata,
-          createdFrom: toolResult.toolCallId,
+          contributionUsability: contribution.usability,
+          settlementRefs: contribution.settlementRefs,
         }),
       }),
     ]);
   }
 }
 
-function createEvidenceId(toolResult: EvidenceEligibleToolResult): string {
-  return `evidence_${toolResult.toolCallId}`;
+export function snapshotEvidenceContribution<TContent>(
+  input: EvidenceContribution<TContent>,
+): EvidenceContribution<TContent> {
+  if (input === null || typeof input !== "object") {
+    throw new TypeError("EvidenceContribution must be an object.");
+  }
+  if (input.usability !== "complete" && input.usability !== "partial_validated") {
+    throw new TypeError("EvidenceContribution.usability is invalid.");
+  }
+  if (typeof input.summary !== "string" || input.summary.trim().length === 0) {
+    throw new TypeError("EvidenceContribution.summary must be non-empty text.");
+  }
+  if (input.content === undefined) {
+    throw new TypeError("EvidenceContribution.content must be present.");
+  }
+  if (!Array.isArray(input.settlementRefs) || input.settlementRefs.length === 0) {
+    throw new TypeError("EvidenceContribution requires at least one settlement reference.");
+  }
+  const source = snapshotReference(input.source, "EvidenceContribution.source");
+  const settlementRefs = input.settlementRefs.map((reference, index) =>
+    snapshotReference(reference, `EvidenceContribution.settlementRefs[${index}]`)
+  ) as [EvidenceContribution["settlementRefs"][number], ...EvidenceContribution["settlementRefs"][number][]];
+  if (!isRecord(input.metadata)) {
+    throw new TypeError("EvidenceContribution.metadata must be a record.");
+  }
+  return deepFreeze({
+    source,
+    settlementRefs,
+    usability: input.usability,
+    summary: input.summary,
+    content: input.content,
+    metadata: { ...input.metadata },
+  }) as EvidenceContribution<TContent>;
 }
 
-function createSummary(toolResult: EvidenceEligibleToolResult): string {
-  return toolResult.status === "partial"
-    ? `Partial evidence from ${toolResult.toolName}.`
-    : `Evidence from ${toolResult.toolName}.`;
+function createEvidenceId(contribution: EvidenceContribution): string {
+  return `evidence_${encodeIdentity(contribution.source.owner)}_${encodeIdentity(contribution.source.kind)}_${encodeIdentity(contribution.source.id)}`;
+}
+
+function encodeIdentity(value: string): string {
+  return encodeURIComponent(value).replaceAll("%", "_");
+}
+
+function snapshotReference<T extends {
+  readonly owner: string;
+  readonly kind: string;
+  readonly id: string;
+  readonly revision: string | null;
+}>(input: T, field: string): T {
+  if (!isRecord(input)) throw new TypeError(`${field} must be an object.`);
+  token(input.owner, `${field}.owner`);
+  token(input.kind, `${field}.kind`);
+  token(input.id, `${field}.id`);
+  if (input.revision !== null) token(input.revision, `${field}.revision`);
+  if ("metadata" in input && !isRecord(input.metadata)) {
+    throw new TypeError(`${field}.metadata must be a record.`);
+  }
+  return deepFreeze({
+    ...input,
+    ...(input.revision === null ? { revision: null } : {}),
+    ...("metadata" in input ? { metadata: { ...(input.metadata as object) } } : {}),
+  }) as T;
+}
+
+function token(value: unknown, field: string): asserts value is string {
+  if (typeof value !== "string" || value.length === 0 || value !== value.trim()) {
+    throw new TypeError(`${field} must be a canonical token.`);
+  }
 }
 
 function requireSensitivity(value: EvidenceSensitivity): EvidenceSensitivity {
@@ -87,16 +139,22 @@ function requireSensitivity(value: EvidenceSensitivity): EvidenceSensitivity {
 }
 
 function isEvidenceSensitivity(value: unknown): value is EvidenceSensitivity {
-  return (
-    value === "public" ||
-    value === "private" ||
-    value === "secret" ||
-    value === "restricted"
-  );
+  return value === "public" || value === "private" || value === "secret" || value === "restricted";
 }
 
 function isConservativeSensitivity(
   value: unknown,
 ): value is ConservativeEvidenceSensitivity {
   return value === "private" || value === "secret" || value === "restricted";
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) deepFreeze(child, seen);
+  return Object.freeze(value);
 }

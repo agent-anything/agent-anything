@@ -16,10 +16,11 @@ describe("Host RuntimeEvent projection", () => {
       name: "controller.finished",
       occurredAt: "2026-08-03T00:00:00.000Z",
       payload: Object.freeze({
+        turnId: "turn-1",
         iteration: 1,
-        status: "succeeded",
+        status: "decided",
         code: null,
-        decisionKind: "actions",
+        decisionKind: "advance",
         controllerAction: "call_tool",
         promptArchitectureVersion: "helarc-prompt-v1",
         actionContractVersion: "helarc-action-v1",
@@ -35,10 +36,11 @@ describe("Host RuntimeEvent projection", () => {
     const projected = projectRuntimeEventForHost(event);
 
     expect(projected.payload).toEqual({
+      turnId: "turn-1",
       iteration: 1,
-      status: "succeeded",
+      status: "decided",
       code: null,
-      decisionKind: "actions",
+      decisionKind: "advance",
     });
     expect(projected.payload).not.toHaveProperty("controllerAction");
     expect(projected.payload).not.toHaveProperty("promptArchitectureVersion");

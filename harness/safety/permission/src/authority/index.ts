@@ -22,3 +22,12 @@ export {
   type ValidateSessionAuthorityRecordInput,
   type ValidateSessionAuthorityRecordResult,
 } from "./validateAuthority.js";
+export {
+  createActionPermissionAssessmentPort,
+  type ActionPermissionAssessment,
+  type ActionPermissionAssessmentInput,
+  type ActionPermissionAssessmentPort,
+  type ActionPermissionContext,
+  type ActionPermissionReviewCause,
+  type CreateActionPermissionAssessmentPortOptions,
+} from "./ActionPermissionAssessment.js";

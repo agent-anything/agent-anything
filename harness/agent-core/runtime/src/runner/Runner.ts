@@ -118,7 +118,11 @@ export class Runner {
       resolvedConfig,
       configuredPublishers,
       configuredObservers,
+      options.actionExecutionObserver,
       (update) => handle.publish(update),
+    );
+    handle.bindInteractionSubmission((submission) =>
+      execution.submitInteraction(submission)
     );
     this.activeRunIds.add(runId);
     handle.start(async () => {
@@ -170,6 +174,8 @@ function createEmergencyRunResult<TOutput>(
   runId: string,
   taskId: string,
 ): RunResult<TOutput> {
+  const unknownAgent = Object.freeze({ id: "unknown", revision: "unknown" });
+  const completedAt = new Date().toISOString();
   const failure = createRunFailureCause("runtime", Object.freeze({
     code: "runtime_execution_failed",
     message: "Agent Core execution could not settle its failure path.",
@@ -180,6 +186,10 @@ function createEmergencyRunResult<TOutput>(
     {
       runId,
       taskId,
+      startingAgent: unknownAgent,
+      finalActiveAgent: unknownAgent,
+      startedAt: completedAt,
+      completedAt,
       items: Object.freeze([]),
       metadata: Object.freeze({ emergencySettlement: true }),
     },
@@ -192,25 +202,12 @@ function validateActionComposition(
   dependencies: ResolvedRunnerDependencies,
   config: ValidatedRunConfig,
 ): void {
-  const parts = [
-    dependencies.actionEnforcementPipeline !== undefined,
-    dependencies.sandboxExecutionGateway !== undefined,
-    dependencies.evidenceBuilder !== undefined,
-    dependencies.evidencePersistence !== undefined,
-    config.actionContext !== null,
-  ];
-  if (parts.some(Boolean) && !parts.every(Boolean)) {
-    throw new TypeError(
-      "ActionEnforcementPipeline, SandboxExecutionGateway, EvidenceBuilderPort, EvidencePersistencePort, and RunConfig.actionContext must be configured together.",
-    );
-  }
   if (
-    dependencies.actionEnforcementPipeline !== undefined &&
-    dependencies.actionEnforcementPipeline.toolBindingSnapshotId !==
-      config.toolBindings.snapshotId
+    (dependencies.operations.actionExecution === undefined) !==
+      (config.actionExecution === null)
   ) {
     throw new TypeError(
-      "RunConfig Tool bindings do not match ActionEnforcementPipeline composition.",
+      "Runner Operation Action composition and RunConfig.actionExecution must be configured together.",
     );
   }
 }

@@ -3,7 +3,7 @@ import type {
   ApprovalReviewInput,
   ApprovalReviewOutcome,
 } from "@agent-anything/permission";
-import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/control";
 import type { RetryAttemptContext } from "../retry/index.js";
 import type { RetryEventSink } from "../retry/index.js";
 import type { RetryExecutor } from "../retry/RetryExecutor.js";
@@ -25,7 +25,7 @@ export type ApprovalReviewerExecutionResult =
   | { readonly kind: "cancelled" };
 
 export interface ExecuteApprovalReviewerInput {
-  readonly reviewer: ApprovalReviewerBinding;
+  readonly reviewer: Extract<ApprovalReviewerBinding, { readonly kind: "auto_review" }>;
   readonly review: ApprovalReviewInput;
   readonly operationId: string;
   readonly startedAt: string;
@@ -40,25 +40,7 @@ export interface ExecuteApprovalReviewerInput {
 export function executeApprovalReviewer(
   input: ExecuteApprovalReviewerInput,
 ): Promise<ApprovalReviewerExecutionResult> {
-  return input.reviewer.kind === "user"
-    ? executeUserReviewer(input)
-    : executeAutomaticReviewer(input);
-}
-
-async function executeUserReviewer(
-  input: ExecuteApprovalReviewerInput,
-): Promise<ApprovalReviewerExecutionResult> {
-  const interruption = createUserReviewInterruption(input);
-  try {
-    const outcome = await executeApprovalReviewAttempt({
-      reviewer: input.reviewer.reviewer,
-      review: input.review,
-      interruption: interruption.context,
-    });
-    return mapReviewOutcome(outcome);
-  } finally {
-    interruption.dispose();
-  }
+  return executeAutomaticReviewer(input);
 }
 
 async function executeAutomaticReviewer(
@@ -157,20 +139,6 @@ async function executeAutomaticReviewer(
   }
 }
 
-function mapReviewOutcome(
-  outcome: ApprovalReviewOutcome,
-): ApprovalReviewerExecutionResult {
-  if (outcome.status === "decided") return { kind: "decided", outcome };
-  if (outcome.status === "failed") return { kind: "failed", failure: outcome.failure };
-  return outcome.interruption.kind === "run_cancellation"
-    ? { kind: "cancelled" }
-    : { kind: "failed", failure: reviewFailure(
-        "approval_review_timeout",
-        "Approval review exceeded its deadline.",
-        false,
-      ) };
-}
-
 function retryInterruptionContext(
   attempt: RetryAttemptContext,
 ): InvocationInterruptionContext {
@@ -196,50 +164,6 @@ function retryInterruptionContext(
               requestId: request.id,
             }),
           });
-    },
-  });
-}
-
-function createUserReviewInterruption(input: ExecuteApprovalReviewerInput): {
-  readonly context: InvocationInterruptionContext;
-  dispose(): void;
-} {
-  const controller = new AbortController();
-  let interruption: InvocationInterruptionRef | null = null;
-  const abortFromCancellation = (): void => {
-    const request = input.cancellation.request;
-    if (request === null || interruption !== null) return;
-    interruption = Object.freeze({
-      kind: "run_cancellation" as const,
-      cancellation: Object.freeze({ runId: request.runId, requestId: request.id }),
-    });
-    controller.abort(interruption);
-  };
-  input.cancellation.signal.addEventListener("abort", abortFromCancellation, { once: true });
-  const delayMs = Math.max(0, Date.parse(input.deadlineAt) - Date.parse(input.now()));
-  const timer = setTimeout(() => {
-    if (interruption !== null) return;
-    interruption = Object.freeze({
-      kind: "operation_deadline" as const,
-      deadline: Object.freeze({
-        operationId: input.operationId,
-        deadlineAt: input.deadlineAt,
-      }),
-    });
-    controller.abort(interruption);
-  }, delayMs);
-  if (input.cancellation.signal.aborted) abortFromCancellation();
-
-  return Object.freeze({
-    context: Object.freeze({
-      signal: controller.signal,
-      get interruption() {
-        return interruption;
-      },
-    }),
-    dispose() {
-      clearTimeout(timer);
-      input.cancellation.signal.removeEventListener("abort", abortFromCancellation);
     },
   });
 }

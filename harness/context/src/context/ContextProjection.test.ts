@@ -1,4 +1,4 @@
-import type { ObservationBase } from "@agent-anything/agent-core/action";
+import type { ContextObservation } from "./Context.js";
 import { describe, expect, it } from "vitest";
 import {
   ContextProjectionError,
@@ -6,7 +6,7 @@ import {
   type ContextProjectionRequest,
 } from "./ContextProjection.js";
 
-interface TestObservation extends ObservationBase {
+interface TestObservation extends ContextObservation {
   readonly kind: "test_result";
   readonly value: unknown;
 }

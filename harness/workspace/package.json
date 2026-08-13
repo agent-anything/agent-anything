@@ -1,0 +1,30 @@
+{
+  "name": "@agent-anything/workspace",
+  "version": "0.0.0",
+  "description": "Dependency-free Workspace identity and Run selection contracts for Agent Harness.",
+  "type": "module",
+  "exports": {
+    "./identity": {
+      "types": "./src/identity/index.ts",
+      "import": "./dist/identity/index.js"
+    },
+    "./selection": {
+      "types": "./src/selection/index.ts",
+      "import": "./dist/selection/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "kind": "harness",
+      "component": "workspace"
+    }
+  },
+  "license": "Apache-2.0",
+  "private": true
+}

@@ -8,11 +8,11 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/model-interaction";
-import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import {
   createToolCatalogSnapshot,
   type ToolDescriptor,
-} from "@agent-anything/tools";
+} from "@agent-anything/tools/catalog";
 import { describe, expect, it } from "vitest";
 import {
   buildHelarcActionDecisionRulesText,

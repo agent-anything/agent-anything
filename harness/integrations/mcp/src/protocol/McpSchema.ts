@@ -4,7 +4,7 @@ import {
   type ValidateFunction,
 } from "ajv";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import type { ToolSchemaIdentity } from "@agent-anything/tools";
+import type { ToolSchemaIdentity } from "@agent-anything/tools/identity";
 import {
   createMcpContractFingerprint,
   type McpJsonObject,

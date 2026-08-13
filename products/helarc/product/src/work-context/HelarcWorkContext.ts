@@ -3,7 +3,7 @@ import type {
   HostTerminalRunProjection,
 } from "@agent-anything/host/projection";
 
-import type { RunWorkspace } from "@agent-anything/agent-core/run";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type {
   HelarcProductResult,
 } from "../composition/HelarcProductResult.js";
@@ -47,14 +47,14 @@ export interface HelarcThreadWorkspaceRef {
   readonly path: string;
 }
 
-export interface HelarcThreadWorkspaceContext {
+export interface HelarcThreadWorkspaceIdentity {
   readonly primary: HelarcThreadWorkspaceRef;
   readonly additional: readonly HelarcThreadWorkspaceRef[];
 }
 
 export interface CreateHelarcThreadInput {
   id: string;
-  workspace: HelarcThreadWorkspaceContext;
+  workspace: HelarcThreadWorkspaceIdentity;
   title: string;
   status?: HelarcThreadStatus;
   createdAt: string;
@@ -66,7 +66,7 @@ export interface CreateHelarcThreadInput {
 
 export interface HelarcThread {
   id: string;
-  workspace: HelarcThreadWorkspaceContext;
+  workspace: HelarcThreadWorkspaceIdentity;
   title: string;
   status: HelarcThreadStatus;
   createdAt: string;
@@ -126,15 +126,15 @@ export interface HelarcRunProviderContext {
   model: string;
 }
 
-export interface HelarcRunWorkspaceRef {
+export interface HelarcWorkspaceSelectionRef {
   readonly workspaceId: string;
   readonly profileId: string;
   readonly displayName: string;
 }
 
-export interface HelarcRunWorkspaceContext {
-  readonly primary: HelarcRunWorkspaceRef;
-  readonly additional: readonly HelarcRunWorkspaceRef[];
+export interface HelarcWorkspaceSelectionIdentity {
+  readonly primary: HelarcWorkspaceSelectionRef;
+  readonly additional: readonly HelarcWorkspaceSelectionRef[];
 }
 
 export interface CreateHelarcPersistedRunInput {
@@ -144,7 +144,7 @@ export interface CreateHelarcPersistedRunInput {
   threadId: string;
   triggeringMessageId: string;
   triggerMessageRole: HelarcRunTriggerMessageRole;
-  workspace: HelarcRunWorkspaceContext;
+  workspace: HelarcWorkspaceSelectionIdentity;
   provider?: HelarcRunProviderContext | null;
   permissionPreset?: HelarcRunPermissionPreset;
   startedAt: string;
@@ -170,7 +170,7 @@ export interface HelarcPersistedRun {
   threadId: string;
   triggeringMessageId: string;
   triggerMessageRole: HelarcRunTriggerMessageRole;
-  workspace: HelarcRunWorkspaceContext;
+  workspace: HelarcWorkspaceSelectionIdentity;
   provider: HelarcRunProviderContext | null;
   permissionPreset: HelarcRunPermissionPreset;
   startedAt: string;
@@ -467,7 +467,7 @@ export function createHelarcPersistedRun(
     return reject("run_trigger_message_role_invalid", "Run trigger message role is invalid.");
   }
 
-  const workspace = normalizeRunWorkspace(input.workspace);
+  const workspace = normalizeWorkspaceSelection(input.workspace);
   if (!workspace.ok) {
     return workspace;
   }
@@ -520,10 +520,10 @@ export function deriveHelarcPersistedRunStatus(run: HelarcPersistedRun): HelarcP
     : "completed";
 }
 
-export function projectHelarcRunWorkspaceContext(input: {
-  readonly workspace: RunWorkspace;
-  readonly threadWorkspace: HelarcThreadWorkspaceContext;
-}): HelarcRunWorkspaceContext {
+export function projectHelarcWorkspaceSelectionIdentity(input: {
+  readonly workspace: WorkspaceSelection;
+  readonly threadWorkspace: HelarcThreadWorkspaceIdentity;
+}): HelarcWorkspaceSelectionIdentity {
   if (
     input.workspace.additional.length !==
     input.threadWorkspace.additional.length
@@ -534,7 +534,7 @@ export function projectHelarcRunWorkspaceContext(input: {
   }
 
   return Object.freeze({
-    primary: projectHelarcRunWorkspaceRef(
+    primary: projectHelarcWorkspaceSelectionRef(
       input.workspace.primary.id,
       input.workspace.primary.name,
       input.threadWorkspace.primary.profileId,
@@ -547,7 +547,7 @@ export function projectHelarcRunWorkspaceContext(input: {
             "Resolved additional Workspace has no matching Thread reference.",
           );
         }
-        return projectHelarcRunWorkspaceRef(
+        return projectHelarcWorkspaceSelectionRef(
           workspace.id,
           workspace.name,
           threadRef.profileId,
@@ -869,8 +869,8 @@ function validateThreadRecordRelationships(
 }
 
 function normalizeWorkspace(
-  workspace: HelarcThreadWorkspaceContext,
-): { ok: true; workspace: HelarcThreadWorkspaceContext } |
+  workspace: HelarcThreadWorkspaceIdentity,
+): { ok: true; workspace: HelarcThreadWorkspaceIdentity } |
   { ok: false; error: HelarcWorkContextError } {
   if (
     workspace === null ||
@@ -921,9 +921,9 @@ function normalizeThreadWorkspaceRef(
     : null;
 }
 
-function normalizeRunWorkspace(
-  workspace: HelarcRunWorkspaceContext,
-): { ok: true; workspace: HelarcRunWorkspaceContext } |
+function normalizeWorkspaceSelection(
+  workspace: HelarcWorkspaceSelectionIdentity,
+): { ok: true; workspace: HelarcWorkspaceSelectionIdentity } |
   { ok: false; error: HelarcWorkContextError } {
   if (
     workspace === null ||
@@ -932,15 +932,15 @@ function normalizeRunWorkspace(
   ) {
     return reject("run_workspace_invalid", "Run Workspace context is invalid.");
   }
-  const primary = normalizeRunWorkspaceRef(workspace.primary);
+  const primary = normalizeWorkspaceSelectionRef(workspace.primary);
   if (primary === null) {
     return reject("run_workspace_invalid", "Run primary Workspace context is invalid.");
   }
-  const additional: HelarcRunWorkspaceRef[] = [];
+  const additional: HelarcWorkspaceSelectionRef[] = [];
   const workspaceIds = new Set([primary.workspaceId]);
   const profileIds = new Set([primary.profileId]);
   for (const candidate of workspace.additional) {
-    const normalized = normalizeRunWorkspaceRef(candidate);
+    const normalized = normalizeWorkspaceSelectionRef(candidate);
     if (
       normalized === null ||
       workspaceIds.has(normalized.workspaceId) ||
@@ -964,9 +964,9 @@ function normalizeRunWorkspace(
   };
 }
 
-function normalizeRunWorkspaceRef(
-  workspace: HelarcRunWorkspaceRef,
-): HelarcRunWorkspaceRef | null {
+function normalizeWorkspaceSelectionRef(
+  workspace: HelarcWorkspaceSelectionRef,
+): HelarcWorkspaceSelectionRef | null {
   if (workspace === null || typeof workspace !== "object") {
     return null;
   }
@@ -978,12 +978,12 @@ function normalizeRunWorkspaceRef(
     : null;
 }
 
-function projectHelarcRunWorkspaceRef(
+function projectHelarcWorkspaceSelectionRef(
   workspaceId: string,
   displayName: string,
   profileId: string,
-): HelarcRunWorkspaceRef {
-  const normalized = normalizeRunWorkspaceRef({
+): HelarcWorkspaceSelectionRef {
+  const normalized = normalizeWorkspaceSelectionRef({
     workspaceId,
     profileId,
     displayName,

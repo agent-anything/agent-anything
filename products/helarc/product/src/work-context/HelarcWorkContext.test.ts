@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RunWorkspace } from "@agent-anything/agent-core/run";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import {
   createHelarcArtifact,
   createHelarcConversation,
@@ -8,7 +8,7 @@ import {
   createHelarcThread,
   deriveHelarcPersistedRunStatus,
   normalizeHelarcThreadRecord,
-  projectHelarcRunWorkspaceContext,
+  projectHelarcWorkspaceSelectionIdentity,
   type HelarcPersistedRun,
   type HelarcThreadRecord,
 } from "./HelarcWorkContext.js";
@@ -163,7 +163,7 @@ describe("Helarc work context domain", () => {
   });
 
   it("projects primary and additional Run Workspace identities without root paths", () => {
-    const workspace: RunWorkspace = {
+    const workspace: WorkspaceSelection = {
       primary: workspaceContext(
         "workspace-1",
         "AgentAnything",
@@ -176,7 +176,7 @@ describe("Helarc work context domain", () => {
       )],
     };
 
-    const projected = projectHelarcRunWorkspaceContext({
+    const projected = projectHelarcWorkspaceSelectionIdentity({
       workspace,
       threadWorkspace: threadWorkspace(),
     });

@@ -2,7 +2,7 @@ import type {
   ExecPolicyAmendment,
   NetworkPolicyAmendment,
 } from "@agent-anything/governance/amendment";
-import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/control";
 import type {
   ApprovalApplicabilityKey,
   RunPermissionGrant,
@@ -162,6 +162,24 @@ export interface ApprovalRequirement<
 > {
   readonly category: TCategory;
   readonly subject: ApprovalSubject;
+  readonly reason: string;
+  readonly payload: ApprovalPayloadByCategory[TCategory];
+  readonly decisionOptions: readonly [
+    ApprovalDecisionOption,
+    ...ApprovalDecisionOption[],
+  ];
+  readonly trustedProposals: readonly ApprovalTrustedProposal[];
+  readonly deadlineAt: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
+}
+
+/** Owner-produced review meaning before canonical Action identity is sealed. */
+export interface ApprovalRequirementDraft<
+  TCategory extends ApprovalCategory = ApprovalCategory,
+> {
+  readonly category: TCategory;
+  readonly environmentId: string;
+  readonly applicabilityKeys: readonly ApprovalApplicabilityKey[];
   readonly reason: string;
   readonly payload: ApprovalPayloadByCategory[TCategory];
   readonly decisionOptions: readonly [

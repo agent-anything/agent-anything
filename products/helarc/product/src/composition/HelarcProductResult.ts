@@ -1,7 +1,7 @@
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { RunResult, RunResultStatus } from "@agent-anything/agent-runtime/run";
 import type { AgentTask } from "@agent-anything/agent-core/task";
-import type { RunWorkspace } from "@agent-anything/agent-core/run";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type {
   SandboxEnforcement,
 } from "@agent-anything/action-execution/sandbox";
@@ -61,7 +61,7 @@ export interface HelarcProductResult {
 
 export function projectHelarcProductResult(
   task: AgentTask,
-  workspace: RunWorkspace,
+  workspace: WorkspaceSelection,
   runResult: RunResult<HelarcAgentOutput>,
   patchOutcome: HelarcPatchOutcome | null,
   selectedEnforcement: SandboxEnforcement,

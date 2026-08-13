@@ -21,8 +21,8 @@ describe("Context public API", () => {
     ]);
     expect(Object.keys(evidenceApi).sort()).toEqual([
       "EvidenceBuilder",
-      "classifyToolResult",
-      "settleToolResultEvidence",
+      "settleEvidenceContribution",
+      "snapshotEvidenceContribution",
     ]);
     expect(Object.keys(persistenceApi)).toEqual([]);
   });

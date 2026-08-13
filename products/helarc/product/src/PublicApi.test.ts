@@ -33,7 +33,7 @@ describe("Helarc public API", () => {
       "deriveHelarcPersistedRunStatus",
       "normalizeHelarcThreadAggregate",
       "normalizeHelarcThreadRecord",
-      "projectHelarcRunWorkspaceContext",
+      "projectHelarcWorkspaceSelectionIdentity",
     ]);
     expect(Object.keys(runApi).sort()).toEqual([
       "createHelarcProductRunProjection",

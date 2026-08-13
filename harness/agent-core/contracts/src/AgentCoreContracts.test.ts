@@ -7,15 +7,16 @@ import {
   snapshotRunInput,
 } from "./input/index.js";
 import {
-  snapshotRunWorkspace,
-  type RunWorkspace,
-} from "./run/index.js";
+  snapshotWorkspaceSelection,
+  type WorkspaceSelection,
+} from "@agent-anything/workspace/selection";
 import type { AgentTask } from "./task/index.js";
 
 describe("Agent Core contracts", () => {
   it("keeps Agent identity independent from Tool exposure", () => {
     const input: Agent<{ summary: string }> = {
       id: "agent",
+      revision: "1",
       name: "Agent",
       instructions: "Complete the task.",
       output: {
@@ -55,20 +56,20 @@ describe("Agent Core contracts", () => {
   });
 
   it("snapshots one primary Workspace and unique additional Workspaces", () => {
-    const workspace: RunWorkspace = {
+    const workspace: WorkspaceSelection = {
       primary: createWorkspace("primary"),
       additional: [createWorkspace("docs")],
     };
 
-    const snapshot = snapshotRunWorkspace(workspace);
+    const snapshot = snapshotWorkspaceSelection(workspace);
 
     expect(snapshot.primary.id).toBe("primary");
     expect(snapshot.additional.map((item) => item.id)).toEqual(["docs"]);
     expect(Object.isFrozen(snapshot.additional)).toBe(true);
-    expect(() => snapshotRunWorkspace({
+    expect(() => snapshotWorkspaceSelection({
       primary: createWorkspace("duplicate"),
       additional: [createWorkspace("duplicate")],
-    })).toThrow(/duplicate workspace id/);
+    })).toThrow(/duplicate Workspace id/);
   });
   it("keeps caller-assigned identity out of RunInput", () => {
     expectTypeOf<Parameters<typeof snapshotRunInput>[0]>().not.toHaveProperty(

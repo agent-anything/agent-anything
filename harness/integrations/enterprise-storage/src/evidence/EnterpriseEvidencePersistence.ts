@@ -379,13 +379,15 @@ function validateEvidenceIdentity(evidence: Evidence): void {
   }
   if (
     evidence.source === null ||
-    typeof evidence.source !== "object" ||
-    evidence.source.kind !== "toolResult"
+    typeof evidence.source !== "object"
   ) {
     throw new TypeError("Evidence source is invalid.");
   }
-  requiredText(evidence.source.toolCallId, "evidence.source.toolCallId");
-  requiredText(evidence.source.toolName, "evidence.source.toolName");
+  requiredText(evidence.source.owner, "evidence.source.owner");
+  requiredText(evidence.source.kind, "evidence.source.kind");
+  requiredText(evidence.source.id, "evidence.source.id");
+  optionalText(evidence.source.revision, "evidence.source.revision");
+  snapshotMetadata(evidence.source.metadata, "evidence.source.metadata");
 }
 
 function validateReceipt(

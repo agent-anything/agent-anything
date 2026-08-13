@@ -1,12 +1,4 @@
 export type {
-  ApprovalRecordSummary,
-  ApprovalRequestSummary,
-} from "./ApprovalSummary.js";
-export {
-  createApprovalRecordSummary,
-  createApprovalRequestSummary,
-} from "./ApprovalSummary.js";
-export type {
   CancellationAttribution,
   CancellationContext,
   CancellationLimits,
@@ -22,65 +14,26 @@ export type {
   RunCancellationSummary,
   RunFinalizationContext,
 } from "./RunCancellation.js";
-export {
-  createRunCancellationController,
-  toRunCancellationSummary,
-} from "./RunCancellation.js";
+export { createRunCancellationController, toRunCancellationSummary } from "./RunCancellation.js";
 export type {
+  DescendantRunFailure,
   RunFailureCause,
   RunFailureForKind,
   RunFailureKind,
   RuntimeFailure,
 } from "./RunFailure.js";
-export {
-  createRunFailureCause,
-  runFailureCode,
-  runFailureMessage,
-  runFailureMetadata,
-} from "./RunFailure.js";
+export { createRunFailureCause, runFailureCode, runFailureMessage, runFailureMetadata } from "./RunFailure.js";
+export type { RunBlockedCode, RunCancelledCode, RunFailureCode, RunResultCode, RunResultStatus } from "./RunStatus.js";
 export type {
-  RunBlockedCode,
-  RunCancelledCode,
-  RunFailureCode,
-  RunResultCode,
-  RunResultStatus,
-} from "./RunStatus.js";
+  PendingRunSubject,
+  PendingRunSubjectProjection,
+} from "./PendingRunSubject.js";
+export { deriveActiveRunStatus, projectPendingRunSubject } from "./PendingRunSubject.js";
 export type {
-  ActionAssessedRunItem,
-  ActionAssessedSummary,
-  ActionInvalidatedRunItem,
-  ActionInvalidatedSummary,
-  ActionPreparedRunItem,
-  ActionPreparedSummary,
-  ActionRunItem,
-  ApprovalRequestedRunItem,
-  ApprovalResolvedRunItem,
-  FinalOutputRunItem,
-  ModelOutputRunItem,
-  ObservationRunItem,
-  PlanAbandonedRunItem,
-  PlanCompletedRunItem,
-  PlanCreatedRunItem,
-  PlanUpdatedRunItem,
-  RetryAttemptFinishedRunItem,
-  RetryAttemptStartedRunItem,
-  RetryCancelledRunItem,
-  RetryExhaustedRunItem,
-  RetryFallbackSelectedRunItem,
-  RetryRunItem,
-  RetryScheduledRunItem,
-  RunBlockedRunItem,
-  RunCancellationRequestedRunItem,
-  RunCancelledRunItem,
-  RunFailedRunItem,
   RunItem,
-  RunItemBase,
-  SandboxAttemptResolvedRunItem,
-  SandboxAttemptResolutionSummary,
-  SandboxAttemptStartedRunItem,
-  SandboxAttemptSummary,
-  SandboxEscalationProposedRunItem,
-  StopRunItem,
+  RunItemPayload,
+  RuntimeRunAction,
+  RuntimeRunActionSubject,
 } from "./RunItem.js";
 export type {
   ApprovalLimits,
@@ -97,12 +50,8 @@ export {
   snapshotResolvedRunPermissionConfig,
 } from "./RunPermissionConfig.js";
 export type {
-  ApprovalCounters,
-  ApprovalFingerprintRequestCount,
   EffectivePermissionContext,
-  PendingApproval,
   PermissionContextProjection,
-  RunPermissionLifecycleStatus,
   RunPermissionState,
 } from "./RunPermissionState.js";
 export {
@@ -119,29 +68,12 @@ export type {
   RunResult,
   SucceededRunResult,
 } from "./RunResult.js";
-export {
-  createBlockedRunResult,
-  createCancelledRunResult,
-  createFailedRunResult,
-  createSucceededRunResult,
-} from "./RunResult.js";
+export { createBlockedRunResult, createCancelledRunResult, createFailedRunResult, createSucceededRunResult } from "./RunResult.js";
+export type { RunCounters, RunState } from "./RunState.js";
 export type {
-  RunCounters,
-  RunState,
-} from "./RunState.js";
-export type {
-  ActionDeniedObservation,
-  ActionDeniedOwner,
-  ActionFailureObservation,
-  ActionRejectedObservation,
-  ApprovalApplicationFailedObservation,
-  ApprovalDeclinedObservation,
-  ApprovalLimitReachedObservation,
-  ApprovalObservation,
-  ApprovalPolicyRejectedObservation,
-  ApprovalReviewFailedObservation,
-  PermissionsGrantedObservation,
-  PlanUpdateResultObservation,
   RunObservation,
-  ToolResultObservation,
+  RunObservationEnvelope,
+  RunObservationLowerRef,
+  RunObservationPayload,
 } from "./RunObservation.js";
+export { createRunObservation } from "./RunObservation.js";

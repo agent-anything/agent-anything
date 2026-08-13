@@ -1,4 +1,4 @@
-import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/control";
 import type {
   AppliedPolicyAmendmentRecord,
   TrustedPolicyAmendment,

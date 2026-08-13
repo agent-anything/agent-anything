@@ -10,5 +10,7 @@ export type {
   RunHandle,
   RunOperationListener,
   RunOperationSnapshot,
+  RunPendingInteractionProjection,
+  RunRetryProjection,
 } from "./RunHandle.js";
 export { Runner } from "./Runner.js";

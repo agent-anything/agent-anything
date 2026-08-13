@@ -30,6 +30,14 @@ describe("EnterpriseEvidencePersistenceAdapter", () => {
     expect(client.commits).toHaveLength(1);
     expect(client.commits[0]).toMatchObject({
       commitId: "enterprise-evidence:tenant-a:evidence_1",
+      evidence: {
+        source: {
+          owner: "code-agent",
+          kind: "operation-result",
+          id: "operation-result-1",
+          revision: "1",
+        },
+      },
       workspaceId: "workspace_1",
       actorRef: "user_1",
       retentionPolicyRef: "retention-restricted",
@@ -326,9 +334,11 @@ function evidence(overrides: Partial<Evidence> = {}): Evidence {
   return {
     id: "evidence_1",
     source: {
-      kind: "toolResult",
-      toolCallId: "tool_call_1",
-      toolName: "codeAgent.readFile",
+      owner: "code-agent",
+      kind: "operation-result",
+      id: "operation-result-1",
+      revision: "1",
+      metadata: { adapter: "fake" },
     },
     summary: "Read workspace file.",
     content: { answer: "ok" },

@@ -16,7 +16,8 @@ import type {
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/model-interaction";
-import type { InvocationInterruptionContext, RunWorkspace } from "@agent-anything/agent-core/run";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -45,7 +46,7 @@ type RunHelarcTestInput = Omit<
   | "identityResolver"
   | "identitySelection"
 > & {
-  readonly workspace: RunWorkspace;
+  readonly workspace: WorkspaceSelection;
   readonly workspaceResolver?: HostWorkspaceResolver;
   readonly workspaceSelection?: HostWorkspaceSelection;
   readonly identityResolver?: HostIdentityResolver;
@@ -397,7 +398,7 @@ describe("Helarc Host Run composition", () => {
       "Use only a Tool exposed in the active Tool catalog.",
     );
     expect(result.runResult.items.some((item) =>
-      item.kind === "action" && item.action.name === "codeAgent.runCommand"
+      item.kind === "action" && item.action.subject.name === "codeAgent.runCommand"
     )).toBe(false);
     await expect(access(markerPath)).rejects.toThrow();
   });
@@ -651,7 +652,9 @@ describe("Helarc Host Run composition", () => {
     expect(provider.requests).toHaveLength(1);
     expect(result.runResult.items).toContainEqual(expect.objectContaining({
       kind: "action",
-      action: expect.objectContaining({ name: "codeAgent.createFile" }),
+      action: expect.objectContaining({
+        subject: expect.objectContaining({ name: "codeAgent.createFile" }),
+      }),
     }));
     expect(result.runResult.metadata.helarcToolCatalog).not.toEqual(
       expect.objectContaining({

@@ -1,12 +1,14 @@
 export type {
   SelectedTool,
+  ToolExposureProof,
   ToolRequestOrigin,
   ToolSelectionInput,
-  ToolSelectionSnapshot,
-  ToolSelectionValidationCode,
+  ToolSelectionRevision,
 } from "./ToolSelection.js";
 export {
-  createToolSelectionSnapshot,
+  createControllerToolExposureProof,
+  createFixedLocalToolSelection,
   findSelectedTool,
+  snapshotToolSelectionRevision,
   ToolSelectionValidationError,
 } from "./ToolSelection.js";

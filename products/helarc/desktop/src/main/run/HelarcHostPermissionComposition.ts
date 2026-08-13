@@ -9,7 +9,7 @@ import type {
   ManagedPermissionConstraints,
   PersistentPolicyAmendmentPort,
 } from "@agent-anything/governance";
-import type { WorkspaceContext } from "@agent-anything/agent-core/run";
+import type { WorkspaceIdentity } from "@agent-anything/workspace/identity";
 import {
   resolveHelarcPermissionPreset,
   type HelarcPermissionPreset,
@@ -19,13 +19,13 @@ import type {
   PermissionEnforcement,
   PermissionProfileDefinition,
 } from "@agent-anything/permission/profile";
-import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 
 export interface CreateHelarcHostPermissionCompositionInput {
   readonly preset: HelarcPermissionPreset;
   readonly productRunId: string;
   readonly sessionId: string;
-  readonly workspace: WorkspaceContext;
+  readonly workspace: WorkspaceIdentity;
   readonly workspaceRoots: readonly { readonly rootId: string; readonly path: string }[];
   readonly platform: "win32" | "posix";
   readonly enforcement: PermissionEnforcement;

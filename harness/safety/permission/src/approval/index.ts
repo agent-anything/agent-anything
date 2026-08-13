@@ -10,6 +10,7 @@ export type {
   ApprovalRequest,
   ApprovalRequestBase,
   ApprovalRequirement,
+  ApprovalRequirementDraft,
   ApprovalReviewContext,
   ApprovalReviewFailure,
   ApprovalReviewInput,
@@ -30,6 +31,10 @@ export type {
   RemoteToolApprovalTool,
   ValidatedApprovalDecision,
 } from "./ApprovalContracts.js";
+export {
+  sealApprovalRequirement,
+  type SealApprovalRequirementInput,
+} from "./sealApprovalRequirement.js";
 export {
   ApprovalContractError,
   type ApprovalContractErrorCode,
@@ -79,3 +84,12 @@ export {
   allowsActionApproval,
   type ActionApprovalCause,
 } from "./evaluateApprovalPolicy.js";
+export {
+  APPROVAL_INTERACTION_PROTOCOL,
+  createApprovalInteractionPresentation,
+  createApprovalInteractionProtocol,
+  type ApprovalInteractionHandlers,
+  type ApprovalInteractionProtocol,
+  type ApprovalInteractionResolution,
+  type ApprovalInteractionSubject,
+} from "./ApprovalInteractionProtocol.js";

@@ -7,16 +7,14 @@ import {
 } from "./ToolCatalog.js";
 
 describe("ToolCatalog", () => {
-  it("creates an immutable declarative catalog without execution behavior", () => {
+  it("captures one immutable revisioned descriptor without execution behavior", () => {
     const inputSchema = {
-      required: ["path"],
-      properties: {
-        path: { type: "string" },
-      },
       type: "object",
+      required: ["path"],
+      properties: { path: { type: "string" } },
     };
     const input: ToolDescriptorInput = {
-      name: "codeAgent.readFile",
+      ...descriptor("codeAgent.readFile"),
       description: "Read one workspace file.",
       inputSchema,
       annotations: {
@@ -24,99 +22,95 @@ describe("ToolCatalog", () => {
         readOnlyHint: true,
         destructiveHint: false,
       },
-      metadata: {
-        family: "workspace",
-        priority: 1,
-      },
+      metadata: { family: "workspace", priority: 1 },
     };
 
     const catalog = createToolCatalogSnapshot([input]);
     inputSchema.required[0] = "changed";
 
     expect(catalog).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       tools: [{
+        ref: { tool: { namespace: "code-agent", name: "read-file" }, revision: "1" },
         name: "codeAgent.readFile",
-        description: "Read one workspace file.",
-        inputSchema: {
-          properties: { path: { type: "string" } },
-          required: ["path"],
-          type: "object",
+        inputSchema: { required: ["path"] },
+        schemaRevisions: {
+          dialect: "json-schema-2020-12",
+          input: "input-1",
+          output: null,
+          translation: "native-1",
         },
-        annotations: {
-          title: "Read file",
-          readOnlyHint: true,
-          destructiveHint: false,
+        source: {
+          kind: "product",
+          sourceId: "helarc-code-agent",
+          sourceRevision: "1",
+          activationEpoch: null,
         },
-        metadata: { family: "workspace", priority: 1 },
+        operationBinding: {
+          operation: {
+            operation: { namespace: "code", name: "read-file" },
+            revision: "1",
+          },
+          revision: "binding-1",
+        },
       }],
     });
     expect(catalog.catalogId).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect(findToolDescriptor(catalog, "codeAgent.readFile")).toBe(catalog.tools[0]);
+    expect(catalog.revision).toBe(catalog.catalogId);
+    expect(findToolDescriptor(catalog, "codeAgent.readFile", "1")).toBe(catalog.tools[0]);
     expect("execute" in catalog.tools[0]!).toBe(false);
-    expect(Object.isFrozen(catalog)).toBe(true);
-    expect(Object.isFrozen(catalog.tools)).toBe(true);
+    expect(Object.isFrozen(catalog.tools[0]!.source)).toBe(true);
     expect(Object.isFrozen(catalog.tools[0]!.inputSchema)).toBe(true);
-    expect(Object.isFrozen(catalog.tools[0]!.annotations)).toBe(true);
   });
 
-  it("uses canonical order and rejects duplicate or non-canonical names", () => {
+  it("uses canonical revision order and rejects duplicate revisions or names", () => {
     const first = descriptor("codeAgent.listFiles");
     const second = descriptor("codeAgent.readFile");
-
     expect(createToolCatalogSnapshot([second, first]).tools.map((tool) => tool.name))
       .toEqual(["codeAgent.listFiles", "codeAgent.readFile"]);
     expect(() => createToolCatalogSnapshot([first, first])).toThrowError(
-      expect.objectContaining({ code: "tool_name_duplicate" }),
+      expect.objectContaining({ code: "tool_revision_duplicate" }),
     );
-    expect(() => createToolCatalogSnapshot([descriptor(" readFile")])).toThrowError(
-      expect.objectContaining({ code: "tool_name_invalid" }),
-    );
+    expect(() => createToolCatalogSnapshot([
+      first,
+      { ...first, ref: { ...first.ref, revision: "2" } },
+    ])).toThrowError(expect.objectContaining({ code: "tool_name_duplicate" }));
+    expect(() => createToolCatalogSnapshot([
+      { ...first, name: " codeAgent.listFiles" },
+    ])).toThrowError(expect.objectContaining({ code: "tool_identity_invalid" }));
   });
 
-  it("rejects unsupported annotations and non-serializable catalog data", () => {
+  it("rejects unsupported fields and non-serializable catalog data", () => {
     expect(() => createToolCatalogSnapshot([{
       ...descriptor("codeAgent.readFile"),
-      execute: (() => undefined),
+      execute: () => undefined,
     } as never])).toThrowError(expect.objectContaining({ code: "tool_descriptor_invalid" }));
-
     expect(() => createToolCatalogSnapshot([{
       ...descriptor("codeAgent.readFile"),
-      annotations: { risk: "safe" } as never,
-    }])).toThrowError(expect.objectContaining({ code: "tool_annotation_invalid" }));
-
-    expect(() => createToolCatalogSnapshot([{
-      ...descriptor("codeAgent.readFile"),
-      metadata: { execute: (() => undefined) as never },
-    }])).toThrowError(expect.objectContaining({ code: "tool_data_not_serializable" }));
-
+      annotations: { risk: "safe" },
+    } as never])).toThrowError(expect.objectContaining({ code: "tool_descriptor_invalid" }));
+    expectInvalidMetadata({ execute: () => undefined });
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
-    expect(() => createToolCatalogSnapshot([{
-      ...descriptor("codeAgent.readFile"),
-      metadata: cyclic as never,
-    }])).toThrowError(expect.objectContaining({ code: "tool_data_not_serializable" }));
+    expectInvalidMetadata(cyclic);
   });
 
   it("rejects accessors, class instances, sparse arrays, symbols, and non-finite numbers", () => {
-    const withGetter = Object.defineProperty({}, "value", {
+    expectInvalidMetadata(Object.defineProperty({}, "value", {
       enumerable: true,
       get: () => "secret",
-    });
-    expectInvalidMetadata(withGetter);
+    }));
     expectInvalidMetadata(new Date());
-
     const sparse: unknown[] = [];
     sparse.length = 1;
     expectInvalidMetadata({ sparse });
     expectInvalidMetadata({ value: Number.POSITIVE_INFINITY });
-
     const symbolData = { value: true } as Record<PropertyKey, unknown>;
     symbolData[Symbol("hidden")] = true;
     expectInvalidMetadata(symbolData);
   });
 
-  it("reports catalog validation paths", () => {
+  it("reports the exact invalid data path", () => {
     try {
       createToolCatalogSnapshot([{
         ...descriptor("codeAgent.readFile"),
@@ -138,7 +132,6 @@ describe("ToolCatalog", () => {
     expect(() => createToolCatalogSnapshot(sparse)).toThrowError(
       expect.objectContaining({ code: "tool_descriptor_invalid" }),
     );
-
     const descriptorWithGetter = Object.defineProperty({}, "name", {
       enumerable: true,
       get: () => "codeAgent.readFile",
@@ -150,12 +143,30 @@ describe("ToolCatalog", () => {
 });
 
 function descriptor(name: string): ToolDescriptorInput {
+  const operationName = name.endsWith("listFiles") ? "list-files" : "read-file";
+  const toolName = name.endsWith("listFiles") ? "list-files" : "read-file";
   return {
+    ref: { tool: { namespace: "code-agent", name: toolName }, revision: "1" },
     name,
-    inputSchema: {
-      type: "object",
-      properties: {},
-      additionalProperties: false,
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    schemaRevisions: {
+      dialect: "json-schema-2020-12",
+      input: "input-1",
+      output: null,
+      translation: "native-1",
+    },
+    source: {
+      kind: "product",
+      sourceId: "helarc-code-agent",
+      sourceRevision: "1",
+      activationEpoch: null,
+    },
+    operationBinding: {
+      operation: {
+        operation: { namespace: "code", name: operationName },
+        revision: "1",
+      },
+      revision: "binding-1",
     },
   };
 }

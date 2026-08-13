@@ -1,5 +1,5 @@
-import type { ObservationBase } from "@agent-anything/agent-core/action";
 import type {
+  ContextObservation,
   ContextProjection,
   ContextProjectionLimits,
   ContextProjectorInput,
@@ -16,7 +16,7 @@ const TEST_CONTEXT_PROJECTION_LIMITS: ContextProjectionLimits = Object.freeze({
 });
 
 export function createTestIdentityContextProjector<
-  TObservation extends ObservationBase = ObservationBase,
+  TObservation extends ContextObservation = ContextObservation,
 >(): ContextProjectorPort<TObservation, TObservation> {
   return Object.freeze({
     project: ({
@@ -32,7 +32,7 @@ export function createTestIdentityContextProjector<
 }
 
 export function createTestContextProjection<
-  TObservation extends ObservationBase = ObservationBase,
+  TObservation extends ContextObservation = ContextObservation,
 >() {
   return Object.freeze({
     projector: createTestIdentityContextProjector<TObservation>(),

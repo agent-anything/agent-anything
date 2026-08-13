@@ -3,7 +3,7 @@ import type {
   ApprovalReviewInput,
   ApprovalReviewOutcome,
 } from "@agent-anything/permission";
-import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
+import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/control";
 import { describe, expect, it } from "vitest";
 import {
   approvalReviewRetryClassifier,

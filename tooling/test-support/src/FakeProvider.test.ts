@@ -3,7 +3,7 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/model-interaction";
-import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { describe, expect, it } from "vitest";
 import { FakeProvider } from "./FakeProvider.js";
 

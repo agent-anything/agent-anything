@@ -1,10 +1,18 @@
-import type { ObservationBase } from "@agent-anything/agent-core/action";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { EvidenceRef } from "../evidence/EvidenceRef.js";
 import type { ContextMessage } from "./ContextMessage.js";
 
+export interface ContextObservation {
+  readonly id: string;
+  readonly runId: string;
+  readonly actionId: string;
+  readonly kind: string;
+  readonly createdAt: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
+}
+
 export interface Context<
-  TObservation extends ObservationBase = ObservationBase,
+  TObservation extends ContextObservation = ContextObservation,
 > {
   readonly messages: readonly ContextMessage[];
   readonly observations: readonly TObservation[];
@@ -13,7 +21,7 @@ export interface Context<
 }
 
 export interface ContextUpdate<
-  TObservation extends ObservationBase = ObservationBase,
+  TObservation extends ContextObservation = ContextObservation,
 > {
   readonly messages?: readonly ContextMessage[];
   readonly observations?: readonly TObservation[];
@@ -22,7 +30,7 @@ export interface ContextUpdate<
 }
 
 export function createInitialContext<
-  TObservation extends ObservationBase = ObservationBase,
+  TObservation extends ContextObservation = ContextObservation,
 >(task: AgentTask): Context<TObservation> {
   return freezeContext({
     messages: [],
@@ -36,7 +44,7 @@ export function createInitialContext<
   });
 }
 
-export function applyContextUpdate<TObservation extends ObservationBase>(
+export function applyContextUpdate<TObservation extends ContextObservation>(
   context: Context<TObservation>,
   update: ContextUpdate<TObservation>,
 ): Context<TObservation> {
@@ -51,7 +59,7 @@ export function applyContextUpdate<TObservation extends ObservationBase>(
   });
 }
 
-function freezeContext<TObservation extends ObservationBase>(
+function freezeContext<TObservation extends ContextObservation>(
   context: Context<TObservation>,
 ): Context<TObservation> {
   const observations = context.observations.map(snapshotObservation);
@@ -84,7 +92,7 @@ function snapshotMessage(message: ContextMessage): ContextMessage {
   });
 }
 
-function snapshotObservation<TObservation extends ObservationBase>(
+function snapshotObservation<TObservation extends ContextObservation>(
   observation: TObservation,
 ): TObservation {
   if (!isRecord(observation)) {
@@ -120,7 +128,7 @@ function snapshotMetadata(
 }
 
 function assertUniqueObservationIds(
-  observations: readonly ObservationBase[],
+  observations: readonly ContextObservation[],
 ): void {
   const ids = new Set<string>();
   for (const observation of observations) {

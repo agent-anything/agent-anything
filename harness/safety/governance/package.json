@@ -40,6 +40,7 @@
   "license": "Apache-2.0",
   "private": true,
   "dependencies": {
-    "@agent-anything/agent-core": "workspace:*"
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/canonical-action": "workspace:*"
   }
 }

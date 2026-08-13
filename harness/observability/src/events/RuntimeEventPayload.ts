@@ -1,51 +1,13 @@
-
-
 export type RuntimeRunItemKind =
-  | "model_output"
-  | "action"
+  | "controller_turn"
+  | "run_action"
   | "observation"
-  | "plan_created"
-  | "plan_updated"
-  | "plan_completed"
-  | "plan_abandoned"
-  | "final_output"
-  | "stop"
-  | "run_cancellation_requested"
-  | "run_blocked"
-  | "run_failed"
-  | "run_cancelled"
-  | "approval_requested"
-  | "approval_resolved"
-  | "action_prepared"
-  | "action_assessed"
-  | "action_invalidated"
-  | "sandbox_attempt_started"
-  | "sandbox_attempt_resolved"
-  | "sandbox_escalation_proposed"
-  | "retry_attempt_started"
-  | "retry_attempt_finished"
-  | "retry_scheduled"
-  | "retry_fallback_selected"
-  | "retry_exhausted"
-  | "retry_cancelled";
+  | "state_transition"
+  | "pending_transition"
+  | "cancellation_transition"
+  | "terminal_transition";
 
-export type RuntimeTerminalStatus =
-  | "succeeded"
-  | "blocked"
-  | "failed"
-  | "cancelled";
-
-export interface RuntimePlanStepProjection {
-  readonly step: string;
-  readonly status: "pending" | "in_progress" | "completed";
-}
-
-export interface RuntimePlanProjection {
-  readonly id: string;
-  readonly version: number;
-  readonly status: "active" | "completed" | "abandoned";
-  readonly steps: readonly RuntimePlanStepProjection[];
-}
+export type RuntimeTerminalStatus = "succeeded" | "blocked" | "failed" | "cancelled";
 
 export interface RunStartedRuntimeEventPayload {
   readonly status: "running";
@@ -68,296 +30,69 @@ interface TerminalRuntimeEventPayload<TStatus extends RuntimeTerminalStatus> {
   readonly errorCodes: readonly string[];
 }
 
-export type RunCompletedRuntimeEventPayload =
-  TerminalRuntimeEventPayload<"succeeded">;
-export type RunBlockedRuntimeEventPayload =
-  TerminalRuntimeEventPayload<"blocked">;
-export type RunFailedRuntimeEventPayload =
-  TerminalRuntimeEventPayload<"failed">;
-export type RunCancelledRuntimeEventPayload =
-  TerminalRuntimeEventPayload<"cancelled">;
+export type RunCompletedRuntimeEventPayload = TerminalRuntimeEventPayload<"succeeded">;
+export type RunBlockedRuntimeEventPayload = TerminalRuntimeEventPayload<"blocked">;
+export type RunFailedRuntimeEventPayload = TerminalRuntimeEventPayload<"failed">;
+export type RunCancelledRuntimeEventPayload = TerminalRuntimeEventPayload<"cancelled">;
 
 export interface ControllerStartedRuntimeEventPayload {
+  readonly turnId: string;
   readonly iteration: number;
 }
 
 export interface ControllerFinishedRuntimeEventPayload {
+  readonly turnId: string;
   readonly iteration: number;
-  readonly status: "succeeded" | "failed" | "cancelled";
+  readonly status: "decided" | "failed" | "interrupted";
   readonly code: string | null;
-  readonly decisionKind: "final_output" | "actions" | "stop" | null;
+  readonly decisionKind: "advance" | "propose_completion" | "propose_stop" | null;
 }
 
-export interface PlanCreatedRuntimeEventPayload {
-  readonly plan: RuntimePlanProjection;
+export type RuntimeOperationBindingKind = "internal" | "direct" | "hosted" | "composite" | "descendant_agent";
+export type RuntimeOperationCorrelationKind = "run_action" | "run_request" | "owner_operation" | "evaluation_trial";
+
+export interface OperationStartedRuntimeEventPayload {
+  readonly invocationId: string;
+  readonly operationNamespace: string;
+  readonly operationName: string;
+  readonly operationRevision: string;
+  readonly semanticOwner: string;
+  readonly bindingKind: RuntimeOperationBindingKind;
+  readonly correlationKind: RuntimeOperationCorrelationKind;
+  readonly parentInvocationId: string | null;
+  readonly parentRunActionId: string | null;
 }
 
-export interface PlanUpdatedRuntimeEventPayload {
-  readonly plan: RuntimePlanProjection;
-  readonly previousVersion: number;
-  readonly transition: "updated" | "reactivated";
-}
+export type RuntimeOperationStatus = "succeeded" | "partial" | "failed" | "unavailable" | "denied" | "cancelled" | "timed_out" | "invalid" | "unknown_effect";
 
-export interface PlanCompletedRuntimeEventPayload {
-  readonly plan: RuntimePlanProjection;
-}
-
-export interface PlanAbandonedRuntimeEventPayload {
-  readonly plan: RuntimePlanProjection;
-  readonly terminalStatus: RuntimeTerminalStatus;
-  readonly reasonCode: string | null;
-}
-
-export interface ActionPreparedRuntimeEventPayload {
-  readonly actionId: string;
-  readonly actionFingerprint: string;
-  readonly category:
-    | "file_system"
-    | "process"
-    | "network"
-    | "remote_tool"
-    | "computation";
-  readonly effectCount: number;
-  readonly targetAssertionCount: number;
-}
-
-export interface ActionAssessedRuntimeEventPayload {
-  readonly actionId: string;
-  readonly actionFingerprint: string;
-  readonly status:
-    | "authorized"
-    | "approval_required"
-    | "denied"
-    | "invalidated"
-    | "failed"
-    | "interrupted";
-  readonly owner: "policy" | "permission" | "tool" | null;
+export interface OperationFinishedRuntimeEventPayload {
+  readonly invocationId: string;
+  readonly status: RuntimeOperationStatus;
   readonly code: string | null;
+  readonly resultId: string;
+  readonly lowerResultRefs: readonly string[];
 }
 
-export interface ActionInvalidatedRuntimeEventPayload {
-  readonly actionId: string;
-  readonly actionFingerprint: string;
-  readonly phase: "assessment" | "revalidation" | "dispatch";
-  readonly owner: "permission" | "tool";
-  readonly code: string;
-}
-
-export type RuntimeApprovalCategory =
-  | "commandExecution"
-  | "fileChange"
-  | "permissions"
-  | "remoteToolCall"
-  | "skill"
-  | "networkAccess";
-
-export interface ApprovalRequestedRuntimeEventPayload {
+export interface InteractionOpenedRuntimeEventPayload {
   readonly requestId: string;
-  readonly actionId: string;
-  readonly actionFingerprint: string;
-  readonly category: RuntimeApprovalCategory;
+  readonly protocolOwner: string;
+  readonly protocolKind: string;
+  readonly protocolRevision: string;
+  readonly subjectOwner: string;
+  readonly subjectKind: string;
+  readonly subjectId: string;
+  readonly subjectRevision: string;
+  readonly blockingScope: "none" | "branch" | "run";
   readonly pendingVersion: number;
-  readonly reviewer: "user" | "auto_review";
-  readonly phase: "reviewing";
-  readonly reviewOperationId: string;
+  readonly parentRunActionId: string | null;
 }
 
-export interface ApprovalResolvedRuntimeEventPayload {
+export interface InteractionSettledRuntimeEventPayload {
   readonly requestId: string;
-  readonly actionId: string;
-  readonly actionFingerprint: string;
   readonly pendingVersion: number;
-  readonly reviewer: "user" | "auto_review";
-  readonly resolutionKind:
-    | "decision"
-    | "review_failure"
-    | "request_failure"
-    | "run_cancelled";
-  readonly decisionKind:
-    | "accept"
-    | "acceptForSession"
-    | "grantPermissions"
-    | "acceptWithExecpolicyAmendment"
-    | "applyNetworkPolicyAmendment"
-    | "decline"
-    | "cancel"
-    | null;
-  readonly applicationKind:
-    | "not_applicable"
-    | "applied"
-    | "not_applied"
-    | "interrupted"
-    | "outcome_unknown";
+  readonly lifecycle: "resolved" | "expired" | "cancelled" | "invalidated" | "failed";
   readonly code: string | null;
-  readonly authorityRecordIds: readonly string[];
-}
-
-export type RuntimeSandboxEnforcement = "managed" | "external" | "disabled";
-
-export interface SandboxAttemptStartedRuntimeEventPayload {
-  readonly actionId: string;
-  readonly attemptId: string;
-  readonly ordinal: 1 | 2;
-  readonly enforcement: RuntimeSandboxEnforcement;
-}
-
-export interface SandboxAttemptResolvedRuntimeEventPayload {
-  readonly actionId: string;
-  readonly attemptId: string;
-  readonly ordinal: 1 | 2;
-  readonly enforcement: RuntimeSandboxEnforcement;
-  readonly outcome:
-    | "executed"
-    | "sandbox_denied"
-    | "sandbox_unavailable"
-    | "interrupted"
-    | "failed";
-  readonly code: string | null;
-}
-
-export interface SandboxEscalationProposedRuntimeEventPayload {
-  readonly actionId: string;
-  readonly previousAttemptId: string;
-  readonly previousActionFingerprint: string;
-  readonly nextActionFingerprint: string;
-  readonly deniedEffectKind: "file_system" | "network";
-}
-
-export interface ToolStartedRuntimeEventPayload {
-  readonly actionId: string;
-  readonly toolName: string;
-}
-
-export interface ToolFinishedRuntimeEventPayload {
-  readonly actionId: string;
-  readonly toolName: string;
-  readonly status: "succeeded" | "failed";
-  readonly code: string | null;
-  readonly toolResultStatus: "succeeded" | "partial" | "failed" | "timeout";
-  readonly durationMs: number;
-}
-
-export interface ObservationCreatedRuntimeEventPayload {
-  readonly actionId: string;
-  readonly observationId: string;
-  readonly status:
-    | "succeeded"
-    | "partial"
-    | "failed"
-    | "timeout"
-    | "denied"
-    | "rejected"
-    | "declined"
-    | "limit_reached"
-    | "granted"
-    | "updated";
-  readonly code: string | null;
-}
-
-export interface ContextUpdatedRuntimeEventPayload {
-  readonly observationId: string;
-}
-
-export interface EvidenceCreatedRuntimeEventPayload {
-  readonly actionId: string;
-  readonly evidenceId: string;
-}
-
-export type RuntimeRetryOwner =
-  | "provider_request"
-  | "response_stream"
-  | "approvals_reviewer"
-  | "structured_output";
-
-interface RetryRuntimeEventPayload {
-  readonly operationId: string;
-  readonly owner: RuntimeRetryOwner;
-}
-
-export interface RetryAttemptStartedRuntimeEventPayload
-  extends RetryRuntimeEventPayload {
-  readonly attemptId: string;
-  readonly budgetId: string;
-  readonly attemptNumber: number;
-  readonly budgetAttemptNumber: number;
-  readonly maxBudgetAttempts: number;
-}
-
-export interface RetryAttemptFinishedRuntimeEventPayload
-  extends RetryRuntimeEventPayload {
-  readonly attemptId: string;
-  readonly budgetId: string;
-  readonly attemptNumber: number;
-  readonly budgetAttemptNumber: number;
-  readonly durationMs: number;
-  readonly outcome: "succeeded" | "failed" | "cancelled";
-  readonly failureCategory: string | null;
-  readonly failureCode: string | null;
-  readonly next:
-    | "retry_scheduled"
-    | "budget_exhausted"
-    | "deadline_exhausted"
-    | "return_to_owner"
-    | "cancelled";
-}
-
-export interface RetryScheduledRuntimeEventPayload
-  extends RetryRuntimeEventPayload {
-  readonly afterAttemptId: string;
-  readonly budgetId: string;
-  readonly retryNumber: number;
-  readonly nextAttemptNumber: number;
-  readonly nextBudgetAttemptNumber: number;
-  readonly delayMs: number;
-  readonly delaySource: "calculated_backoff" | "trusted_server_delay";
-  readonly nextAttemptAt: string;
-  readonly failureCategory: string;
-  readonly failureCode: string;
-}
-
-export interface RetryFallbackSelectedRuntimeEventPayload
-  extends RetryRuntimeEventPayload {
-  readonly fromLegId: string;
-  readonly toLegId: string;
-  readonly fromBudgetId: string;
-  readonly toBudgetId: string;
-  readonly fromTransport: string;
-  readonly toTransport: string;
-  readonly fallbackNumber: number;
-  readonly reasonCode: string;
-  readonly nextAttemptNumber: number;
-}
-
-export interface RetryExhaustedRuntimeEventPayload
-  extends RetryRuntimeEventPayload {
-  readonly finalBudgetId: string;
-  readonly reason: "retry_budget_exhausted" | "deadline_exceeded";
-  readonly totalAttempts: number;
-  readonly totalRetryDelayMs: number;
-  readonly lastFailureCategory: string | null;
-  readonly lastFailureCode: string | null;
-}
-
-export interface RuntimeCancellationAttribution {
-  readonly requestId: string;
-  readonly operation:
-    | "controller"
-    | "provider"
-    | "retry_wait"
-    | "approval_reviewer"
-    | "authority_commit"
-    | "tool"
-    | "process";
-  readonly observedAt: string;
-}
-
-export interface RetryCancelledRuntimeEventPayload
-  extends RetryRuntimeEventPayload {
-  readonly phase: "before_attempt" | "attempt" | "backoff";
-  readonly budgetId: string;
-  readonly attemptId: string | null;
-  readonly attemptNumber: number | null;
-  readonly attribution: RuntimeCancellationAttribution;
+  readonly terminalRecordId: string;
 }
 
 export interface RuntimeEventPayloadMap {
@@ -369,29 +104,10 @@ export interface RuntimeEventPayloadMap {
   readonly "run.cancelled": RunCancelledRuntimeEventPayload;
   readonly "controller.started": ControllerStartedRuntimeEventPayload;
   readonly "controller.finished": ControllerFinishedRuntimeEventPayload;
-  readonly "plan.created": PlanCreatedRuntimeEventPayload;
-  readonly "plan.updated": PlanUpdatedRuntimeEventPayload;
-  readonly "plan.completed": PlanCompletedRuntimeEventPayload;
-  readonly "plan.abandoned": PlanAbandonedRuntimeEventPayload;
-  readonly "action.prepared": ActionPreparedRuntimeEventPayload;
-  readonly "action.assessed": ActionAssessedRuntimeEventPayload;
-  readonly "action.invalidated": ActionInvalidatedRuntimeEventPayload;
-  readonly "approval.requested": ApprovalRequestedRuntimeEventPayload;
-  readonly "approval.resolved": ApprovalResolvedRuntimeEventPayload;
-  readonly "sandbox.attempt.started": SandboxAttemptStartedRuntimeEventPayload;
-  readonly "sandbox.attempt.resolved": SandboxAttemptResolvedRuntimeEventPayload;
-  readonly "sandbox.escalation.proposed": SandboxEscalationProposedRuntimeEventPayload;
-  readonly "tool.started": ToolStartedRuntimeEventPayload;
-  readonly "tool.finished": ToolFinishedRuntimeEventPayload;
-  readonly "observation.created": ObservationCreatedRuntimeEventPayload;
-  readonly "context.updated": ContextUpdatedRuntimeEventPayload;
-  readonly "evidence.created": EvidenceCreatedRuntimeEventPayload;
-  readonly "retry.attempt.started": RetryAttemptStartedRuntimeEventPayload;
-  readonly "retry.attempt.finished": RetryAttemptFinishedRuntimeEventPayload;
-  readonly "retry.scheduled": RetryScheduledRuntimeEventPayload;
-  readonly "retry.fallback.selected": RetryFallbackSelectedRuntimeEventPayload;
-  readonly "retry.exhausted": RetryExhaustedRuntimeEventPayload;
-  readonly "retry.cancelled": RetryCancelledRuntimeEventPayload;
+  readonly "operation.started": OperationStartedRuntimeEventPayload;
+  readonly "operation.finished": OperationFinishedRuntimeEventPayload;
+  readonly "interaction.opened": InteractionOpenedRuntimeEventPayload;
+  readonly "interaction.settled": InteractionSettledRuntimeEventPayload;
 }
 
 export type RuntimeEventName = keyof RuntimeEventPayloadMap;

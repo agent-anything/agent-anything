@@ -5,7 +5,6 @@ import type { HostSessionAuthorityComposition } from "./composition/index.js";
 import type { HostActiveRun, HostRunManager } from "./run/index.js";
 import type { HostRunProjection } from "./projection/index.js";
 import type { HostCommand } from "./transport/index.js";
-import type { UserApprovalReviewBridge } from "./authority/index.js";
 import * as contextApi from "./context/index.js";
 import * as compositionApi from "./composition/index.js";
 import * as runApi from "./run/index.js";
@@ -22,7 +21,6 @@ describe("Host public API", () => {
     expectTypeOf<HostRunManager>().toBeObject();
     expectTypeOf<HostRunProjection>().toBeObject();
     expectTypeOf<HostCommand>().toBeObject();
-    expectTypeOf<UserApprovalReviewBridge>().toBeObject();
 
     expect(Object.keys(contextApi).sort()).toEqual([
       "HostContextResolutionError",
@@ -37,7 +35,6 @@ describe("Host public API", () => {
       "createHostRunManager",
     ]);
     expect(Object.keys(projectionApi).sort()).toEqual([
-      "HOST_RETRY_EVENT_LIMIT",
       "createHostRunProjection",
       "createHostRunProjectionStore",
       "createHostTerminalRunProjection",
@@ -49,13 +46,13 @@ describe("Host public API", () => {
       "HOST_COMMAND_REASON_MAX_LENGTH",
       "HOST_COMMAND_RECEIPT_LIMIT",
       "HOST_COMMAND_VERSION",
+      "HOST_INTERACTION_PAYLOAD_MAX_BYTES",
       "createHostCommandDispatcher",
       "snapshotHostCommand",
     ]);
     expect(Object.keys(authorityApi).sort()).toEqual([
       "createInMemoryHostPolicyAmendmentStore",
       "createInMemoryHostSessionAuthorityStore",
-      "createUserApprovalReviewBridge",
     ]);
   });
 

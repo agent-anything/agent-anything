@@ -1,0 +1,38 @@
+{
+  "name": "@agent-anything/interaction",
+  "version": "0.0.0",
+  "description": "Typed interaction protocol, coordination, and record contracts for Agent Harness.",
+  "type": "module",
+  "exports": {
+    "./protocol": {
+      "types": "./src/protocol/index.ts",
+      "import": "./dist/protocol/index.js"
+    },
+    "./coordination": {
+      "types": "./src/coordination/index.ts",
+      "import": "./dist/coordination/index.js"
+    },
+    "./records": {
+      "types": "./src/records/index.ts",
+      "import": "./dist/records/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "kind": "harness",
+      "component": "interaction"
+    }
+  },
+  "license": "Apache-2.0",
+  "private": true,
+  "dependencies": {
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/operation-catalog": "workspace:*"
+  }
+}

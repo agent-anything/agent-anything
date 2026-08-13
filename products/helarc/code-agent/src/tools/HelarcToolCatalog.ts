@@ -6,7 +6,7 @@ import {
 } from "../file-actions/FileActionContracts.js";
 import { CODE_AGENT_RUN_COMMAND_ACTION } from "../command/CommandActionContracts.js";
 
-import type { ToolAnnotations, ToolDescriptor } from "@agent-anything/tools";
+import type { ToolAnnotations, ToolDescriptor } from "@agent-anything/tools/catalog";
 
 export type HelarcToolCatalogMode = "read-only" | "shell-enabled";
 

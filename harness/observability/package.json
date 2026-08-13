@@ -48,7 +48,6 @@
   "license": "Apache-2.0",
   "private": true,
   "dependencies": {
-    "@agent-anything/context": "workspace:*",
     "@agent-anything/agent-core": "workspace:*"
   }
 }

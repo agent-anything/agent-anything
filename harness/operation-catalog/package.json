@@ -1,0 +1,41 @@
+{
+  "name": "@agent-anything/operation-catalog",
+  "version": "0.0.0",
+  "description": "Immutable Operation identity, catalog, and trusted binding contracts for Agent Harness.",
+  "type": "module",
+  "exports": {
+    "./identity": {
+      "types": "./src/identity/index.ts",
+      "import": "./dist/identity/index.js"
+    },
+    "./catalog": {
+      "types": "./src/catalog/index.ts",
+      "import": "./dist/catalog/index.js"
+    },
+    "./binding": {
+      "types": "./src/binding/index.ts",
+      "import": "./dist/binding/index.js"
+    },
+    "./result": {
+      "types": "./src/result/index.ts",
+      "import": "./dist/result/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "kind": "harness",
+      "component": "operation-catalog"
+    }
+  },
+  "license": "Apache-2.0",
+  "private": true,
+  "dependencies": {
+    "@agent-anything/agent-core": "workspace:*"
+  }
+}

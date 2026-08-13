@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/host",
   "version": "0.0.0",
-  "description": "Product-neutral host integration, safe Run projection, approval bridge, and host authority stores for AgentAnything.",
+  "description": "Product-neutral host integration, safe Run projection, interaction transport, and host authority stores for AgentAnything.",
   "type": "module",
   "exports": {
     "./context": {
@@ -49,10 +49,14 @@
     "@agent-anything/agent-runtime": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/permission": "workspace:*",
-    "@agent-anything/agent-core": "workspace:*"
+    "@agent-anything/interaction": "workspace:*",
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/workspace": "workspace:*"
   },
   "devDependencies": {
     "@agent-anything/model-interaction": "workspace:*",
+    "@agent-anything/operation-catalog": "workspace:*",
+    "@agent-anything/tools": "workspace:*",
     "@agent-anything/test-support": "workspace:*"
   },
   "license": "Apache-2.0",

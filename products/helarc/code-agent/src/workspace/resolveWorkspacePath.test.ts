@@ -1,5 +1,6 @@
 import { basename, join, resolve } from "node:path";
-import type { RunWorkspace, WorkspaceContext } from "@agent-anything/agent-core/run";
+import type { WorkspaceIdentity } from "@agent-anything/workspace/identity";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import { describe, expect, it } from "vitest";
 import { resolveWorkspacePath } from "./resolveWorkspacePath.js";
 
@@ -9,7 +10,7 @@ const docsRoot = resolve("workspace-fixtures", "docs");
 describe("resolveWorkspacePath", () => {
   it("selects an explicit additional Workspace by identity", () => {
     const result = resolveWorkspacePath({
-      workspace: createRunWorkspace(
+      workspace: createWorkspaceSelection(
         createWorkspace("workspace-code", codeRoot),
         [createWorkspace("workspace-docs", docsRoot)],
       ),
@@ -30,7 +31,7 @@ describe("resolveWorkspacePath", () => {
 
   it("selects the primary Workspace when no identity is requested", () => {
     const result = resolveWorkspacePath({
-      workspace: createRunWorkspace(
+      workspace: createWorkspaceSelection(
         createWorkspace("workspace-docs", docsRoot),
         [createWorkspace("workspace-code", codeRoot)],
       ),
@@ -48,7 +49,7 @@ describe("resolveWorkspacePath", () => {
 
   it("preserves the selected Workspace trust state", () => {
     const result = resolveWorkspacePath({
-      workspace: createRunWorkspace(createWorkspace("workspace-docs", docsRoot, {
+      workspace: createWorkspaceSelection(createWorkspace("workspace-docs", docsRoot, {
         trustState: "restricted",
       })),
       requestedPath: "README.md",
@@ -109,7 +110,7 @@ describe("resolveWorkspacePath", () => {
     },
   ])("rejects $name", ({ workspace, expectedCode }) => {
     expect(resolveWorkspacePath({
-      workspace: createRunWorkspace(workspace),
+      workspace: createWorkspaceSelection(workspace),
       requestedPath: "README.md",
     })).toMatchObject({
       status: "rejected",
@@ -192,22 +193,22 @@ describe("resolveWorkspacePath", () => {
   });
 });
 
-function createRunWorkspace(
-  primary: WorkspaceContext,
-  additional: readonly WorkspaceContext[] = [],
-): RunWorkspace {
+function createWorkspaceSelection(
+  primary: WorkspaceIdentity,
+  additional: readonly WorkspaceIdentity[] = [],
+): WorkspaceSelection {
   return { primary, additional };
 }
 
-function createCodeWorkspace(): RunWorkspace {
-  return createRunWorkspace(createWorkspace("workspace-code", codeRoot));
+function createCodeWorkspace(): WorkspaceSelection {
+  return createWorkspaceSelection(createWorkspace("workspace-code", codeRoot));
 }
 
 function createWorkspace(
   id: string,
   rootRef: string | null,
-  overrides: Partial<WorkspaceContext> = {},
-): WorkspaceContext {
+  overrides: Partial<WorkspaceIdentity> = {},
+): WorkspaceIdentity {
   return {
     id,
     name: id,

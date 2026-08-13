@@ -10,7 +10,8 @@ import {
   type SessionAuthorityPort,
   type SessionAuthorityRecord,
 } from "@agent-anything/permission";
-import type { InvocationInterruptionContext, RunWorkspace } from "@agent-anything/agent-core/run";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import { describe, expect, it } from "vitest";
 import {
   deriveApprovalReviewDeadline,
@@ -23,7 +24,6 @@ import {
   assertRunPermissionStateInvariant,
   createInitialRunPermissionState,
   projectPermissionContext,
-  type PendingApproval,
 } from "./RunPermissionState.js";
 import {
   createApprovalRecordSummary,
@@ -86,7 +86,7 @@ describe("Run permission configuration", () => {
     expect(() => snapshotResolvedRunPermissionConfig({
       permissions: createPermissionConfig({
         approvalPolicy: "never",
-        reviewer: reviewerBinding("user", null),
+        reviewer: userReviewerBinding(),
       }),
       workspace: workspace(),
       identity: identity(),
@@ -95,11 +95,11 @@ describe("Run permission configuration", () => {
     expect(() => snapshotResolvedRunPermissionConfig({
       permissions: createPermissionConfig({
         approvalPolicy: "on-request",
-        reviewer: reviewerBinding("auto_review", null),
+        reviewer: automaticReviewerBinding(null),
       }),
       workspace: workspace(),
       identity: identity(),
-    })).toThrow("automatic reviewer requires a finite timeout");
+    })).toThrow("reviewTimeoutMs must be a positive integer");
   });
 
   it("rejects mismatched managed constraint snapshots", () => {
@@ -211,7 +211,7 @@ describe("Run permission state", () => {
     const state = createInitialRunPermissionState(config);
     const projection = projectPermissionContext(config, state);
 
-    assertRunPermissionStateInvariant(state, "running");
+    assertRunPermissionStateInvariant(state);
     expect(projection).toMatchObject({
       profile: {
         profileId: ":read-only",
@@ -224,8 +224,7 @@ describe("Run permission state", () => {
       approval: {
         canRequest: false,
         reviewer: null,
-        pending: false,
-        requestsRemaining: 8,
+        pendingCount: 0,
       },
     });
     expect(JSON.stringify(projection)).not.toContain("/work/repo");
@@ -268,49 +267,21 @@ describe("Run permission state", () => {
     expect(Object.isFrozen(requestSummary.optionIds)).toBe(true);
   });
 
-  it("allows PendingApproval only with waiting_for_approval", () => {
+  it("projects pending Interaction count without owning pending state", () => {
     const config = createPermissionConfig({
       approvalPolicy: "on-request",
-      reviewer: reviewerBinding("user", null),
+      reviewer: userReviewerBinding(),
     });
     const state = createInitialRunPermissionState(config);
-    const pending: PendingApproval = {
-      phase: "reviewing",
-      request: approvalRequest(),
-      reviewerBindingId: "reviewer.user",
+    const projection = projectPermissionContext(config, state, 1);
+
+    expect(() => assertRunPermissionStateInvariant(state)).not.toThrow();
+    expect(state).not.toHaveProperty("pendingApproval");
+    expect(projection.approval).toEqual({
+      canRequest: true,
       reviewer: "user",
-      reviewOperationId: "review.operation.1",
-      version: 1,
-      createdAt: "2026-07-15T00:00:00.000Z",
-    };
-    const waiting = {
-      ...state,
-      pendingApproval: pending,
-      counters: { ...state.counters, lastPendingVersion: 1 },
-    };
-
-    expect(() => assertRunPermissionStateInvariant(
-      waiting,
-      "waiting_for_approval",
-    )).not.toThrow();
-    expect(() => assertRunPermissionStateInvariant(waiting, "running")).toThrow(
-      "cannot retain PendingApproval",
-    );
-    expect(() => assertRunPermissionStateInvariant(state, "waiting_for_approval"))
-      .toThrow("requires exactly one PendingApproval");
-
-    expect(() => assertRunPermissionStateInvariant({
-      ...waiting,
-      pendingApproval: {
-        ...pending,
-        request: { ...pending.request, decisionOptions: [] },
-      } as PendingApproval,
-    }, "waiting_for_approval")).toThrow("at least one decision option");
-
-    expect(() => assertRunPermissionStateInvariant({
-      ...waiting,
-      counters: { ...waiting.counters, lastPendingVersion: 2 },
-    }, "waiting_for_approval")).toThrow("must equal ApprovalCounters.lastPendingVersion");
+      pendingCount: 1,
+    });
   });
 });
 
@@ -363,7 +334,7 @@ function managedConstraints(): ManagedPermissionConstraints {
   };
 }
 
-function workspace(): RunWorkspace {
+function workspace(): WorkspaceSelection {
   return {
     primary: {
       id: "workspace.test",
@@ -387,10 +358,23 @@ function identity() {
   };
 }
 
-function reviewerBinding(
-  kind: "user" | "auto_review",
+function userReviewerBinding(): NonNullable<ResolvedRunPermissionConfig["reviewer"]> {
+  return {
+    bindingId: "reviewer.user",
+    kind: "user",
+    descriptor: {
+      id: "reviewer.user",
+      kind: "user",
+      displayName: "Test reviewer",
+      source: "test",
+      metadata: {},
+    },
+  };
+}
+
+function automaticReviewerBinding(
   reviewTimeoutMs: number | null,
-) {
+): NonNullable<ResolvedRunPermissionConfig["reviewer"]> {
   const reviewer: ApprovalReviewerPort = {
     async review(
       _input,
@@ -408,18 +392,18 @@ function reviewerBinding(
     },
   };
   return {
-    bindingId: `reviewer.${kind}`,
-    kind,
+    bindingId: "reviewer.auto_review",
+    kind: "auto_review",
     reviewer,
     descriptor: {
-      id: `reviewer.${kind}`,
-      kind,
+      id: "reviewer.auto_review",
+      kind: "auto_review",
       displayName: "Test reviewer",
       source: "test",
       metadata: {},
     },
     reviewTimeoutMs,
-  };
+  } as NonNullable<ResolvedRunPermissionConfig["reviewer"]>;
 }
 
 function sessionAuthorityPort(): SessionAuthorityPort {

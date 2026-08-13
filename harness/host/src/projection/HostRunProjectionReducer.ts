@@ -1,50 +1,22 @@
-import {
-  snapshotApprovalReviewInput,
-  type ApprovalCategory,
-  type ApprovalReviewInput,
-} from "@agent-anything/permission";
-
-import type { RuntimeEvent } from "@agent-anything/observability/events";
-import type { PlanProjection, PlanStepStatus } from "@agent-anything/agent-runtime/plan";
+import type { RunOperationSnapshot, RunRetryProjection } from "@agent-anything/agent-runtime/runner";
+import type { RetryEvent } from "@agent-anything/agent-runtime/retry";
+import type { ActionExecutionNotification } from "@agent-anything/action-execution/enforcement";
+import type { InteractionTransportReceipt } from "@agent-anything/interaction/records";
 import { projectRuntimeEventForHost } from "./RuntimeEventHostProjection.js";
 import {
-  HOST_RETRY_EVENT_LIMIT,
   snapshotHostCancellation,
   type CreateHostRunProjectionStoreInput,
+  type HostActionAttemptProjection,
   type HostEnforcementProjection,
-  type HostPendingApprovalProjection,
-  type HostPlanProjection,
-  type HostRetryEventName,
+  type HostPendingInteractionProjection,
   type HostRetryEventProjection,
-  type HostRetryOwner,
   type HostRetryProjection,
   type HostRunProjection,
   type HostRunProjectionReduction,
   type HostRunProjectionRejectionCode,
   type HostRunProjectionStore,
   type HostRunProjectionUpdate,
-  type HostSandboxAttemptProjection,
 } from "./HostRunProjection.js";
-
-const approvalCategories: readonly ApprovalCategory[] = [
-  "commandExecution",
-  "fileChange",
-  "permissions",
-  "remoteToolCall",
-  "skill",
-  "networkAccess",
-];
-const retryOwners: readonly HostRetryOwner[] = [
-  "provider_request",
-  "response_stream",
-  "approvals_reviewer",
-  "structured_output",
-];
-const planStepStatuses: readonly PlanStepStatus[] = [
-  "pending",
-  "in_progress",
-  "completed",
-];
 
 export function reduceHostRunProjection(
   current: HostRunProjection,
@@ -65,23 +37,33 @@ export function reduceHostRunProjection(
 
   try {
     switch (update.kind) {
-      case "runtime_event":
-        return applyRuntimeEvent(current, update.sequence, update.event);
-      case "approval_review_available":
-        return applyApprovalReview(current, update.sequence, update.review);
-      case "approval_submission_accepted":
-        return applyApprovalSubmission(current, update.sequence, update.receipt);
+      case "runtime_event": {
+        const event = projectRuntimeEventForHost(update.event);
+        if (event.runId !== current.runId || event.taskId !== current.taskId) {
+          return rejected(current, "run_identity_mismatch");
+        }
+        return applied(current, update.sequence, event.name === "run.started" &&
+            current.status === "starting"
+          ? { status: "running" }
+          : {});
+      }
+      case "run_operation":
+        return applyRunOperation(current, update.sequence, update.snapshot);
+      case "action_execution":
+        return applyActionExecution(current, update.sequence, update.notification);
+      case "interaction_submission_accepted":
+        return applyInteractionSubmission(current, update.sequence, update.receipt);
       case "cancellation_accepted":
         if (
           current.status !== "starting" &&
           current.status !== "running" &&
-          current.status !== "waiting_for_approval"
+          current.status !== "waiting" &&
+          current.status !== "cancelling"
         ) {
           return rejected(current, "invalid_transition");
         }
         return applied(current, update.sequence, {
           status: "cancelling",
-          approval: null,
           cancellation: snapshotHostCancellation(update.cancellation),
         });
       case "terminal_result":
@@ -93,7 +75,7 @@ export function reduceHostRunProjection(
         }
         return applied(current, update.sequence, {
           status: update.terminal.status,
-          approval: null,
+          pendingInteractions: Object.freeze([]),
           cancellation: update.terminal.cancellation ?? current.cancellation,
           terminal: update.terminal,
         });
@@ -108,11 +90,8 @@ export function createHostRunProjectionStore(
 ): HostRunProjectionStore {
   let projection = input.initial;
   const listeners = new Set<(projection: HostRunProjection) => void>();
-
   return Object.freeze({
-    getProjection() {
-      return projection;
-    },
+    getProjection: () => projection,
     apply(update: HostRunProjectionUpdate) {
       const result = reduceHostRunProjection(projection, update);
       if (result.status === "rejected") return result;
@@ -144,336 +123,211 @@ export function createHostRunProjectionStore(
   });
 }
 
-function applyRuntimeEvent(
+function applyRunOperation(
   current: HostRunProjection,
   sequence: number,
-  candidate: RuntimeEvent,
+  snapshot: RunOperationSnapshot,
 ): HostRunProjectionReduction {
-  const event = projectRuntimeEventForHost(candidate);
-  if (event.runId !== current.runId || event.taskId !== current.taskId) {
+  if (snapshot.runId !== current.runId) {
     return rejected(current, "run_identity_mismatch");
   }
-  const payload: Readonly<Record<string, unknown>> = isRecord(event.payload)
-    ? event.payload as unknown as Readonly<Record<string, unknown>>
-    : {};
-
-  switch (event.name) {
-    case "run.started":
-      return current.status === "starting"
-        ? applied(current, sequence, { status: "running" })
-        : rejected(current, "invalid_transition");
-    case "plan.created":
-    case "plan.updated":
-    case "plan.completed":
-    case "plan.abandoned":
-      return applyPlan(current, sequence, readPlan(payload.plan));
-    case "approval.requested":
-      return applyApprovalRequested(current, sequence, event, payload);
-    case "approval.resolved":
-      return applyApprovalResolved(current, sequence, payload);
-    case "retry.attempt.started":
-    case "retry.attempt.finished":
-    case "retry.scheduled":
-    case "retry.fallback.selected":
-    case "retry.exhausted":
-    case "retry.cancelled":
-      return applied(current, sequence, {
-        retry: appendRetry(current.retry, event.name, payload, event.occurredAt),
-      });
-    case "sandbox.attempt.started":
-      return applySandboxStarted(current, sequence, payload);
-    case "sandbox.attempt.resolved":
-      return applySandboxResolved(current, sequence, payload);
-    case "sandbox.escalation.proposed":
-      return applied(current, sequence, {
-        enforcement: Object.freeze({
-          ...current.enforcement,
-          escalationCount: current.enforcement.escalationCount + 1,
-        }),
-      });
-    default:
-      return applied(current, sequence, {});
+  if (snapshot.sequence < current.runOperationSequence) {
+    return rejected(current, "run_operation_sequence_regression");
   }
-}
-
-function applyPlan(
-  current: HostRunProjection,
-  sequence: number,
-  plan: HostPlanProjection,
-): HostRunProjectionReduction {
-  if (current.plan !== null) {
-    if (plan.id !== current.plan.id) {
-      return rejected(current, "invalid_update");
-    }
-    if (plan.version < current.plan.version) {
-      return rejected(current, "plan_version_regression");
-    }
-    if (plan.version === current.plan.version && !samePlan(plan, current.plan)) {
-      return rejected(current, "invalid_update");
-    }
-  }
-  return applied(current, sequence, { plan });
-}
-
-function applyApprovalRequested(
-  current: HostRunProjection,
-  sequence: number,
-  event: RuntimeEvent,
-  payload: Readonly<Record<string, unknown>>,
-): HostRunProjectionReduction {
-  if (current.status !== "running" && current.status !== "waiting_for_approval") {
-    return rejected(current, "invalid_transition");
-  }
-  const approval = approvalFromRuntimeEvent(event, payload);
-  if (current.approval !== null && !sameApproval(current.approval, approval)) {
-    return rejected(current, "approval_correlation_mismatch");
-  }
+  const pendingInteractions = snapshot.pendingInteractions.map((pending) => {
+    const prior = current.pendingInteractions.find((candidate) =>
+      sameRequest(candidate.request, pending.envelope.request)
+    );
+    return Object.freeze({
+      request: pending.envelope.request,
+      presentation: snapshotUnknown(pending.envelope.presentation),
+      disclosureClass: pending.envelope.disclosureClass,
+      expiresAt: pending.envelope.expiresAt,
+      blockingScope: pending.blockingScope,
+      phase: prior?.phase ?? "pending",
+    }) satisfies HostPendingInteractionProjection;
+  });
+  const status = activeStatus(current.status, snapshot.status);
   return applied(current, sequence, {
-    status: "waiting_for_approval",
-    approval: current.approval === null
-      ? approval
-      : Object.freeze({ ...approval, review: current.approval.review }),
+    runOperationSequence: snapshot.sequence,
+    status,
+    plan: snapshot.plan,
+    pendingInteractions: Object.freeze(pendingInteractions),
+    retry: projectRetry(snapshot.retry),
   });
 }
 
-function applyApprovalReview(
+function applyInteractionSubmission(
   current: HostRunProjection,
   sequence: number,
-  candidate: ApprovalReviewInput,
+  receipt: InteractionTransportReceipt,
 ): HostRunProjectionReduction {
-  if (current.status !== "running" && current.status !== "waiting_for_approval") {
-    return rejected(current, "invalid_transition");
-  }
-  const review = snapshotApprovalReviewInput(candidate);
-  const approval = Object.freeze({
-    runId: review.request.runId,
-    requestId: review.request.id,
-    actionId: review.request.actionId,
-    category: review.request.category,
-    pendingVersion: review.pendingVersion,
-    reviewer: "user" as const,
-    phase: current.approval?.phase ?? "reviewing" as const,
-    requestedAt: review.request.createdAt,
-    review,
+  const index = current.pendingInteractions.findIndex((pending) =>
+    sameRequest(pending.request, receipt.request)
+  );
+  if (index < 0) return rejected(current, "interaction_correlation_mismatch");
+  const pendingInteractions = current.pendingInteractions.map((pending, candidateIndex) =>
+    candidateIndex === index
+      ? Object.freeze({ ...pending, phase: "submitted_for_resolution" as const })
+      : pending
+  );
+  return applied(current, sequence, {
+    pendingInteractions: Object.freeze(pendingInteractions),
   });
-  if (approval.runId !== current.runId) {
+}
+
+function applyActionExecution(
+  current: HostRunProjection,
+  sequence: number,
+  notification: ActionExecutionNotification,
+): HostRunProjectionReduction {
+  if (notification.runId !== current.runId) {
     return rejected(current, "run_identity_mismatch");
   }
-  if (current.approval !== null && !sameApproval(current.approval, approval)) {
-    return rejected(current, "approval_correlation_mismatch");
+  if (notification.kind === "attempt_started") {
+    const attempt: HostActionAttemptProjection = Object.freeze({
+      attemptId: notification.attemptId,
+      actionId: notification.actionId,
+      ordinal: notification.ordinal,
+      enforcement: notification.enforcement,
+      outcome: "running",
+      code: null,
+    });
+    return applied(current, sequence, {
+      enforcement: Object.freeze({
+        ...current.enforcement,
+        status: "running",
+        attemptCount: current.enforcement.attemptCount + 1,
+        latestAttempt: attempt,
+      }),
+    });
   }
-  return applied(current, sequence, {
-    status: "waiting_for_approval",
-    approval,
-  });
-}
-
-function applyApprovalSubmission(
-  current: HostRunProjection,
-  sequence: number,
-  receipt: {
-    readonly runId: string;
-    readonly requestId: string;
-    readonly pendingVersion: number;
-  },
-): HostRunProjectionReduction {
-  if (
-    current.status !== "waiting_for_approval" ||
-    current.approval === null ||
-    receipt.runId !== current.runId ||
-    receipt.requestId !== current.approval.requestId ||
-    receipt.pendingVersion !== current.approval.pendingVersion
-  ) {
-    return rejected(current, "approval_correlation_mismatch");
-  }
-  return applied(current, sequence, {
-    approval: Object.freeze({
-      ...current.approval,
-      phase: "submitted_for_resolution" as const,
-    }),
-  });
-}
-
-function applyApprovalResolved(
-  current: HostRunProjection,
-  sequence: number,
-  payload: Readonly<Record<string, unknown>>,
-): HostRunProjectionReduction {
-  if (current.status !== "waiting_for_approval" || current.approval === null) {
-    return rejected(current, "invalid_transition");
-  }
-  if (
-    readString(payload.requestId) !== current.approval.requestId ||
-    readPositiveInteger(payload.pendingVersion) !== current.approval.pendingVersion
-  ) {
-    return rejected(current, "approval_correlation_mismatch");
-  }
-  return applied(current, sequence, {
-    status: "running",
-    approval: null,
-  });
-}
-
-function applySandboxStarted(
-  current: HostRunProjection,
-  sequence: number,
-  payload: Readonly<Record<string, unknown>>,
-): HostRunProjectionReduction {
-  const attempt = readSandboxAttempt(payload, "running", null);
-  if (attempt.enforcement !== current.enforcement.selected) {
-    return rejected(current, "invalid_update");
-  }
+  const latest = current.enforcement.latestAttempt;
+  const settledLatest = latest === null || latest.actionId !== notification.actionId
+    ? latest
+    : Object.freeze({
+        ...latest,
+        outcome: notification.status,
+        code: notification.causeRef,
+      });
   return applied(current, sequence, {
     enforcement: Object.freeze({
       ...current.enforcement,
-      attemptCount: current.enforcement.attemptCount + 1,
-      latestAttempt: attempt,
+      status: enforcementStatus(notification, current.enforcement),
+      latestAttempt: settledLatest,
     }),
-  });
-}
-
-function applySandboxResolved(
-  current: HostRunProjection,
-  sequence: number,
-  payload: Readonly<Record<string, unknown>>,
-): HostRunProjectionReduction {
-  const outcome = readSandboxOutcome(payload.outcome);
-  const attempt = readSandboxAttempt(payload, outcome, readNullableString(payload.code));
-  if (attempt.enforcement !== current.enforcement.selected) {
-    return rejected(current, "invalid_update");
-  }
-  return applied(current, sequence, {
-    enforcement: Object.freeze({
-      ...current.enforcement,
-      status: enforcementStatus(attempt.enforcement, outcome),
-      latestAttempt: attempt,
-    }),
-  });
-}
-
-function appendRetry(
-  current: HostRetryProjection | null,
-  event: HostRetryEventName,
-  payload: Readonly<Record<string, unknown>>,
-  occurredAt: string,
-): HostRetryProjection {
-  const projection = retryEvent(event, payload, occurredAt);
-  const prior = current ?? Object.freeze({
-    attemptCount: 0,
-    scheduledCount: 0,
-    fallbackCount: 0,
-    exhaustedCount: 0,
-    cancellationCount: 0,
-    omittedEventCount: 0,
-    recentEvents: Object.freeze([]),
-  });
-  const all = [...prior.recentEvents, projection];
-  const omitted = Math.max(0, all.length - HOST_RETRY_EVENT_LIMIT);
-  return Object.freeze({
-    attemptCount: prior.attemptCount + (event === "retry.attempt.started" ? 1 : 0),
-    scheduledCount: prior.scheduledCount + (event === "retry.scheduled" ? 1 : 0),
-    fallbackCount: prior.fallbackCount + (event === "retry.fallback.selected" ? 1 : 0),
-    exhaustedCount: prior.exhaustedCount + (event === "retry.exhausted" ? 1 : 0),
-    cancellationCount: prior.cancellationCount + (event === "retry.cancelled" ? 1 : 0),
-    omittedEventCount: prior.omittedEventCount + omitted,
-    recentEvents: Object.freeze(all.slice(omitted)),
-  });
-}
-
-function retryEvent(
-  event: HostRetryEventName,
-  payload: Readonly<Record<string, unknown>>,
-  occurredAt: string,
-): HostRetryEventProjection {
-  const owner = readRetryOwner(payload.owner);
-  return Object.freeze({
-    event,
-    operationId: readString(payload.operationId),
-    owner,
-    occurredAt,
-    attemptNumber: readNullablePositiveInteger(
-      payload.attemptNumber ?? payload.nextAttemptNumber,
-    ),
-    delayMs: readNullableNonNegativeNumber(payload.delayMs),
-    outcome: readNullableString(payload.outcome ?? payload.next ?? payload.reason),
-    code: readNullableString(
-      payload.failureCode ?? payload.lastFailureCode ?? payload.reasonCode,
-    ),
-  });
-}
-
-function approvalFromRuntimeEvent(
-  event: RuntimeEvent,
-  payload: Readonly<Record<string, unknown>>,
-): HostPendingApprovalProjection {
-  return Object.freeze({
-    runId: event.runId,
-    requestId: readString(payload.requestId),
-    actionId: readString(payload.actionId),
-    category: readApprovalCategory(payload.category),
-    pendingVersion: readPositiveInteger(payload.pendingVersion),
-    reviewer: readReviewer(payload.reviewer),
-    phase: "reviewing" as const,
-    requestedAt: event.occurredAt,
-    review: null,
-  });
-}
-
-function readPlan(value: unknown): HostPlanProjection {
-  if (!isRecord(value)) throw new TypeError("Plan projection is required.");
-  const id = readString(value.id);
-  const version = readPositiveInteger(value.version);
-  if (value.status !== "active" && value.status !== "completed" && value.status !== "abandoned") {
-    throw new TypeError("Plan projection status is invalid.");
-  }
-  if (!Array.isArray(value.steps)) throw new TypeError("Plan projection steps are invalid.");
-  const steps = value.steps.map((candidate) => {
-    if (!isRecord(candidate)) throw new TypeError("Plan step is invalid.");
-    const step = readString(candidate.step);
-    if (!planStepStatuses.includes(candidate.status as PlanStepStatus)) {
-      throw new TypeError("Plan step status is invalid.");
-    }
-    return Object.freeze({ step, status: candidate.status as PlanStepStatus });
-  });
-  return Object.freeze({
-    id,
-    version,
-    status: value.status,
-    steps: Object.freeze(steps),
-  });
-}
-
-function readSandboxAttempt(
-  payload: Readonly<Record<string, unknown>>,
-  outcome: HostSandboxAttemptProjection["outcome"],
-  code: string | null,
-): HostSandboxAttemptProjection {
-  const ordinal = readPositiveInteger(payload.ordinal);
-  if (ordinal !== 1 && ordinal !== 2) throw new TypeError("Sandbox ordinal is invalid.");
-  const enforcement = payload.enforcement;
-  if (enforcement !== "managed" && enforcement !== "external" && enforcement !== "disabled") {
-    throw new TypeError("Sandbox enforcement is invalid.");
-  }
-  return Object.freeze({
-    attemptId: readString(payload.attemptId),
-    actionId: readString(payload.actionId),
-    ordinal,
-    enforcement,
-    outcome,
-    code,
   });
 }
 
 function enforcementStatus(
-  enforcement: HostSandboxAttemptProjection["enforcement"],
-  outcome: Exclude<HostSandboxAttemptProjection["outcome"], "running">,
+  notification: Extract<ActionExecutionNotification, { readonly kind: "settled" }>,
+  current: HostEnforcementProjection,
 ): HostEnforcementProjection["status"] {
-  switch (outcome) {
-    case "executed": return enforcement === "disabled" ? "unisolated" : "enforced";
-    case "sandbox_denied": return "denied";
-    case "sandbox_unavailable": return "unavailable";
-    case "interrupted": return "interrupted";
-    case "failed": return "failed";
+  if (notification.status === "unknown_effect") return "unknown_effect";
+  if (notification.status === "denied") return "denied";
+  if (notification.status === "cancelled" || notification.status === "timed_out") {
+    return "interrupted";
+  }
+  if (
+    notification.attemptCount === 0 &&
+    notification.causeOwner === "sandbox" &&
+    notification.causeRef?.includes("unavailable")
+  ) return "unavailable";
+  if (notification.status === "succeeded" || notification.status === "partial") {
+    return notification.enforcement === "disabled" ? "unisolated" : "enforced";
+  }
+  return current.status === "not_exercised" && notification.attemptCount === 0
+    ? "not_exercised"
+    : "failed";
+}
+
+function projectRetry(input: RunRetryProjection | null): HostRetryProjection | null {
+  if (input === null) return null;
+  return Object.freeze({
+    attemptCount: input.attemptCount,
+    scheduledCount: input.scheduledCount,
+    fallbackCount: input.fallbackCount,
+    exhaustedCount: input.exhaustedCount,
+    cancellationCount: input.cancellationCount,
+    omittedEventCount: input.omittedEventCount,
+    recentEvents: Object.freeze(input.recentEvents.map(projectRetryEvent)),
+  });
+}
+
+function projectRetryEvent(event: RetryEvent): HostRetryEventProjection {
+  const base = {
+    event: event.type,
+    operationId: event.operationId,
+    owner: event.owner,
+    occurredAt: event.occurredAt,
+  } as const;
+  switch (event.type) {
+    case "retry_scheduled":
+      return Object.freeze({
+        ...base,
+        attemptNumber: event.nextAttemptNumber,
+        delayMs: event.delayMs,
+        outcome: "retry_scheduled",
+        code: event.failureCode,
+      });
+    case "retry_attempt_started":
+      return Object.freeze({
+        ...base,
+        attemptNumber: event.attemptNumber,
+        delayMs: null,
+        outcome: null,
+        code: null,
+      });
+    case "retry_attempt_finished":
+      return Object.freeze({
+        ...base,
+        attemptNumber: event.attemptNumber,
+        delayMs: null,
+        outcome: event.outcome,
+        code: event.failureCode ?? null,
+      });
+    case "retry_fallback_selected":
+      return Object.freeze({
+        ...base,
+        attemptNumber: event.nextAttemptNumber,
+        delayMs: null,
+        outcome: "fallback_selected",
+        code: event.reasonCode,
+      });
+    case "retry_exhausted":
+      return Object.freeze({
+        ...base,
+        attemptNumber: event.totalAttempts,
+        delayMs: event.totalRetryDelayMs,
+        outcome: event.reason,
+        code: event.lastFailureCode,
+      });
+    case "retry_cancelled":
+      return Object.freeze({
+        ...base,
+        attemptNumber: event.attemptNumber,
+        delayMs: null,
+        outcome: event.phase,
+        code: "cancelled",
+      });
+  }
+}
+
+function activeStatus(
+  current: HostRunProjection["status"],
+  runtime: RunOperationSnapshot["status"],
+): HostRunProjection["status"] {
+  if (current === "cancelling") return current;
+  switch (runtime) {
+    case "initializing": return current;
+    case "running": return "running";
+    case "waiting": return "waiting";
+    case "cancelling": return "cancelling";
+    case "succeeded":
+    case "blocked":
+    case "failed":
+    case "cancelled":
+      return current;
   }
 }
 
@@ -495,25 +349,30 @@ function rejected(
   return Object.freeze({ status: "rejected" as const, code, projection: current });
 }
 
-function sameApproval(
-  left: HostPendingApprovalProjection,
-  right: HostPendingApprovalProjection,
+function sameRequest(
+  left: HostPendingInteractionProjection["request"],
+  right: HostPendingInteractionProjection["request"],
 ): boolean {
-  return left.runId === right.runId &&
-    left.requestId === right.requestId &&
-    left.actionId === right.actionId &&
-    left.pendingVersion === right.pendingVersion &&
-    left.reviewer === right.reviewer;
+  return left.id === right.id &&
+    left.requestVersion === right.requestVersion &&
+    left.protocol.owner === right.protocol.owner &&
+    left.protocol.kind === right.protocol.kind &&
+    left.protocol.revision === right.protocol.revision &&
+    left.subject.owner === right.subject.owner &&
+    left.subject.kind === right.subject.kind &&
+    left.subject.id === right.subject.id &&
+    left.subject.revision === right.subject.revision;
 }
 
-function samePlan(left: PlanProjection, right: PlanProjection): boolean {
-  return left.id === right.id &&
-    left.version === right.version &&
-    left.status === right.status &&
-    left.steps.length === right.steps.length &&
-    left.steps.every((step, index) =>
-      step.step === right.steps[index]?.step && step.status === right.steps[index]?.status
-    );
+function snapshotUnknown<T>(input: T): T {
+  return deepFreeze(structuredClone(input));
+}
+
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) deepFreeze(child, seen);
+  return Object.freeze(value);
 }
 
 function isTerminal(status: HostRunProjection["status"]): boolean {
@@ -521,73 +380,6 @@ function isTerminal(status: HostRunProjection["status"]): boolean {
     status === "failed" || status === "cancelled";
 }
 
-function readApprovalCategory(value: unknown): ApprovalCategory {
-  if (!approvalCategories.includes(value as ApprovalCategory)) {
-    throw new TypeError("Approval category is invalid.");
-  }
-  return value as ApprovalCategory;
-}
-
-function readReviewer(value: unknown): "user" | "auto_review" {
-  if (value !== "user" && value !== "auto_review") {
-    throw new TypeError("Approval reviewer is invalid.");
-  }
-  return value;
-}
-
-function readRetryOwner(value: unknown): HostRetryOwner {
-  if (!retryOwners.includes(value as HostRetryOwner)) {
-    throw new TypeError("Retry owner is invalid.");
-  }
-  return value as HostRetryOwner;
-}
-
-function readSandboxOutcome(
-  value: unknown,
-): Exclude<HostSandboxAttemptProjection["outcome"], "running"> {
-  if (
-    value !== "executed" && value !== "sandbox_denied" &&
-    value !== "sandbox_unavailable" && value !== "interrupted" && value !== "failed"
-  ) {
-    throw new TypeError("Sandbox outcome is invalid.");
-  }
-  return value;
-}
-
-function readString(value: unknown): string {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new TypeError("A non-empty string is required.");
-  }
-  return value;
-}
-
-function readNullableString(value: unknown): string | null {
-  return value === null || value === undefined ? null : readString(value);
-}
-
-function readPositiveInteger(value: unknown): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
-    throw new TypeError("A positive integer is required.");
-  }
-  return value;
-}
-
-function readNullablePositiveInteger(value: unknown): number | null {
-  return value === null || value === undefined ? null : readPositiveInteger(value);
-}
-
-function readNullableNonNegativeNumber(value: unknown): number | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    throw new TypeError("A non-negative number is required.");
-  }
-  return value;
-}
-
 function isDateTime(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
-}
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -1,22 +1,14 @@
 import type { ContextFailure } from "@agent-anything/context/context";
 import type { ProviderFailure } from "@agent-anything/model-interaction";
-import type {
-  AuditFailure,
-  TelemetryFailure,
-} from "@agent-anything/observability";
-import type {
-  ApprovalFailure,
-  PermissionFailure,
-} from "@agent-anything/permission";
+import type { AuditFailure, TelemetryFailure } from "@agent-anything/observability";
+import type { ApprovalFailure, PermissionFailure } from "@agent-anything/permission";
 import type { PolicyFailure } from "@agent-anything/governance";
-import type {
-  SandboxExecutionFailure,
-} from "@agent-anything/action-execution/sandbox";
-import type {
-  ActionProcessingFailure,
-} from "@agent-anything/action-execution/execution";
-import type { ToolFailure } from "@agent-anything/tools";
-
+import type { ActionExecutionFailure } from "@agent-anything/action-execution/execution";
+import type { SandboxExecutionFailure } from "@agent-anything/action-execution/sandbox";
+import type { ToolFailure } from "@agent-anything/tools/result";
+import type { OperationFailure } from "@agent-anything/operation-catalog/result";
+import type { InteractionFailure } from "@agent-anything/interaction/protocol";
+import type { CompositeFailure } from "@agent-anything/operation-composition/result";
 import type { ModelFailure } from "../controller/ModelFailure.js";
 
 export interface RuntimeFailure {
@@ -26,28 +18,29 @@ export interface RuntimeFailure {
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
+export interface DescendantRunFailure extends RuntimeFailure {
+  readonly childRunId: string | null;
+}
+
 export type RunFailureCause =
   | { readonly kind: "runtime"; readonly failure: RuntimeFailure }
   | { readonly kind: "model"; readonly failure: ModelFailure }
   | { readonly kind: "provider"; readonly failure: ProviderFailure }
+  | { readonly kind: "operation"; readonly failure: OperationFailure }
+  | { readonly kind: "interaction"; readonly failure: InteractionFailure }
   | { readonly kind: "approval"; readonly failure: ApprovalFailure }
   | { readonly kind: "permission"; readonly failure: PermissionFailure }
   | { readonly kind: "policy"; readonly failure: PolicyFailure }
-  | {
-      readonly kind: "action_execution";
-      readonly failure: ActionProcessingFailure;
-    }
-  | {
-      readonly kind: "sandbox";
-      readonly failure: SandboxExecutionFailure;
-    }
+  | { readonly kind: "action_execution"; readonly failure: ActionExecutionFailure }
+  | { readonly kind: "sandbox"; readonly failure: SandboxExecutionFailure }
   | { readonly kind: "tool"; readonly failure: ToolFailure }
+  | { readonly kind: "composite"; readonly failure: CompositeFailure }
+  | { readonly kind: "descendant"; readonly failure: DescendantRunFailure }
   | { readonly kind: "context"; readonly failure: ContextFailure }
   | { readonly kind: "audit"; readonly failure: AuditFailure }
   | { readonly kind: "telemetry"; readonly failure: TelemetryFailure };
 
 export type RunFailureKind = RunFailureCause["kind"];
-
 export type RunFailureForKind<TKind extends RunFailureKind> = Extract<
   RunFailureCause,
   { readonly kind: TKind }
@@ -57,22 +50,9 @@ export function createRunFailureCause<TKind extends RunFailureKind>(
   kind: TKind,
   failure: RunFailureForKind<TKind>,
 ): Extract<RunFailureCause, { readonly kind: TKind }> {
-  return Object.freeze({ kind, failure }) as unknown as Extract<
-    RunFailureCause,
-    { readonly kind: TKind }
-  >;
+  return Object.freeze({ kind, failure }) as unknown as Extract<RunFailureCause, { readonly kind: TKind }>;
 }
 
-export function runFailureCode(cause: RunFailureCause): string {
-  return cause.failure.code;
-}
-
-export function runFailureMessage(cause: RunFailureCause): string {
-  return cause.failure.message;
-}
-
-export function runFailureMetadata(
-  cause: RunFailureCause,
-): Readonly<Record<string, unknown>> {
-  return cause.failure.metadata;
-}
+export const runFailureCode = (cause: RunFailureCause): string => cause.failure.code;
+export const runFailureMessage = (cause: RunFailureCause): string => cause.failure.message;
+export const runFailureMetadata = (cause: RunFailureCause): Readonly<Record<string, unknown>> => cause.failure.metadata;

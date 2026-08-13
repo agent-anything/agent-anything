@@ -9,7 +9,7 @@ import {
   createCanonicalWorkspaceIdentity,
   createPreparedActionInvocation,
   createTargetStateAssertions,
-} from "@agent-anything/action-execution/canonical";
+} from "@agent-anything/canonical-action/subject";
 import {
   createToolActionBindingSnapshot,
   type ToolActionBindingSnapshot,
@@ -24,7 +24,8 @@ import type { Controller } from "@agent-anything/agent-runtime/controller";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { Agent } from "@agent-anything/agent-core/agent";
 import type { AgentTask } from "@agent-anything/agent-core/task";
-import type { RunWorkspace, WorkspaceContext } from "@agent-anything/agent-core/run";
+import type { WorkspaceIdentity } from "@agent-anything/workspace/identity";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { ControllerDecision } from "@agent-anything/agent-runtime/controller";
 import { Runner, type RunConfig } from "@agent-anything/agent-runtime/runner";
 import { EvidenceBuilder } from "@agent-anything/context/evidence";
@@ -34,7 +35,7 @@ import {
   FakeEvidencePersistencePort,
   createTestContextProjection,
 } from "@agent-anything/test-support";
-import { createToolSelectionSnapshot } from "@agent-anything/tools";
+import { createToolSelectionSnapshot } from "@agent-anything/tools/selection";
 import { describe, expect, it } from "vitest";
 import { acceptPatch, createPatchProposal } from "../patch/index.js";
 import {
@@ -233,8 +234,8 @@ describe("code-agent file Actions", () => {
 
 interface Fixture {
   readonly root: string;
-  readonly workspace: WorkspaceContext;
-  readonly scope: RunWorkspace;
+  readonly workspace: WorkspaceIdentity;
+  readonly scope: WorkspaceSelection;
   readonly platform: "win32" | "posix";
 }
 

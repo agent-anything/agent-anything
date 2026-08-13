@@ -5,26 +5,26 @@ import {
   type PreparedActionInvocation,
   type SerializableValue,
   type TargetStateAssertion,
-} from "@agent-anything/action-execution/canonical";
+} from "@agent-anything/canonical-action/subject";
+import {
+  type ActionAdapter,
+  type ActionAdapterPreparedData,
+} from "@agent-anything/action-execution/registration";
 import {
   createActionRegistrationSnapshot,
-  type ActionAdapter,
   type ActionAdapterDescriptor,
-  type ActionAdapterPreparedData,
   type ActionExecutorDescriptor,
-} from "@agent-anything/action-execution/registration";
+} from "@agent-anything/canonical-action/registration";
 import {
   assertActionExecutorDispatchContext,
   type ActionExecutor,
   type ActionExecutorContext,
   type ActionExecutorResult,
 } from "@agent-anything/action-execution/execution";
-import type { InvocationInterruptionRef } from "@agent-anything/agent-core/run";
-import {
-  createToolRegistrationSnapshot,
-  createToolSourceRef,
-  type ToolResult,
-} from "@agent-anything/tools";
+import type { InvocationInterruptionRef } from "@agent-anything/agent-core/control";
+import { createToolSourceRef } from "@agent-anything/tools/identity";
+import { createToolRegistrationSnapshot } from "@agent-anything/tools/registration";
+import type { ToolResult } from "@agent-anything/tools/result";
 import {
   type CreateRemoteActionCapabilityInput,
   type PreparedRemoteActionInvocationPayload,

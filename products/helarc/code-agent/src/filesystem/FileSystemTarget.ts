@@ -7,11 +7,11 @@ import type {
   CanonicalWorkspaceRootIdentity,
   CanonicalWorkspaceRootIdentityInput,
   FileBaseline,
-} from "@agent-anything/action-execution/canonical";
+} from "@agent-anything/canonical-action/subject";
 import {
   createCanonicalSha256Digest,
-} from "@agent-anything/action-execution/canonical";
-import type { RunWorkspace } from "@agent-anything/agent-core/run";
+} from "@agent-anything/canonical-action/subject";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import {
   resolveExistingTarget,
   resolveWritableTarget,
@@ -33,7 +33,7 @@ export interface PreparedFileSystemTarget {
 }
 
 export async function createCodeAgentCanonicalWorkspaceRoots(input: {
-  readonly workspace: RunWorkspace | null;
+  readonly workspace: WorkspaceSelection | null;
   readonly platform: FileSystemPlatform;
 }): Promise<readonly CanonicalWorkspaceRootIdentityInput[]> {
   if (input.workspace === null) {
@@ -74,7 +74,7 @@ export async function createCodeAgentCanonicalWorkspaceRoots(input: {
 }
 
 export async function prepareFileSystemTarget(input: {
-  readonly workspace: RunWorkspace | null;
+  readonly workspace: WorkspaceSelection | null;
   readonly workspaceRoots: readonly CanonicalWorkspaceRootIdentity[];
   readonly platform: FileSystemPlatform;
   readonly rootName?: string;

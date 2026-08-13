@@ -1,14 +1,14 @@
-import type { ObservationBase } from "@agent-anything/agent-core/action";
 import type {
   ActionExecutionFailure,
 } from "@agent-anything/action-execution/execution";
 import type { RunObservation } from "@agent-anything/agent-runtime/run";
 import type {
   ContextProjection,
+  ContextObservation,
   ContextProjectorInput,
   ContextProjectorPort,
 } from "@agent-anything/context/context";
-import type { ToolResult, ToolResultError } from "@agent-anything/tools";
+import type { ToolResult, ToolResultError } from "@agent-anything/tools/result";
 
 const SENSITIVE_KEY =
   /(?:authorization|credential|password|secret|token|api[-_]?key)/i;
@@ -167,7 +167,7 @@ function projectObservation(
 
 function observationBase(
   observation: RunObservation,
-): ObservationBase {
+): ContextObservation {
   const actionName = observation.metadata.actionName;
   return Object.freeze({
     id: observation.id,

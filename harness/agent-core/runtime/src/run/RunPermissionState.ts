@@ -1,60 +1,26 @@
-import type { AppliedPolicyAmendmentRecord } from "@agent-anything/governance";
 import {
-  createApprovalRequest,
   projectControllerPermissionProfile,
   type ActionApprovalCoverage,
-  type ApprovalRecord,
-  type ApprovalRequirement,
-  type ApprovalRequest,
-  type ApprovalsReviewer,
   type ControllerPermissionProfileProjection,
   type RunPermissionGrant,
-  type SessionAuthorityContext,
   type SessionAuthorityRecord,
-  type ValidatedApprovalDecision,
 } from "@agent-anything/permission";
-
+import type { AppliedPolicyAmendmentRecord } from "@agent-anything/governance";
 import type { ResolvedRunPermissionConfig } from "./RunPermissionConfig.js";
-import { isReviewCapablePolicy } from "./RunPermissionConfig.js";
-
-export interface ApprovalFingerprintRequestCount {
-  readonly actionFingerprint: string;
-  readonly count: number;
-}
-
-export interface ApprovalCounters {
-  readonly totalRequests: number;
-  readonly requestsByActionFingerprint: readonly ApprovalFingerprintRequestCount[];
-  readonly consecutiveDeclines: number;
-  readonly consecutiveReviewFailures: number;
-  readonly lastPendingVersion: number;
-}
-
-interface PendingApprovalBase {
-  readonly request: ApprovalRequest;
-  readonly reviewerBindingId: string;
-  readonly reviewer: ApprovalsReviewer;
-  readonly reviewOperationId: string;
-  readonly version: number;
-  readonly createdAt: string;
-}
-
-export type PendingApproval =
-  | (PendingApprovalBase & { readonly phase: "reviewing" })
-  | (PendingApprovalBase & {
-      readonly phase: "applying_authority";
-      readonly validatedDecision: ValidatedApprovalDecision;
-      readonly authorityOperationId: string;
-    });
 
 export interface RunPermissionState {
-  readonly pendingApproval: PendingApproval | null;
-  readonly approvalRecords: readonly ApprovalRecord[];
   readonly actionCoverage: readonly ActionApprovalCoverage[];
   readonly runPermissionGrants: readonly RunPermissionGrant[];
   readonly sessionAuthorityRecords: readonly SessionAuthorityRecord[];
   readonly appliedPolicyAmendments: readonly AppliedPolicyAmendmentRecord[];
-  readonly counters: ApprovalCounters;
+  readonly approvalActivity: ApprovalActivity;
+}
+
+export interface ApprovalActivity {
+  readonly requestCount: number;
+  readonly requestsByActionFingerprint: Readonly<Record<string, number>>;
+  readonly consecutiveDeclines: number;
+  readonly consecutiveReviewFailures: number;
 }
 
 export interface EffectivePermissionContext {
@@ -77,40 +43,22 @@ export interface PermissionContextProjection {
   };
   readonly approval: {
     readonly canRequest: boolean;
-    readonly reviewer: ApprovalsReviewer | null;
-    readonly pending: boolean;
-    readonly requestsRemaining: number;
+    readonly reviewer: string | null;
+    readonly pendingCount: number;
   };
 }
 
-export type RunPermissionLifecycleStatus =
-  | "initializing"
-  | "running"
-  | "waiting_for_approval"
-  | "cancelling"
-  | "succeeded"
-  | "blocked"
-  | "failed"
-  | "cancelled";
-
-export function createInitialRunPermissionState(
-  config: ResolvedRunPermissionConfig,
-): RunPermissionState & { readonly pendingApproval: null } {
+export function createInitialRunPermissionState(config: ResolvedRunPermissionConfig): RunPermissionState {
   return deepFreeze({
-    pendingApproval: null,
-    approvalRecords: [],
     actionCoverage: [],
     runPermissionGrants: [],
-    sessionAuthorityRecords: [
-      ...(config.sessionAuthority?.initialRecords ?? []),
-    ],
+    sessionAuthorityRecords: [...(config.sessionAuthority?.initialRecords ?? [])],
     appliedPolicyAmendments: [],
-    counters: {
-      totalRequests: 0,
-      requestsByActionFingerprint: [],
+    approvalActivity: {
+      requestCount: 0,
+      requestsByActionFingerprint: {},
       consecutiveDeclines: 0,
       consecutiveReviewFailures: 0,
-      lastPendingVersion: 0,
     },
   });
 }
@@ -119,197 +67,62 @@ export function deriveEffectivePermissionContext(
   config: ResolvedRunPermissionConfig,
   state: RunPermissionState,
 ): EffectivePermissionContext {
-  const sessionAuthorityRecords = config.sessionAuthority === null
-    ? []
-    : state.sessionAuthorityRecords.filter((record) =>
-      sameSessionContext(record, config.sessionAuthority!.context));
   return Object.freeze({
     profile: config.permissionProfile,
-    runPermissionGrants: Object.freeze([...state.runPermissionGrants]),
-    sessionAuthorityRecords: Object.freeze(sessionAuthorityRecords),
-    appliedPolicyAmendments: Object.freeze([...state.appliedPolicyAmendments]),
+    runPermissionGrants: state.runPermissionGrants,
+    sessionAuthorityRecords: state.sessionAuthorityRecords,
+    appliedPolicyAmendments: state.appliedPolicyAmendments,
   });
 }
 
 export function projectPermissionContext(
   config: ResolvedRunPermissionConfig,
   state: RunPermissionState,
+  pendingApprovalCount = 0,
 ): PermissionContextProjection {
-  const effective = deriveEffectivePermissionContext(config, state);
   const permissionSets = [
-    ...effective.runPermissionGrants.map((grant) => grant.permissions),
-    ...effective.sessionAuthorityRecords.flatMap((record) =>
+    ...state.runPermissionGrants.map((grant) => grant.permissions),
+    ...state.sessionAuthorityRecords.flatMap((record) =>
       record.grantedPermissions === null ? [] : [record.grantedPermissions]),
   ];
-  const canRequest =
-    config.reviewer !== null &&
-    isReviewCapablePolicy(config.approvalPolicy) &&
-    state.counters.totalRequests < config.approvalLimits.maxRequestsPerRun;
-
+  const canRequest = config.reviewer !== null;
   return deepFreeze({
-    profile: projectControllerPermissionProfile(
-      config.permissionProfile,
-      canRequest,
-    ),
+    profile: projectControllerPermissionProfile(config.permissionProfile, canRequest),
     authority: {
-      hasAdditionalFileSystemRead: permissionSets.some(
-        (permissions) => (permissions.fileSystem?.read?.length ?? 0) > 0,
-      ),
-      hasAdditionalFileSystemWrite: permissionSets.some(
-        (permissions) => (permissions.fileSystem?.write?.length ?? 0) > 0,
-      ),
-      hasAdditionalNetwork: permissionSets.some(
-        (permissions) => permissions.network?.enabled === true,
-      ),
-      actionCoverageCount: state.actionCoverage.filter(
-        (coverage) => coverage.status === "available",
-      ).length,
-      runGrantCount: effective.runPermissionGrants.length,
-      sessionAuthorityCount: effective.sessionAuthorityRecords.length,
-      policyAmendmentCount: effective.appliedPolicyAmendments.length,
+      hasAdditionalFileSystemRead: permissionSets.some((value) => (value.fileSystem?.read?.length ?? 0) > 0),
+      hasAdditionalFileSystemWrite: permissionSets.some((value) => (value.fileSystem?.write?.length ?? 0) > 0),
+      hasAdditionalNetwork: permissionSets.some((value) => value.network?.enabled === true),
+      actionCoverageCount: state.actionCoverage.filter((value) => value.status === "available").length,
+      runGrantCount: state.runPermissionGrants.length,
+      sessionAuthorityCount: state.sessionAuthorityRecords.length,
+      policyAmendmentCount: state.appliedPolicyAmendments.length,
     },
     approval: {
       canRequest,
       reviewer: config.reviewer?.kind ?? null,
-      pending: state.pendingApproval !== null,
-      requestsRemaining: Math.max(
-        0,
-        config.approvalLimits.maxRequestsPerRun - state.counters.totalRequests,
-      ),
+      pendingCount: pendingApprovalCount,
     },
   });
 }
 
-export function assertRunPermissionStateInvariant(
-  state: RunPermissionState,
-  lifecycleStatus: RunPermissionLifecycleStatus,
-): void {
-  if (!state || typeof state !== "object") {
-    throw new TypeError("RunPermissionState must be an object.");
+export function assertRunPermissionStateInvariant(state: RunPermissionState): void {
+  for (const field of ["actionCoverage", "runPermissionGrants", "sessionAuthorityRecords", "appliedPolicyAmendments"] as const) {
+    if (!Array.isArray(state[field])) throw new TypeError(`RunPermissionState.${field} must be an array.`);
   }
-  if (lifecycleStatus === "waiting_for_approval") {
-    if (state.pendingApproval === null) {
-      throw new TypeError("A waiting Run requires exactly one PendingApproval.");
-    }
-    assertPendingApproval(state.pendingApproval);
-    if (state.pendingApproval.version !== state.counters.lastPendingVersion) {
-      throw new TypeError(
-        "PendingApproval.version must equal ApprovalCounters.lastPendingVersion.",
-      );
-    }
-  } else if (state.pendingApproval !== null) {
-    throw new TypeError(
-      `Run lifecycle '${lifecycleStatus}' cannot retain PendingApproval.`,
-    );
-  }
-  assertCounters(state.counters);
-  for (const field of [
-    "approvalRecords",
-    "actionCoverage",
-    "runPermissionGrants",
-    "sessionAuthorityRecords",
-    "appliedPolicyAmendments",
-  ] as const) {
-    if (!Array.isArray(state[field])) {
-      throw new TypeError(`RunPermissionState.${field} must be an array.`);
-    }
-  }
-}
-
-function assertPendingApproval(pending: PendingApproval): void {
-  if (pending.phase !== "reviewing" && pending.phase !== "applying_authority") {
-    throw new TypeError("PendingApproval.phase is unsupported.");
-  }
-  for (const [field, value] of [
-    ["reviewerBindingId", pending.reviewerBindingId],
-    ["reviewOperationId", pending.reviewOperationId],
-    ["createdAt", pending.createdAt],
-  ] as const) {
-    if (typeof value !== "string" || value.trim().length === 0) {
-      throw new TypeError(`PendingApproval.${field} must be non-empty.`);
-    }
-  }
-  if (!Number.isSafeInteger(pending.version) || pending.version <= 0) {
-    throw new TypeError("PendingApproval.version must be a positive integer.");
-  }
-  if (pending.reviewer !== "user" && pending.reviewer !== "auto_review") {
-    throw new TypeError("PendingApproval.reviewer is unsupported.");
-  }
+  const activity = state.approvalActivity;
   if (
-    pending.phase === "applying_authority" &&
-    (typeof pending.authorityOperationId !== "string" ||
-      pending.authorityOperationId.trim().length === 0)
+    activity === null || typeof activity !== "object" ||
+    !Number.isSafeInteger(activity.requestCount) || activity.requestCount < 0 ||
+    !Number.isSafeInteger(activity.consecutiveDeclines) || activity.consecutiveDeclines < 0 ||
+    !Number.isSafeInteger(activity.consecutiveReviewFailures) || activity.consecutiveReviewFailures < 0
   ) {
-    throw new TypeError(
-      "An applying PendingApproval requires an authority operation id.",
-    );
-  }
-  const request = pending.request;
-  if (!request || typeof request !== "object") {
-    throw new TypeError("PendingApproval.request must be a valid ApprovalRequest.");
-  }
-  createApprovalRequest({
-    id: request.id,
-    createdAt: request.createdAt,
-    requirement: {
-      category: request.category,
-      subject: request.subject,
-      reason: request.reason,
-      payload: request.payload,
-      decisionOptions: request.decisionOptions,
-      trustedProposals: request.trustedProposals,
-      deadlineAt: request.deadlineAt,
-      metadata: request.metadata,
-    } as ApprovalRequirement,
-  });
-}
-
-function assertCounters(counters: ApprovalCounters): void {
-  for (const field of [
-    "totalRequests",
-    "consecutiveDeclines",
-    "consecutiveReviewFailures",
-    "lastPendingVersion",
-  ] as const) {
-    if (!Number.isSafeInteger(counters[field]) || counters[field] < 0) {
-      throw new TypeError(`ApprovalCounters.${field} must be non-negative.`);
-    }
-  }
-  if (!Array.isArray(counters.requestsByActionFingerprint)) {
-    throw new TypeError("Approval fingerprint counters must be an array.");
-  }
-  const fingerprints = new Set<string>();
-  for (const entry of counters.requestsByActionFingerprint) {
-    if (
-      typeof entry.actionFingerprint !== "string" ||
-      entry.actionFingerprint.length === 0 ||
-      !Number.isSafeInteger(entry.count) ||
-      entry.count <= 0 ||
-      fingerprints.has(entry.actionFingerprint)
-    ) {
-      throw new TypeError("Approval fingerprint counters are invalid.");
-    }
-    fingerprints.add(entry.actionFingerprint);
+    throw new TypeError("RunPermissionState.approvalActivity is invalid.");
   }
 }
 
-function sameSessionContext(
-  record: SessionAuthorityRecord,
-  context: SessionAuthorityContext,
-): boolean {
-  return (
-    record.hostSessionId === context.hostSessionId &&
-    record.authorityContextKey === context.authorityContextKey &&
-    record.workspaceId === context.workspaceId &&
-    record.identityId === context.identityId &&
-    record.environmentId === context.environmentId
-  );
-}
-
-function deepFreeze<T>(value: T): T {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
-    return value;
-  }
-  for (const child of Object.values(value)) deepFreeze(child);
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) deepFreeze(child, seen);
   return Object.freeze(value);
 }

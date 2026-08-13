@@ -20,17 +20,27 @@ import {
   type SessionAuthorityPort,
   type SessionAuthorityRecord,
 } from "@agent-anything/permission";
-import type { IdentityRef, RunWorkspace } from "@agent-anything/agent-core/run";
+import type { IdentityRef } from "@agent-anything/agent-core/run";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
-export interface ApprovalReviewerBinding {
+interface ApprovalReviewerBindingBase {
   readonly bindingId: string;
-  readonly kind: ApprovalsReviewer;
-  readonly reviewer: ApprovalReviewerPort;
   readonly descriptor: ApprovalReviewerDescriptor;
-  readonly reviewTimeoutMs: number | null;
 }
+
+export type ApprovalReviewerBinding =
+  | (ApprovalReviewerBindingBase & {
+      readonly kind: "user";
+      readonly descriptor: ApprovalReviewerDescriptor & { readonly kind: "user" };
+    })
+  | (ApprovalReviewerBindingBase & {
+      readonly kind: "auto_review";
+      readonly reviewer: ApprovalReviewerPort;
+      readonly descriptor: ApprovalReviewerDescriptor & { readonly kind: "auto_review" };
+      readonly reviewTimeoutMs: number;
+    });
 
 export interface ApprovalLimits {
   readonly maxRequestsPerRun: number;
@@ -64,7 +74,7 @@ export interface ResolvedRunPermissionConfig {
 
 export interface SnapshotResolvedRunPermissionConfigInput {
   readonly permissions: ResolvedRunPermissionConfig;
-  readonly workspace: RunWorkspace | null;
+  readonly workspace: WorkspaceSelection | null;
   readonly identity: IdentityRef;
 }
 
@@ -208,9 +218,6 @@ function snapshotReviewerBinding(
   if (binding.kind !== "user" && binding.kind !== "auto_review") {
     throw new TypeError("ApprovalReviewerBinding.kind is unsupported.");
   }
-  if (!binding.reviewer || typeof binding.reviewer.review !== "function") {
-    throw new TypeError("ApprovalReviewerBinding.reviewer must provide review().");
-  }
   const descriptor = binding.descriptor;
   if (!descriptor || typeof descriptor !== "object") {
     throw new TypeError("ApprovalReviewerBinding.descriptor must be an object.");
@@ -224,19 +231,34 @@ function snapshotReviewerBinding(
   if (!isRecord(descriptor.metadata)) {
     throw new TypeError("ApprovalReviewerDescriptor.metadata must be an object.");
   }
-  if (binding.kind === "auto_review" && binding.reviewTimeoutMs === null) {
-    throw new TypeError("An automatic reviewer requires a finite timeout.");
+  if (binding.kind === "user") {
+    if ("reviewer" in binding || "reviewTimeoutMs" in binding) {
+      throw new TypeError(
+        "A user reviewer binding must receive decisions through Interaction transport.",
+      );
+    }
+    return Object.freeze({
+      bindingId: binding.bindingId,
+      kind: binding.kind,
+      descriptor: Object.freeze({
+        ...descriptor,
+        kind: "user" as const,
+        metadata: deepFreezeClone(descriptor.metadata),
+      }),
+    });
   }
-  if (binding.reviewTimeoutMs !== null) {
-    assertPositiveTimer(binding.reviewTimeoutMs, "reviewTimeoutMs");
+  if (!binding.reviewer || typeof binding.reviewer.review !== "function") {
+    throw new TypeError("An automatic reviewer binding must provide review().");
   }
+  assertPositiveTimer(binding.reviewTimeoutMs, "reviewTimeoutMs");
 
   return Object.freeze({
     bindingId: binding.bindingId,
-    kind: binding.kind,
+    kind: "auto_review" as const,
     reviewer: binding.reviewer,
     descriptor: Object.freeze({
       ...descriptor,
+      kind: "auto_review" as const,
       metadata: deepFreezeClone(descriptor.metadata),
     }),
     reviewTimeoutMs: binding.reviewTimeoutMs,
@@ -555,7 +577,7 @@ function snapshotSessionAuthority(input: {
   readonly config: ResolvedSessionAuthorityConfig | null;
   readonly profile: ResolvedPermissionProfile;
   readonly managedConstraints: ManagedPermissionConstraints;
-  readonly workspace: RunWorkspace | null;
+  readonly workspace: WorkspaceSelection | null;
   readonly identity: IdentityRef;
 }): ResolvedSessionAuthorityConfig | null {
   if (input.config === null) return null;

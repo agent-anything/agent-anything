@@ -13,7 +13,7 @@ import {
   createCanonicalSha256Digest,
   type CanonicalExecutableIdentityInput,
   type FileBaseline,
-} from "@agent-anything/action-execution/canonical";
+} from "@agent-anything/canonical-action/subject";
 
 type FileSystemPlatform = "win32" | "posix";
 

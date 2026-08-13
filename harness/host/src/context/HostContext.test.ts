@@ -1,4 +1,6 @@
-import type { IdentityRef, RunWorkspace, WorkspaceContext } from "@agent-anything/agent-core/run";
+import type { IdentityRef } from "@agent-anything/agent-core/run";
+import type { WorkspaceIdentity } from "@agent-anything/workspace/identity";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import { describe, expect, it } from "vitest";
 import {
   createStaticHostIdentityResolver,
@@ -143,7 +145,7 @@ describe("Host Run context resolution", () => {
       ...resolutionInput(),
       workspaceResolver: {
         async resolve() {
-          return { primary: null, additional: [] } as unknown as RunWorkspace;
+          return { primary: null, additional: [] } as unknown as WorkspaceSelection;
         },
       },
       identityResolver: createStaticHostIdentityResolver(userIdentity()),
@@ -240,8 +242,8 @@ function resolutionInput() {
 }
 
 function runWorkspace(): {
-  primary: WorkspaceContext & { name: string };
-  additional: WorkspaceContext[];
+  primary: WorkspaceIdentity & { name: string };
+  additional: WorkspaceIdentity[];
 } {
   return {
     primary: workspaceContext("primary"),
@@ -249,7 +251,7 @@ function runWorkspace(): {
   };
 }
 
-function workspaceContext(id: string): WorkspaceContext & { name: string } {
+function workspaceContext(id: string): WorkspaceIdentity & { name: string } {
   return {
     id: `workspace-${id}`,
     name: id[0]!.toUpperCase() + id.slice(1),

@@ -1,44 +1,44 @@
-import type { EvidenceBuilderPort } from "@agent-anything/context/evidence";
-import type { EvidencePersistencePort } from "@agent-anything/context/persistence";
-import type {
-  ContextProjectionLimits,
-  ContextProjectionPurpose,
-  ContextProjectorPort,
-} from "@agent-anything/context/context";
-import type {
-  AuditPort,
-  RunTraceObserver,
-  RuntimeEventPublisher,
-  TelemetryPort,
-} from "@agent-anything/observability";
-
-import type {
-  ActionEnforcementPipeline,
-} from "@agent-anything/action-execution/enforcement";
-import type {
-  SandboxExecutionGateway,
-} from "@agent-anything/action-execution/sandbox";
-import type { Controller } from "../controller/index.js";
+import type { Agent, AgentRevisionRef } from "@agent-anything/agent-core/agent";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import type { RunInput } from "@agent-anything/agent-core/input";
+import type { RunActionRef } from "@agent-anything/agent-core/run-action";
+import type { ContextProjectionLimits, ContextProjectionPurpose, ContextProjectorPort } from "@agent-anything/context/context";
+import type { AuditPort, RunTraceObserver, RuntimeEventPublisher, TelemetryPort } from "@agent-anything/observability";
+import type { ActionExecutionCoordinatorDependencies } from "@agent-anything/action-execution/enforcement";
+import type { ActionExecutionObserver } from "@agent-anything/action-execution/enforcement";
+import type { InteractionProtocolRegistrySnapshot } from "@agent-anything/interaction/coordination";
+import type { OperationBindingResolverSnapshot, ResolvedOperationBinding } from "@agent-anything/operation-catalog/binding";
+import type { OperationCatalogSnapshot } from "@agent-anything/operation-catalog/catalog";
+import type { OperationResult } from "@agent-anything/operation-catalog/result";
+import type { CompositeDefinitionRevision } from "@agent-anything/operation-composition/definition";
+import type { CompositeExecutionDependencies } from "@agent-anything/operation-composition/execution";
 import type { RetryExecutor } from "../retry/RetryExecutor.js";
 import type { RunObservation } from "../run/RunObservation.js";
+import type { RunResult } from "../run/RunResult.js";
+import type { RunConfig } from "./RunConfig.js";
 
 export type RunnerIdentityKind =
   | "run_cancellation_request"
   | "run_item"
-  | "action"
+  | "run_action"
+  | "controller_turn"
+  | "operation_invocation"
+  | "operation_result"
+  | "tool_call"
   | "observation"
   | "plan"
-  | "approval_request"
-  | "approval_record"
-  | "approval_review_operation"
-  | "authority_operation"
-  | "action_authority"
-  | "run_permission_grant"
-  | "session_authority_record"
-  | "policy_amendment_record"
+  | "interaction_request"
+  | "interaction_submission_receipt"
+  | "interaction_resolution"
+  | "interaction_application"
+  | "action"
+  | "descendant_relation"
+  | "composite"
   | "runtime_event"
   | "run_trace"
-  | "trace_span";
+  | "trace_span"
+  | "approval_record"
+  | "authority_record";
 
 export interface CreateRunnerIdentityInput {
   readonly kind: RunnerIdentityKind;
@@ -55,17 +55,90 @@ export interface RunnerContextProjection {
   readonly limits: ContextProjectionLimits;
 }
 
+export interface InternalOperationExecutionContext {
+  readonly runId: string;
+  readonly parentRunAction: RunActionRef;
+  readonly binding: Extract<ResolvedOperationBinding, { readonly kind: "internal" }>;
+  readonly deadlineAt: string;
+  readonly interruption: InvocationInterruptionContext;
+}
+
+export interface InternalOperationHandler {
+  readonly id: string;
+  execute(context: InternalOperationExecutionContext): Promise<OperationResult>;
+}
+
+export interface AgentResolution {
+  readonly status: "admitted" | "unavailable" | "denied";
+  readonly agent: Agent | null;
+  readonly admissionEvidenceRef: string | null;
+  readonly code: string | null;
+}
+
+export interface AgentResolverPort {
+  resolve(ref: AgentRevisionRef): Promise<AgentResolution>;
+}
+
+export interface DescendantRunPreparation {
+  readonly agent: Agent;
+  readonly input: RunInput;
+  readonly config: RunConfig;
+  readonly contextManifestRef: string;
+  readonly visibility: "parent_and_host" | "parent_only";
+  mapResult(result: RunResult): DescendantOperationOutcome;
+}
+
+export type DescendantOperationOutcome =
+  | { readonly status: "succeeded"; readonly output: unknown; readonly failure: null }
+  | { readonly status: "partial"; readonly output: unknown; readonly failure: import("@agent-anything/operation-catalog/result").OperationFailure }
+  | {
+      readonly status: "failed" | "unavailable" | "denied" | "cancelled" | "timed_out" | "invalid" | "unknown_effect";
+      readonly output: null;
+      readonly failure: import("@agent-anything/operation-catalog/result").OperationFailure;
+    };
+
+export interface DescendantRunCompositionPort {
+  prepare(input: {
+    readonly parentRunId: string;
+    readonly parentRunAction: RunActionRef;
+    readonly targetAgent: AgentRevisionRef;
+    readonly delegatedInput: unknown;
+    readonly parentConfig: RunConfig;
+  }): Promise<DescendantRunPreparation>;
+}
+
+export interface CompositeOperationResolution {
+  readonly definition: CompositeDefinitionRevision;
+  readonly execution: Omit<CompositeExecutionDependencies, "children">;
+}
+
+export interface CompositeOperationResolverPort {
+  resolve(definitionRef: string): CompositeOperationResolution | null;
+}
+
+export interface RunnerOperationComposition {
+  readonly catalog: OperationCatalogSnapshot;
+  readonly bindings: OperationBindingResolverSnapshot;
+  readonly validateToolInput: (schema: unknown, candidate: unknown) => boolean;
+  readonly internalHandlers: readonly InternalOperationHandler[];
+  readonly actionExecution?: Omit<
+    ActionExecutionCoordinatorDependencies,
+    "approval" | "permission"
+  >;
+  readonly composite?: CompositeOperationResolverPort;
+  readonly descendants?: DescendantRunCompositionPort;
+}
+
 export interface RunnerDependencies {
-  readonly controller: Controller<unknown>;
+  readonly controller: import("../controller/index.js").Controller<unknown>;
   readonly contextProjection: RunnerContextProjection;
+  readonly operations: RunnerOperationComposition;
+  readonly interactions: InteractionProtocolRegistrySnapshot;
+  readonly agents?: AgentResolverPort;
   readonly runtimeEventPublisher?: RuntimeEventPublisher;
   readonly auditPort?: AuditPort;
   readonly telemetryPort?: TelemetryPort;
   readonly runTraceObserver?: RunTraceObserver;
-  readonly actionEnforcementPipeline?: ActionEnforcementPipeline;
-  readonly sandboxExecutionGateway?: SandboxExecutionGateway;
-  readonly evidenceBuilder?: EvidenceBuilderPort;
-  readonly evidencePersistence?: EvidencePersistencePort;
   readonly retryExecutor?: RetryExecutor;
   readonly now?: () => string;
   readonly createRunId?: CreateRunIdentity;
@@ -75,14 +148,10 @@ export interface RunnerDependencies {
 export interface RunInvocationOptions {
   readonly runtimeEventPublisher?: RuntimeEventPublisher;
   readonly runTraceObserver?: RunTraceObserver;
+  readonly actionExecutionObserver?: ActionExecutionObserver;
 }
 
-export type ResolvedRunnerDependencies = Required<
-  Pick<
-    RunnerDependencies,
-    "controller" | "now" | "createRunId" | "createId" | "retryExecutor"
-  >
-> & Omit<
+export type ResolvedRunnerDependencies = Required<Pick<
   RunnerDependencies,
-  "controller" | "now" | "createRunId" | "createId" | "retryExecutor"
->;
+  "controller" | "contextProjection" | "operations" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor"
+>> & Omit<RunnerDependencies, "controller" | "contextProjection" | "operations" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor">;

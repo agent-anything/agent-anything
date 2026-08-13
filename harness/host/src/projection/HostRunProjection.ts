@@ -1,25 +1,25 @@
-import type {
-  ApprovalCategory,
-  ApprovalReviewInput,
-  ApprovalSubmissionReceipt,
-} from "@agent-anything/permission";
-
-import type {
-  SandboxEnforcement,
-} from "@agent-anything/action-execution/sandbox";
-import type {
-  RuntimeEvent,
-  RuntimeEventName,
-} from "@agent-anything/observability/events";
+import type { ActionExecutionNotification } from "@agent-anything/action-execution/enforcement";
+import type { SandboxEnforcement } from "@agent-anything/action-execution/sandbox";
 import type { PlanProjection } from "@agent-anything/agent-runtime/plan";
-import type { RunCancellationSummary, RunFailureCause, RunFailureKind, RunResult, RunResultCode } from "@agent-anything/agent-runtime/run";
-
-export const HOST_RETRY_EVENT_LIMIT = 16;
+import type {
+  RunCancellationSummary,
+  RunFailureCause,
+  RunFailureKind,
+  RunResult,
+  RunResultCode,
+} from "@agent-anything/agent-runtime/run";
+import type {
+  RunOperationSnapshot,
+  RunRetryProjection,
+} from "@agent-anything/agent-runtime/runner";
+import type { RuntimeEvent } from "@agent-anything/observability/events";
+import type { InteractionRequestRef } from "@agent-anything/interaction/protocol";
+import type { InteractionTransportReceipt } from "@agent-anything/interaction/records";
 
 export type HostRunProjectionStatus =
   | "starting"
   | "running"
-  | "waiting_for_approval"
+  | "waiting"
   | "cancelling"
   | "completed"
   | "blocked"
@@ -28,27 +28,22 @@ export type HostRunProjectionStatus =
 
 export type HostPlanProjection = PlanProjection;
 
-export interface HostPendingApprovalProjection {
-  readonly runId: string;
-  readonly requestId: string;
-  readonly actionId: string;
-  readonly category: ApprovalCategory;
-  readonly pendingVersion: number;
-  readonly reviewer: "user" | "auto_review";
-  readonly phase: "reviewing" | "submitted_for_resolution";
-  readonly requestedAt: string;
-  readonly review: ApprovalReviewInput | null;
+export interface HostPendingInteractionProjection {
+  readonly request: InteractionRequestRef;
+  readonly presentation: unknown;
+  readonly disclosureClass: "public" | "internal" | "sensitive";
+  readonly expiresAt: string | null;
+  readonly blockingScope: "none" | "branch" | "run";
+  readonly phase: "pending" | "submitted_for_resolution";
 }
 
-export type HostRetryEventName = Extract<
-  RuntimeEventName,
-  | "retry.attempt.started"
-  | "retry.attempt.finished"
-  | "retry.scheduled"
-  | "retry.fallback.selected"
-  | "retry.exhausted"
-  | "retry.cancelled"
->;
+export type HostRetryEventName =
+  | "retry_scheduled"
+  | "retry_attempt_started"
+  | "retry_attempt_finished"
+  | "retry_fallback_selected"
+  | "retry_exhausted"
+  | "retry_cancelled";
 
 export type HostRetryOwner =
   | "provider_request"
@@ -81,25 +76,31 @@ export type HostCancellationProjection = RunCancellationSummary;
 
 export type HostEnforcementStatus =
   | "not_exercised"
+  | "running"
   | "unisolated"
   | "enforced"
   | "unavailable"
   | "denied"
   | "interrupted"
-  | "failed";
+  | "failed"
+  | "unknown_effect";
 
-export interface HostSandboxAttemptProjection {
+export interface HostActionAttemptProjection {
   readonly attemptId: string;
   readonly actionId: string;
-  readonly ordinal: 1 | 2;
+  readonly ordinal: number;
   readonly enforcement: SandboxEnforcement;
   readonly outcome:
     | "running"
-    | "executed"
-    | "sandbox_denied"
-    | "sandbox_unavailable"
-    | "interrupted"
-    | "failed";
+    | "invalid"
+    | "invalidated"
+    | "denied"
+    | "cancelled"
+    | "timed_out"
+    | "failed"
+    | "partial"
+    | "succeeded"
+    | "unknown_effect";
   readonly code: string | null;
 }
 
@@ -107,8 +108,7 @@ export interface HostEnforcementProjection {
   readonly selected: SandboxEnforcement;
   readonly status: HostEnforcementStatus;
   readonly attemptCount: number;
-  readonly escalationCount: number;
-  readonly latestAttempt: HostSandboxAttemptProjection | null;
+  readonly latestAttempt: HostActionAttemptProjection | null;
 }
 
 export interface HostTerminalFailureProjection {
@@ -124,8 +124,6 @@ export interface HostTerminalRunProjection {
   readonly code: RunResultCode | null;
   readonly completedAt: string;
   readonly durationMs: number | null;
-  readonly iterations: number | null;
-  readonly actions: number | null;
   readonly itemCount: number;
   readonly evidenceCount: number;
   readonly artifactCount: number;
@@ -139,10 +137,11 @@ export interface HostRunProjection {
   readonly taskId: string;
   readonly runId: string;
   readonly sequence: number;
+  readonly runOperationSequence: number;
   readonly status: HostRunProjectionStatus;
   readonly startedAt: string;
   readonly plan: HostPlanProjection | null;
-  readonly approval: HostPendingApprovalProjection | null;
+  readonly pendingInteractions: readonly HostPendingInteractionProjection[];
   readonly retry: HostRetryProjection | null;
   readonly cancellation: HostCancellationProjection | null;
   readonly enforcement: HostEnforcementProjection;
@@ -174,17 +173,19 @@ export interface HostRuntimeEventProjectionUpdate
   readonly event: RuntimeEvent;
 }
 
-export interface HostApprovalReviewProjectionUpdate
-  extends HostRunProjectionUpdateBase<"approval_review_available"> {
-  readonly review: ApprovalReviewInput;
+export interface HostRunOperationProjectionUpdate
+  extends HostRunProjectionUpdateBase<"run_operation"> {
+  readonly snapshot: RunOperationSnapshot;
 }
 
-export interface HostApprovalSubmissionProjectionUpdate
-  extends HostRunProjectionUpdateBase<"approval_submission_accepted"> {
-  readonly receipt: Extract<
-    ApprovalSubmissionReceipt,
-    { readonly status: "accepted_for_resolution" }
-  >;
+export interface HostActionExecutionProjectionUpdate
+  extends HostRunProjectionUpdateBase<"action_execution"> {
+  readonly notification: ActionExecutionNotification;
+}
+
+export interface HostInteractionSubmissionProjectionUpdate
+  extends HostRunProjectionUpdateBase<"interaction_submission_accepted"> {
+  readonly receipt: InteractionTransportReceipt;
 }
 
 export interface HostCancellationProjectionUpdate
@@ -199,8 +200,9 @@ export interface HostTerminalProjectionUpdate
 
 export type HostRunProjectionUpdate =
   | HostRuntimeEventProjectionUpdate
-  | HostApprovalReviewProjectionUpdate
-  | HostApprovalSubmissionProjectionUpdate
+  | HostRunOperationProjectionUpdate
+  | HostActionExecutionProjectionUpdate
+  | HostInteractionSubmissionProjectionUpdate
   | HostCancellationProjectionUpdate
   | HostTerminalProjectionUpdate;
 
@@ -209,8 +211,8 @@ export type HostRunProjectionRejectionCode =
   | "run_identity_mismatch"
   | "invalid_transition"
   | "invalid_update"
-  | "approval_correlation_mismatch"
-  | "plan_version_regression"
+  | "interaction_correlation_mismatch"
+  | "run_operation_sequence_regression"
   | "terminal_projection_mismatch";
 
 export type HostRunProjectionReduction =
@@ -256,17 +258,17 @@ export function createHostRunProjection(
     taskId: input.taskId,
     runId: input.runId,
     sequence: 0,
+    runOperationSequence: 0,
     status: "starting" as const,
     startedAt: input.startedAt,
     plan: null,
-    approval: null,
+    pendingInteractions: Object.freeze([]),
     retry: null,
     cancellation: null,
     enforcement: Object.freeze({
       selected: input.enforcement,
       status: "not_exercised" as const,
       attemptCount: 0,
-      escalationCount: 0,
       latestAttempt: null,
     }),
     terminal: null,
@@ -284,12 +286,10 @@ export function createHostTerminalRunProjection<TOutput>(
   return Object.freeze({
     runId: input.runResult.runId,
     taskId: input.runResult.taskId,
-    status: terminalStatus(input.runResult.status),
+    status: input.runResult.status === "succeeded" ? "completed" : input.runResult.status,
     code: input.runResult.code,
     completedAt,
     durationMs: readNonNegativeNumber(input.runResult.metadata.durationMs),
-    iterations: readNonNegativeInteger(input.runResult.metadata.iterations),
-    actions: readNonNegativeInteger(input.runResult.metadata.actions),
     itemCount: input.runResult.items.length,
     evidenceCount: input.runResult.evidenceRefs.length,
     artifactCount: input.runResult.artifactRefs.length,
@@ -303,15 +303,11 @@ export function createHostTerminalRunProjection<TOutput>(
   });
 }
 
-function projectFailure(
-  cause: RunFailureCause,
-): HostTerminalFailureProjection {
+function projectFailure(cause: RunFailureCause): HostTerminalFailureProjection {
   return Object.freeze({
     kind: cause.kind,
     code: cause.failure.code,
-    retryable: "retryable" in cause.failure
-      ? cause.failure.retryable
-      : null,
+    retryable: "retryable" in cause.failure ? cause.failure.retryable : null,
   });
 }
 
@@ -321,24 +317,13 @@ export function snapshotHostCancellation(
   return snapshotCancellation(cancellation)!;
 }
 
-function terminalStatus(
-  status: RunResult["status"],
-): HostTerminalRunProjection["status"] {
-  return status === "succeeded" ? "completed" : status;
-}
-
 function snapshotCancellation(
   cancellation: RunCancellationSummary | null,
 ): HostCancellationProjection | null {
   if (cancellation === null) return null;
   assertIdentity(cancellation.requestId, "cancellation.requestId");
   assertDateTime(cancellation.requestedAt, "cancellation.requestedAt");
-  return Object.freeze({
-    requestId: cancellation.requestId,
-    origin: cancellation.origin,
-    reasonCode: cancellation.reasonCode,
-    requestedAt: cancellation.requestedAt,
-  });
+  return Object.freeze({ ...cancellation });
 }
 
 function readDateTimeMetadata(value: unknown): string | null {
@@ -347,12 +332,6 @@ function readDateTimeMetadata(value: unknown): string | null {
 
 function readNonNegativeNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? value
-    : null;
-}
-
-function readNonNegativeInteger(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : null;
 }

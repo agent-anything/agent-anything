@@ -1,40 +1,63 @@
 export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
-  "@agent-anything/agent-core": [],
+  "@agent-anything/workspace": [],
+  "@agent-anything/agent-core": ["@agent-anything/workspace"],
+  "@agent-anything/operation-catalog": ["@agent-anything/agent-core"],
+  "@agent-anything/interaction": [
+    "@agent-anything/agent-core",
+    "@agent-anything/operation-catalog",
+  ],
+  "@agent-anything/canonical-action": [
+    "@agent-anything/agent-core",
+    "@agent-anything/operation-catalog",
+  ],
   "@agent-anything/model-interaction": ["@agent-anything/agent-core"],
-  "@agent-anything/tools": ["@agent-anything/agent-core"],
-  "@agent-anything/governance": ["@agent-anything/agent-core"],
+  "@agent-anything/tools": [
+    "@agent-anything/agent-core",
+    "@agent-anything/operation-catalog",
+  ],
+  "@agent-anything/governance": [
+    "@agent-anything/agent-core",
+    "@agent-anything/canonical-action",
+  ],
   "@agent-anything/permission": [
     "@agent-anything/agent-core",
+    "@agent-anything/canonical-action",
     "@agent-anything/governance",
+    "@agent-anything/interaction",
   ],
   "@agent-anything/action-execution": [
     "@agent-anything/agent-core",
+    "@agent-anything/canonical-action",
     "@agent-anything/governance",
+    "@agent-anything/operation-catalog",
     "@agent-anything/permission",
-    "@agent-anything/tools",
   ],
-  "@agent-anything/context": [
+  "@agent-anything/context": ["@agent-anything/agent-core"],
+  "@agent-anything/observability": ["@agent-anything/agent-core"],
+  "@agent-anything/operation-composition": [
     "@agent-anything/agent-core",
-    "@agent-anything/tools",
-  ],
-  "@agent-anything/observability": [
-    "@agent-anything/context",
-    "@agent-anything/agent-core",
+    "@agent-anything/operation-catalog",
   ],
   "@agent-anything/evaluation": ["@agent-anything/agent-core"],
   "@agent-anything/agent-runtime": [
     "@agent-anything/action-execution",
-    "@agent-anything/context",
     "@agent-anything/agent-core",
+    "@agent-anything/canonical-action",
+    "@agent-anything/context",
     "@agent-anything/governance",
+    "@agent-anything/interaction",
     "@agent-anything/model-interaction",
     "@agent-anything/observability",
+    "@agent-anything/operation-catalog",
+    "@agent-anything/operation-composition",
     "@agent-anything/permission",
     "@agent-anything/tools",
+    "@agent-anything/workspace",
   ],
   "@agent-anything/remote-integrations": [
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",
+    "@agent-anything/canonical-action",
     "@agent-anything/tools",
   ],
   "@agent-anything/mcp": [
@@ -55,9 +78,11 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",
     "@agent-anything/governance",
+    "@agent-anything/interaction",
     "@agent-anything/observability",
     "@agent-anything/permission",
     "@agent-anything/agent-runtime",
+    "@agent-anything/workspace",
   ],
 });
 
@@ -65,27 +90,32 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
   "@agent-anything/helarc-code-agent": [
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",
+    "@agent-anything/canonical-action",
     "@agent-anything/context",
     "@agent-anything/governance",
     "@agent-anything/model-interaction",
     "@agent-anything/observability",
     "@agent-anything/agent-runtime",
     "@agent-anything/tools",
+    "@agent-anything/workspace",
   ],
   "@agent-anything/helarc": [
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",
+    "@agent-anything/canonical-action",
     "@agent-anything/helarc-code-agent",
     "@agent-anything/host",
     "@agent-anything/model-interaction",
     "@agent-anything/observability",
     "@agent-anything/agent-runtime",
     "@agent-anything/tools",
+    "@agent-anything/workspace",
   ],
   "@agent-anything/helarc-desktop": [
     "@agent-anything/action-execution",
     "@agent-anything/context",
     "@agent-anything/agent-core",
+    "@agent-anything/canonical-action",
     "@agent-anything/governance",
     "@agent-anything/helarc",
     "@agent-anything/helarc-code-agent",
@@ -94,6 +124,7 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/observability",
     "@agent-anything/permission",
     "@agent-anything/agent-runtime",
+    "@agent-anything/workspace",
     "lucide-react",
     "react",
     "react-dom",
@@ -104,6 +135,7 @@ export const TOOLING_PRODUCTION_DEPENDENCIES = Object.freeze({
   "@agent-anything/test-support": [
     "@agent-anything/action-execution",
     "@agent-anything/agent-runtime",
+    "@agent-anything/canonical-action",
     "@agent-anything/context",
     "@agent-anything/agent-core",
     "@agent-anything/evaluation",
@@ -114,6 +146,7 @@ export const TOOLING_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/model-interaction",
     "@agent-anything/observability",
     "@agent-anything/permission",
+    "@agent-anything/workspace",
   ],
 });
 
@@ -130,10 +163,19 @@ export const REVIEWED_PRODUCTION_DEPENDENCIES = Object.freeze({
   ...TOOLING_PRODUCTION_DEPENDENCIES,
 });
 
-const PRODUCT_COMPONENT_ORDER = Object.freeze({
-  "code-agent": 0,
-  product: 1,
-  desktop: 2,
+const PRODUCT_COMPONENT_DEPENDENCIES = Object.freeze({
+  "code-agent": new Set(),
+  "code-workspace": new Set(),
+  product: new Set(["code-agent"]),
+  core: new Set(["code-agent", "code-workspace"]),
+  "local-environment": new Set(["code-agent", "code-workspace"]),
+  desktop: new Set([
+    "code-agent",
+    "code-workspace",
+    "product",
+    "core",
+    "local-environment",
+  ]),
 });
 
 export function evaluateRepositoryDirection({
@@ -206,17 +248,19 @@ export function evaluateRepositoryDirection({
 }
 
 function evaluateProductComponentDirection(owner, imported) {
-  const ownerOrder = PRODUCT_COMPONENT_ORDER[owner.component];
-  const importedOrder = PRODUCT_COMPONENT_ORDER[imported.component];
-  if (ownerOrder === undefined || importedOrder === undefined) {
+  const allowedDependencies = PRODUCT_COMPONENT_DEPENDENCIES[owner.component];
+  if (
+    allowedDependencies === undefined ||
+    PRODUCT_COMPONENT_DEPENDENCIES[imported.component] === undefined
+  ) {
     return [];
   }
-  if (importedOrder <= ownerOrder) {
+  if (allowedDependencies.has(imported.component)) {
     return [];
   }
   return [violation(
     "product_component_direction",
-    `Product component '${owner.component}' must not depend on higher component '${imported.component}'.`,
+    `Product component '${owner.component}' must not depend on component '${imported.component}'.`,
   )];
 }
 

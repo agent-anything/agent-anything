@@ -5,7 +5,7 @@ import type {
   SessionAuthorityPort,
   SessionAuthorityRecord,
 } from "@agent-anything/permission";
-import type { InvocationInterruptionContext } from "@agent-anything/agent-core/run";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { describe, expect, it } from "vitest";
 import { resolveHostRunPermissionConfig } from "./HostRunPermissionComposition.js";
 

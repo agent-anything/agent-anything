@@ -7,19 +7,39 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const packageExportKeys = {
+  "harness/workspace": ["./identity", "./selection"],
   "harness/agent-core/contracts": [
-    "./action",
     "./agent",
+    "./control",
     "./input",
     "./run",
+    "./run-action",
+    "./run-item",
     "./task",
+  ],
+  "harness/operation-catalog": ["./binding", "./catalog", "./identity", "./result"],
+  "harness/interaction": ["./coordination", "./protocol", "./records"],
+  "harness/safety/canonical-action": [
+    "./assessment",
+    "./lifecycle",
+    "./registration",
+    "./settlement",
+    "./subject",
   ],
   "harness/context": [
     "./context",
     "./evidence",
     "./persistence",
   ],
-  "harness/tools": [".", "./catalog", "./registration", "./selection"],
+  "harness/tools": [
+    "./activation",
+    "./catalog",
+    "./identity",
+    "./invocation",
+    "./registration",
+    "./result",
+    "./selection",
+  ],
   "harness/safety/governance": [
     ".",
     "./amendment",
@@ -48,12 +68,13 @@ const packageExportKeys = {
   "harness/model-interaction": ["."],
   "tooling/test-support": [".", "./evaluation-targets/helarc"],
   "harness/safety/action-execution": [
-    "./canonical",
+    "./coordination",
     "./enforcement",
     "./execution",
     "./registration",
     "./sandbox",
   ],
+  "harness/operation-composition": ["./definition", "./execution", "./result"],
   "harness/agent-core/runtime": [
     "./controller",
     "./plan",
@@ -117,6 +138,9 @@ for (const [packagePath, expectedKeys] of Object.entries(packageExportKeys)) {
 }
 
 const removedGeneratedPaths = [
+  "harness/agent-core/contracts/dist/action",
+  "harness/agent-core/contracts/dist/run/InvocationInterruption.js",
+  "harness/agent-core/contracts/dist/run/Workspace.js",
   "harness/context/dist/index.js",
   "harness/context/dist/observation",
   "harness/host/dist/index.js",
@@ -126,6 +150,9 @@ const removedGeneratedPaths = [
   "harness/integrations/plugins/dist/index.js",
   "harness/integrations/remote/dist/index.js",
   "harness/safety/action-execution/dist/index.js",
+  "harness/safety/action-execution/dist/canonical",
+  "harness/safety/action-execution/dist/preparation",
+  "harness/tools/dist/index.js",
   "products/helarc/code-agent/dist/index.js",
   "products/helarc/code-agent/dist/command-actions",
   "products/helarc/code-agent/dist/process",
@@ -147,16 +174,18 @@ for (const removedPath of removedGeneratedPaths) {
 }
 
 const expectedLowerValueExports = {
-  "@agent-anything/agent-core/action": [],
-  "@agent-anything/agent-core/agent": ["snapshotAgent"],
-  "@agent-anything/agent-core/input": ["snapshotRunInput"],
-  "@agent-anything/agent-core/run": [
-    "findRunWorkspace",
-    "listRunWorkspaces",
-    "snapshotIdentityRef",
-    "snapshotRunWorkspace",
-    "snapshotWorkspaceContext",
+  "@agent-anything/workspace/identity": ["snapshotWorkspaceIdentity"],
+  "@agent-anything/workspace/selection": [
+    "findSelectedWorkspace",
+    "listSelectedWorkspaces",
+    "snapshotWorkspaceSelection",
   ],
+  "@agent-anything/agent-core/agent": ["snapshotAgent", "toAgentRevisionRef"],
+  "@agent-anything/agent-core/control": [],
+  "@agent-anything/agent-core/input": ["snapshotRunInput"],
+  "@agent-anything/agent-core/run": ["snapshotIdentityRef"],
+  "@agent-anything/agent-core/run-action": [],
+  "@agent-anything/agent-core/run-item": [],
   "@agent-anything/agent-core/task": ["snapshotAgentTask"],
   "@agent-anything/context/context": [
     "ContextProjectionError",
@@ -167,21 +196,13 @@ const expectedLowerValueExports = {
   ],
   "@agent-anything/context/evidence": [
     "EvidenceBuilder",
-    "classifyToolResult",
-    "settleToolResultEvidence",
+    "settleEvidenceContribution",
+    "snapshotEvidenceContribution",
   ],
   "@agent-anything/context/persistence": [],
-  "@agent-anything/tools": [
-    "ToolCatalogValidationError",
-    "ToolRegistrationValidationError",
-    "ToolSelectionValidationError",
-    "createToolCatalogSnapshot",
-    "createToolRegistrationSnapshot",
-    "createToolSelectionSnapshot",
-    "createToolSourceRef",
-    "findSelectedTool",
-    "findToolDescriptor",
-    "findToolRegistration",
+  "@agent-anything/tools/identity": [
+    "createToolContractIdentity",
+    "toolRevisionKey",
   ],
   "@agent-anything/tools/catalog": [
     "ToolCatalogValidationError",
@@ -191,14 +212,21 @@ const expectedLowerValueExports = {
   "@agent-anything/tools/registration": [
     "ToolRegistrationValidationError",
     "createToolRegistrationSnapshot",
-    "createToolSourceRef",
     "findToolRegistration",
   ],
   "@agent-anything/tools/selection": [
     "ToolSelectionValidationError",
-    "createToolSelectionSnapshot",
+    "createControllerToolExposureProof",
+    "createFixedLocalToolSelection",
     "findSelectedTool",
+    "snapshotToolSelectionRevision",
   ],
+  "@agent-anything/tools/invocation": [
+    "materializeToolCall",
+    "validateExactToolCall",
+  ],
+  "@agent-anything/tools/result": ["adaptToolSemanticResult"],
+  "@agent-anything/tools/activation": [],
   "@agent-anything/governance": [
     "createAllowAllActionPolicyPort",
     "evaluateExecPolicyRules",
@@ -217,6 +245,7 @@ const expectedLowerValueExports = {
   "@agent-anything/governance/managed-permission": [],
   "@agent-anything/governance/amendment": ["normalizePolicyAmendment"],
   "@agent-anything/permission": [
+    "APPROVAL_INTERACTION_PROTOCOL",
     "ApprovalContractError",
     "BUILT_IN_PERMISSION_PROFILE_IDS",
     "PermissionProfileResolutionError",
@@ -228,6 +257,9 @@ const expectedLowerValueExports = {
     "canonicalizePermissionFileSystemTarget",
     "canonicalizePermissionPathFromCwd",
     "createActionApprovalCoverage",
+    "createActionPermissionAssessmentPort",
+    "createApprovalInteractionPresentation",
+    "createApprovalInteractionProtocol",
     "createApprovalRequest",
     "isActionApprovalCoverageApplicable",
     "isSessionAuthorityApplicable",
@@ -238,6 +270,7 @@ const expectedLowerValueExports = {
     "projectPermissionProfile",
     "resolvePermissionProfile",
     "resolvePermissionWorkspaceRoots",
+    "sealApprovalRequirement",
     "snapshotApprovalDecisionSubmission",
     "snapshotApprovalInterruption",
     "snapshotApprovalPayload",
@@ -265,11 +298,15 @@ const expectedLowerValueExports = {
     "resolvePermissionWorkspaceRoots",
   ],
   "@agent-anything/permission/approval": [
+    "APPROVAL_INTERACTION_PROTOCOL",
     "ApprovalContractError",
     "allowsActionApproval",
     "canonicalizeAdditionalPermissions",
+    "createApprovalInteractionPresentation",
+    "createApprovalInteractionProtocol",
     "createApprovalRequest",
     "projectApprovalReviewRequest",
+    "sealApprovalRequirement",
     "snapshotApprovalDecisionSubmission",
     "snapshotApprovalInterruption",
     "snapshotApprovalPayload",
@@ -282,6 +319,7 @@ const expectedLowerValueExports = {
   ],
   "@agent-anything/permission/authority": [
     "createActionApprovalCoverage",
+    "createActionPermissionAssessmentPort",
     "isActionApprovalCoverageApplicable",
     "isSessionAuthorityApplicable",
     "validateSessionAuthorityRecord",
@@ -342,6 +380,59 @@ const expectedLowerValueExports = {
   ],
 };
 
+const expectedOperationCatalogValueExports = {
+  "@agent-anything/operation-catalog/identity": [
+    "operationRevisionKey",
+    "snapshotOperationBindingRevisionRef",
+    "snapshotOperationCorrelation",
+    "snapshotOperationInvocationRef",
+    "snapshotOperationKey",
+    "snapshotOperationRevisionRef",
+  ],
+  "@agent-anything/operation-catalog/catalog": [
+    "OperationContractValidationError",
+    "createOperationCatalogSnapshot",
+    "findRegisteredOperation",
+  ],
+  "@agent-anything/operation-catalog/binding": [
+    "createOperationBindingResolverSnapshot",
+    "snapshotResolvedOperationBinding",
+    "unavailableOperationBindingResolver",
+  ],
+  "@agent-anything/operation-catalog/result": ["createOperationResult"],
+};
+
+const expectedInteractionValueExports = {
+  "@agent-anything/interaction/protocol": [
+    "snapshotInteractionProtocolRef",
+    "snapshotInteractionRequest",
+    "snapshotInteractionRequestRef",
+    "snapshotInteractionSubjectRef",
+    "snapshotSafeInteractionEnvelope",
+  ],
+  "@agent-anything/interaction/coordination": [
+    "InteractionContractError",
+    "InteractionExecution",
+    "createInteractionProtocolRegistrySnapshot",
+    "snapshotPendingInteractionRef",
+  ],
+  "@agent-anything/interaction/records": [
+    "snapshotInteractionApplicationRef",
+    "snapshotInteractionResolutionRef",
+    "snapshotInteractionSubmissionRecordRef",
+    "snapshotInteractionTerminalRecord",
+    "snapshotInteractionTransportReceipt",
+  ],
+};
+
+const expectedOperationCompositionValueExports = {
+  "@agent-anything/operation-composition/definition": [
+    "snapshotCompositeDefinition",
+  ],
+  "@agent-anything/operation-composition/execution": ["CompositeExecution"],
+  "@agent-anything/operation-composition/result": [],
+};
+
 const expectedValueExports = {
   "@agent-anything/observability/events": [
     "RUNTIME_EVENT_SCHEMA_VERSION",
@@ -352,6 +443,7 @@ const expectedValueExports = {
     "ControllerError",
     "ProviderBackedController",
     "StructuredOutputError",
+    "validateControllerDecision",
   ],
   "@agent-anything/agent-runtime/plan": [
     "abandonPlan",
@@ -369,20 +461,21 @@ const expectedValueExports = {
   ],
   "@agent-anything/agent-runtime/run": [
     "assertRunPermissionStateInvariant",
-    "createApprovalRecordSummary",
-    "createApprovalRequestSummary",
     "createBlockedRunResult",
     "createCancelledRunResult",
     "createFailedRunResult",
     "createInitialRunPermissionState",
     "createRunCancellationController",
     "createRunFailureCause",
+    "createRunObservation",
     "createSucceededRunResult",
+    "deriveActiveRunStatus",
     "deriveApprovalReviewDeadline",
     "deriveAuthorityCommitDeadline",
     "deriveEffectivePermissionContext",
     "deriveRunDeadline",
     "isReviewCapablePolicy",
+    "projectPendingRunSubject",
     "projectPermissionContext",
     "runFailureCode",
     "runFailureMessage",
@@ -393,14 +486,12 @@ const expectedValueExports = {
   "@agent-anything/agent-runtime/runner": [
     "Runner",
   ],
-  "@agent-anything/action-execution/canonical": [
-    "ACTION_FINGERPRINT_DOMAIN",
+  "@agent-anything/canonical-action/subject": [
     "ActionContractValidationError",
+    "CANONICAL_ACTION_SUBJECT_FINGERPRINT_DOMAIN",
     "CanonicalEncodingError",
-    "PREPARED_INVOCATION_FINGERPRINT_DOMAIN",
     "PreparedActionInvocationValidationError",
     "addCapabilityEffect",
-    "assertCanonicalActionCoherence",
     "assertPreparedInvocationMatchesExecutor",
     "canonicalEncode",
     "canonicalEndpointKey",
@@ -410,10 +501,8 @@ const expectedValueExports = {
     "canonicalRemoteToolTargetKey",
     "capabilityEffectKey",
     "createActionEffectSet",
-    "createActionFingerprint",
-    "createCanonicalActionOperation",
+    "createCanonicalActionSubjectFingerprint",
     "createCanonicalActorIdentity",
-    "createCanonicalEffectivePermissions",
     "createCanonicalEnvironmentIdentity",
     "createCanonicalExecutableIdentity",
     "createCanonicalFileSystemTarget",
@@ -426,27 +515,31 @@ const expectedValueExports = {
     "createCanonicalWorkspaceRootIdentity",
     "createFileBaseline",
     "createPreparedActionInvocation",
-    "createPreparedInvocationDigest",
     "createSafeActionSummary",
     "createTargetStateAssertions",
     "mergeTargetStateAssertions",
     "snapshotCapabilityEffect",
     "targetStateAssertionKey",
   ],
-  "@agent-anything/action-execution/registration": [
+  "@agent-anything/canonical-action/assessment": [],
+  "@agent-anything/canonical-action/lifecycle": [],
+  "@agent-anything/canonical-action/settlement": [],
+  "@agent-anything/canonical-action/registration": [
     "ActionRegistrationValidationError",
-    "ToolActionBindingValidationError",
-    "assertToolActionBindingSnapshot",
-    "createActionAdapterImplementationSnapshot",
     "createActionRegistrationSnapshot",
-    "createEmptyToolActionBindingSnapshot",
-    "createToolActionBindingSnapshot",
-    "findActionRegistration",
-    "findToolActionBinding",
+    "findActionRegistrationByAdapter",
+    "findActionRegistrationByBinding",
+  ],
+  "@agent-anything/action-execution/registration": [
+    "createActionAdapterImplementationSnapshot",
+    "createPreparedAction",
+  ],
+  "@agent-anything/action-execution/coordination": [
+    "CanonicalActionCommitError",
+    "CanonicalActionLedger",
   ],
   "@agent-anything/action-execution/enforcement": [
-    "ActionEnforcementPipeline",
-    "snapshotRunActionContext",
+    "ActionExecutionCoordinator",
   ],
   "@agent-anything/action-execution/sandbox": [
     "createSandboxExecutionGateway",
@@ -468,7 +561,6 @@ const expectedValueExports = {
     "createHostRunManager",
   ],
   "@agent-anything/host/projection": [
-    "HOST_RETRY_EVENT_LIMIT",
     "createHostRunProjection",
     "createHostRunProjectionStore",
     "createHostTerminalRunProjection",
@@ -480,13 +572,13 @@ const expectedValueExports = {
     "HOST_COMMAND_REASON_MAX_LENGTH",
     "HOST_COMMAND_RECEIPT_LIMIT",
     "HOST_COMMAND_VERSION",
+    "HOST_INTERACTION_PAYLOAD_MAX_BYTES",
     "createHostCommandDispatcher",
     "snapshotHostCommand",
   ],
   "@agent-anything/host/authority": [
     "createInMemoryHostPolicyAmendmentStore",
     "createInMemoryHostSessionAuthorityStore",
-    "createUserApprovalReviewBridge",
   ],
   "@agent-anything/helarc-code-agent/task": [
     "DEFAULT_HELARC_TASK_PROMPT_MAX_LENGTH",
@@ -569,7 +661,7 @@ const expectedValueExports = {
     "deriveHelarcPersistedRunStatus",
     "normalizeHelarcThreadAggregate",
     "normalizeHelarcThreadRecord",
-    "projectHelarcRunWorkspaceContext",
+    "projectHelarcWorkspaceSelectionIdentity",
   ],
   "@agent-anything/helarc/run": [
     "createHelarcProductRunProjection",
@@ -731,6 +823,7 @@ const removedOrPrivateSpecifiers = [
   "@agent-anything/evidence",
   "@agent-anything/storage",
   "@agent-anything/agent-core",
+  "@agent-anything/agent-core/action",
   "@agent-anything/agent-core/artifact",
   "@agent-anything/agent-core/interaction",
   "@agent-anything/agent-core/invocation",
@@ -745,6 +838,14 @@ const removedOrPrivateSpecifiers = [
   "@agent-anything/agent-core/host",
   "@agent-anything/action-execution",
   "@agent-anything/action-execution/ActionGovernanceAssessment",
+  "@agent-anything/action-execution/canonical",
+  "@agent-anything/action-execution/preparation",
+  "@agent-anything/canonical-action",
+  "@agent-anything/interaction",
+  "@agent-anything/operation-catalog",
+  "@agent-anything/operation-composition",
+  "@agent-anything/tools",
+  "@agent-anything/workspace",
   "@agent-anything/host",
   "@agent-anything/host/HostRuntime",
   "@agent-anything/governance/identity",
@@ -778,6 +879,58 @@ if (process.argv.includes("--evaluation-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--harness-execution-only")) {
+  checkBuiltSurfaces(
+    Object.fromEntries(
+      Object.entries(expectedLowerValueExports).filter(
+        ([specifier]) => specifier !== "@agent-anything/test-support/evaluation-targets/helarc",
+      ),
+    ),
+    [
+      "@agent-anything/context",
+      "@agent-anything/context/observation",
+      "@agent-anything/tools",
+    ],
+    join(repoRoot, "harness/agent-core/runtime"),
+  );
+  checkBuiltSurfaces(
+    expectedOperationCatalogValueExports,
+    ["@agent-anything/operation-catalog", "@agent-anything/operation-catalog/internal"],
+    join(repoRoot, "harness/operation-catalog"),
+  );
+  checkBuiltSurfaces(
+    expectedInteractionValueExports,
+    ["@agent-anything/interaction", "@agent-anything/interaction/internal"],
+    join(repoRoot, "harness/interaction"),
+  );
+  checkBuiltSurfaces(
+    expectedOperationCompositionValueExports,
+    ["@agent-anything/operation-composition", "@agent-anything/operation-composition/internal"],
+    join(repoRoot, "harness/operation-composition"),
+  );
+  checkBuiltSurfaces(
+    selectExpectedExports(expectedValueExports, [
+      "@agent-anything/agent-runtime/",
+      "@agent-anything/canonical-action/",
+      "@agent-anything/action-execution/",
+    ]),
+    [
+      "@agent-anything/action-execution",
+      "@agent-anything/action-execution/canonical",
+      "@agent-anything/action-execution/preparation",
+      "@agent-anything/canonical-action",
+    ],
+    join(repoRoot, "harness/agent-core/runtime"),
+  );
+  checkBuiltSurfaces(
+    selectExpectedExports(expectedValueExports, ["@agent-anything/host/"]),
+    ["@agent-anything/host", "@agent-anything/host/HostRuntime"],
+    join(repoRoot, "harness/host"),
+  );
+  console.log("Built Harness execution public API check passed.");
+  process.exit(0);
+}
+
 if (process.argv.includes("--helarc-only")) {
   checkBuiltSurfaces(
     expectedValueExports,
@@ -801,6 +954,30 @@ checkBuiltSurfaces(
     "@agent-anything/context/observation",
   ],
   join(repoRoot, "harness/agent-core/runtime"),
+);
+checkBuiltSurfaces(
+  expectedOperationCatalogValueExports,
+  [
+    "@agent-anything/operation-catalog",
+    "@agent-anything/operation-catalog/internal",
+  ],
+  join(repoRoot, "harness/operation-catalog"),
+);
+checkBuiltSurfaces(
+  expectedInteractionValueExports,
+  [
+    "@agent-anything/interaction",
+    "@agent-anything/interaction/internal",
+  ],
+  join(repoRoot, "harness/interaction"),
+);
+checkBuiltSurfaces(
+  expectedOperationCompositionValueExports,
+  [
+    "@agent-anything/operation-composition",
+    "@agent-anything/operation-composition/internal",
+  ],
+  join(repoRoot, "harness/operation-composition"),
 );
 checkBuiltSurfaces(
   expectedEvaluationValueExports,
@@ -866,6 +1043,13 @@ checkBuiltSurfaces(
 );
 
 console.log("Built public API check passed.");
+
+function selectExpectedExports(expected, prefixes) {
+  return Object.fromEntries(
+    Object.entries(expected).filter(([specifier]) =>
+      prefixes.some((prefix) => specifier.startsWith(prefix))),
+  );
+}
 
 function checkBuiltSurfaces(expected, unavailableSpecifiers, cwd) {
   const childSource = `

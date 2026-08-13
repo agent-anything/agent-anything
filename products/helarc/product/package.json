@@ -46,13 +46,15 @@
     "private":  true,
     "dependencies":  {
                          "@agent-anything/action-execution":  "workspace:*",
+                         "@agent-anything/canonical-action":  "workspace:*",
                          "@agent-anything/observability":  "workspace:*",
                          "@agent-anything/agent-runtime":  "workspace:*",
                          "@agent-anything/helarc-code-agent":  "workspace:*",
                          "@agent-anything/host":  "workspace:*",
                          "@agent-anything/model-interaction":  "workspace:*",
                          "@agent-anything/agent-core":  "workspace:*",
-                         "@agent-anything/tools":  "workspace:*"
+                         "@agent-anything/tools":  "workspace:*",
+                         "@agent-anything/workspace":  "workspace:*"
                      },
     "devDependencies":  {
                             "@types/node":  "^25.9.1"

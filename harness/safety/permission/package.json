@@ -41,6 +41,8 @@
   "private": true,
   "dependencies": {
     "@agent-anything/governance": "workspace:*",
-    "@agent-anything/agent-core": "workspace:*"
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/canonical-action": "workspace:*",
+    "@agent-anything/interaction": "workspace:*"
   }
 }

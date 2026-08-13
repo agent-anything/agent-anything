@@ -10,9 +10,9 @@ export {
 } from "./ExecPolicyRule.js";
 export {
   createAllowAllActionPolicyPort,
+  type ActionPolicyAssessment,
   type ActionPolicyCheckInput,
-  type ActionPolicyEffectKind,
-  type ActionPolicyOperationKind,
+  type ActionPolicyContext,
   type ActionPolicyPort,
 } from "./ActionPolicyPort.js";
 export {

@@ -1,15 +1,15 @@
 import type {
   FileBaseline,
-} from "@agent-anything/action-execution/canonical";
+} from "@agent-anything/canonical-action/subject";
 import type {
   ActionAdapterImplementation,
-  ActionRegistrationSnapshot,
 } from "@agent-anything/action-execution/registration";
+import type { ActionRegistrationSnapshot } from "@agent-anything/canonical-action/registration";
 import type {
   ActionExecutor,
 } from "@agent-anything/action-execution/execution";
-import type { RunWorkspace } from "@agent-anything/agent-core/run";
-import type { ToolRegistrationSnapshot } from "@agent-anything/tools";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
+import type { ToolRegistrationSnapshot } from "@agent-anything/tools/registration";
 import type {
   CodeAgentCommandLimits,
   ProcessTerminationLimits,
@@ -19,7 +19,7 @@ import type {
 export const CODE_AGENT_RUN_COMMAND_ACTION = "codeAgent.runCommand";
 
 export interface CreateCodeAgentCommandActionCapabilityInput {
-  readonly workspace: RunWorkspace | null;
+  readonly workspace: WorkspaceSelection | null;
   readonly limits?: Partial<CodeAgentCommandLimits>;
   readonly environment?: Readonly<Record<string, string>>;
   readonly environmentPolicyId?: string;

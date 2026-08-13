@@ -1,17 +1,19 @@
 export type { Evidence, EvidenceSensitivity } from "./Evidence.js";
 export type { EvidenceRef } from "./EvidenceRef.js";
-export type { EvidenceSource } from "./EvidenceSource.js";
+export type {
+  EvidenceContribution,
+  EvidenceSettlementRef,
+  EvidenceSource,
+} from "./EvidenceSource.js";
 export {
   EvidenceBuilder,
   type BuildEvidenceInput,
   type ConservativeEvidenceSensitivity,
-  type EvidenceEligibleToolResult,
   type EvidenceBuilderPort,
   type EvidenceSensitivityPolicy,
+  snapshotEvidenceContribution,
 } from "./EvidenceBuilder.js";
 export {
-  classifyToolResult,
-  settleToolResultEvidence,
+  settleEvidenceContribution,
   type EvidenceSettlementResult,
-  type ToolResultClassification,
 } from "./EvidenceSettlement.js";

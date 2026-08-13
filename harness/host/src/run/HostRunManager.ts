@@ -1,15 +1,19 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
 import type { RunInput } from "@agent-anything/agent-core/input";
-import {
-  snapshotApprovalDecisionSubmission,
-  type ApprovalDecisionSubmission,
-  type ApprovalSubmissionReceipt,
-} from "@agent-anything/permission";
 import type {
-  RuntimeEvent,
-  RuntimeEventPublisher,
-} from "@agent-anything/observability/events";
-import { toRunCancellationSummary, type RunCancellationRequestInput, type RunResult } from "@agent-anything/agent-runtime/run";
+  InteractionSubmissionOutcome,
+} from "@agent-anything/interaction/coordination";
+import {
+  snapshotInteractionRequestRef,
+  type InteractionRequestRef,
+} from "@agent-anything/interaction/protocol";
+import type { ActionExecutionObserver } from "@agent-anything/action-execution/enforcement";
+import type { RuntimeEvent, RuntimeEventPublisher } from "@agent-anything/observability/events";
+import {
+  toRunCancellationSummary,
+  type RunCancellationRequestInput,
+  type RunResult,
+} from "@agent-anything/agent-runtime/run";
 import type {
   RunConfig,
   RunHandle,
@@ -25,7 +29,6 @@ import {
   type HostTerminalRunProjection,
 } from "../projection/HostRunProjection.js";
 import { createHostRunProjectionStore } from "../projection/HostRunProjectionReducer.js";
-import type { UserApprovalReviewBridge } from "../authority/UserApprovalReviewBridge.js";
 
 export type HostSessionId = string;
 
@@ -34,7 +37,6 @@ export interface HostRunStartInput<TOutput = unknown> {
   readonly agent: Agent<TOutput>;
   readonly runInput: RunInput;
   readonly runConfig: RunConfig;
-  readonly userApprovalReviewBridge: UserApprovalReviewBridge | null;
 }
 
 export interface HostRunResult<TOutput = unknown> {
@@ -48,26 +50,23 @@ export interface HostRunResult<TOutput = unknown> {
 
 export type HostRunCancellationInput = RunCancellationRequestInput;
 
+export interface HostInteractionSubmission {
+  readonly request: InteractionRequestRef;
+  readonly submissionId: string;
+  readonly payload: unknown;
+}
+
 export type HostRunCancellationReceipt =
-  | {
-      readonly status: "accepted";
-      readonly cancellation: HostCancellationProjection;
-    }
-  | {
-      readonly status: "already_requested";
-      readonly cancellation: HostCancellationProjection;
-    }
-  | {
-      readonly status: "run_settled";
-      readonly cancellation: HostCancellationProjection | null;
-    };
+  | { readonly status: "accepted"; readonly cancellation: HostCancellationProjection }
+  | { readonly status: "already_requested"; readonly cancellation: HostCancellationProjection }
+  | { readonly status: "run_settled"; readonly cancellation: HostCancellationProjection | null };
 
 export interface HostActiveRun<TOutput = unknown> {
   readonly sessionId: HostSessionId;
   readonly runId: string;
   getProjection(): HostRunProjection;
   subscribe(listener: HostRunProjectionListener): () => void;
-  submitApprovalDecision(input: ApprovalDecisionSubmission): ApprovalSubmissionReceipt;
+  submitInteraction(input: HostInteractionSubmission): InteractionSubmissionOutcome;
   cancel(input: HostRunCancellationInput): HostRunCancellationReceipt;
   wait(): Promise<HostRunResult<TOutput>>;
   getResult(): HostRunResult<TOutput> | null;
@@ -117,7 +116,6 @@ export function createHostRunManager(input: CreateHostRunManagerInput): HostRunM
   }
   const now = input.now ?? (() => new Date().toISOString());
   const registry = new HostRunRegistry(terminalRetentionLimit);
-
   return Object.freeze({
     start<TOutput>(startInput: HostRunStartInput<TOutput>): HostActiveRun<TOutput> {
       const registration = startHostRun(
@@ -150,27 +148,38 @@ function startHostRun<TOutput>(
   let runId = "";
   let store: ReturnType<typeof createHostRunProjectionStore>;
 
-  const nextSequence = (): number => {
-    hostSequence += 1;
-    return hostSequence;
-  };
+  const nextSequence = (): number => ++hostSequence;
   const runtimeEventPublisher: RuntimeEventPublisher = Object.freeze({
     publish(event: RuntimeEvent) {
       if (invocationState !== "active") return;
-      store.apply({
+      applyRequired(store, {
         kind: "runtime_event",
         runId,
         sequence: nextSequence(),
         occurredAt: event.occurredAt,
         event,
-      });
+      }, "RuntimeEvent");
+    },
+  });
+  const actionExecutionObserver: ActionExecutionObserver = Object.freeze({
+    observe(
+      notification: Parameters<ActionExecutionObserver["observe"]>[0],
+    ) {
+      if (invocationState !== "active") return;
+      applyRequired(store, {
+        kind: "action_execution",
+        runId,
+        sequence: nextSequence(),
+        occurredAt: notification.occurredAt,
+        notification,
+      }, "Action execution");
     },
   });
   const handle: RunHandle<TOutput> = runner.start(
     input.agent,
     input.runInput,
     input.runConfig,
-    { runtimeEventPublisher },
+    { runtimeEventPublisher, actionExecutionObserver },
   );
   runId = handle.runId;
   store = createHostRunProjectionStore({
@@ -183,56 +192,47 @@ function startHostRun<TOutput>(
     }),
     ...(onListenerFailure === undefined ? {} : { onListenerFailure }),
   });
-  const userApprovalReviewBridge = input.userApprovalReviewBridge;
-  const unsubscribeApprovalReview = userApprovalReviewBridge?.subscribe((review) => {
-    if (review === null || invocationState !== "active") return;
-    const reduction = store.apply({
-      kind: "approval_review_available",
+  const unsubscribeHandle = handle.subscribe((snapshot) => {
+    if (invocationState !== "active") return;
+    applyRequired(store, {
+      kind: "run_operation",
       runId,
       sequence: nextSequence(),
-      occurredAt: review.request.createdAt,
-      review,
-    });
-    if (reduction.status === "rejected") {
-      throw new Error(`Host approval review projection was rejected: ${reduction.code}.`);
-    }
-  }) ?? (() => undefined);
+      occurredAt: readNow(now),
+      snapshot,
+    }, "Run operation");
+  });
 
   let released = false;
   const release = (): void => {
     if (released) return;
     released = true;
-    unsubscribeApprovalReview();
+    unsubscribeHandle();
   };
   let terminalResult: HostRunResult<TOutput> | null = null;
-  const waitForResult = handle.wait().then<HostRunResult<TOutput>>(
-    (runResult) => {
-      assertRunResultIdentity(runResult, runId, taskId);
-      const terminal = createHostTerminalRunProjection({
-        runResult,
-        completedAt: readNow(now),
-      });
-      const reduction = store.apply({
-        kind: "terminal_result",
-        runId,
-        sequence: nextSequence(),
-        occurredAt: terminal.completedAt,
-        terminal,
-      });
-      if (reduction.status === "rejected") {
-        throw new Error(`Host terminal projection was rejected: ${reduction.code}.`);
-      }
-      terminalResult = Object.freeze({
-        kind: "run_result" as const,
-        sessionId,
-        taskId,
-        runId,
-        runResult,
-        terminal,
-      });
-      return terminalResult;
-    },
-  ).finally(() => {
+  const waitForResult = handle.wait().then<HostRunResult<TOutput>>((runResult) => {
+    assertRunResultIdentity(runResult, runId, taskId);
+    const terminal = createHostTerminalRunProjection({
+      runResult,
+      completedAt: readNow(now),
+    });
+    applyRequired(store, {
+      kind: "terminal_result",
+      runId,
+      sequence: nextSequence(),
+      occurredAt: terminal.completedAt,
+      terminal,
+    }, "terminal");
+    terminalResult = Object.freeze({
+      kind: "run_result" as const,
+      sessionId,
+      taskId,
+      runId,
+      runResult,
+      terminal,
+    });
+    return terminalResult;
+  }).finally(() => {
     invocationState = "settled";
     release();
   });
@@ -242,84 +242,62 @@ function startHostRun<TOutput>(
     runId,
     getProjection: () => store.getProjection(),
     subscribe: (listener: HostRunProjectionListener) => store.subscribe(listener),
-    submitApprovalDecision(
-      candidate: ApprovalDecisionSubmission,
-    ): ApprovalSubmissionReceipt {
-      const submissionId = readSubmissionId(candidate);
-      let submission: ApprovalDecisionSubmission;
+    submitInteraction(candidate: HostInteractionSubmission): InteractionSubmissionOutcome {
+      if (invocationState !== "active") {
+        return Object.freeze({ status: "rejected", code: "run_settled", receipt: null });
+      }
+      let submission: Parameters<RunHandle["submitInteraction"]>[0];
       try {
-        submission = snapshotApprovalDecisionSubmission(candidate);
+        const request = snapshotInteractionRequestRef(candidate.request);
+        const submissionId = identity(candidate.submissionId, "Interaction submissionId");
+        const payload = snapshotUnknown(candidate.payload);
+        submission = Object.freeze({
+          request,
+          submissionId,
+          contentDigest: canonicalDigest(payload),
+          payload,
+          receivedAt: readNow(now),
+        });
       } catch {
-        return rejectedApprovalSubmission(submissionId, "approval_submission_invalid");
+        return Object.freeze({
+          status: "rejected",
+          code: "interaction_submission_invalid",
+          receipt: null,
+        });
       }
-      if (userApprovalReviewBridge === null || invocationState !== "active") {
-        return rejectedApprovalSubmission(submission.submissionId, "approval_not_pending");
+      const outcome = handle.submitInteraction(submission);
+      if (outcome.status === "accepted_for_resolution" || outcome.status === "duplicate_identical") {
+        applyRequired(store, {
+          kind: "interaction_submission_accepted",
+          runId,
+          sequence: nextSequence(),
+          occurredAt: outcome.receipt.recordedAt,
+          receipt: outcome.receipt,
+        }, "Interaction submission");
       }
-      const projection = store.getProjection();
-      const approval = projection.approval;
-      if (
-        projection.status !== "waiting_for_approval" ||
-        approval === null ||
-        submission.runId !== runId ||
-        submission.requestId !== approval.requestId
-      ) {
-        return rejectedApprovalSubmission(submission.submissionId, "approval_not_pending");
-      }
-      if (submission.pendingVersion !== approval.pendingVersion) {
-        return rejectedApprovalSubmission(submission.submissionId, "approval_version_mismatch");
-      }
-
-      const receipt = userApprovalReviewBridge.submitDecision(submission);
-      if (receipt.status !== "accepted_for_resolution") return receipt;
-      if (approval.phase === "submitted_for_resolution") return receipt;
-      const reduction = store.apply({
-        kind: "approval_submission_accepted",
-        runId,
-        sequence: nextSequence(),
-        occurredAt: readNow(now),
-        receipt,
-      });
-      if (reduction.status === "rejected") {
-        throw new Error(`Host approval submission projection was rejected: ${reduction.code}.`);
-      }
-      return receipt;
+      return outcome;
     },
     cancel(cancellationInput: HostRunCancellationInput): HostRunCancellationReceipt {
       const currentCancellation = store.getProjection().cancellation;
       if (invocationState === "settled") {
-        return Object.freeze({
-          status: "run_settled" as const,
-          cancellation: currentCancellation,
-        });
+        return Object.freeze({ status: "run_settled", cancellation: currentCancellation });
       }
       const receipt = handle.cancel(cancellationInput);
       const cancellation = toRunCancellationSummary(receipt.request);
       if (receipt.status === "run_settled") {
-        return Object.freeze({
-          status: "run_settled" as const,
-          cancellation: currentCancellation,
-        });
+        return Object.freeze({ status: "run_settled", cancellation: currentCancellation });
       }
       if (receipt.status === "already_requested") {
-        return Object.freeze({
-          status: "already_requested" as const,
-          cancellation,
-        });
+        return Object.freeze({ status: "already_requested", cancellation });
       }
-      const reduction = store.apply({
+      applyRequired(store, {
         kind: "cancellation_accepted",
         runId,
         sequence: nextSequence(),
         occurredAt: cancellation.requestedAt,
         cancellation,
-      });
-      if (reduction.status === "rejected") {
-        throw new Error(`Host cancellation projection was rejected: ${reduction.code}.`);
-      }
-      return Object.freeze({
-        status: "accepted" as const,
-        cancellation,
-      });
+      }, "cancellation");
+      return Object.freeze({ status: "accepted", cancellation });
     },
     wait: () => waitForResult,
     getResult: () => terminalResult,
@@ -336,26 +314,20 @@ interface HostRunRegistryRecord {
 class HostRunRegistry {
   private readonly records = new Map<string, HostRunRegistryRecord>();
   private readonly terminalOrder: string[] = [];
-
   constructor(private readonly terminalRetentionLimit: number) {}
 
   admit<TOutput>(registration: HostRunRegistration<TOutput>): void {
     const activeRun = registration.activeRun;
     if (this.records.has(activeRun.runId)) {
-      activeRun.cancel({
-        origin: "host",
-        reasonCode: "host_requested",
-        reason: "Duplicate Host Run identity.",
-      });
+      activeRun.cancel({ origin: "host", reasonCode: "host_requested", reason: "Duplicate Host Run identity." });
       registration.release();
       throw new Error(`Host Run '${activeRun.runId}' is already registered.`);
     }
-    const record: HostRunRegistryRecord = {
+    this.records.set(activeRun.runId, {
       activeRun,
       release: registration.release,
       lifecycle: "active",
-    };
-    this.records.set(activeRun.runId, record);
+    });
     void activeRun.wait().then(
       () => this.markSettled(activeRun.runId),
       () => this.markSettled(activeRun.runId),
@@ -378,14 +350,10 @@ class HostRunRegistry {
   release(runId: string): HostRunReleaseReceipt {
     assertIdentity(runId, "runId");
     const record = this.records.get(runId);
-    if (record === undefined) {
-      return Object.freeze({ status: "not_found" as const, runId });
-    }
-    if (record.lifecycle === "active") {
-      return Object.freeze({ status: "run_active" as const, runId });
-    }
+    if (record === undefined) return Object.freeze({ status: "not_found", runId });
+    if (record.lifecycle === "active") return Object.freeze({ status: "run_active", runId });
     this.evict(runId, record);
-    return Object.freeze({ status: "released" as const, runId });
+    return Object.freeze({ status: "released", runId });
   }
 
   private markSettled(runId: string): void {
@@ -393,17 +361,11 @@ class HostRunRegistry {
     if (record === undefined || record.lifecycle === "settled") return;
     record.lifecycle = "settled";
     this.terminalOrder.push(runId);
-    this.trimTerminalRecords();
-  }
-
-  private trimTerminalRecords(): void {
     while (this.terminalOrder.length > this.terminalRetentionLimit) {
-      const runId = this.terminalOrder.shift();
-      if (runId === undefined) return;
-      const record = this.records.get(runId);
-      if (record !== undefined && record.lifecycle === "settled") {
-        this.evict(runId, record);
-      }
+      const evictedId = this.terminalOrder.shift();
+      if (evictedId === undefined) break;
+      const evicted = this.records.get(evictedId);
+      if (evicted !== undefined && evicted.lifecycle === "settled") this.evict(evictedId, evicted);
     }
   }
 
@@ -415,55 +377,26 @@ class HostRunRegistry {
   }
 }
 
-function assertStartInput<TOutput>(input: HostRunStartInput<TOutput>): void {
-  if (input === null || typeof input !== "object") {
-    throw new TypeError("HostRunStartInput must be an object.");
-  }
-  assertIdentity(input.sessionId, "sessionId");
-  if (input.runInput === null || typeof input.runInput !== "object") {
-    throw new TypeError("runInput must be an object.");
-  }
-  if (input.runInput.task === null || typeof input.runInput.task !== "object") {
-    throw new TypeError("runInput.task must be an object.");
-  }
-  assertIdentity(input.runInput.task.id, "taskId");
-  if (!input.runConfig || typeof input.runConfig !== "object") {
-    throw new TypeError("runConfig must be an object.");
-  }
-  const enforcement = input.runConfig.permissions?.permissionProfile?.enforcement;
-  if (enforcement !== "managed" && enforcement !== "external" && enforcement !== "disabled") {
-    throw new TypeError("Run permission enforcement is invalid.");
-  }
-  assertUserApprovalBinding(input);
-}
-
-function assertUserApprovalBinding<TOutput>(input: HostRunStartInput<TOutput>): void {
-  if (!Object.prototype.hasOwnProperty.call(input, "userApprovalReviewBridge")) {
-    throw new TypeError(
-      "Host Run must explicitly provide an approval review bridge or null.",
-    );
-  }
-  const reviewer = input.runConfig.permissions.reviewer;
-  const bridge = input.userApprovalReviewBridge;
-  if (reviewer?.kind === "user") {
-    if (bridge === null) {
-      throw new TypeError("Host user reviewer requires an explicit approval review bridge.");
-    }
-    if (reviewer.reviewer !== bridge) {
-      throw new TypeError("Host approval review bridge does not match the configured user reviewer.");
-    }
-    return;
-  }
-  if (bridge !== null) {
-    throw new TypeError("Host Run without a user reviewer must not include an approval review bridge.");
-  }
-}
-
-function assertRunResultIdentity<TOutput>(
-  result: RunResult<TOutput>,
-  runId: string,
-  taskId: string,
+function applyRequired(
+  store: ReturnType<typeof createHostRunProjectionStore>,
+  update: Parameters<ReturnType<typeof createHostRunProjectionStore>["apply"]>[0],
+  source: string,
 ): void {
+  const reduction = store.apply(update);
+  if (reduction.status === "rejected") {
+    throw new Error(`${source} Host projection was rejected: ${reduction.code}.`);
+  }
+}
+
+function assertStartInput<TOutput>(input: HostRunStartInput<TOutput>): void {
+  if (input === null || typeof input !== "object") throw new TypeError("HostRunStartInput must be an object.");
+  assertIdentity(input.sessionId, "sessionId");
+  if (input.runInput === null || typeof input.runInput !== "object") throw new TypeError("runInput must be an object.");
+  assertIdentity(input.runInput.task?.id, "taskId");
+  if (!input.runConfig || typeof input.runConfig !== "object") throw new TypeError("runConfig must be an object.");
+}
+
+function assertRunResultIdentity<TOutput>(result: RunResult<TOutput>, runId: string, taskId: string): void {
   if (result.runId !== runId || result.taskId !== taskId) {
     throw new Error("Runner returned a result for a different Host Run.");
   }
@@ -477,22 +410,46 @@ function readNow(now: () => string): string {
   return value;
 }
 
-function assertIdentity(value: string, field: string): void {
+function assertIdentity(value: unknown, field: string): asserts value is string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError(`${field} must be a non-empty string.`);
   }
 }
 
-function readSubmissionId(value: unknown): string {
-  return typeof value === "object" && value !== null &&
-      typeof (value as { submissionId?: unknown }).submissionId === "string"
-    ? (value as { submissionId: string }).submissionId
-    : "";
+function identity(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.length === 0 || /\s/.test(value)) {
+    throw new TypeError(`${field} must be a non-empty identity.`);
+  }
+  return value;
 }
 
-function rejectedApprovalSubmission(
-  submissionId: string,
-  code: Extract<ApprovalSubmissionReceipt, { status: "rejected" }>["code"],
-): ApprovalSubmissionReceipt {
-  return Object.freeze({ status: "rejected", submissionId, code });
+function snapshotUnknown<T>(value: T): T {
+  return deepFreeze(structuredClone(value));
+}
+
+function canonicalDigest(value: unknown): string {
+  return JSON.stringify(canonicalValue(value));
+}
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, canonicalValue(child)]),
+    );
+  }
+  if (
+    value === null || typeof value === "string" || typeof value === "boolean" ||
+    typeof value === "number" && Number.isFinite(value)
+  ) return value;
+  throw new TypeError("Interaction payload is not canonical data.");
+}
+
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) deepFreeze(child, seen);
+  return Object.freeze(value);
 }

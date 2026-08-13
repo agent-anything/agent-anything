@@ -6,22 +6,23 @@ import {
   type HostWorkspaceResolver,
 } from "@agent-anything/host/context";
 import type {
-  HelarcThreadWorkspaceContext,
+  HelarcThreadWorkspaceIdentity,
   HelarcThreadWorkspaceRef,
 } from "@agent-anything/helarc/work-context";
-import type { RunWorkspace, WorkspaceContext } from "@agent-anything/agent-core/run";
+import type { WorkspaceIdentity } from "@agent-anything/workspace/identity";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, normalize } from "node:path";
 
 export function createHelarcDesktopWorkspaceResolver(
-  workspace: HelarcThreadWorkspaceContext,
+  workspace: HelarcThreadWorkspaceIdentity,
 ): HostWorkspaceResolver {
   const selection = snapshotThreadWorkspace(workspace);
 
   return Object.freeze({
     async resolve(
       input: HostWorkspaceResolutionInput,
-    ): Promise<RunWorkspace | null> {
+    ): Promise<WorkspaceSelection | null> {
       if (input.selection.kind === "none") {
         return null;
       }
@@ -44,9 +45,9 @@ export function createHelarcDesktopWorkspaceResolver(
       }
 
       return Object.freeze({
-        primary: await resolveWorkspaceContext(selection.primary),
+        primary: await resolveWorkspaceIdentity(selection.primary),
         additional: Object.freeze(await Promise.all(
-          selection.additional.map(resolveWorkspaceContext),
+          selection.additional.map(resolveWorkspaceIdentity),
         )),
       });
     },
@@ -74,9 +75,9 @@ export function createHelarcDesktopIdentityResolver(): HostIdentityResolver {
   });
 }
 
-async function resolveWorkspaceContext(
+async function resolveWorkspaceIdentity(
   reference: HelarcThreadWorkspaceRef,
-): Promise<WorkspaceContext> {
+): Promise<WorkspaceIdentity> {
   const lexicalPath = normalize(reference.path);
   if (!isAbsolute(lexicalPath)) {
     throw new HostContextResolutionError(
@@ -113,8 +114,8 @@ async function resolveWorkspaceContext(
 }
 
 function snapshotThreadWorkspace(
-  workspace: HelarcThreadWorkspaceContext,
-): HelarcThreadWorkspaceContext {
+  workspace: HelarcThreadWorkspaceIdentity,
+): HelarcThreadWorkspaceIdentity {
   const primary = snapshotThreadWorkspaceRef(workspace.primary);
   const additional = workspace.additional.map(snapshotThreadWorkspaceRef);
   const profileIds = new Set([primary.profileId]);

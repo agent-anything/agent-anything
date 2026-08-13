@@ -81,6 +81,59 @@ test("classifies direct and grouped Harness packages", () => {
   });
 });
 
+test("discovers the Phase27 lower Contract package topology", () => {
+  withWorkspace((root) => {
+    writeFileSync(
+      join(root, "pnpm-workspace.yaml"),
+      [
+        "packages:",
+        '  - "harness/workspace"',
+        '  - "harness/agent-core/contracts"',
+        '  - "harness/operation-catalog"',
+        '  - "harness/interaction"',
+        '  - "harness/safety/*"',
+        "",
+      ].join("\n"),
+    );
+    createPackage(root, "harness/workspace", "@test/workspace", {
+      kind: "harness",
+      component: "workspace",
+    });
+    createPackage(root, "harness/agent-core/contracts", "@test/agent-core", {
+      kind: "harness",
+      component: "agent-core",
+      role: "contracts",
+    });
+    createPackage(root, "harness/operation-catalog", "@test/operation-catalog", {
+      kind: "harness",
+      component: "operation-catalog",
+    });
+    createPackage(root, "harness/interaction", "@test/interaction", {
+      kind: "harness",
+      component: "interaction",
+    });
+    createPackage(root, "harness/safety/canonical-action", "@test/canonical-action", {
+      kind: "harness",
+      component: "safety.canonical-action",
+    });
+
+    assert.deepEqual(
+      discoverWorkspacePackages(root).map(({ name, component, role }) => ({
+        name,
+        component,
+        role,
+      })),
+      [
+        { name: "@test/agent-core", component: "agent-core", role: "contracts" },
+        { name: "@test/interaction", component: "interaction", role: null },
+        { name: "@test/operation-catalog", component: "operation-catalog", role: null },
+        { name: "@test/canonical-action", component: "safety.canonical-action", role: null },
+        { name: "@test/workspace", component: "workspace", role: null },
+      ],
+    );
+  });
+});
+
 test("classifies explicit packages under one Product grouping", () => {
   withWorkspace((root) => {
     writeFileSync(

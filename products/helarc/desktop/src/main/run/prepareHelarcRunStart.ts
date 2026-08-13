@@ -15,7 +15,7 @@ import {
   type HelarcRunProviderRef,
 } from "@agent-anything/helarc/run";
 import type {
-  HelarcThreadWorkspaceContext,
+  HelarcThreadWorkspaceIdentity,
 } from "@agent-anything/helarc/work-context";
 import {
   createHelarcTask,
@@ -47,7 +47,7 @@ export interface PrepareHelarcRunStartInput {
 export interface PreparedHelarcRunStart {
   run: HelarcRunInput;
   task: AgentTask<HelarcTaskInput>;
-  workspace: HelarcThreadWorkspaceContext;
+  workspace: HelarcThreadWorkspaceIdentity;
   provider: HelarcRunProviderRef;
 }
 
@@ -174,7 +174,7 @@ export function prepareHelarcRunStart(
 
 function toThreadWorkspaceRef(
   profile: HelarcWorkspaceProfile,
-): HelarcThreadWorkspaceContext["primary"] {
+): HelarcThreadWorkspaceIdentity["primary"] {
   return {
     profileId: profile.id,
     displayName: profile.displayName,

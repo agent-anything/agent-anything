@@ -1,7 +1,7 @@
 import type { Stats } from "node:fs";
 import { lstat, realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
-import type { RunWorkspace } from "@agent-anything/agent-core/run";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import {
   resolveWorkspacePath,
   type ResolvedWorkspacePath,
@@ -20,7 +20,7 @@ export interface WritableWorkspaceTarget extends ExistingWorkspaceTarget {
 }
 
 export async function resolveExistingTarget(input: {
-  workspace: RunWorkspace | null;
+  workspace: WorkspaceSelection | null;
   rootName?: string;
   path: string;
   expectedKind: "file" | "directory" | "fileOrDirectory";
@@ -56,7 +56,7 @@ export async function resolveExistingTarget(input: {
 }
 
 export async function resolveWritableTarget(input: {
-  workspace: RunWorkspace | null;
+  workspace: WorkspaceSelection | null;
   rootName?: string;
   path: string;
   overwrite: boolean;
@@ -143,7 +143,7 @@ export function workspaceRelativePath(
 }
 
 function resolveLexicalPath(input: {
-  workspace: RunWorkspace | null;
+  workspace: WorkspaceSelection | null;
   rootName?: string;
   path: string;
 }): ResolvedWorkspacePath {

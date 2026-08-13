@@ -1,37 +1,27 @@
-import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
-import type { ToolResult } from "@agent-anything/tools";
-import type { ActionExecutionFailure } from "../execution/ActionExecutionFailure.js";
-import type { ActionDispatchPlan } from "../enforcement/ActionRevalidation.js";
-import type { ActionExecutorDescriptor } from "../registration/ActionRegistration.js";
-import type { CanonicalEffectivePermissions } from "../canonical/CanonicalEffectivePermissions.js";
-import type { CanonicalEnvironmentIdentity } from "../canonical/CanonicalIdentity.js";
-import type { ActionEffectSet, CapabilityEffect } from "../canonical/CapabilityEffect.js";
-import type { PreparedActionInvocation } from "../canonical/PreparedActionInvocation.js";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import type { ActionAttemptRef } from "@agent-anything/canonical-action/subject";
+import type { ActionExecutorDescriptor } from "@agent-anything/canonical-action/registration";
+import type { PreparedActionInvocation } from "@agent-anything/canonical-action/subject";
+import type {
+  PhysicalAttemptOutcome,
+} from "../execution/ActionExecutor.js";
 
 export type SandboxEnforcement = "managed" | "external" | "disabled";
 export type SandboxProviderKind = Exclude<SandboxEnforcement, "disabled">;
-export type CapabilityEffectKind = CapabilityEffect["kind"];
 
 export interface ActionExecutionLimits {
   readonly maxResultBytes: number;
 }
 
-export interface SandboxAttempt {
-  readonly id: string;
+export interface SandboxAttempt extends ActionAttemptRef {
   readonly runId: string;
-  readonly actionId: string;
   readonly actionFingerprint: string;
-  readonly ordinal: 1 | 2;
   readonly enforcement: SandboxEnforcement;
   readonly policyId: string;
   readonly authoritySnapshotId: string;
   readonly dispatchPlanFingerprint: string;
+  readonly actionRegistrationFingerprint: string;
   readonly startedAt: string;
-}
-
-export interface CanonicalEnvironmentPolicy {
-  readonly kind: "bound_configuration";
-  readonly environment: CanonicalEnvironmentIdentity;
 }
 
 export interface SandboxPolicyEnvelope {
@@ -41,45 +31,24 @@ export interface SandboxPolicyEnvelope {
   readonly authoritySnapshotId: string;
   readonly enforcement: SandboxEnforcement;
   readonly defaultDisposition: "deny";
-  readonly authorizedEffects: ActionEffectSet;
-  readonly fileSystemPermissions: CanonicalEffectivePermissions["fileSystem"];
-  readonly processPermissions: CanonicalEffectivePermissions["process"];
-  readonly networkPermissions: CanonicalEffectivePermissions["network"];
-  readonly remoteToolPermissions: CanonicalEffectivePermissions["remoteTool"];
-  readonly environmentPolicy: CanonicalEnvironmentPolicy;
+  readonly effectFamilies: readonly string[];
   readonly resourceLimits: ActionExecutionLimits;
   readonly allowedSecretReferences: readonly string[];
 }
-
-export interface DispatchSandboxActionInput {
-  readonly plan: ActionDispatchPlan;
-  readonly preparedInvocation: PreparedActionInvocation;
-  readonly deadlineAt: string;
-  readonly interruption: InvocationInterruptionContext;
-}
-
-export interface PreparedSandboxDispatch {
-  readonly attempt: SandboxAttempt;
-}
-
-export type SandboxDispatchPreparationResult =
-  | { readonly status: "ready"; readonly prepared: PreparedSandboxDispatch }
-  | { readonly status: "interrupted"; readonly interruption: InvocationInterruptionRef }
-  | { readonly status: "failed"; readonly failure: ActionExecutionFailure };
 
 export interface SandboxExecutionRequest {
   readonly attempt: SandboxAttempt;
   readonly policy: SandboxPolicyEnvelope;
   readonly executor: ActionExecutorDescriptor;
+  readonly actionRegistrationFingerprint: string;
   readonly invocation: PreparedActionInvocation;
   readonly deadlineAt: string;
+  readonly interruption: InvocationInterruptionContext;
 }
 
 export interface SandboxCancellationRequest {
-  readonly attemptId: string;
-  readonly runId: string;
-  readonly actionId: string;
-  readonly interruption: InvocationInterruptionRef;
+  readonly attempt: ActionAttemptRef;
+  readonly cancellationId: string;
 }
 
 export type SandboxCancellationResult =
@@ -92,40 +61,23 @@ export interface SandboxProviderDescriptor {
   readonly version: string;
   readonly kind: SandboxProviderKind;
   readonly supportedPolicyVersions: readonly number[];
-  readonly supportedEffectKinds: readonly CapabilityEffectKind[];
+  readonly supportedEffectFamilies: readonly string[];
 }
 
 export interface SandboxEnforcementEvidence {
   readonly providerId: string;
   readonly providerVersion: string;
   readonly policyId: string;
-  readonly enforcement: SandboxProviderKind;
-  readonly enforcedEffectKinds: readonly CapabilityEffectKind[];
+  readonly enforcement: SandboxEnforcement;
+  readonly enforcedEffectFamilies: readonly string[];
   readonly settledAt: string;
 }
 
-export interface SandboxDenial {
-  readonly attemptId: string;
-  readonly runId: string;
-  readonly actionId: string;
-  readonly actionFingerprint: string;
-  readonly ordinal: 1 | 2;
-  readonly code: string;
-  readonly deniedEffect: CapabilityEffect;
-  readonly effectState: "none" | "unknown";
-  readonly message: string;
-}
-
-export type SandboxProviderResult =
+export type SandboxProviderResult<TPayload = unknown> =
   | {
-      readonly status: "executed";
-      readonly toolResult: ToolResult;
+      readonly status: "settled";
+      readonly outcome: PhysicalAttemptOutcome<TPayload>;
       readonly enforcementEvidence: SandboxEnforcementEvidence;
-    }
-  | { readonly status: "denied"; readonly denial: SandboxDenial }
-  | {
-      readonly status: "interrupted";
-      readonly interruption: InvocationInterruptionRef;
     }
   | {
       readonly status: "enforcement_failed";
@@ -134,25 +86,20 @@ export type SandboxProviderResult =
       readonly effectState: "none" | "unknown";
     };
 
-export interface SandboxProvider {
+export interface SandboxProvider<TPayload = unknown> {
   readonly kind: SandboxProviderKind;
   readonly descriptor: SandboxProviderDescriptor;
-  execute(input: SandboxExecutionRequest): Promise<SandboxProviderResult>;
+  execute(input: SandboxExecutionRequest): Promise<SandboxProviderResult<TPayload>>;
   cancel(input: SandboxCancellationRequest): Promise<SandboxCancellationResult>;
 }
 
-export type ActionExecutionResult =
+export type SandboxExecutionResult<TPayload = unknown> =
   | {
-      readonly status: "executed";
+      readonly status: "settled";
       readonly attempt: SandboxAttempt;
-      readonly toolResult: ToolResult;
+      readonly outcome: PhysicalAttemptOutcome<TPayload>;
       readonly isolation: "enforced" | "unisolated";
-      readonly enforcementEvidence: SandboxEnforcementEvidence | null;
-    }
-  | {
-      readonly status: "sandbox_denied";
-      readonly attempt: SandboxAttempt;
-      readonly denial: SandboxDenial;
+      readonly enforcementEvidence: SandboxEnforcementEvidence;
     }
   | {
       readonly status: "sandbox_unavailable";
@@ -160,20 +107,9 @@ export type ActionExecutionResult =
       readonly code: string;
       readonly stage: "capability_check" | "setup" | "dispatch" | "settlement";
       readonly effectState: "none" | "unknown";
-    }
-  | {
-      readonly status: "interrupted";
-      readonly attempt: SandboxAttempt | null;
-      readonly interruption: InvocationInterruptionRef;
-    }
-  | {
-      readonly status: "failed";
-      readonly attempt: SandboxAttempt | null;
-      readonly effectState: "none" | "unknown";
-      readonly failure: ActionExecutionFailure;
     };
 
-export interface SandboxExecutionGateway {
-  prepare(input: DispatchSandboxActionInput): Promise<SandboxDispatchPreparationResult>;
-  execute(prepared: PreparedSandboxDispatch): Promise<ActionExecutionResult>;
+export interface SandboxExecutionGateway<TPayload = unknown> {
+  execute(request: SandboxExecutionRequest): Promise<SandboxExecutionResult<TPayload>>;
+  cancel(input: SandboxCancellationRequest): Promise<SandboxCancellationResult>;
 }

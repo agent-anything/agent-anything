@@ -1,252 +1,60 @@
-
-import type { Action } from "@agent-anything/agent-core/action";
-import type { ControllerModelItem } from "../controller/Controller.js";
+import type { AgentRevisionRef } from "@agent-anything/agent-core/agent";
+import type { ControllerTurnRef } from "@agent-anything/agent-core/control";
+import type { RunActionEnvelope } from "@agent-anything/agent-core/run-action";
+import type { RunItemEnvelope } from "@agent-anything/agent-core/run-item";
+import type { InteractionRequestRef } from "@agent-anything/interaction/protocol";
 import type { PlanProjection } from "../plan/index.js";
-import type { RunObservation } from "./RunObservation.js";
+import type { ControllerModelItem } from "../controller/Controller.js";
+import type { PendingRunSubject } from "./PendingRunSubject.js";
 import type { RunCancellationSummary } from "./RunCancellation.js";
 import type { RunFailureCause } from "./RunFailure.js";
-import type { RunBlockedCode, RunFailureCode } from "./RunStatus.js";
-import type { ApprovalsReviewer } from "@agent-anything/permission";
-import type {
-  ApprovalRecordSummary,
-  ApprovalRequestSummary,
-} from "./ApprovalSummary.js";
-import type {
-  RetryAttemptFinishedEvent,
-  RetryAttemptStartedEvent,
-  RetryCancelledEvent,
-  RetryExhaustedEvent,
-  RetryFallbackSelectedEvent,
-  RetryScheduledEvent,
-} from "../retry/RetryEvent.js";
+import type { RunObservation } from "./RunObservation.js";
+import type { RunBlockedCode, RunFailureCode, RunResultStatus } from "./RunStatus.js";
 
-export interface RunItemBase {
-  readonly id: string;
-  readonly runId: string;
-  readonly sequence: number;
-  readonly createdAt: string;
-  readonly metadata: Readonly<Record<string, unknown>>;
-}
+export type RuntimeRunActionSubject =
+  | { readonly kind: "state_transition"; readonly transition: "plan_update" | "handoff" }
+  | { readonly kind: "operation"; readonly invocationId: string | null; readonly requestOrigin: "controller_protocol" | "tool_request" | "composite" | "descendant" }
+  | { readonly kind: "interaction"; readonly request: InteractionRequestRef | null };
 
-export interface ModelOutputRunItem extends RunItemBase {
-  readonly kind: "model_output";
-  readonly modelItem: ControllerModelItem;
-}
+export type RuntimeRunAction = RunActionEnvelope<RuntimeRunActionSubject>;
 
-export interface ActionRunItem extends RunItemBase {
-  readonly kind: "action";
-  readonly action: Action;
-}
+export type RunItemPayload<TOutput = unknown> =
+  | {
+      readonly kind: "controller_turn";
+      readonly turn: ControllerTurnRef;
+      readonly status: "decided" | "failed" | "interrupted";
+      readonly decisionKind: "advance" | "propose_completion" | "propose_stop" | null;
+      readonly modelItems: readonly ControllerModelItem[];
+      readonly failure: RunFailureCause | null;
+    }
+  | { readonly kind: "run_action"; readonly action: RuntimeRunAction }
+  | { readonly kind: "observation"; readonly observation: RunObservation }
+  | {
+      readonly kind: "state_transition";
+      readonly transition: "plan";
+      readonly previousRevision: number | null;
+      readonly plan: PlanProjection;
+    }
+  | {
+      readonly kind: "state_transition";
+      readonly transition: "active_agent";
+      readonly previousAgent: AgentRevisionRef;
+      readonly activeAgent: AgentRevisionRef;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: "pending_transition";
+      readonly transition: "opened" | "resolved" | "expired" | "cancelled" | "invalidated" | "failed";
+      readonly pending: PendingRunSubject;
+      readonly recordRef: string | null;
+    }
+  | { readonly kind: "cancellation_transition"; readonly transition: "requested" | "settled"; readonly cancellation: RunCancellationSummary }
+  | {
+      readonly kind: "terminal_transition";
+      readonly status: RunResultStatus;
+      readonly code: RunBlockedCode | RunFailureCode | "runtime_cancelled" | null;
+      readonly output: TOutput | null;
+      readonly failure: RunFailureCause | null;
+    };
 
-export interface ObservationRunItem extends RunItemBase {
-  readonly kind: "observation";
-  readonly observation: RunObservation;
-}
-
-export interface PlanCreatedRunItem extends RunItemBase {
-  readonly kind: "plan_created";
-  readonly plan: PlanProjection;
-  readonly explanation: string | null;
-}
-
-export interface PlanUpdatedRunItem extends RunItemBase {
-  readonly kind: "plan_updated";
-  readonly previousVersion: number;
-  readonly plan: PlanProjection;
-  readonly transition: "updated" | "reactivated";
-  readonly explanation: string | null;
-}
-
-export interface PlanCompletedRunItem extends RunItemBase {
-  readonly kind: "plan_completed";
-  readonly plan: PlanProjection;
-}
-
-export interface PlanAbandonedRunItem extends RunItemBase {
-  readonly kind: "plan_abandoned";
-  readonly plan: PlanProjection;
-  readonly terminalStatus: "succeeded" | "blocked" | "failed" | "cancelled";
-  readonly reasonCode: string | null;
-}
-
-export interface FinalOutputRunItem<TOutput = unknown> extends RunItemBase {
-  readonly kind: "final_output";
-  readonly output: TOutput;
-}
-
-export interface StopRunItem extends RunItemBase {
-  readonly kind: "stop";
-  readonly reason: string;
-}
-
-export interface RunCancellationRequestedRunItem extends RunItemBase {
-  readonly kind: "run_cancellation_requested";
-  readonly request: RunCancellationSummary;
-}
-
-export interface RunBlockedRunItem extends RunItemBase {
-  readonly kind: "run_blocked";
-  readonly code: RunBlockedCode;
-}
-
-export interface RunFailedRunItem extends RunItemBase {
-  readonly kind: "run_failed";
-  readonly code: RunFailureCode;
-  readonly failure: RunFailureCause;
-  readonly relatedFailures: readonly RunFailureCause[];
-}
-
-export interface RunCancelledRunItem extends RunItemBase {
-  readonly kind: "run_cancelled";
-  readonly cancellation: RunCancellationSummary;
-  readonly completedAt: string;
-}
-
-export interface ApprovalRequestedRunItem extends RunItemBase {
-  readonly kind: "approval_requested";
-  readonly request: ApprovalRequestSummary;
-  readonly pendingVersion: number;
-  readonly reviewer: ApprovalsReviewer;
-  readonly reviewOperationId: string;
-}
-
-export interface ApprovalResolvedRunItem extends RunItemBase {
-  readonly kind: "approval_resolved";
-  readonly record: ApprovalRecordSummary;
-}
-
-export interface ActionPreparedSummary {
-  readonly actionId: string;
-  readonly actionFingerprint: string;
-  readonly category: "file_system" | "process" | "network" | "remote_tool" | "computation";
-  readonly effectCount: number;
-  readonly targetAssertionCount: number;
-}
-
-export interface ActionPreparedRunItem extends RunItemBase {
-  readonly kind: "action_prepared";
-  readonly prepared: ActionPreparedSummary;
-}
-
-export interface ActionAssessedSummary {
-  readonly actionId: string;
-  readonly actionFingerprint: string;
-  readonly status:
-    | "authorized"
-    | "approval_required"
-    | "denied"
-    | "invalidated"
-    | "failed"
-    | "interrupted";
-  readonly owner: "policy" | "permission" | "tool" | null;
-  readonly code: string | null;
-}
-
-export interface ActionAssessedRunItem extends RunItemBase {
-  readonly kind: "action_assessed";
-  readonly assessment: ActionAssessedSummary;
-}
-
-export interface ActionInvalidatedSummary {
-  readonly actionId: string;
-  readonly actionFingerprint: string;
-  readonly phase: "assessment" | "revalidation" | "dispatch";
-  readonly owner: "permission" | "tool";
-  readonly code: string;
-}
-
-export interface ActionInvalidatedRunItem extends RunItemBase {
-  readonly kind: "action_invalidated";
-  readonly invalidation: ActionInvalidatedSummary;
-}
-
-export interface SandboxAttemptSummary {
-  readonly attemptId: string;
-  readonly actionId: string;
-  readonly actionFingerprint: string;
-  readonly ordinal: 1 | 2;
-  readonly enforcement: "managed" | "external" | "disabled";
-  readonly policyId: string;
-  readonly authoritySnapshotId: string;
-  readonly dispatchPlanFingerprint: string;
-  readonly startedAt: string;
-}
-
-export interface SandboxAttemptStartedRunItem extends RunItemBase {
-  readonly kind: "sandbox_attempt_started";
-  readonly attempt: SandboxAttemptSummary;
-}
-
-export interface SandboxAttemptResolutionSummary {
-  readonly attemptId: string;
-  readonly actionId: string;
-  readonly ordinal: 1 | 2;
-  readonly enforcement: "managed" | "external" | "disabled";
-  readonly outcome:
-    | "executed"
-    | "sandbox_denied"
-    | "sandbox_unavailable"
-    | "interrupted"
-    | "failed";
-  readonly code: string | null;
-  readonly effectState: "none" | "unknown" | null;
-  readonly settledAt: string;
-}
-
-export interface SandboxAttemptResolvedRunItem extends RunItemBase {
-  readonly kind: "sandbox_attempt_resolved";
-  readonly resolution: SandboxAttemptResolutionSummary;
-}
-
-export interface SandboxEscalationProposedRunItem extends RunItemBase {
-  readonly kind: "sandbox_escalation_proposed";
-  readonly previousAttemptId: string;
-  readonly actionId: string;
-  readonly previousActionFingerprint: string;
-  readonly nextActionFingerprint: string;
-  readonly deniedEffectKind: "file_system" | "network";
-}
-
-type RetryEventRunItem<TEvent extends { readonly type: string }> = RunItemBase & {
-  readonly kind: TEvent["type"];
-  readonly retry: TEvent;
-};
-
-export type RetryAttemptStartedRunItem = RetryEventRunItem<RetryAttemptStartedEvent>;
-export type RetryAttemptFinishedRunItem = RetryEventRunItem<RetryAttemptFinishedEvent>;
-export type RetryScheduledRunItem = RetryEventRunItem<RetryScheduledEvent>;
-export type RetryFallbackSelectedRunItem = RetryEventRunItem<RetryFallbackSelectedEvent>;
-export type RetryExhaustedRunItem = RetryEventRunItem<RetryExhaustedEvent>;
-export type RetryCancelledRunItem = RetryEventRunItem<RetryCancelledEvent>;
-
-export type RetryRunItem =
-  | RetryAttemptStartedRunItem
-  | RetryAttemptFinishedRunItem
-  | RetryScheduledRunItem
-  | RetryFallbackSelectedRunItem
-  | RetryExhaustedRunItem
-  | RetryCancelledRunItem;
-
-export type RunItem<TOutput = unknown> =
-  | ModelOutputRunItem
-  | ActionRunItem
-  | ObservationRunItem
-  | PlanCreatedRunItem
-  | PlanUpdatedRunItem
-  | PlanCompletedRunItem
-  | PlanAbandonedRunItem
-  | FinalOutputRunItem<TOutput>
-  | StopRunItem
-  | RunCancellationRequestedRunItem
-  | RunBlockedRunItem
-  | RunFailedRunItem
-  | RunCancelledRunItem
-  | ApprovalRequestedRunItem
-  | ApprovalResolvedRunItem
-  | ActionPreparedRunItem
-  | ActionAssessedRunItem
-  | ActionInvalidatedRunItem
-  | SandboxAttemptStartedRunItem
-  | SandboxAttemptResolvedRunItem
-  | SandboxEscalationProposedRunItem
-  | RetryRunItem;
+export type RunItem<TOutput = unknown> = RunItemEnvelope<RunItemPayload<TOutput>>;

@@ -1,0 +1,46 @@
+{
+  "name": "@agent-anything/canonical-action",
+  "version": "0.0.0",
+  "description": "Dependency-safe canonical Action subject, assessment, settlement, and registration contracts.",
+  "type": "module",
+  "exports": {
+    "./subject": {
+      "types": "./src/subject/index.ts",
+      "import": "./dist/subject/index.js"
+    },
+    "./assessment": {
+      "types": "./src/assessment/index.ts",
+      "import": "./dist/assessment/index.js"
+    },
+    "./settlement": {
+      "types": "./src/settlement/index.ts",
+      "import": "./dist/settlement/index.js"
+    },
+    "./registration": {
+      "types": "./src/registration/index.ts",
+      "import": "./dist/registration/index.js"
+    },
+    "./lifecycle": {
+      "types": "./src/lifecycle/index.ts",
+      "import": "./dist/lifecycle/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "kind": "harness",
+      "component": "safety.canonical-action"
+    }
+  },
+  "license": "Apache-2.0",
+  "private": true,
+  "dependencies": {
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/operation-catalog": "workspace:*"
+  }
+}

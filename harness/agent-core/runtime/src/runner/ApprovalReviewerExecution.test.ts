@@ -8,7 +8,7 @@ import { createRunCancellationController } from "../run/index.js";
 import { executeApprovalReviewer } from "./ApprovalReviewerExecution.js";
 
 describe("Approval reviewer execution", () => {
-  it("treats user waiting as one pending operation rather than a Retry attempt", async () => {
+  it("runs an automatic reviewer through the retry operation", async () => {
     const events = vi.fn();
     const reviewer: ApprovalReviewerPort = {
       async review(input) {
@@ -29,17 +29,17 @@ describe("Approval reviewer execution", () => {
     };
     const result = await executeApprovalReviewer({
       reviewer: {
-        bindingId: "binding.user",
-        kind: "user",
+        bindingId: "binding.auto",
+        kind: "auto_review",
         reviewer,
         descriptor: {
-          id: "reviewer.user",
-          kind: "user",
-          displayName: "User",
+          id: "reviewer.auto",
+          kind: "auto_review",
+          displayName: "Automatic reviewer",
           source: "test",
           metadata: {},
         },
-        reviewTimeoutMs: null,
+        reviewTimeoutMs: 60_000,
       },
       review: reviewInput(),
       operationId: "operation.review.1",
@@ -66,7 +66,11 @@ describe("Approval reviewer execution", () => {
     });
 
     expect(result.kind).toBe("decided");
-    expect(events).not.toHaveBeenCalled();
+    expect(events).toHaveBeenCalledTimes(2);
+    expect(events.mock.calls.map(([event]) => event.type)).toEqual([
+      "retry_attempt_started",
+      "retry_attempt_finished",
+    ]);
   });
 });
 

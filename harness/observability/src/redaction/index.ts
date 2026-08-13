@@ -1,5 +1,5 @@
 export { defaultRedactionRules } from "./defaultRules.js";
-export { Redactor, type RedactInput, type RedactorInput } from "./Redactor.js";
+export { Redactor, type DataSensitivity, type RedactInput, type RedactorInput } from "./Redactor.js";
 export type {
   Redaction,
   RedactionResult,

@@ -1,37 +1,37 @@
-import type { Action } from "@agent-anything/agent-core/action";
+import type { RunActionEnvelope } from "@agent-anything/agent-core/run-action";
 import type { RunInput } from "@agent-anything/agent-core/input";
-import type { ActionRunItem, RunResult } from "./index.js";
+import type { RunItem, RunResult } from "./index.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as runApi from "./index.js";
 import { createSucceededRunResult } from "./index.js";
 
 describe("Agent Core Run public API", () => {
   it("exposes Action and Run contracts without the Runner implementation", () => {
-    const action: Action = {
-      id: "action-1",
-      runId: "run-1",
-      sequence: 1,
-      kind: "tool",
-      name: "codeAgent.readFile",
-      input: { path: "README.md" },
+    const action: RunActionEnvelope<{ readonly kind: "tool"; readonly name: string }> = {
+      ref: { run: { id: "run-1" }, id: "action-1", sequence: 1 },
       provenance: {
-        modelItemId: "model-item-1",
-        controllerIteration: 1,
+        kind: "controller",
+        turn: { run: { id: "run-1" }, id: "turn-1", sequence: 1 },
+        candidateIndex: 0,
       },
+      subject: { kind: "tool", name: "codeAgent.readFile" },
+      basis: { runRevision: 0, activeAgentId: "agent-1", controllerProjectionRevision: null },
+      materializedAt: "2026-01-01T00:00:00.000Z",
     };
-    const item: ActionRunItem = {
-      id: "item-1",
-      runId: "run-1",
-      sequence: 1,
+    const item: RunItem = {
+      ref: { run: { id: "run-1" }, id: "item-1", sequence: 1 },
+      committedInRevision: 1,
       createdAt: "2026-01-01T00:00:00.000Z",
-      metadata: {},
-      kind: "action",
-      action,
+      payload: { kind: "run_action", action },
     };
     const result = createSucceededRunResult(
       {
         runId: "run-1",
         taskId: "task-1",
+        startingAgent: { id: "agent-1", revision: "1" },
+        finalActiveAgent: { id: "agent-1", revision: "1" },
+        startedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:01.000Z",
         items: [item],
       },
       { summary: "done" },

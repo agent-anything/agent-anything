@@ -3,5 +3,6 @@ export type {
   AgentInstructions,
   AgentOutputContract,
   AgentOutputValidation,
+  AgentRevisionRef,
 } from "./Agent.js";
-export { snapshotAgent } from "./Agent.js";
+export { snapshotAgent, toAgentRevisionRef } from "./Agent.js";

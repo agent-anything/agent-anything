@@ -1,0 +1,38 @@
+{
+  "name": "@agent-anything/operation-composition",
+  "version": "0.0.0",
+  "description": "Bounded trusted Operation graphs and invocation-local composite execution for Agent Harness.",
+  "type": "module",
+  "exports": {
+    "./definition": {
+      "types": "./src/definition/index.ts",
+      "import": "./dist/definition/index.js"
+    },
+    "./execution": {
+      "types": "./src/execution/index.ts",
+      "import": "./dist/execution/index.js"
+    },
+    "./result": {
+      "types": "./src/result/index.ts",
+      "import": "./dist/result/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "kind": "harness",
+      "component": "operation-composition"
+    }
+  },
+  "license": "Apache-2.0",
+  "private": true,
+  "dependencies": {
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/operation-catalog": "workspace:*"
+  }
+}

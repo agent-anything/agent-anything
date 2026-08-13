@@ -1,14 +1,16 @@
 import {
-  createActionRegistrationSnapshot,
   createToolActionBindingSnapshot,
   type ActionAdapterImplementation,
-  type ActionRegistrationSnapshot,
   type ToolActionBindingSnapshot,
 } from "@agent-anything/action-execution/registration";
 import {
+  createActionRegistrationSnapshot,
+  type ActionRegistrationSnapshot,
+} from "@agent-anything/canonical-action/registration";
+import {
   type ActionExecutor,
 } from "@agent-anything/action-execution/execution";
-import type { RunWorkspace } from "@agent-anything/agent-core/run";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import {
   CODE_AGENT_LIST_FILES_ACTION,
   CODE_AGENT_READ_FILE_ACTION,
@@ -23,10 +25,8 @@ import {
   createCodeAgentCommandActionCapability,
   type CodeAgentCommandLimits,
 } from "@agent-anything/helarc-code-agent/command";
-import {
-  createToolRegistrationSnapshot,
-  createToolSelectionSnapshot,
-} from "@agent-anything/tools";
+import { createToolRegistrationSnapshot } from "@agent-anything/tools/registration";
+import { createToolSelectionSnapshot } from "@agent-anything/tools/selection";
 
 const READ_ONLY_ACTIONS = new Set([
   CODE_AGENT_LIST_FILES_ACTION,
@@ -52,7 +52,7 @@ export interface HelarcActionComposition {
 }
 
 export async function createHelarcActionComposition(
-  workspace: RunWorkspace,
+  workspace: WorkspaceSelection,
   input: CreateHelarcActionCompositionInput,
 ): Promise<HelarcActionComposition> {
   const file = createCodeAgentFileActionCapability({

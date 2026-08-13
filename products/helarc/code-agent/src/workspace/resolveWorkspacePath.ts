@@ -1,5 +1,6 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { RunWorkspace, WorkspaceContext } from "@agent-anything/agent-core/run";
+import type { WorkspaceIdentity } from "@agent-anything/workspace/identity";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type {
   RejectedWorkspacePath,
   ResolveWorkspacePathInput,
@@ -94,7 +95,7 @@ export function resolveWorkspacePath(
 function selectWorkspace(
   input: ResolveWorkspacePathInput,
 ):
-  | { rootName: string; workspace: WorkspaceContext }
+  | { rootName: string; workspace: WorkspaceIdentity }
   | RejectedWorkspacePath {
   const { workspace: runWorkspace, requestedPath } = input;
 
@@ -138,8 +139,8 @@ function selectWorkspace(
 }
 
 function runWorkspaceEntries(
-  workspace: RunWorkspace,
-): readonly (readonly [string, WorkspaceContext])[] {
+  workspace: WorkspaceSelection,
+): readonly (readonly [string, WorkspaceIdentity])[] {
   return [
     [workspace.primary.id, workspace.primary] as const,
     ...workspace.additional.map(

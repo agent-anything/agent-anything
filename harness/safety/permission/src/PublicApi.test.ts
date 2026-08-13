@@ -22,11 +22,15 @@ describe("Permission public API", () => {
       "resolvePermissionWorkspaceRoots",
     ]);
     expect(Object.keys(approval).sort()).toEqual([
+      "APPROVAL_INTERACTION_PROTOCOL",
       "ApprovalContractError",
       "allowsActionApproval",
       "canonicalizeAdditionalPermissions",
+      "createApprovalInteractionPresentation",
+      "createApprovalInteractionProtocol",
       "createApprovalRequest",
       "projectApprovalReviewRequest",
+      "sealApprovalRequirement",
       "snapshotApprovalDecisionSubmission",
       "snapshotApprovalInterruption",
       "snapshotApprovalPayload",
@@ -39,6 +43,7 @@ describe("Permission public API", () => {
     ]);
     expect(Object.keys(authority).sort()).toEqual([
       "createActionApprovalCoverage",
+      "createActionPermissionAssessmentPort",
       "isActionApprovalCoverageApplicable",
       "isSessionAuthorityApplicable",
       "validateSessionAuthorityRecord",

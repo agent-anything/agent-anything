@@ -4,6 +4,7 @@ export type {
   ToolCatalogValidationCode,
   ToolDescriptor,
   ToolDescriptorInput,
+  ToolRetirement,
   ToolJsonObject,
   ToolJsonValue,
 } from "./ToolCatalog.js";

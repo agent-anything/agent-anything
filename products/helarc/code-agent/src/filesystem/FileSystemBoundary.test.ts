@@ -8,7 +8,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RunWorkspace } from "@agent-anything/agent-core/run";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   resolveExistingTarget,
@@ -83,7 +83,7 @@ async function createLinkedFixture() {
   };
 }
 
-function runWorkspace(rootRef: string): RunWorkspace {
+function runWorkspace(rootRef: string): WorkspaceSelection {
   return {
     primary: {
       id: "workspace-primary",

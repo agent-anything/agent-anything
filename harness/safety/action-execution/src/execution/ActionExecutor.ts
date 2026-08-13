@@ -1,15 +1,12 @@
-import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/run";
-import type { ToolResult } from "@agent-anything/tools";
-import type { ActionExecutorDescriptor } from "../registration/ActionRegistration.js";
 import type {
-  ActionExecutionLimits,
-  SandboxAttempt,
-} from "../sandbox/SandboxContracts.js";
-import type { PreparedActionInvocation } from "../canonical/PreparedActionInvocation.js";
+  InvocationInterruptionContext,
+} from "@agent-anything/agent-core/control";
+import type { ActionExecutorDescriptor } from "@agent-anything/canonical-action/registration";
+import type { ActionAttemptRef } from "@agent-anything/canonical-action/subject";
+import type { PreparedActionInvocation } from "@agent-anything/canonical-action/subject";
+import type { ActionExecutionLimits } from "../sandbox/SandboxContracts.js";
 
-const actionExecutorDispatchPermitBrand: unique symbol = Symbol(
-  "ActionExecutorDispatchPermit",
-);
+const actionExecutorDispatchPermitBrand: unique symbol = Symbol("ActionExecutorDispatchPermit");
 const actionExecutorDispatchPermits = new WeakSet<object>();
 
 export interface ActionExecutorDispatchPermit {
@@ -22,7 +19,7 @@ export interface ResolvedActionSecret {
 }
 
 export interface ActionExecutorContext {
-  readonly attempt: SandboxAttempt;
+  readonly attempt: ActionAttemptRef;
   readonly interruption: InvocationInterruptionContext;
   readonly deadlineAt: string;
   readonly limits: ActionExecutionLimits;
@@ -30,41 +27,51 @@ export interface ActionExecutorContext {
   readonly dispatchPermit: ActionExecutorDispatchPermit;
 }
 
-export interface ActionExecutorFailure {
+export interface PhysicalEvidence {
   readonly code: string;
   readonly message: string;
-  readonly effectState: "none" | "unknown";
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
-export type ActionExecutorResult =
+export interface ExecutorFailure extends PhysicalEvidence {
+  readonly retryable: boolean;
+}
+
+export type PhysicalAttemptOutcome<TPayload = unknown> =
   | {
-      readonly status: "executed";
-      readonly toolResult: ToolResult;
+      readonly status: "completed";
+      readonly effectState: "none" | "settled";
+      readonly payload: TPayload;
     }
   | {
-      readonly status: "interrupted";
-      readonly interruption: InvocationInterruptionRef;
+      readonly status: "denied";
+      readonly effectState: "none";
+      readonly evidence: PhysicalEvidence;
+    }
+  | {
+      readonly status: "interrupted" | "timed_out";
+      readonly effectState: "none" | "settled" | "unknown";
+      readonly evidence: PhysicalEvidence;
     }
   | {
       readonly status: "failed";
-      readonly failure: ActionExecutorFailure;
+      readonly effectState: "none" | "settled" | "unknown";
+      readonly failure: ExecutorFailure;
     };
 
 export interface ActionExecutor<
   TInvocation extends PreparedActionInvocation = PreparedActionInvocation,
+  TPayload = unknown,
 > {
   readonly descriptor: ActionExecutorDescriptor;
-
+  validatePayload(candidate: unknown): candidate is TPayload;
   execute(
     invocation: TInvocation,
     context: ActionExecutorContext,
-  ): Promise<ActionExecutorResult>;
+  ): Promise<PhysicalAttemptOutcome<TPayload>>;
 }
 
-export function assertActionExecutorDispatchContext(
-  context: ActionExecutorContext,
-): void {
+export function assertActionExecutorDispatchContext(context: ActionExecutorContext): void {
   if (
     context === null ||
     typeof context !== "object" ||
@@ -73,17 +80,12 @@ export function assertActionExecutorDispatchContext(
     context.dispatchPermit[actionExecutorDispatchPermitBrand] !== true ||
     !actionExecutorDispatchPermits.has(context.dispatchPermit)
   ) {
-    throw new TypeError(
-      "ActionExecutor requires a gateway-created dispatch context.",
-    );
+    throw new TypeError("ActionExecutor requires a gateway-created dispatch context.");
   }
 }
 
-// Internal to the package. The action-execution public entry point does not export it.
 export function createActionExecutorDispatchPermit(): ActionExecutorDispatchPermit {
-  const permit = Object.freeze({
-    [actionExecutorDispatchPermitBrand]: true as const,
-  });
+  const permit = Object.freeze({ [actionExecutorDispatchPermitBrand]: true as const });
   actionExecutorDispatchPermits.add(permit);
   return permit;
 }

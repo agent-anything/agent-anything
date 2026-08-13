@@ -2,8 +2,8 @@
 import type {
   ToolAnnotations,
   ToolJsonObject,
-  ToolSchemaIdentity,
-} from "@agent-anything/tools";
+} from "@agent-anything/tools/catalog";
+import type { ToolSchemaIdentity } from "@agent-anything/tools/identity";
 import type { McpToolHeaderBinding } from "../protocol/McpHeaders.js";
 import type {
   McpJsonObject,

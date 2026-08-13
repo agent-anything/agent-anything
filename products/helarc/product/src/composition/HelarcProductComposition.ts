@@ -5,7 +5,7 @@ import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { Agent } from "@agent-anything/agent-core/agent";
 import type { AgentTask } from "@agent-anything/agent-core/task";
-import type { RunWorkspace } from "@agent-anything/agent-core/run";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { RetryClock } from "@agent-anything/agent-runtime/retry";
 import type {
   SandboxEnforcement,
@@ -65,7 +65,7 @@ export type HelarcToolMode = "read-only" | "shell-enabled";
 export interface CreateHelarcProductCompositionInput {
   readonly runId: string;
   readonly task: AgentTask<HelarcTaskInput>;
-  readonly workspace: RunWorkspace;
+  readonly workspace: WorkspaceSelection;
   readonly provider: Provider;
   readonly toolMode: HelarcToolMode;
   readonly commandLimits?: Partial<CodeAgentCommandLimits>;

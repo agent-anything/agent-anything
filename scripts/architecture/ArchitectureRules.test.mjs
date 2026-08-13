@@ -44,6 +44,48 @@ test("an unreviewed package owner fails closed", () => {
   assert.equal(violations[0]?.rule, "dependency_policy_missing");
 });
 
+test("Phase27 lower Contract dependencies are exact and acyclic", () => {
+  assert.deepEqual(expectedProductionDependencies("@agent-anything/workspace"), []);
+  assert.deepEqual(
+    expectedProductionDependencies("@agent-anything/agent-core"),
+    ["@agent-anything/workspace"],
+  );
+  assert.deepEqual(
+    expectedProductionDependencies("@agent-anything/operation-catalog"),
+    ["@agent-anything/agent-core"],
+  );
+  assert.deepEqual(
+    expectedProductionDependencies("@agent-anything/canonical-action"),
+    [
+      "@agent-anything/agent-core",
+      "@agent-anything/operation-catalog",
+    ],
+  );
+  assert.deepEqual(
+    expectedProductionDependencies("@agent-anything/interaction"),
+    ["@agent-anything/agent-core", "@agent-anything/operation-catalog"],
+  );
+});
+
+test("Phase27 execution dependencies are exact and owner-directed", () => {
+  assert.deepEqual(
+    expectedProductionDependencies("@agent-anything/tools"),
+    ["@agent-anything/agent-core", "@agent-anything/operation-catalog"],
+  );
+  assert.deepEqual(
+    expectedProductionDependencies("@agent-anything/context"),
+    ["@agent-anything/agent-core"],
+  );
+  assert.deepEqual(
+    expectedProductionDependencies("@agent-anything/observability"),
+    ["@agent-anything/agent-core"],
+  );
+  assert.deepEqual(
+    expectedProductionDependencies("@agent-anything/operation-composition"),
+    ["@agent-anything/agent-core", "@agent-anything/operation-catalog"],
+  );
+});
+
 test("Test Support is accepted only from test sources", () => {
   const owner = { kind: "harness", name: "@agent-anything/agent-runtime" };
   const imported = {

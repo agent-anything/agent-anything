@@ -1,4 +1,5 @@
-import type { RunWorkspace, WorkspaceTrustState } from "@agent-anything/agent-core/run";
+import type { WorkspaceTrustState } from "@agent-anything/workspace/identity";
+import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 
 export type WorkspacePathErrorCode =
   | "workspace_missing"
@@ -38,7 +39,7 @@ export type WorkspacePathResolution =
   | RejectedWorkspacePath;
 
 export interface ResolveWorkspacePathInput {
-  workspace: RunWorkspace | null;
+  workspace: WorkspaceSelection | null;
   rootName?: string;
   requestedPath: string;
 }
