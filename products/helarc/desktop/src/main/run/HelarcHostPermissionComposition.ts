@@ -3,9 +3,6 @@ import {
   resolveHostRunPermissionConfig,
 } from "@agent-anything/host/composition";
 import type {
-  UserApprovalReviewBridge,
-} from "@agent-anything/host/authority";
-import type {
   ManagedPermissionConstraints,
   PersistentPolicyAmendmentPort,
 } from "@agent-anything/governance";
@@ -29,7 +26,6 @@ export interface CreateHelarcHostPermissionCompositionInput {
   readonly workspaceRoots: readonly { readonly rootId: string; readonly path: string }[];
   readonly platform: "win32" | "posix";
   readonly enforcement: PermissionEnforcement;
-  readonly userApprovalBridge: UserApprovalReviewBridge | null;
   readonly automaticReviewer: (ApprovalReviewerBinding & {
     readonly kind: "auto_review";
   }) | null;
@@ -39,7 +35,6 @@ export interface CreateHelarcHostPermissionCompositionInput {
 
 export interface HelarcHostPermissionComposition {
   readonly permissions: ResolvedRunPermissionConfig;
-  readonly userApprovalBridge: UserApprovalReviewBridge | null;
 }
 
 export async function createHelarcHostPermissionComposition(
@@ -102,12 +97,7 @@ export async function createHelarcHostPermissionComposition(
     interruption: createPreparationInterruptionContext(),
   });
 
-  return Object.freeze({
-    permissions,
-    userApprovalBridge: preset.reviewerKind === "user"
-      ? input.userApprovalBridge
-      : null,
-  });
+  return Object.freeze({ permissions });
 }
 
 function resolveReviewer(
@@ -115,33 +105,31 @@ function resolveReviewer(
   expected: "user" | "auto_review" | null,
 ): ApprovalReviewerBinding | null {
   if (expected === "user") {
-    if (input.userApprovalBridge === null) {
-      throw new TypeError("Ask for approval requires an explicit user approval bridge.");
-    }
     if (input.automaticReviewer !== null) {
       throw new TypeError("Ask for approval must not include an automatic reviewer.");
     }
     return Object.freeze({
       bindingId: `${input.productRunId}:reviewer:user`,
       kind: "user",
-      reviewer: input.userApprovalBridge,
-      descriptor: input.userApprovalBridge.descriptor,
-      reviewTimeoutMs: null,
+      descriptor: Object.freeze({
+        id: "helarc-desktop-user-reviewer",
+        kind: "user" as const,
+        displayName: "Helarc user",
+        source: "helarc-desktop",
+        metadata: Object.freeze({ product: "helarc" }),
+      }),
     });
   }
   if (expected === "auto_review") {
     if (input.automaticReviewer === null) {
       throw new TypeError("Approve for me requires an explicit automatic reviewer.");
     }
-    if (input.userApprovalBridge !== null) {
-      throw new TypeError("Approve for me must not include a user approval bridge.");
-    }
     if (input.automaticReviewer.kind !== "auto_review") {
       throw new TypeError("Approve for me reviewer kind must be auto_review.");
     }
     return input.automaticReviewer;
   }
-  if (input.userApprovalBridge !== null || input.automaticReviewer !== null) {
+  if (input.automaticReviewer !== null) {
     throw new TypeError("Full access must not include an approval reviewer.");
   }
   return null;

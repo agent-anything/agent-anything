@@ -165,72 +165,77 @@ export type HelarcApprovalReviewRequestSnapshot =
       readonly actionSummary: string;
     }>;
 
-export interface HelarcApprovalReviewSnapshot {
-  readonly request: HelarcApprovalReviewRequestSnapshot;
-  readonly pendingVersion: number;
+export interface HelarcInteractionProtocolRefSnapshot {
+  readonly owner: string;
+  readonly kind: string;
+  readonly revision: string;
 }
 
-export interface HelarcPendingApprovalSnapshot {
-  readonly phase: "reviewing" | "submitted_for_resolution";
-  readonly review: HelarcApprovalReviewSnapshot | null;
+export interface HelarcInteractionSubjectRefSnapshot {
+  readonly owner: string;
+  readonly kind: string;
+  readonly id: string;
+  readonly revision: string;
 }
 
-export interface HelarcSubmitApprovalDecisionInput {
-  readonly commandId: string;
-  readonly submissionId: string;
-  readonly runId: string;
-  readonly requestId: string;
-  readonly pendingVersion: number;
-  readonly optionId: string;
-  readonly grantedPermissions: HelarcAdditionalPermissionsSnapshot | null;
-  readonly reason: string | null;
+export interface HelarcInteractionRequestRefSnapshot {
+  readonly id: string;
+  readonly protocol: HelarcInteractionProtocolRefSnapshot;
+  readonly requestVersion: number;
+  readonly subject: HelarcInteractionSubjectRefSnapshot;
 }
 
-export type HelarcApprovalSubmissionReceipt =
-  | {
-      readonly status: "accepted_for_resolution";
-      readonly submissionId: string;
-      readonly runId: string;
-      readonly requestId: string;
-      readonly pendingVersion: number;
-    }
-  | {
-      readonly status: "rejected";
-      readonly submissionId: string;
-      readonly code:
-        | "approval_not_pending"
-        | "approval_version_mismatch"
-        | "approval_already_resolved"
-        | "approval_submission_invalid";
-    };
-
-export interface HelarcPendingPatchReviewSnapshot {
+export interface HelarcPatchReviewPresentationSnapshot {
   readonly runId: string;
   readonly proposalId: string;
   readonly proposalRevision: number;
   readonly reviewId: string;
-  readonly pendingVersion: number;
-  readonly phase: "reviewing" | "submitted_for_resolution";
+  readonly rootName: string;
+  readonly workspaceId: string;
   readonly path: string;
   readonly operation: "create" | "update" | "delete";
   readonly summary: string;
+  readonly rationale: string;
   readonly originalContent: string | null;
   readonly proposedContent: string | null;
+  readonly originalContentBytes: number | null;
+  readonly proposedContentBytes: number | null;
 }
+
+interface HelarcPendingInteractionSnapshotBase<TFamily extends string> {
+  readonly family: TFamily;
+  readonly request: HelarcInteractionRequestRefSnapshot;
+  readonly phase: "pending" | "submitted_for_resolution";
+  readonly disclosureClass: "public" | "internal" | "sensitive";
+  readonly expiresAt: string | null;
+  readonly blockingScope: "none" | "branch" | "run";
+}
+
+export type HelarcPendingInteractionSnapshot =
+  | (HelarcPendingInteractionSnapshotBase<"approval"> & {
+      readonly presentation: HelarcApprovalReviewRequestSnapshot;
+    })
+  | (HelarcPendingInteractionSnapshotBase<"patch_review"> & {
+      readonly presentation: HelarcPatchReviewPresentationSnapshot;
+    })
+  | (HelarcPendingInteractionSnapshotBase<"unsupported"> & {
+      readonly presentation: null;
+    });
 
 export type HelarcProductPhaseSnapshot =
   | { readonly kind: "none" }
   | {
-      readonly kind: "waiting_for_patch_review";
-      readonly review: HelarcPendingPatchReviewSnapshot;
-    }
-  | {
-      readonly kind: "patch_action_submitted";
-      readonly runId: string;
+      readonly kind: "patch_review_requested";
       readonly proposalId: string;
       readonly proposalRevision: number;
       readonly reviewId: string;
-      readonly pendingVersion: number;
+    }
+  | {
+      readonly kind: "patch_action_submitted";
+      readonly proposalId: string;
+      readonly proposalRevision: number;
+      readonly reviewId: string;
+      readonly requestVersion: number;
     };
 
 export interface HelarcRunActivitySnapshot {
@@ -247,7 +252,10 @@ export interface HelarcRunProductResultSnapshot {
   readonly status: "completed" | "rejected" | "failed" | "blocked" | "cancelled";
   readonly output: {
     readonly taskId: string;
-    readonly workspaceId: string | null;
+    readonly workspace: {
+      readonly primaryId: string | null;
+      readonly additionalIds: readonly string[];
+    };
     readonly agentSummary: string | null;
     readonly runtimeStatus: "succeeded" | "blocked" | "failed" | "cancelled";
     readonly patchStatus: "proposed" | "applied" | "rejected" | "failed" | null;
@@ -284,7 +292,8 @@ export interface HelarcRunSnapshot {
   readonly host: {
     readonly taskId: string;
     readonly startedAt: string;
-    readonly approval: HelarcPendingApprovalSnapshot | null;
+    readonly runRevision: number;
+    readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
     readonly terminal: {
       readonly status: "completed" | "blocked" | "failed" | "cancelled";
       readonly code: string | null;
@@ -405,21 +414,25 @@ export interface HelarcCancelRunInput {
   readonly reason: string | null;
 }
 
-export interface HelarcResolvePatchReviewInput {
-  commandId: string;
-  submissionId: string;
-  runId: string;
-  proposalId: string;
-  proposalRevision: number;
-  reviewId: string;
-  pendingVersion: number;
-  decision: "accepted" | "rejected" | "request_revision";
-  reason: string | null;
+export interface HelarcSubmitInteractionInput {
+  readonly commandId: string;
+  readonly runId: string;
+  readonly request: HelarcInteractionRequestRefSnapshot;
+  readonly submissionId: string;
+  readonly payload: unknown;
 }
 
-export type HelarcResolvePatchReviewResult =
-  | { ok: true; snapshot: HelarcMainSnapshot }
-  | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
+export interface HelarcSteerRunInput {
+  readonly commandId: string;
+  readonly runId: string;
+  readonly expectedRunRevision: number;
+  readonly instruction: string;
+}
+
+export interface HelarcGetRunStatusInput {
+  readonly queryId: string;
+  readonly runId: string;
+}
 
 export interface HelarcOpenThreadInput {
   commandId: string;
@@ -455,7 +468,6 @@ export interface HelarcProductCommandResultMap {
   readonly "workspace.select": HelarcMainSnapshot;
   readonly "provider.save": HelarcMainSnapshot;
   readonly "run.start": HelarcStartRunResult;
-  readonly "patch_review.submit": HelarcResolvePatchReviewResult;
   readonly "thread.open": HelarcOpenThreadResult;
 }
 
@@ -508,7 +520,9 @@ export type HelarcRunCancellationReceipt =
       readonly cancellation: HelarcCancellationSummarySnapshot | null;
     };
 
-interface HelarcHostCommandReceiptBase<TKind extends "run.cancel" | "approval.submit"> {
+interface HelarcHostCommandReceiptBase<
+  TKind extends "run.cancel" | "run.steer" | "interaction.submit",
+> {
   readonly version: 1;
   readonly commandId: string;
   readonly runId: string;
@@ -521,17 +535,71 @@ export interface HelarcRunCancellationCommandReceipt
   readonly result: HelarcRunCancellationReceipt;
 }
 
-export interface HelarcApprovalSubmissionCommandReceipt
-  extends HelarcHostCommandReceiptBase<"approval.submit"> {
+export interface HelarcInteractionSubmissionCommandReceipt
+  extends HelarcHostCommandReceiptBase<"interaction.submit"> {
   readonly status: "handled";
-  readonly result: HelarcApprovalSubmissionReceipt;
+  readonly result:
+    | {
+        readonly status: "accepted_for_resolution" | "duplicate_identical";
+        readonly receipt: {
+          readonly receiptId: string;
+          readonly request: HelarcInteractionRequestRefSnapshot;
+          readonly submissionId: string;
+          readonly status: "accepted_for_resolution" | "duplicate_identical" | "rejected";
+          readonly recordedAt: string;
+        };
+      }
+    | {
+        readonly status: "rejected";
+      readonly code:
+          | "interaction_not_pending"
+          | "interaction_version_stale"
+          | "interaction_submission_conflict"
+          | "interaction_submission_invalid"
+          | "run_settled";
+        readonly receipt: {
+          readonly receiptId: string;
+          readonly request: HelarcInteractionRequestRefSnapshot;
+          readonly submissionId: string;
+          readonly status: "accepted_for_resolution" | "duplicate_identical" | "rejected";
+          readonly recordedAt: string;
+        } | null;
+      };
+}
+
+export interface HelarcRunSteeringCommandReceipt
+  extends HelarcHostCommandReceiptBase<"run.steer"> {
+  readonly status: "handled";
+  readonly result:
+    | {
+        readonly status: "accepted_for_application" | "duplicate_identical";
+        readonly command: {
+          readonly commandId: string;
+          readonly expectedRunRevision: number;
+          readonly acceptedRunRevision: number;
+          readonly instruction: string;
+          readonly submittedAt: string;
+        };
+      }
+    | {
+        readonly status: "rejected";
+        readonly code:
+          | "steering_invalid"
+          | "steering_command_conflict"
+          | "steering_revision_stale"
+          | "steering_queue_full"
+          | "run_cancelling"
+          | "run_settled";
+        readonly commandId: string;
+        readonly currentRunRevision: number;
+      };
 }
 
 export interface HelarcHostCommandRejectedReceipt {
   readonly version: 1;
   readonly commandId: string;
   readonly runId: string;
-  readonly kind: "run.cancel" | "approval.submit" | null;
+  readonly kind: "run.cancel" | "run.steer" | "interaction.submit" | null;
   readonly status: "rejected";
   readonly code: HelarcHostCommandRejectionCode;
 }
@@ -548,7 +616,8 @@ export type HelarcHostCommandRejectionCode =
 
 export type HelarcHostCommandReceipt =
   | HelarcRunCancellationCommandReceipt
-  | HelarcApprovalSubmissionCommandReceipt
+  | HelarcRunSteeringCommandReceipt
+  | HelarcInteractionSubmissionCommandReceipt
   | HelarcHostCommandRejectedReceipt;
 
 export interface HelarcHostCommandResponse {
@@ -556,8 +625,51 @@ export interface HelarcHostCommandResponse {
   readonly snapshot: HelarcMainSnapshot;
 }
 
+export interface HelarcRunStatusResponse {
+  readonly receipt:
+    | {
+        readonly version: 1;
+        readonly queryId: string;
+        readonly runId: string;
+        readonly kind: "run.status";
+        readonly status: "handled";
+        readonly run: HelarcHostRunStatusSnapshot;
+      }
+    | {
+        readonly version: 1;
+        readonly queryId: string;
+        readonly runId: string;
+        readonly kind: "run.status" | null;
+        readonly status: "rejected";
+        readonly code:
+          | "host_query_invalid"
+          | "host_query_version_unsupported"
+          | "host_query_run_not_found"
+          | "host_query_failed";
+      };
+  readonly snapshot: HelarcMainSnapshot;
+}
+
+export interface HelarcHostRunStatusSnapshot {
+  readonly runId: string;
+  readonly taskId: string;
+  readonly runRevision: number;
+  readonly status:
+    | "starting"
+    | "running"
+    | "waiting"
+    | "cancelling"
+    | "completed"
+    | "blocked"
+    | "failed"
+    | "cancelled";
+  readonly startedAt: string;
+  readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
+  readonly terminal: HelarcRunSnapshot["host"]["terminal"];
+}
+
 export interface HelarcDesktopApi {
-  readonly bridgeVersion: 6;
+  readonly bridgeVersion: 7;
   readonly productId: "helarc";
   chooseWorkspace(
     input: HelarcChooseWorkspaceInput,
@@ -573,12 +685,9 @@ export interface HelarcDesktopApi {
     input: HelarcStartRunInput,
   ): Promise<HelarcProductCommandReceipt<"run.start">>;
   cancelRun(input: HelarcCancelRunInput): Promise<HelarcHostCommandResponse>;
-  submitApprovalDecision(
-    input: HelarcSubmitApprovalDecisionInput,
-  ): Promise<HelarcHostCommandResponse>;
-  resolvePatchReview(
-    input: HelarcResolvePatchReviewInput,
-  ): Promise<HelarcProductCommandReceipt<"patch_review.submit">>;
+  steerRun(input: HelarcSteerRunInput): Promise<HelarcHostCommandResponse>;
+  submitInteraction(input: HelarcSubmitInteractionInput): Promise<HelarcHostCommandResponse>;
+  getRunStatus(input: HelarcGetRunStatusInput): Promise<HelarcRunStatusResponse>;
   openThread(
     input: HelarcOpenThreadInput,
   ): Promise<HelarcProductCommandReceipt<"thread.open">>;

@@ -118,7 +118,12 @@ const packageExportKeys = {
     "./sandbox",
     "./workspace",
   ],
-  "harness/integrations/remote": ["./action", "./tools"],
+  "harness/integrations/remote": ["./operation", "./transport"],
+  "harness/integrations/providers": [
+    "./http",
+    "./ollama",
+    "./openai-compatible",
+  ],
   "harness/integrations/mcp": [
     "./adapters",
     "./lifecycle",
@@ -493,6 +498,7 @@ const expectedValueExports = {
     "runFailureMessage",
     "runFailureMetadata",
     "snapshotResolvedRunPermissionConfig",
+    "snapshotRunSteeringInput",
     "toRunCancellationSummary",
   ],
   "@agent-anything/agent-runtime/runner": [
@@ -585,8 +591,11 @@ const expectedValueExports = {
     "HOST_COMMAND_RECEIPT_LIMIT",
     "HOST_COMMAND_VERSION",
     "HOST_INTERACTION_PAYLOAD_MAX_BYTES",
+    "HOST_QUERY_VERSION",
     "createHostCommandDispatcher",
+    "createHostRunStatusQueryHandler",
     "snapshotHostCommand",
+    "snapshotHostRunStatusQuery",
   ],
   "@agent-anything/host/authority": [
     "createInMemoryHostPolicyAmendmentStore",
@@ -691,21 +700,29 @@ const expectedValueExports = {
     "reduceHelarcRunProjection",
   ],
   "@agent-anything/helarc/composition": [
+    "HELARC_PATCH_REVIEW_PROTOCOL",
     "createHelarcActionComposition",
     "createHelarcProductComposition",
     "mapRuntimeEventToHelarcActivity",
     "projectHelarcProductResult",
+    "snapshotHelarcPatchReviewPresentation",
     "validateHelarcToolInput",
   ],
   "@agent-anything/helarc/review": [
+    "HELARC_PATCH_REVIEW_PROTOCOL",
     "HelarcPatchActionController",
     "PatchWorkflowError",
     "acceptPatch",
+    "createHelarcPatchReviewPresentation",
+    "createHelarcPatchReviewProtocol",
+    "createHelarcPatchReviewSubjectRef",
     "createPatchProposal",
     "defaultPatchWorkflowLimits",
     "materializePatchReview",
     "rejectPatch",
     "requestPatchRevision",
+    "snapshotHelarcPatchReviewPresentation",
+    "snapshotHelarcPatchReviewSubmission",
   ],
   "@agent-anything/helarc/observability": [
     "HelarcTracingController",
@@ -798,13 +815,19 @@ const expectedEvaluationValueExports = {
 };
 
 const expectedRemoteIntegrationValueExports = {
-  "@agent-anything/remote-integrations/action": ["createRemoteActionCapability"],
-  "@agent-anything/remote-integrations/tools": ["createRemoteToolActionCapability"],
+  "@agent-anything/remote-integrations/operation": ["createRemoteOperationContribution"],
+  "@agent-anything/remote-integrations/transport": [],
+};
+
+const expectedProviderIntegrationValueExports = {
+  "@agent-anything/provider-integrations/http": ["readProviderHttpFailureMetadata"],
+  "@agent-anything/provider-integrations/ollama": ["OllamaProvider"],
+  "@agent-anything/provider-integrations/openai-compatible": ["OpenAICompatibleProvider"],
 };
 
 const expectedMcpValueExports = {
   "@agent-anything/mcp/adapters": [
-    "createMcpActionCapability",
+    "createMcpOperationContribution",
   ],
   "@agent-anything/mcp/lifecycle": [
     "McpActivationError",
@@ -1082,9 +1105,18 @@ checkBuiltSurfaces(
   join(repoRoot, "products/helarc/desktop"),
 );
 checkBuiltSurfaces(
+  expectedProviderIntegrationValueExports,
+  [
+    "@agent-anything/provider-integrations",
+  ],
+  join(repoRoot, "harness/integrations/providers"),
+);
+checkBuiltSurfaces(
   expectedRemoteIntegrationValueExports,
   [
     "@agent-anything/remote-integrations",
+    "@agent-anything/remote-integrations/action",
+    "@agent-anything/remote-integrations/tools",
     "@agent-anything/extensions",
     "@agent-anything/extensions/action-registrations",
     "@agent-anything/extensions/enterprise-storage",

@@ -45,9 +45,9 @@ import {
   type InteractionRequestRef,
 } from "@agent-anything/interaction/protocol";
 import type {
-  HelarcPatchReviewBridge,
   HelarcProductPhase,
 } from "./HelarcPatchReview.js";
+import { createHelarcPatchReviewProtocol } from "./HelarcPatchReview.js";
 import {
   createHelarcActionComposition,
   type HelarcCommandActionContribution,
@@ -86,7 +86,6 @@ export interface CreateHelarcProductCompositionInput {
   readonly fileActions: HelarcFileActionContribution;
   readonly commandActions: HelarcCommandActionContribution | null;
   readonly permissionRequests?: HelarcPermissionRequestApplicationPort | null;
-  readonly patchReviewBridge?: HelarcPatchReviewBridge;
   readonly now?: () => string;
 }
 
@@ -165,7 +164,6 @@ export async function createHelarcProductComposition(
   const patchController = new HelarcPatchActionController({
     controller: providerController,
     codeSource: input.codeSource,
-    patchReviewPort: input.patchReviewBridge,
     onStateChanged: (state) => {
       const phase = productPhaseForPatchState(state);
       if (phase !== null) {
@@ -174,20 +172,6 @@ export async function createHelarcProductComposition(
     },
     now: input.now,
   });
-  const unsubscribePatchReview = input.patchReviewBridge?.subscribe((review) => {
-    if (review !== null) {
-      if (productProjection.phase.kind !== "patch_action_submitted") {
-        publishProductUpdate({
-          kind: "phase_changed",
-          phase: Object.freeze({ kind: "waiting_for_patch_review", review }),
-        });
-      }
-      return;
-    }
-    if (productProjection.phase.kind === "waiting_for_patch_review") {
-      publishProductUpdate({ kind: "phase_changed", phase: Object.freeze({ kind: "none" }) });
-    }
-  }) ?? (() => undefined);
   const runMetadata = Object.freeze({
     product: "helarc",
     toolMode: input.toolMode,
@@ -235,7 +219,6 @@ export async function createHelarcProductComposition(
         selectedEnforcement,
       );
       publishProductUpdate({ kind: "result_settled", result });
-      unsubscribePatchReview();
       return result;
     },
   });
@@ -252,19 +235,23 @@ function createHelarcRetryClock(
 function productPhaseForPatchState(
   state: HelarcPatchActionState,
 ): HelarcProductPhase | null {
-  if (state.kind === "reviewing") {
-    return null;
-  }
   if (state.kind === "none") {
     return Object.freeze({ kind: "none" });
   }
+  if (state.kind === "review_requested") {
+    return Object.freeze({
+      kind: "patch_review_requested",
+      proposalId: state.proposalId,
+      proposalRevision: state.proposalRevision,
+      reviewId: state.reviewId,
+    });
+  }
   return Object.freeze({
     kind: "patch_action_submitted",
-    runId: state.runId,
     proposalId: state.proposalId,
     proposalRevision: state.proposalRevision,
     reviewId: state.reviewId,
-    pendingVersion: state.pendingVersion,
+    requestVersion: state.requestVersion,
   });
 }
 
@@ -351,9 +338,13 @@ function createHelarcInteractionComposition(
     },
   };
   const protocol = Object.freeze(protocolImplementation);
+  const patchReview = createHelarcPatchReviewProtocol();
   return createInteractionProtocolRegistrySnapshot(
     "helarc.interactions.v1",
-    [{ ref: HELARC_PERMISSION_REQUEST_PROTOCOL, protocol }],
+    [
+      { ref: HELARC_PERMISSION_REQUEST_PROTOCOL, protocol },
+      { ref: patchReview.ref, protocol: patchReview },
+    ],
   );
 }
 

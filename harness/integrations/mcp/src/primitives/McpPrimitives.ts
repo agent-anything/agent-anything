@@ -3,7 +3,7 @@ import type {
   ToolAnnotations,
   ToolJsonObject,
 } from "@agent-anything/tools/catalog";
-import type { ToolSchemaIdentity } from "@agent-anything/tools/identity";
+import type { McpSchemaIdentity } from "../protocol/McpSchema.js";
 import type { McpToolHeaderBinding } from "../protocol/McpHeaders.js";
 import type {
   McpJsonObject,
@@ -45,7 +45,7 @@ export interface McpToolDescriptor {
   readonly icons: readonly McpIcon[];
   readonly inputSchema: ToolJsonObject;
   readonly outputSchema?: ToolJsonObject;
-  readonly schema: ToolSchemaIdentity;
+  readonly schema: McpSchemaIdentity;
   readonly inputSchemaFingerprint: string;
   readonly outputSchemaFingerprint: string | null;
   readonly annotations: ToolAnnotations;

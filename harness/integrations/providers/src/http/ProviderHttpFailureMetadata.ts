@@ -1,6 +1,4 @@
-export interface HttpResponseHeadersLike {
-  get(name: string): string | null;
-}
+import type { HttpResponseHeadersLike } from "./ProviderHttpTransport.js";
 
 export interface ProviderHttpFailureMetadata {
   readonly statusCode: number;

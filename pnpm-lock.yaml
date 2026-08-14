@@ -159,17 +159,26 @@ importers:
         specifier: 7.7.1
         version: 7.7.1
 
+  harness/integrations/providers:
+    dependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../../agent-core/contracts
+      '@agent-anything/model-interaction':
+        specifier: workspace:*
+        version: link:../../model-interaction
+
   harness/integrations/remote:
     dependencies:
       '@agent-anything/action-execution':
         specifier: workspace:*
         version: link:../../safety/action-execution
-      '@agent-anything/agent-core':
-        specifier: workspace:*
-        version: link:../../agent-core/contracts
       '@agent-anything/canonical-action':
         specifier: workspace:*
         version: link:../../safety/canonical-action
+      '@agent-anything/operation-catalog':
+        specifier: workspace:*
+        version: link:../../operation-catalog
       '@agent-anything/tools':
         specifier: workspace:*
         version: link:../../tools
@@ -402,6 +411,9 @@ importers:
       '@agent-anything/permission':
         specifier: workspace:*
         version: link:../../../harness/safety/permission
+      '@agent-anything/provider-integrations':
+        specifier: workspace:*
+        version: link:../../../harness/integrations/providers
       '@agent-anything/workspace':
         specifier: workspace:*
         version: link:../../../harness/workspace

@@ -4,6 +4,7 @@ import type {
   ControllerCallContext,
   ControllerDecision,
   ControllerInput,
+  ProgressionCandidate,
 } from "@agent-anything/agent-runtime/controller";
 import {
   createRunCancellationController,
@@ -20,21 +21,17 @@ import type {
   CodeSourceSnapshot,
 } from "@agent-anything/helarc-code-agent/source";
 import { describe, expect, it } from "vitest";
+import { HELARC_PATCH_REVIEW_PROTOCOL } from "../composition/HelarcPatchReview.js";
 import type { HelarcAgentOutput } from "../controller/index.js";
 import { createHelarcTask } from "../task/index.js";
-import {
-  HelarcPatchActionController,
-  type HelarcPatchReviewDecision,
-  type HelarcPatchReviewPort,
-} from "./HelarcPatchActionController.js";
-import type { MaterializedPatchReview } from "./HelarcProposalWorkflow.js";
+import { HelarcPatchActionController } from "./HelarcPatchActionController.js";
 
 describe("HelarcPatchActionController", () => {
   it("submits an accepted proposal as an Operation request and settles denial", async () => {
     const controller = createController();
-    const first = await controller.next(createInput([]), createCallContext());
+    const { reviewDecision, interactionObservation } = await acceptPendingReview(controller);
 
-    expect(first).toMatchObject({
+    expect(reviewDecision).toMatchObject({
       kind: "advance",
       candidates: [{
         kind: "operation_request",
@@ -53,11 +50,11 @@ describe("HelarcPatchActionController", () => {
     expect(controller.getPatchState()).toMatchObject({
       kind: "action_submitted",
       runId: "run-1",
-      pendingVersion: 1,
+      requestVersion: 1,
     });
 
     const settled = await controller.next(
-      createInput([operationRejected()]),
+      createInput([interactionObservation, operationRejected()]),
       createCallContext(),
     );
     expect(settled.kind).toBe("propose_completion");
@@ -72,8 +69,11 @@ describe("HelarcPatchActionController", () => {
 
   it("settles Operation failure without claiming an applied patch", async () => {
     const controller = createController();
-    await controller.next(createInput([]), createCallContext());
-    await controller.next(createInput([operationFailure()]), createCallContext());
+    const { interactionObservation } = await acceptPendingReview(controller);
+    await controller.next(
+      createInput([interactionObservation, operationFailure()]),
+      createCallContext(),
+    );
 
     expect(controller.getPatchOutcome()).toMatchObject({
       status: "failed",
@@ -88,7 +88,6 @@ function createController(): HelarcPatchActionController {
   return new HelarcPatchActionController({
     controller: new ProposalController(),
     codeSource: fixedCodeSource(),
-    patchReviewPort: new AcceptingReviewPort(),
     now: () => "2026-07-17T00:00:00.000Z",
   });
 }
@@ -112,20 +111,66 @@ class ProposalController implements Controller<HelarcAgentOutput> {
   }
 }
 
-class AcceptingReviewPort implements HelarcPatchReviewPort {
-  async review(request: MaterializedPatchReview) {
-    const submission: HelarcPatchReviewDecision = {
+async function acceptPendingReview(controller: HelarcPatchActionController): Promise<{
+  readonly reviewDecision: ControllerDecision<HelarcAgentOutput>;
+  readonly interactionObservation: RunObservation;
+}> {
+  const requestDecision = await controller.next(createInput([]), createCallContext());
+  expect(requestDecision).toMatchObject({
+    kind: "advance",
+    candidates: [{
+      kind: "interaction_request",
+      protocol: HELARC_PATCH_REVIEW_PROTOCOL,
+      requestVersion: 1,
+      blockingScope: "run",
+      presentation: {
+        path: "src/file.txt",
+        operation: "update",
+        originalContent: "before\n",
+        proposedContent: "after\n",
+      },
+    }],
+  });
+  expect(controller.getPatchState()).toMatchObject({
+    kind: "review_requested",
+    runId: "run-1",
+    proposalRevision: 1,
+  });
+  if (requestDecision.kind !== "advance") {
+    throw new Error("Expected a patch-review Interaction request.");
+  }
+  const candidate = requestDecision.candidates[0];
+  if (candidate?.kind !== "interaction_request") {
+    throw new Error("Expected a patch-review Interaction candidate.");
+  }
+  const interactionObservation = acceptedReviewObservation(candidate);
+  const reviewDecision = await controller.next(
+    createInput([interactionObservation]),
+    createCallContext(),
+  );
+  return { reviewDecision, interactionObservation };
+}
+
+function acceptedReviewObservation(
+  candidate: Extract<ProgressionCandidate, { readonly kind: "interaction_request" }>,
+): RunObservation {
+  return observation({
+    kind: "interaction",
+    owner: HELARC_PATCH_REVIEW_PROTOCOL.owner,
+    status: "resolved",
+    value: {
+      kind: "helarc_patch_review_decision",
+      request: {
+        id: "patch-review-request-1",
+        protocol: candidate.protocol,
+        requestVersion: candidate.requestVersion,
+        subject: candidate.subjectRef,
+      },
       submissionId: "submission-1",
-      runId: request.runId,
-      proposalId: request.proposalId,
-      proposalRevision: request.proposalRevision,
-      reviewId: request.reviewId,
-      pendingVersion: 1,
       decision: "accepted",
       reason: "Accept in product test.",
-    };
-    return { status: "decided" as const, submission };
-  }
+    },
+  });
 }
 
 function createInput(observations: readonly RunObservation[]): ControllerInput<HelarcAgentOutput> {

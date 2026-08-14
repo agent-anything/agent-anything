@@ -149,6 +149,26 @@ describe("ActionExecutionCoordinator", () => {
     expect(fixture.order.filter((value) => value === "records.pre-effect"))
       .toHaveLength(2);
   });
+
+  it("invalidates a prepared Action when its Runner progression basis changes before dispatch", async () => {
+    const fixture = createFixture();
+
+    const result = await fixture.coordinator.execute({
+      ...fixture.request,
+      isProgressionBasisCurrent: () => false,
+    });
+
+    expect(result).toMatchObject({
+      status: "settled",
+      settlement: {
+        status: "invalidated",
+        causeOwner: "agent-runtime",
+        causeRef: "action_progression_basis_invalidated",
+        attempts: [],
+      },
+    });
+    expect(fixture.order).not.toContain("executor.execute");
+  });
 });
 
 interface FixtureOptions {
@@ -446,6 +466,7 @@ function createFixture(options: FixtureOptions = {}) {
       interruption,
       deadlineAt: "2026-08-13T01:00:00.000Z",
       maxAttempts: 1,
+      isProgressionBasisCurrent: () => true,
     },
   };
 }

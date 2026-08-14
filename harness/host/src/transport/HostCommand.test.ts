@@ -15,6 +15,7 @@ import {
   snapshotHostCommand,
   type HostInteractionSubmissionCommand,
   type HostRunCancellationCommand,
+  type HostRunSteeringCommand,
 } from "./HostCommand.js";
 
 describe("Host command transport", () => {
@@ -26,6 +27,7 @@ describe("Host command transport", () => {
     payload.choice = "mutated";
 
     expect(snapshotHostCommand(cancellationCommand())).toEqual(cancellationCommand());
+    expect(snapshotHostCommand(steeringCommand())).toEqual(steeringCommand());
     expect(interaction).toMatchObject({
       kind: "interaction.submit",
       payload: {
@@ -40,6 +42,25 @@ describe("Host command transport", () => {
       ...cancellationCommand(),
       legacyApproval: true,
     })).toThrow("unsupported fields");
+  });
+
+  it("routes steering as an acknowledged Run command without claiming application", () => {
+    const active = fakeActiveRun();
+    const dispatcher = createDispatcher(active);
+
+    const receipt = dispatcher.dispatch(steeringCommand(), "run.steer");
+
+    expect(receipt).toMatchObject({
+      status: "handled",
+      kind: "run.steer",
+      result: { status: "accepted_for_application" },
+    });
+    expect(active.steer).toHaveBeenCalledWith({
+      commandId: "command-steer-1",
+      expectedRunRevision: 0,
+      instruction: "Inspect the tests before continuing.",
+      attribution: { origin: "user", actorId: "user-1" },
+    });
   });
 
   it("replays one identical command and rejects conflicting command identity", () => {
@@ -90,6 +111,7 @@ describe("Host command transport", () => {
     const dispatcher = createHostCommandDispatcher({
       resolveActiveRun: (runId) => runId === active.runId ? active : null,
       cancellationAttribution: { origin: "user", reasonCode: "user_requested" },
+      steeringAttribution: { origin: "user", actorId: "user-1" },
     });
 
     const receipt = dispatcher.dispatch(cancellationCommand({ runId: "run-old" }), "run.cancel");
@@ -107,6 +129,7 @@ describe("Host command transport", () => {
     const dispatcher = createHostCommandDispatcher({
       resolveActiveRun: () => active,
       cancellationAttribution: { origin: "user", reasonCode: "user_requested" },
+      steeringAttribution: { origin: "user", actorId: "user-1" },
       maxReceipts: 1,
     });
     const firstCommand = cancellationCommand();
@@ -130,6 +153,7 @@ function createDispatcher(active: ReturnType<typeof fakeActiveRun>) {
   return createHostCommandDispatcher({
     resolveActiveRun: () => active,
     cancellationAttribution: { origin: "user", reasonCode: "user_requested" },
+    steeringAttribution: { origin: "user", actorId: "user-1" },
   });
 }
 
@@ -158,6 +182,22 @@ function interactionCommand(
       request: REQUEST,
       submissionId: "submission-1",
       payload: { choice: "approve" },
+    },
+    ...overrides,
+  };
+}
+
+function steeringCommand(
+  overrides: Partial<HostRunSteeringCommand> = {},
+): HostRunSteeringCommand {
+  return {
+    version: HOST_COMMAND_VERSION,
+    commandId: "command-steer-1",
+    runId: "run-1",
+    kind: "run.steer",
+    payload: {
+      expectedRunRevision: 0,
+      instruction: "Inspect the tests before continuing.",
     },
     ...overrides,
   };
@@ -192,15 +232,27 @@ function fakeActiveRun(runId = "run-1") {
       recordedAt: NOW,
     },
   }));
+  const steer = vi.fn((input: Parameters<HostActiveRun["steer"]>[0]) => ({
+    status: "accepted_for_application" as const,
+    command: {
+      ...input,
+      submittedAt: NOW,
+      ref: { run: { id: runId }, commandId: input.commandId },
+      acceptedRunRevision: input.expectedRunRevision,
+    },
+  }));
   const active: HostActiveRun & {
     cancel: typeof cancel;
+    steer: typeof steer;
     submitInteraction: typeof submitInteraction;
   } = {
     sessionId: "session-1",
     runId,
     getProjection: () => projection,
+    getStatus: () => projection,
     subscribe: () => () => undefined,
     submitInteraction,
+    steer,
     cancel,
     wait: () => new Promise(() => undefined),
     getResult: () => null,

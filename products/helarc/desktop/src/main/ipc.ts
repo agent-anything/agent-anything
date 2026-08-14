@@ -3,6 +3,7 @@ import type { HelarcMainController } from "./HelarcMainController.js";
 import {
   projectHelarcDesktopSnapshot,
   projectHelarcHostCommandReceipt,
+  projectHelarcRunStatusQueryReceipt,
 } from "./HelarcDesktopProjection.js";
 import { createHelarcProductCommandDispatcher } from "./HelarcProductCommandDispatcher.js";
 import { createHelarcProvider } from "./provider/createHelarcProvider.js";
@@ -15,14 +16,15 @@ import type { HelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspacePro
 export const HELARC_IPC_CHANNELS = {
   cancelRun: "helarc:cancel-run",
   chooseWorkspace: "helarc:choose-workspace",
+  getRunStatus: "helarc:get-run-status",
   getSnapshot: "helarc:get-snapshot",
   openThread: "helarc:open-thread",
-  resolvePatchReview: "helarc:resolve-patch-review",
-  submitApprovalDecision: "helarc:submit-approval-decision",
   saveProviderConfig: "helarc:save-provider-config",
   selectWorkspaceProfile: "helarc:select-workspace-profile",
   snapshotUpdated: "helarc:snapshot-updated",
   startRun: "helarc:start-run",
+  steerRun: "helarc:steer-run",
+  submitInteraction: "helarc:submit-interaction",
 } as const;
 
 export interface RegisterHelarcIpcInput {
@@ -161,19 +163,6 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
               snapshot: projectHelarcDesktopSnapshot(result.snapshot),
             };
       },
-      "patch_review.submit": (payload) => {
-        const result = input.controller.resolvePatchReview(payload);
-        return result.ok
-          ? {
-              ok: true,
-              snapshot: projectHelarcDesktopSnapshot(result.snapshot),
-            }
-          : {
-              ok: false,
-              error: { code: result.error.code, message: result.error.message },
-              snapshot: projectHelarcDesktopSnapshot(result.snapshot),
-            };
-      },
       "thread.open": async (payload) => {
         const result = await input.controller.openThread(payload.threadId);
         return result.ok
@@ -216,13 +205,6 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
     return productCommands.dispatch(command, "run.start");
   });
 
-  ipcMain.handle(
-    HELARC_IPC_CHANNELS.resolvePatchReview,
-    (_event, command: unknown) => {
-      return productCommands.dispatch(command, "patch_review.submit");
-    },
-  );
-
   ipcMain.handle(HELARC_IPC_CHANNELS.openThread, (_event, command: unknown) => {
     return productCommands.dispatch(command, "thread.open");
   });
@@ -236,11 +218,11 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
   });
 
   ipcMain.handle(
-    HELARC_IPC_CHANNELS.submitApprovalDecision,
+    HELARC_IPC_CHANNELS.steerRun,
     (_event, command: unknown) => {
       const receipt = input.controller.dispatchHostCommand(
         command,
-        "approval.submit",
+        "run.steer",
       );
       return {
         receipt: projectHelarcHostCommandReceipt(receipt),
@@ -248,4 +230,27 @@ export function registerHelarcIpc(input: RegisterHelarcIpcInput): void {
       };
     },
   );
+
+  ipcMain.handle(
+    HELARC_IPC_CHANNELS.submitInteraction,
+    (_event, command: unknown) => {
+      const receipt = input.controller.dispatchHostCommand(
+        command,
+        "interaction.submit",
+      );
+      return {
+        receipt: projectHelarcHostCommandReceipt(receipt),
+        snapshot: projectHelarcDesktopSnapshot(input.controller.getSnapshot()),
+      };
+    },
+  );
+
+  ipcMain.handle(HELARC_IPC_CHANNELS.getRunStatus, (_event, query: unknown) => {
+    return {
+      receipt: projectHelarcRunStatusQueryReceipt(
+        input.controller.queryRunStatus(query),
+      ),
+      snapshot: projectHelarcDesktopSnapshot(input.controller.getSnapshot()),
+    };
+  });
 }

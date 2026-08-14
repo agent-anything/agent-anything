@@ -1,5 +1,8 @@
 import type { HostRunProjection } from "@agent-anything/host/projection";
-import type { HelarcProductPhase } from "../composition/HelarcPatchReview.js";
+import {
+  HELARC_PATCH_REVIEW_PROTOCOL,
+  type HelarcProductPhase,
+} from "../composition/HelarcPatchReview.js";
 import type {
   HelarcActivityItem,
   HelarcProductResult,
@@ -235,13 +238,18 @@ export function deriveHelarcRunDisplayProjection(
   )) {
     return display("waiting_for_approval", false, "host");
   }
-  if (product.phase.kind === "waiting_for_patch_review") {
+  const pendingPatchReview = host.pendingInteractions.find((pending) =>
+    pending.request.protocol.owner === HELARC_PATCH_REVIEW_PROTOCOL.owner &&
+    pending.request.protocol.kind === HELARC_PATCH_REVIEW_PROTOCOL.kind &&
+    pending.request.protocol.revision === HELARC_PATCH_REVIEW_PROTOCOL.revision
+  );
+  if (pendingPatchReview !== undefined) {
     return display(
-      product.phase.review.phase === "submitted_for_resolution"
+      pendingPatchReview.phase === "submitted_for_resolution"
         ? "applying_patch"
         : "waiting_for_patch_review",
       false,
-      "product",
+      "host",
     );
   }
   if (product.phase.kind === "patch_action_submitted") {
@@ -266,25 +274,22 @@ function snapshotUnifiedProjection(
 
 function snapshotProductPhase(phase: HelarcProductPhase): HelarcProductPhase {
   if (phase?.kind === "none") return Object.freeze({ kind: "none" });
-  if (phase?.kind === "waiting_for_patch_review") {
-    const review = phase.review;
+  if (phase?.kind === "patch_review_requested") {
     if (
-      !hasIdentity(review?.runId) || !hasIdentity(review.proposalId) ||
-      !Number.isSafeInteger(review.proposalRevision) || review.proposalRevision < 1 ||
-      !hasIdentity(review.reviewId) || !Number.isSafeInteger(review.pendingVersion) ||
-      review.pendingVersion < 1 ||
-      (review.phase !== "reviewing" && review.phase !== "submitted_for_resolution")
+      !hasIdentity(phase.proposalId) ||
+      !Number.isSafeInteger(phase.proposalRevision) || phase.proposalRevision < 1 ||
+      !hasIdentity(phase.reviewId)
     ) {
       throw new TypeError("Patch review phase is invalid.");
     }
-    return Object.freeze({ kind: "waiting_for_patch_review", review: Object.freeze({ ...review }) });
+    return Object.freeze({ ...phase });
   }
   if (phase?.kind === "patch_action_submitted") {
     if (
-      !hasIdentity(phase.runId) || !hasIdentity(phase.proposalId) ||
+      !hasIdentity(phase.proposalId) ||
       !Number.isSafeInteger(phase.proposalRevision) || phase.proposalRevision < 1 ||
-      !hasIdentity(phase.reviewId) || !Number.isSafeInteger(phase.pendingVersion) ||
-      phase.pendingVersion < 1
+      !hasIdentity(phase.reviewId) || !Number.isSafeInteger(phase.requestVersion) ||
+      phase.requestVersion < 1
     ) {
       throw new TypeError("Submitted Patch Action phase is invalid.");
     }

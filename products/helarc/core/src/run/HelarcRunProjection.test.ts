@@ -89,7 +89,10 @@ describe("Helarc product Run projection", () => {
 
 describe("Helarc unified Run projection", () => {
   it("derives active approval and Patch phases without mutable display state", () => {
-    const host = hostProjection({ status: "running" });
+    const host = hostProjection({
+      status: "waiting",
+      pendingInteractions: [pendingPatchReview()],
+    });
     let product = createHelarcProductRunProjection("run-1");
     product = applyProduct(product, {
       kind: "phase_changed",
@@ -100,16 +103,15 @@ describe("Helarc unified Run projection", () => {
     expect(createHelarcRunProjection({ host, product }).display).toEqual({
       status: "waiting_for_patch_review",
       terminal: false,
-      statusSource: "product",
+      statusSource: "host",
     });
 
-    product = applyProduct(product, {
-      kind: "phase_changed",
-      runId: "run-1",
-      sequence: 2,
-      phase: waitingPhase("submitted_for_resolution"),
+    const submittedHost = hostProjection({
+      status: "waiting",
+      pendingInteractions: [pendingPatchReview("submitted_for_resolution")],
     });
-    expect(createHelarcRunProjection({ host, product }).display.status).toBe("applying_patch");
+    expect(createHelarcRunProjection({ host: submittedHost, product }).display)
+      .toMatchObject({ status: "applying_patch", statusSource: "host" });
     expect(createHelarcRunProjection({
       host: hostProjection({
         status: "waiting",
@@ -231,28 +233,12 @@ function hostProjection(
 }
 
 function waitingPhase(
-  phase: "reviewing" | "submitted_for_resolution" = "reviewing",
 ): HelarcProductPhase {
   return {
-    kind: "waiting_for_patch_review",
-    review: {
-      runId: "run-1",
-      proposalId: "proposal-1",
-      proposalRevision: 1,
-      reviewId: "review-1",
-      pendingVersion: 1,
-      rootName: "root",
-      workspaceId: "workspace-1",
-      path: "src/file.ts",
-      operation: "update",
-      summary: "Update file",
-      rationale: "Apply requested change.",
-      originalContent: "before\n",
-      proposedContent: "after\n",
-      originalContentBytes: 7,
-      proposedContentBytes: 6,
-      phase,
-    },
+    kind: "patch_review_requested",
+    proposalId: "proposal-1",
+    proposalRevision: 1,
+    reviewId: "review-1",
   };
 }
 
@@ -316,5 +302,23 @@ function pendingApproval(): HostRunProjection["pendingInteractions"][number] {
     expiresAt: null,
     blockingScope: "run",
     phase: "pending",
+  };
+}
+
+function pendingPatchReview(
+  phase: "pending" | "submitted_for_resolution" = "pending",
+): HostRunProjection["pendingInteractions"][number] {
+  return {
+    request: {
+      id: "patch-review-request-1",
+      protocol: { owner: "helarc", kind: "patch_review", revision: "1" },
+      requestVersion: 1,
+      subject: { owner: "helarc", kind: "patch_proposal", id: "review-1", revision: "1" },
+    },
+    presentation: {},
+    disclosureClass: "internal",
+    expiresAt: null,
+    blockingScope: "run",
+    phase,
   };
 }

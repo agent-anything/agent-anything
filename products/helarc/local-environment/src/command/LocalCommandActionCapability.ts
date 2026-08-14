@@ -457,7 +457,7 @@ function createCommandExecutor(
           cwd: payload.cwd,
           platform: payload.runtimeEnvironmentPlatform,
         });
-        if (JSON.stringify(executable.identity.baseline) !== JSON.stringify(payload.executableBaseline)) {
+        if (!sameFileBaseline(executable.identity.baseline, payload.executableBaseline)) {
           return failed("none", "command_executable_changed", "Command executable changed before dispatch.");
         }
         dispatched = true;

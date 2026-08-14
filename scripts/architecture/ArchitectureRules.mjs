@@ -56,9 +56,13 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
   ],
   "@agent-anything/remote-integrations": [
     "@agent-anything/action-execution",
-    "@agent-anything/agent-core",
     "@agent-anything/canonical-action",
+    "@agent-anything/operation-catalog",
     "@agent-anything/tools",
+  ],
+  "@agent-anything/provider-integrations": [
+    "@agent-anything/agent-core",
+    "@agent-anything/model-interaction",
   ],
   "@agent-anything/mcp": [
     "@agent-anything/agent-core",
@@ -129,6 +133,7 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/model-interaction",
     "@agent-anything/observability",
     "@agent-anything/permission",
+    "@agent-anything/provider-integrations",
     "@agent-anything/agent-runtime",
     "@agent-anything/workspace",
     "lucide-react",

@@ -1,13 +1,23 @@
-import type { ApprovalReviewRequest, ApprovalSubmissionReceipt } from "@agent-anything/permission";
-import type { HostCommandReceipt } from "@agent-anything/host/transport";
+import {
+  APPROVAL_INTERACTION_PROTOCOL,
+  type ApprovalReviewRequest,
+} from "@agent-anything/permission";
+import type {
+  HostCommandReceipt,
+  HostRunStatusQueryReceipt,
+} from "@agent-anything/host/transport";
+import { HELARC_PATCH_REVIEW_PROTOCOL } from "@agent-anything/helarc/composition";
 import type { HelarcMainSnapshot as MainSnapshot } from "./HelarcMainController.js";
 import type {
   HelarcAdditionalPermissionsSnapshot,
   HelarcApprovalReviewRequestSnapshot,
-  HelarcApprovalSubmissionReceipt,
   HelarcHostCommandReceipt,
+  HelarcInteractionRequestRefSnapshot,
   HelarcMainSnapshot as DesktopSnapshot,
+  HelarcPendingInteractionSnapshot,
+  HelarcPatchReviewPresentationSnapshot,
   HelarcProductPhaseSnapshot,
+  HelarcRunStatusResponse,
   HelarcRunSnapshot,
 } from "../shared/HelarcDesktopApi.js";
 
@@ -100,24 +110,6 @@ export function projectHelarcDesktopSnapshot(snapshot: MainSnapshot): DesktopSna
   };
 }
 
-export function projectHelarcApprovalSubmissionReceipt(
-  receipt: ApprovalSubmissionReceipt,
-): HelarcApprovalSubmissionReceipt {
-  return receipt.status === "accepted_for_resolution"
-    ? {
-        status: receipt.status,
-        submissionId: receipt.submissionId,
-        runId: receipt.runId,
-        requestId: receipt.requestId,
-        pendingVersion: receipt.pendingVersion,
-      }
-    : {
-        status: receipt.status,
-        submissionId: receipt.submissionId,
-        code: receipt.code,
-      };
-}
-
 export function projectHelarcHostCommandReceipt(
   receipt: HostCommandReceipt,
 ): HelarcHostCommandReceipt {
@@ -132,14 +124,68 @@ export function projectHelarcHostCommandReceipt(
     };
   }
 
-  if (receipt.kind === "approval.submit") {
+  if (receipt.kind === "interaction.submit") {
+    if (receipt.result.status === "rejected") {
+      return {
+        version: receipt.version,
+        commandId: receipt.commandId,
+        runId: receipt.runId,
+        kind: receipt.kind,
+        status: receipt.status,
+        result: {
+          status: receipt.result.status,
+          code: receipt.result.code,
+          receipt: receipt.result.receipt === null
+            ? null
+            : projectInteractionTransportReceipt(receipt.result.receipt),
+        },
+      };
+    }
     return {
       version: receipt.version,
       commandId: receipt.commandId,
       runId: receipt.runId,
       kind: receipt.kind,
       status: receipt.status,
-      result: projectHelarcApprovalSubmissionReceipt(receipt.result),
+      result: {
+        status: receipt.result.status,
+        receipt: projectInteractionTransportReceipt(receipt.result.receipt),
+      },
+    };
+  }
+
+  if (receipt.kind === "run.steer") {
+    if (receipt.result.status === "rejected") {
+      return {
+        version: receipt.version,
+        commandId: receipt.commandId,
+        runId: receipt.runId,
+        kind: receipt.kind,
+        status: receipt.status,
+        result: {
+          status: receipt.result.status,
+          code: receipt.result.code,
+          commandId: receipt.result.commandId,
+          currentRunRevision: receipt.result.currentRunRevision,
+        },
+      };
+    }
+    return {
+      version: receipt.version,
+      commandId: receipt.commandId,
+      runId: receipt.runId,
+      kind: receipt.kind,
+      status: receipt.status,
+      result: {
+        status: receipt.result.status,
+        command: {
+          commandId: receipt.result.command.commandId,
+          expectedRunRevision: receipt.result.command.expectedRunRevision,
+          acceptedRunRevision: receipt.result.command.acceptedRunRevision,
+          instruction: receipt.result.command.instruction,
+          submittedAt: receipt.result.command.submittedAt,
+        },
+      },
     };
   }
 
@@ -180,6 +226,43 @@ export function projectHelarcHostCommandReceipt(
             origin: receipt.result.cancellation.origin,
             reasonCode: receipt.result.cancellation.reasonCode,
             requestedAt: receipt.result.cancellation.requestedAt,
+          },
+    },
+  };
+}
+
+export function projectHelarcRunStatusQueryReceipt(
+  receipt: HostRunStatusQueryReceipt,
+): HelarcRunStatusResponse["receipt"] {
+  if (receipt.status === "rejected") {
+    return {
+      version: receipt.version,
+      queryId: receipt.queryId,
+      runId: receipt.runId,
+      kind: receipt.kind,
+      status: receipt.status,
+      code: receipt.code,
+    };
+  }
+  return {
+    version: receipt.version,
+    queryId: receipt.queryId,
+    runId: receipt.runId,
+    kind: receipt.kind,
+    status: receipt.status,
+    run: {
+      runId: receipt.projection.runId,
+      taskId: receipt.projection.taskId,
+      runRevision: receipt.projection.runRevision,
+      status: receipt.projection.status,
+      startedAt: receipt.projection.startedAt,
+      pendingInteractions: receipt.projection.pendingInteractions.map(projectPendingInteraction),
+      terminal: receipt.projection.terminal === null
+        ? null
+        : {
+            status: receipt.projection.terminal.status,
+            code: receipt.projection.terminal.code,
+            completedAt: receipt.projection.terminal.completedAt,
           },
     },
   };
@@ -234,17 +317,8 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
     host: {
       taskId: run.host.taskId,
       startedAt: run.host.startedAt,
-      approval: run.host.approval === null
-        ? null
-        : {
-            phase: run.host.approval.phase,
-            review: run.host.approval.review === null
-              ? null
-              : {
-                  pendingVersion: run.host.approval.review.pendingVersion,
-                  request: projectApprovalRequest(run.host.approval.review.request),
-                },
-          },
+      runRevision: run.host.runRevision,
+      pendingInteractions: run.host.pendingInteractions.map(projectPendingInteraction),
       terminal: run.host.terminal === null
         ? null
         : {
@@ -270,7 +344,10 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
             status: run.product.result.status,
             output: {
               taskId: run.product.result.output.taskId,
-              workspaceId: run.product.result.output.workspaceId,
+              workspace: {
+                primaryId: run.product.result.output.workspace.primaryId,
+                additionalIds: [...run.product.result.output.workspace.additionalIds],
+              },
               agentSummary: run.product.result.output.agentSummary,
               runtimeStatus: run.product.result.output.runtimeStatus,
               patchStatus: run.product.result.output.patchStatus,
@@ -328,29 +405,152 @@ function projectProductPhase(
   if (phase.kind === "patch_action_submitted") {
     return {
       kind: phase.kind,
-      runId: phase.runId,
       proposalId: phase.proposalId,
       proposalRevision: phase.proposalRevision,
       reviewId: phase.reviewId,
-      pendingVersion: phase.pendingVersion,
+      requestVersion: phase.requestVersion,
     };
   }
   return {
-    kind: "waiting_for_patch_review",
-    review: {
-      runId: phase.review.runId,
-      proposalId: phase.review.proposalId,
-      proposalRevision: phase.review.proposalRevision,
-      reviewId: phase.review.reviewId,
-      pendingVersion: phase.review.pendingVersion,
-      phase: phase.review.phase,
-      path: phase.review.path,
-      operation: phase.review.operation,
-      summary: phase.review.summary,
-      originalContent: phase.review.originalContent,
-      proposedContent: phase.review.proposedContent,
-    },
+    kind: "patch_review_requested",
+    proposalId: phase.proposalId,
+    proposalRevision: phase.proposalRevision,
+    reviewId: phase.reviewId,
   };
+}
+
+function projectPendingInteraction(
+  pending: NonNullable<MainSnapshot["run"]>["host"]["pendingInteractions"][number],
+): HelarcPendingInteractionSnapshot {
+  const base = {
+    request: projectInteractionRequestRef(pending.request),
+    phase: pending.phase,
+    disclosureClass: pending.disclosureClass,
+    expiresAt: pending.expiresAt,
+    blockingScope: pending.blockingScope,
+  };
+  if (sameProtocol(pending.request.protocol, APPROVAL_INTERACTION_PROTOCOL)) {
+    try {
+      return {
+        ...base,
+        family: "approval",
+        presentation: projectApprovalRequest(
+          requireApprovalReviewRequest(pending.presentation),
+        ),
+      };
+    } catch {
+      return { ...base, family: "unsupported", presentation: null };
+    }
+  }
+  if (sameProtocol(pending.request.protocol, HELARC_PATCH_REVIEW_PROTOCOL)) {
+    const presentation = projectPatchReviewPresentation(pending.presentation);
+    return presentation === null
+      ? { ...base, family: "unsupported", presentation: null }
+      : { ...base, family: "patch_review", presentation };
+  }
+  return { ...base, family: "unsupported", presentation: null };
+}
+
+function projectInteractionTransportReceipt(receipt: {
+  readonly receiptId: string;
+  readonly request: Parameters<typeof projectInteractionRequestRef>[0];
+  readonly submissionId: string;
+  readonly status: "accepted_for_resolution" | "duplicate_identical" | "rejected";
+  readonly recordedAt: string;
+}) {
+  return {
+    receiptId: receipt.receiptId,
+    request: projectInteractionRequestRef(receipt.request),
+    submissionId: receipt.submissionId,
+    status: receipt.status,
+    recordedAt: receipt.recordedAt,
+  };
+}
+
+function projectInteractionRequestRef(
+  request: {
+    readonly id: string;
+    readonly protocol: { readonly owner: string; readonly kind: string; readonly revision: string };
+    readonly requestVersion: number;
+    readonly subject: { readonly owner: string; readonly kind: string; readonly id: string; readonly revision: string };
+  },
+): HelarcInteractionRequestRefSnapshot {
+  return {
+    id: request.id,
+    protocol: { ...request.protocol },
+    requestVersion: request.requestVersion,
+    subject: { ...request.subject },
+  };
+}
+
+function projectPatchReviewPresentation(
+  value: unknown,
+): HelarcPatchReviewPresentationSnapshot | null {
+  if (!isRecord(value)) return null;
+  if (
+    !isIdentity(value.runId) || !isIdentity(value.proposalId) ||
+    !Number.isSafeInteger(value.proposalRevision) || (value.proposalRevision as number) < 1 ||
+    !isIdentity(value.reviewId) || typeof value.rootName !== "string" ||
+    !isIdentity(value.workspaceId) || typeof value.path !== "string" ||
+    (value.operation !== "create" && value.operation !== "update" && value.operation !== "delete") ||
+    typeof value.summary !== "string" || typeof value.rationale !== "string" ||
+    !isNullableString(value.originalContent) || !isNullableString(value.proposedContent) ||
+    !isNullableNonNegativeInteger(value.originalContentBytes) ||
+    !isNullableNonNegativeInteger(value.proposedContentBytes)
+  ) return null;
+  return {
+    runId: value.runId,
+    proposalId: value.proposalId,
+    proposalRevision: value.proposalRevision as number,
+    reviewId: value.reviewId,
+    rootName: value.rootName,
+    workspaceId: value.workspaceId,
+    path: value.path,
+    operation: value.operation,
+    summary: value.summary,
+    rationale: value.rationale,
+    originalContent: value.originalContent,
+    proposedContent: value.proposedContent,
+    originalContentBytes: value.originalContentBytes as number | null,
+    proposedContentBytes: value.proposedContentBytes as number | null,
+  };
+}
+
+function requireApprovalReviewRequest(value: unknown): ApprovalReviewRequest {
+  if (!isRecord(value) || ![
+    "commandExecution",
+    "fileChange",
+    "permissions",
+    "remoteToolCall",
+    "skill",
+    "networkAccess",
+  ].includes(String(value.category))) {
+    throw new TypeError("Approval presentation is invalid.");
+  }
+  return value as unknown as ApprovalReviewRequest;
+}
+
+function sameProtocol(
+  left: { readonly owner: string; readonly kind: string; readonly revision: string },
+  right: { readonly owner: string; readonly kind: string; readonly revision: string },
+): boolean {
+  return left.owner === right.owner && left.kind === right.kind && left.revision === right.revision;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isIdentity(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && !/\s/.test(value);
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isNullableNonNegativeInteger(value: unknown): value is number | null {
+  return value === null || Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
 function projectApprovalRequest(

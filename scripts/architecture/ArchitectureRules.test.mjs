@@ -84,6 +84,19 @@ test("Phase27 execution dependencies are exact and owner-directed", () => {
     expectedProductionDependencies("@agent-anything/operation-composition"),
     ["@agent-anything/agent-core", "@agent-anything/operation-catalog"],
   );
+  assert.deepEqual(
+    expectedProductionDependencies("@agent-anything/provider-integrations"),
+    ["@agent-anything/agent-core", "@agent-anything/model-interaction"],
+  );
+  assert.deepEqual(
+    expectedProductionDependencies("@agent-anything/remote-integrations"),
+    [
+      "@agent-anything/action-execution",
+      "@agent-anything/canonical-action",
+      "@agent-anything/operation-catalog",
+      "@agent-anything/tools",
+    ],
+  );
 });
 
 test("Test Support is accepted only from test sources", () => {

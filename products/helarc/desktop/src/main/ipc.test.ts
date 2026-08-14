@@ -113,6 +113,18 @@ describe("Helarc IPC", () => {
     const controller = controllerDouble(snapshot, {
       subscribeSnapshot,
       dispatchHostCommand: vi.fn(),
+      queryRunStatus: vi.fn((candidate: unknown) => {
+        const query = candidate as Record<string, unknown>;
+        return {
+          version: 1,
+          queryId: query.queryId,
+          runId: query.runId,
+          kind: "run.status",
+          status: "rejected",
+          code: "host_query_run_not_found",
+          projection: null,
+        };
+      }),
       startRun: vi.fn(),
     });
     const closedListeners: Array<() => void> = [];
@@ -124,14 +136,36 @@ describe("Helarc IPC", () => {
 
     registerHelarcIpc({ window, controller });
     const getSnapshot = requiredHandler(HELARC_IPC_CHANNELS.getSnapshot);
+    const getRunStatus = requiredHandler(HELARC_IPC_CHANNELS.getRunStatus);
+    const statusQuery = {
+      version: 1,
+      queryId: "run-status-1",
+      runId: "run-1",
+      kind: "run.status",
+      payload: {},
+    };
 
     expect(getSnapshot({})).toEqual(snapshot);
     expect(getSnapshot({})).toEqual(snapshot);
+    expect(getRunStatus({}, statusQuery)).toMatchObject({
+      receipt: {
+        queryId: "run-status-1",
+        runId: "run-1",
+        kind: "run.status",
+        status: "rejected",
+        code: "host_query_run_not_found",
+      },
+    });
+    expect(getRunStatus({}, statusQuery)).toMatchObject({
+      receipt: { status: "rejected" },
+    });
     publish(snapshot);
     expect(window.webContents.send).toHaveBeenCalledOnce();
     closedListeners[0]?.();
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(controller.dispatchHostCommand).not.toHaveBeenCalled();
+    expect(controller.queryRunStatus).toHaveBeenCalledTimes(2);
+    expect(controller.queryRunStatus).toHaveBeenNthCalledWith(1, statusQuery);
     expect(controller.startRun).not.toHaveBeenCalled();
   });
 
@@ -192,6 +226,131 @@ describe("Helarc IPC", () => {
     expect(JSON.stringify(response)).not.toContain(PRIVATE_RESULT);
   });
 
+  it("keeps steering and Interaction submission as distinct exact Host commands", async () => {
+    const snapshot = mainSnapshot("running");
+    const request = {
+      id: "interaction-1",
+      protocol: { owner: "helarc", kind: "patch-review", revision: "1" },
+      requestVersion: 2,
+      subject: {
+        owner: "helarc",
+        kind: "patch-proposal",
+        id: "proposal-1",
+        revision: "proposal-revision-2",
+      },
+    };
+    const dispatchHostCommand = vi.fn((candidate: unknown, expectedKind: string) => {
+      const command = candidate as Record<string, unknown>;
+      if (expectedKind === "run.steer") {
+        return {
+          version: 1,
+          commandId: command.commandId,
+          runId: command.runId,
+          kind: "run.steer",
+          status: "handled",
+          result: {
+            status: "accepted_for_application",
+            command: {
+              commandId: command.commandId,
+              expectedRunRevision: 4,
+              acceptedRunRevision: 4,
+              instruction: "Inspect the failing test first.",
+              submittedAt: "2026-08-03T00:00:00.000Z",
+              privateAttribution: PRIVATE_RESULT,
+            },
+          },
+          projection: { privateProjection: PRIVATE_RESULT },
+        };
+      }
+      expect(expectedKind).toBe("interaction.submit");
+      return {
+        version: 1,
+        commandId: command.commandId,
+        runId: command.runId,
+        kind: "interaction.submit",
+        status: "handled",
+        result: {
+          status: "accepted_for_resolution",
+          receipt: {
+            receiptId: "interaction-receipt-1",
+            request,
+            submissionId: "patch-review-submission-1",
+            status: "accepted_for_resolution",
+            recordedAt: "2026-08-03T00:00:01.000Z",
+            privateDigest: PRIVATE_RESULT,
+          },
+        },
+        projection: { privateProjection: PRIVATE_RESULT },
+      };
+    });
+    const controller = controllerDouble(snapshot, { dispatchHostCommand });
+    registerHelarcIpc({ window: windowDouble(), controller });
+    const steer = requiredHandler(HELARC_IPC_CHANNELS.steerRun);
+    const submitInteraction = requiredHandler(HELARC_IPC_CHANNELS.submitInteraction);
+    const steeringCommand = {
+      version: 1,
+      commandId: "host-steer-1",
+      runId: "run-1",
+      kind: "run.steer",
+      payload: {
+        expectedRunRevision: 4,
+        instruction: "Inspect the failing test first.",
+      },
+    };
+    const interactionCommand = {
+      version: 1,
+      commandId: "host-interaction-1",
+      runId: "run-1",
+      kind: "interaction.submit",
+      payload: {
+        request,
+        submissionId: "patch-review-submission-1",
+        payload: { optionId: "accept" },
+      },
+    };
+
+    const steeringResponse = await steer({}, steeringCommand);
+    const interactionResponse = await submitInteraction({}, interactionCommand);
+
+    expect(dispatchHostCommand).toHaveBeenNthCalledWith(1, steeringCommand, "run.steer");
+    expect(dispatchHostCommand).toHaveBeenNthCalledWith(
+      2,
+      interactionCommand,
+      "interaction.submit",
+    );
+    expect(steeringResponse).toMatchObject({
+      receipt: {
+        kind: "run.steer",
+        status: "handled",
+        result: {
+          status: "accepted_for_application",
+          command: {
+            commandId: "host-steer-1",
+            acceptedRunRevision: 4,
+          },
+        },
+      },
+      snapshot: { status: "running" },
+    });
+    expect(interactionResponse).toMatchObject({
+      receipt: {
+        kind: "interaction.submit",
+        status: "handled",
+        result: {
+          status: "accepted_for_resolution",
+          receipt: {
+            receiptId: "interaction-receipt-1",
+            submissionId: "patch-review-submission-1",
+            request: { id: "interaction-1", requestVersion: 2 },
+          },
+        },
+      },
+      snapshot: { status: "running" },
+    });
+    expect(JSON.stringify({ steeringResponse, interactionResponse }))
+      .not.toContain(PRIVATE_RESULT);
+  });
+
   it("rejects malformed Thread commands instead of coercing them into navigation", async () => {
     const openThread = vi.fn();
     const controller = controllerDouble(mainSnapshot(), { openThread });
@@ -237,7 +396,7 @@ function controllerDouble(
     configureProvider: vi.fn(),
     startRun: vi.fn(),
     dispatchHostCommand: vi.fn(),
-    resolvePatchReview: vi.fn(),
+    queryRunStatus: vi.fn(),
     ...overrides,
   } as unknown as HelarcMainController;
 }

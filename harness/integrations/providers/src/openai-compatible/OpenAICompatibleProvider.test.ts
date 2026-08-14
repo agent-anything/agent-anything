@@ -3,24 +3,28 @@ import type {
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OllamaProvider } from "./OllamaProvider.js";
-import type { FetchLike } from "./OpenAICompatibleProvider.js";
+import type { FetchLike } from "../http/ProviderHttpTransport.js";
+import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider.js";
 
-describe("OllamaProvider", () => {
+describe("OpenAICompatibleProvider", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("sends an Ollama native generate request", async () => {
+  it("sends an OpenAI-compatible chat completions request", async () => {
     const calls: Array<{ url: string; headers: Record<string, string>; body: unknown }> = [];
-    const provider = new OllamaProvider(config(), async (url, init) => {
+    const provider = new OpenAICompatibleProvider({
+      baseUrl: "https://provider.local/v1/",
+      apiKey: "secret-key",
+      model: "model-a",
+      timeoutMs: 1000,
+    }, async (url, init) => {
       calls.push({
         url,
         headers: init.headers,
         body: JSON.parse(init.body) as unknown,
       });
       return okResponse({
-        response: "{\"action\":\"complete\",\"summary\":\"done\"}",
-        prompt_eval_count: 3,
-        eval_count: 4,
+        choices: [{ message: { content: "{\"action\":\"complete\",\"summary\":\"done\"}" } }],
+        usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
       });
     });
 
@@ -28,13 +32,14 @@ describe("OllamaProvider", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
-      url: "http://localhost:11434/api/generate",
+      url: "https://provider.local/v1/chat/completions",
       headers: {
         "content-type": "application/json",
+        authorization: "Bearer secret-key",
       },
       body: {
-        model: "gemma3:4b",
-        prompt: "system: You are concise.\n\nuser: hello",
+        model: "model-a",
+        messages: [{ role: "user", content: "hello" }],
         stream: false,
       },
     });
@@ -47,12 +52,17 @@ describe("OllamaProvider", () => {
     });
   });
 
-  it("maps HTTP failure without reading response body", async () => {
-    const provider = new OllamaProvider(config(), async () => ({
+  it("maps HTTP failure without leaking credentials", async () => {
+    const provider = new OpenAICompatibleProvider({
+      baseUrl: "https://provider.local/v1",
+      apiKey: "secret-key",
+      model: "model-a",
+      timeoutMs: 1000,
+    }, async () => ({
       ok: false,
-      status: 500,
+      status: 401,
       async json() {
-        return { response: "secret" };
+        return { error: "secret-key" };
       },
     }));
 
@@ -62,21 +72,21 @@ describe("OllamaProvider", () => {
       kind: "failed",
       failure: {
         code: "provider_http_error",
-        message: "Provider request failed with HTTP 500.",
-        statusCode: 500,
+        message: "Provider request failed with HTTP 401.",
+        statusCode: 401,
       },
     });
-    expect(JSON.stringify(result)).not.toContain("secret");
+    expect(JSON.stringify(result)).not.toContain("secret-key");
   });
 
   it("projects trusted HTTP retry metadata into ProviderFailure", async () => {
-    const provider = new OllamaProvider(config(), async () => ({
+    const provider = new OpenAICompatibleProvider(config(), async () => ({
       ok: false,
-      status: 503,
+      status: 429,
       headers: {
         get(name) {
-          if (name === "retry-after") return "0";
-          if (name === "request-id") return "ollama_503";
+          if (name === "retry-after") return "2";
+          if (name === "x-request-id") return "request_429";
           return null;
         },
       },
@@ -88,16 +98,16 @@ describe("OllamaProvider", () => {
     await expect(provider.send(request(), context())).resolves.toMatchObject({
       kind: "failed",
       failure: {
-        statusCode: 503,
-        retryAfterMs: 0,
-        requestId: "ollama_503",
+        statusCode: 429,
+        retryAfterMs: 2_000,
+        requestId: "request_429",
         metadata: {},
       },
     });
   });
 
   it("maps malformed provider responses", async () => {
-    const provider = new OllamaProvider(config(), async () => okResponse({ done: true }));
+    const provider = new OpenAICompatibleProvider(config(), async () => okResponse({ choices: [] }));
 
     await expect(provider.send(request(), context())).resolves.toMatchObject({
       kind: "failed",
@@ -111,7 +121,7 @@ describe("OllamaProvider", () => {
       await rejectWhenAborted(init.signal);
       throw new Error("unreachable");
     };
-    const provider = new OllamaProvider(config(), abortingFetch);
+    const provider = new OpenAICompatibleProvider(config(), abortingFetch);
     const result = provider.send(request(), context());
 
     await vi.advanceTimersByTimeAsync(1000);
@@ -122,9 +132,24 @@ describe("OllamaProvider", () => {
     });
   });
 
+  it("does not classify an unrelated AbortError as timeout or Run cancellation", async () => {
+    const provider = new OpenAICompatibleProvider(config(), async () => {
+      throw Object.assign(new Error("unrelated abort"), { name: "AbortError" });
+    });
+
+    await expect(provider.send(request(), context())).resolves.toMatchObject({
+      kind: "failed",
+      failure: {
+        category: "transport",
+        code: "provider_request_failed",
+        metadata: { causeName: "AbortError" },
+      },
+    });
+  });
+
   it("returns exact Run cancellation when it aborts the active request", async () => {
     const interruption = cancellableContext();
-    const provider = new OllamaProvider(config(), async (_url, init) => {
+    const provider = new OpenAICompatibleProvider(config(), async (_url, init) => {
       await rejectWhenAborted(init.signal);
       throw new Error("unreachable");
     });
@@ -137,14 +162,26 @@ describe("OllamaProvider", () => {
       cancellation: { runId: "run_001", requestId: "cancel_001" },
     });
   });
+
+  it("does not start transport work for an already-cancelled invocation", async () => {
+    const interruption = cancellableContext();
+    interruption.cancel();
+    const fetchImpl = vi.fn(async () => okResponse({ choices: [] }));
+    const provider = new OpenAICompatibleProvider(config(), fetchImpl);
+
+    await expect(provider.send(request(), interruption.context)).resolves.toEqual({
+      kind: "cancelled",
+      cancellation: { runId: "run_001", requestId: "cancel_001" },
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });
 
 function config() {
   return {
-    providerKind: "ollama" as const,
-    baseUrl: "http://localhost:11434/",
+    baseUrl: "https://provider.local/v1",
     apiKey: "",
-    model: "gemma3:4b",
+    model: "model-a",
     timeoutMs: 1000,
   };
 }
@@ -187,10 +224,7 @@ function rejectWhenAborted(signal: AbortSignal): Promise<never> {
 function request(): ProviderRequest {
   return {
     capability: "helarc.code-agent.plan",
-    messages: [
-      { role: "system", content: "You are concise.", metadata: {} },
-      { role: "user", content: "hello", metadata: {} },
-    ],
+    messages: [{ role: "user", content: "hello", metadata: {} }],
     metadata: {},
   };
 }

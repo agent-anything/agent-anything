@@ -1,0 +1,41 @@
+{
+  "name": "@agent-anything/provider-integrations",
+  "version": "0.0.0",
+  "description": "Reusable model-provider transport adapters for Agent Harness.",
+  "type": "module",
+  "exports": {
+    "./http": {
+      "types": "./src/http/index.ts",
+      "import": "./dist/http/index.js"
+    },
+    "./openai-compatible": {
+      "types": "./src/openai-compatible/index.ts",
+      "import": "./dist/openai-compatible/index.js"
+    },
+    "./ollama": {
+      "types": "./src/ollama/index.ts",
+      "import": "./dist/ollama/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "debug:test": "vitest run src/openai-compatible/OpenAICompatibleProvider.test.ts --inspect-brk --pool forks --poolOptions.forks.singleFork"
+  },
+  "agentAnything": {
+    "architecture": {
+      "kind": "harness",
+      "component": "integrations.providers"
+    }
+  },
+  "dependencies": {
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/model-interaction": "workspace:*"
+  },
+  "license": "Apache-2.0",
+  "private": true
+}

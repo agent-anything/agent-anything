@@ -124,6 +124,7 @@ export interface ActionExecutionRequest<TRequest = unknown> {
   readonly interruption: InvocationInterruptionContext;
   readonly deadlineAt: string;
   readonly maxAttempts: number;
+  readonly isProgressionBasisCurrent: () => boolean;
 }
 
 export type ActionExecutionResult<TOutput = unknown> =
@@ -356,6 +357,18 @@ export class ActionExecutionCoordinator {
       );
     }
 
+    if (!request.isProgressionBasisCurrent()) {
+      return this.settlePrepared<TOutput>(
+        ledger,
+        request,
+        captured.adapter,
+        prepared,
+        "invalidated",
+        "agent-runtime",
+        "action_progression_basis_invalidated",
+      );
+    }
+
     await ledger.transition({
       expectedRevision: ledger.getSnapshot().revision,
       kind: "mark_ready",
@@ -465,8 +478,19 @@ export class ActionExecutionCoordinator {
         resourceLimits: Object.freeze({
           maxResultBytes: captured.registration.maxPhysicalResultBytes,
         }),
-        allowedSecretReferences: prepared.invocation.secretReferences,
-      });
+      allowedSecretReferences: prepared.invocation.secretReferences,
+    });
+    if (!request.isProgressionBasisCurrent()) {
+      return this.settlePrepared<TOutput>(
+        ledger,
+        request,
+        captured.adapter,
+        prepared,
+        "invalidated",
+        "agent-runtime",
+        "action_progression_basis_invalidated",
+      );
+    }
       sandbox = await this.dependencies.sandbox.execute({
         attempt: sandboxAttempt,
         policy: sandboxPolicy,

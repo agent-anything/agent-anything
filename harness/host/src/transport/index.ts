@@ -20,4 +20,15 @@ export {
   type HostRunCancellationCommand,
   type HostRunCancellationCommandPayload,
   type HostRunCancellationCommandReceipt,
+  type HostRunSteeringCommand,
+  type HostRunSteeringCommandPayload,
+  type HostRunSteeringCommandReceipt,
 } from "./HostCommand.js";
+export {
+  createHostRunStatusQueryHandler,
+  HOST_QUERY_VERSION,
+  snapshotHostRunStatusQuery,
+  type HostRunStatusQuery,
+  type HostRunStatusQueryHandler,
+  type HostRunStatusQueryReceipt,
+} from "./HostRunStatusQuery.js";

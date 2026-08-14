@@ -51,7 +51,7 @@ describe("HostRunManager", () => {
     expect(fixture.submitInteraction).toHaveBeenCalledWith({
       request: REQUEST,
       submissionId: "submission-1",
-      contentDigest: "{\"choice\":\"approve\"}",
+      contentDigest: "sha256:11e8eebafd9a704fe24ef6fcc44050ff9b1d28c0a0a51473f88473b2980d3dd4",
       payload: { choice: "approve" },
       receivedAt: NOW,
     });
@@ -95,6 +95,31 @@ describe("HostRunManager", () => {
       cancellation: { requestId: "cancellation-1" },
     });
     expect(manager.releaseRun("run-1")).toEqual({ status: "run_active", runId: "run-1" });
+  });
+
+  it("forwards steering with Host time and exposes the current status projection", () => {
+    const fixture = createFakeRunner();
+    const manager = createHostRunManager({ runner: fixture.runner, now: () => NOW });
+    const active = manager.start(startInput());
+    fixture.publishSnapshot({ sequence: 1, runRevision: 3, status: "running" });
+
+    const receipt = active.steer({
+      commandId: "steering-1",
+      expectedRunRevision: 3,
+      instruction: "Inspect the failing tests first.",
+      attribution: { origin: "user", actorId: "user-1" },
+    });
+
+    expect(receipt).toMatchObject({ status: "accepted_for_application" });
+    expect(fixture.steer).toHaveBeenCalledWith({
+      commandId: "steering-1",
+      expectedRunRevision: 3,
+      instruction: "Inspect the failing tests first.",
+      attribution: { origin: "user", actorId: "user-1" },
+      submittedAt: NOW,
+    });
+    expect(active.getStatus()).toBe(active.getProjection());
+    expect(active.getStatus().runRevision).toBe(3);
   });
 
   it("rejects duplicate Runner-created Run identity without replacing the original", () => {
@@ -141,6 +166,7 @@ function createFakeHandle(runId: string) {
   let snapshot: RunOperationSnapshot = {
     runId,
     sequence: 0,
+    runRevision: 0,
     status: "initializing",
     lastRunItemSequence: 0,
     plan: null,
@@ -178,6 +204,14 @@ function createFakeHandle(runId: string) {
       recordedAt: NOW,
     },
   }));
+  const steer = vi.fn((input: Parameters<RunHandle["steer"]>[0]) => ({
+    status: "accepted_for_application" as const,
+    command: {
+      ...input,
+      ref: { run: { id: runId }, commandId: input.commandId },
+      acceptedRunRevision: input.expectedRunRevision,
+    },
+  }));
   const handle: RunHandle = {
     runId,
     getSnapshot: () => snapshot,
@@ -187,6 +221,7 @@ function createFakeHandle(runId: string) {
       return () => listeners.delete(listener);
     },
     cancel,
+    steer,
     submitInteraction,
     wait: () => completion,
     getResult: () => result,
@@ -194,6 +229,7 @@ function createFakeHandle(runId: string) {
   return {
     handle,
     cancel,
+    steer,
     submitInteraction,
     publishSnapshot(overrides: Partial<RunOperationSnapshot>) {
       snapshot = Object.freeze({ ...snapshot, ...overrides });

@@ -4,7 +4,6 @@ import {
   type ValidateFunction,
 } from "ajv";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import type { ToolSchemaIdentity } from "@agent-anything/tools/identity";
 import {
   createMcpContractFingerprint,
   type McpJsonObject,
@@ -26,12 +25,15 @@ export interface McpSchemaValidation {
   readonly errors: readonly string[];
 }
 
+export interface McpSchemaIdentity {
+  readonly dialect: McpJsonSchemaDialect;
+  readonly translationVersion: typeof MCP_SCHEMA_TRANSLATION_VERSION;
+}
+
 export interface McpCompiledSchema {
   readonly schema: McpJsonObject;
   readonly schemaFingerprint: string;
-  readonly identity: ToolSchemaIdentity & {
-    readonly dialect: McpJsonSchemaDialect;
-  };
+  readonly identity: McpSchemaIdentity;
   validate(value: unknown): McpSchemaValidation;
 }
 

@@ -49,20 +49,22 @@ const initialSnapshot: HelarcMainSnapshot = {
 };
 
 type ActiveRunProjection = NonNullable<HelarcMainSnapshot["run"]>;
-type HostApprovalProjection = NonNullable<ActiveRunProjection["host"]["approval"]>;
-type PendingApprovalView = NonNullable<HostApprovalProjection["review"]> &
-  Pick<HostApprovalProjection, "phase">;
+type PendingInteractionView = ActiveRunProjection["host"]["pendingInteractions"][number];
+type PendingApprovalView = Extract<PendingInteractionView, { family: "approval" }>;
+type PendingPatchReviewView = Extract<PendingInteractionView, { family: "patch_review" }>;
 
 type SidePanelMode = "review" | "threads" | "settings";
 
 export function App() {
   const [snapshot, setSnapshot] = useState<HelarcMainSnapshot>(initialSnapshot);
   const [taskText, setTaskText] = useState("");
+  const [steeringText, setSteeringText] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [startResult, setStartResult] = useState<HelarcStartRunResult | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [sidePanelMode, setSidePanelMode] = useState<SidePanelMode>("review");
-  const [approvalSubmissionError, setApprovalSubmissionError] = useState<string | null>(null);
+  const [interactionSubmissionError, setInteractionSubmissionError] = useState<string | null>(null);
+  const [runControlError, setRunControlError] = useState<string | null>(null);
   const pendingApproval = getPendingApproval(snapshot.run);
   const pendingPatchReview = getPendingPatchReview(snapshot.run);
   const runActive = isRunActive(snapshot.status);
@@ -90,6 +92,13 @@ export function App() {
       && !runActive
     ),
     [isBusy, runActive, snapshot.provider.configured, snapshot.workspace, taskText],
+  );
+  const canSteer = Boolean(
+    snapshot.run &&
+    runActive &&
+    snapshot.run.display.status !== "cancelling" &&
+    steeringText.trim().length > 0 &&
+    !isBusy
   );
 
   async function chooseWorkspace() {
@@ -197,38 +206,72 @@ export function App() {
   }
 
   async function submitApprovalDecision(
-    option: PendingApprovalView["request"]["decisionOptions"][number],
+    option: PendingApprovalView["presentation"]["decisionOptions"][number],
   ) {
     const api = getHelarcApi();
-    if (!api || !pendingApproval || pendingApproval.phase !== "reviewing") {
+    const runId = snapshot.run?.harnessRunId;
+    if (!api || !runId || !pendingApproval || pendingApproval.phase !== "pending") {
       return;
     }
 
     setIsBusy(true);
     try {
-      const response = await api.submitApprovalDecision({
-        commandId: createCommandId("approval.submit"),
-        submissionId: `helarc-desktop-${crypto.randomUUID()}`,
-        runId: pendingApproval.request.runId,
-        requestId: pendingApproval.request.id,
-        pendingVersion: pendingApproval.pendingVersion,
-        optionId: option.id,
-        grantedPermissions: defaultGrantedPermissions(pendingApproval, option.kind),
-        reason: option.kind === "decline"
-          ? "Declined from Helarc desktop."
-          : option.kind === "cancel"
-            ? "Cancelled from Helarc desktop."
-            : null,
+      const submissionId = `helarc-desktop-${crypto.randomUUID()}`;
+      const response = await api.submitInteraction({
+        commandId: createCommandId("interaction.submit"),
+        submissionId,
+        runId,
+        request: pendingApproval.request,
+        payload: {
+          submissionId,
+          runId: pendingApproval.presentation.runId,
+          requestId: pendingApproval.request.id,
+          pendingVersion: pendingApproval.request.requestVersion,
+          optionId: option.id,
+          grantedPermissions: defaultGrantedPermissions(pendingApproval, option.kind),
+          reason: option.kind === "decline"
+            ? "Declined from Helarc desktop."
+            : option.kind === "cancel"
+              ? "Cancelled from Helarc desktop."
+              : null,
+        },
       });
       setSnapshot(response.snapshot);
-      setApprovalSubmissionError(
+      setInteractionSubmissionError(
         response.receipt.status === "rejected"
           ? response.receipt.code
-          : response.receipt.kind === "approval.submit" &&
+          : response.receipt.kind === "interaction.submit" &&
               response.receipt.result.status === "rejected"
             ? response.receipt.result.code
             : null,
       );
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function steerRun(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const api = getHelarcApi();
+    const run = snapshot.run;
+    if (!api || !run || !canSteer) return;
+
+    setIsBusy(true);
+    try {
+      const response = await api.steerRun({
+        commandId: createCommandId("run.steer"),
+        runId: run.harnessRunId,
+        expectedRunRevision: run.host.runRevision,
+        instruction: steeringText,
+      });
+      setSnapshot(response.snapshot);
+      const error = response.receipt.status === "rejected"
+        ? response.receipt.code
+        : response.receipt.kind === "run.steer" && response.receipt.result.status === "rejected"
+          ? response.receipt.result.code
+          : null;
+      setRunControlError(error);
+      if (error === null) setSteeringText("");
     } finally {
       setIsBusy(false);
     }
@@ -258,30 +301,36 @@ export function App() {
     decision: "accepted" | "rejected" | "request_revision",
   ) {
     const api = getHelarcApi();
-    if (!api || !pendingPatchReview) {
+    const runId = snapshot.run?.harnessRunId;
+    if (!api || !runId || !pendingPatchReview || pendingPatchReview.phase !== "pending") {
       return;
     }
 
     setIsBusy(true);
     try {
-      const receipt = await api.resolvePatchReview({
-        commandId: createCommandId("patch_review.submit"),
+      const response = await api.submitInteraction({
+        commandId: createCommandId("interaction.submit"),
         submissionId: globalThis.crypto.randomUUID(),
-        runId: pendingPatchReview.runId,
-        proposalId: pendingPatchReview.proposalId,
-        proposalRevision: pendingPatchReview.proposalRevision,
-        reviewId: pendingPatchReview.reviewId,
-        pendingVersion: pendingPatchReview.pendingVersion,
-        decision,
-        reason: decision === "accepted"
-          ? "Accepted from Helarc desktop."
-          : decision === "rejected"
-            ? "Rejected from Helarc desktop."
-            : "Revision requested from Helarc desktop.",
+        runId,
+        request: pendingPatchReview.request,
+        payload: {
+          decision,
+          reason: decision === "accepted"
+            ? "Accepted from Helarc desktop."
+            : decision === "rejected"
+              ? "Rejected from Helarc desktop."
+              : "Revision requested from Helarc desktop.",
+        },
       });
-      if (receipt.status === "handled") {
-        setSnapshot(receipt.result.snapshot);
-      }
+      setSnapshot(response.snapshot);
+      setInteractionSubmissionError(
+        response.receipt.status === "rejected"
+          ? response.receipt.code
+          : response.receipt.kind === "interaction.submit" &&
+              response.receipt.result.status === "rejected"
+            ? response.receipt.result.code
+            : null,
+      );
     } finally {
       setIsBusy(false);
     }
@@ -424,31 +473,37 @@ export function App() {
             ) : pendingApproval ? (
               <ApprovalPromptPanel
                 approval={pendingApproval}
-                submissionError={approvalSubmissionError}
+                submissionError={interactionSubmissionError}
                 isBusy={isBusy}
                 onSubmit={(option) => void submitApprovalDecision(option)}
               />
             ) : pendingPatchReview ? (
               <div className="patch-panel">
                 <FileCode2 size={24} aria-hidden="true" />
-                <strong>{pendingPatchReview.summary}</strong>
-                <span>{pendingPatchReview.operation} - {pendingPatchReview.path}</span>
+                <strong>{pendingPatchReview.presentation.summary}</strong>
+                <span>{pendingPatchReview.presentation.operation} - {pendingPatchReview.presentation.path}</span>
                 <div className="patch-preview">
                   <section>
                     <span>Original</span>
-                    <pre>{pendingPatchReview.originalContent ?? ""}</pre>
+                    <pre>{pendingPatchReview.presentation.originalContent ?? ""}</pre>
                   </section>
                   <section>
                     <span>Proposed</span>
-                    <pre>{pendingPatchReview.proposedContent ?? ""}</pre>
+                    <pre>{pendingPatchReview.presentation.proposedContent ?? ""}</pre>
                   </section>
                 </div>
+                {pendingPatchReview.phase === "submitted_for_resolution" ? (
+                  <span>Submitted for resolution</span>
+                ) : null}
+                {interactionSubmissionError ? (
+                  <span className="error-text">{interactionSubmissionError}</span>
+                ) : null}
                 <div className="permission-actions">
                   <button
                     className="secondary-button danger"
                     type="button"
                     onClick={() => void resolvePatchReview("rejected")}
-                    disabled={isBusy}
+                    disabled={isBusy || pendingPatchReview.phase !== "pending"}
                   >
                     Reject
                   </button>
@@ -456,7 +511,7 @@ export function App() {
                     className="secondary-button"
                     type="button"
                     onClick={() => void resolvePatchReview("request_revision")}
-                    disabled={isBusy}
+                    disabled={isBusy || pendingPatchReview.phase !== "pending"}
                   >
                     Request revision
                   </button>
@@ -464,7 +519,7 @@ export function App() {
                     className="primary-button compact"
                     type="button"
                     onClick={() => void resolvePatchReview("accepted")}
-                    disabled={isBusy}
+                    disabled={isBusy || pendingPatchReview.phase !== "pending"}
                   >
                     Apply
                   </button>
@@ -485,9 +540,9 @@ export function App() {
         </aside>
       </main>
 
-      <form className="task-composer" onSubmit={startRun}>
+      <form className="task-composer" onSubmit={runActive ? steerRun : startRun}>
         <div className="composer-heading">
-          <label htmlFor="task-input">Task</label>
+          <label htmlFor="task-input">{runActive ? "Steer run" : "Task"}</label>
           <select
             aria-label="Task templates"
             value=""
@@ -507,18 +562,21 @@ export function App() {
             id="task-input"
             name="task"
             rows={2}
-            placeholder="Describe a code task..."
-            value={taskText}
-            onChange={(event) => setTaskText(event.target.value)}
-            disabled={!snapshot.workspace || !snapshot.provider.configured || isBusy || runActive}
+            placeholder={runActive ? "Add guidance to the active run..." : "Describe a code task..."}
+            value={runActive ? steeringText : taskText}
+            onChange={(event) => runActive
+              ? setSteeringText(event.target.value)
+              : setTaskText(event.target.value)}
+            disabled={!snapshot.workspace || !snapshot.provider.configured || isBusy}
           />
-          <button className="primary-button" type="submit" disabled={!canStart}>
+          <button className="primary-button" type="submit" disabled={runActive ? !canSteer : !canStart}>
             <Play size={17} fill="currentColor" aria-hidden="true" />
-            Start
+            {runActive ? "Steer" : "Start"}
           </button>
         </div>
         {!snapshot.provider.configured ? <p className="composer-message error">{snapshot.provider.error.message}</p> : null}
         {snapshot.error ? <p className="composer-message error">{snapshot.error.message}</p> : null}
+        {runControlError ? <p className="composer-message error">{runControlError}</p> : null}
         {startResult?.ok ? <p className="composer-message">Run started</p> : null}
       </form>
     </div>
@@ -712,13 +770,13 @@ export function ApprovalPromptPanel({
   submissionError: string | null;
   isBusy: boolean;
   onSubmit: (
-    option: PendingApprovalView["request"]["decisionOptions"][number],
+    option: PendingApprovalView["presentation"]["decisionOptions"][number],
   ) => void;
 }) {
   if (!approval) {
     return null;
   }
-  const request = approval.request;
+  const request = approval.presentation;
   const submitted = approval.phase === "submitted_for_resolution";
 
   return (
@@ -729,7 +787,7 @@ export function ApprovalPromptPanel({
       <code>{approvalRequestSummary(request)}</code>
       <div className="permission-meta">
         <span>{request.category}</span>
-        <span>{approval.phase === "reviewing" ? "Awaiting review" : "Submitted for resolution"}</span>
+        <span>{approval.phase === "pending" ? "Awaiting review" : "Submitted for resolution"}</span>
       </div>
       {submissionError ? <span className="error-text">{submissionError}</span> : null}
       <div className="permission-actions">
@@ -1145,7 +1203,7 @@ function getHelarcApi() {
 }
 
 function approvalCategoryLabel(
-  request: PendingApprovalView["request"],
+  request: PendingApprovalView["presentation"],
 ): string {
   switch (request.category) {
     case "commandExecution": return "Command execution";
@@ -1161,7 +1219,7 @@ function approvalCategoryLabel(
 }
 
 function approvalRequestSummary(
-  request: PendingApprovalView["request"],
+  request: PendingApprovalView["presentation"],
 ): string {
   switch (request.category) {
     case "commandExecution":
@@ -1190,7 +1248,7 @@ function approvalRequestSummary(
 }
 
 function approvalOptionButtonClass(
-  kind: PendingApprovalView["request"]["decisionOptions"][number]["kind"],
+  kind: PendingApprovalView["presentation"]["decisionOptions"][number]["kind"],
 ): string {
   if (kind === "decline" || kind === "cancel") {
     return "secondary-button danger";
@@ -1200,10 +1258,10 @@ function approvalOptionButtonClass(
 
 function defaultGrantedPermissions(
   approval: PendingApprovalView,
-  optionKind: PendingApprovalView["request"]["decisionOptions"][number]["kind"],
+  optionKind: PendingApprovalView["presentation"]["decisionOptions"][number]["kind"],
 ) {
   if (optionKind !== "grantPermissions") return null;
-  const request = approval.request;
+  const request = approval.presentation;
   switch (request.category) {
     case "commandExecution":
     case "fileChange":
@@ -1219,15 +1277,15 @@ function defaultGrantedPermissions(
 }
 
 function getPendingApproval(run: HelarcMainSnapshot["run"]): PendingApprovalView | null {
-  const approval = run?.host.approval ?? null;
-  return approval?.review === null || approval === null
-    ? null
-    : { ...approval.review, phase: approval.phase };
+  return run?.host.pendingInteractions.find(
+    (interaction): interaction is PendingApprovalView => interaction.family === "approval",
+  ) ?? null;
 }
 
-function getPendingPatchReview(run: HelarcMainSnapshot["run"]) {
-  const phase = run?.product.phase;
-  return phase?.kind === "waiting_for_patch_review" ? phase.review : null;
+function getPendingPatchReview(run: HelarcMainSnapshot["run"]): PendingPatchReviewView | null {
+  return run?.host.pendingInteractions.find(
+    (interaction): interaction is PendingPatchReviewView => interaction.family === "patch_review",
+  ) ?? null;
 }
 
 function activitySeverity(

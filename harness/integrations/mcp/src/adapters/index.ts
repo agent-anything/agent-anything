@@ -1,4 +1,4 @@
 export {
-  createMcpActionCapability,
-  type CreateMcpActionCapabilityInput,
-} from "./createMcpActionCapability.js";
+  createMcpOperationContribution,
+  type CreateMcpOperationContributionInput,
+} from "./createMcpOperationContribution.js";

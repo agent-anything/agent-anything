@@ -1,22 +1,18 @@
 import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,
-  createUserApprovalReviewBridge,
 } from "@agent-anything/host/authority";
 import type { ApprovalReviewerPort, SessionAuthorityPort } from "@agent-anything/permission";
 import { describe, expect, it } from "vitest";
 import { createHelarcHostPermissionComposition } from "./HelarcHostPermissionComposition.js";
 
 describe("Helarc Host permission composition", () => {
-  it("binds Ask for approval to the exact Run-scoped user bridge", async () => {
-    const bridge = userBridge();
+  it("binds Ask for approval to a descriptor-only Run-scoped user reviewer", async () => {
     const composition = await createHelarcHostPermissionComposition({
       ...baseInput(),
       preset: "ask_for_approval",
-      userApprovalBridge: bridge,
     });
 
-    expect(composition.userApprovalBridge).toBe(bridge);
     expect(composition.permissions).toMatchObject({
       permissionProfile: {
         id: "helarc-workspace-disabled",
@@ -24,28 +20,36 @@ describe("Helarc Host permission composition", () => {
         process: { unrestricted: false },
       },
       approvalPolicy: "on-request",
-      reviewer: { kind: "user", reviewer: bridge },
+      reviewer: {
+        kind: "user",
+        bindingId: "run.1:reviewer:user",
+        descriptor: {
+          id: "helarc-desktop-user-reviewer",
+          source: "helarc-desktop",
+        },
+      },
     });
+    expect(composition.permissions.reviewer).not.toHaveProperty("reviewer");
   });
 
-  it("requires exactly the reviewer kind selected by each preset", async () => {
+  it("requires exactly the automatic reviewer selected by each preset", async () => {
     await expect(createHelarcHostPermissionComposition({
       ...baseInput(),
       preset: "ask_for_approval",
-    })).rejects.toThrow("requires an explicit user approval bridge");
+      automaticReviewer: autoReviewer(),
+    })).rejects.toThrow("must not include an automatic reviewer");
     await expect(createHelarcHostPermissionComposition({
       ...baseInput(),
       preset: "approve_for_me",
-      userApprovalBridge: userBridge(),
     })).rejects.toThrow("requires an explicit automatic reviewer");
     await expect(createHelarcHostPermissionComposition({
       ...baseInput(),
       preset: "full_access",
-      userApprovalBridge: userBridge(),
+      automaticReviewer: autoReviewer(),
     })).rejects.toThrow("must not include an approval reviewer");
   });
 
-  it("binds Approve for me and Full access without user transport fallback", async () => {
+  it("binds Approve for me and Full access without a user transport bridge", async () => {
     const automaticReviewer = autoReviewer();
     const automatic = await createHelarcHostPermissionComposition({
       ...baseInput(),
@@ -56,7 +60,6 @@ describe("Helarc Host permission composition", () => {
       approvalPolicy: "on-request",
       reviewer: { kind: "auto_review", reviewer: automaticReviewer.reviewer },
     });
-    expect(automatic.userApprovalBridge).toBeNull();
 
     const fullAccess = await createHelarcHostPermissionComposition({
       ...baseInput(),
@@ -85,7 +88,6 @@ describe("Helarc Host permission composition", () => {
     await expect(createHelarcHostPermissionComposition({
       ...baseInput(),
       preset: "ask_for_approval",
-      userApprovalBridge: userBridge(),
       sessionAuthorityPort: unavailable,
     })).rejects.toThrow("authority store unavailable");
   });
@@ -107,23 +109,10 @@ function baseInput() {
     workspaceRoots: [{ rootId: "workspace.1", path: "D:\\workspace" }],
     platform: "win32" as const,
     enforcement: "disabled" as const,
-    userApprovalBridge: null,
     automaticReviewer: null,
     sessionAuthorityPort: createInMemoryHostSessionAuthorityStore({ maxRecords: 64 }),
     persistentPolicyAmendments: createInMemoryHostPolicyAmendmentStore({ maxRecords: 64 }),
   };
-}
-
-function userBridge() {
-  return createUserApprovalReviewBridge({
-    descriptor: {
-      id: "reviewer.user",
-      kind: "user",
-      displayName: "User",
-      source: "test",
-      metadata: {},
-    },
-  });
 }
 
 function autoReviewer() {

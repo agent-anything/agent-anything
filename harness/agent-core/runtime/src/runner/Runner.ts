@@ -124,6 +124,7 @@ export class Runner {
     handle.bindInteractionSubmission((submission) =>
       execution.submitInteraction(submission)
     );
+    handle.bindSteering((steering) => execution.submitSteering(steering));
     this.activeRunIds.add(runId);
     handle.start(async () => {
       try {

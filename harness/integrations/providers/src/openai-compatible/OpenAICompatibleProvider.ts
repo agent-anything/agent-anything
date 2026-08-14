@@ -9,33 +9,22 @@ import {
   type ProviderResponse,
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
-import type { HelarcProviderConfig } from "./resolveHelarcProviderConfig.js";
 import {
   readProviderHttpFailureMetadata,
-  type HttpResponseHeadersLike,
-} from "./ProviderHttpFailureMetadata.js";
+} from "../http/ProviderHttpFailureMetadata.js";
+import type { FetchLike } from "../http/ProviderHttpTransport.js";
 
-export interface FetchResponseLike {
-  ok: boolean;
-  status: number;
-  headers?: HttpResponseHeadersLike;
-  json(): Promise<unknown>;
+export interface OpenAICompatibleProviderConfig {
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly model: string;
+  readonly timeoutMs: number;
 }
-
-export type FetchLike = (
-  url: string,
-  init: {
-    method: "POST";
-    headers: Record<string, string>;
-    body: string;
-    signal: AbortSignal;
-  },
-) => Promise<FetchResponseLike>;
 
 export class OpenAICompatibleProvider implements Provider {
   readonly descriptor: ProviderDescriptor = {
-    id: "helarc-openai-compatible",
-    name: "Helarc OpenAI-compatible Provider",
+    id: "openai-compatible.chat-completions",
+    name: "OpenAI-compatible Chat Completions",
     capabilities: {
       supportsToolPlanning: true,
       supportsStructuredOutput: true,
@@ -46,9 +35,13 @@ export class OpenAICompatibleProvider implements Provider {
   };
 
   constructor(
-    private readonly config: HelarcProviderConfig,
+    config: OpenAICompatibleProviderConfig,
     private readonly fetchImpl: FetchLike = globalThis.fetch as FetchLike,
-  ) {}
+  ) {
+    this.config = snapshotConfig(config);
+  }
+
+  private readonly config: Readonly<OpenAICompatibleProviderConfig>;
 
   async send(
     request: ProviderRequest,
@@ -207,4 +200,38 @@ function failed(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function snapshotConfig(
+  input: OpenAICompatibleProviderConfig,
+): Readonly<OpenAICompatibleProviderConfig> {
+  return Object.freeze({
+    baseUrl: validatedBaseUrl(input.baseUrl),
+    apiKey: requiredString(input.apiKey, "OpenAI-compatible API key", true),
+    model: requiredString(input.model, "OpenAI-compatible model"),
+    timeoutMs: positiveTimeout(input.timeoutMs),
+  });
+}
+
+function validatedBaseUrl(value: string): string {
+  const normalized = requiredString(value, "OpenAI-compatible base URL");
+  const url = new URL(normalized);
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
+    throw new TypeError("OpenAI-compatible base URL must be an HTTP URL without credentials.");
+  }
+  return normalized;
+}
+
+function requiredString(value: string, field: string, allowEmpty = false): string {
+  if (typeof value !== "string") throw new TypeError(`${field} must be a string.`);
+  const normalized = value.trim();
+  if (!allowEmpty && normalized.length === 0) throw new TypeError(`${field} is required.`);
+  return normalized;
+}
+
+function positiveTimeout(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new TypeError("OpenAI-compatible timeout must be a positive integer.");
+  }
+  return value;
 }

@@ -7,9 +7,6 @@ import {
   type HostWorkspaceResolver,
   type HostWorkspaceSelection,
 } from "@agent-anything/host/context";
-import {
-  createUserApprovalReviewBridge,
-} from "@agent-anything/host/authority";
 import type { ApprovalReviewInput } from "@agent-anything/permission";
 import type {
   Provider,
@@ -24,14 +21,14 @@ import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
-  createHelarcActionComposition,
+  type HelarcPatchReviewPresentation,
 } from "@agent-anything/helarc/composition";
 import { createHelarcTask } from "@agent-anything/helarc/task";
 import {
   prepareHelarcHostRun,
+  type HelarcHostActiveRun,
   type PrepareHelarcHostRunInput,
 } from "./HelarcHostRunComposition.js";
-import { createHelarcPatchReviewBridge } from "./HelarcPatchReviewBridge.js";
 
 type RunHelarcTestInput = Omit<
   PrepareHelarcHostRunInput,
@@ -39,7 +36,6 @@ type RunHelarcTestInput = Omit<
   | "productRunId"
   | "toolMode"
   | "permissionPreset"
-  | "patchReviewBridge"
   | "inputItems"
   | "workspaceResolver"
   | "workspaceSelection"
@@ -55,29 +51,29 @@ type RunHelarcTestInput = Omit<
   readonly productRunId?: string;
   readonly enableShell?: boolean;
   readonly permissionPreset?: PrepareHelarcHostRunInput["permissionPreset"];
-  readonly patchReviewBridge?: PrepareHelarcHostRunInput["patchReviewBridge"];
+  readonly patchReviewDecision?: "accepted" | "rejected";
+  readonly onPatchReview?: (review: HelarcPatchReviewPresentation) => void | Promise<void>;
   readonly inputItems?: PrepareHelarcHostRunInput["inputItems"];
 };
 
 async function executeTestHostRun(input: RunHelarcTestInput) {
   const prepared = await prepareTestHostRun(input);
-  return prepared.start().result;
+  const composition = prepared.start();
+  const submission = input.patchReviewDecision === undefined
+    ? null
+    : submitNextPatchReview(
+        composition.activeRun,
+        input.patchReviewDecision,
+        input.onPatchReview,
+      );
+  const result = await composition.result;
+  await submission;
+  return result;
 }
 
 async function prepareTestHostRun(input: RunHelarcTestInput) {
   const productRunId = input.productRunId ?? input.sessionId ?? input.task.id;
   const permissionPreset = input.permissionPreset ?? "ask_for_approval";
-  const userApprovalBridge = permissionPreset === "ask_for_approval"
-    ? input.userApprovalBridge ?? createUserApprovalReviewBridge({
-        descriptor: {
-          id: "test-user-reviewer",
-          kind: "user",
-          displayName: "Test user",
-          source: "helarc-host-run-test",
-          metadata: {},
-        },
-      })
-    : input.userApprovalBridge;
   const {
     workspace,
     workspaceResolver,
@@ -85,6 +81,8 @@ async function prepareTestHostRun(input: RunHelarcTestInput) {
     identityResolver,
     identitySelection,
     enableShell,
+    patchReviewDecision: _patchReviewDecision,
+    onPatchReview: _onPatchReview,
     inputItems,
     ...hostInput
   } = input;
@@ -109,9 +107,6 @@ async function prepareTestHostRun(input: RunHelarcTestInput) {
     inputItems: inputItems ?? [],
     toolMode: enableShell ? "shell-enabled" : "read-only",
     permissionPreset,
-    userApprovalBridge,
-    patchReviewBridge: input.patchReviewBridge ??
-      createHelarcPatchReviewBridge(),
   });
 }
 
@@ -159,43 +154,6 @@ describe("Helarc Host Run composition", () => {
     expect(provider.requests).toHaveLength(0);
   });
 
-  it("exposes only read-only Actions while retaining trusted mutation registrations", async () => {
-    const runFixture = createTask("D:/workspace");
-    const composition = await createHelarcActionComposition(runFixture.workspace, { enableShell: false });
-
-    expect(composition.toolBindings.toolCatalog.tools.map((tool) => tool.name)).toEqual([
-      "codeAgent.listFiles",
-      "codeAgent.readFile",
-      "codeAgent.searchFiles",
-    ]);
-    expect(composition.registrations.registrations.map(({ actionName }) => actionName))
-      .toEqual(expect.arrayContaining([
-        "codeAgent.createFile",
-        "codeAgent.updateFile",
-        "codeAgent.deleteFile",
-      ]));
-    expect(composition.toolBindings.bindings).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        toolName: "codeAgent.createFile",
-        origins: ["workflow"],
-      }),
-    ]));
-    expect(composition.toolBindings.toolCatalog.tools.some(
-      ({ name }) => name === "codeAgent.createFile",
-    ))
-      .toBe(false);
-  });
-
-  it("adds the canonical command Action only when shell execution is enabled", async () => {
-    const runFixture = createTask("D:/workspace");
-    const composition = await createHelarcActionComposition(runFixture.workspace, { enableShell: true });
-
-    expect(composition.toolBindings.toolCatalog.tools.map(({ name }) => name))
-      .toContain("codeAgent.runCommand");
-    expect(composition.registrations.registrations.map(({ actionName }) => actionName))
-      .toContain("codeAgent.runCommand");
-  });
-
   it("runs one read-only tool call and completes with ordered activity", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-session-"));
     await mkdir(join(workspaceRoot, "src"));
@@ -233,39 +191,12 @@ describe("Helarc Host Run composition", () => {
       "run.started",
       "controller.started",
       "run.item.appended",
-      "retry.attempt.started",
-      "run.item.appended",
-      "retry.attempt.started",
-      "run.item.appended",
-      "retry.attempt.finished",
-      "run.item.appended",
-      "retry.attempt.finished",
-      "run.item.appended",
       "controller.finished",
       "run.item.appended",
-      "tool.started",
+      "operation.started",
+      "operation.finished",
       "run.item.appended",
-      "action.prepared",
-      "run.item.appended",
-      "action.assessed",
-      "run.item.appended",
-      "sandbox.attempt.started",
-      "run.item.appended",
-      "sandbox.attempt.resolved",
-      "run.item.appended",
-      "observation.created",
-      "context.updated",
-      "evidence.created",
-      "tool.finished",
       "controller.started",
-      "run.item.appended",
-      "retry.attempt.started",
-      "run.item.appended",
-      "retry.attempt.started",
-      "run.item.appended",
-      "retry.attempt.finished",
-      "run.item.appended",
-      "retry.attempt.finished",
       "run.item.appended",
       "controller.finished",
       "run.item.appended",
@@ -291,35 +222,38 @@ describe("Helarc Host Run composition", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-provider-retry-"));
     const provider = new RetryThenCompleteProvider();
 
-    const result = await executeReadOnlyTestHostRun({
+    const prepared = await prepareTestHostRun({
       ...createTask(workspaceRoot),
       provider,
       now: () => "2026-07-14T00:00:00.000Z",
     });
+    const composition = prepared.start();
+    const result = await composition.result;
 
     expect(result.product.status).toBe("completed");
     expect(provider.requests).toHaveLength(2);
-    const retryActivity = result.activity.filter((item) =>
-      item.kind.startsWith("retry.") && item.metadata.owner === "provider_request"
+    const retryProjection = composition.activeRun.getStatus().retry;
+    expect(retryProjection).not.toBeNull();
+    const retryActivity = retryProjection?.recentEvents.filter((item) =>
+      item.owner === "provider_request"
     );
-    expect(retryActivity.map((item) => item.kind)).toEqual([
-      "retry.attempt.started",
-      "retry.attempt.finished",
-      "retry.scheduled",
-      "retry.attempt.started",
-      "retry.attempt.finished",
+    expect(retryActivity?.map((item) => item.event)).toEqual([
+      "retry_attempt_started",
+      "retry_attempt_finished",
+      "retry_scheduled",
+      "retry_attempt_started",
+      "retry_attempt_finished",
     ]);
-    expect(new Set(retryActivity.map((item) => item.metadata.operationId))).toEqual(
+    expect(new Set(retryActivity?.map((item) => item.operationId))).toEqual(
       new Set([`${result.harnessRunId}:controller:1:provider-request:1`]),
     );
-    expect(retryActivity.find((item) => item.kind === "retry.scheduled")?.metadata).toMatchObject({
+    expect(retryActivity?.find((item) => item.event === "retry_scheduled")).toMatchObject({
       owner: "provider_request",
-      nextAttemptNumber: 2,
+      attemptNumber: 2,
       delayMs: 0,
-      failureCategory: "transport",
-      failureCode: "provider_unavailable",
+      code: "provider_unavailable",
     });
-    expect(retryActivity.every((item) => Object.isFrozen(item.metadata))).toBe(true);
+    expect(retryActivity?.every(Object.isFrozen)).toBe(true);
     expect(JSON.stringify(retryActivity)).not.toContain("Provider is temporarily unavailable.");
   });
 
@@ -360,8 +294,10 @@ describe("Helarc Host Run composition", () => {
 
     expect(result.product.status).toBe("completed");
     expect(result.product.output.agentSummary).toBe("Read-only tools completed.");
-    expect(result.runResult.evidenceRefs).toHaveLength(3);
-    expect(result.activity.filter((item) => item.kind === "tool.finished")).toHaveLength(3);
+    expect(result.runResult.evidenceRefs).toHaveLength(0);
+    expect(result.product.effects).toHaveLength(3);
+    expect(result.product.effects.every((effect) => effect.status === "succeeded")).toBe(true);
+    expect(result.activity.filter((item) => item.kind === "operation.finished")).toHaveLength(3);
     expect(provider.lastControllerInputContexts).toEqual([0, 1, 2, 3]);
   });
 
@@ -398,7 +334,7 @@ describe("Helarc Host Run composition", () => {
       "Use only a Tool exposed in the active Tool catalog.",
     );
     expect(result.runResult.items.some((item) =>
-      item.kind === "action" && item.action.subject.name === "codeAgent.runCommand"
+      item.payload.kind === "run_action" && item.payload.action.subject.kind === "operation"
     )).toBe(false);
     await expect(access(markerPath)).rejects.toThrow();
   });
@@ -412,20 +348,6 @@ describe("Helarc Host Run composition", () => {
       provider,
       enforcement: "managed",
     })).rejects.toThrow("requires a matching SandboxProvider");
-    expect(provider.requests).toHaveLength(0);
-  });
-
-  it("rejects a cross-Run Patch review bridge before Provider or Runner invocation", async () => {
-    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-patch-bridge-mismatch-"));
-    const provider = new ScriptedProvider([{ action: "complete", summary: "Must not run." }]);
-
-    const patchReviewBridge = createHelarcPatchReviewBridge();
-    patchReviewBridge.bindRun("run-other");
-    await expect(executeReadOnlyTestHostRun({
-      ...createTask(workspaceRoot),
-      provider,
-      patchReviewBridge,
-    })).rejects.toThrow("patch review bridge must be unbound");
     expect(provider.requests).toHaveLength(0);
   });
 
@@ -445,7 +367,7 @@ describe("Helarc Host Run composition", () => {
     expect(result.product.status).toBe("failed");
     expect(result.runResult).toMatchObject({
       status: "failed",
-      code: "model_structured_output_retry_exhausted",
+      code: "controller_failed",
       failure: {
         kind: "model",
         failure: { code: "model_structured_output_retry_exhausted" },
@@ -453,7 +375,7 @@ describe("Helarc Host Run composition", () => {
       relatedFailures: [],
     });
     expect(result.runResult.items.some((item) =>
-      item.kind === "model_output" || item.kind === "action"
+      item.payload.kind === "run_action"
     )).toBe(false);
     expect(provider.requests).toHaveLength(2);
     expect(JSON.stringify(provider.requests[1])).not.toContain(firstInvalidOutput);
@@ -483,9 +405,12 @@ describe("Helarc Host Run composition", () => {
     });
 
     expect(result.product.status).toBe("blocked");
-    expect(result.runResult.items.some((item) => item.kind === "approval_requested")).toBe(true);
-    expect(result.runResult.items.some((item) => item.kind === "sandbox_attempt_started"))
-      .toBe(false);
+    expect(result.runResult.items.some((item) =>
+      item.payload.kind === "pending_transition" &&
+      item.payload.transition === "opened" &&
+      item.payload.pending.kind === "interaction"
+    )).toBe(true);
+    expect(result.product.output.enforcement.status).toBe("denied");
     await expect(access(markerPath)).rejects.toThrow();
   });
 
@@ -514,16 +439,13 @@ describe("Helarc Host Run composition", () => {
     });
 
     expect(result.product.status).toBe("blocked");
-    expect(result.runResult.items.some((item) => item.kind === "approval_requested")).toBe(true);
-    expect(result.runResult.items).toContainEqual(expect.objectContaining({
-      kind: "approval_resolved",
-      record: expect.objectContaining({
-        resolutionKind: "review_failure",
-        code: "approval_reviewer_unavailable",
-      }),
-    }));
-    expect(result.runResult.items.some((item) => item.kind === "sandbox_attempt_started"))
-      .toBe(false);
+    expect(result.runResult.items.some((item) =>
+      item.payload.kind === "pending_transition" &&
+      item.payload.transition === "opened" &&
+      item.payload.pending.kind === "interaction"
+    )).toBe(true);
+    expect(JSON.stringify(result.runResult.items)).toContain("approval_reviewer_unavailable");
+    expect(result.product.output.enforcement.status).toBe("failed");
     await expect(access(markerPath)).rejects.toThrow();
   });
 
@@ -552,15 +474,30 @@ describe("Helarc Host Run composition", () => {
 
     expect(result.product.status).toBe("completed");
     expect(result.product.output.agentSummary).toBe("Shell command completed.");
+    expect(result.product.output.safeErrors).toEqual([]);
+    const commandResults = result.runResult.items.flatMap((item) =>
+      item.payload.kind === "observation" &&
+        item.payload.observation.payload.kind === "operation"
+        ? [item.payload.observation.payload.result]
+        : []
+    );
+    expect(commandResults).toHaveLength(1);
+    expect(commandResults[0]).toMatchObject({
+      status: "succeeded",
+      output: { exitCode: 0, signal: null, stderr: "" },
+    });
     await expect(access(markerPath)).resolves.toBeUndefined();
     expect(result.product.output.enforcement).toEqual({
       selected: "disabled",
       status: "unisolated",
       code: null,
     });
-    expect(result.runResult.items).toContainEqual(expect.objectContaining({
-      kind: "sandbox_attempt_resolved",
-      resolution: expect.objectContaining({ enforcement: "disabled", outcome: "executed" }),
+    expect(result.product.actions).toContainEqual(expect.objectContaining({
+      status: "succeeded",
+    }));
+    expect(result.product.effects[0]?.lowerRefs).toContainEqual(expect.objectContaining({
+      owner: "canonical-action",
+      kind: "action_settlement",
     }));
     expect(provider.lastControllerInputContexts).toEqual([0, 1]);
   });
@@ -620,18 +557,15 @@ describe("Helarc Host Run composition", () => {
     const result = await executeTestHostRun({
       ...createTask(workspaceRoot),
       provider,
-      patchReviewBridge: automaticPatchReviewBridge(
-        "accepted",
-        (review) => {
+      patchReviewDecision: "accepted",
+      onPatchReview: (review) => {
         expect(review).toMatchObject({
           operation: "create",
           path: "src/created.txt",
           originalContent: null,
           proposedContent: "created\n",
-          phase: "reviewing",
         });
-        },
-      ),
+      },
     });
 
     expect(result.product.status).toBe("completed");
@@ -651,9 +585,11 @@ describe("Helarc Host Run composition", () => {
     });
     expect(provider.requests).toHaveLength(1);
     expect(result.runResult.items).toContainEqual(expect.objectContaining({
-      kind: "action",
-      action: expect.objectContaining({
-        subject: expect.objectContaining({ name: "codeAgent.createFile" }),
+      payload: expect.objectContaining({
+        kind: "run_action",
+        action: expect.objectContaining({
+          subject: expect.objectContaining({ kind: "operation" }),
+        }),
       }),
     }));
     expect(result.runResult.metadata.helarcToolCatalog).not.toEqual(
@@ -686,16 +622,14 @@ describe("Helarc Host Run composition", () => {
     const result = await executeTestHostRun({
       ...createTask(workspaceRoot),
       provider,
-      patchReviewBridge: automaticPatchReviewBridge(
-        "rejected",
-        (review) => {
+      patchReviewDecision: "rejected",
+      onPatchReview: (review) => {
         expect(review).toMatchObject({
           operation: "update",
           originalContent: "before\n",
           proposedContent: "after\n",
         });
-        },
-      ),
+      },
     });
 
     expect(result.product.status).toBe("rejected");
@@ -737,12 +671,10 @@ describe("Helarc Host Run composition", () => {
     const result = await executeTestHostRun({
       ...createTask(workspaceRoot),
       provider,
-      patchReviewBridge: automaticPatchReviewBridge(
-        "accepted",
-        async () => {
+      patchReviewDecision: "accepted",
+      onPatchReview: async () => {
           await writeFile(targetPath, "changed\n");
-        },
-      ),
+      },
     });
 
     expect(result.product.status).toBe("failed");
@@ -759,38 +691,58 @@ describe("Helarc Host Run composition", () => {
       patchStatus: "failed",
       appliedPath: null,
       safeErrors: [{
-        code: "action_invalid",
-        message: "The proposed file change could not be applied.",
+        code: "file_baseline_mismatch",
+        message: "The run could not be completed.",
       }],
     });
     await expect(readFile(targetPath, "utf8")).resolves.toBe("changed\n");
   });
 });
 
-function automaticPatchReviewBridge(
+async function submitNextPatchReview(
+  activeRun: HelarcHostActiveRun,
   decision: "accepted" | "rejected",
-  onReview?: (
-    review: NonNullable<ReturnType<ReturnType<typeof createHelarcPatchReviewBridge>["getPendingProjection"]>>,
-  ) => void | Promise<void>,
-) {
-  const bridge = createHelarcPatchReviewBridge();
-  bridge.subscribe(async (review) => {
-    if (review === null || review.phase !== "reviewing") return;
-    await onReview?.(review);
-    const receipt = bridge.submitDecision({
-      submissionId: `${review.reviewId}:test-submission`,
-      runId: review.runId,
-      proposalId: review.proposalId,
-      reviewId: review.reviewId,
-      pendingVersion: review.pendingVersion,
+  onReview?: (review: HelarcPatchReviewPresentation) => void | Promise<void>,
+): Promise<void> {
+  const pending = await waitForPatchReviewInteraction(activeRun);
+  const review = pending.presentation as HelarcPatchReviewPresentation;
+  await onReview?.(review);
+  const outcome = activeRun.submitInteraction({
+    request: pending.request,
+    submissionId: `${review.reviewId}:test-submission`,
+    payload: {
       decision,
       reason: decision === "accepted" ? "Looks good." : "Not this change.",
-    });
-    if (receipt.status !== "accepted_for_resolution") {
-      throw new Error(`Patch review submission failed: ${receipt.code}.`);
-    }
+    },
   });
-  return bridge;
+  if (outcome.status === "rejected") {
+    throw new Error(`Patch review submission failed: ${outcome.code}.`);
+  }
+}
+
+function waitForPatchReviewInteraction(activeRun: HelarcHostActiveRun): Promise<
+  ReturnType<HelarcHostActiveRun["getProjection"]>["pendingInteractions"][number]
+> {
+  const findPending = () => activeRun.getProjection().pendingInteractions.find(
+    (candidate) => candidate.request.protocol.owner === "helarc" &&
+      candidate.request.protocol.kind === "patch_review" &&
+      candidate.phase === "pending",
+  );
+  const current = findPending();
+  if (current !== undefined) return Promise.resolve(current);
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      unsubscribe();
+      reject(new Error("Timed out waiting for patch review Interaction."));
+    }, 2_000);
+    const unsubscribe = activeRun.subscribe(() => {
+      const pending = findPending();
+      if (pending === undefined) return;
+      clearTimeout(timeout);
+      unsubscribe();
+      resolve(pending);
+    });
+  });
 }
 
 function automaticReviewer(decisionKind: "accept" | "decline") {
@@ -1014,7 +966,7 @@ function createShellInput(markerPath: string) {
       `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran')`,
     ],
     cwd: ".",
-    timeoutMs: 1_000,
+    timeoutMs: 5_000,
     reason: "Create a governed marker file.",
   };
 }

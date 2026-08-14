@@ -1,4 +1,4 @@
-import type { RemoteActionCapability } from "@agent-anything/remote-integrations/action";
+import type { RemoteOperationContribution } from "@agent-anything/remote-integrations/operation";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as adaptersApi from "./adapters/index.js";
 import * as lifecycleApi from "./lifecycle/index.js";
@@ -32,7 +32,7 @@ describe("MCP public API", () => {
       "McpProtocolError",
     ].sort());
     expect(Object.keys(primitivesApi)).toEqual(["McpPrimitiveError"]);
-    expect(Object.keys(adaptersApi)).toEqual(["createMcpActionCapability"]);
+    expect(Object.keys(adaptersApi)).toEqual(["createMcpOperationContribution"]);
   });
 
   it("keeps transport, lifecycle, primitives, and adapters distinct", () => {
@@ -40,8 +40,8 @@ describe("MCP public API", () => {
     expectTypeOf<McpActivationResolver>().toBeObject();
     expectTypeOf<McpSourceResolver>().toBeObject();
     expectTypeOf<McpToolOperationPort>().toBeObject();
-    expectTypeOf<ReturnType<typeof adaptersApi.createMcpActionCapability>>()
-      .toMatchTypeOf<RemoteActionCapability>();
+    expectTypeOf<ReturnType<typeof adaptersApi.createMcpOperationContribution>>()
+      .toMatchTypeOf<RemoteOperationContribution>();
   });
 
   it("does not expose private coordinators or protocol helpers", () => {

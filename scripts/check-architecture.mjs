@@ -162,8 +162,16 @@ const focusedPublicSubpaths = new Map([
   [
     "@agent-anything/remote-integrations",
     new Set([
-      "@agent-anything/remote-integrations/action",
-      "@agent-anything/remote-integrations/tools",
+      "@agent-anything/remote-integrations/operation",
+      "@agent-anything/remote-integrations/transport",
+    ]),
+  ],
+  [
+    "@agent-anything/provider-integrations",
+    new Set([
+      "@agent-anything/provider-integrations/http",
+      "@agent-anything/provider-integrations/ollama",
+      "@agent-anything/provider-integrations/openai-compatible",
     ]),
   ],
   [
@@ -368,6 +376,7 @@ function checkPublicApiImport(file, owner, statement, specifier) {
   if (
     specifier === "@agent-anything/plugins" ||
     specifier === "@agent-anything/remote-integrations" ||
+    specifier === "@agent-anything/provider-integrations" ||
     specifier === "@agent-anything/enterprise-storage"
   ) {
     report("integration_root_import", {
@@ -842,8 +851,8 @@ function checkPhase22Topology() {
     },
     {
       packagePath: "harness/integrations/remote",
-      sourceAreas: ["action", "tools"],
-      allowedSourceEntries: ["action", "tools"],
+      sourceAreas: ["operation", "transport"],
+      allowedSourceEntries: ["operation", "transport"],
       forbiddenPaths: ["src/index.ts"],
     },
     {
@@ -976,6 +985,11 @@ function checkPhase27Topology() {
     {
       packagePath: "harness/operation-composition",
       allowedSourceEntries: ["definition", "execution", "result"],
+    },
+    {
+      packagePath: "harness/integrations/providers",
+      allowedSourceEntries: ["http", "ollama", "openai-compatible"],
+      forbiddenPaths: ["src/index.ts"],
     },
     {
       packagePath: "harness/agent-core/runtime",

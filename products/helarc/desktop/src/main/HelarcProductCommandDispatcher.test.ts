@@ -186,10 +186,6 @@ function createHandlers(
       threadId: "thread-1",
       snapshot: snapshot("running"),
     })),
-    "patch_review.submit": vi.fn(() => ({
-      ok: true as const,
-      snapshot: snapshot(),
-    })),
     "thread.open": vi.fn(() => ({
       ok: true as const,
       snapshot: snapshot(),

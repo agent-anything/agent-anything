@@ -70,6 +70,22 @@ interface ActiveInteraction {
   expiryTimer: ReturnType<typeof setTimeout> | null;
 }
 
+type NonResolvedInteractionTransition =
+  | {
+      readonly status: "expired";
+      readonly code: "interaction_expired";
+      readonly expiredAt: string;
+    }
+  | {
+      readonly status: "cancelled";
+      readonly code: "interaction_cancelled";
+      readonly cancellationId: string;
+    }
+  | {
+      readonly status: "invalidated";
+      readonly code: string;
+    };
+
 export interface RunInteractionCoordinatorDependencies {
   readonly runId: string;
   readonly registry: InteractionProtocolRegistrySnapshot;
@@ -155,7 +171,11 @@ export class RunInteractionCoordinator {
       if (input.expiresAt !== null) {
         const delay = Math.max(0, Date.parse(input.expiresAt) - Date.parse(this.dependencies.now()));
         active.expiryTimer = setTimeout(() => {
-          this.settleNonResolved(active, "expired", "interaction_expired", input.expiresAt!);
+          this.settleNonResolved(active, {
+            status: "expired",
+            code: "interaction_expired",
+            expiredAt: input.expiresAt!,
+          });
         }, Math.min(delay, 2_147_483_647));
       }
       this.dependencies.onOpened(pending);
@@ -208,7 +228,11 @@ export class RunInteractionCoordinator {
 
   cancelAll(cancellationId: string): void {
     for (const active of [...this.active.values()]) {
-      this.settleNonResolved(active, "cancelled", cancellationId, this.dependencies.now());
+      this.settleNonResolved(active, {
+        status: "cancelled",
+        code: "interaction_cancelled",
+        cancellationId,
+      });
     }
   }
 
@@ -233,8 +257,20 @@ export class RunInteractionCoordinator {
   invalidate(request: InteractionRequestRef, reasonCode: string): boolean {
     const active = this.active.get(requestKey(request));
     if (active === undefined) return false;
-    this.settleNonResolved(active, "invalidated", reasonCode, this.dependencies.now());
+    this.settleNonResolved(active, {
+      status: "invalidated",
+      code: reasonCode,
+    });
     return true;
+  }
+
+  invalidateAll(reasonCode: string): void {
+    for (const active of [...this.active.values()]) {
+      this.settleNonResolved(active, {
+        status: "invalidated",
+        code: reasonCode,
+      });
+    }
   }
 
   getPendingProjections(): readonly {
@@ -250,7 +286,10 @@ export class RunInteractionCoordinator {
   close(reasonCode = "run_settled"): void {
     if (this.settled) return;
     for (const active of [...this.active.values()]) {
-      this.settleNonResolved(active, "invalidated", reasonCode, this.dependencies.now());
+      this.settleNonResolved(active, {
+        status: "invalidated",
+        code: reasonCode,
+      });
     }
     this.settled = true;
   }
@@ -305,7 +344,7 @@ export class RunInteractionCoordinator {
         request: input.request,
         resolution,
       }), settlement);
-    } catch (error) {
+    } catch {
       const failureId = this.dependencies.createId("interaction_resolution", this.nextResolution++);
       const settlement: RuntimeInteractionSettlement = Object.freeze({
         status: "failed" as const,
@@ -324,22 +363,20 @@ export class RunInteractionCoordinator {
 
   private settleNonResolved(
     active: ActiveInteraction,
-    status: "expired" | "cancelled" | "invalidated",
-    code: string,
-    occurredAt: string,
+    transition: NonResolvedInteractionTransition,
   ): void {
     if (!this.active.has(requestKey(active.pending.request))) return;
     const request = active.pending.request;
-    const terminal: InteractionTerminalRecord = status === "expired"
-      ? Object.freeze({ kind: "expired", request, expiredAt: occurredAt })
-      : status === "cancelled"
-        ? Object.freeze({ kind: "cancelled", request, cancellationId: code })
-        : Object.freeze({ kind: "invalidated", request, reasonCode: code });
+    const terminal: InteractionTerminalRecord = transition.status === "expired"
+      ? Object.freeze({ kind: "expired", request, expiredAt: transition.expiredAt })
+      : transition.status === "cancelled"
+        ? Object.freeze({ kind: "cancelled", request, cancellationId: transition.cancellationId })
+        : Object.freeze({ kind: "invalidated", request, reasonCode: transition.code });
     this.commitTerminal(active, terminal, Object.freeze({
-      status,
+      status: transition.status,
       request,
       owner: request.protocol.owner,
-      code,
+      code: transition.code,
     }));
   }
 

@@ -6,10 +6,11 @@ const SECRET = "sentinel-desktop-private-value";
 
 describe("Helarc Desktop IPC projection", () => {
   it("keeps only the Desktop-owned Run display contract", () => {
-    const projected = projectHelarcDesktopSnapshot(snapshotWithRun({ approval: null }));
+    const projected = projectHelarcDesktopSnapshot(snapshotWithRun([]));
 
     expect(Object.keys(projected.run?.host ?? {}).sort()).toEqual([
-      "approval",
+      "pendingInteractions",
+      "runRevision",
       "startedAt",
       "taskId",
       "terminal",
@@ -29,63 +30,46 @@ describe("Helarc Desktop IPC projection", () => {
     expect(JSON.stringify(projected)).not.toContain(SECRET);
   });
 
-  it("projects approval review content without trusted authority or review context", () => {
-    const projected = projectHelarcDesktopSnapshot(snapshotWithRun({
-      approval: {
-        runId: "run-1",
-        requestId: "approval-1",
-        actionId: "action-1",
-        category: "permissions",
-        pendingVersion: 1,
-        reviewer: "user",
-        phase: "reviewing",
-        requestedAt: "2026-07-19T00:00:00.000Z",
-        review: {
-          pendingVersion: 1,
-          request: {
-            id: "approval-1",
-            runId: "run-1",
-            actionId: "action-1",
-            actionFingerprint: SECRET,
-            category: "permissions",
-            reason: "Additional write access is required.",
-            subject: {
-              runId: "run-1",
-              actionId: "action-1",
-              actionFingerprint: SECRET,
-              environmentId: "environment-1",
-              applicabilityKeyCount: 1,
-            },
-            payload: {
-              permissions: { fileSystem: { write: ["workspace:marker.txt"] } },
-              cwdDisplay: "workspace",
-              environmentId: "environment-1",
-            },
-            decisionOptions: [{
-              id: "grant",
-              kind: "grantPermissions",
-              scope: "run",
-              label: "Grant for Run",
-              description: null,
-            }],
-            createdAt: "2026-07-19T00:00:00.000Z",
-            deadlineAt: "2026-07-19T00:01:00.000Z",
-          },
-          context: {
-            workspaceTrustState: "trusted",
-            ruleOutcome: "prompt",
-            currentAuthority: {
-              fileSystemRead: true,
-              fileSystemWrite: false,
-              network: false,
-            },
-            annotations: { privateReason: SECRET },
-          },
+  it("projects approval presentation without authority or owner-private state", () => {
+    const projected = projectHelarcDesktopSnapshot(snapshotWithRun([{
+      request: {
+        id: "approval-1",
+        protocol: { owner: "permission", kind: "approval", revision: "1" },
+        requestVersion: 1,
+        subject: {
+          owner: "permission",
+          kind: "approval",
+          id: "action-1",
+          revision: "action-fingerprint-1",
         },
       },
-    }));
+      presentation: {
+        id: "approval-1",
+        runId: "run-1",
+        category: "permissions",
+        reason: "Additional write access is required.",
+        payload: {
+          permissions: { fileSystem: { write: ["workspace:marker.txt"] } },
+          privateAuthority: SECRET,
+        },
+        decisionOptions: [{
+          id: "grant",
+          kind: "grantPermissions",
+          scope: "run",
+          label: "Grant for Run",
+          description: null,
+        }],
+        privateContext: SECRET,
+      },
+      disclosureClass: "sensitive",
+      expiresAt: "2026-07-19T00:01:00.000Z",
+      blockingScope: "run",
+      phase: "pending",
+    }]));
 
-    expect(projected.run?.host.approval?.review?.request).toEqual({
+    const approval = projected.run?.host.pendingInteractions[0];
+    expect(approval?.family).toBe("approval");
+    expect(approval?.presentation).toEqual({
       id: "approval-1",
       runId: "run-1",
       category: "permissions",
@@ -104,7 +88,7 @@ describe("Helarc Desktop IPC projection", () => {
   });
 });
 
-function snapshotWithRun(input: { approval: unknown }): HelarcMainSnapshot {
+function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSnapshot {
   const profile = {
     id: "provider-1",
     providerKind: "openai-compatible" as const,
@@ -127,10 +111,12 @@ function snapshotWithRun(input: { approval: unknown }): HelarcMainSnapshot {
       taskId: "task-1",
       runId: "harness-run-1",
       sequence: 1,
+      runOperationSequence: 0,
+      runRevision: 0,
       status: "running",
       startedAt: "2026-07-19T00:00:00.000Z",
       plan: { privatePlanState: SECRET },
-      approval: input.approval,
+      pendingInteractions,
       retry: { privateRetryState: SECRET },
       cancellation: { privateCancellationState: SECRET },
       enforcement: { privateAttemptState: SECRET },

@@ -59,16 +59,14 @@ import {
   createStaticHostWorkspaceResolver,
   resolveHostRunContext,
 } from "@agent-anything/host/context";
-import { createHostRunManager } from "@agent-anything/host/run";
+import {
+  createHostRunManager,
+  type HostActiveRun,
+} from "@agent-anything/host/run";
 import {
   createHelarcProductComposition,
-  type HelarcPatchReviewBridge,
-  type HelarcPatchReviewDecisionSubmission,
-  type HelarcPatchReviewOutcome,
-  type HelarcPatchReviewProjectionListener,
-  type HelarcPatchReviewRequest,
-  type HelarcPatchReviewSubmissionReceipt,
-  type HelarcPendingPatchReviewProjection,
+  HELARC_PATCH_REVIEW_PROTOCOL,
+  snapshotHelarcPatchReviewPresentation,
   type HelarcProductResult,
   validateHelarcToolInput,
 } from "@agent-anything/helarc/composition";
@@ -423,7 +421,7 @@ async function invokeHelarcTarget(
     identityId: runContext.identity.id,
     automaticReviewer: approval,
   });
-  const patchReviews = new DeterministicPatchReviewBridge(
+  const patchReviews = new DeterministicPatchReviewResponder(
     caseDefinition.script.patchReviewDecision,
   );
   const provider = new FakeProvider({
@@ -455,7 +453,6 @@ async function invokeHelarcTarget(
     codeSource: createLocalCodeSourcePort(clock.now),
     fileActions,
     commandActions,
-    patchReviewBridge: patchReviews,
     now: clock.now,
   });
   const gateway = createHelarcLocalSandboxGateway({
@@ -612,7 +609,7 @@ async function invokeHelarcTarget(
       metadata: runMetadata,
     },
   });
-  patchReviews.bindRun(active.runId);
+  const unsubscribePatchReviews = patchReviews.attach(active);
   const onAbort = () => {
     active.cancel({
       origin: "host",
@@ -623,7 +620,9 @@ async function invokeHelarcTarget(
   signal.addEventListener("abort", onAbort, { once: true });
   if (signal.aborted) onAbort();
   const hostResult = await active.wait();
+  unsubscribePatchReviews();
   signal.removeEventListener("abort", onAbort);
+  patchReviews.assertHealthy();
   const terminalProjection = active.getProjection();
   const productResult = product.projectResult(hostResult.runResult, "disabled");
   if (trace === null) throw new TypeError("Helarc Evaluation requires one complete RunTrace.");
@@ -1176,87 +1175,73 @@ class DeterministicApprovalReviewer {
   }
 }
 
-class DeterministicPatchReviewBridge implements HelarcPatchReviewBridge {
-  #boundRunId: string | null = null;
-  #pending: HelarcPendingPatchReviewProjection | null = null;
+class DeterministicPatchReviewResponder {
   #record: PatchReviewRecord = Object.freeze({ decision: null, operation: null, path: null });
-  readonly #listeners = new Set<HelarcPatchReviewProjectionListener>();
+  #failure: Error | null = null;
+  readonly #submittedRequests = new Set<string>();
 
   constructor(private readonly decision: "accepted" | "rejected" | null) {}
-
-  get boundRunId(): string | null {
-    return this.#boundRunId;
-  }
 
   get record(): PatchReviewRecord {
     return this.#record;
   }
 
-  bindRun(runId: string): void {
-    if (this.#boundRunId !== null || runId.trim().length === 0) {
-      throw new TypeError("Deterministic Patch review bridge can be bound once.");
-    }
-    this.#boundRunId = runId;
+  attach(active: HostActiveRun): () => void {
+    const respond = (projection: ReturnType<HostActiveRun["getProjection"]>): void => {
+      for (const pending of projection.pendingInteractions) {
+        if (
+          pending.phase !== "pending" ||
+          pending.request.protocol.owner !== HELARC_PATCH_REVIEW_PROTOCOL.owner ||
+          pending.request.protocol.kind !== HELARC_PATCH_REVIEW_PROTOCOL.kind ||
+          pending.request.protocol.revision !== HELARC_PATCH_REVIEW_PROTOCOL.revision
+        ) {
+          continue;
+        }
+        const requestKey = `${pending.request.id}@${pending.request.requestVersion}`;
+        if (this.#submittedRequests.has(requestKey)) continue;
+        this.#submittedRequests.add(requestKey);
+        try {
+          if (this.decision === null) {
+            throw new TypeError("The deterministic evaluation Case did not define a Patch review decision.");
+          }
+          const presentation = snapshotHelarcPatchReviewPresentation(pending.presentation as never);
+          const outcome = active.submitInteraction({
+            request: pending.request,
+            submissionId: `${pending.request.id}.evaluation-${this.decision}`,
+            payload: Object.freeze({
+              decision: this.decision,
+              reason: this.decision === "accepted"
+                ? "Accepted by the deterministic Phase26 reviewer."
+                : "Rejected by the deterministic Phase26 reviewer.",
+            }),
+          });
+          if (outcome.status === "rejected") {
+            throw new TypeError(`Deterministic Patch review submission was rejected: ${outcome.code}.`);
+          }
+          this.#record = Object.freeze({
+            decision: this.decision,
+            operation: presentation.operation,
+            path: presentation.path,
+          });
+        } catch (error) {
+          this.#failure = error instanceof Error
+            ? error
+            : new TypeError("Deterministic Patch review submission failed.");
+          active.cancel({
+            origin: "host",
+            reasonCode: "host_requested",
+            reason: "Evaluation Patch review automation failed.",
+          });
+        }
+      }
+    };
+    const unsubscribe = active.subscribe(respond);
+    respond(active.getProjection());
+    return unsubscribe;
   }
 
-  getPendingProjection(): HelarcPendingPatchReviewProjection | null {
-    return this.#pending;
-  }
-
-  subscribe(listener: HelarcPatchReviewProjectionListener): () => void {
-    this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
-  }
-
-  async review(
-    request: HelarcPatchReviewRequest,
-  ): Promise<HelarcPatchReviewOutcome> {
-    if (this.#boundRunId === null || request.runId !== this.#boundRunId || this.decision === null) {
-      return Object.freeze({
-        status: "failed" as const,
-        code: "patch_review_state_invalid" as const,
-        message: "Deterministic Patch review state does not match the Case.",
-      });
-    }
-    const pendingVersion = 1;
-    this.#pending = Object.freeze({
-      ...request,
-      pendingVersion,
-      phase: "reviewing" as const,
-    });
-    this.#notify(this.#pending);
-    const submission: HelarcPatchReviewDecisionSubmission = Object.freeze({
-      submissionId: `${request.reviewId}.evaluation-${this.decision}`,
-      runId: request.runId,
-      proposalId: request.proposalId,
-      proposalRevision: request.proposalRevision,
-      reviewId: request.reviewId,
-      pendingVersion,
-      decision: this.decision,
-      reason: this.decision === "accepted"
-        ? "Accepted by the deterministic Phase26 reviewer."
-        : "Rejected by the deterministic Phase26 reviewer.",
-    });
-    this.#record = Object.freeze({
-      decision: this.decision,
-      operation: request.operation,
-      path: request.path,
-    });
-    this.#pending = null;
-    this.#notify(null);
-    return Object.freeze({ status: "decided" as const, submission });
-  }
-
-  submitDecision(input: HelarcPatchReviewDecisionSubmission): HelarcPatchReviewSubmissionReceipt {
-    return Object.freeze({
-      status: "rejected" as const,
-      submissionId: input.submissionId,
-      code: "patch_review_not_pending" as const,
-    });
-  }
-
-  #notify(projection: HelarcPendingPatchReviewProjection | null): void {
-    for (const listener of this.#listeners) void listener(projection);
+  assertHealthy(): void {
+    if (this.#failure !== null) throw this.#failure;
   }
 }
 

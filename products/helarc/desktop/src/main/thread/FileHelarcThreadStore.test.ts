@@ -335,6 +335,7 @@ function progressCommit(
         runId: "run-1",
         sequence,
         runOperationSequence: sequence,
+        runRevision: 0,
         status: "running",
         startedAt: STARTED_AT,
         plan: null,

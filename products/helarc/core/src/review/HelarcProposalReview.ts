@@ -75,7 +75,7 @@ export interface AcceptedPatchDecision {
   readonly proposalId: PatchProposalId;
   readonly proposalRevision: PatchProposalRevision;
   readonly reviewId: PatchReviewId;
-  readonly pendingVersion: number;
+  readonly requestVersion: number;
   readonly submissionId: PatchDecisionSubmissionId;
   readonly decidedAt: string;
   readonly reason?: string;
@@ -88,7 +88,7 @@ export interface RejectedPatchDecision {
   readonly proposalId: PatchProposalId;
   readonly proposalRevision: PatchProposalRevision;
   readonly reviewId: PatchReviewId;
-  readonly pendingVersion: number;
+  readonly requestVersion: number;
   readonly submissionId: PatchDecisionSubmissionId;
   readonly decidedAt: string;
   readonly reason: string;
@@ -101,7 +101,7 @@ export interface RevisionRequestedPatchDecision {
   readonly proposalId: PatchProposalId;
   readonly proposalRevision: PatchProposalRevision;
   readonly reviewId: PatchReviewId;
-  readonly pendingVersion: number;
+  readonly requestVersion: number;
   readonly submissionId: PatchDecisionSubmissionId;
   readonly decidedAt: string;
   readonly reason: string;

@@ -27,7 +27,7 @@ describe("Helarc workbench shell", () => {
   it("renders offered approval decision actions", () => {
     const html = renderToStaticMarkup(
       <ApprovalPromptPanel
-        approval={pendingApproval("reviewing")}
+        approval={pendingApproval("pending")}
         submissionError={null}
         isBusy={false}
         onSubmit={() => undefined}
@@ -243,12 +243,26 @@ describe("Helarc workbench shell", () => {
 });
 
 function pendingApproval(
-  phase: "reviewing" | "submitted_for_resolution",
+  phase: "pending" | "submitted_for_resolution",
 ): NonNullable<Parameters<typeof ApprovalPromptPanel>[0]["approval"]> {
   return {
+    family: "approval",
     phase,
-    pendingVersion: 1,
     request: {
+      id: "approval-1",
+      protocol: { owner: "permission", kind: "approval", revision: "1" },
+      requestVersion: 1,
+      subject: {
+        owner: "permission",
+        kind: "approval",
+        id: "action-1",
+        revision: "fingerprint-1",
+      },
+    },
+    disclosureClass: "sensitive",
+    expiresAt: "2026-07-05T01:01:00.000Z",
+    blockingScope: "run",
+    presentation: {
       id: "approval-1",
       runId: "run-1",
       category: "permissions",
@@ -303,7 +317,8 @@ function runProjection(input: {
     host: {
       taskId: "task-1",
       startedAt: "2026-07-05T01:00:00.000Z",
-      approval: null,
+      runRevision: 0,
+      pendingInteractions: [],
       terminal: terminal
         ? {
             status,
@@ -320,7 +335,10 @@ function runProjection(input: {
             status: status === "completed" ? "completed" : status,
             output: {
               taskId: "task-1",
-              workspaceId: "workspace",
+              workspace: {
+                primaryId: "workspace",
+                additionalIds: [],
+              },
               agentSummary: "Terminal summary",
               runtimeStatus,
               patchStatus: null,

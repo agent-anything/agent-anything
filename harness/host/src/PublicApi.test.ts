@@ -47,8 +47,11 @@ describe("Host public API", () => {
       "HOST_COMMAND_RECEIPT_LIMIT",
       "HOST_COMMAND_VERSION",
       "HOST_INTERACTION_PAYLOAD_MAX_BYTES",
+      "HOST_QUERY_VERSION",
       "createHostCommandDispatcher",
+      "createHostRunStatusQueryHandler",
       "snapshotHostCommand",
+      "snapshotHostRunStatusQuery",
     ]);
     expect(Object.keys(authorityApi).sort()).toEqual([
       "createInMemoryHostPolicyAmendmentStore",

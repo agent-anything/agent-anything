@@ -54,6 +54,7 @@ describe("Agent Core Runtime public API", () => {
       "runFailureMessage",
       "runFailureMetadata",
       "snapshotResolvedRunPermissionConfig",
+      "snapshotRunSteeringInput",
       "toRunCancellationSummary",
     ]);
     expect(Object.keys(runnerApi)).toEqual(["Runner"]);

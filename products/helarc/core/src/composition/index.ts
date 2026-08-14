@@ -13,14 +13,15 @@ export {
   validateHelarcToolInput,
 } from "./HelarcActionComposition.js";
 export type {
-  HelarcPatchReviewBridge,
-  HelarcPatchReviewDecisionSubmission,
-  HelarcPatchReviewOutcome,
-  HelarcPatchReviewProjectionListener,
-  HelarcPatchReviewRequest,
-  HelarcPatchReviewSubmissionReceipt,
-  HelarcPendingPatchReviewProjection,
+  HelarcPatchReviewApplication,
+  HelarcPatchReviewPresentation,
+  HelarcPatchReviewResolution,
+  HelarcPatchReviewSubmission,
   HelarcProductPhase,
+} from "./HelarcPatchReview.js";
+export {
+  HELARC_PATCH_REVIEW_PROTOCOL,
+  snapshotHelarcPatchReviewPresentation,
 } from "./HelarcPatchReview.js";
 export type {
   HelarcActivityItem,

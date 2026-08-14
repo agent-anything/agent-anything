@@ -253,7 +253,7 @@ function decisionInput() {
     proposalId: "proposal-1",
     proposalRevision: 1,
     reviewId: "review-1",
-    pendingVersion: 1,
+    requestVersion: 1,
     submissionId: "submission-1",
     now: clock,
   };

@@ -61,7 +61,7 @@ export interface AcceptPatchInput {
   readonly proposalId: PatchProposalId;
   readonly proposalRevision: PatchProposalRevision;
   readonly reviewId: PatchReviewId;
-  readonly pendingVersion: number;
+  readonly requestVersion: number;
   readonly submissionId: PatchDecisionSubmissionId;
   readonly reason?: string;
   readonly metadata?: Readonly<Record<string, unknown>>;
@@ -211,7 +211,7 @@ export function acceptPatch(
     proposalId: input.proposalId,
     proposalRevision: input.proposalRevision,
     reviewId: required(input.reviewId, "Patch review id is required."),
-    pendingVersion: positiveInteger(input.pendingVersion, "Patch pending version"),
+    requestVersion: positiveInteger(input.requestVersion, "Patch review request version"),
     submissionId: required(input.submissionId, "Patch submission id is required."),
     decidedAt: isoDate((input.now ?? defaultNow)()),
     ...(input.reason === undefined ? {} : { reason: required(input.reason, "Accepted reason is invalid.") }),
@@ -235,7 +235,7 @@ export function rejectPatch(
       proposalId: input.proposalId,
       proposalRevision: input.proposalRevision,
       reviewId: required(input.reviewId, "Patch review id is required."),
-      pendingVersion: positiveInteger(input.pendingVersion, "Patch pending version"),
+      requestVersion: positiveInteger(input.requestVersion, "Patch review request version"),
       submissionId: required(input.submissionId, "Patch submission id is required."),
       decidedAt: isoDate((input.now ?? defaultNow)()),
       reason: required(input.reason, "Rejected patch reason is required."),
@@ -259,7 +259,7 @@ export function requestPatchRevision(
       proposalId: input.proposalId,
       proposalRevision: input.proposalRevision,
       reviewId: required(input.reviewId, "Patch review id is required."),
-      pendingVersion: positiveInteger(input.pendingVersion, "Patch pending version"),
+      requestVersion: positiveInteger(input.requestVersion, "Patch review request version"),
       submissionId: required(input.submissionId, "Patch submission id is required."),
       decidedAt: isoDate((input.now ?? defaultNow)()),
       reason: required(input.reason, "Patch revision request reason is required."),

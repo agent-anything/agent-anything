@@ -9,14 +9,19 @@ import {
   type ProviderResponse,
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
-import type { FetchLike } from "./OpenAICompatibleProvider.js";
-import { readProviderHttpFailureMetadata } from "./ProviderHttpFailureMetadata.js";
-import type { HelarcProviderConfig } from "./resolveHelarcProviderConfig.js";
+import type { FetchLike } from "../http/ProviderHttpTransport.js";
+import { readProviderHttpFailureMetadata } from "../http/ProviderHttpFailureMetadata.js";
+
+export interface OllamaProviderConfig {
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly timeoutMs: number;
+}
 
 export class OllamaProvider implements Provider {
   readonly descriptor: ProviderDescriptor = {
-    id: "helarc-ollama",
-    name: "Helarc Ollama Provider",
+    id: "ollama.generate",
+    name: "Ollama Generate",
     capabilities: {
       supportsToolPlanning: true,
       supportsStructuredOutput: true,
@@ -27,9 +32,13 @@ export class OllamaProvider implements Provider {
   };
 
   constructor(
-    private readonly config: HelarcProviderConfig,
+    config: OllamaProviderConfig,
     private readonly fetchImpl: FetchLike = globalThis.fetch as FetchLike,
-  ) {}
+  ) {
+    this.config = snapshotConfig(config);
+  }
+
+  private readonly config: Readonly<OllamaProviderConfig>;
 
   async send(
     request: ProviderRequest,
@@ -160,4 +169,20 @@ function failed(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function snapshotConfig(input: OllamaProviderConfig): Readonly<OllamaProviderConfig> {
+  const baseUrl = input.baseUrl.trim();
+  const model = input.model.trim();
+  if (baseUrl.length === 0 || model.length === 0) {
+    throw new TypeError("Ollama base URL and model are required.");
+  }
+  const url = new URL(baseUrl);
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
+    throw new TypeError("Ollama base URL must be an HTTP URL without credentials.");
+  }
+  if (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 1) {
+    throw new TypeError("Ollama timeout must be a positive integer.");
+  }
+  return Object.freeze({ baseUrl, model, timeoutMs: input.timeoutMs });
 }

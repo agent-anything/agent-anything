@@ -1,14 +1,15 @@
 import {
   createHostCommandDispatcher,
+  createHostRunStatusQueryHandler,
   type HostCommandDispatcher,
   type HostCommandKind,
   type HostCommandReceipt,
+  type HostRunStatusQueryHandler,
+  type HostRunStatusQueryReceipt,
 } from "@agent-anything/host/transport";
 import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,
-  createUserApprovalReviewBridge,
-  type UserApprovalReviewBridge,
 } from "@agent-anything/host/authority";
 import type {
   HostTerminalRunProjection,
@@ -49,10 +50,11 @@ import {
   type HelarcRunProviderRef,
 } from "@agent-anything/helarc/run";
 import type {
-  HelarcPatchReviewDecisionSubmission,
-  HelarcPendingPatchReviewProjection,
+  HelarcPatchReviewPresentation,
+  HelarcPatchReviewSubmission,
   HelarcProductResult,
 } from "@agent-anything/helarc/composition";
+import { HELARC_PATCH_REVIEW_PROTOCOL } from "@agent-anything/helarc/composition";
 import {
   createBuiltInHelarcTaskTemplates,
   type HelarcTaskTemplate,
@@ -68,7 +70,6 @@ import type { ProviderCredentialStoreError } from "./provider/ProviderCredential
 import {
   createHelarcDesktopIdentityResolver,
   createHelarcDesktopWorkspaceResolver,
-  createHelarcPatchReviewBridge,
   prepareHelarcHostRun,
   prepareHelarcRunStart,
   type HelarcHostActiveRun,
@@ -193,8 +194,6 @@ export type HelarcMainErrorCode =
   | "run_persistence_failed"
   | "run_already_active"
   | "run_not_active"
-  | "patch_review_not_pending"
-  | "patch_review_mismatch"
   | "workspace_not_selected"
   | "workspace_path_required"
   | "workspace_path_not_absolute"
@@ -268,12 +267,6 @@ type ResolveHelarcRunStartTargetResult =
   | { readonly ok: true; readonly target: ResolvedHelarcRunStartTarget }
   | { readonly ok: false; readonly error: HelarcMainError };
 
-export type ResolveHelarcPatchReviewInput = HelarcPatchReviewDecisionSubmission;
-
-export type ResolveHelarcPatchReviewResult =
-  | { ok: true; snapshot: HelarcMainSnapshot }
-  | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
-
 export type OpenHelarcThreadResult =
   | { ok: true; snapshot: HelarcMainSnapshot }
   | { ok: false; error: HelarcMainError; snapshot: HelarcMainSnapshot };
@@ -339,6 +332,19 @@ export class HelarcMainController {
       cancellationAttribution: {
         origin: "user",
         reasonCode: "user_requested",
+      },
+      steeringAttribution: {
+        origin: "user",
+        actorId: null,
+      },
+    });
+  private readonly hostRunStatusQueryHandler: HostRunStatusQueryHandler =
+    createHostRunStatusQueryHandler({
+      resolveRun: (runId) => {
+        const slot = this.activeRunSlot;
+        return slot.kind === "active" && slot.handle.runId === runId
+          ? slot.handle
+          : null;
       },
     });
   private runProjectionUnsubscribers: Array<() => void> = [];
@@ -415,7 +421,24 @@ export class HelarcMainController {
     candidate: unknown,
     expectedKind: HostCommandKind,
   ): HostCommandReceipt {
-    return this.hostCommandDispatcher.dispatch(candidate, expectedKind);
+    const patchSubmission = expectedKind === "interaction.submit"
+      ? this.capturePendingPatchSubmission(candidate)
+      : null;
+    const receipt = this.hostCommandDispatcher.dispatch(candidate, expectedKind);
+    if (
+      patchSubmission !== null &&
+      receipt.status === "handled" &&
+      receipt.kind === "interaction.submit" &&
+      (receipt.result.status === "accepted_for_resolution" ||
+        receipt.result.status === "duplicate_identical")
+    ) {
+      this.lastPatchReview = patchSubmission;
+    }
+    return receipt;
+  }
+
+  queryRunStatus(candidate: unknown): HostRunStatusQueryReceipt {
+    return this.hostRunStatusQueryHandler.query(candidate);
   }
 
   selectWorkspacePath(workspacePath: string): HelarcMainSnapshot {
@@ -555,8 +578,6 @@ export class HelarcMainController {
     this.lastPatchReview = null;
     this.publishSnapshot();
 
-    const userApprovalBridge = this.createApprovalReviewBridge();
-    const patchReviewBridge = this.createPatchReviewBridge();
     let startCommitted = false;
     try {
       const threadWorkspace = preparedStart.prepared.workspace;
@@ -578,10 +599,8 @@ export class HelarcMainController {
         inputItems,
         toolMode: this.runtimeToolMode,
         permissionPreset: preparedStart.prepared.run.permissionPreset,
-        userApprovalBridge,
         sessionAuthorityPort: this.sessionAuthorityStore,
         persistentPolicyAmendments: this.policyAmendmentStore,
-        patchReviewBridge,
       });
       const startCommitResult = this.createRunStartCommit({
         sequenceNumber,
@@ -652,39 +671,6 @@ export class HelarcMainController {
       this.publishSnapshot();
       return { ok: false, error, snapshot: this.getSnapshot() };
     }
-  }
-
-  resolvePatchReview(input: ResolveHelarcPatchReviewInput): ResolveHelarcPatchReviewResult {
-    const slot = this.activeRunSlot;
-    if (slot.kind !== "active") {
-      const error = this.setError("patch_review_not_pending", "No patch review is pending.");
-      return { ok: false, error, snapshot: this.getSnapshot() };
-    }
-    const pending = this.getPendingPatchReview();
-    const receipt = slot.handle.submitPatchReviewDecision(input);
-    if (receipt.status === "rejected") {
-      const code = receipt.code === "patch_review_not_pending" ||
-          receipt.code === "patch_review_already_resolved"
-        ? "patch_review_not_pending"
-        : "patch_review_mismatch";
-      const error = this.setError(
-        code,
-        code === "patch_review_not_pending"
-          ? "No patch review is pending."
-          : "Patch review submission is stale or invalid.",
-      );
-      return { ok: false, error, snapshot: this.getSnapshot() };
-    }
-    if (pending === null) {
-      const error = this.setError("patch_review_not_pending", "No patch review is pending.");
-      return { ok: false, error, snapshot: this.getSnapshot() };
-    }
-    this.lastPatchReview = {
-      review: pending,
-      decision: input.decision,
-      reason: input.reason,
-    };
-    return { ok: true, snapshot: this.getSnapshot() };
   }
 
   async openThread(threadId: string): Promise<OpenHelarcThreadResult> {
@@ -1035,9 +1021,33 @@ export class HelarcMainController {
     this.runProjectionUnsubscribers = [];
   }
 
-  private getPendingPatchReview(): HelarcPendingPatchReviewProjection | null {
-    const phase = this.runProjection?.product.phase;
-    return phase?.kind === "waiting_for_patch_review" ? phase.review : null;
+  private capturePendingPatchSubmission(candidate: unknown): CompletedPatchReview | null {
+    const command = asRecord(candidate);
+    const commandPayload = asRecord(command?.payload);
+    const request = asRecord(commandPayload?.request);
+    const protocol = asRecord(request?.protocol);
+    const submission = asRecord(commandPayload?.payload);
+    if (
+      command?.kind !== "interaction.submit" ||
+      protocol?.owner !== HELARC_PATCH_REVIEW_PROTOCOL.owner ||
+      protocol.kind !== HELARC_PATCH_REVIEW_PROTOCOL.kind ||
+      protocol.revision !== HELARC_PATCH_REVIEW_PROTOCOL.revision ||
+      request === null ||
+      submission === null ||
+      !isPatchReviewSubmission(submission)
+    ) return null;
+    const pending = this.runProjection?.host.pendingInteractions.find((interaction) =>
+      sameInteractionRequest(interaction.request, request)
+    );
+    const review = pending === undefined
+      ? null
+      : readPatchReviewPresentation(pending.presentation);
+    if (review === null) return null;
+    return Object.freeze({
+      review,
+      decision: submission.decision,
+      reason: submission.reason,
+    });
   }
 
   private getCurrentStatus(): HelarcMainSnapshotStatus {
@@ -1046,22 +1056,6 @@ export class HelarcMainController {
     return this.lastError?.code === "run_execution_failed"
       ? "failed"
       : this.inactiveStatus;
-  }
-
-  private createApprovalReviewBridge(): UserApprovalReviewBridge {
-    return createUserApprovalReviewBridge({
-      descriptor: {
-        id: "helarc-desktop-user-reviewer",
-        kind: "user",
-        displayName: "Helarc user",
-        source: "helarc-desktop",
-        metadata: { product: "helarc" },
-      },
-    });
-  }
-
-  private createPatchReviewBridge() {
-    return createHelarcPatchReviewBridge();
   }
 
   private createRunStartCommit(input: {
@@ -1243,7 +1237,7 @@ export class HelarcMainController {
 }
 
 interface CompletedPatchReview {
-  review: HelarcPendingPatchReviewProjection;
+  review: HelarcPatchReviewPresentation;
   decision: "accepted" | "rejected" | "request_revision" | null;
   reason: string | null;
 }
@@ -1508,6 +1502,140 @@ function createPatchArtifactSummary(patchReview: CompletedPatchReview): string {
   return `Proposed ${patchReview.review.operation} patch for ${patchReview.review.path}.`;
 }
 
+function asRecord(candidate: unknown): Record<string, unknown> | null {
+  return candidate !== null && typeof candidate === "object" && !Array.isArray(candidate)
+    ? candidate as Record<string, unknown>
+    : null;
+}
+
+function sameInteractionRequest(
+  left: {
+    readonly id: string;
+    readonly protocol: { readonly owner: string; readonly kind: string; readonly revision: string };
+    readonly requestVersion: number;
+    readonly subject: {
+      readonly owner: string;
+      readonly kind: string;
+      readonly id: string;
+      readonly revision: string;
+    };
+  },
+  right: Record<string, unknown>,
+): boolean {
+  const protocol = asRecord(right.protocol);
+  const subject = asRecord(right.subject);
+  return right.id === left.id &&
+    right.requestVersion === left.requestVersion &&
+    protocol?.owner === left.protocol.owner &&
+    protocol.kind === left.protocol.kind &&
+    protocol.revision === left.protocol.revision &&
+    subject?.owner === left.subject.owner &&
+    subject.kind === left.subject.kind &&
+    subject.id === left.subject.id &&
+    subject.revision === left.subject.revision;
+}
+
+function isPatchReviewSubmission(
+  candidate: Record<string, unknown>,
+): candidate is Record<string, unknown> & HelarcPatchReviewSubmission {
+  if (!hasExactKeys(candidate, ["decision", "reason"])) return false;
+  if (
+    candidate.decision !== "accepted" &&
+    candidate.decision !== "rejected" &&
+    candidate.decision !== "request_revision"
+  ) return false;
+  if (candidate.reason !== null && typeof candidate.reason !== "string") return false;
+  return candidate.decision === "accepted" ||
+    (typeof candidate.reason === "string" && candidate.reason.trim().length > 0);
+}
+
+function readPatchReviewPresentation(candidate: unknown): HelarcPatchReviewPresentation | null {
+  const record = asRecord(candidate);
+  if (
+    record === null ||
+    !hasExactKeys(record, [
+      "runId",
+      "proposalId",
+      "proposalRevision",
+      "reviewId",
+      "rootName",
+      "workspaceId",
+      "path",
+      "operation",
+      "summary",
+      "rationale",
+      "originalContent",
+      "proposedContent",
+      "originalContentBytes",
+      "proposedContentBytes",
+    ]) ||
+    !isIdentity(record.runId) ||
+    !isIdentity(record.proposalId) ||
+    !isPositiveInteger(record.proposalRevision) ||
+    !isIdentity(record.reviewId) ||
+    !isBoundedText(record.rootName, 512, false) ||
+    !isIdentity(record.workspaceId) ||
+    !isBoundedText(record.path, 4_096, false) ||
+    (record.operation !== "create" && record.operation !== "update" && record.operation !== "delete") ||
+    !isBoundedText(record.summary, 4_096, false) ||
+    !isBoundedText(record.rationale, 8_192, false) ||
+    !isNullableBoundedText(record.originalContent, 1_000_000) ||
+    !isNullableBoundedText(record.proposedContent, 1_000_000) ||
+    !isNullableByteLength(record.originalContentBytes) ||
+    !isNullableByteLength(record.proposedContentBytes)
+  ) return null;
+  return Object.freeze({
+    runId: record.runId,
+    proposalId: record.proposalId,
+    proposalRevision: record.proposalRevision,
+    reviewId: record.reviewId,
+    rootName: record.rootName,
+    workspaceId: record.workspaceId,
+    path: record.path,
+    operation: record.operation,
+    summary: record.summary,
+    rationale: record.rationale,
+    originalContent: record.originalContent,
+    proposedContent: record.proposedContent,
+    originalContentBytes: record.originalContentBytes,
+    proposedContentBytes: record.proposedContentBytes,
+  });
+}
+
+function hasExactKeys(candidate: Record<string, unknown>, fields: readonly string[]): boolean {
+  const actual = Object.keys(candidate).sort();
+  const expected = [...fields].sort();
+  return actual.length === expected.length &&
+    actual.every((field, index) => field === expected[index]);
+}
+
+function isIdentity(candidate: unknown): candidate is string {
+  return typeof candidate === "string" && candidate.length > 0 && !/\s/.test(candidate);
+}
+
+function isPositiveInteger(candidate: unknown): candidate is number {
+  return Number.isSafeInteger(candidate) && (candidate as number) > 0;
+}
+
+function isNullableByteLength(candidate: unknown): candidate is number | null {
+  return candidate === null ||
+    (Number.isSafeInteger(candidate) && (candidate as number) >= 0);
+}
+
+function isBoundedText(
+  candidate: unknown,
+  maxLength: number,
+  allowEmpty: boolean,
+): candidate is string {
+  return typeof candidate === "string" &&
+    candidate.length <= maxLength &&
+    (allowEmpty || candidate.trim().length > 0);
+}
+
+function isNullableBoundedText(candidate: unknown, maxLength: number): candidate is string | null {
+  return candidate === null || isBoundedText(candidate, maxLength, true);
+}
+
 function createAssistantTerminalMessageContent(
   terminal: HostTerminalRunProjection,
   product: HelarcProductResult,
@@ -1517,18 +1645,18 @@ function createAssistantTerminalMessageContent(
     return summary;
   }
 
-  if (product.output.safeErrors.length > 0) {
-    return product.output.safeErrors
-      .map((error) => `${error.code}: ${error.message}`)
-      .join("; ");
-  }
-
   if (terminal.status === "cancelled") {
     return "Run cancelled.";
   }
 
   if (terminal.status === "blocked") {
     return "Run blocked.";
+  }
+
+  if (product.output.safeErrors.length > 0) {
+    return product.output.safeErrors
+      .map((error) => `${error.code}: ${error.message}`)
+      .join("; ");
   }
 
   if (terminal.status === "failed") {

@@ -8,7 +8,9 @@ import type {
   HostInteractionSubmission,
   HostRunCancellationInput,
   HostRunCancellationReceipt,
+  HostRunSteeringReceipt,
 } from "../run/HostRunManager.js";
+import type { RunSteeringAttribution } from "@agent-anything/agent-runtime/run";
 import type { HostRunProjection } from "../projection/HostRunProjection.js";
 
 export const HOST_COMMAND_VERSION = 1 as const;
@@ -16,7 +18,7 @@ export const HOST_COMMAND_REASON_MAX_LENGTH = 500;
 export const HOST_COMMAND_RECEIPT_LIMIT = 4_096;
 export const HOST_INTERACTION_PAYLOAD_MAX_BYTES = 262_144;
 
-export type HostCommandKind = "run.cancel" | "interaction.submit";
+export type HostCommandKind = "run.cancel" | "run.steer" | "interaction.submit";
 
 export interface HostCommandEnvelope<TKind extends HostCommandKind, TPayload> {
   readonly version: typeof HOST_COMMAND_VERSION;
@@ -36,6 +38,11 @@ export interface HostInteractionSubmissionCommandPayload {
   readonly payload: unknown;
 }
 
+export interface HostRunSteeringCommandPayload {
+  readonly expectedRunRevision: number;
+  readonly instruction: string;
+}
+
 export type HostRunCancellationCommand = HostCommandEnvelope<
   "run.cancel",
   HostRunCancellationCommandPayload
@@ -46,7 +53,15 @@ export type HostInteractionSubmissionCommand = HostCommandEnvelope<
   HostInteractionSubmissionCommandPayload
 >;
 
-export type HostCommand = HostRunCancellationCommand | HostInteractionSubmissionCommand;
+export type HostRunSteeringCommand = HostCommandEnvelope<
+  "run.steer",
+  HostRunSteeringCommandPayload
+>;
+
+export type HostCommand =
+  | HostRunCancellationCommand
+  | HostRunSteeringCommand
+  | HostInteractionSubmissionCommand;
 
 export type HostCommandRejectionCode =
   | "host_command_invalid"
@@ -79,6 +94,13 @@ export interface HostInteractionSubmissionCommandReceipt
   readonly projection: HostRunProjection;
 }
 
+export interface HostRunSteeringCommandReceipt
+  extends HostCommandReceiptBase<"run.steer"> {
+  readonly status: "handled";
+  readonly result: HostRunSteeringReceipt;
+  readonly projection: HostRunProjection;
+}
+
 export interface HostCommandRejectedReceipt {
   readonly version: typeof HOST_COMMAND_VERSION;
   readonly commandId: string;
@@ -91,6 +113,7 @@ export interface HostCommandRejectedReceipt {
 
 export type HostCommandReceipt =
   | HostRunCancellationCommandReceipt
+  | HostRunSteeringCommandReceipt
   | HostInteractionSubmissionCommandReceipt
   | HostCommandRejectedReceipt;
 
@@ -101,6 +124,7 @@ export type HostCommandCancellationAttribution =
 export interface CreateHostCommandDispatcherInput {
   readonly resolveActiveRun: (runId: string) => HostActiveRun | null;
   readonly cancellationAttribution: HostCommandCancellationAttribution;
+  readonly steeringAttribution: RunSteeringAttribution;
   readonly maxReceipts?: number;
 }
 
@@ -120,6 +144,7 @@ export function createHostCommandDispatcher(
     throw new TypeError("Host command dispatcher requires an active Run resolver.");
   }
   assertCancellationAttribution(input.cancellationAttribution);
+  assertSteeringAttribution(input.steeringAttribution);
   const maxReceipts = input.maxReceipts ?? HOST_COMMAND_RECEIPT_LIMIT;
   if (!Number.isSafeInteger(maxReceipts) || maxReceipts < 1) {
     throw new TypeError("Host command receipt limit must be a positive integer.");
@@ -174,6 +199,15 @@ export function snapshotHostCommand(candidate: unknown): HostCommand {
       payload: snapshotCancellationPayload(candidate.payload),
     });
   }
+  if (candidate.kind === "run.steer") {
+    return Object.freeze({
+      version: HOST_COMMAND_VERSION,
+      commandId,
+      runId,
+      kind: "run.steer" as const,
+      payload: snapshotSteeringPayload(candidate.payload),
+    });
+  }
   return Object.freeze({
     version: HOST_COMMAND_VERSION,
     commandId,
@@ -209,6 +243,22 @@ function dispatchValidatedCommand(
         kind: command.kind,
         status: "handled",
         result: activeRun.cancel(cancellation),
+        projection: activeRun.getProjection(),
+      });
+    }
+    if (command.kind === "run.steer") {
+      return Object.freeze({
+        version: HOST_COMMAND_VERSION,
+        commandId: command.commandId,
+        runId: command.runId,
+        kind: command.kind,
+        status: "handled",
+        result: activeRun.steer({
+          commandId: command.commandId,
+          expectedRunRevision: command.payload.expectedRunRevision,
+          instruction: command.payload.instruction,
+          attribution: input.steeringAttribution,
+        }),
         projection: activeRun.getProjection(),
       });
     }
@@ -257,6 +307,31 @@ function snapshotInteractionPayload(candidate: unknown): HostInteractionSubmissi
   }
 }
 
+function snapshotSteeringPayload(candidate: unknown): HostRunSteeringCommandPayload {
+  assertRecord(candidate, "Host steering payload");
+  assertExactKeys(candidate, ["expectedRunRevision", "instruction"], "Host steering payload");
+  if (!Number.isSafeInteger(candidate.expectedRunRevision) || (candidate.expectedRunRevision as number) < 0) {
+    throw new HostCommandValidationError(
+      "host_command_invalid",
+      "Host steering expectedRunRevision must be a non-negative integer.",
+    );
+  }
+  if (
+    typeof candidate.instruction !== "string" ||
+    candidate.instruction.trim().length === 0 ||
+    candidate.instruction.length > 32_768
+  ) {
+    throw new HostCommandValidationError(
+      "host_command_invalid",
+      "Host steering instruction must be bounded non-empty text.",
+    );
+  }
+  return Object.freeze({
+    expectedRunRevision: candidate.expectedRunRevision as number,
+    instruction: candidate.instruction,
+  });
+}
+
 function rejectedReceipt(
   candidate: unknown,
   code: HostCommandRejectionCode,
@@ -303,6 +378,18 @@ function assertCancellationAttribution(candidate: HostCommandCancellationAttribu
   ) throw new TypeError("Host command cancellation attribution is invalid.");
 }
 
+function assertSteeringAttribution(candidate: RunSteeringAttribution): void {
+  if (
+    candidate === null ||
+    typeof candidate !== "object" ||
+    (candidate.origin !== "user" && candidate.origin !== "host") ||
+    (candidate.actorId !== null &&
+      (typeof candidate.actorId !== "string" || candidate.actorId.length === 0 || /\s/.test(candidate.actorId)))
+  ) {
+    throw new TypeError("Host command steering attribution is invalid.");
+  }
+}
+
 function assertHostCommandKind(value: unknown, field: string): asserts value is HostCommandKind {
   if (!isHostCommandKind(value)) {
     throw new HostCommandValidationError(
@@ -313,7 +400,7 @@ function assertHostCommandKind(value: unknown, field: string): asserts value is 
 }
 
 function isHostCommandKind(value: unknown): value is HostCommandKind {
-  return value === "run.cancel" || value === "interaction.submit";
+  return value === "run.cancel" || value === "run.steer" || value === "interaction.submit";
 }
 
 function nullableReason(value: unknown, field: string): string | null {

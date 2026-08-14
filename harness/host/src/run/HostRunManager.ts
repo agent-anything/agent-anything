@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Agent } from "@agent-anything/agent-core/agent";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import type {
@@ -19,6 +20,10 @@ import type {
   RunHandle,
   Runner,
 } from "@agent-anything/agent-runtime/runner";
+import type {
+  RunSteeringAttribution,
+  RunSteeringSubmissionReceipt,
+} from "@agent-anything/agent-runtime/run";
 import {
   createHostRunProjection,
   createHostTerminalRunProjection,
@@ -50,6 +55,16 @@ export interface HostRunResult<TOutput = unknown> {
 
 export type HostRunCancellationInput = RunCancellationRequestInput;
 
+export interface HostRunSteeringInput {
+  readonly commandId: string;
+  readonly expectedRunRevision: number;
+  readonly instruction: string;
+  readonly attribution: RunSteeringAttribution;
+}
+
+export type HostRunSteeringReceipt = RunSteeringSubmissionReceipt;
+export type HostRunStatusProjection = HostRunProjection;
+
 export interface HostInteractionSubmission {
   readonly request: InteractionRequestRef;
   readonly submissionId: string;
@@ -67,7 +82,9 @@ export interface HostActiveRun<TOutput = unknown> {
   getProjection(): HostRunProjection;
   subscribe(listener: HostRunProjectionListener): () => void;
   submitInteraction(input: HostInteractionSubmission): InteractionSubmissionOutcome;
+  steer(input: HostRunSteeringInput): HostRunSteeringReceipt;
   cancel(input: HostRunCancellationInput): HostRunCancellationReceipt;
+  getStatus(): HostRunStatusProjection;
   wait(): Promise<HostRunResult<TOutput>>;
   getResult(): HostRunResult<TOutput> | null;
 }
@@ -242,6 +259,7 @@ function startHostRun<TOutput>(
     runId,
     getProjection: () => store.getProjection(),
     subscribe: (listener: HostRunProjectionListener) => store.subscribe(listener),
+    getStatus: () => store.getProjection(),
     submitInteraction(candidate: HostInteractionSubmission): InteractionSubmissionOutcome {
       if (invocationState !== "active") {
         return Object.freeze({ status: "rejected", code: "run_settled", receipt: null });
@@ -276,6 +294,35 @@ function startHostRun<TOutput>(
         }, "Interaction submission");
       }
       return outcome;
+    },
+    steer(candidate: HostRunSteeringInput): HostRunSteeringReceipt {
+      const projection = store.getProjection();
+      if (invocationState !== "active") {
+        return Object.freeze({
+          status: "rejected" as const,
+          code: "run_settled" as const,
+          run: Object.freeze({ id: runId }),
+          commandId: typeof candidate?.commandId === "string" ? candidate.commandId : "",
+          currentRunRevision: projection.runRevision,
+        });
+      }
+      try {
+        return handle.steer({
+          commandId: identity(candidate.commandId, "Steering commandId"),
+          expectedRunRevision: candidate.expectedRunRevision,
+          instruction: candidate.instruction,
+          attribution: candidate.attribution,
+          submittedAt: readNow(now),
+        });
+      } catch {
+        return Object.freeze({
+          status: "rejected" as const,
+          code: "steering_invalid" as const,
+          run: Object.freeze({ id: runId }),
+          commandId: typeof candidate?.commandId === "string" ? candidate.commandId : "",
+          currentRunRevision: projection.runRevision,
+        });
+      }
     },
     cancel(cancellationInput: HostRunCancellationInput): HostRunCancellationReceipt {
       const currentCancellation = store.getProjection().cancellation;
@@ -428,7 +475,9 @@ function snapshotUnknown<T>(value: T): T {
 }
 
 function canonicalDigest(value: unknown): string {
-  return JSON.stringify(canonicalValue(value));
+  return `sha256:${createHash("sha256")
+    .update(JSON.stringify(canonicalValue(value)), "utf8")
+    .digest("hex")}`;
 }
 
 function canonicalValue(value: unknown): unknown {

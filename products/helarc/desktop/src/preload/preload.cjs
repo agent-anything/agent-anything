@@ -5,18 +5,19 @@ const COMMAND_VERSION = 1;
 const channels = Object.freeze({
   cancelRun: "helarc:cancel-run",
   chooseWorkspace: "helarc:choose-workspace",
+  getRunStatus: "helarc:get-run-status",
   getSnapshot: "helarc:get-snapshot",
   openThread: "helarc:open-thread",
-  resolvePatchReview: "helarc:resolve-patch-review",
-  submitApprovalDecision: "helarc:submit-approval-decision",
   saveProviderConfig: "helarc:save-provider-config",
   selectWorkspaceProfile: "helarc:select-workspace-profile",
   snapshotUpdated: "helarc:snapshot-updated",
   startRun: "helarc:start-run",
+  steerRun: "helarc:steer-run",
+  submitInteraction: "helarc:submit-interaction",
 });
 
 contextBridge.exposeInMainWorld("helarc", Object.freeze({
-  bridgeVersion: 6,
+  bridgeVersion: 7,
   productId: "helarc",
   chooseWorkspace: (input) => ipcRenderer.invoke(
     channels.chooseWorkspace,
@@ -70,35 +71,34 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
       reason: input?.reason,
     },
   }),
-  submitApprovalDecision: (input) => ipcRenderer.invoke(
-    channels.submitApprovalDecision,
-    {
-      version: COMMAND_VERSION,
-      commandId: input?.commandId,
-      runId: input?.runId,
-      kind: "approval.submit",
-      payload: {
-        submissionId: input?.submissionId,
-        requestId: input?.requestId,
-        pendingVersion: input?.pendingVersion,
-        optionId: input?.optionId,
-        grantedPermissions: input?.grantedPermissions,
-        reason: input?.reason,
-      },
+  steerRun: (input) => ipcRenderer.invoke(channels.steerRun, {
+    version: COMMAND_VERSION,
+    commandId: input?.commandId,
+    runId: input?.runId,
+    kind: "run.steer",
+    payload: {
+      expectedRunRevision: input?.expectedRunRevision,
+      instruction: input?.instruction,
     },
-  ),
-  resolvePatchReview: (input) => ipcRenderer.invoke(
-    channels.resolvePatchReview,
-    productCommand("patch_review.submit", input?.commandId, {
+  }),
+  submitInteraction: (input) => ipcRenderer.invoke(channels.submitInteraction, {
+    version: COMMAND_VERSION,
+    commandId: input?.commandId,
+    runId: input?.runId,
+    kind: "interaction.submit",
+    payload: {
+      request: input?.request,
       submissionId: input?.submissionId,
-      runId: input?.runId,
-      proposalId: input?.proposalId,
-      reviewId: input?.reviewId,
-      pendingVersion: input?.pendingVersion,
-      decision: input?.decision,
-      reason: input?.reason,
-    }),
-  ),
+      payload: input?.payload,
+    },
+  }),
+  getRunStatus: (input) => ipcRenderer.invoke(channels.getRunStatus, {
+    version: COMMAND_VERSION,
+    queryId: input?.queryId,
+    runId: input?.runId,
+    kind: "run.status",
+    payload: {},
+  }),
   subscribeSnapshot: (listener) => {
     const safeListener = (_event, snapshot) => {
       if (typeof listener === "function") {

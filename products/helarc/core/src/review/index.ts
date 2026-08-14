@@ -48,9 +48,6 @@ export type {
   HelarcPatchActionControllerInput,
   HelarcPatchActionState,
   HelarcPatchOutcome,
-  HelarcPatchReviewDecision,
-  HelarcPatchReviewPort,
-  HelarcPatchReviewResolution,
 } from "./HelarcPatchActionController.js";
 export { HelarcPatchActionController } from "./HelarcPatchActionController.js";
 export * from "../composition/HelarcPatchReview.js";

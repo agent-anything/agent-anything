@@ -71,6 +71,15 @@ export type {
 export { createBlockedRunResult, createCancelledRunResult, createFailedRunResult, createSucceededRunResult } from "./RunResult.js";
 export type { RunCounters, RunState } from "./RunState.js";
 export type {
+  RunSteeringApplication,
+  RunSteeringAttribution,
+  RunSteeringCommand,
+  RunSteeringInput,
+  RunSteeringRejectionCode,
+  RunSteeringSubmissionReceipt,
+} from "./RunSteering.js";
+export { snapshotRunSteeringInput } from "./RunSteering.js";
+export type {
   RunObservation,
   RunObservationEnvelope,
   RunObservationLowerRef,

@@ -19,7 +19,6 @@ const DISPLAY_NAME_MAX_LENGTH = 200;
 const BASE_URL_MAX_LENGTH = 2_048;
 const MODEL_MAX_LENGTH = 512;
 const API_KEY_MAX_LENGTH = 16_384;
-const REASON_MAX_LENGTH = 500;
 
 export type HelarcProductCommandHandlers = {
   readonly [TKind in HelarcProductCommandKind]: (
@@ -122,8 +121,6 @@ export function snapshotHelarcProductCommand(candidate: unknown): HelarcProductC
       return envelope(commandId, candidate.kind, snapshotProviderSave(candidate.payload));
     case "run.start":
       return envelope(commandId, candidate.kind, snapshotRunStart(candidate.payload));
-    case "patch_review.submit":
-      return envelope(commandId, candidate.kind, snapshotPatchReview(candidate.payload));
     case "thread.open":
       return envelope(commandId, candidate.kind, snapshotThreadOpen(candidate.payload));
   }
@@ -160,8 +157,6 @@ function invokeHandler(
     case "provider.save":
       return handlers[command.kind](command.payload);
     case "run.start":
-      return handlers[command.kind](command.payload);
-    case "patch_review.submit":
       return handlers[command.kind](command.payload);
     case "thread.open":
       return handlers[command.kind](command.payload);
@@ -270,56 +265,6 @@ function snapshotRunStartTarget(
   invalid("Run start target kind is invalid.");
 }
 
-function snapshotPatchReview(
-  candidate: unknown,
-): HelarcProductCommandPayloadMap["patch_review.submit"] {
-  assertRecord(candidate, "Patch review payload");
-  assertExactKeys(
-    candidate,
-    [
-      "submissionId",
-      "runId",
-      "proposalId",
-      "proposalRevision",
-      "reviewId",
-      "pendingVersion",
-      "decision",
-      "reason",
-    ],
-    "Patch review payload",
-  );
-  if (!Number.isSafeInteger(candidate.pendingVersion) || (candidate.pendingVersion as number) < 1) {
-    invalid("Patch review pendingVersion must be a positive safe integer.");
-  }
-  if (
-    !Number.isSafeInteger(candidate.proposalRevision) ||
-    (candidate.proposalRevision as number) < 1
-  ) {
-    invalid("Patch proposal revision must be a positive safe integer.");
-  }
-  if (
-    candidate.decision !== "accepted" &&
-    candidate.decision !== "rejected" &&
-    candidate.decision !== "request_revision"
-  ) {
-    invalid("Patch review decision is invalid.");
-  }
-  const reason = nullableReason(candidate.reason, "Patch review reason");
-  if (candidate.decision !== "accepted" && reason === null) {
-    invalid("Rejected or revision-requested patch review requires a reason.");
-  }
-  return Object.freeze({
-    submissionId: identity(candidate.submissionId, "Patch review submission id"),
-    runId: identity(candidate.runId, "Patch review Run id"),
-    proposalId: identity(candidate.proposalId, "Patch proposal id"),
-    proposalRevision: candidate.proposalRevision as number,
-    reviewId: identity(candidate.reviewId, "Patch review id"),
-    pendingVersion: candidate.pendingVersion as number,
-    decision: candidate.decision,
-    reason,
-  });
-}
-
 function snapshotThreadOpen(
   candidate: unknown,
 ): HelarcProductCommandPayloadMap["thread.open"] {
@@ -382,7 +327,6 @@ const PRODUCT_COMMAND_KINDS = [
   "workspace.select",
   "provider.save",
   "run.start",
-  "patch_review.submit",
   "thread.open",
 ] as const satisfies readonly HelarcProductCommandKind[];
 
@@ -428,11 +372,6 @@ function boundedString(value: unknown, field: string, maxLength: number): string
     invalid(`${field} is invalid.`);
   }
   return value;
-}
-
-function nullableReason(value: unknown, field: string): string | null {
-  if (value === null) return null;
-  return boundedText(value, field, REASON_MAX_LENGTH);
 }
 
 function assertRecord(

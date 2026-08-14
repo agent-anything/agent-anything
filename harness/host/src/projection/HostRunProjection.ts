@@ -138,6 +138,7 @@ export interface HostRunProjection {
   readonly runId: string;
   readonly sequence: number;
   readonly runOperationSequence: number;
+  readonly runRevision: number;
   readonly status: HostRunProjectionStatus;
   readonly startedAt: string;
   readonly plan: HostPlanProjection | null;
@@ -259,6 +260,7 @@ export function createHostRunProjection(
     runId: input.runId,
     sequence: 0,
     runOperationSequence: 0,
+    runRevision: 0,
     status: "starting" as const,
     startedAt: input.startedAt,
     plan: null,

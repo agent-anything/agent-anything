@@ -10,5 +10,8 @@ export {
   type HostRunReleaseReceipt,
   type HostRunResult,
   type HostRunStartInput,
+  type HostRunSteeringInput,
+  type HostRunSteeringReceipt,
+  type HostRunStatusProjection,
   type HostSessionId,
 } from "./HostRunManager.js";

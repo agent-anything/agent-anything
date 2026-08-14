@@ -295,6 +295,32 @@ describe("Runner semantic integration", () => {
     expect(handle.getSnapshot().pendingInteractions).toEqual([]);
   });
 
+  it("keeps Interaction cancellation identity separate from its semantic settlement code", async () => {
+    const operations = createOperationFixture([]);
+    const interaction = testInteractionProtocol();
+    const controller = new ScriptedController([
+      advance([interactionCandidate("run")], "model_interaction_1"),
+    ]);
+    const handle = createRunner(controller, operations, {
+      interactions: interaction.registry,
+    }).start(createAgent(), createRunInput(), createRunConfig(operations));
+    await waitForPendingInteraction(handle);
+
+    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status)
+      .toBe("accepted");
+    const result = await handle.wait();
+
+    expect(result.status).toBe("cancelled");
+    expect(observations(result)).toContainEqual(expect.objectContaining({
+      payload: {
+        kind: "interaction",
+        owner: "test-owner",
+        status: "cancelled",
+        value: { code: "interaction_cancelled" },
+      },
+    }));
+  });
+
   it("queues a non-blocking Interaction settlement and discards a stale Controller decision", async () => {
     const operations = createOperationFixture([]);
     const interaction = testInteractionProtocol();
@@ -332,6 +358,73 @@ describe("Runner semantic integration", () => {
       finalOutput: { summary: "Fresh decision" },
     });
     expect(controller.calls).toHaveLength(3);
+  });
+
+  it("applies accepted steering at a safe point and discards the stale Controller decision", async () => {
+    const operations = createOperationFixture([]);
+    const staleDecision = deferred<ControllerDecision<TestOutput>>();
+    const controller = new ScriptedController([
+      () => staleDecision.promise,
+      (input) => {
+        expect(input.plan).toBeNull();
+        expect(input.context.messages.at(-1)).toMatchObject({
+          role: "user",
+          content: "Inspect the failing tests first.",
+          metadata: {
+            kind: "run_steering",
+            commandId: "steering-1",
+            origin: "user",
+            actorId: "user-1",
+          },
+        });
+        return complete("Fresh decision", "model_complete_2");
+      },
+    ]);
+    const handle = createRunner(controller, operations).start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations),
+    );
+    await waitUntil(() => controller.calls.length === 1);
+    const expectedRunRevision = handle.getSnapshot().runRevision;
+    const command = {
+      commandId: "steering-1",
+      expectedRunRevision,
+      instruction: "Inspect the failing tests first.",
+      attribution: { origin: "user" as const, actorId: "user-1" },
+      submittedAt: NOW,
+    };
+
+    expect(handle.steer(command)).toMatchObject({ status: "accepted_for_application" });
+    expect(handle.steer(command)).toMatchObject({ status: "duplicate_identical" });
+    expect(handle.steer({ ...command, instruction: "Conflicting instruction." })).toMatchObject({
+      status: "rejected",
+      code: "steering_command_conflict",
+    });
+    expect(handle.steer({
+      ...command,
+      commandId: "steering-stale",
+      expectedRunRevision: expectedRunRevision + 1,
+    })).toMatchObject({
+      status: "rejected",
+      code: "steering_revision_stale",
+    });
+
+    staleDecision.resolve(complete("Stale decision", "model_stale_1"));
+    const result = await handle.wait();
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      finalOutput: { summary: "Fresh decision" },
+    });
+    expect(result.items).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        kind: "state_transition",
+        transition: "steering",
+        steering: expect.objectContaining({ status: "applied" }),
+      }),
+    }));
+    expect(controller.calls).toHaveLength(2);
   });
 
   it("applies a same-Run handoff without replacing Run or Task identity", async () => {

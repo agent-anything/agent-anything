@@ -150,6 +150,7 @@ function applyRunOperation(
   const status = activeStatus(current.status, snapshot.status);
   return applied(current, sequence, {
     runOperationSequence: snapshot.sequence,
+    runRevision: snapshot.runRevision,
     status,
     plan: snapshot.plan,
     pendingInteractions: Object.freeze(pendingInteractions),

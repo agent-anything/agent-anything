@@ -104,7 +104,12 @@ import {
   type RunObservation,
   type RunResult,
   type RunState,
+  type RunSteeringApplication,
+  type RunSteeringCommand,
+  type RunSteeringInput,
+  type RunSteeringSubmissionReceipt,
   type RuntimeRunAction,
+  snapshotRunSteeringInput,
 } from "../run/index.js";
 import type { RunExecutionUpdate } from "./RunHandle.js";
 import type { ResolvedRunConfig } from "./RunConfig.js";
@@ -195,6 +200,12 @@ export class RunExecution<TOutput> {
   private readonly childHandles = new Set<import("./RunHandle.js").RunHandle>();
   private readonly interactionActions = new Map<string, RuntimeRunAction>();
   private readonly interactionSettlements: QueuedInteractionSettlement[] = [];
+  private readonly steeringQueue: RunSteeringCommand[] = [];
+  private readonly steeringLedger = new Map<string, {
+    readonly fingerprint: string;
+    readonly command: RunSteeringCommand;
+  }>();
+  private steeringEpoch = 0;
   private retryProjection: import("./RunHandle.js").RunRetryProjection | null = null;
 
   constructor(
@@ -302,6 +313,60 @@ export class RunExecution<TOutput> {
     return local;
   }
 
+  submitSteering(input: RunSteeringInput): RunSteeringSubmissionReceipt {
+    const state = this.writer.getSnapshot();
+    let candidate: RunSteeringInput;
+    try {
+      candidate = snapshotRunSteeringInput(input);
+    } catch {
+      return this.rejectSteering(
+        typeof input?.commandId === "string" ? input.commandId : "",
+        "steering_invalid",
+      );
+    }
+    const fingerprint = JSON.stringify(candidate);
+    const previous = this.steeringLedger.get(candidate.commandId);
+    if (previous !== undefined) {
+      return previous.fingerprint === fingerprint
+        ? Object.freeze({
+            status: "duplicate_identical" as const,
+            command: previous.command,
+          })
+        : this.rejectSteering(candidate.commandId, "steering_command_conflict");
+    }
+    if (!isActiveStatus(state.status)) {
+      return this.rejectSteering(
+        candidate.commandId,
+        state.status === "cancelling" ? "run_cancelling" : "run_settled",
+      );
+    }
+    if (candidate.expectedRunRevision !== state.revision) {
+      return this.rejectSteering(candidate.commandId, "steering_revision_stale");
+    }
+    if (this.steeringQueue.length >= 64) {
+      return this.rejectSteering(candidate.commandId, "steering_queue_full");
+    }
+    const command: RunSteeringCommand = Object.freeze({
+      ...candidate,
+      ref: Object.freeze({
+        run: state.run,
+        commandId: candidate.commandId,
+      }),
+      acceptedRunRevision: state.revision,
+    });
+    this.steeringLedger.set(candidate.commandId, Object.freeze({
+      fingerprint,
+      command,
+    }));
+    this.steeringQueue.push(command);
+    this.steeringEpoch += 1;
+    this.interactions.invalidateAll("run_steering_pending");
+    return Object.freeze({
+      status: "accepted_for_application" as const,
+      command,
+    });
+  }
+
   async run(): Promise<RunResult<TOutput>> {
     this.interruptionCoordinator.start();
     try {
@@ -325,6 +390,7 @@ export class RunExecution<TOutput> {
         if (this.config.cancellation.context.request !== null) {
           return await this.settle({ status: "cancelled" });
         }
+        this.drainSteering("apply");
         const state = this.writer.getSnapshot();
         const violation = evaluateRunLoopLimits({
           counters: state.counters,
@@ -347,6 +413,9 @@ export class RunExecution<TOutput> {
           return await this.settle({ status: "cancelled" });
         }
         if (settlementsAfterDecision > 0) {
+          continue;
+        }
+        if (this.drainSteering("apply") > 0) {
           continue;
         }
         if (decision.decision.kind === "propose_completion") {
@@ -372,12 +441,14 @@ export class RunExecution<TOutput> {
         for (let index = 0; index < decision.decision.candidates.length; index += 1) {
           if (this.config.cancellation.context.request !== null) break;
           if (this.drainInteractionSettlements() > 0) break;
+          if (this.drainSteering("apply") > 0) break;
           const invalidatesRemainder = await this.processCandidate(
             decision.decision.candidates[index]!,
             index,
             basis,
           );
           if (this.terminalResult !== null) return this.terminalResult;
+          if (this.drainSteering("apply") > 0) break;
           if (invalidatesRemainder) break;
         }
       }
@@ -1039,6 +1110,7 @@ export class RunExecution<TOutput> {
         this.now(),
       );
     }
+    const dispatchSteeringEpoch = this.steeringEpoch;
     const outcome = await this.actionExecution.execute({
       action: Object.freeze({ id: this.id("action") }),
       parentRunAction: action.ref,
@@ -1057,6 +1129,7 @@ export class RunExecution<TOutput> {
       interruption: context.interruption,
       deadlineAt: this.writer.getSnapshot().deadlineAt,
       maxAttempts: this.config.retry.action.maxAttempts,
+      isProgressionBasisCurrent: () => this.steeringEpoch === dispatchSteeringEpoch,
     });
     if (outcome.status === "pending_interaction") {
       return this.operationFailureResult(
@@ -1463,6 +1536,69 @@ export class RunExecution<TOutput> {
     return count;
   }
 
+  private drainSteering(
+    disposition: "apply" | "cancelled" | "run_settled",
+  ): number {
+    if (this.steeringQueue.length === 0) return 0;
+    const queued = this.steeringQueue.splice(0);
+    const latest = queued.at(-1)!;
+    for (const command of queued) {
+      const status: RunSteeringApplication["status"] = disposition === "apply"
+        ? command === latest ? "applied" : "superseded"
+        : disposition;
+      const current = this.writer.getSnapshot();
+      const application: RunSteeringApplication = Object.freeze({
+        command,
+        status,
+        appliedInRunRevision: current.revision + 1,
+        supersededByCommandId: status === "superseded" ? latest.commandId : null,
+        reasonCode: status === "cancelled"
+          ? "run_cancellation_requested"
+          : status === "run_settled"
+            ? "run_settled_before_application"
+            : null,
+      });
+      this.writer.commit({
+        kind: "state_transition",
+        transition: "steering",
+        steering: application,
+      }, (state) => status === "applied"
+        ? Object.freeze({
+            context: applyContextUpdate(state.context, {
+              messages: [{
+                id: `steering:${command.commandId}`,
+                role: "user",
+                content: command.instruction,
+                metadata: Object.freeze({
+                  kind: "run_steering",
+                  commandId: command.commandId,
+                  origin: command.attribution.origin,
+                  actorId: command.attribution.actorId,
+                  acceptedRunRevision: command.acceptedRunRevision,
+                }),
+              }],
+            }),
+            plan: null,
+          })
+        : Object.freeze({}));
+    }
+    return queued.length;
+  }
+
+  private rejectSteering(
+    commandId: string,
+    code: Extract<RunSteeringSubmissionReceipt, { status: "rejected" }>["code"],
+  ): RunSteeringSubmissionReceipt {
+    const state = this.writer.getSnapshot();
+    return Object.freeze({
+      status: "rejected" as const,
+      code,
+      run: state.run,
+      commandId,
+      currentRunRevision: state.revision,
+    });
+  }
+
   private addPending(pending: PendingRunSubject): void {
     this.writer.commit({
       kind: "pending_transition",
@@ -1811,6 +1947,7 @@ export class RunExecution<TOutput> {
 
   private async settle(candidate: TerminalCandidate<TOutput>): Promise<RunResult<TOutput>> {
     if (this.terminalResult !== null) return this.terminalResult;
+    this.drainSteering(candidate.status === "cancelled" ? "cancelled" : "run_settled");
     this.interactions.close();
     this.drainInteractionSettlements();
     let terminal = candidate;
@@ -2114,6 +2251,7 @@ export class RunExecution<TOutput> {
       handle.getSnapshot().pendingInteractions
     );
     this.onUpdate({
+      runRevision: state.revision,
       status: state.status,
       lastRunItemSequence: state.items.at(-1)?.ref.sequence ?? 0,
       plan: state.plan === null ? null : projectPlan(state.plan),

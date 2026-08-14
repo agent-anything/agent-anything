@@ -7,6 +7,7 @@ import type { PlanProjection } from "../plan/index.js";
 import type { ControllerModelItem } from "../controller/Controller.js";
 import type { PendingRunSubject } from "./PendingRunSubject.js";
 import type { RunCancellationSummary } from "./RunCancellation.js";
+import type { RunSteeringApplication } from "./RunSteering.js";
 import type { RunFailureCause } from "./RunFailure.js";
 import type { RunObservation } from "./RunObservation.js";
 import type { RunBlockedCode, RunFailureCode, RunResultStatus } from "./RunStatus.js";
@@ -41,6 +42,11 @@ export type RunItemPayload<TOutput = unknown> =
       readonly previousAgent: AgentRevisionRef;
       readonly activeAgent: AgentRevisionRef;
       readonly reason: string;
+    }
+  | {
+      readonly kind: "state_transition";
+      readonly transition: "steering";
+      readonly steering: RunSteeringApplication;
     }
   | {
       readonly kind: "pending_transition";

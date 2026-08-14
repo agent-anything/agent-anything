@@ -10,6 +10,8 @@ import type {
   RunCancellationReceipt,
   RunCancellationRequestInput,
   RunResult,
+  RunSteeringInput,
+  RunSteeringSubmissionReceipt,
 } from "../run/index.js";
 import type { PlanProjection } from "../plan/index.js";
 import type { RetryEvent } from "../retry/index.js";
@@ -32,6 +34,7 @@ export interface RunRetryProjection {
 export interface RunOperationSnapshot<TOutput = unknown> {
   readonly runId: string;
   readonly sequence: number;
+  readonly runRevision: number;
   readonly status: RunLifecycleStatus;
   readonly lastRunItemSequence: number;
   readonly plan: PlanProjection | null;
@@ -49,12 +52,14 @@ export interface RunHandle<TOutput = unknown> {
   getSnapshot(): RunOperationSnapshot<TOutput>;
   subscribe(listener: RunOperationListener<TOutput>): () => void;
   cancel(input: RunCancellationRequestInput): RunCancellationReceipt;
+  steer(input: RunSteeringInput): RunSteeringSubmissionReceipt;
   submitInteraction(input: InteractionSubmissionInput): InteractionSubmissionOutcome;
   wait(): Promise<RunResult<TOutput>>;
   getResult(): RunResult<TOutput> | null;
 }
 
 export interface RunExecutionUpdate<TOutput> {
+  readonly runRevision: number;
   readonly status: RunLifecycleStatus;
   readonly lastRunItemSequence: number;
   readonly plan: PlanProjection | null;
@@ -71,6 +76,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
   private resolveCompletion!: (result: RunResult<TOutput>) => void;
   private snapshot: RunOperationSnapshot<TOutput>;
   private submitInteractionImpl: ((input: InteractionSubmissionInput) => InteractionSubmissionOutcome) | null = null;
+  private steerImpl: ((input: RunSteeringInput) => RunSteeringSubmissionReceipt) | null = null;
 
   constructor(
     runId: string,
@@ -81,6 +87,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     this.snapshot = freezeSnapshot({
       runId,
       sequence: 0,
+      runRevision: 0,
       status: "initializing",
       lastRunItemSequence: 0,
       plan: null,
@@ -111,6 +118,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     this.snapshot = freezeSnapshot({
       runId: this.runId,
       sequence: this.snapshot.sequence + 1,
+      runRevision: update.runRevision,
       status: update.status,
       lastRunItemSequence: update.lastRunItemSequence,
       plan: update.plan,
@@ -150,6 +158,25 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     });
   }
 
+  bindSteering(
+    steer: (input: RunSteeringInput) => RunSteeringSubmissionReceipt,
+  ): void {
+    if (this.steerImpl !== null) {
+      throw new TypeError("Run steering is already bound.");
+    }
+    this.steerImpl = steer;
+  }
+
+  steer(input: RunSteeringInput): RunSteeringSubmissionReceipt {
+    if (this.snapshot.result !== null) {
+      return rejectedSteering(this.runId, input, this.snapshot.runRevision, "run_settled");
+    }
+    if (this.steerImpl === null) {
+      return rejectedSteering(this.runId, input, this.snapshot.runRevision, "steering_invalid");
+    }
+    return this.steerImpl(input);
+  }
+
   bindInteractionSubmission(
     submit: (input: InteractionSubmissionInput) => InteractionSubmissionOutcome,
   ): void {
@@ -180,6 +207,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
   private settle(result: RunResult<TOutput>): void {
     if (this.snapshot.result === null) {
       this.publish({
+        runRevision: this.snapshot.runRevision,
         status: terminalStatus(result),
         lastRunItemSequence: result.items.at(-1)?.ref.sequence ?? 0,
         plan: this.snapshot.plan,
@@ -190,6 +218,21 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     }
     this.resolveCompletion(result);
   }
+}
+
+function rejectedSteering(
+  runId: string,
+  input: RunSteeringInput,
+  currentRunRevision: number,
+  code: "run_settled" | "steering_invalid",
+): RunSteeringSubmissionReceipt {
+  return Object.freeze({
+    status: "rejected" as const,
+    code,
+    run: Object.freeze({ id: runId }),
+    commandId: typeof input?.commandId === "string" ? input.commandId : "",
+    currentRunRevision,
+  });
 }
 
 function terminalStatus<TOutput>(

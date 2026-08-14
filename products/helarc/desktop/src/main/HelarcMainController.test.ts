@@ -1,4 +1,4 @@
-import type { HelarcPatchReviewDecisionSubmission } from "@agent-anything/helarc/composition";
+import type { HelarcPatchReviewSubmission } from "@agent-anything/helarc/composition";
 import { HOST_COMMAND_VERSION } from "@agent-anything/host/transport";
 import type {
   ApprovalDecisionKind,
@@ -16,6 +16,8 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { HelarcMainController, type HelarcMainSnapshot } from "./HelarcMainController.js";
 import { FileHelarcThreadStore, InMemoryHelarcThreadStore } from "./thread/index.js";
+
+type InteractionRequestRef = NonNullable<HelarcMainSnapshot["run"]>["host"]["pendingInteractions"][number]["request"];
 
 describe("HelarcMainController", () => {
   it("keeps workspace authority in main state", () => {
@@ -478,7 +480,6 @@ describe("HelarcMainController", () => {
     for (const trustedName of [
       "apiKey",
       "rawProvider",
-      "runResult",
       "RunState",
       "cancellationController",
       "commitLedger",
@@ -492,6 +493,11 @@ describe("HelarcMainController", () => {
     ]) {
       expect(serialized).not.toContain(trustedName);
     }
+    expect(snapshot.run?.product.result?.runResult).toMatchObject({
+      status: "failed",
+      code: "controller_failed",
+    });
+    expect(snapshot.run?.product.result).not.toHaveProperty("items");
   });
 
   it("persists work context thread, trigger message, and run records", async () => {
@@ -648,12 +654,7 @@ describe("HelarcMainController", () => {
     const controller = new HelarcMainController({
       runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
-        {
-          action: "request_permissions",
-          rootId: "workspace",
-          permissions: { fileSystem: { write: ["marker.txt"] } },
-          reason: "Create a governed marker file.",
-        },
+        commandToolCall(markerPath),
         {
           action: "stop",
           reason: "Permission was denied.",
@@ -680,24 +681,26 @@ describe("HelarcMainController", () => {
       phase: "reviewing",
       pendingVersion: 1,
       request: {
-        category: "permissions",
+        category: "commandExecution",
         reason: "Create a governed marker file.",
       },
     });
     expect(waitingSnapshot.run).toMatchObject({
       display: { status: "waiting_for_approval", statusSource: "host" },
       host: {
-        status: "waiting_for_approval",
-        approval: {
-          requestId: pending.request.id,
-          pendingVersion: pending.pendingVersion,
-          phase: "reviewing",
-        },
+        status: "waiting",
+        pendingInteractions: [{
+          request: {
+            id: pending.request.id,
+            requestVersion: pending.pendingVersion,
+          },
+          phase: "pending",
+        }],
       },
     });
     expect(controller.getSnapshot()).toMatchObject({
       status: "waiting_for_approval",
-      run: { host: { approval: { requestId: pending.request.id } } },
+      run: { host: { pendingInteractions: [{ request: { id: pending.request.id } }] } },
     });
 
     const decline = approvalSubmission(waitingSnapshot, "decline", {
@@ -705,44 +708,52 @@ describe("HelarcMainController", () => {
     });
     expect(dispatchApprovalCommand(controller, {
       ...decline,
-      requestId: "stale-request",
+      interactionRequest: {
+        ...decline.interactionRequest,
+        id: "stale-request",
+      },
     }, "host-stale-request")).toMatchObject({
       status: "handled",
-      kind: "approval.submit",
+      kind: "interaction.submit",
       result: {
         status: "rejected",
-        submissionId: "desktop-decline-1",
-        code: "approval_not_pending",
+        code: "interaction_not_pending",
       },
     });
     expect(dispatchApprovalCommand(controller, {
       ...decline,
       submissionId: "desktop-stale-version-1",
-      pendingVersion: decline.pendingVersion + 1,
+      interactionRequest: {
+        ...decline.interactionRequest,
+        requestVersion: decline.interactionRequest.requestVersion + 1,
+      },
     })).toMatchObject({
       status: "handled",
       result: {
         status: "rejected",
-        submissionId: "desktop-stale-version-1",
-        code: "approval_version_mismatch",
+        code: "interaction_version_stale",
       },
     });
 
     const receipt = dispatchApprovalCommand(controller, decline);
     expect(receipt).toMatchObject({
       status: "handled",
-      kind: "approval.submit",
+      kind: "interaction.submit",
       result: {
         status: "accepted_for_resolution",
-        submissionId: "desktop-decline-1",
-        requestId: pending?.request.id,
-        pendingVersion: pending?.pendingVersion,
+        receipt: {
+          submissionId: "desktop-decline-1",
+          request: {
+            id: pending.request.id,
+            requestVersion: pending.pendingVersion,
+          },
+        },
       },
     });
     expect(dispatchApprovalCommand(controller, decline)).toBe(receipt);
     expect(dispatchApprovalCommand(controller, {
       ...decline,
-      optionId: approvalSubmission(waitingSnapshot, "cancel").optionId,
+      optionId: approvalSubmission(waitingSnapshot, "accept").optionId,
     })).toMatchObject({
       status: "rejected",
       commandId: "host-approval-desktop-decline-1",
@@ -752,7 +763,7 @@ describe("HelarcMainController", () => {
       status: "waiting_for_approval",
       run: {
         display: { status: "waiting_for_approval" },
-        host: { approval: { phase: "submitted_for_resolution" } },
+        host: { pendingInteractions: [{ phase: "submitted_for_resolution" }] },
       },
     });
 
@@ -762,7 +773,16 @@ describe("HelarcMainController", () => {
       run: {
         display: { status: "blocked", statusSource: "host" },
         host: { status: "blocked", terminal: { status: "blocked" } },
-        product: { result: { output: { safeErrors: [] } } },
+        product: {
+          result: {
+            output: {
+              safeErrors: [{
+                code: "approval_declined",
+                message: "Approval could not be completed.",
+              }],
+            },
+          },
+        },
       },
       threadSummaries: [{ latestRun: { runId: "helarc-run-1", status: "blocked" } }],
       activeThread: { messages: [{ role: "user" }, { role: "assistant", content: "Run blocked." }] },
@@ -784,12 +804,7 @@ describe("HelarcMainController", () => {
     const controller = new HelarcMainController({
       runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
-        {
-          action: "request_permissions",
-          rootId: "workspace",
-          permissions: { fileSystem: { write: ["marker.txt"] } },
-          reason: "Create a governed marker file.",
-        },
+        commandToolCall(markerPath),
         {
           action: "complete",
           summary: "Permission was granted for this run.",
@@ -808,24 +823,30 @@ describe("HelarcMainController", () => {
     const waitingSnapshot = await waiting;
     const submitted = waitForSnapshot(
       controller,
-      (snapshot) => snapshot.run?.host.approval?.phase === "submitted_for_resolution",
+      (snapshot) => snapshot.run?.host.pendingInteractions.some(
+        (candidate) => candidate.phase === "submitted_for_resolution",
+      ) === true,
     );
     expect(dispatchApprovalCommand(
       controller,
-      approvalSubmission(waitingSnapshot, "grantPermissions"),
+      approvalSubmission(waitingSnapshot, "accept"),
     )).toMatchObject({
       status: "handled",
       result: {
         status: "accepted_for_resolution",
-        requestId: pendingApproval(waitingSnapshot).request.id,
-        pendingVersion: pendingApproval(waitingSnapshot).pendingVersion,
+        receipt: {
+          request: {
+            id: pendingApproval(waitingSnapshot).request.id,
+            requestVersion: pendingApproval(waitingSnapshot).pendingVersion,
+          },
+        },
       },
     });
     expect(await submitted).toMatchObject({
       status: "waiting_for_approval",
       run: {
         display: { status: "waiting_for_approval" },
-        host: { approval: { phase: "submitted_for_resolution" } },
+        host: { pendingInteractions: [{ phase: "submitted_for_resolution" }] },
       },
     });
 
@@ -836,11 +857,16 @@ describe("HelarcMainController", () => {
         display: { status: "completed" },
         host: { status: "completed", terminal: { status: "completed" } },
         product: {
-          result: { output: { agentSummary: "Permission was granted for this run." } },
+          result: {
+            output: {
+              agentSummary: "Permission was granted for this run.",
+              safeErrors: [],
+            },
+          },
         },
       },
     });
-    await expect(access(markerPath)).rejects.toThrow();
+    await expect(access(markerPath)).resolves.toBeUndefined();
   });
 
   it("cancels while an explicit approval request is pending", async () => {
@@ -849,12 +875,7 @@ describe("HelarcMainController", () => {
     const controller = new HelarcMainController({
       runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
-        {
-          action: "request_permissions",
-          rootId: "workspace",
-          permissions: { fileSystem: { write: ["marker.txt"] } },
-          reason: "Create a governed marker file.",
-        },
+        commandToolCall(markerPath),
       ]),
     });
     controller.selectWorkspacePath(workspaceRoot);
@@ -865,7 +886,7 @@ describe("HelarcMainController", () => {
       target: { kind: "new_thread" },
     });
     const waitingSnapshot = await waiting;
-    const lateSubmission = approvalSubmission(waitingSnapshot, "grantPermissions", {
+    const lateSubmission = approvalSubmission(waitingSnapshot, "accept", {
       submissionId: "desktop-after-cancel-1",
     });
 
@@ -878,7 +899,6 @@ describe("HelarcMainController", () => {
       result: { status: "accepted" },
       projection: {
         status: "cancelling",
-        approval: null,
         cancellation: {
           origin: "user",
           reasonCode: "user_requested",
@@ -901,8 +921,7 @@ describe("HelarcMainController", () => {
       status: "handled",
       result: {
         status: "rejected",
-        submissionId: "desktop-after-cancel-1",
-        code: "approval_not_pending",
+        code: "interaction_not_pending",
       },
     });
 
@@ -934,15 +953,12 @@ describe("HelarcMainController", () => {
     await expect(access(markerPath)).rejects.toThrow();
   });
 
-  it("routes the approval cancel option through Run cancellation", async () => {
+  it("keeps owner-defined approval options separate from Run cancellation", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-approval-cancel-"));
+    const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
-      provider: new ScriptedProvider([{
-        action: "request_permissions",
-        rootId: "workspace",
-        permissions: { fileSystem: { write: ["marker.txt"] } },
-        reason: "Create a governed marker file.",
-      }]),
+      runtimeToolMode: "shell-enabled",
+      provider: new ScriptedProvider([commandToolCall(markerPath)]),
     });
     controller.selectWorkspacePath(workspaceRoot);
 
@@ -953,17 +969,19 @@ describe("HelarcMainController", () => {
       target: { kind: "new_thread" },
     });
     const waitingSnapshot = await waiting;
+    expect(pendingApproval(waitingSnapshot).request.decisionOptions.map(({ kind }) => kind)).toEqual([
+      "accept",
+      "decline",
+    ]);
 
-    expect(dispatchApprovalCommand(
+    expect(dispatchCancellationCommand(
       controller,
-      approvalSubmission(waitingSnapshot, "cancel", {
-        submissionId: "desktop-approval-cancel-1",
-      }),
+      pendingApproval(waitingSnapshot).request.runId,
+      "desktop-approval-cancel-1",
     )).toMatchObject({
       status: "handled",
       result: {
-        status: "accepted_for_resolution",
-        submissionId: "desktop-approval-cancel-1",
+        status: "accepted",
       },
     });
 
@@ -973,15 +991,16 @@ describe("HelarcMainController", () => {
         display: { status: "cancelled" },
         host: {
           status: "cancelled",
-          approval: null,
+          pendingInteractions: [],
           cancellation: {
-            origin: "approval",
-            reasonCode: "approval_cancelled",
+            origin: "user",
+            reasonCode: "user_requested",
           },
           terminal: { status: "cancelled" },
         },
       },
     });
+    await expect(access(markerPath)).rejects.toThrow();
   });
 
   it("keeps desktop runtime tool mode read-only by default", async () => {
@@ -1027,8 +1046,8 @@ describe("HelarcMainController", () => {
         display: { status: "failed", statusSource: "host" },
         host: {
           status: "failed",
-          approval: null,
-          terminal: { status: "failed", code: "model_structured_output_retry_exhausted" },
+          pendingInteractions: [],
+          terminal: { status: "failed", code: "controller_failed" },
         },
         product: {
           result: { output: { safeErrors: [{ code: "model_structured_output_retry_exhausted" }] } },
@@ -1051,6 +1070,17 @@ describe("HelarcMainController", () => {
       optionId: "accept",
       grantedPermissions: null,
       reason: null,
+      interactionRequest: {
+        id: "unknown",
+        protocol: { owner: "permission", kind: "approval", revision: "1" },
+        requestVersion: 1,
+        subject: {
+          owner: "permission",
+          kind: "approval",
+          id: "action-unknown",
+          revision: "fingerprint-unknown",
+        },
+      },
     })).toMatchObject({
       status: "rejected",
       code: "host_command_run_not_active",
@@ -1064,6 +1094,7 @@ describe("HelarcMainController", () => {
 
   it("rejects a stale cancellation without touching a newer active Run", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-stale-cancel-"));
+    const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
       runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
@@ -1071,12 +1102,7 @@ describe("HelarcMainController", () => {
           action: "complete",
           summary: "First Run completed.",
         },
-        {
-          action: "request_permissions",
-          rootId: "workspace",
-          permissions: { fileSystem: { write: ["marker.txt"] } },
-          reason: "Keep the second Run active.",
-        },
+        commandToolCall(markerPath, "Keep the second Run active."),
       ]),
     });
     controller.selectWorkspacePath(workspaceRoot);
@@ -1172,20 +1198,31 @@ describe("HelarcMainController", () => {
       proposedContent: "created\n",
     });
 
-    expect(controller.resolvePatchReview(patchSubmission(
-      waitingSnapshot,
-      "accepted",
-      { proposalId: "stale-proposal", submissionId: "stale-submission" },
-    ))).toMatchObject({
-      ok: false,
-      error: { code: "patch_review_not_pending" },
+    const staleSubmission = patchSubmission(waitingSnapshot, "accepted", {
+      submissionId: "stale-submission",
+    });
+    expect(dispatchPatchReviewCommand(controller, {
+      ...staleSubmission,
+      interactionRequest: {
+        ...staleSubmission.interactionRequest,
+        subject: {
+          ...staleSubmission.interactionRequest.subject,
+          id: "stale-review",
+        },
+      },
+    })).toMatchObject({
+      status: "handled",
+      result: { status: "rejected", code: "interaction_not_pending" },
     });
 
     const acceptedSubmission = patchSubmission(waitingSnapshot, "accepted", {
-      reason: "Apply it.",
+      payload: { decision: "accepted", reason: "Apply it." },
     });
     const applying = waitForStatus(controller, "applying_patch");
-    expect(controller.resolvePatchReview(acceptedSubmission)).toMatchObject({ ok: true });
+    expect(dispatchPatchReviewCommand(controller, acceptedSubmission)).toMatchObject({
+      status: "handled",
+      result: { status: "accepted_for_resolution" },
+    });
     await applying;
 
     const completedSnapshot = await completed;
@@ -1212,12 +1249,12 @@ describe("HelarcMainController", () => {
             summary: "Create a file.",
           },
           {
-            kind: "patch-proposal",
+            kind: "proposal-revision",
             title: "Patch proposal: create src/created.txt",
             summary: "Accepted create patch for src/created.txt.",
           },
           {
-            kind: "applied-patch",
+            kind: "applied-change",
             title: "Applied patch: src/created.txt",
             summary: "Applied create to src/created.txt.",
           },
@@ -1225,12 +1262,12 @@ describe("HelarcMainController", () => {
       },
     });
     await expect(readFile(targetPath, "utf8")).resolves.toBe("created\n");
-    expect(controller.resolvePatchReview({
+    expect(dispatchPatchReviewCommand(controller, {
       ...acceptedSubmission,
       submissionId: "late-patch-submission",
     })).toMatchObject({
-      ok: false,
-      error: { code: "patch_review_not_pending" },
+      status: "rejected",
+      code: "host_command_run_not_active",
     });
   });
 
@@ -1281,9 +1318,9 @@ describe("HelarcMainController", () => {
         },
       },
     });
-    expect(controller.resolvePatchReview(lateSubmission)).toMatchObject({
-      ok: false,
-      error: { code: "patch_review_not_pending" },
+    expect(dispatchPatchReviewCommand(controller, lateSubmission)).toMatchObject({
+      status: "handled",
+      result: { status: "rejected", code: "run_settled" },
     });
     await expect(access(targetPath)).rejects.toThrow();
   });
@@ -1331,7 +1368,7 @@ describe("HelarcMainController", () => {
 
     expect(result).toMatchObject({ ok: true });
     const reviewSnapshot = await waitingForReview;
-    expect(reviewSnapshot.run?.product.activity.map((item) => item.kind)).toContain("tool.finished");
+    expect(reviewSnapshot.run?.product.activity.map((item) => item.kind)).toContain("operation.finished");
     expect(pendingPatchReview(reviewSnapshot)).toMatchObject({
       operation: "update",
       path: "src/existing.txt",
@@ -1339,8 +1376,8 @@ describe("HelarcMainController", () => {
       proposedContent: "after\n",
     });
 
-    controller.resolvePatchReview(patchSubmission(reviewSnapshot, "accepted", {
-      reason: "Apply scenario change.",
+    dispatchPatchReviewCommand(controller, patchSubmission(reviewSnapshot, "accepted", {
+      payload: { decision: "accepted", reason: "Apply scenario change." },
     }));
 
     const completedSnapshot = await completed;
@@ -1401,8 +1438,8 @@ describe("HelarcMainController", () => {
       }],
       artifacts: expect.arrayContaining([
         expect.objectContaining({ kind: "final-output", runId: "helarc-run-1" }),
-        expect.objectContaining({ kind: "patch-proposal", runId: "helarc-run-1" }),
-        expect.objectContaining({ kind: "applied-patch", runId: "helarc-run-1" }),
+        expect.objectContaining({ kind: "proposal-revision", runId: "helarc-run-1" }),
+        expect.objectContaining({ kind: "applied-change", runId: "helarc-run-1" }),
       ]),
     });
 
@@ -1877,67 +1914,109 @@ class ScriptedProvider implements Provider {
   }
 }
 
+function commandToolCall(
+  markerPath: string,
+  reason = "Create a governed marker file.",
+) {
+  return {
+    action: "call_tool",
+    reason,
+    toolName: "codeAgent.runCommand",
+    input: {
+      command: process.execPath,
+      args: [
+        "-e",
+        `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran')`,
+      ],
+      cwd: ".",
+      timeoutMs: 5_000,
+      reason,
+    },
+  };
+}
+
 function pendingApproval(snapshot: HelarcMainSnapshot) {
-  const pending = snapshot.run?.host.approval ?? null;
-  if (pending === null || pending.review === null) {
+  const pending = snapshot.run?.host.pendingInteractions.find(
+    (candidate) => candidate.request.protocol.owner === "permission" &&
+      candidate.request.protocol.kind === "approval" &&
+      candidate.request.protocol.revision === "1",
+  );
+  if (pending === undefined) {
     throw new Error("Expected a pending approval.");
   }
   return {
-    ...pending.review,
-    phase: pending.phase,
+    request: pending.presentation as import("@agent-anything/permission").ApprovalReviewRequest,
+    interactionRequest: pending.request,
+    pendingVersion: pending.request.requestVersion,
+    phase: pending.phase === "pending" ? "reviewing" as const : pending.phase,
   };
 }
 
 function pendingPatchReview(snapshot: HelarcMainSnapshot) {
-  const phase = snapshot.run?.product.phase ?? null;
-  if (phase?.kind !== "waiting_for_patch_review") {
+  const pending = snapshot.run?.host.pendingInteractions.find(
+    (candidate) => candidate.request.protocol.owner === "helarc" &&
+      candidate.request.protocol.kind === "patch_review" &&
+      candidate.request.protocol.revision === "1",
+  );
+  if (pending === undefined) {
     throw new Error("Expected a pending patch review.");
   }
-  return phase.review;
+  return {
+    ...(pending.presentation as import("@agent-anything/helarc/composition").HelarcPatchReviewPresentation),
+    interactionRequest: pending.request,
+    phase: pending.phase,
+  };
 }
+
+type ApprovalInteractionSubmission = ApprovalDecisionSubmission & {
+  readonly interactionRequest: InteractionRequestRef;
+};
 
 function approvalSubmission(
   snapshot: HelarcMainSnapshot,
   kind: ApprovalDecisionKind,
   overrides: Partial<ApprovalDecisionSubmission> = {},
-): ApprovalDecisionSubmission {
-  const pending = snapshot.run?.host.approval ?? null;
-  if (pending === null || pending.review === null) {
-    throw new Error("Expected a pending approval.");
-  }
-  const option = pending.review.request.decisionOptions.find((candidate) => candidate.kind === kind);
+): ApprovalInteractionSubmission {
+  const pending = pendingApproval(snapshot);
+  const option = pending.request.decisionOptions.find((candidate) => candidate.kind === kind);
   if (option === undefined) {
     throw new Error(`Expected approval option ${kind}.`);
   }
   const grantedPermissions = kind === "grantPermissions" &&
-      pending.review.request.category === "permissions"
-    ? pending.review.request.payload.permissions
+      pending.request.category === "permissions"
+    ? pending.request.payload.permissions
     : null;
   return {
     submissionId: "desktop-submission-1",
-    runId: pending.review.request.runId,
-    requestId: pending.review.request.id,
+    runId: pending.request.runId,
+    requestId: pending.request.id,
     pendingVersion: pending.pendingVersion,
     optionId: option.id,
     grantedPermissions,
     reason: kind === "decline" ? "Declined in test." : null,
+    interactionRequest: pending.interactionRequest,
     ...overrides,
   };
 }
 
 function dispatchApprovalCommand(
   controller: HelarcMainController,
-  submission: ApprovalDecisionSubmission,
+  submission: ApprovalInteractionSubmission,
   commandId = `host-approval-${submission.submissionId}`,
 ) {
-  const { runId, ...payload } = submission;
+  const { interactionRequest, ...payload } = submission;
+  const { runId } = submission;
   return controller.dispatchHostCommand({
     version: HOST_COMMAND_VERSION,
     commandId,
     runId,
-    kind: "approval.submit",
-    payload,
-  }, "approval.submit");
+    kind: "interaction.submit",
+    payload: {
+      request: interactionRequest,
+      submissionId: submission.submissionId,
+      payload,
+    },
+  }, "interaction.submit");
 }
 
 function dispatchCancellationCommand(
@@ -1956,26 +2035,47 @@ function dispatchCancellationCommand(
   }, "run.cancel");
 }
 
+interface PatchInteractionSubmission {
+  readonly submissionId: string;
+  readonly runId: string;
+  readonly interactionRequest: InteractionRequestRef;
+  readonly payload: HelarcPatchReviewSubmission;
+}
+
 function patchSubmission(
   snapshot: HelarcMainSnapshot,
-  decision: "accepted" | "rejected",
-  overrides: Partial<HelarcPatchReviewDecisionSubmission> = {},
-): HelarcPatchReviewDecisionSubmission {
-  const phase = snapshot.run?.product.phase ?? null;
-  if (phase?.kind !== "waiting_for_patch_review") {
-    throw new Error("Expected a pending patch review.");
-  }
-  const pending = phase.review;
+  decision: "accepted" | "rejected" | "request_revision",
+  overrides: Partial<PatchInteractionSubmission> = {},
+): PatchInteractionSubmission {
+  const pending = pendingPatchReview(snapshot);
   return {
     submissionId: "desktop-patch-submission-1",
     runId: pending.runId,
-    proposalId: pending.proposalId,
-    reviewId: pending.reviewId,
-    pendingVersion: pending.pendingVersion,
-    decision,
-    reason: decision === "accepted" ? null : "Rejected in test.",
+    interactionRequest: pending.interactionRequest,
+    payload: {
+      decision,
+      reason: decision === "accepted" ? null : "Rejected in test.",
+    },
     ...overrides,
   };
+}
+
+function dispatchPatchReviewCommand(
+  controller: HelarcMainController,
+  submission: PatchInteractionSubmission,
+  commandId = `host-patch-${submission.submissionId}`,
+) {
+  return controller.dispatchHostCommand({
+    version: HOST_COMMAND_VERSION,
+    commandId,
+    runId: submission.runId,
+    kind: "interaction.submit",
+    payload: {
+      request: submission.interactionRequest,
+      submissionId: submission.submissionId,
+      payload: submission.payload,
+    },
+  }, "interaction.submit");
 }
 
 function waitForPendingApproval(
@@ -1983,8 +2083,9 @@ function waitForPendingApproval(
 ): Promise<HelarcMainSnapshot> {
   return waitForSnapshot(
     controller,
-    (snapshot) => snapshot.run?.host.approval?.review !== null &&
-      snapshot.run?.host.approval?.review !== undefined,
+    (snapshot) => snapshot.run?.host.pendingInteractions.some(
+      (candidate) => candidate.request.protocol.kind === "approval",
+    ) === true,
   );
 }
 
@@ -1993,7 +2094,10 @@ function waitForPendingPatchReview(
 ): Promise<HelarcMainSnapshot> {
   return waitForSnapshot(
     controller,
-    (snapshot) => snapshot.run?.product.phase.kind === "waiting_for_patch_review",
+    (snapshot) => snapshot.run?.host.pendingInteractions.some(
+      (candidate) => candidate.request.protocol.owner === "helarc" &&
+        candidate.request.protocol.kind === "patch_review",
+    ) === true,
   );
 }
 

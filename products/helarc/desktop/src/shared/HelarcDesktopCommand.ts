@@ -6,7 +6,6 @@ export type HelarcProductCommandKind =
   | "workspace.select"
   | "provider.save"
   | "run.start"
-  | "patch_review.submit"
   | "thread.open";
 
 export type HelarcProductRunStartTarget =
@@ -33,16 +32,6 @@ export interface HelarcProductCommandPayloadMap {
   readonly "run.start": {
     readonly taskText: string;
     readonly target: HelarcProductRunStartTarget;
-  };
-  readonly "patch_review.submit": {
-    readonly submissionId: string;
-    readonly runId: string;
-    readonly proposalId: string;
-    readonly proposalRevision: number;
-    readonly reviewId: string;
-    readonly pendingVersion: number;
-    readonly decision: "accepted" | "rejected" | "request_revision";
-    readonly reason: string | null;
   };
   readonly "thread.open": {
     readonly threadId: string;
