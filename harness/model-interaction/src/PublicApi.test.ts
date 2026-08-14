@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import * as continuationApi from "./continuation/index.js";
+import * as inputApi from "./input/index.js";
 import type { RetrySchedulerOwnership } from "./index.js";
 import * as api from "./index.js";
 
@@ -7,6 +9,16 @@ describe("Model Interaction public API", () => {
     expect(Object.keys(api).sort()).toEqual([
       "createProviderAttemptInterruption",
       "providerResultFromInterruption",
+    ]);
+    expect(Object.keys(inputApi).sort()).toEqual([
+      "snapshotModelInputCapability",
+      "snapshotModelInputComposition",
+    ]);
+    expect(Object.keys(continuationApi).sort()).toEqual([
+      "snapshotModelContinuationCapability",
+      "snapshotModelContinuationCompatibility",
+      "snapshotModelContinuationOutcome",
+      "snapshotModelContinuationRef",
     ]);
   });
 

@@ -27,9 +27,13 @@ const packageExportKeys = {
     "./subject",
   ],
   "harness/context": [
+    "./active-context",
     "./context",
+    "./contract",
+    "./contribution",
     "./evidence",
     "./persistence",
+    "./projection",
   ],
   "harness/tools": [
     "./activation",
@@ -65,7 +69,7 @@ const packageExportKeys = {
     "./report",
     "./trial",
   ],
-  "harness/model-interaction": ["."],
+  "harness/model-interaction": [".", "./continuation", "./input"],
   "tooling/test-support": [".", "./evaluation-targets/helarc", "./phase-27"],
   "harness/safety/action-execution": [
     "./coordination",
@@ -215,6 +219,25 @@ const expectedLowerValueExports = {
     "EvidenceBuilder",
     "settleEvidenceContribution",
     "snapshotEvidenceContribution",
+  ],
+  "@agent-anything/context/contract": ["ContextContractError"],
+  "@agent-anything/context/contribution": [
+    "isContextDisclosureAtLeastAsRestrictive",
+    "measureContextPayload",
+    "snapshotContextContribution",
+    "snapshotContextContributionRef",
+    "snapshotContextDisclosure",
+  ],
+  "@agent-anything/context/active-context": [
+    "createEmptyActiveContext",
+    "snapshotActiveContext",
+    "snapshotActiveContextRef",
+    "snapshotContextTransition",
+  ],
+  "@agent-anything/context/projection": [
+    "snapshotContextProjection",
+    "snapshotContextProjectionRequest",
+    "snapshotProjectionManifest",
   ],
   "@agent-anything/context/persistence": [],
   "@agent-anything/tools/identity": [
@@ -396,6 +419,16 @@ const expectedLowerValueExports = {
     "createHelarcEvaluationTargetAdapter",
     "projectHelarcEvaluationBaselineSignature",
     "runHelarcEvaluationBaselineCandidate",
+  ],
+  "@agent-anything/model-interaction/input": [
+    "snapshotModelInputCapability",
+    "snapshotModelInputComposition",
+  ],
+  "@agent-anything/model-interaction/continuation": [
+    "snapshotModelContinuationCapability",
+    "snapshotModelContinuationCompatibility",
+    "snapshotModelContinuationOutcome",
+    "snapshotModelContinuationRef",
   ],
   "@agent-anything/test-support/phase-27": [
     "PHASE27_BINDING_CONFORMANCE",

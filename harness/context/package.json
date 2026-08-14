@@ -4,6 +4,22 @@
   "description": "Generic Run Context state, explicit projection, Evidence, and owner-defined Evidence persistence for Agent Harness.",
   "type": "module",
   "exports": {
+    "./contract": {
+      "types": "./src/contract/index.ts",
+      "import": "./dist/contract/index.js"
+    },
+    "./contribution": {
+      "types": "./src/contribution/index.ts",
+      "import": "./dist/contribution/index.js"
+    },
+    "./active-context": {
+      "types": "./src/active-context/index.ts",
+      "import": "./dist/active-context/index.js"
+    },
+    "./projection": {
+      "types": "./src/projection/index.ts",
+      "import": "./dist/projection/index.js"
+    },
     "./context": {
       "types": "./src/context/index.ts",
       "import": "./dist/context/index.js"

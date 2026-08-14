@@ -86,6 +86,43 @@ test("rejects Provider HTTP transport reimplemented in Desktop", () => {
   assert.deepEqual(violations.map(({ rule }) => rule), ["desktop_provider_transport_implementation"]);
 });
 
+test("rejects semantic processors and generic metadata in final Context Contracts", () => {
+  const semanticDependency = evaluateSourceOwnershipRules({
+    sourcePath: "harness/context/src/projection/ContextProjection.ts",
+    text: 'import { rank } from "@vendor/semantic-search";',
+  });
+  const metadataEscapeHatch = evaluateSourceOwnershipRules({
+    sourcePath: "harness/context/src/contribution/ContextContribution.ts",
+    text: "readonly metadata?: Record<string, unknown>;",
+  });
+
+  assert.deepEqual(
+    semanticDependency.map(({ rule }) => rule),
+    ["context_semantic_processor_dependency"],
+  );
+  assert.deepEqual(
+    metadataEscapeHatch.map(({ rule }) => rule),
+    ["context_generic_metadata_escape_hatch"],
+  );
+});
+
+test("rejects Context, Runtime, Product, and adapter ownership in Model Interaction Contracts", () => {
+  for (const sourcePath of [
+    "harness/model-interaction/src/continuation/ModelContinuation.ts",
+    "harness/model-interaction/src/ModelInteractionContractValidation.ts",
+  ]) {
+    const violations = evaluateSourceOwnershipRules({
+      sourcePath,
+      text: 'import { state } from "@agent-anything/context/active-context";',
+    });
+
+    assert.deepEqual(
+      violations.map(({ rule }) => rule),
+      ["model_interaction_contract_dependency_direction"],
+    );
+  }
+});
+
 test("test-only physical fixtures do not violate production result ownership", () => {
   const violations = evaluateSourceOwnershipRules({
     sourcePath: "products/helarc/local-environment/src/command/ProcessExecutor.test.ts",

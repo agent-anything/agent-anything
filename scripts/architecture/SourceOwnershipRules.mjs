@@ -28,6 +28,46 @@ export function evaluateSourceOwnershipRules({
   }
 
   if (!isTestOnly) {
+    const isContextContractSource =
+      /^harness\/context\/src\/(?:contract|contribution|active-context|projection)\//.test(path);
+    if (
+      isContextContractSource &&
+      /@agent-anything\/(?:agent-runtime|model-interaction|tools|action-execution|host|helarc)/.test(text)
+    ) {
+      reject(
+        "context_contract_dependency_direction",
+        "Context Contracts cannot depend on Runtime implementations, Product, Host, Tool, execution, or Model Interaction owners.",
+      );
+    }
+    if (
+      isContextContractSource &&
+      /from\s+["'][^"']*(?:tree-sitter|language-server|semantic-search|code-understanding|source-indexer)[^"']*["']/.test(text)
+    ) {
+      reject(
+        "context_semantic_processor_dependency",
+        "Context Contracts cannot depend on language, indexing, retrieval, or Code Understanding processors.",
+      );
+    }
+    if (isContextContractSource && /readonly\s+metadata\s*[?:]/.test(text)) {
+      reject(
+        "context_generic_metadata_escape_hatch",
+        "Final Context Contracts require owned typed fields instead of generic metadata.",
+      );
+    }
+
+    const isModelInputContractSource =
+      /^harness\/model-interaction\/src\/(?:input|continuation)\//.test(path) ||
+      path === "harness/model-interaction/src/ModelInteractionContractValidation.ts";
+    if (
+      isModelInputContractSource &&
+      /@agent-anything\/(?:context|agent-runtime|provider-integrations|helarc)/.test(text)
+    ) {
+      reject(
+        "model_interaction_contract_dependency_direction",
+        "Model Interaction input and continuation Contracts cannot depend on Context state, Runtime, Product, or Provider adapter implementations.",
+      );
+    }
+
     const isPhysicalExecutionSource =
       path.startsWith("harness/safety/action-execution/src/execution/") ||
       path.startsWith("harness/safety/action-execution/src/sandbox/") ||
