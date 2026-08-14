@@ -44,7 +44,7 @@ test("an unreviewed package owner fails closed", () => {
   assert.equal(violations[0]?.rule, "dependency_policy_missing");
 });
 
-test("Phase27 lower Contract dependencies are exact and acyclic", () => {
+test("lower Contract dependencies are exact and acyclic", () => {
   assert.deepEqual(expectedProductionDependencies("@agent-anything/workspace"), []);
   assert.deepEqual(
     expectedProductionDependencies("@agent-anything/agent-core"),
@@ -67,7 +67,7 @@ test("Phase27 lower Contract dependencies are exact and acyclic", () => {
   );
 });
 
-test("Phase27 execution dependencies are exact and owner-directed", () => {
+test("execution dependencies are exact and owner-directed", () => {
   assert.deepEqual(
     expectedProductionDependencies("@agent-anything/tools"),
     ["@agent-anything/agent-core", "@agent-anything/operation-catalog"],

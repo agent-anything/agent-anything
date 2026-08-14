@@ -81,7 +81,7 @@ test("classifies direct and grouped Harness packages", () => {
   });
 });
 
-test("discovers the Phase27 lower Contract package topology", () => {
+test("discovers the lower Contract package topology", () => {
   withWorkspace((root) => {
     writeFileSync(
       join(root, "pnpm-workspace.yaml"),

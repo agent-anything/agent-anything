@@ -14,6 +14,9 @@ import {
 import {
   evaluateRepositoryCommands,
 } from "./architecture/RepositoryCommands.mjs";
+import {
+  evaluateSourceOwnershipRules,
+} from "./architecture/SourceOwnershipRules.mjs";
 
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 let discoveredPackages;
@@ -223,9 +226,9 @@ const focusedPublicSubpaths = new Map([
 const violations = [];
 checkRootCommands();
 checkRepositoryTopology();
-checkPhase21Topology();
-checkPhase22Topology();
-checkPhase27Topology();
+checkContextHostAndMcpSourceTopology();
+checkIntegrationSourceTopology();
+checkExecutionSourceTopology();
 for (const root of packageRoots) {
   for (const file of collectSourceFiles(root)) {
     checkFile(file);
@@ -437,6 +440,13 @@ function checkReviewedManifests() {
 
 function checkArchitectureSource(file, text, isTestOnly) {
   const rel = display(file);
+  for (const violation of evaluateSourceOwnershipRules({
+    sourcePath: rel,
+    text,
+    isTestOnly,
+  })) {
+    report(violation.rule, { file, message: violation.message });
+  }
   checkDesktopSafeSurface(rel, text);
   if (rel.includes("/src/common/")) {
     report("temporary_common_source", {
@@ -750,7 +760,7 @@ function checkRepositoryTopology() {
   }
 }
 
-function checkPhase21Topology() {
+function checkContextHostAndMcpSourceTopology() {
   const areas = [
     {
       packagePath: "harness/context",
@@ -796,20 +806,20 @@ function checkPhase21Topology() {
     for (const sourceArea of area.sourceAreas) {
       const path = join(repoRoot, area.packagePath, "src", sourceArea);
       if (!exists(path)) {
-        report("phase21_source_area_missing", {
+        report("harness_source_area_missing", {
           file: path,
           message:
-            `Required Phase 21 source area '${area.packagePath}/src/${sourceArea}' is missing.`,
+            `Required Harness source area '${area.packagePath}/src/${sourceArea}' is missing.`,
         });
       }
     }
     for (const forbiddenPath of area.forbiddenPaths) {
       const path = join(repoRoot, area.packagePath, forbiddenPath);
       if (exists(path)) {
-        report("phase21_superseded_source_path", {
+        report("harness_superseded_source_path", {
           file: path,
           message:
-            `Superseded Phase 21 source path '${area.packagePath}/${forbiddenPath}' must not exist.`,
+            `Superseded Harness source path '${area.packagePath}/${forbiddenPath}' must not exist.`,
         });
       }
     }
@@ -818,7 +828,7 @@ function checkPhase21Topology() {
       const actualEntries = sourceTopologyEntries(sourceRoot);
       const allowedEntries = [...area.allowedSourceEntries].sort();
       if (JSON.stringify(actualEntries) !== JSON.stringify(allowedEntries)) {
-        report("phase21_source_topology_changed", {
+        report("harness_source_topology_changed", {
           file: sourceRoot,
           message:
             `Reviewed source entries must be exactly: ${allowedEntries.join(", ")}.`,
@@ -828,7 +838,7 @@ function checkPhase21Topology() {
   }
 }
 
-function checkPhase22Topology() {
+function checkIntegrationSourceTopology() {
   const areas = [
     {
       packagePath: "harness/integrations/plugins",
@@ -868,20 +878,20 @@ function checkPhase22Topology() {
     for (const sourceArea of area.sourceAreas) {
       const path = join(repoRoot, area.packagePath, "src", sourceArea);
       if (!exists(path)) {
-        report("phase22_source_area_missing", {
+        report("integration_source_area_missing", {
           file: path,
           message:
-            `Required Phase 22 source area '${area.packagePath}/src/${sourceArea}' is missing.`,
+            `Required Integration source area '${area.packagePath}/src/${sourceArea}' is missing.`,
         });
       }
     }
     for (const forbiddenPath of area.forbiddenPaths) {
       const path = join(repoRoot, area.packagePath, forbiddenPath);
       if (exists(path)) {
-        report("phase22_superseded_source_path", {
+        report("integration_superseded_source_path", {
           file: path,
           message:
-            `Superseded Phase 22 source path '${area.packagePath}/${forbiddenPath}' must not exist.`,
+            `Superseded Integration source path '${area.packagePath}/${forbiddenPath}' must not exist.`,
         });
       }
     }
@@ -889,19 +899,19 @@ function checkPhase22Topology() {
     const actualEntries = sourceTopologyEntries(sourceRoot);
     const allowedEntries = [...area.allowedSourceEntries].sort();
     if (JSON.stringify(actualEntries) !== JSON.stringify(allowedEntries)) {
-      report("phase22_source_topology_changed", {
+      report("integration_source_topology_changed", {
         file: sourceRoot,
         message:
-          `Phase 22 source entries must be exactly: ${allowedEntries.join(", ")}.`,
+          `Reviewed Integration source entries must be exactly: ${allowedEntries.join(", ")}.`,
       });
     }
   }
 }
 
-function checkPhase27Topology() {
+function checkExecutionSourceTopology() {
   const removedProductPath = join(repoRoot, "products/helarc/product");
   if (exists(removedProductPath)) {
-    report("phase27_superseded_product_path", {
+    report("helarc_superseded_product_path", {
       file: removedProductPath,
       message: "Superseded Helarc Product directory must not exist after the Core move.",
     });
@@ -1066,9 +1076,9 @@ function checkPhase27Topology() {
         exists(path) &&
         (!statSync(path).isDirectory() || directoryContainsEntries(path))
       ) {
-        report("phase27_superseded_source_path", {
+        report("execution_superseded_source_path", {
           file: path,
-          message: `Superseded Phase 27 source path '${area.packagePath}/${forbiddenPath}' must not exist.`,
+          message: `Superseded execution source path '${area.packagePath}/${forbiddenPath}' must not exist.`,
         });
       }
     }
@@ -1076,9 +1086,9 @@ function checkPhase27Topology() {
     const actualEntries = sourceTopologyEntries(sourceRoot);
     const allowedEntries = [...area.allowedSourceEntries].sort();
     if (JSON.stringify(actualEntries) !== JSON.stringify(allowedEntries)) {
-      report("phase27_source_topology_changed", {
+      report("execution_source_topology_changed", {
         file: sourceRoot,
-        message: `Phase 27 source entries must be exactly: ${allowedEntries.join(", ")}.`,
+        message: `Reviewed execution source entries must be exactly: ${allowedEntries.join(", ")}.`,
       });
     }
   }
