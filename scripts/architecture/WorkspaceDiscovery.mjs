@@ -194,7 +194,10 @@ export function expectedArchitectureForPath(repoRoot, packageRoot) {
 
   const product = /^products\/([^/]+)\/([^/]+)$/.exec(path);
   if (product) {
-    return architecture("product", product[2], product[1]);
+    const component = product[1] === "helarc" && product[2] === "code-agent"
+      ? "code-workspace"
+      : product[2];
+    return architecture("product", component, product[1]);
   }
 
   if (path === "tooling/test-support") {

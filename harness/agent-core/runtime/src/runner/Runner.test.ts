@@ -170,6 +170,55 @@ describe("Runner semantic integration", () => {
       .toHaveLength(1);
   });
 
+  it("maps a workflow Tool Call to a trusted-workflow Operation request", async () => {
+    const operation = operationRef("create-file");
+    const handler = internalHandler("handler.create-file", "code-workspace", {
+      created: true,
+    });
+    const operations = createOperationFixture([
+      operationSpec(operation, "internal", {
+        requestOrigins: ["trusted_workflow"],
+        handlerId: handler.id,
+      }),
+    ], [handler]);
+    const tools = createToolSelection(
+      operations,
+      operation,
+      "codeAgent.createFile",
+      "workflow",
+    );
+    const controller = new ScriptedController([
+      advance([{
+        kind: "operation_request",
+        origin: "tool_request",
+        tool: {
+          name: "codeAgent.createFile",
+          revision: "1",
+          input: { path: "created.txt", content: "" },
+          origin: "workflow",
+          controllerRequestId: null,
+        },
+        modelItemId: "workflow_tool_1",
+      }], "workflow_tool_1"),
+      complete("Create complete", "model_complete_2"),
+    ]);
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools }),
+    );
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+    expect(observations(result)).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        kind: "operation",
+        result: expect.objectContaining({ status: "succeeded" }),
+      }),
+    }));
+  });
+
   it("commits Plan state as an ordinary in-loop transition", async () => {
     const operations = createOperationFixture([]);
     const controller = new ScriptedController([
@@ -735,6 +784,7 @@ function createToolSelection(
   operations: OperationFixture,
   operation: OperationRevisionRef,
   name: string,
+  origin: "model" | "workflow" = "model",
 ) {
   const keyName = operation.operation.name;
   const registration: ToolRegistrationInput = {
@@ -758,13 +808,13 @@ function createToolSelection(
       },
       operationBinding: { operation, revision: "binding-1" },
     },
-    allowedOrigins: ["model"],
+    allowedOrigins: [origin],
     admittedAt: NOW,
   };
   const registrations = createToolRegistrationSnapshot(operations.catalog, [registration]);
   return createFixedLocalToolSelection(registrations, operations.catalog, [{
     tool: registration.descriptor.ref,
-    origins: ["model"],
+    origins: [origin],
   }]);
 }
 

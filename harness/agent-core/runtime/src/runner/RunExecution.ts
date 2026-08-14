@@ -46,6 +46,7 @@ import {
   type ActionExecutionObserver,
   type ActionExecutionResult,
 } from "@agent-anything/action-execution/enforcement";
+import { createCanonicalSha256Digest } from "@agent-anything/canonical-action/subject";
 import { createActionPermissionAssessmentPort } from "@agent-anything/permission/authority";
 import {
   APPROVAL_INTERACTION_PROTOCOL,
@@ -811,7 +812,11 @@ export class RunExecution<TOutput> {
       action,
       operation: operation!,
       request,
-      requestOrigin: candidate.origin === "tool_request" ? "tool_request" : "controller_protocol",
+      requestOrigin: toolCall === null
+        ? "controller_protocol"
+        : toolCall.origin === "model"
+          ? "tool_request"
+          : "trusted_workflow",
       invocationId,
       parentInvocation: null,
       basis: toolCall ?? candidate,
@@ -1604,7 +1609,7 @@ export class RunExecution<TOutput> {
             this.interactions.submit({
               request: opened.pending.request,
               submissionId: reviewResult.outcome.submission.submissionId,
-              contentDigest: approvalSubmissionDigest(reviewResult.outcome.submission),
+              contentDigest: await approvalSubmissionDigest(reviewResult.outcome.submission),
               payload: reviewResult.outcome.submission,
               receivedAt: this.now(),
             });
@@ -2501,8 +2506,11 @@ function requireCancellation(
 
 function approvalSubmissionDigest(
   submission: import("@agent-anything/permission/approval").ApprovalDecisionSubmission,
-): string {
-  return JSON.stringify(submission);
+): Promise<string> {
+  return createCanonicalSha256Digest(
+    "agent-anything.approval-interaction-submission.v1",
+    submission,
+  );
 }
 
 function finalizationObservabilityContext(

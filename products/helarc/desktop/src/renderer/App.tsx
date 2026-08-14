@@ -254,7 +254,9 @@ export function App() {
     }
   }
 
-  async function resolvePatchReview(decision: "accepted" | "rejected") {
+  async function resolvePatchReview(
+    decision: "accepted" | "rejected" | "request_revision",
+  ) {
     const api = getHelarcApi();
     if (!api || !pendingPatchReview) {
       return;
@@ -267,10 +269,15 @@ export function App() {
         submissionId: globalThis.crypto.randomUUID(),
         runId: pendingPatchReview.runId,
         proposalId: pendingPatchReview.proposalId,
+        proposalRevision: pendingPatchReview.proposalRevision,
         reviewId: pendingPatchReview.reviewId,
         pendingVersion: pendingPatchReview.pendingVersion,
         decision,
-        reason: decision === "accepted" ? "Accepted from Helarc desktop." : "Rejected from Helarc desktop.",
+        reason: decision === "accepted"
+          ? "Accepted from Helarc desktop."
+          : decision === "rejected"
+            ? "Rejected from Helarc desktop."
+            : "Revision requested from Helarc desktop.",
       });
       if (receipt.status === "handled") {
         setSnapshot(receipt.result.snapshot);
@@ -381,7 +388,7 @@ export function App() {
             </div>
           </div>
           <div className="activity-stack">
-            <ConversationPanel activeThread={snapshot.activeThread} />
+            <ThreadTimeline activeThread={snapshot.activeThread} />
             <RunTimelinePanel
               run={snapshot.run}
               acceptedTask={snapshot.acceptedTask}
@@ -444,6 +451,14 @@ export function App() {
                     disabled={isBusy}
                   >
                     Reject
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void resolvePatchReview("request_revision")}
+                    disabled={isBusy}
+                  >
+                    Request revision
                   </button>
                   <button
                     className="primary-button compact"
@@ -510,7 +525,7 @@ export function App() {
   );
 }
 
-export function ConversationPanel({
+export function ThreadTimeline({
   activeThread,
 }: {
   activeThread: HelarcMainSnapshot["activeThread"];
@@ -520,17 +535,17 @@ export function ConversationPanel({
   }
 
   return (
-    <section className="conversation-panel" aria-label="Active conversation">
-      <div className="conversation-header">
+    <section className="thread-timeline" aria-label="Active Thread">
+      <div className="thread-timeline-header">
         <MessageSquareText size={16} aria-hidden="true" />
         <strong>{activeThread.title}</strong>
         <span>{activeThread.messages.length} messages</span>
       </div>
-      <div className="conversation-list">
+      <div className="thread-message-list">
         {activeThread.messages.map((message) => (
-          <article className={`conversation-message role-${message.role}`} key={message.id}>
+          <article className={`thread-message role-${message.role}`} key={message.id}>
             <div>
-              <strong>{conversationRoleLabel(message.role)}</strong>
+              <strong>{threadMessageRoleLabel(message.role)}</strong>
               <time dateTime={message.createdAt}>{formatTimestamp(message.createdAt)}</time>
             </div>
             <p>{message.content}</p>
@@ -1017,11 +1032,7 @@ function runStatusLabel(status: ActiveRunProjection["display"]["status"]): strin
   return status[0]?.toUpperCase() + status.slice(1).replaceAll("_", " ");
 }
 
-function conversationRoleLabel(role: NonNullable<HelarcMainSnapshot["activeThread"]>["messages"][number]["role"]): string {
-  if (role === "product-event") {
-    return "Product";
-  }
-
+function threadMessageRoleLabel(role: NonNullable<HelarcMainSnapshot["activeThread"]>["messages"][number]["role"]): string {
   return role.charAt(0).toUpperCase() + role.slice(1);
 }
 

@@ -39,7 +39,7 @@ describe("FileHelarcThreadStore", () => {
       latestRun: { runId: "run-1", status: "inactive" },
     }]);
     expect(JSON.parse(await readFile(filePath, "utf8"))).toMatchObject({
-      formatVersion: 1,
+      formatVersion: 2,
       aggregates: [{ commitLedger: [{ commitId: "commit-start-1" }] }],
     });
   });
@@ -79,7 +79,7 @@ describe("FileHelarcThreadStore", () => {
       store.commitRunProgress(progressCommit(2, "commit-progress-2", "2026-07-18T00:00:11.000Z")),
     ]);
     const stale = await store.commitRunProgress(
-      progressCommit(1, "commit-progress-stale", "2026-07-18T00:00:12.000Z"),
+      progressCommit(1, "commit-progress-stale", "2026-07-18T00:00:12.000Z", 3),
     );
 
     expect(first.status).toBe("applied");
@@ -118,7 +118,6 @@ describe("FileHelarcThreadStore", () => {
 
     expect(result).toMatchObject({ status: "applied" });
     await expect(store.loadThread("thread-1")).resolves.toMatchObject({
-      conversations: [{ messageIds: ["message-1", "message-final"] }],
       messages: [{ id: "message-1" }, { id: "message-final" }],
       runs: [{
         terminal: { host: { status: "completed" }, product: { status: "completed" } },
@@ -149,9 +148,15 @@ describe("FileHelarcThreadStore", () => {
     await expect(store.commitRunTerminal({
       ...terminal,
       commitId: "commit-terminal-conflict",
+      expectedThreadRevision: 2,
     })).resolves.toMatchObject({ status: "rejected", code: "run_terminal" });
     await expect(store.commitRunProgress(
-      progressCommit(1, "commit-progress-after-terminal", "2026-07-18T00:00:30.000Z"),
+      progressCommit(
+        1,
+        "commit-progress-after-terminal",
+        "2026-07-18T00:00:30.000Z",
+        2,
+      ),
     )).resolves.toMatchObject({ status: "rejected", code: "run_terminal" });
     expect(replacementCount).toBe(2);
   });
@@ -199,7 +204,7 @@ describe("FileHelarcThreadStore", () => {
       .toBeInstanceOf(HelarcThreadStoreCorruptionError);
 
     const store = new FileHelarcThreadStore(filePath);
-    await writeFile(filePath, JSON.stringify({ formatVersion: 1, aggregates: [] }), "utf8");
+    await writeFile(filePath, JSON.stringify({ formatVersion: 2, aggregates: [] }), "utf8");
     await store.commitRunStart(startCommit("1"));
     const valid = JSON.parse(await readFile(filePath, "utf8"));
     const malformed = structuredClone(valid);
@@ -209,7 +214,7 @@ describe("FileHelarcThreadStore", () => {
       .toBeInstanceOf(HelarcThreadStoreCorruptionError);
 
     await writeFile(filePath, JSON.stringify({
-      formatVersion: 1,
+      formatVersion: 2,
       aggregates: [valid.aggregates[0], valid.aggregates[0]],
     }), "utf8");
     await expect(store.listThreadSummaries()).rejects
@@ -239,10 +244,12 @@ function startCommit(id: string, timestamp = STARTED_AT): HelarcRunStartCommit {
     threadId: `thread-${id}`,
     runId: `run-${id}`,
     committedAt: timestamp,
+    expectedThreadRevision: 0,
     target: {
       kind: "create_thread",
       thread: {
         id: `thread-${id}`,
+        revision: 0,
         workspace: {
           primary: {
             profileId: "workspace-1",
@@ -255,25 +262,22 @@ function startCommit(id: string, timestamp = STARTED_AT): HelarcRunStartCommit {
         status: "open",
         createdAt: timestamp,
         updatedAt: timestamp,
-        activeConversationId: `conversation-${id}`,
         latestRunId: null,
-        metadata: {},
-      },
-      conversation: {
-        id: `conversation-${id}`,
-        threadId: `thread-${id}`,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        messageIds: [],
         metadata: {},
       },
     },
     triggeringMessage: {
       id: `message-${id}`,
       threadId: `thread-${id}`,
-      conversationId: `conversation-${id}`,
+      sequence: 1,
       role: "user",
       content: `Task ${id}`,
+      source: { kind: "user_input", owner: "desktop", refId: `input-${id}` },
+      correlation: {
+        runId: `run-${id}`,
+        interactionRequestId: null,
+        reviewId: null,
+      },
       createdAt: timestamp,
       relatedRunIds: [`run-${id}`],
       relatedArtifactIds: [],
@@ -287,6 +291,7 @@ function startCommit(id: string, timestamp = STARTED_AT): HelarcRunStartCommit {
       threadId: `thread-${id}`,
       triggeringMessageId: `message-${id}`,
       triggerMessageRole: "user",
+      triggeringThreadRevision: 0,
       workspace: {
         primary: {
           workspaceId: "workspace-1",
@@ -312,6 +317,7 @@ function progressCommit(
   sequence: number,
   commitId: string,
   timestamp = PROGRESS_AT,
+  expectedThreadRevision = sequence,
 ): HelarcRunProgressCommit {
   return {
     kind: "run_progress",
@@ -319,6 +325,7 @@ function progressCommit(
     threadId: "thread-1",
     runId: "run-1",
     committedAt: timestamp,
+    expectedThreadRevision,
     progressSequence: sequence,
     progress: {
       recordedAt: timestamp,
@@ -327,17 +334,17 @@ function progressCommit(
         taskId: "task-1",
         runId: "run-1",
         sequence,
+        runOperationSequence: sequence,
         status: "running",
         startedAt: STARTED_AT,
         plan: null,
-        approval: null,
+        pendingInteractions: [],
         retry: null,
         cancellation: null,
         enforcement: {
           selected: "disabled",
           status: "not_exercised",
           attemptCount: 0,
-          escalationCount: 0,
           latestAttempt: null,
         },
         terminal: null,
@@ -360,6 +367,7 @@ function terminalCommit(): HelarcRunTerminalCommit {
     threadId: "thread-1",
     runId: "run-1",
     committedAt: COMPLETED_AT,
+    expectedThreadRevision: 1,
     terminal: {
       host: {
         runId: "run-1",
@@ -368,8 +376,6 @@ function terminalCommit(): HelarcRunTerminalCommit {
         code: null,
         completedAt: COMPLETED_AT,
         durationMs: 20_000,
-        iterations: 1,
-        actions: 0,
         itemCount: 0,
         evidenceCount: 0,
         artifactCount: 1,
@@ -379,9 +385,16 @@ function terminalCommit(): HelarcRunTerminalCommit {
       },
       product: {
         status: "completed",
+        runResult: {
+          runId: "run-1",
+          status: "succeeded",
+          code: null,
+          startedAt: STARTED_AT,
+          completedAt: COMPLETED_AT,
+        },
         output: {
           taskId: "task-1",
-          workspaceId: "workspace-1",
+          workspace: { primaryId: "workspace-1", additionalIds: [] },
           agentSummary: "Done",
           runtimeStatus: "succeeded",
           patchStatus: null,
@@ -389,14 +402,28 @@ function terminalCommit(): HelarcRunTerminalCommit {
           enforcement: { selected: "disabled", status: "not_exercised", code: null },
           safeErrors: [],
         },
+        runActions: [],
+        effects: [],
+        actions: [],
+        composites: [],
+        children: [],
+        interactions: [],
+        validation: { status: "not_evaluated", assessments: [] },
+        uncertainty: [],
+        residualRisk: [],
+        incompleteWork: [],
+        nextActions: [],
+        artifactRefs: [],
       },
     },
     assistantMessage: {
       id: "message-final",
       threadId: "thread-1",
-      conversationId: "conversation-1",
+      sequence: 2,
       role: "assistant",
       content: "Done.",
+      source: { kind: "agent_run", owner: "helarc", refId: "run-1" },
+      correlation: { runId: "run-1", interactionRequestId: null, reviewId: null },
       createdAt: COMPLETED_AT,
       relatedRunIds: ["run-1"],
       relatedArtifactIds: ["artifact-final"],
@@ -409,9 +436,27 @@ function terminalCommit(): HelarcRunTerminalCommit {
       kind: "final-output",
       title: "Final output",
       summary: "Done",
+      producer: { kind: "agent", owner: "helarc", refId: "run-1" },
+      sourceRefs: [{
+        owner: "agent-core",
+        kind: "run_result",
+        id: "run-1",
+        revision: COMPLETED_AT,
+      }],
+      effectRefs: [],
+      content: { kind: "inline", mediaType: "text/plain", value: "Done" },
+      completeness: "complete",
+      sensitivity: "private",
+      freshness: {
+        status: "current",
+        observedAt: COMPLETED_AT,
+        sourceRevision: COMPLETED_AT,
+      },
+      integrity: { status: "unverified" },
+      lifecycle: "final",
+      persistence: "thread_record",
+      limitations: [],
       createdAt: COMPLETED_AT,
-      payload: { summary: "Done" },
-      metadata: {},
     }],
   };
 }

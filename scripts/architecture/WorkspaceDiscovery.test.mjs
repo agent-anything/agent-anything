@@ -134,16 +134,21 @@ test("discovers the Phase27 lower Contract package topology", () => {
   });
 });
 
-test("classifies explicit packages under one Product grouping", () => {
+test("classifies final and transitional packages under one Product grouping", () => {
   withWorkspace((root) => {
     writeFileSync(
       join(root, "pnpm-workspace.yaml"),
       'packages:\n  - "products/helarc/*"\n',
     );
-    createPackage(root, "products/helarc/product", "@test/helarc", {
+    createPackage(root, "products/helarc/core", "@test/helarc", {
       kind: "product",
       productId: "helarc",
-      component: "product",
+      component: "core",
+    });
+    createPackage(root, "products/helarc/code-agent", "@test/helarc-code-agent", {
+      kind: "product",
+      productId: "helarc",
+      component: "code-workspace",
     });
     createPackage(
       root,
@@ -168,15 +173,21 @@ test("classifies explicit packages under one Product grouping", () => {
       [
         {
           kind: "product",
-          name: "@test/helarc-desktop",
+          name: "@test/helarc-code-agent",
           productId: "helarc",
-          component: "desktop",
+          component: "code-workspace",
         },
         {
           kind: "product",
           name: "@test/helarc",
           productId: "helarc",
-          component: "product",
+          component: "core",
+        },
+        {
+          kind: "product",
+          name: "@test/helarc-desktop",
+          productId: "helarc",
+          component: "desktop",
         },
       ],
     );

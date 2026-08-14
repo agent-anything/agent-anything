@@ -43,10 +43,14 @@
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/helarc": "workspace:*",
     "@agent-anything/helarc-code-agent": "workspace:*",
+    "@agent-anything/helarc-local-environment": "workspace:*",
     "@agent-anything/host": "workspace:*",
+    "@agent-anything/interaction": "workspace:*",
     "@agent-anything/model-interaction": "workspace:*",
     "@agent-anything/observability": "workspace:*",
+    "@agent-anything/operation-catalog": "workspace:*",
     "@agent-anything/permission": "workspace:*",
+    "@agent-anything/tools": "workspace:*",
     "@agent-anything/workspace": "workspace:*"
   },
   "devDependencies": {

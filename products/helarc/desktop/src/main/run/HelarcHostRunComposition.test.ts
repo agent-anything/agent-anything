@@ -26,7 +26,7 @@ import { describe, expect, it } from "vitest";
 import {
   createHelarcActionComposition,
 } from "@agent-anything/helarc/composition";
-import { createHelarcTask } from "@agent-anything/helarc-code-agent/task";
+import { createHelarcTask } from "@agent-anything/helarc/task";
 import {
   prepareHelarcHostRun,
   type PrepareHelarcHostRunInput,
@@ -40,7 +40,7 @@ type RunHelarcTestInput = Omit<
   | "toolMode"
   | "permissionPreset"
   | "patchReviewBridge"
-  | "conversationItems"
+  | "inputItems"
   | "workspaceResolver"
   | "workspaceSelection"
   | "identityResolver"
@@ -56,7 +56,7 @@ type RunHelarcTestInput = Omit<
   readonly enableShell?: boolean;
   readonly permissionPreset?: PrepareHelarcHostRunInput["permissionPreset"];
   readonly patchReviewBridge?: PrepareHelarcHostRunInput["patchReviewBridge"];
-  readonly conversationItems?: PrepareHelarcHostRunInput["conversationItems"];
+  readonly inputItems?: PrepareHelarcHostRunInput["inputItems"];
 };
 
 async function executeTestHostRun(input: RunHelarcTestInput) {
@@ -85,7 +85,7 @@ async function prepareTestHostRun(input: RunHelarcTestInput) {
     identityResolver,
     identitySelection,
     enableShell,
-    conversationItems,
+    inputItems,
     ...hostInput
   } = input;
   return prepareHelarcHostRun({
@@ -106,7 +106,7 @@ async function prepareTestHostRun(input: RunHelarcTestInput) {
     identitySelection: identitySelection ?? { kind: "anonymous" },
     productRunId,
     sessionId: input.sessionId ?? productRunId,
-    conversationItems: conversationItems ?? [],
+    inputItems: inputItems ?? [],
     toolMode: enableShell ? "shell-enabled" : "read-only",
     permissionPreset,
     userApprovalBridge,

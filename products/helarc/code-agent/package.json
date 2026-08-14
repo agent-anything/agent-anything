@@ -1,57 +1,14 @@
 {
   "name": "@agent-anything/helarc-code-agent",
   "version": "0.0.0",
-  "description": "Code Agent behavior and code-work capabilities for the Helarc product.",
+  "description": "Bounded Code Workspace source and file-operation semantics retained until Phase 28.",
   "type": "module",
   "exports": {
-    "./task": {
-      "types": "./src/task/index.ts",
-      "import": "./dist/task/index.js"
-    },
-    "./controller": {
-      "types": "./src/controller/index.ts",
-      "import": "./dist/controller/index.js"
-    },
-    "./prompt": {
-      "types": "./src/prompt/index.ts",
-      "import": "./dist/prompt/index.js"
-    },
-    "./tools": {
-      "types": "./src/tools/index.ts",
-      "import": "./dist/tools/index.js"
-    },
-    "./task-templates": {
-      "types": "./src/task-templates/index.ts",
-      "import": "./dist/task-templates/index.js"
-    },
-    "./workspace": {
-      "types": "./src/workspace/index.ts",
-      "import": "./dist/workspace/index.js"
-    },
-    "./filesystem": {
-      "types": "./src/filesystem/index.ts",
-      "import": "./dist/filesystem/index.js"
-    },
-    "./file-actions": {
-      "types": "./src/file-actions/index.ts",
-      "import": "./dist/file-actions/index.js"
-    },
-    "./command": {
-      "types": "./src/command/index.ts",
-      "import": "./dist/command/index.js"
-    },
-    "./patch": {
-      "types": "./src/patch/index.ts",
-      "import": "./dist/patch/index.js"
-    },
-    "./observability": {
-      "types": "./src/observability/index.ts",
-      "import": "./dist/observability/index.js"
-    }
+    "./workspace": { "types": "./src/workspace/index.ts", "import": "./dist/workspace/index.js" },
+    "./source": { "types": "./src/source/index.ts", "import": "./dist/source/index.js" },
+    "./file-operation": { "types": "./src/file-operation/index.ts", "import": "./dist/file-operation/index.js" }
   },
-  "files": [
-    "dist"
-  ],
+  "files": ["dist"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -61,26 +18,18 @@
     "architecture": {
       "kind": "product",
       "productId": "helarc",
-      "component": "code-agent"
+      "component": "code-workspace"
     }
   },
   "license": "Apache-2.0",
   "private": true,
   "dependencies": {
-    "@agent-anything/action-execution": "workspace:*",
     "@agent-anything/canonical-action": "workspace:*",
-    "@agent-anything/agent-core": "workspace:*",
-    "@agent-anything/context": "workspace:*",
-    "@agent-anything/governance": "workspace:*",
-    "@agent-anything/model-interaction": "workspace:*",
-    "@agent-anything/observability": "workspace:*",
-    "@agent-anything/agent-runtime": "workspace:*",
+    "@agent-anything/operation-catalog": "workspace:*",
     "@agent-anything/tools": "workspace:*",
     "@agent-anything/workspace": "workspace:*"
   },
   "devDependencies": {
-    "@agent-anything/permission": "workspace:*",
-    "@agent-anything/test-support": "workspace:*",
     "@types/node": "^25.9.1"
   }
 }

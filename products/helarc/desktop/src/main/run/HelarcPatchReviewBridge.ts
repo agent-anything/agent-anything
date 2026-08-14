@@ -174,6 +174,7 @@ class DefaultHelarcPatchReviewBridge implements HelarcPatchReviewBridge {
       this.runBinding === null ||
       submission.runId !== this.runBinding ||
       submission.proposalId !== projection.proposalId ||
+      submission.proposalRevision !== projection.proposalRevision ||
       submission.reviewId !== projection.reviewId
     ) {
       return rejectedReceipt(submission.submissionId, "patch_review_not_pending");
@@ -187,6 +188,7 @@ class DefaultHelarcPatchReviewBridge implements HelarcPatchReviewBridge {
       submissionId: submission.submissionId,
       runId: submission.runId,
       proposalId: submission.proposalId,
+      proposalRevision: submission.proposalRevision,
       reviewId: submission.reviewId,
       pendingVersion: submission.pendingVersion,
     });
@@ -231,6 +233,10 @@ function snapshotReviewRequest(candidate: HelarcPatchReviewRequest): HelarcPatch
   return Object.freeze({
     runId: requireIdentity(candidate.runId, "runId"),
     proposalId: requireIdentity(candidate.proposalId, "proposalId"),
+    proposalRevision: requirePositiveInteger(
+      candidate.proposalRevision,
+      "proposalRevision",
+    ),
     reviewId: requireIdentity(candidate.reviewId, "reviewId"),
     rootName: requireIdentity(candidate.rootName, "rootName"),
     workspaceId: requireIdentity(candidate.workspaceId, "workspaceId"),
@@ -275,20 +281,28 @@ function snapshotSubmission(
     throw new TypeError("Patch review submission must be an object.");
   }
   const decision = candidate.decision;
-  if (decision !== "accepted" && decision !== "rejected") {
+  if (
+    decision !== "accepted" &&
+    decision !== "rejected" &&
+    decision !== "request_revision"
+  ) {
     throw new TypeError("Patch review decision is invalid.");
   }
   if (!Number.isSafeInteger(candidate.pendingVersion) || candidate.pendingVersion < 1) {
     throw new TypeError("Patch review pendingVersion must be a positive integer.");
   }
   const reason = candidate.reason === null ? null : requireIdentity(candidate.reason, "reason");
-  if (decision === "rejected" && reason === null) {
-    throw new TypeError("Rejected patch review requires a reason.");
+  if (decision !== "accepted" && reason === null) {
+    throw new TypeError("Rejected or revision-requested patch review requires a reason.");
   }
   return Object.freeze({
     submissionId: requireIdentity(candidate.submissionId, "submissionId"),
     runId: requireIdentity(candidate.runId, "runId"),
     proposalId: requireIdentity(candidate.proposalId, "proposalId"),
+    proposalRevision: requirePositiveInteger(
+      candidate.proposalRevision,
+      "proposalRevision",
+    ),
     reviewId: requireIdentity(candidate.reviewId, "reviewId"),
     pendingVersion: candidate.pendingVersion,
     decision,
@@ -324,14 +338,20 @@ function sameSubmission(
   return left.submissionId === right.submissionId &&
     left.runId === right.runId &&
     left.proposalId === right.proposalId &&
+    left.proposalRevision === right.proposalRevision &&
     left.reviewId === right.reviewId &&
     left.pendingVersion === right.pendingVersion &&
     left.decision === right.decision &&
     left.reason === right.reason;
 }
 
-function reviewKey(input: { runId: string; proposalId: string; reviewId: string }): string {
-  return `${input.runId}\u0000${input.proposalId}\u0000${input.reviewId}`;
+function reviewKey(input: {
+  runId: string;
+  proposalId: string;
+  proposalRevision: number;
+  reviewId: string;
+}): string {
+  return `${input.runId}\u0000${input.proposalId}\u0000${input.proposalRevision}\u0000${input.reviewId}`;
 }
 
 function requireIdentity(value: unknown, field: string): string {
@@ -346,6 +366,13 @@ function requireOperation(value: unknown): "create" | "update" | "delete" {
     throw new TypeError("Patch review operation is invalid.");
   }
   return value;
+}
+
+function requirePositiveInteger(value: unknown, field: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new TypeError(`${field} must be a positive integer.`);
+  }
+  return value as number;
 }
 
 function optionalContent(value: unknown, field: string): string | null {

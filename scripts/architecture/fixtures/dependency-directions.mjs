@@ -31,46 +31,34 @@ export const repositoryDirectionFixtures = [
     imported: pkg("harness", "agent-runtime"),
   },
   {
-    name: "Product Desktop to Product Model",
-    accepted: true,
-    owner: productPkg("helarc", "helarc-desktop", "desktop"),
-    imported: productPkg("helarc", "helarc", "product"),
-  },
-  {
-    name: "Product Model to Code Agent",
-    accepted: true,
-    owner: productPkg("helarc", "helarc", "product"),
-    imported: productPkg("helarc", "helarc-code-agent", "code-agent"),
-  },
-  {
-    name: "Code Agent to Product Model",
-    accepted: false,
-    owner: productPkg("helarc", "helarc-code-agent", "code-agent"),
-    imported: productPkg("helarc", "helarc", "product"),
-  },
-  {
-    name: "Product Model to Desktop",
-    accepted: false,
-    owner: productPkg("helarc", "helarc", "product"),
-    imported: productPkg("helarc", "helarc-desktop", "desktop"),
-  },
-  {
     name: "Product Desktop to Helarc Core",
     accepted: true,
     owner: productPkg("helarc", "helarc-desktop", "desktop"),
-    imported: productPkg("helarc", "helarc-core", "core"),
+    imported: productPkg("helarc", "helarc", "core"),
+  },
+  {
+    name: "Helarc Core to Code Workspace",
+    accepted: true,
+    owner: productPkg("helarc", "helarc", "core"),
+    imported: productPkg("helarc", "helarc-code-agent", "code-workspace"),
+  },
+  {
+    name: "Code Workspace to Helarc Core",
+    accepted: false,
+    owner: productPkg("helarc", "helarc-code-agent", "code-workspace"),
+    imported: productPkg("helarc", "helarc", "core"),
+  },
+  {
+    name: "Helarc Core to Desktop",
+    accepted: false,
+    owner: productPkg("helarc", "helarc", "core"),
+    imported: productPkg("helarc", "helarc-desktop", "desktop"),
   },
   {
     name: "Product Desktop to Local Environment",
     accepted: true,
     owner: productPkg("helarc", "helarc-desktop", "desktop"),
     imported: productPkg("helarc", "helarc-local-environment", "local-environment"),
-  },
-  {
-    name: "Helarc Core to Code Workspace",
-    accepted: true,
-    owner: productPkg("helarc", "helarc-core", "core"),
-    imported: productPkg("helarc", "helarc-code-workspace", "code-workspace"),
   },
   {
     name: "Local Environment to Code Workspace",
@@ -81,20 +69,14 @@ export const repositoryDirectionFixtures = [
   {
     name: "Helarc Core to Local Environment",
     accepted: false,
-    owner: productPkg("helarc", "helarc-core", "core"),
+    owner: productPkg("helarc", "helarc", "core"),
     imported: productPkg("helarc", "helarc-local-environment", "local-environment"),
   },
   {
     name: "Local Environment to Helarc Core",
     accepted: false,
     owner: productPkg("helarc", "helarc-local-environment", "local-environment"),
-    imported: productPkg("helarc", "helarc-core", "core"),
-  },
-  {
-    name: "Code Workspace to Helarc Core",
-    accepted: false,
-    owner: productPkg("helarc", "helarc-code-workspace", "code-workspace"),
-    imported: productPkg("helarc", "helarc-core", "core"),
+    imported: productPkg("helarc", "helarc", "core"),
   },
   {
     name: "Product to another Product",

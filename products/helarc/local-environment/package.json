@@ -1,0 +1,36 @@
+{
+  "name": "@agent-anything/helarc-local-environment",
+  "version": "0.0.0",
+  "description": "Trusted local workspace, filesystem, process, and sandbox adapters for Helarc.",
+  "type": "module",
+  "exports": {
+    "./workspace": { "types": "./src/workspace/index.ts", "import": "./dist/workspace/index.js" },
+    "./filesystem": { "types": "./src/filesystem/index.ts", "import": "./dist/filesystem/index.js" },
+    "./command": { "types": "./src/command/index.ts", "import": "./dist/command/index.js" },
+    "./sandbox": { "types": "./src/sandbox/index.ts", "import": "./dist/sandbox/index.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "kind": "product",
+      "productId": "helarc",
+      "component": "local-environment"
+    }
+  },
+  "license": "Apache-2.0",
+  "private": true,
+  "dependencies": {
+    "@agent-anything/action-execution": "workspace:*",
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/canonical-action": "workspace:*",
+    "@agent-anything/helarc-code-agent": "workspace:*",
+    "@agent-anything/operation-catalog": "workspace:*",
+    "@agent-anything/workspace": "workspace:*"
+  },
+  "devDependencies": { "@types/node": "^25.9.1" }
+}

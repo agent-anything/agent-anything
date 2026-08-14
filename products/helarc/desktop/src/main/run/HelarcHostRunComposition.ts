@@ -37,13 +37,13 @@ import type {
 } from "@agent-anything/host/projection";
 import {
   createCodeAgentCanonicalWorkspaceRoots,
-} from "@agent-anything/helarc-code-agent/filesystem";
-import type { CodeAgentCommandLimits } from "@agent-anything/helarc-code-agent/command";
+} from "@agent-anything/helarc-local-environment/filesystem";
+import type { CodeAgentCommandLimits } from "@agent-anything/helarc-local-environment/command";
 import {
   createHelarcContextProjector,
   type HelarcAgentOutput,
-} from "@agent-anything/helarc-code-agent/controller";
-import type { HelarcTaskInput } from "@agent-anything/helarc-code-agent/task";
+} from "@agent-anything/helarc/controller";
+import type { HelarcTaskInput } from "@agent-anything/helarc/task";
 import { EvidenceBuilder, type Evidence } from "@agent-anything/context/evidence";
 import type {
   EvidencePersistencePort,
@@ -81,7 +81,7 @@ export interface PrepareHelarcHostRunInput {
   readonly sessionId: string;
   readonly productRunId: string;
   readonly task: AgentTask<HelarcTaskInput>;
-  readonly conversationItems: readonly RunInputItem[];
+  readonly inputItems: readonly RunInputItem[];
   readonly workspaceResolver: HostWorkspaceResolver;
   readonly workspaceSelection: HostWorkspaceSelection;
   readonly identityResolver: HostIdentityResolver;
@@ -261,7 +261,7 @@ export async function prepareHelarcHostRun(
     userApprovalReviewBridge: permissions.userApprovalBridge,
     runInput: {
       task: input.task,
-      items: input.conversationItems,
+      items: input.inputItems,
       metadata: runMetadata,
     },
     runConfig: {

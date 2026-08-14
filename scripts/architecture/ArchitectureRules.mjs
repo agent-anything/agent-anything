@@ -88,14 +88,8 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
 
 export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
   "@agent-anything/helarc-code-agent": [
-    "@agent-anything/action-execution",
-    "@agent-anything/agent-core",
     "@agent-anything/canonical-action",
-    "@agent-anything/context",
-    "@agent-anything/governance",
-    "@agent-anything/model-interaction",
-    "@agent-anything/observability",
-    "@agent-anything/agent-runtime",
+    "@agent-anything/operation-catalog",
     "@agent-anything/tools",
     "@agent-anything/workspace",
   ],
@@ -103,12 +97,23 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",
     "@agent-anything/canonical-action",
+    "@agent-anything/context",
     "@agent-anything/helarc-code-agent",
     "@agent-anything/host",
+    "@agent-anything/interaction",
     "@agent-anything/model-interaction",
     "@agent-anything/observability",
+    "@agent-anything/operation-catalog",
     "@agent-anything/agent-runtime",
     "@agent-anything/tools",
+    "@agent-anything/workspace",
+  ],
+  "@agent-anything/helarc-local-environment": [
+    "@agent-anything/action-execution",
+    "@agent-anything/agent-core",
+    "@agent-anything/canonical-action",
+    "@agent-anything/helarc-code-agent",
+    "@agent-anything/operation-catalog",
     "@agent-anything/workspace",
   ],
   "@agent-anything/helarc-desktop": [
@@ -119,6 +124,7 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/governance",
     "@agent-anything/helarc",
     "@agent-anything/helarc-code-agent",
+    "@agent-anything/helarc-local-environment",
     "@agent-anything/host",
     "@agent-anything/model-interaction",
     "@agent-anything/observability",
@@ -142,10 +148,14 @@ export const TOOLING_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/governance",
     "@agent-anything/helarc",
     "@agent-anything/helarc-code-agent",
+    "@agent-anything/helarc-local-environment",
     "@agent-anything/host",
+    "@agent-anything/interaction",
     "@agent-anything/model-interaction",
     "@agent-anything/observability",
+    "@agent-anything/operation-catalog",
     "@agent-anything/permission",
+    "@agent-anything/tools",
     "@agent-anything/workspace",
   ],
 });
@@ -155,6 +165,7 @@ const HELARC_EVALUATION_TARGET_SOURCE_PREFIX =
 const HELARC_EVALUATION_TARGET_PRODUCT_DEPENDENCIES = new Set([
   "@agent-anything/helarc",
   "@agent-anything/helarc-code-agent",
+  "@agent-anything/helarc-local-environment",
 ]);
 
 export const REVIEWED_PRODUCTION_DEPENDENCIES = Object.freeze({
@@ -164,15 +175,11 @@ export const REVIEWED_PRODUCTION_DEPENDENCIES = Object.freeze({
 });
 
 const PRODUCT_COMPONENT_DEPENDENCIES = Object.freeze({
-  "code-agent": new Set(),
   "code-workspace": new Set(),
-  product: new Set(["code-agent"]),
-  core: new Set(["code-agent", "code-workspace"]),
-  "local-environment": new Set(["code-agent", "code-workspace"]),
+  core: new Set(["code-workspace"]),
+  "local-environment": new Set(["code-workspace"]),
   desktop: new Set([
-    "code-agent",
     "code-workspace",
-    "product",
     "core",
     "local-environment",
   ]),

@@ -54,9 +54,10 @@ export function projectHelarcDesktopSnapshot(snapshot: MainSnapshot): DesktopSna
             name: snapshot.activeThread.workspace.name,
             path: snapshot.activeThread.workspace.path,
           },
-          activeConversationId: snapshot.activeThread.activeConversationId,
+          revision: snapshot.activeThread.revision,
           messages: snapshot.activeThread.messages.map((message) => ({
             id: message.id,
+            sequence: message.sequence,
             role: message.role,
             content: message.content,
             createdAt: message.createdAt,
@@ -329,6 +330,7 @@ function projectProductPhase(
       kind: phase.kind,
       runId: phase.runId,
       proposalId: phase.proposalId,
+      proposalRevision: phase.proposalRevision,
       reviewId: phase.reviewId,
       pendingVersion: phase.pendingVersion,
     };
@@ -338,6 +340,7 @@ function projectProductPhase(
     review: {
       runId: phase.review.runId,
       proposalId: phase.review.proposalId,
+      proposalRevision: phase.review.proposalRevision,
       reviewId: phase.review.reviewId,
       pendingVersion: phase.review.pendingVersion,
       phase: phase.review.phase,

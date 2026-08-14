@@ -207,6 +207,7 @@ export type HelarcApprovalSubmissionReceipt =
 export interface HelarcPendingPatchReviewSnapshot {
   readonly runId: string;
   readonly proposalId: string;
+  readonly proposalRevision: number;
   readonly reviewId: string;
   readonly pendingVersion: number;
   readonly phase: "reviewing" | "submitted_for_resolution";
@@ -227,6 +228,7 @@ export type HelarcProductPhaseSnapshot =
       readonly kind: "patch_action_submitted";
       readonly runId: string;
       readonly proposalId: string;
+      readonly proposalRevision: number;
       readonly reviewId: string;
       readonly pendingVersion: number;
     };
@@ -296,16 +298,16 @@ export interface HelarcRunSnapshot {
   };
 }
 
-export type HelarcConversationMessageRole =
+export type HelarcThreadMessageRole =
   | "user"
   | "assistant"
   | "system"
-  | "tool"
-  | "product-event";
+  | "product";
 
-export interface HelarcConversationMessageSnapshot {
+export interface HelarcThreadMessageSnapshot {
   id: string;
-  role: HelarcConversationMessageRole;
+  sequence: number;
+  role: HelarcThreadMessageRole;
   content: string;
   createdAt: string;
   relatedRunIds: string[];
@@ -314,10 +316,14 @@ export interface HelarcConversationMessageSnapshot {
 
 export type HelarcArtifactSnapshotKind =
   | "final-output"
-  | "patch-proposal"
-  | "applied-patch"
+  | "proposal-revision"
+  | "applied-change"
   | "trace-projection"
   | "tool-output-summary"
+  | "evidence-bundle"
+  | "validation-report"
+  | "evaluation-report"
+  | "engineering-review"
   | "error-report";
 
 export interface HelarcArtifactSnapshot {
@@ -334,8 +340,8 @@ export interface HelarcActiveThreadSnapshot {
   title: string;
   status: "open" | "closed" | "archived";
   workspace: HelarcWorkspaceSnapshot;
-  activeConversationId: string;
-  messages: HelarcConversationMessageSnapshot[];
+  revision: number;
+  messages: HelarcThreadMessageSnapshot[];
   artifacts: HelarcArtifactSnapshot[];
 }
 
@@ -404,9 +410,10 @@ export interface HelarcResolvePatchReviewInput {
   submissionId: string;
   runId: string;
   proposalId: string;
+  proposalRevision: number;
   reviewId: string;
   pendingVersion: number;
-  decision: "accepted" | "rejected";
+  decision: "accepted" | "rejected" | "request_revision";
   reason: string | null;
 }
 

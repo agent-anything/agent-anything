@@ -1,4 +1,4 @@
-import { createBuiltInHelarcTaskTemplates } from "@agent-anything/helarc-code-agent/task-templates";
+import { createBuiltInHelarcTaskTemplates } from "@agent-anything/helarc/task";
 import { describe, expect, it } from "vitest";
 import { prepareHelarcRunStart } from "./prepareHelarcRunStart.js";
 

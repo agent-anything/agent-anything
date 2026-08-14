@@ -94,8 +94,9 @@ describe("Helarc Phase26 Evaluation target", () => {
   it("repeats to an equivalent semantic baseline despite fresh temporary Workspaces", async () => {
     const first = await candidate();
     const second = await runHelarcEvaluationBaselineCandidate();
+    const comparison = compareHelarcEvaluationBaseline(first, second);
 
-    expect(compareHelarcEvaluationBaseline(first, second)).toMatchObject({
+    expect(comparison).toMatchObject({
       status: "equivalent",
     });
   }, 120_000);

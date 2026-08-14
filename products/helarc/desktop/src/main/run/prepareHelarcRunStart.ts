@@ -21,12 +21,12 @@ import {
   createHelarcTask,
   type HelarcTaskInput,
   type HelarcTaskInputErrorCode,
-} from "@agent-anything/helarc-code-agent/task";
+} from "@agent-anything/helarc/task";
 import {
   selectHelarcTaskTemplate,
   type HelarcTaskTemplate,
   type HelarcTaskTemplateErrorCode,
-} from "@agent-anything/helarc-code-agent/task-templates";
+} from "@agent-anything/helarc/task";
 
 export interface PrepareHelarcRunStartInput {
   runId: string;

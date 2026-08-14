@@ -298,6 +298,25 @@ importers:
 
   products/helarc/code-agent:
     dependencies:
+      '@agent-anything/canonical-action':
+        specifier: workspace:*
+        version: link:../../../harness/safety/canonical-action
+      '@agent-anything/operation-catalog':
+        specifier: workspace:*
+        version: link:../../../harness/operation-catalog
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../../../harness/tools
+      '@agent-anything/workspace':
+        specifier: workspace:*
+        version: link:../../../harness/workspace
+    devDependencies:
+      '@types/node':
+        specifier: ^25.9.1
+        version: 25.9.1
+
+  products/helarc/core:
+    dependencies:
       '@agent-anything/action-execution':
         specifier: workspace:*
         version: link:../../../harness/safety/action-execution
@@ -313,15 +332,24 @@ importers:
       '@agent-anything/context':
         specifier: workspace:*
         version: link:../../../harness/context
-      '@agent-anything/governance':
+      '@agent-anything/helarc-code-agent':
         specifier: workspace:*
-        version: link:../../../harness/safety/governance
+        version: link:../code-agent
+      '@agent-anything/host':
+        specifier: workspace:*
+        version: link:../../../harness/host
+      '@agent-anything/interaction':
+        specifier: workspace:*
+        version: link:../../../harness/interaction
       '@agent-anything/model-interaction':
         specifier: workspace:*
         version: link:../../../harness/model-interaction
       '@agent-anything/observability':
         specifier: workspace:*
         version: link:../../../harness/observability
+      '@agent-anything/operation-catalog':
+        specifier: workspace:*
+        version: link:../../../harness/operation-catalog
       '@agent-anything/tools':
         specifier: workspace:*
         version: link:../../../harness/tools
@@ -329,12 +357,6 @@ importers:
         specifier: workspace:*
         version: link:../../../harness/workspace
     devDependencies:
-      '@agent-anything/permission':
-        specifier: workspace:*
-        version: link:../../../harness/safety/permission
-      '@agent-anything/test-support':
-        specifier: workspace:*
-        version: link:../../../tooling/test-support
       '@types/node':
         specifier: ^25.9.1
         version: 25.9.1
@@ -361,10 +383,13 @@ importers:
         version: link:../../../harness/safety/governance
       '@agent-anything/helarc':
         specifier: workspace:*
-        version: link:../product
+        version: link:../core
       '@agent-anything/helarc-code-agent':
         specifier: workspace:*
         version: link:../code-agent
+      '@agent-anything/helarc-local-environment':
+        specifier: workspace:*
+        version: link:../local-environment
       '@agent-anything/host':
         specifier: workspace:*
         version: link:../../../harness/host
@@ -409,7 +434,7 @@ importers:
         specifier: ^8.0.16
         version: 8.0.16(@types/node@25.9.1)(esbuild@0.28.0)
 
-  products/helarc/product:
+  products/helarc/local-environment:
     dependencies:
       '@agent-anything/action-execution':
         specifier: workspace:*
@@ -417,27 +442,15 @@ importers:
       '@agent-anything/agent-core':
         specifier: workspace:*
         version: link:../../../harness/agent-core/contracts
-      '@agent-anything/agent-runtime':
-        specifier: workspace:*
-        version: link:../../../harness/agent-core/runtime
       '@agent-anything/canonical-action':
         specifier: workspace:*
         version: link:../../../harness/safety/canonical-action
       '@agent-anything/helarc-code-agent':
         specifier: workspace:*
         version: link:../code-agent
-      '@agent-anything/host':
+      '@agent-anything/operation-catalog':
         specifier: workspace:*
-        version: link:../../../harness/host
-      '@agent-anything/model-interaction':
-        specifier: workspace:*
-        version: link:../../../harness/model-interaction
-      '@agent-anything/observability':
-        specifier: workspace:*
-        version: link:../../../harness/observability
-      '@agent-anything/tools':
-        specifier: workspace:*
-        version: link:../../../harness/tools
+        version: link:../../../harness/operation-catalog
       '@agent-anything/workspace':
         specifier: workspace:*
         version: link:../../../harness/workspace
@@ -471,22 +484,34 @@ importers:
         version: link:../../harness/safety/governance
       '@agent-anything/helarc':
         specifier: workspace:*
-        version: link:../../products/helarc/product
+        version: link:../../products/helarc/core
       '@agent-anything/helarc-code-agent':
         specifier: workspace:*
         version: link:../../products/helarc/code-agent
+      '@agent-anything/helarc-local-environment':
+        specifier: workspace:*
+        version: link:../../products/helarc/local-environment
       '@agent-anything/host':
         specifier: workspace:*
         version: link:../../harness/host
+      '@agent-anything/interaction':
+        specifier: workspace:*
+        version: link:../../harness/interaction
       '@agent-anything/model-interaction':
         specifier: workspace:*
         version: link:../../harness/model-interaction
       '@agent-anything/observability':
         specifier: workspace:*
         version: link:../../harness/observability
+      '@agent-anything/operation-catalog':
+        specifier: workspace:*
+        version: link:../../harness/operation-catalog
       '@agent-anything/permission':
         specifier: workspace:*
         version: link:../../harness/safety/permission
+      '@agent-anything/tools':
+        specifier: workspace:*
+        version: link:../../harness/tools
       '@agent-anything/workspace':
         specifier: workspace:*
         version: link:../../harness/workspace

@@ -280,6 +280,7 @@ function snapshotPatchReview(
       "submissionId",
       "runId",
       "proposalId",
+      "proposalRevision",
       "reviewId",
       "pendingVersion",
       "decision",
@@ -290,17 +291,32 @@ function snapshotPatchReview(
   if (!Number.isSafeInteger(candidate.pendingVersion) || (candidate.pendingVersion as number) < 1) {
     invalid("Patch review pendingVersion must be a positive safe integer.");
   }
-  if (candidate.decision !== "accepted" && candidate.decision !== "rejected") {
+  if (
+    !Number.isSafeInteger(candidate.proposalRevision) ||
+    (candidate.proposalRevision as number) < 1
+  ) {
+    invalid("Patch proposal revision must be a positive safe integer.");
+  }
+  if (
+    candidate.decision !== "accepted" &&
+    candidate.decision !== "rejected" &&
+    candidate.decision !== "request_revision"
+  ) {
     invalid("Patch review decision is invalid.");
+  }
+  const reason = nullableReason(candidate.reason, "Patch review reason");
+  if (candidate.decision !== "accepted" && reason === null) {
+    invalid("Rejected or revision-requested patch review requires a reason.");
   }
   return Object.freeze({
     submissionId: identity(candidate.submissionId, "Patch review submission id"),
     runId: identity(candidate.runId, "Patch review Run id"),
     proposalId: identity(candidate.proposalId, "Patch proposal id"),
+    proposalRevision: candidate.proposalRevision as number,
     reviewId: identity(candidate.reviewId, "Patch review id"),
     pendingVersion: candidate.pendingVersion as number,
     decision: candidate.decision,
-    reason: nullableReason(candidate.reason, "Patch review reason"),
+    reason,
   });
 }
 

@@ -4,7 +4,7 @@ import type { HelarcMainSnapshot } from "../shared/HelarcDesktopApi.js";
 import {
   App,
   ApprovalPromptPanel,
-  ConversationPanel,
+  ThreadTimeline,
   RunTerminalPanel,
   RunTimelinePanel,
   ThreadPanel,
@@ -105,9 +105,9 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("tools codeAgent.listFiles, codeAgent.readFile, codeAgent.searchFiles");
   });
 
-  it("renders active thread conversation messages", () => {
+  it("renders active Thread messages", () => {
     const html = renderToStaticMarkup(
-      <ConversationPanel
+      <ThreadTimeline
         activeThread={{
           id: "thread-1",
           title: "Update docs",
@@ -117,10 +117,11 @@ describe("Helarc workbench shell", () => {
             name: "agent-anything",
             path: "D:/projects/agent-anything",
           },
-          activeConversationId: "conversation-1",
+          revision: 1,
           messages: [
             {
               id: "message-1",
+              sequence: 1,
               role: "user",
               content: "Update docs",
               createdAt: "2026-07-05T01:00:00.000Z",
@@ -129,6 +130,7 @@ describe("Helarc workbench shell", () => {
             },
             {
               id: "message-2",
+              sequence: 2,
               role: "assistant",
               content: "No changes needed.",
               createdAt: "2026-07-05T01:00:01.000Z",

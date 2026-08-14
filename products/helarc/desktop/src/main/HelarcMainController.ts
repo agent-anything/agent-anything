@@ -19,7 +19,6 @@ import {
   type HelarcWorkspaceProfile,
 } from "@agent-anything/helarc/configuration";
 import {
-  createHelarcConversation,
   createHelarcMessage,
   createHelarcArtifact,
   createHelarcPersistedRun,
@@ -30,6 +29,10 @@ import {
   type HelarcRunStartCommit,
   type HelarcRunTerminalCommit,
   type HelarcArtifact,
+  type HelarcArtifactCompleteness,
+  type HelarcArtifactProducer,
+  type HelarcArtifactRecordRef,
+  type HelarcSafeValue,
   type HelarcMessage,
   type HelarcPersistedRunStatus,
   type HelarcThreadRecord,
@@ -53,8 +56,8 @@ import type {
 import {
   createBuiltInHelarcTaskTemplates,
   type HelarcTaskTemplate,
-} from "@agent-anything/helarc-code-agent/task-templates";
-import type { HelarcTaskInputError } from "@agent-anything/helarc-code-agent/task";
+  type HelarcTaskInputError,
+} from "@agent-anything/helarc/task";
 import type { RunInputItem } from "@agent-anything/agent-core/input";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { Provider } from "@agent-anything/model-interaction";
@@ -117,16 +120,16 @@ export type HelarcMainSnapshotStatus =
   | "blocked"
   | "cancelled";
 
-export type HelarcConversationMessageRole =
+export type HelarcThreadMessageRole =
   | "user"
   | "assistant"
   | "system"
-  | "tool"
-  | "product-event";
+  | "product";
 
-export interface HelarcConversationMessageSnapshot {
+export interface HelarcThreadMessageSnapshot {
   id: string;
-  role: HelarcConversationMessageRole;
+  sequence: number;
+  role: HelarcThreadMessageRole;
   content: string;
   createdAt: string;
   relatedRunIds: string[];
@@ -147,8 +150,8 @@ export interface HelarcActiveThreadSnapshot {
   title: string;
   status: "open" | "closed" | "archived";
   workspace: HelarcWorkspaceSnapshot;
-  activeConversationId: string;
-  messages: HelarcConversationMessageSnapshot[];
+  revision: number;
+  messages: HelarcThreadMessageSnapshot[];
   artifacts: HelarcArtifactSnapshot[];
 }
 
@@ -241,12 +244,14 @@ type HelarcRunStartCommitTarget =
   | {
       readonly kind: "create_thread";
       readonly threadId: string;
-      readonly conversationId: string;
+      readonly expectedThreadRevision: 0;
+      readonly messageSequence: 1;
     }
   | {
       readonly kind: "existing_thread";
       readonly threadId: string;
-      readonly conversationId: string;
+      readonly expectedThreadRevision: number;
+      readonly messageSequence: number;
     };
 
 interface ResolvedHelarcRunStartTarget {
@@ -255,7 +260,7 @@ interface ResolvedHelarcRunStartTarget {
   readonly workspaceProfileId: string;
   readonly additionalWorkspaceProfileIds: readonly string[];
   readonly workspaceProfiles: readonly HelarcWorkspaceProfile[];
-  readonly conversationItems: readonly RunInputItem[];
+  readonly inputItems: readonly RunInputItem[];
   readonly commitTarget: HelarcRunStartCommitTarget;
 }
 
@@ -301,6 +306,7 @@ type DesktopActiveRunSlot =
       readonly productRunId: string;
       readonly handle: HelarcHostActiveRun;
       progressSequence: number;
+      threadRevision: number;
       progressTail: Promise<void>;
       persistenceFailure: Error | null;
     };
@@ -505,7 +511,7 @@ export class HelarcMainController {
     const {
       additionalWorkspaceProfileIds,
       commitTarget,
-      conversationItems,
+      inputItems,
       startedAt,
       threadId,
       workspaceProfileId,
@@ -569,7 +575,7 @@ export class HelarcMainController {
         productRunId: runId,
         sessionId: threadId,
         provider: providerInstance,
-        conversationItems,
+        inputItems,
         toolMode: this.runtimeToolMode,
         permissionPreset: preparedStart.prepared.run.permissionPreset,
         userApprovalBridge,
@@ -749,11 +755,12 @@ export class HelarcMainController {
           workspaceProfileId: workspaceProfile.id,
           additionalWorkspaceProfileIds: [],
           workspaceProfiles: [workspaceProfile],
-          conversationItems: [],
+          inputItems: [],
           commitTarget: {
             kind: "create_thread",
             threadId,
-            conversationId: `helarc-conversation-${sequenceNumber}`,
+            expectedThreadRevision: 0,
+            messageSequence: 1,
           },
         },
       };
@@ -821,31 +828,14 @@ export class HelarcMainController {
       });
     }
 
-    const conversation = record.conversations.find(
-      (candidate) => candidate.id === record.thread.activeConversationId,
-    );
-    if (conversation === undefined) {
-      return rejectRunStartTarget(
-        "thread_record_invalid",
-        "The selected Thread has no active Conversation.",
-      );
-    }
-    const messages = new Map(record.messages.map((message) => [message.id, message]));
-    const conversationItems: RunInputItem[] = [];
-    for (const messageId of conversation.messageIds) {
-      const message = messages.get(messageId);
-      if (message === undefined) {
-        return rejectRunStartTarget(
-          "thread_record_invalid",
-          "The selected Thread Conversation contains an invalid Message reference.",
-        );
-      }
+    const inputItems: RunInputItem[] = [];
+    for (const message of record.messages) {
       if (
         message.role === "system" ||
         message.role === "user" ||
         message.role === "assistant"
       ) {
-        conversationItems.push({
+        inputItems.push({
           id: message.id,
           kind: "message",
           role: message.role,
@@ -866,11 +856,12 @@ export class HelarcMainController {
           (workspace) => workspace.profileId,
         ),
         workspaceProfiles,
-        conversationItems,
+        inputItems,
         commitTarget: {
           kind: "existing_thread",
           threadId: record.thread.id,
-          conversationId: conversation.id,
+          expectedThreadRevision: record.thread.revision,
+          messageSequence: record.messages.length + 1,
         },
       },
     };
@@ -952,6 +943,7 @@ export class HelarcMainController {
       productRunId,
       handle: activeRun,
       progressSequence: 0,
+      threadRevision: this.currentThreadRecord?.thread.revision ?? 0,
       progressTail: Promise.resolve(),
       persistenceFailure: null,
     };
@@ -990,6 +982,8 @@ export class HelarcMainController {
   ): void {
     slot.progressSequence += 1;
     const progressSequence = slot.progressSequence;
+    const expectedThreadRevision = slot.threadRevision;
+    slot.threadRevision += 1;
     const currentRun = this.currentThreadRecord?.runs.find(
       (run) => run.id === slot.productRunId,
     );
@@ -1003,6 +997,7 @@ export class HelarcMainController {
       threadId: slot.threadId,
       runId: slot.productRunId,
       committedAt: recordedAt,
+      expectedThreadRevision,
       progressSequence,
       progress: {
         recordedAt,
@@ -1082,17 +1077,23 @@ export class HelarcMainController {
     permissionPreset: HelarcRunPermissionPreset;
   }): { ok: true; commit: HelarcRunStartCommit } | { ok: false; error: HelarcWorkContextError } {
     const threadId = input.target.threadId;
-    const conversationId = input.target.conversationId;
     const messageId = `helarc-message-${input.sequenceNumber}`;
 
     const messageResult = createHelarcMessage({
       id: messageId,
       threadId,
-      conversationId,
+      sequence: input.target.messageSequence,
       role: "user",
       content: input.taskText,
+      source: { kind: "user_input", owner: "helarc-desktop", refId: messageId },
+      correlation: {
+        runId: input.runId,
+        interactionRequestId: null,
+        reviewId: null,
+      },
       createdAt: input.startedAt,
       relatedRunIds: [input.runId],
+      relatedArtifactIds: [],
     });
     if (!messageResult.ok) {
       return messageResult;
@@ -1105,6 +1106,7 @@ export class HelarcMainController {
       threadId,
       triggeringMessageId: messageId,
       triggerMessageRole: "user",
+      triggeringThreadRevision: input.target.expectedThreadRevision,
       workspace: projectHelarcWorkspaceSelectionIdentity({
         workspace: input.runWorkspace,
         threadWorkspace: input.threadWorkspace,
@@ -1124,12 +1126,12 @@ export class HelarcMainController {
     if (input.target.kind === "create_thread") {
       const threadResult = createHelarcThread({
         id: threadId,
+        revision: 0,
         workspace: input.threadWorkspace,
         title: createThreadTitle(input.taskText),
         status: "open",
         createdAt: input.startedAt,
         updatedAt: input.startedAt,
-        activeConversationId: conversationId,
         latestRunId: null,
         metadata: {
           product: "helarc",
@@ -1139,26 +1141,12 @@ export class HelarcMainController {
         return threadResult;
       }
 
-      const conversationResult = createHelarcConversation({
-        id: conversationId,
-        threadId,
-        createdAt: input.startedAt,
-        updatedAt: input.startedAt,
-        messageIds: [],
-      });
-      if (!conversationResult.ok) {
-        return conversationResult;
-      }
       target = {
         kind: "create_thread",
         thread: threadResult.thread,
-        conversation: conversationResult.conversation,
       };
     } else {
-      target = {
-        kind: "existing_thread",
-        conversationId,
-      };
+      target = { kind: "existing_thread" };
     }
 
     return {
@@ -1169,6 +1157,7 @@ export class HelarcMainController {
         threadId,
         runId: input.runId,
         committedAt: input.startedAt,
+        expectedThreadRevision: input.target.expectedThreadRevision,
         target,
         triggeringMessage: messageResult.message,
         run: runResult.run,
@@ -1221,6 +1210,7 @@ export class HelarcMainController {
         maxIsoDateTime(run.updatedAt, outcome.terminal.completedAt),
         new Date().toISOString(),
       ),
+      expectedThreadRevision: record.thread.revision,
       terminal: {
         host: outcome.terminal,
         product: outcome.product,
@@ -1254,7 +1244,7 @@ export class HelarcMainController {
 
 interface CompletedPatchReview {
   review: HelarcPendingPatchReviewProjection;
-  decision: "accepted" | "rejected" | null;
+  decision: "accepted" | "rejected" | "request_revision" | null;
   reason: string | null;
 }
 
@@ -1277,17 +1267,18 @@ function createAssistantTerminalMessage(
     return null;
   }
 
-  const conversation = record.conversations.find((item) => item.id === record.thread.activeConversationId);
-  if (!conversation) {
-    return null;
-  }
-
   const result = createHelarcMessage({
     id: `${run.triggeringMessageId}-assistant`,
     threadId: record.thread.id,
-    conversationId: conversation.id,
+    sequence: record.messages.length + 1,
     role: "assistant",
     content,
+    source: { kind: "agent_run", owner: "helarc", refId: run.id },
+    correlation: {
+      runId: run.id,
+      interactionRequestId: null,
+      reviewId: null,
+    },
     createdAt: terminal.completedAt,
     relatedRunIds: [run.id],
     relatedArtifactIds,
@@ -1316,6 +1307,11 @@ function createTerminalArtifacts(
       title: "Final output",
       summary,
       createdAt: terminal.completedAt,
+      producer: { kind: "agent", owner: "helarc", refId: run.id },
+      sourceRefs: [runResultArtifactRef(product)],
+      effectRefs: operationEffectArtifactRefs(product),
+      completeness: product.incompleteWork.length === 0 ? "complete" : "partial",
+      limitations: [...product.uncertainty, ...product.residualRisk],
       payload: safeOutput
         ? {
             agentSummary: safeOutput.agentSummary,
@@ -1341,10 +1337,20 @@ function createTerminalArtifacts(
       id: `${run.id}-artifact-patch-proposal`,
       threadId: record.thread.id,
       runId: run.id,
-      kind: "patch-proposal",
+      kind: "proposal-revision",
       title: `Patch proposal: ${patchReview.review.operation} ${patchReview.review.path}`,
       summary: patchSummary,
       createdAt: terminal.completedAt,
+      producer: { kind: "review", owner: "helarc", refId: patchReview.review.reviewId },
+      sourceRefs: [{
+        owner: "helarc",
+        kind: "proposal_revision",
+        id: patchReview.review.proposalId,
+        revision: String(patchReview.review.proposalRevision),
+      }],
+      effectRefs: [],
+      completeness: "complete",
+      limitations: [],
       payload: {
         operation: patchReview.review.operation,
         path: patchReview.review.path,
@@ -1366,12 +1372,22 @@ function createTerminalArtifacts(
         id: `${run.id}-artifact-applied-patch`,
         threadId: record.thread.id,
         runId: run.id,
-        kind: "applied-patch",
+        kind: "applied-change",
         title: `Applied patch: ${patchReview.review.path}`,
         summary: safeOutput.appliedPath
           ? `Applied ${patchReview.review.operation} to ${safeOutput.appliedPath}.`
           : `Applied ${patchReview.review.operation} patch.`,
         createdAt: terminal.completedAt,
+        producer: { kind: "product", owner: "helarc", refId: run.id },
+        sourceRefs: [{
+          owner: "helarc",
+          kind: "proposal_revision",
+          id: patchReview.review.proposalId,
+          revision: String(patchReview.review.proposalRevision),
+        }],
+        effectRefs: operationEffectArtifactRefs(product),
+        completeness: "complete",
+        limitations: [...product.uncertainty, ...product.residualRisk],
         payload: {
           operation: patchReview.review.operation,
           path: safeOutput.appliedPath ?? patchReview.review.path,
@@ -1394,6 +1410,11 @@ function createTerminalArtifacts(
       title: "Error report",
       summary: safeOutput.safeErrors[0]?.message ?? "Run reported errors.",
       createdAt: terminal.completedAt,
+      producer: { kind: "product", owner: "helarc", refId: run.id },
+      sourceRefs: [runResultArtifactRef(product)],
+      effectRefs: operationEffectArtifactRefs(product),
+      completeness: product.incompleteWork.length === 0 ? "complete" : "partial",
+      limitations: [...product.uncertainty, ...product.residualRisk],
       payload: {
         hostStatus: terminal.status,
         productStatus: product.status,
@@ -1413,9 +1434,66 @@ function createTerminalArtifacts(
   return artifacts;
 }
 
-function createArtifact(input: Parameters<typeof createHelarcArtifact>[0]): HelarcArtifact | null {
-  const result = createHelarcArtifact(input);
+interface CreateTerminalArtifactInput {
+  readonly id: string;
+  readonly threadId: string;
+  readonly runId: string;
+  readonly kind: HelarcArtifact["kind"];
+  readonly title: string;
+  readonly summary: string | null;
+  readonly producer: HelarcArtifactProducer;
+  readonly sourceRefs: readonly [HelarcArtifactRecordRef, ...HelarcArtifactRecordRef[]];
+  readonly effectRefs: readonly HelarcArtifactRecordRef[];
+  readonly completeness: HelarcArtifactCompleteness;
+  readonly limitations: readonly string[];
+  readonly createdAt: string;
+  readonly payload: HelarcSafeValue;
+}
+
+function createArtifact(input: CreateTerminalArtifactInput): HelarcArtifact | null {
+  const result = createHelarcArtifact({
+    id: input.id,
+    threadId: input.threadId,
+    runId: input.runId,
+    kind: input.kind,
+    title: input.title,
+    summary: input.summary,
+    producer: input.producer,
+    sourceRefs: input.sourceRefs,
+    effectRefs: input.effectRefs,
+    content: { kind: "inline", mediaType: "application/json", value: input.payload },
+    completeness: input.completeness,
+    sensitivity: "private",
+    freshness: {
+      status: "current",
+      observedAt: input.createdAt,
+      sourceRevision: input.sourceRefs[0].revision,
+    },
+    integrity: { status: "unverified" },
+    lifecycle: "final",
+    persistence: "thread_record",
+    limitations: input.limitations,
+    createdAt: input.createdAt,
+  });
   return result.ok ? result.artifact : null;
+}
+
+function runResultArtifactRef(product: HelarcProductResult): HelarcArtifactRecordRef {
+  return {
+    owner: "agent-core",
+    kind: "run_result",
+    id: product.runResult.runId,
+    revision: product.runResult.completedAt,
+  };
+}
+
+function operationEffectArtifactRefs(product: HelarcProductResult): readonly HelarcArtifactRecordRef[] {
+  return product.effects.map((effect) => ({
+    owner: effect.semanticOwner,
+    kind: "operation_result",
+    id: effect.operationResultId,
+    revision: null,
+  }));
 }
 
 function createPatchArtifactSummary(patchReview: CompletedPatchReview): string {
@@ -1469,21 +1547,15 @@ function createActiveThreadSnapshot(record: HelarcThreadRecord | null): HelarcAc
     return null;
   }
 
-  const activeConversation = record.conversations.find((item) => item.id === record.thread.activeConversationId);
-  const messageById = new Map(record.messages.map((message) => [message.id, message]));
-  const messages = (activeConversation?.messageIds ?? []).flatMap((messageId) => {
-    const message = messageById.get(messageId);
-    return message
-      ? [{
-          id: message.id,
-          role: message.role,
-          content: message.content,
-          createdAt: message.createdAt,
-          relatedRunIds: [...message.relatedRunIds],
-          relatedArtifactIds: [...message.relatedArtifactIds],
-        }]
-      : [];
-  });
+  const messages = record.messages.map((message) => ({
+    id: message.id,
+    sequence: message.sequence,
+    role: message.role,
+    content: message.content,
+    createdAt: message.createdAt,
+    relatedRunIds: [...message.relatedRunIds],
+    relatedArtifactIds: [...message.relatedArtifactIds],
+  }));
 
   const primaryWorkspace = record.thread.workspace.primary;
   return {
@@ -1495,7 +1567,7 @@ function createActiveThreadSnapshot(record: HelarcThreadRecord | null): HelarcAc
       name: primaryWorkspace.displayName,
       path: primaryWorkspace.path,
     },
-    activeConversationId: record.thread.activeConversationId,
+    revision: record.thread.revision,
     messages,
     artifacts: record.artifacts.map((artifact) => ({
       id: artifact.id,

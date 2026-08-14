@@ -91,16 +91,31 @@ const packageExportKeys = {
     "./transport",
   ],
   "products/helarc/code-agent": [
-    "./command",
+    "./file-operation",
+    "./source",
+    "./workspace",
+  ],
+  "products/helarc/core": [
+    ".",
+    "./agent",
+    "./artifacts",
+    "./composition",
+    "./configuration",
     "./controller",
-    "./file-actions",
-    "./filesystem",
     "./observability",
-    "./patch",
     "./prompt",
+    "./result",
+    "./review",
+    "./run",
     "./task",
-    "./task-templates",
+    "./thread",
     "./tools",
+    "./work-context",
+  ],
+  "products/helarc/local-environment": [
+    "./command",
+    "./filesystem",
+    "./sandbox",
     "./workspace",
   ],
   "harness/integrations/remote": ["./action", "./tools"],
@@ -119,13 +134,6 @@ const packageExportKeys = {
     "./manifest",
   ],
   "harness/integrations/enterprise-storage": ["./evidence"],
-  "products/helarc/product": [
-    ".",
-    "./composition",
-    "./configuration",
-    "./run",
-    "./work-context",
-  ],
 };
 
 for (const [packagePath, expectedKeys] of Object.entries(packageExportKeys)) {
@@ -156,13 +164,17 @@ const removedGeneratedPaths = [
   "products/helarc/code-agent/dist/index.js",
   "products/helarc/code-agent/dist/command-actions",
   "products/helarc/code-agent/dist/process",
-  "products/helarc/product/dist/controller",
-  "products/helarc/product/dist/patch",
-  "products/helarc/product/dist/permission",
-  "products/helarc/product/dist/provider-profile",
-  "products/helarc/product/dist/task",
-  "products/helarc/product/dist/task-template",
-  "products/helarc/product/dist/workspace-profile",
+  "products/helarc/code-agent/dist/command",
+  "products/helarc/code-agent/dist/controller",
+  "products/helarc/code-agent/dist/file-actions",
+  "products/helarc/code-agent/dist/filesystem",
+  "products/helarc/code-agent/dist/observability",
+  "products/helarc/code-agent/dist/patch",
+  "products/helarc/code-agent/dist/prompt",
+  "products/helarc/code-agent/dist/task",
+  "products/helarc/code-agent/dist/task-templates",
+  "products/helarc/code-agent/dist/tools",
+  "products/helarc/product",
 ];
 
 for (const removedPath of removedGeneratedPaths) {
@@ -580,15 +592,39 @@ const expectedValueExports = {
     "createInMemoryHostPolicyAmendmentStore",
     "createInMemoryHostSessionAuthorityStore",
   ],
-  "@agent-anything/helarc-code-agent/task": [
+  "@agent-anything/helarc-code-agent/workspace": ["resolveWorkspacePath"],
+  "@agent-anything/helarc-code-agent/source": [],
+  "@agent-anything/helarc-code-agent/file-operation": [
+    "CODE_AGENT_CREATE_FILE_TOOL",
+    "CODE_AGENT_DELETE_FILE_TOOL",
+    "CODE_AGENT_LIST_FILES_TOOL",
+    "CODE_AGENT_READ_FILE_TOOL",
+    "CODE_AGENT_SEARCH_FILES_TOOL",
+    "CODE_AGENT_UPDATE_FILE_TOOL",
+    "bindingRefForCodeFileTool",
+    "codeFileOperationForRef",
+    "createCodeFileOperationContribution",
+    "operationRefForCodeFileTool",
+  ],
+  "@agent-anything/helarc": [
+    "HELARC_PRODUCT_ID",
+    "helarcProduct",
+  ],
+  "@agent-anything/helarc/agent": ["createHelarcAgent"],
+  "@agent-anything/helarc/task": [
     "DEFAULT_HELARC_TASK_PROMPT_MAX_LENGTH",
     "HELARC_TASK_KIND",
+    "createBuiltInHelarcTaskTemplates",
     "createHelarcTask",
+    "createHelarcTaskTemplate",
+    "renderHelarcTaskTemplatePrompt",
+    "selectHelarcTaskTemplate",
   ],
-  "@agent-anything/helarc-code-agent/controller": [
+  "@agent-anything/helarc/controller": [
     "HELARC_CONTROLLER_ACTIONS",
     "HELARC_CONTROLLER_CAPABILITY",
     "HELARC_CONTROLLER_OUTPUT_MAX_LENGTH",
+    "HELARC_PERMISSION_REQUEST_PROTOCOL",
     "HelarcControllerParseError",
     "buildHelarcActionDecisionRulesText",
     "buildHelarcActionProtocolText",
@@ -598,49 +634,23 @@ const expectedValueExports = {
     "parseHelarcProviderResponse",
     "parseStructuredOutput",
   ],
-  "@agent-anything/helarc-code-agent/prompt": [
+  "@agent-anything/helarc/prompt": [
     "HELARC_ACTION_CONTRACT_VERSION",
     "HELARC_PROMPT_ARCHITECTURE_VERSION",
     "HELARC_TOOL_CATALOG_VERSION",
     "buildHelarcPromptAssembly",
   ],
-  "@agent-anything/helarc-code-agent/tools": [
+  "@agent-anything/helarc/tools": [
+    "HELARC_RUN_COMMAND_BINDING",
+    "HELARC_RUN_COMMAND_OPERATION",
+    "HELARC_RUN_COMMAND_TOOL",
     "HELARC_TOOL_CATALOG_METADATA_KEY",
     "buildHelarcToolCatalogText",
     "createDefaultHelarcToolCatalog",
+    "createHelarcCommandOperationContribution",
     "createHelarcToolCatalogFromDescriptors",
     "createHelarcToolCatalogMetadata",
     "readHelarcToolCatalog",
-  ],
-  "@agent-anything/helarc-code-agent/task-templates": [
-    "createBuiltInHelarcTaskTemplates",
-    "createHelarcTaskTemplate",
-    "renderHelarcTaskTemplatePrompt",
-    "selectHelarcTaskTemplate",
-  ],
-  "@agent-anything/helarc-code-agent/workspace": ["resolveWorkspacePath"],
-  "@agent-anything/helarc-code-agent/filesystem": [
-    "createCodeAgentCanonicalWorkspaceRoots",
-    "defaultCodeAgentFileLimits",
-  ],
-  "@agent-anything/helarc-code-agent/file-actions": [
-    "CODE_AGENT_CREATE_FILE_ACTION",
-    "CODE_AGENT_DELETE_FILE_ACTION",
-    "CODE_AGENT_LIST_FILES_ACTION",
-    "CODE_AGENT_READ_FILE_ACTION",
-    "CODE_AGENT_SEARCH_FILES_ACTION",
-    "CODE_AGENT_UPDATE_FILE_ACTION",
-    "createAcceptedPatchFileAction",
-    "createCodeAgentFileActionCapability",
-  ],
-  "@agent-anything/helarc-code-agent/command": [
-    "CODE_AGENT_RUN_COMMAND_ACTION",
-    "createCodeAgentCommandActionCapability",
-    "defaultCodeAgentCommandLimits",
-  ],
-  "@agent-anything/helarc": [
-    "HELARC_PRODUCT_ID",
-    "helarcProduct",
   ],
   "@agent-anything/helarc/configuration": [
     "createHelarcProviderProfile",
@@ -654,12 +664,21 @@ const expectedValueExports = {
     "applyHelarcRunStartCommit",
     "applyHelarcRunTerminalCommit",
     "createHelarcArtifact",
-    "createHelarcConversation",
     "createHelarcMessage",
     "createHelarcPersistedRun",
     "createHelarcThread",
     "deriveHelarcPersistedRunStatus",
     "normalizeHelarcThreadAggregate",
+    "normalizeHelarcThreadRecord",
+    "projectHelarcWorkspaceSelectionIdentity",
+    "snapshotHelarcCollaborationRecord",
+    "snapshotHelarcReviewRecord",
+  ],
+  "@agent-anything/helarc/thread": [
+    "createHelarcMessage",
+    "createHelarcPersistedRun",
+    "createHelarcThread",
+    "deriveHelarcPersistedRunStatus",
     "normalizeHelarcThreadRecord",
     "projectHelarcWorkspaceSelectionIdentity",
   ],
@@ -676,8 +695,9 @@ const expectedValueExports = {
     "createHelarcProductComposition",
     "mapRuntimeEventToHelarcActivity",
     "projectHelarcProductResult",
+    "validateHelarcToolInput",
   ],
-  "@agent-anything/helarc-code-agent/patch": [
+  "@agent-anything/helarc/review": [
     "HelarcPatchActionController",
     "PatchWorkflowError",
     "acceptPatch",
@@ -685,10 +705,36 @@ const expectedValueExports = {
     "defaultPatchWorkflowLimits",
     "materializePatchReview",
     "rejectPatch",
+    "requestPatchRevision",
   ],
-  "@agent-anything/helarc-code-agent/observability": [
+  "@agent-anything/helarc/observability": [
     "HelarcTracingController",
     "projectHelarcControllerTraceForEvent",
+  ],
+  "@agent-anything/helarc/result": [
+    "mapRuntimeEventToHelarcActivity",
+    "projectHelarcProductResult",
+  ],
+  "@agent-anything/helarc/artifacts": ["createHelarcArtifact"],
+  "@agent-anything/helarc-local-environment/command": [
+    "HELARC_LOCAL_COMMAND_ACTION_ADAPTER_ID",
+    "createHelarcLocalCommandActionCapability",
+    "defaultCodeAgentCommandLimits",
+  ],
+  "@agent-anything/helarc-local-environment/filesystem": [
+    "HELARC_LOCAL_FILE_ACTION_ADAPTER_IDS",
+    "createCodeAgentCanonicalWorkspaceRoots",
+    "createHelarcLocalFileActionCapability",
+    "createLocalCodeSourcePort",
+    "defaultCodeAgentFileLimits",
+    "inspectPreparedFileSystemTarget",
+    "prepareFileSystemTarget",
+  ],
+  "@agent-anything/helarc-local-environment/sandbox": [
+    "createHelarcLocalSandboxGateway",
+  ],
+  "@agent-anything/helarc-local-environment/workspace": [
+    "createCodeAgentCanonicalWorkspaceRoots",
   ],
 };
 
@@ -851,8 +897,19 @@ const removedOrPrivateSpecifiers = [
   "@agent-anything/governance/identity",
   "@agent-anything/governance/workspace",
   "@agent-anything/helarc-code-agent",
+  "@agent-anything/helarc-code-agent/command",
   "@agent-anything/helarc-code-agent/command-actions",
+  "@agent-anything/helarc-code-agent/controller",
+  "@agent-anything/helarc-code-agent/file-actions",
+  "@agent-anything/helarc-code-agent/filesystem",
+  "@agent-anything/helarc-code-agent/observability",
+  "@agent-anything/helarc-code-agent/patch",
   "@agent-anything/helarc-code-agent/process",
+  "@agent-anything/helarc-code-agent/prompt",
+  "@agent-anything/helarc-code-agent/task",
+  "@agent-anything/helarc-code-agent/task-templates",
+  "@agent-anything/helarc-code-agent/tools",
+  "@agent-anything/helarc-local-environment",
 ];
 
 if (process.argv.includes("--helarc-evaluation-target-only")) {
@@ -928,6 +985,38 @@ if (process.argv.includes("--harness-execution-only")) {
     join(repoRoot, "harness/host"),
   );
   console.log("Built Harness execution public API check passed.");
+  process.exit(0);
+}
+
+if (process.argv.includes("--helarc-domain-only")) {
+  checkBuiltSurfaces(
+    {
+      "@agent-anything/helarc": expectedValueExports["@agent-anything/helarc"],
+      ...selectExpectedExports(expectedValueExports, [
+        "@agent-anything/helarc/",
+        "@agent-anything/helarc-code-agent/",
+      ]),
+    },
+    removedOrPrivateSpecifiers.filter((specifier) =>
+      specifier === "@agent-anything/helarc-code-agent" ||
+      specifier.startsWith("@agent-anything/helarc-code-agent/")
+    ),
+    join(repoRoot, "products/helarc/core"),
+  );
+  checkBuiltSurfaces(
+    selectExpectedExports(expectedValueExports, ["@agent-anything/helarc-code-agent/"]),
+    removedOrPrivateSpecifiers.filter((specifier) =>
+      specifier === "@agent-anything/helarc-code-agent" ||
+      specifier.startsWith("@agent-anything/helarc-code-agent/")
+    ),
+    join(repoRoot, "products/helarc/code-agent"),
+  );
+  checkBuiltSurfaces(
+    selectExpectedExports(expectedValueExports, ["@agent-anything/helarc-local-environment/"]),
+    ["@agent-anything/helarc-local-environment"],
+    join(repoRoot, "products/helarc/local-environment"),
+  );
+  console.log("Built Helarc domain public API check passed.");
   process.exit(0);
 }
 

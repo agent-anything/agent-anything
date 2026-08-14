@@ -542,15 +542,8 @@ describe("HelarcMainController", () => {
     await expect(threadStore.loadThread("helarc-thread-1")).resolves.toMatchObject({
       thread: {
         id: "helarc-thread-1",
-        activeConversationId: "helarc-conversation-1",
         latestRunId: "helarc-run-1",
       },
-      conversations: [
-        {
-          id: "helarc-conversation-1",
-          messageIds: ["helarc-message-1", "helarc-message-1-assistant"],
-        },
-      ],
       messages: [
         {
           id: "helarc-message-1",
@@ -616,7 +609,6 @@ describe("HelarcMainController", () => {
     expect(snapshot.activeThread).toMatchObject({
       id: "helarc-thread-1",
       title: "Update docs",
-      activeConversationId: "helarc-conversation-1",
       messages: [
         {
           id: "helarc-message-1",
@@ -1371,9 +1363,6 @@ describe("HelarcMainController", () => {
     await persisted;
 
     await expect(threadStore.loadThread("helarc-thread-1")).resolves.toMatchObject({
-      conversations: [{
-        messageIds: ["helarc-message-1", "helarc-message-1-assistant"],
-      }],
       messages: [
         {
           role: "user",
@@ -1573,7 +1562,7 @@ describe("HelarcMainController", () => {
     );
   });
 
-  it("continues the exact selected Thread with prior Conversation context", async () => {
+  it("continues the exact selected Thread with prior Message context", async () => {
     const provider = new RecordingCompleteProvider();
     const threadStore = new InMemoryHelarcThreadStore();
     const controller = new HelarcMainController({ provider, threadStore });

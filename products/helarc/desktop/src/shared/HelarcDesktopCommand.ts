@@ -38,9 +38,10 @@ export interface HelarcProductCommandPayloadMap {
     readonly submissionId: string;
     readonly runId: string;
     readonly proposalId: string;
+    readonly proposalRevision: number;
     readonly reviewId: string;
     readonly pendingVersion: number;
-    readonly decision: "accepted" | "rejected";
+    readonly decision: "accepted" | "rejected" | "request_revision";
     readonly reason: string | null;
   };
   readonly "thread.open": {

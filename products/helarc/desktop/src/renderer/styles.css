@@ -331,7 +331,7 @@ h2 {
   overflow: hidden;
 }
 
-.conversation-panel {
+.thread-timeline {
   display: grid;
   max-height: 220px;
   min-height: 0;
@@ -341,19 +341,19 @@ h2 {
   border-bottom: 1px solid #e0e4e1;
 }
 
-.conversation-header,
-.conversation-message > div {
+.thread-timeline-header,
+.thread-message > div {
   display: flex;
   align-items: center;
 }
 
-.conversation-header {
+.thread-timeline-header {
   min-width: 0;
   gap: 8px;
   color: #59666d;
 }
 
-.conversation-header strong {
+.thread-timeline-header strong {
   min-width: 0;
   overflow: hidden;
   color: #26343e;
@@ -362,7 +362,7 @@ h2 {
   white-space: nowrap;
 }
 
-.conversation-header span {
+.thread-timeline-header span {
   flex: 0 0 auto;
   margin-left: auto;
   color: #7b858c;
@@ -370,14 +370,14 @@ h2 {
   font-weight: 700;
 }
 
-.conversation-list {
+.thread-message-list {
   display: grid;
   gap: 8px;
   min-height: 0;
   overflow: auto;
 }
 
-.conversation-message {
+.thread-message {
   display: grid;
   gap: 5px;
   padding: 9px 10px;
@@ -386,38 +386,38 @@ h2 {
   border-radius: 6px;
 }
 
-.conversation-message.role-user {
+.thread-message.role-user {
   background: #eef3f0;
 }
 
-.conversation-message.role-assistant {
+.thread-message.role-assistant {
   background: #f7fafc;
 }
 
-.conversation-message > div {
+.thread-message > div {
   min-width: 0;
   justify-content: space-between;
   gap: 10px;
 }
 
-.conversation-message strong,
-.conversation-message time {
+.thread-message strong,
+.thread-message time {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.conversation-message strong {
+.thread-message strong {
   color: #26343e;
   font-size: 12px;
 }
 
-.conversation-message time {
+.thread-message time {
   color: #9aa3a8;
   font-size: 11px;
 }
 
-.conversation-message p {
+.thread-message p {
   display: -webkit-box;
   margin: 0;
   overflow: hidden;

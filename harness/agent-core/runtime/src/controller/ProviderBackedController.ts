@@ -249,6 +249,10 @@ export class ProviderBackedController<TOutput = unknown>
             this.assertOutputLength(response);
             const parsed = await this.parseResponse(response, controllerInput);
             const decision = validateControllerDecision(parsed, controllerInput);
+            assertProviderBackedDecisionProvenance(
+              decision,
+              controllerInput.toolExposure.controllerRequestId,
+            );
             const interruptedAfterValidation = structuredOutputInterruption(
               attempt,
               callContext,
@@ -687,6 +691,18 @@ function validateProgressionCandidate(
       if (revision !== null && typeof revision !== "string") {
         throw decisionContractError("controller_tool_revision_invalid");
       }
+      const originValue = candidate.tool.origin;
+      if (originValue !== "model" && originValue !== "workflow") {
+        throw decisionContractError("controller_tool_origin_invalid");
+      }
+      const origin: "model" | "workflow" = originValue;
+      const controllerRequestId = candidate.tool.controllerRequestId;
+      if (
+        (origin === "model" && typeof controllerRequestId !== "string") ||
+        (origin === "workflow" && controllerRequestId !== null)
+      ) {
+        throw decisionContractError("controller_tool_provenance_invalid");
+      }
       return Object.freeze({
         kind: "operation_request" as const,
         origin: "tool_request" as const,
@@ -694,9 +710,9 @@ function validateProgressionCandidate(
           name: nonEmptyDecisionText(candidate.tool.name),
           revision: revision as string | null,
           input: candidate.tool.input,
-          origin: "model" as const,
-          controllerRequestId: typeof candidate.tool.controllerRequestId === "string"
-            ? candidate.tool.controllerRequestId
+          origin,
+          controllerRequestId: origin === "model"
+            ? nonEmptyDecisionText(controllerRequestId)
             : null,
         }),
         modelItemId,
@@ -730,6 +746,25 @@ function validateProgressionCandidate(
     });
   }
   throw decisionContractError("controller_candidate_kind_invalid");
+}
+
+function assertProviderBackedDecisionProvenance<TOutput>(
+  decision: ControllerDecision<TOutput>,
+  controllerRequestId: string,
+): void {
+  if (decision.kind !== "advance") return;
+  for (const candidate of decision.candidates) {
+    if (
+      candidate.kind === "operation_request" &&
+      candidate.origin === "tool_request" &&
+      (
+        candidate.tool.origin !== "model" ||
+        candidate.tool.controllerRequestId !== controllerRequestId
+      )
+    ) {
+      throw decisionContractError("controller_provider_tool_provenance_invalid");
+    }
+  }
 }
 
 function validateCandidateOrdering(candidates: readonly ProgressionCandidate[]): void {

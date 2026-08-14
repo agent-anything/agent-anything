@@ -1,0 +1,26 @@
+export type {
+  CreateHelarcMessageInput,
+  CreateHelarcMessageResult,
+  CreateHelarcPersistedRunInput,
+  CreateHelarcPersistedRunResult,
+  CreateHelarcThreadInput,
+  CreateHelarcThreadResult,
+  HelarcMessage,
+  HelarcMessageRole,
+  HelarcPersistedRun,
+  HelarcPersistedRunStatus,
+  HelarcRunTriggerMessageRole,
+  HelarcThread,
+  HelarcThreadRecord,
+  HelarcThreadStatus,
+  HelarcThreadWorkspaceIdentity,
+  HelarcThreadWorkspaceRef,
+} from "../work-context/HelarcWorkContext.js";
+export {
+  createHelarcMessage,
+  createHelarcPersistedRun,
+  createHelarcThread,
+  deriveHelarcPersistedRunStatus,
+  normalizeHelarcThreadRecord,
+  projectHelarcWorkspaceSelectionIdentity,
+} from "../work-context/HelarcWorkContext.js";

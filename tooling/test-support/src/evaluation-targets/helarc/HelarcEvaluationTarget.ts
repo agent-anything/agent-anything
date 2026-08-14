@@ -12,13 +12,12 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import {
   createCanonicalSha256Digest,
+  createCanonicalWorkspaceIdentity,
 } from "@agent-anything/canonical-action/subject";
-import {
-  ActionEnforcementPipeline,
+import type {
+  ActionRecordPort,
+  ActionRetryDecisionPort,
 } from "@agent-anything/action-execution/enforcement";
-import {
-  createSandboxExecutionGateway,
-} from "@agent-anything/action-execution/sandbox";
 import { Runner } from "@agent-anything/agent-runtime/runner";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
@@ -44,11 +43,7 @@ import type {
   EvaluationTargetPort,
   EvaluationTrial,
 } from "@agent-anything/evaluation/trial";
-import { EvidenceBuilder, type Evidence } from "@agent-anything/context/evidence";
-import type {
-  EvidencePersistencePort,
-  EvidencePersistenceResult,
-} from "@agent-anything/context/persistence";
+import { createEvaluationTargetObservation } from "@agent-anything/evaluation/trial";
 import { createAllowAllActionPolicyPort } from "@agent-anything/governance";
 import type {
   ManagedPermissionConstraints,
@@ -75,22 +70,34 @@ import {
   type HelarcPatchReviewSubmissionReceipt,
   type HelarcPendingPatchReviewProjection,
   type HelarcProductResult,
+  validateHelarcToolInput,
 } from "@agent-anything/helarc/composition";
 import {
   resolveHelarcPermissionPreset,
   type HelarcPermissionPreset,
 } from "@agent-anything/helarc/configuration";
 import {
-  createCodeAgentCanonicalWorkspaceRoots,
-} from "@agent-anything/helarc-code-agent/filesystem";
-import {
   createHelarcContextProjector,
   type HelarcAgentOutput,
-} from "@agent-anything/helarc-code-agent/controller";
-import { createHelarcTask } from "@agent-anything/helarc-code-agent/task";
+} from "@agent-anything/helarc/controller";
+import {
+  HELARC_RUN_COMMAND_BINDING,
+  HELARC_RUN_COMMAND_OPERATION,
+} from "@agent-anything/helarc/tools";
+import { createHelarcTask } from "@agent-anything/helarc/task";
+import {
+  createCodeAgentCanonicalWorkspaceRoots,
+  createHelarcLocalFileActionCapability,
+  createLocalCodeSourcePort,
+} from "@agent-anything/helarc-local-environment/filesystem";
+import {
+  createHelarcLocalCommandActionCapability,
+} from "@agent-anything/helarc-local-environment/command";
+import { createHelarcLocalSandboxGateway } from "@agent-anything/helarc-local-environment/sandbox";
 import type { ProviderRequest } from "@agent-anything/model-interaction";
 import type { RuntimeEvent, RuntimeEventPublisher } from "@agent-anything/observability/events";
 import type { RunTrace } from "@agent-anything/observability/tracing";
+import type { ToolSelectionRevision } from "@agent-anything/tools/selection";
 import type { SessionAuthorityPort } from "@agent-anything/permission";
 import type {
   ApprovalReviewInput,
@@ -148,6 +155,8 @@ interface HelarcEvaluationCaptureMaterial {
   readonly patchReview: PatchReviewRecord;
   readonly approval: ApprovalDecisionRecord;
   readonly providerRequests: readonly ProviderRequest[];
+  readonly actionNames: readonly string[];
+  readonly retryCount: number;
 }
 
 export interface HelarcEvaluationTargetAdapter {
@@ -395,6 +404,11 @@ async function invokeHelarcTarget(
     workspace: runContext.workspace,
     platform: process.platform === "win32" ? "win32" : "posix",
   });
+  const actionWorkspace = createCanonicalWorkspaceIdentity({
+    workspaceId: workspace.primary.id,
+    trustState: workspace.primary.trustState,
+    roots: canonicalRoots,
+  });
   const approval = new DeterministicApprovalReviewer(caseDefinition.expectedClaim.approvalDecision);
   const permissions = await createEvaluationPermissionConfig({
     preset: caseDefinition.script.permissionPreset,
@@ -420,28 +434,33 @@ async function invokeHelarcTarget(
     },
     results: [...caseDefinition.script.responses],
   });
+  const fileActions = createHelarcLocalFileActionCapability({
+    workspace: runContext.workspace,
+    now: clock.now,
+  });
+  const commandActions = caseDefinition.script.toolMode === "shell-enabled"
+    ? await createHelarcLocalCommandActionCapability({
+        workspace: runContext.workspace,
+        operation: HELARC_RUN_COMMAND_OPERATION,
+        binding: HELARC_RUN_COMMAND_BINDING,
+        now: clock.now,
+      })
+    : null;
   const product = await createHelarcProductComposition({
     runId: productRunId,
     task: taskResult.task,
     workspace: runContext.workspace,
     provider,
     toolMode: caseDefinition.script.toolMode,
+    codeSource: createLocalCodeSourcePort(clock.now),
+    fileActions,
+    commandActions,
     patchReviewBridge: patchReviews,
     now: clock.now,
   });
-  const pipeline = new ActionEnforcementPipeline({
-    registrations: product.actions.registrations,
-    toolBindings: product.actions.toolBindings,
-    adapters: product.actions.adapters,
-    policyPort: createAllowAllActionPolicyPort(),
-    now: clock.now,
-  });
-  const gateway = createSandboxExecutionGateway({
-    registrations: product.actions.registrations,
+  const gateway = createHelarcLocalSandboxGateway({
     executors: product.actions.executors,
     providers: [],
-    limits: { maxResultBytes: 2 * 1024 * 1024 },
-    now: clock.now,
   });
   let trace: RunTrace | null = null;
   const runtimePublisher: RuntimeEventPublisher = Object.freeze({
@@ -463,10 +482,21 @@ async function invokeHelarcTarget(
         maxMetadataEntries: 1,
       },
     },
-    actionEnforcementPipeline: pipeline,
-    sandboxExecutionGateway: gateway,
-    evidenceBuilder: new EvidenceBuilder(),
-    evidencePersistence: new DeterministicEvidencePersistence(clock.now),
+    operations: {
+      catalog: product.actions.operationCatalog,
+      bindings: product.actions.operationBindings,
+      validateToolInput: validateHelarcToolInput,
+      internalHandlers: [],
+      actionExecution: {
+        registrations: product.actions.registrations,
+        adapters: product.actions.adapters,
+        policy: createAllowAllActionPolicyPort(clock.now),
+        sandbox: gateway,
+        records: createEvaluationActionRecordPort(trial.ref.id),
+        retry: createEvaluationActionRetryPort(),
+      },
+    },
+    interactions: product.interactions,
     runtimeEventPublisher: runtimePublisher,
     runTraceObserver: {
       observe(candidate) {
@@ -486,7 +516,10 @@ async function invokeHelarcTarget(
       registrationFingerprints: product.actions.registrations.registrations.map(
         (registration) => registration.registrationFingerprint,
       ),
-      toolBindingSnapshotId: product.actions.toolBindings.snapshotId,
+      operationCatalogId: product.actions.operationCatalog.id,
+      operationCatalogRevision: product.actions.operationCatalog.revision,
+      operationBindingRevision: product.actions.operationBindings.revision,
+      toolSelectionRevision: product.actions.toolSelection.revision,
       workspaceRootFingerprints: canonicalRoots.map((root) => root.resolutionFingerprint),
     },
   );
@@ -494,7 +527,6 @@ async function invokeHelarcTarget(
   const active = manager.start({
     sessionId: `${trial.ref.id}.session`,
     agent: product.agent,
-    userApprovalReviewBridge: null,
     runInput: {
       task: taskResult.task,
       items: [],
@@ -503,29 +535,33 @@ async function invokeHelarcTarget(
     runConfig: {
       workspace: runContext.workspace,
       identity: runContext.identity,
-      actionContext: {
-        workspace: {
-          workspaceId: workspace.primary.id,
-          trustState: workspace.primary.trustState,
-          roots: canonicalRoots,
-        },
-        actor: {
-          identityId: runContext.identity.id,
-          kind: runContext.identity.kind,
-        },
-        environment: {
-          environmentId: permissions.permissionProfile.environmentId,
-          platform: process.platform === "win32" ? "win32" : "posix",
-          configurationFingerprint,
-        },
-      },
       permissions,
-      toolBindings: product.actions.toolBindings,
+      tools: product.actions.toolSelection,
+      actionExecution: {
+        policySnapshotId: "helarc-evaluation-policy-v1",
+        securityContext: {
+          workspace: actionWorkspace,
+          actor: {
+            identityId: runContext.identity.id,
+            kind: runContext.identity.kind,
+          },
+          environment: {
+            environmentId: permissions.permissionProfile.environmentId,
+            platform: process.platform === "win32" ? "win32" : "posix",
+            configurationFingerprint,
+          },
+        },
+        enforcement: "disabled",
+        metadata: {},
+      },
       limits: {
         maxIterations: 5,
         maxActions: 8,
         maxConsecutiveActionFailures: 1,
         maxDurationMs: 30_000,
+        maxPendingInteractions: 4,
+        maxDescendantRuns: 0,
+        maxDescendantDepth: 0,
         plan: {
           maxSteps: 12,
           maxStepLength: 300,
@@ -571,18 +607,7 @@ async function invokeHelarcTarget(
           ],
           serverDelay: { mode: "ignore" },
         },
-        approvalsReviewer: {
-          maxRetries: 0,
-          delay: {
-            kind: "exponential_jitter",
-            baseDelayMs: 0,
-            maxDelayMs: 0,
-            multiplier: 2,
-            jitterRatio: 0.1,
-          },
-          retryableCategories: [],
-          serverDelay: { mode: "ignore" },
-        },
+        action: { maxAttempts: 1 },
       },
       metadata: runMetadata,
     },
@@ -599,6 +624,7 @@ async function invokeHelarcTarget(
   if (signal.aborted) onAbort();
   const hostResult = await active.wait();
   signal.removeEventListener("abort", onAbort);
+  const terminalProjection = active.getProjection();
   const productResult = product.projectResult(hostResult.runResult, "disabled");
   if (trace === null) throw new TypeError("Helarc Evaluation requires one complete RunTrace.");
   const observationRef = createEvaluationRecordRef({
@@ -621,6 +647,11 @@ async function invokeHelarcTarget(
     patchReview: patchReviews.record,
     approval: approval.record,
     providerRequests: Object.freeze(provider.requests()),
+    actionNames: collectObservedToolNames(
+      hostResult.runResult,
+      product.actions.toolSelection,
+    ),
+    retryCount: terminalProjection.retry?.scheduledCount ?? 0,
   });
 }
 
@@ -639,7 +670,7 @@ function targetObservation(
     id: `${trial.ref.id}.artifact.${index + 1}.${sha256(artifactRef).slice(0, 12)}`,
     revision: trial.ref.revision,
   }));
-  return Object.freeze({
+  return createEvaluationTargetObservation({
     ref: material.observationRef,
     trialRef: trial.ref,
     targetSnapshotRef: trial.targetSnapshotRef,
@@ -647,7 +678,7 @@ function targetObservation(
     outcome: Object.freeze({
       status,
       owner: targetOutcomeOwner(material),
-      code: material.runResult.code ?? material.product.output.safeErrors[0]?.code ?? null,
+      code: targetOutcomeCode(material),
       summary: `Helarc Product settled as ${material.product.status}.`,
       data: Object.freeze({
         productStatus: material.product.status,
@@ -666,6 +697,21 @@ function targetObservation(
     limitations: Object.freeze([TARGET_LIMITATION]),
     metadata: Object.freeze({ adapter: "helarc-phase26", scenario: material.caseDefinition.scenario }),
   });
+}
+
+function targetOutcomeCode(
+  material: HelarcEvaluationCaptureMaterial,
+): string | null {
+  if (material.runResult.failure !== null) {
+    return material.runResult.failure.failure.code;
+  }
+  if (material.runResult.status === "cancelled") {
+    return material.runResult.code;
+  }
+  if (material.runResult.status === "blocked") {
+    return blockedRunOutcomeCode(material.runResult.items) ?? material.runResult.code;
+  }
+  return material.product.output.safeErrors[0]?.code ?? material.runResult.code;
 }
 
 function targetOutcomeOwner(
@@ -687,35 +733,86 @@ function blockedRunOutcomeOwner(
   items: RunResult<HelarcAgentOutput>["items"],
 ): string | null {
   for (const item of [...items].reverse()) {
-    if (item.kind === "action_assessed" && item.assessment.owner !== null) {
-      return item.assessment.owner;
-    }
-    if (item.kind === "action_invalidated") {
-      return item.invalidation.owner;
-    }
-    if (item.kind !== "observation") continue;
-    const observation = item.observation;
-    if (observation.kind === "action_denied") {
-      return observation.owner;
-    }
-    if (observation.kind === "action_failure") {
-      return observation.failure.kind;
-    }
-    if (
-      observation.kind === "approval_declined" ||
-      observation.kind === "approval_policy_rejected" ||
-      observation.kind === "approval_limit_reached"
-    ) {
-      return "permission";
-    }
-    if (
-      observation.kind === "approval_review_failed" ||
-      observation.kind === "approval_application_failed"
-    ) {
-      return "approval";
+    if (item.payload.kind !== "observation") continue;
+    const payload = item.payload.observation.payload;
+    if (payload.kind === "operation_rejected") return payload.owner;
+    if (payload.kind === "operation") return payload.result.failure?.owner ?? null;
+    if (payload.kind === "interaction") return payload.owner;
+  }
+  return null;
+}
+
+function blockedRunOutcomeCode(
+  items: RunResult<HelarcAgentOutput>["items"],
+): string | null {
+  for (const item of [...items].reverse()) {
+    if (item.payload.kind !== "observation") continue;
+    const payload = item.payload.observation.payload;
+    if (payload.kind === "operation_rejected") return payload.code;
+    if (payload.kind === "operation") return payload.result.failure?.code ?? null;
+    if (payload.kind === "interaction" && payload.status !== "resolved") {
+      return `interaction_${payload.status}`;
     }
   }
   return null;
+}
+
+function collectObservedToolNames(
+  result: RunResult<HelarcAgentOutput>,
+  selection: ToolSelectionRevision,
+): readonly string[] {
+  const namesByOperation = new Map(selection.tools.map((selected) => [
+    operationRevisionKey(selected.registration.operation.operation.ref),
+    selected.registration.descriptor.name,
+  ]));
+  return Object.freeze(result.items.flatMap((item) => {
+    if (
+      item.payload.kind !== "observation" ||
+      item.payload.observation.payload.kind !== "operation"
+    ) {
+      return [];
+    }
+    const name = namesByOperation.get(operationRevisionKey(
+      item.payload.observation.payload.result.ref.invocation.operation,
+    ));
+    return name === undefined ? [] : [name];
+  }).sort());
+}
+
+function operationRevisionKey(input: {
+  readonly operation: { readonly namespace: string; readonly name: string };
+  readonly revision: string;
+}): string {
+  return `${input.operation.namespace}:${input.operation.name}@${input.revision}`;
+}
+
+function createEvaluationActionRecordPort(prefix: string): ActionRecordPort {
+  let sequence = 0;
+  const next = (kind: string): { readonly recordId: string } => Object.freeze({
+    recordId: `${prefix}.action-${kind}-${++sequence}`,
+  });
+  return Object.freeze({
+    async recordPreEffect() {
+      return next("pre-effect");
+    },
+    async recordPostEffect() {
+      return next("post-effect");
+    },
+  });
+}
+
+function createEvaluationActionRetryPort(): ActionRetryDecisionPort {
+  return Object.freeze({
+    async decide() {
+      return Object.freeze({
+        status: "stop" as const,
+        code: "evaluation_action_retry_disabled",
+      });
+    },
+    async wait() {
+      return "elapsed" as const;
+    },
+  });
 }
 
 function captureHelarcMaterial(
@@ -724,11 +821,8 @@ function captureHelarcMaterial(
   material: HelarcEvaluationCaptureMaterial,
 ) {
   const runItems = material.runResult.items;
-  const actionNames = runItems
-    .filter((item) => item.kind === "action")
-    .map((item) => item.kind === "action" ? item.action.subject.name : "")
-    .sort();
-  const retryCount = runItems.filter((item) => item.kind === "retry_scheduled").length;
+  const actionNames = material.actionNames;
+  const retryCount = material.retryCount;
   const totalUsage = material.caseDefinition.script.responses
     .slice(0, material.providerRequests.length)
     .reduce((totals, result) => {
@@ -759,7 +853,7 @@ function captureHelarcMaterial(
     captured("run-terminal", "agent-core", {
       status: material.runResult.status,
       code: material.runResult.code,
-      itemKinds: runItems.map((item) => item.kind),
+      itemKinds: runItems.map((item) => item.payload.kind),
       itemCount: runItems.length,
       evidenceCount: material.runResult.evidenceRefs.length,
       artifactCount: material.runResult.artifactRefs.length,
@@ -802,7 +896,7 @@ function captureHelarcMaterial(
       "agent-core",
       "run-items",
       "count",
-      runItems.filter((item) => item.kind === "observation").length,
+      runItems.filter((item) => item.payload.kind === "observation").length,
     ),
     measurement("retry_count", "agent-core", "run-items", "count", retryCount),
     measurement("artifact_count", "agent-core", "run-result", "count", material.runResult.artifactRefs.length),
@@ -1135,6 +1229,7 @@ class DeterministicPatchReviewBridge implements HelarcPatchReviewBridge {
       submissionId: `${request.reviewId}.evaluation-${this.decision}`,
       runId: request.runId,
       proposalId: request.proposalId,
+      proposalRevision: request.proposalRevision,
       reviewId: request.reviewId,
       pendingVersion,
       decision: this.decision,
@@ -1162,26 +1257,6 @@ class DeterministicPatchReviewBridge implements HelarcPatchReviewBridge {
 
   #notify(projection: HelarcPendingPatchReviewProjection | null): void {
     for (const listener of this.#listeners) void listener(projection);
-  }
-}
-
-class DeterministicEvidencePersistence implements EvidencePersistencePort {
-  #sequence = 0;
-
-  constructor(private readonly now: () => string) {}
-
-  async persistEvidence(evidence: Evidence): Promise<EvidencePersistenceResult> {
-    this.#sequence += 1;
-    return Object.freeze({
-      status: "stored" as const,
-      artifact: Object.freeze({
-        storageId: `helarc-evaluation-evidence-${this.#sequence}`,
-        evidenceRef: evidence.id,
-        artifactRef: `memory://helarc-evaluation/evidence/${this.#sequence}`,
-        createdAt: this.now(),
-        metadata: Object.freeze({ adapter: "helarc-phase26", retention: "trial" }),
-      }),
-    });
   }
 }
 

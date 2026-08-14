@@ -38,6 +38,7 @@
     "@agent-anything/context": "workspace:*",
     "@agent-anything/agent-runtime": "workspace:*",
     "@agent-anything/helarc-code-agent": "workspace:*",
+    "@agent-anything/helarc-local-environment": "workspace:*",
     "@agent-anything/governance": "workspace:*",
     "@agent-anything/helarc": "workspace:*",
     "@agent-anything/host": "workspace:*",

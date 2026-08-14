@@ -24,6 +24,7 @@ import { createToolCatalogSnapshot } from "@agent-anything/tools/catalog";
 import {
   ControllerError,
   ProviderBackedController,
+  validateControllerDecision,
 } from "./ProviderBackedController.js";
 import {
   StructuredOutputError,
@@ -73,7 +74,7 @@ describe("ProviderBackedController", () => {
       results: [succeededResult({ action: "tools" })],
     });
     const controller = createController(provider, {
-      parseResponse() {
+      parseResponse(_response, input) {
         return {
           kind: "advance",
           candidates: [
@@ -85,7 +86,7 @@ describe("ProviderBackedController", () => {
                 revision: null,
                 input: { path: "README.md" },
                 origin: "model",
-                controllerRequestId: null,
+                controllerRequestId: input.toolExposure.controllerRequestId,
               },
               modelItemId: "model_item_1",
             },
@@ -118,6 +119,72 @@ describe("ProviderBackedController", () => {
       "model_item_1",
       "model_item_2",
     ]);
+  });
+
+  it("preserves trusted workflow provenance in generic Controller validation", () => {
+    const input = createControllerInput();
+    const result = validateControllerDecision({
+      kind: "advance",
+      candidates: [{
+        kind: "operation_request",
+        origin: "tool_request",
+        tool: {
+          name: "workspace.createFile",
+          revision: null,
+          input: { path: "created.txt", content: "" },
+          origin: "workflow",
+          controllerRequestId: null,
+        },
+        modelItemId: "workflow_item_1",
+      }],
+      modelItems: [modelItem("workflow_item_1", { action: "create" })],
+    }, input);
+
+    expect(result).toMatchObject({
+      kind: "advance",
+      candidates: [{
+        kind: "operation_request",
+        tool: { origin: "workflow", controllerRequestId: null },
+      }],
+    });
+  });
+
+  it("rejects trusted workflow provenance at the Provider-backed boundary", async () => {
+    const controller = createController(
+      new FakeProvider({ results: [succeededResult({ action: "create" })] }),
+      {
+        parseResponse() {
+          return {
+            kind: "advance",
+            candidates: [{
+              kind: "operation_request",
+              origin: "tool_request",
+              tool: {
+                name: "workspace.createFile",
+                revision: null,
+                input: { path: "created.txt", content: "" },
+                origin: "workflow",
+                controllerRequestId: null,
+              },
+              modelItemId: "model_item_1",
+            }],
+            modelItems: [modelItem("model_item_1", { action: "create" })],
+          };
+        },
+      },
+    );
+
+    const error = await captureError(
+      controller.next(createControllerInput(), callContext()),
+    );
+
+    expect(error).toBeInstanceOf(ControllerError);
+    expect((error as ControllerError).failure.failure).toMatchObject({
+      code: "model_output_invalid",
+      metadata: {
+        structuredOutputFailureCode: "controller_provider_tool_provenance_invalid",
+      },
+    });
   });
 
   it("normalizes stop decisions", async () => {
@@ -1044,6 +1111,7 @@ function createController(
 function createControllerInput(): ControllerInput<TestOutput> {
   const task = createTask();
   const context = createInitialContext<RunObservation>(task);
+  const toolCatalog = createToolCatalogSnapshot([]);
   const request = Object.freeze({
     runId: "run_001",
     controllerIteration: 1,
@@ -1062,8 +1130,15 @@ function createControllerInput(): ControllerInput<TestOutput> {
     iteration: 1,
     agent: createAgent(),
     task,
-    conversationItems: [],
-    toolCatalog: createToolCatalogSnapshot([]),
+    inputItems: [],
+    toolExposure: {
+      id: "test-tool-exposure-1",
+      selectionRevision: "test-tool-selection-1",
+      consumer: "controller",
+      controllerRequestId: "run_001:controller:1",
+      exposedTools: [],
+      catalog: toolCatalog,
+    },
     context: snapshotContextProjection({
       projection: createTestIdentityContextProjector<RunObservation>().project({
         context,
@@ -1073,6 +1148,7 @@ function createControllerInput(): ControllerInput<TestOutput> {
     }),
     plan: null,
     permission: testPermissionProjection(),
+    pending: [],
     workspace: {
       id: "workspace_001",
       name: "Test workspace",

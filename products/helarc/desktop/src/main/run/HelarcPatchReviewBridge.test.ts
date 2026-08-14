@@ -33,6 +33,7 @@ describe("HelarcPatchReviewBridge", () => {
     expect(projection).toMatchObject({
       runId: "run-1",
       proposalId: "proposal-1",
+      proposalRevision: 1,
       reviewId: "review-1",
       pendingVersion: 1,
       phase: "reviewing",
@@ -44,6 +45,7 @@ describe("HelarcPatchReviewBridge", () => {
     expect(receipt).toMatchObject({
       status: "accepted_for_resolution",
       submissionId: "submission-1",
+      proposalRevision: 1,
       pendingVersion: 1,
     });
     expect(bridge.getPendingProjection()).toMatchObject({
@@ -78,6 +80,10 @@ describe("HelarcPatchReviewBridge", () => {
     expect(bridge.submitDecision(submission({
       submissionId: "wrong-proposal",
       proposalId: "proposal-other",
+    }))).toMatchObject({ code: "patch_review_not_pending" });
+    expect(bridge.submitDecision(submission({
+      submissionId: "wrong-revision",
+      proposalRevision: 2,
     }))).toMatchObject({ code: "patch_review_not_pending" });
     expect(bridge.submitDecision(submission({
       submissionId: "wrong-review",
@@ -152,22 +158,45 @@ describe("HelarcPatchReviewBridge", () => {
     await first;
 
     const second = bridge.review(
-      reviewRequest({ proposalId: "proposal-2", reviewId: "review-2" }),
+      reviewRequest({
+        proposalId: "proposal-2",
+        proposalRevision: 2,
+        reviewId: "review-2",
+      }),
       cancellation.context,
     );
     await flushMicrotasks();
     expect(bridge.getPendingProjection()).toMatchObject({
       proposalId: "proposal-2",
+      proposalRevision: 2,
       reviewId: "review-2",
       pendingVersion: 2,
     });
     bridge.submitDecision(submission({
       submissionId: "submission-2",
       proposalId: "proposal-2",
+      proposalRevision: 2,
       reviewId: "review-2",
       pendingVersion: 2,
     }));
     await second;
+  });
+
+  it("delivers a revision request as a typed semantic decision", async () => {
+    const bridge = createBridge();
+    const pending = bridge.review(reviewRequest(), createCancellation().context);
+    await flushMicrotasks();
+
+    const decision = submission({
+      decision: "request_revision",
+      reason: "Please preserve the existing export.",
+    });
+    expect(bridge.submitDecision(decision)).toMatchObject({
+      status: "accepted_for_resolution",
+      proposalId: "proposal-1",
+      proposalRevision: 1,
+    });
+    await expect(pending).resolves.toEqual({ status: "decided", submission: decision });
   });
 });
 
@@ -190,6 +219,7 @@ function reviewRequest(
   return {
     runId: "run-1",
     proposalId: "proposal-1",
+    proposalRevision: 1,
     reviewId: "review-1",
     rootName: "root",
     workspaceId: "workspace-1",
@@ -212,6 +242,7 @@ function submission(
     submissionId: "submission-1",
     runId: "run-1",
     proposalId: "proposal-1",
+    proposalRevision: 1,
     reviewId: "review-1",
     pendingVersion: 1,
     decision: "accepted",

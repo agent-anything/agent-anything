@@ -176,26 +176,37 @@ const focusedPublicSubpaths = new Map([
     "@agent-anything/helarc",
     new Set([
       "@agent-anything/helarc",
-      "@agent-anything/helarc/configuration",
-      "@agent-anything/helarc/work-context",
-      "@agent-anything/helarc/run",
+      "@agent-anything/helarc/agent",
+      "@agent-anything/helarc/artifacts",
       "@agent-anything/helarc/composition",
+      "@agent-anything/helarc/configuration",
+      "@agent-anything/helarc/controller",
+      "@agent-anything/helarc/observability",
+      "@agent-anything/helarc/prompt",
+      "@agent-anything/helarc/result",
+      "@agent-anything/helarc/review",
+      "@agent-anything/helarc/run",
+      "@agent-anything/helarc/task",
+      "@agent-anything/helarc/thread",
+      "@agent-anything/helarc/tools",
+      "@agent-anything/helarc/work-context",
     ]),
   ],
   [
     "@agent-anything/helarc-code-agent",
     new Set([
-      "@agent-anything/helarc-code-agent/task",
-      "@agent-anything/helarc-code-agent/controller",
-      "@agent-anything/helarc-code-agent/prompt",
-      "@agent-anything/helarc-code-agent/tools",
-      "@agent-anything/helarc-code-agent/task-templates",
+      "@agent-anything/helarc-code-agent/file-operation",
+      "@agent-anything/helarc-code-agent/source",
       "@agent-anything/helarc-code-agent/workspace",
-      "@agent-anything/helarc-code-agent/filesystem",
-      "@agent-anything/helarc-code-agent/file-actions",
-      "@agent-anything/helarc-code-agent/command",
-      "@agent-anything/helarc-code-agent/patch",
-      "@agent-anything/helarc-code-agent/observability",
+    ]),
+  ],
+  [
+    "@agent-anything/helarc-local-environment",
+    new Set([
+      "@agent-anything/helarc-local-environment/command",
+      "@agent-anything/helarc-local-environment/filesystem",
+      "@agent-anything/helarc-local-environment/sandbox",
+      "@agent-anything/helarc-local-environment/workspace",
     ]),
   ],
 ]);
@@ -494,8 +505,23 @@ function checkArchitectureSource(file, text, isTestOnly) {
       report("removed_execution_contract", { file, message: `Retains removed execution symbol '${symbol}'.` });
     }
   }
-  if (/\bCODE_AGENT_[A-Z0-9_]+_TOOL\b/.test(text)) {
-    report("removed_tool_constant", { file, message: "Retains a removed code-agent Tool constant." });
+  const codeAgentToolConstants = text.match(/\bCODE_AGENT_[A-Z0-9_]+_TOOL\b/g) ?? [];
+  const retainedCodeWorkspaceToolConstants = new Set([
+    "CODE_AGENT_LIST_FILES_TOOL",
+    "CODE_AGENT_READ_FILE_TOOL",
+    "CODE_AGENT_SEARCH_FILES_TOOL",
+    "CODE_AGENT_CREATE_FILE_TOOL",
+    "CODE_AGENT_UPDATE_FILE_TOOL",
+    "CODE_AGENT_DELETE_FILE_TOOL",
+  ]);
+  const removedCodeAgentToolConstant = codeAgentToolConstants.find(
+    (symbol) => !retainedCodeWorkspaceToolConstants.has(symbol),
+  );
+  if (removedCodeAgentToolConstant !== undefined) {
+    report("removed_tool_constant", {
+      file,
+      message: `Retains removed code-agent Tool constant '${removedCodeAgentToolConstant}'.`,
+    });
   }
   if (/\bwaiting_for_permission\b/.test(text)) {
     report("removed_run_status", { file, message: "Retains the removed waiting_for_permission status." });
@@ -530,11 +556,19 @@ function checkArchitectureSource(file, text, isTestOnly) {
     report("removed_session_ipc", { file, message: "Retains a removed Session-named IPC channel." });
   }
   if (
-    rel.startsWith("products/helarc/product/src/session-history/") ||
     rel.startsWith("products/helarc/desktop/src/main/session-history/") ||
     rel === "products/helarc/desktop/src/main/thread/HelarcThreadStore.ts"
   ) {
     report("removed_history_path", { file, message: "Restores a removed legacy history source path." });
+  }
+  if (
+    rel.startsWith("products/helarc/") &&
+    /\b(?:HelarcConversation|createHelarcConversation|conversationId|activeConversationId)\b/.test(text)
+  ) {
+    report("removed_helarc_conversation", {
+      file,
+      message: "Retains removed mandatory Helarc Conversation identity.",
+    });
   }
 
   if (isTestOnly) {
@@ -689,7 +723,13 @@ function checkRepositoryTopology() {
           "A common package is temporary migration staging and must not remain after Phase 22.",
       });
     }
-    if (ownerName === "core" || ownerName === "shared") {
+    const isAcceptedHelarcCore =
+      ownerName === "core" &&
+      info.name === "@agent-anything/helarc" &&
+      info.kind === "product" &&
+      info.productId === "helarc" &&
+      info.component === "core";
+    if ((ownerName === "core" && !isAcceptedHelarcCore) || ownerName === "shared") {
       report("generic_semantic_owner_unreviewed", {
         file: info.root,
         owner: info,
@@ -781,64 +821,6 @@ function checkPhase21Topology() {
 function checkPhase22Topology() {
   const areas = [
     {
-      packagePath: "products/helarc/code-agent",
-      sourceAreas: [
-        "command",
-        "controller",
-        "file-actions",
-        "filesystem",
-        "observability",
-        "patch",
-        "prompt",
-        "task",
-        "task-templates",
-        "tools",
-        "workspace",
-      ],
-      allowedSourceEntries: [
-        "PublicApi.test.ts",
-        "command",
-        "controller",
-        "file-actions",
-        "filesystem",
-        "observability",
-        "patch",
-        "prompt",
-        "task",
-        "task-templates",
-        "tools",
-        "workspace",
-      ],
-      forbiddenPaths: [
-        "src/index.ts",
-        "src/command-actions",
-        "src/process",
-      ],
-    },
-    {
-      packagePath: "products/helarc/product",
-      sourceAreas: ["composition", "configuration", "run", "work-context"],
-      allowedSourceEntries: [
-        "HelarcProduct.test.ts",
-        "HelarcProduct.ts",
-        "PublicApi.test.ts",
-        "composition",
-        "configuration",
-        "index.ts",
-        "run",
-        "work-context",
-      ],
-      forbiddenPaths: [
-        "src/controller",
-        "src/patch",
-        "src/permission",
-        "src/provider-profile",
-        "src/task",
-        "src/task-template",
-        "src/workspace-profile",
-      ],
-    },
-    {
       packagePath: "harness/integrations/plugins",
       sourceAreas: ["activation", "admission", "lifecycle", "manifest"],
       allowedSourceEntries: [
@@ -907,6 +889,13 @@ function checkPhase22Topology() {
 }
 
 function checkPhase27Topology() {
+  const removedProductPath = join(repoRoot, "products/helarc/product");
+  if (exists(removedProductPath)) {
+    report("phase27_superseded_product_path", {
+      file: removedProductPath,
+      message: "Superseded Helarc Product directory must not exist after the Core move.",
+    });
+  }
   const areas = [
     {
       packagePath: "harness/workspace",
@@ -1004,6 +993,54 @@ function checkPhase27Topology() {
         "src/runner/RunApprovalLifecycle.ts",
         "src/runner/RuntimeActionRecord.ts",
       ],
+    },
+    {
+      packagePath: "products/helarc/core",
+      allowedSourceEntries: [
+        "HelarcProduct.test.ts",
+        "HelarcProduct.ts",
+        "PublicApi.test.ts",
+        "agent",
+        "artifacts",
+        "composition",
+        "configuration",
+        "controller",
+        "index.ts",
+        "observability",
+        "prompt",
+        "result",
+        "review",
+        "run",
+        "task",
+        "thread",
+        "tools",
+        "work-context",
+      ],
+    },
+    {
+      packagePath: "products/helarc/code-agent",
+      allowedSourceEntries: [
+        "PublicApi.test.ts",
+        "file-operation",
+        "source",
+        "workspace",
+      ],
+      forbiddenPaths: [
+        "src/command",
+        "src/controller",
+        "src/file-actions",
+        "src/filesystem",
+        "src/observability",
+        "src/patch",
+        "src/prompt",
+        "src/task",
+        "src/task-templates",
+        "src/tools",
+      ],
+    },
+    {
+      packagePath: "products/helarc/local-environment",
+      allowedSourceEntries: ["command", "filesystem", "sandbox", "workspace"],
     },
   ];
 
@@ -1138,7 +1175,7 @@ function checkPackageCycles() {
 function checkHelarcSourceCycles() {
   const helarc = packageByName.get("@agent-anything/helarc");
   if (!helarc) {
-    report("helarc_package_missing", { file: join(repoRoot, "products/helarc/product/package.json"), owner: "@agent-anything/helarc", message: "Required Helarc product package is missing." });
+    report("helarc_package_missing", { file: join(repoRoot, "products/helarc/core/package.json"), owner: "@agent-anything/helarc", message: "Required Helarc Core package is missing." });
     return;
   }
 
