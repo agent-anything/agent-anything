@@ -53,6 +53,7 @@ const focusedPublicSubpaths = new Map([
     "@agent-anything/test-support",
     new Set([
       "@agent-anything/test-support/evaluation-targets/helarc",
+      "@agent-anything/test-support/phase-27",
     ]),
   ],
   [

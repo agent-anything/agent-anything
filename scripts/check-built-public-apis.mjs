@@ -66,7 +66,7 @@ const packageExportKeys = {
     "./trial",
   ],
   "harness/model-interaction": ["."],
-  "tooling/test-support": [".", "./evaluation-targets/helarc"],
+  "tooling/test-support": [".", "./evaluation-targets/helarc", "./phase-27"],
   "harness/safety/action-execution": [
     "./coordination",
     "./enforcement",
@@ -388,12 +388,20 @@ const expectedLowerValueExports = {
     "HELARC_EVALUATION_TARGET_ADAPTER_REVISION",
     "HELARC_EVALUATION_TIME",
     "HELARC_PHASE26_ACCEPTED_BASELINE",
+    "HELARC_PHASE27_ACCEPTED_BASELINE",
+    "HELARC_PHASE27_BASELINE_ACCEPTANCE",
     "adaptHelarcExternalBenchmarkManifest",
     "compareHelarcEvaluationBaseline",
     "createHelarcEvaluationCorpus",
     "createHelarcEvaluationTargetAdapter",
     "projectHelarcEvaluationBaselineSignature",
     "runHelarcEvaluationBaselineCandidate",
+  ],
+  "@agent-anything/test-support/phase-27": [
+    "PHASE27_BINDING_CONFORMANCE",
+    "PHASE27_CATALOG_REALIZATION_REGISTRY",
+    "PHASE27_SCENARIO_CONFORMANCE",
+    "findPhase27CatalogRecord",
   ],
 };
 

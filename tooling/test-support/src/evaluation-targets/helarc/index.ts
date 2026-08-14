@@ -33,5 +33,9 @@ export {
   runHelarcEvaluationBaselineCandidate,
 } from "./HelarcEvaluationExecution.js";
 export { HELARC_PHASE26_ACCEPTED_BASELINE } from "./baseline/HelarcPhase26Baseline.js";
+export {
+  HELARC_PHASE27_ACCEPTED_BASELINE,
+  HELARC_PHASE27_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcPhase27Baseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";

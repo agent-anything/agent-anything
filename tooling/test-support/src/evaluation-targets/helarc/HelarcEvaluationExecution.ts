@@ -388,7 +388,7 @@ async function aggregateHelarcCampaign(input: {
         criterion,
         grader,
         requestedAt: HELARC_EVALUATION_TIME,
-        metadata: { product: "helarc", evaluation: "phase26" },
+        metadata: { product: "helarc", evaluation: "phase27" },
       }, grader.kind === "reference" ? outcomeGrader : safetyGrader, {
         signal: input.signal,
         deadlineAt: input.deadlineAt,
@@ -401,7 +401,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.baseline-result`,
+      id: `${definition.ref.id}.phase27-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -412,7 +412,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.phase26.report.baseline",
+      id: "helarc.phase27.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -457,7 +457,10 @@ async function aggregateHelarcCampaign(input: {
       differences: [],
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
-    supersedes: null,
+    supersedes: {
+      id: "helarc.phase26.report.baseline",
+      revision: input.corpus.targetSnapshot.ref.revision,
+    },
     createdAt: HELARC_EVALUATION_TIME,
     metadata: {
       product: "helarc",
@@ -471,24 +474,27 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.phase26.baseline-acceptance",
+      id: "helarc.phase27.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
-    acceptedBy: { id: "agent-anything.architecture-review", revision: "phase26" },
+    acceptedBy: { id: "agent-anything.architecture-review", revision: "phase27" },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
       product: "helarc",
       suiteRef: refKey(input.corpus.suite.ref),
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
-    rationale: "Reviewed as the first deterministic Helarc Product and Harness integration baseline.",
+    rationale: "Reviewed as the Phase27 successor to the deterministic Helarc Product and Harness integration baseline.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
-    supersedes: null,
+    supersedes: {
+      id: "helarc.phase26.baseline-acceptance",
+      revision: input.corpus.targetSnapshot.ref.revision,
+    },
     limitations: [BASELINE_LIMITATION],
   }, report);
   const cases = createCaseResults(input.trials, input.captures, input.observations, input.grades);

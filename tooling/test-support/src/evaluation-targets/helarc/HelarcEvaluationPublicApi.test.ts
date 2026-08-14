@@ -8,6 +8,8 @@ describe("Helarc Evaluation target public API", () => {
       "HELARC_EVALUATION_TARGET_ADAPTER_REVISION",
       "HELARC_EVALUATION_TIME",
       "HELARC_PHASE26_ACCEPTED_BASELINE",
+      "HELARC_PHASE27_ACCEPTED_BASELINE",
+      "HELARC_PHASE27_BASELINE_ACCEPTANCE",
       "adaptHelarcExternalBenchmarkManifest",
       "compareHelarcEvaluationBaseline",
       "createHelarcEvaluationCorpus",

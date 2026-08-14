@@ -219,6 +219,75 @@ describe("Runner semantic integration", () => {
     }));
   });
 
+  it("rejects a retired Operation before trusted resolution or execution", async () => {
+    const operation = operationRef("retired-operation");
+    const base = createOperationFixture([
+      operationSpec(operation, "internal", {
+        requestOrigins: ["controller_protocol"],
+        handlerId: "handler.retired",
+      }),
+    ]);
+    const operations: OperationFixture = {
+      ...base,
+      catalog: createOperationCatalogSnapshot({
+        ...base.catalog,
+        entries: base.catalog.entries.map((entry) => ({
+          ...entry,
+          retirement: {
+            retiredAt: NOW,
+            reasonCode: "superseded",
+          },
+        })),
+      }),
+    };
+    const controller = new ScriptedController([
+      advance([operationCandidate(operation, {})], "model_operation"),
+      complete("Handled retirement", "model_complete"),
+    ]);
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations),
+    );
+
+    expect(observations(result)).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        kind: "operation_rejected",
+        owner: "operation-catalog",
+        code: "operation_retired",
+      }),
+    }));
+  });
+
+  it("rejects a request origin outside the exact admitted set", async () => {
+    const operation = operationRef("workflow-only-operation");
+    const operations = createOperationFixture([
+      operationSpec(operation, "internal", {
+        requestOrigins: ["trusted_workflow"],
+        handlerId: "handler.workflow-only",
+      }),
+    ]);
+    const controller = new ScriptedController([
+      advance([operationCandidate(operation, {})], "model_operation"),
+      complete("Handled origin rejection", "model_complete"),
+    ]);
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations),
+    );
+
+    expect(observations(result)).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        kind: "operation_rejected",
+        owner: "operation-catalog",
+        code: "operation_request_origin_denied",
+      }),
+    }));
+  });
+
   it("commits Plan state as an ordinary in-loop transition", async () => {
     const operations = createOperationFixture([]);
     const controller = new ScriptedController([

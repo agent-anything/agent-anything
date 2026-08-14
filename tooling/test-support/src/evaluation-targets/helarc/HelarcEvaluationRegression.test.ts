@@ -1,39 +1,75 @@
 import { describe, expect, it } from "vitest";
 import { HELARC_PHASE26_ACCEPTED_BASELINE } from "./baseline/HelarcPhase26Baseline.js";
 import {
+  HELARC_PHASE27_ACCEPTED_BASELINE,
+  HELARC_PHASE27_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcPhase27Baseline.js";
+import {
   compareHelarcEvaluationBaseline,
   projectHelarcEvaluationBaselineSignature,
   runHelarcEvaluationBaselineCandidate,
   type HelarcEvaluationBaselineSignature,
 } from "./HelarcEvaluationExecution.js";
 
-describe("Helarc Phase26 accepted Evaluation baseline", () => {
-  it("matches a candidate from the real Product and Harness execution path", async () => {
-    const before = JSON.stringify(HELARC_PHASE26_ACCEPTED_BASELINE);
+describe("Helarc accepted Evaluation baseline succession", () => {
+  it("reviews the Phase26 predecessor and matches the accepted Phase27 successor", async () => {
+    const phase26Before = JSON.stringify(HELARC_PHASE26_ACCEPTED_BASELINE);
+    const phase27Before = JSON.stringify(HELARC_PHASE27_ACCEPTED_BASELINE);
     const candidate = await runHelarcEvaluationBaselineCandidate();
-    const comparison = compareHelarcEvaluationBaseline(
+    const predecessorComparison = compareHelarcEvaluationBaseline(
       HELARC_PHASE26_ACCEPTED_BASELINE,
       candidate,
     );
+    const acceptedComparison = compareHelarcEvaluationBaseline(
+      HELARC_PHASE27_ACCEPTED_BASELINE,
+      candidate,
+    );
 
-    if (comparison.status !== "equivalent") {
-      throw new Error(`Accepted baseline mismatch: ${comparison.differences.join(", ")}`);
+    expect(predecessorComparison.status).toBe("regressed");
+    if (predecessorComparison.status === "regressed") {
+      expect(predecessorComparison.differences).toEqual(
+        HELARC_PHASE27_BASELINE_ACCEPTANCE.changedCaseSemanticDigests.flatMap((slug) =>
+          [1, 2].map((ordinal) =>
+            `case_semantics:helarc.phase26.case.${slug}@v1:rep-${ordinal}`
+          )
+        ).sort(),
+      );
     }
-    expect(comparison.pairedComparisons).toHaveLength(4);
-    expect(comparison.pairedComparisons.every((item) =>
+    expect(acceptedComparison.status).toBe("equivalent");
+    expect(acceptedComparison.pairedComparisons).toHaveLength(4);
+    expect(acceptedComparison.pairedComparisons.every((item) =>
       item.pairs.length === 10 && item.exclusions.length === 0)).toBe(true);
     expect(candidate.publication.gateOutcomes.map((item) => [item.dimension, item.status])).toEqual([
       ["outcome_quality", "passed"],
       ["safety", "passed"],
     ]);
-    expect(JSON.stringify(HELARC_PHASE26_ACCEPTED_BASELINE)).toBe(before);
+    expect(candidate.cases.every(({ traceIssueCodes }) => traceIssueCodes.length === 0)).toBe(true);
+    expect(predecessorComparison.pairedComparisons.find((comparison) =>
+      comparison.pairs[0]?.baselineValue === 93)?.pairs.every((pair) =>
+        pair.difference < 0)).toBe(true);
+    expect(JSON.stringify(HELARC_PHASE26_ACCEPTED_BASELINE)).toBe(phase26Before);
+    expect(JSON.stringify(HELARC_PHASE27_ACCEPTED_BASELINE)).toBe(phase27Before);
+    expect(candidate.report.ref).toEqual(HELARC_PHASE27_ACCEPTED_BASELINE.reportRef);
+    expect(candidate.acceptance.ref).toEqual(HELARC_PHASE27_ACCEPTED_BASELINE.acceptanceRef);
+    expect(candidate.report.supersedes).toEqual(HELARC_PHASE26_ACCEPTED_BASELINE.reportRef);
+    expect(candidate.acceptance.supersedes).toEqual(HELARC_PHASE26_ACCEPTED_BASELINE.acceptanceRef);
+    expect(candidate.metrics.map(({ ref }) => ref)).toEqual(
+      HELARC_PHASE27_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
+    );
+    expect(HELARC_PHASE27_ACCEPTED_BASELINE.reportRef).not.toEqual(
+      HELARC_PHASE26_ACCEPTED_BASELINE.reportRef,
+    );
+    expect(HELARC_PHASE27_ACCEPTED_BASELINE.acceptanceRef).not.toEqual(
+      HELARC_PHASE26_ACCEPTED_BASELINE.acceptanceRef,
+    );
     expect(Object.isFrozen(HELARC_PHASE26_ACCEPTED_BASELINE)).toBe(true);
+    expect(Object.isFrozen(HELARC_PHASE27_ACCEPTED_BASELINE)).toBe(true);
   }, 120_000);
 
   it("reports a safety regression even when paired latency improves", () => {
     const improvedLatencyAndUnsafe = changeAcceptedBaselineForRegression();
     const comparison = compareHelarcEvaluationBaseline(
-      HELARC_PHASE26_ACCEPTED_BASELINE,
+      HELARC_PHASE27_ACCEPTED_BASELINE,
       improvedLatencyAndUnsafe,
     );
 
@@ -41,13 +77,13 @@ describe("Helarc Phase26 accepted Evaluation baseline", () => {
     if (comparison.status !== "regressed") return;
     expect(comparison.differences).toContain("gate:safety:failed");
     const latency = comparison.pairedComparisons.find((item) =>
-      item.pairs[0]?.baselineValue === 93);
+      item.pairs[0]?.baselineValue === 85);
     expect(latency?.pairs.every((pair) => pair.difference < 0)).toBe(true);
   });
 });
 
 function changeAcceptedBaselineForRegression(): HelarcEvaluationBaselineSignature {
-  const baseline = projectHelarcEvaluationBaselineSignature(HELARC_PHASE26_ACCEPTED_BASELINE);
+  const baseline = projectHelarcEvaluationBaselineSignature(HELARC_PHASE27_ACCEPTED_BASELINE);
   return Object.freeze({
     ...baseline,
     publication: Object.freeze({
