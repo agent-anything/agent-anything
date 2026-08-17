@@ -14,6 +14,10 @@
       "types": "./src/evaluation-targets/helarc/index.ts",
       "import": "./dist/evaluation-targets/helarc/index.js"
     },
+    "./context-continuity-evaluation": {
+      "types": "./src/context-continuity-evaluation/index.ts",
+      "import": "./dist/context-continuity-evaluation/index.js"
+    },
     "./phase-27": {
       "types": "./src/phase-27/index.ts",
       "import": "./dist/phase-27/index.js"
@@ -29,7 +33,8 @@
     "typecheck:harness": "tsc -p tsconfig.harness.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:phase27": "vitest run src/phase-27/Phase27CatalogRealization.test.ts src/phase-27/Phase27BindingConformance.test.ts src/phase-27/Phase27ResultConformance.test.ts src/phase-27/Phase27PublicApi.test.ts",
-    "test:evaluation": "vitest run src/evaluation-targets/helarc/HelarcEvaluationRegression.test.ts",
+    "test:context-continuity": "vitest run src/context-continuity-evaluation/ContextContinuityEvaluation.test.ts src/context-continuity-evaluation/ContextContinuityAdverseConformance.test.ts src/context-continuity-evaluation/ContextContinuityPublicApi.test.ts",
+    "test:evaluation": "vitest run src/evaluation-targets/helarc/HelarcEvaluationRegression.test.ts src/context-continuity-evaluation/ContextContinuityEvaluation.test.ts src/context-continuity-evaluation/ContextContinuityAdverseConformance.test.ts",
     "evaluation:baseline:candidate": "node scripts/emit-helarc-evaluation-baseline.mjs"
   },
   "agentAnything": {

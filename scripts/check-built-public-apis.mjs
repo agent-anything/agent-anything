@@ -69,7 +69,7 @@ const packageExportKeys = {
     "./trial",
   ],
   "harness/model-interaction": [".", "./continuation", "./input"],
-  "tooling/test-support": [".", "./evaluation-targets/helarc", "./phase-27"],
+  "tooling/test-support": [".", "./context-continuity-evaluation", "./evaluation-targets/helarc", "./phase-27"],
   "harness/safety/action-execution": [
     "./coordination",
     "./enforcement",
@@ -419,6 +419,13 @@ const expectedLowerValueExports = {
     "createHelarcEvaluationTargetAdapter",
     "projectHelarcEvaluationBaselineSignature",
     "runHelarcEvaluationBaselineCandidate",
+  ],
+  "@agent-anything/test-support/context-continuity-evaluation": [
+    "CONTEXT_CONTINUITY_EVALUATION_REVISION",
+    "classifyContextContinuityFailure",
+    "createContextContinuityEvaluationFixtures",
+    "observeContextContinuityFixtures",
+    "runContextContinuityEvaluationCandidate",
   ],
   "@agent-anything/model-interaction/input": [
     "ModelInputCompositionError",

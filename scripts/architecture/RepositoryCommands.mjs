@@ -2,6 +2,7 @@ const REQUIRED_TEST_COMMANDS = Object.freeze([
   "test",
   "test:conformance",
   "test:evaluation",
+  "test:phase29",
 ]);
 
 export function evaluateRepositoryCommands(manifest) {

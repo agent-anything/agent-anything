@@ -6,6 +6,7 @@ const acceptedScripts = Object.freeze({
   test: "pnpm run architecture:check && pnpm build && pnpm -r run test",
   "test:conformance": "pnpm --filter conformance test",
   "test:evaluation": "pnpm --filter @agent-anything/test-support test:evaluation",
+  "test:phase29": "pnpm --filter @agent-anything/test-support test:context-continuity",
   "evaluation:baseline:candidate": "pnpm --filter @agent-anything/test-support build && pnpm --filter @agent-anything/test-support evaluation:baseline:candidate",
 });
 
