@@ -28,6 +28,17 @@ export function evaluateSourceOwnershipRules({
   }
 
   if (!isTestOnly) {
+    if (
+      /\bapplyContextTransition\s*\(/.test(text) &&
+      path !== "harness/context/src/active-context/ContextTransitionApplication.ts" &&
+      path !== "harness/agent-core/runtime/src/runner/RunExecution.ts"
+    ) {
+      reject(
+        "active_context_writer",
+        "Only Context transition mechanics and Agent Core RunExecution may apply an Active Context transition.",
+      );
+    }
+
     const isContextContractSource =
       /^harness\/context\/src\/(?:contract|contribution|active-context|projection)\//.test(path);
     if (

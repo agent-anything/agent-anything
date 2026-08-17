@@ -1,0 +1,245 @@
+import type {
+  ModelInputCapability,
+  ModelInputComposition,
+  ModelInputContent,
+  ModelInputFraming,
+  ModelInputLineage,
+  ModelInputSection,
+  ModelInputSectionRole,
+  ModelInputSourceRef,
+  ModelOutputReserve,
+} from "./ModelInput.js";
+import { snapshotModelInputCapability, snapshotModelInputComposition } from "./ModelInput.js";
+
+export interface ModelInputSectionCandidate {
+  readonly id: string;
+  readonly source: ModelInputSourceRef;
+  readonly kind: string;
+  readonly role: ModelInputSectionRole;
+  readonly necessity: "mandatory" | "optional";
+  readonly content: ModelInputContent;
+}
+
+export interface ProviderModelInputVerificationInput {
+  readonly providerId: string;
+  readonly model: string;
+  readonly messages: readonly {
+    readonly role: ModelInputSectionRole;
+    readonly content: string;
+  }[];
+  readonly composition: ModelInputComposition;
+}
+
+export interface ProviderModelInputAccounting {
+  readonly providerId: string;
+  readonly model: string;
+  readonly capability: ModelInputCapability;
+  estimateSection(candidate: ModelInputSectionCandidate): ModelInputSection;
+  estimateFraming(sections: readonly ModelInputSection[]): ModelInputFraming;
+  verify(input: ProviderModelInputVerificationInput): void;
+}
+
+export interface ModelInputContextAllocation {
+  readonly unit: ModelInputSection["accounting"]["unit"];
+  readonly amount: number;
+  readonly baseSections: readonly ModelInputSection[];
+  readonly framing: ModelInputFraming;
+  readonly remainingAmount: number;
+}
+
+export type ModelInputCompositionFailureCode =
+  | "model_input_accounting_unsupported"
+  | "model_input_mandatory_overflow"
+  | "model_input_context_budget_exceeded"
+  | "model_input_accounting_invalid";
+
+export interface ModelInputCompositionFailure {
+  readonly code: ModelInputCompositionFailureCode;
+  readonly message: string;
+}
+
+export class ModelInputCompositionError extends Error {
+  constructor(readonly failure: ModelInputCompositionFailure) {
+    super(failure.message);
+    this.name = "ModelInputCompositionError";
+  }
+}
+
+export function allocateModelInputContext(input: {
+  readonly accounting: ProviderModelInputAccounting;
+  readonly outputReserve: ModelOutputReserve;
+  readonly baseSections: readonly ModelInputSectionCandidate[];
+  readonly maximumContextAmount: number;
+}): ModelInputContextAllocation {
+  const capability = requireCapability(input.accounting);
+  assertReserve(input.outputReserve, capability.estimator.unit);
+  if (!Number.isSafeInteger(input.maximumContextAmount) || input.maximumContextAmount < 0) {
+    compositionFailure(
+      "model_input_accounting_invalid",
+      "Maximum Context allocation must be a non-negative safe integer.",
+    );
+  }
+  const baseSections = estimateSections(input.accounting, input.baseSections);
+  const framing = input.accounting.estimateFraming(baseSections);
+  assertFraming(framing, capability.estimator.unit);
+  const sectionAmount = sumSections(baseSections);
+  const remainingAmount = capability.limit.maximum -
+    input.outputReserve.amount - framing.amount - sectionAmount;
+  if (remainingAmount < 0) {
+    compositionFailure(
+      "model_input_mandatory_overflow",
+      "Mandatory non-Context model input exceeds the effective input limit.",
+    );
+  }
+  return Object.freeze({
+    unit: capability.estimator.unit,
+    amount: Math.min(remainingAmount, input.maximumContextAmount),
+    baseSections,
+    framing,
+    remainingAmount,
+  });
+}
+
+export function composeModelInput(input: {
+  readonly id: string;
+  readonly providerId: string;
+  readonly model: string;
+  readonly accounting: ProviderModelInputAccounting;
+  readonly outputReserve: ModelOutputReserve;
+  readonly contextBudget: { readonly unit: ModelInputSection["accounting"]["unit"]; readonly amount: number };
+  readonly contextProjectedAmount: number;
+  readonly sections: readonly ModelInputSectionCandidate[];
+  readonly lineage: ModelInputLineage;
+  readonly composedAt: string;
+}): ModelInputComposition {
+  const capability = requireCapability(input.accounting);
+  assertReserve(input.outputReserve, capability.estimator.unit);
+  if (
+    input.contextBudget.unit !== capability.estimator.unit ||
+    !Number.isSafeInteger(input.contextBudget.amount) ||
+    input.contextBudget.amount < 0 ||
+    !Number.isSafeInteger(input.contextProjectedAmount) ||
+    input.contextProjectedAmount < 0
+  ) {
+    compositionFailure(
+      "model_input_accounting_invalid",
+      "Context model-input accounting is invalid.",
+    );
+  }
+  if (input.contextProjectedAmount > input.contextBudget.amount) {
+    compositionFailure(
+      "model_input_context_budget_exceeded",
+      "Context Projection exceeds its granted model-input budget.",
+    );
+  }
+  const sections = estimateSections(input.accounting, input.sections);
+  const framing = input.accounting.estimateFraming(sections);
+  assertFraming(framing, capability.estimator.unit);
+  const sectionAmount = sumSections(sections);
+  const inputAmount = sectionAmount + framing.amount;
+  const remainingAmount = capability.limit.maximum -
+    inputAmount - input.outputReserve.amount;
+  if (remainingAmount < 0) {
+    compositionFailure(
+      "model_input_mandatory_overflow",
+      "Complete mandatory model input exceeds the effective input limit.",
+    );
+  }
+  return snapshotModelInputComposition({
+    id: input.id,
+    providerId: input.providerId,
+    model: input.model,
+    estimator: capability.estimator,
+    limit: capability.limit,
+    outputReserve: input.outputReserve,
+    framing,
+    contextBudget: input.contextBudget,
+    sections,
+    lineage: input.lineage,
+    accounting: {
+      unit: capability.estimator.unit,
+      sectionAmount,
+      framingAmount: framing.amount,
+      inputAmount,
+      outputReserveAmount: input.outputReserve.amount,
+      remainingAmount,
+    },
+    composedAt: input.composedAt,
+  });
+}
+
+function requireCapability(
+  accounting: ProviderModelInputAccounting,
+): Extract<ModelInputCapability, { readonly supported: true }> {
+  if (accounting === null || typeof accounting !== "object") {
+    return compositionFailure(
+      "model_input_accounting_unsupported",
+      "Provider Model Input Accounting is unavailable.",
+    );
+  }
+  const capability = snapshotModelInputCapability(accounting.capability);
+  if (!capability.supported) {
+    return compositionFailure(
+      "model_input_accounting_unsupported",
+      "Provider does not support exact model-input accounting.",
+    );
+  }
+  return capability;
+}
+
+function estimateSections(
+  accounting: ProviderModelInputAccounting,
+  candidates: readonly ModelInputSectionCandidate[],
+): readonly ModelInputSection[] {
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    return compositionFailure(
+      "model_input_accounting_invalid",
+      "Model input sections must be non-empty.",
+    );
+  }
+  const sections = candidates.map((candidate) => accounting.estimateSection(candidate));
+  if (new Set(sections.map((section) => section.id)).size !== sections.length) {
+    return compositionFailure(
+      "model_input_accounting_invalid",
+      "Model input section identities must be unique.",
+    );
+  }
+  return Object.freeze(sections);
+}
+
+function sumSections(sections: readonly ModelInputSection[]): number {
+  return sections.reduce((total, section) => total + section.accounting.amount, 0);
+}
+
+function assertReserve(reserve: ModelOutputReserve, unit: string): void {
+  if (
+    reserve.unit !== unit ||
+    !Number.isSafeInteger(reserve.amount) ||
+    reserve.amount < 0
+  ) {
+    compositionFailure(
+      "model_input_accounting_invalid",
+      "Model output reserve must use the Provider accounting unit.",
+    );
+  }
+}
+
+function assertFraming(framing: ModelInputFraming, unit: string): void {
+  if (
+    framing.unit !== unit ||
+    !Number.isSafeInteger(framing.amount) ||
+    framing.amount < 0
+  ) {
+    compositionFailure(
+      "model_input_accounting_invalid",
+      "Provider framing accounting is invalid.",
+    );
+  }
+}
+
+function compositionFailure(
+  code: ModelInputCompositionFailureCode,
+  message: string,
+): never {
+  throw new ModelInputCompositionError(Object.freeze({ code, message }));
+}

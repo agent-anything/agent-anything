@@ -19,3 +19,21 @@ export {
   snapshotModelInputCapability,
   snapshotModelInputComposition,
 } from "./ModelInput.js";
+export type {
+  ModelInputCompositionFailure,
+  ModelInputCompositionFailureCode,
+  ModelInputContextAllocation,
+  ModelInputSectionCandidate,
+  ProviderModelInputAccounting,
+  ProviderModelInputVerificationInput,
+} from "./ModelInputComposition.js";
+export {
+  allocateModelInputContext,
+  composeModelInput,
+  ModelInputCompositionError,
+} from "./ModelInputComposition.js";
+export type { CreateUtf8ModelInputAccountingInput } from "./Utf8ModelInputAccounting.js";
+export {
+  createUtf8ModelInputAccounting,
+  providerMessagesFromComposition,
+} from "./Utf8ModelInputAccounting.js";

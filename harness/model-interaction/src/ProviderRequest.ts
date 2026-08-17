@@ -1,8 +1,10 @@
 
 import type { ProviderMessage } from "./ProviderMessage.js";
+import type { ModelInputComposition } from "./input/index.js";
 
 export interface ProviderRequest {
-  messages: ProviderMessage[];
-  capability: string;
-  metadata: Readonly<Record<string, unknown>>;
+  readonly messages: readonly ProviderMessage[];
+  readonly capability: string;
+  readonly composition: ModelInputComposition;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }

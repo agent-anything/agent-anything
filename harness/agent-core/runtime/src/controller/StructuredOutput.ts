@@ -1,3 +1,5 @@
+import type { ProviderModelInputAccounting } from "@agent-anything/model-interaction/input";
+
 export type StructuredOutputFailureCategory =
   | "structured_output_syntax"
   | "structured_output_schema"
@@ -14,6 +16,7 @@ export interface StructuredOutputFailure {
 export interface ProviderRequestBuildContext {
   readonly attemptNumber: number;
   readonly correction: StructuredOutputCorrection | null;
+  readonly inputAccounting: ProviderModelInputAccounting;
 }
 
 export interface StructuredOutputCorrection {

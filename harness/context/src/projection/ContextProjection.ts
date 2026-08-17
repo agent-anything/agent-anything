@@ -4,6 +4,7 @@ import type {
   ContextContributionRef,
   ContextInstructionRole,
   ContextPayload,
+  ContextSourceRef,
   ContextTransformationKind,
 } from "../contribution/ContextContribution.js";
 import {
@@ -40,6 +41,7 @@ export interface ContextEstimatorRef {
   readonly id: string;
   readonly revision: string;
   readonly unit: ContextProjectionAccountingUnit;
+  readonly accuracy: "exact";
 }
 
 export type ContextProjectionAccountingUnit = "bytes" | "tokens";
@@ -65,6 +67,7 @@ export interface ContextProjectionRequest {
   readonly policy: ContextPolicyRef;
   readonly estimator: ContextEstimatorRef;
   readonly audiences: readonly string[];
+  readonly mandatoryItems: readonly ActiveContextItemRef[];
   readonly requestedAt: string;
 }
 
@@ -107,15 +110,20 @@ export type ContextProjectionReason =
   | "omitted_removed"
   | "omitted_duplicate"
   | "rejected_contract"
-  | "blocked_mandatory_overflow";
+  | "rejected_policy"
+  | "blocked_mandatory_overflow"
+  | "blocked_mandatory_rejected"
+  | "blocked_prior_failure";
 
 export interface ProjectionManifestRecord {
   readonly item: ActiveContextItemRef;
   readonly contribution: ContextContributionRef;
+  readonly source: ContextSourceRef;
   readonly disposition: ContextProjectionDisposition;
   readonly reason: ContextProjectionReason;
   readonly originalPayloadBytes: number;
   readonly projectedAmount: number;
+  readonly transformation: ContextProjectionTransformation | null;
 }
 
 export interface ProjectionManifestAccounting {
@@ -133,6 +141,7 @@ export interface ProjectionManifest {
   readonly profile: ContextProjectionProfileRef;
   readonly policy: ContextPolicyRef;
   readonly estimator: ContextEstimatorRef;
+  readonly budget: ContextBudgetGrant;
   readonly records: readonly ProjectionManifestRecord[];
   readonly accounting: ProjectionManifestAccounting;
   readonly createdAt: string;
@@ -157,7 +166,7 @@ export function snapshotContextProjectionRequest(
 ): ContextProjectionRequest {
   strictRecord(input, "ContextProjectionRequest", [
     "id", "activeContext", "consumer", "purpose", "profile", "budget",
-    "policy", "estimator", "audiences", "requestedAt",
+    "policy", "estimator", "audiences", "mandatoryItems", "requestedAt",
   ], "context_projection_contract_invalid");
   strictRecord(input.consumer, "ContextProjectionRequest.consumer", [
     "owner", "kind", "id",
@@ -197,6 +206,7 @@ export function snapshotContextProjectionRequest(
       {},
       "context_projection_contract_invalid",
     ),
+    mandatoryItems: snapshotMandatoryItems(input.mandatoryItems),
     requestedAt: isoDateTime(
       input.requestedAt,
       "ContextProjectionRequest.requestedAt",
@@ -274,7 +284,7 @@ export function snapshotProjectionManifest(
 ): ProjectionManifest {
   strictRecord(input, "ProjectionManifest", [
     "id", "projectionId", "requestId", "activeContext", "profile", "policy",
-    "estimator", "records", "accounting", "createdAt",
+    "estimator", "budget", "records", "accounting", "createdAt",
   ], "context_projection_contract_invalid");
   if (!Array.isArray(input.records)) {
     projectionFailure("ProjectionManifest.records must be an array.", "ProjectionManifest.records");
@@ -296,6 +306,11 @@ export function snapshotProjectionManifest(
   const estimator = snapshotEstimator(
     input.estimator,
     "ProjectionManifest.estimator",
+  );
+  const budget = snapshotBudget(
+    input.budget,
+    estimator.unit,
+    "ProjectionManifest.budget",
   );
   const projectedAmount = projectedRecords.reduce(
     (total, record) => total + record.projectedAmount,
@@ -323,6 +338,7 @@ export function snapshotProjectionManifest(
     profile: snapshotRevisionRef(input.profile, "ProjectionManifest.profile"),
     policy: snapshotRevisionRef(input.policy, "ProjectionManifest.policy"),
     estimator,
+    budget,
     records: Object.freeze(records),
     accounting: Object.freeze({
       unit: estimator.unit,
@@ -333,6 +349,25 @@ export function snapshotProjectionManifest(
     createdAt: isoDateTime(
       input.createdAt,
       "ProjectionManifest.createdAt",
+      "context_projection_contract_invalid",
+    ),
+  });
+}
+
+function snapshotBudget(
+  input: ContextBudgetGrant,
+  unit: ContextProjectionAccountingUnit,
+  path: string,
+): ContextBudgetGrant {
+  strictRecord(input, path, ["unit", "maximum"], "context_projection_contract_invalid");
+  if (input.unit !== unit) {
+    projectionFailure("Context projection budget must use the estimator unit.", `${path}.unit`);
+  }
+  return Object.freeze({
+    unit,
+    maximum: nonNegativeInteger(
+      input.maximum,
+      `${path}.maximum`,
       "context_projection_contract_invalid",
     ),
   });
@@ -372,7 +407,7 @@ function snapshotBlock(input: ContextProjectionBlock, path: string): ContextProj
     "transformation",
   ], "context_projection_contract_invalid");
   const payload = snapshotProjectionPayload(input.payload, `${path}.payload`);
-  const payloadBytes = measureContextPayload(payload).payloadBytes;
+  measureContextPayload(payload);
   strictRecord(input.accounting, `${path}.accounting`, [
     "unit", "amount",
   ], "context_projection_contract_invalid");
@@ -384,9 +419,6 @@ function snapshotBlock(input: ContextProjectionBlock, path: string): ContextProj
     `${path}.accounting.amount`,
     "context_projection_contract_invalid",
   );
-  if (input.accounting.unit === "bytes" && amount !== payloadBytes) {
-    projectionFailure("Byte-accounted Projection block must match its payload bytes.", `${path}.accounting`);
-  }
   if (input.instructionRole !== "data" && input.instructionRole !== "user") {
     projectionFailure("Projection block instruction role is invalid.", `${path}.instructionRole`);
   }
@@ -441,8 +473,8 @@ function snapshotProjectionPayload(input: ContextPayload, path: string): Context
 
 function snapshotManifestRecord(input: ProjectionManifestRecord, path: string): ProjectionManifestRecord {
   strictRecord(input, path, [
-    "item", "contribution", "disposition", "reason", "originalPayloadBytes",
-    "projectedAmount",
+    "item", "contribution", "source", "disposition", "reason",
+    "originalPayloadBytes", "projectedAmount", "transformation",
   ], "context_projection_contract_invalid");
   if (!isDisposition(input.disposition) || !isReason(input.reason)) {
     projectionFailure("Projection Manifest disposition or reason is invalid.", path);
@@ -455,10 +487,14 @@ function snapshotManifestRecord(input: ProjectionManifestRecord, path: string): 
   return Object.freeze({
     item: snapshotItemRef(input.item, `${path}.item`),
     contribution: snapshotContextContributionRef(input.contribution),
+    source: snapshotSource(input.source, `${path}.source`),
     disposition: input.disposition,
     reason: input.reason,
     originalPayloadBytes,
     projectedAmount,
+    transformation: input.transformation === null
+      ? null
+      : snapshotTransformation(input.transformation, `${path}.transformation`),
   });
 }
 
@@ -487,12 +523,49 @@ function snapshotRevisionRef<T extends { readonly id: string; readonly revision:
 }
 
 function snapshotEstimator(input: ContextEstimatorRef, path: string): ContextEstimatorRef {
-  strictRecord(input, path, ["id", "revision", "unit"], "context_projection_contract_invalid");
-  if (!isAccountingUnit(input.unit)) projectionFailure("Context estimator unit is invalid.", `${path}.unit`);
+  strictRecord(input, path, ["id", "revision", "unit", "accuracy"], "context_projection_contract_invalid");
+  if (!isAccountingUnit(input.unit) || input.accuracy !== "exact") {
+    projectionFailure("Context estimator must declare an exact supported unit.", path);
+  }
   return Object.freeze({
     id: projectionToken(input.id, `${path}.id`),
     revision: projectionToken(input.revision, `${path}.revision`),
     unit: input.unit,
+    accuracy: "exact",
+  });
+}
+
+function snapshotMandatoryItems(
+  input: readonly ActiveContextItemRef[],
+): readonly ActiveContextItemRef[] {
+  if (!Array.isArray(input)) {
+    projectionFailure(
+      "ContextProjectionRequest.mandatoryItems must be an array.",
+      "ContextProjectionRequest.mandatoryItems",
+    );
+  }
+  const items = input.map((item, index) =>
+    snapshotItemRef(item, `ContextProjectionRequest.mandatoryItems[${index}]`)
+  );
+  if (new Set(items.map((item) => item.id)).size !== items.length) {
+    projectionFailure(
+      "ContextProjectionRequest mandatory item identities must be unique.",
+      "ContextProjectionRequest.mandatoryItems",
+    );
+  }
+  return Object.freeze(items);
+}
+
+function snapshotSource(input: ContextSourceRef, path: string): ContextSourceRef {
+  strictRecord(input, path, ["owner", "kind", "id", "revision", "observedAt"], "context_projection_contract_invalid");
+  return Object.freeze({
+    owner: projectionToken(input.owner, `${path}.owner`),
+    kind: projectionToken(input.kind, `${path}.kind`),
+    id: projectionToken(input.id, `${path}.id`),
+    revision: input.revision === null ? null : projectionToken(input.revision, `${path}.revision`),
+    observedAt: input.observedAt === null
+      ? null
+      : isoDateTime(input.observedAt, `${path}.observedAt`, "context_projection_contract_invalid"),
   });
 }
 
@@ -509,7 +582,7 @@ function isDisposition(value: unknown): value is ContextProjectionDisposition {
 }
 
 function isReason(value: unknown): value is ContextProjectionReason {
-  return value === "included_exact" || value === "transformed_truncate" || value === "transformed_redact" || value === "transformed_reference" || value === "omitted_budget" || value === "omitted_scope" || value === "omitted_disclosure" || value === "omitted_replaced" || value === "omitted_invalidated" || value === "omitted_removed" || value === "omitted_duplicate" || value === "rejected_contract" || value === "blocked_mandatory_overflow";
+  return value === "included_exact" || value === "transformed_truncate" || value === "transformed_redact" || value === "transformed_reference" || value === "omitted_budget" || value === "omitted_scope" || value === "omitted_disclosure" || value === "omitted_replaced" || value === "omitted_invalidated" || value === "omitted_removed" || value === "omitted_duplicate" || value === "rejected_contract" || value === "rejected_policy" || value === "blocked_mandatory_overflow" || value === "blocked_mandatory_rejected" || value === "blocked_prior_failure";
 }
 
 function isDispositionReasonPair(disposition: ContextProjectionDisposition, reason: ContextProjectionReason, projectedAmount: number): boolean {
@@ -517,8 +590,8 @@ function isDispositionReasonPair(disposition: ContextProjectionDisposition, reas
   if (disposition === "transformed") return reason === "transformed_truncate" || reason === "transformed_redact";
   if (disposition === "referenced") return reason === "transformed_reference";
   if (disposition === "omitted") return reason.startsWith("omitted_") && projectedAmount === 0;
-  if (disposition === "rejected") return reason === "rejected_contract" && projectedAmount === 0;
-  return reason === "blocked_mandatory_overflow" && projectedAmount === 0;
+  if (disposition === "rejected") return (reason === "rejected_contract" || reason === "rejected_policy") && projectedAmount === 0;
+  return (reason === "blocked_mandatory_overflow" || reason === "blocked_mandatory_rejected" || reason === "blocked_prior_failure") && projectedAmount === 0;
 }
 
 function isAccountingUnit(value: unknown): value is ContextProjectionAccountingUnit {

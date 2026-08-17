@@ -41,6 +41,7 @@ import {
   type ResolvedRunPermissionConfig,
 } from "@agent-anything/permission";
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
+import type { RuntimeEvent } from "@agent-anything/observability/events";
 import { createCanonicalWorkspaceIdentity } from "@agent-anything/canonical-action/subject";
 import { createTestContextProjection } from "@agent-anything/test-support";
 import type {
@@ -109,6 +110,75 @@ describe("Runner semantic integration", () => {
     ]);
     expect(result.items.map(({ ref }) => ref.sequence)).toEqual([1, 2]);
     expect(controller.calls).toHaveLength(1);
+  });
+
+  it("publishes committed Context transitions only after Runner state commits", async () => {
+    const operations = createOperationFixture([]);
+    const events: RuntimeEvent[] = [];
+    const controller = new ScriptedController([complete("Done")]);
+
+    await createRunner(controller, operations, {
+      runtimeEventPublisher: { publish: (event) => events.push(event) },
+    }).run(createAgent(), createRunInput(), createRunConfig(operations));
+
+    const transitions = events.filter(
+      (event) => event.name === "context.transition.committed",
+    );
+    expect(transitions.map((event) => event.payload.operationKinds)).toEqual([
+      ["add"],
+      ["add", "add"],
+    ]);
+    expect(transitions[0]?.payload).not.toHaveProperty("contribution");
+    const projections = events.filter(
+      (event) => event.name === "context.projection.completed",
+    );
+    expect(projections).toHaveLength(1);
+    expect(projections[0]?.payload).toMatchObject({
+      outcome: "projected",
+      code: null,
+    });
+    expect(projections[0]?.payload).not.toHaveProperty("records");
+    expect(events.findIndex((event) => event.name === "context.transition.committed"))
+      .toBeGreaterThan(events.findIndex((event) => event.name === "run.started"));
+  });
+
+  it("publishes a safe blocked Manifest summary before Context projection failure", async () => {
+    const operations = createOperationFixture([]);
+    const events: RuntimeEvent[] = [];
+    const controller = new ScriptedController([complete("must not run")]);
+    const baseProjection = createTestContextProjection();
+
+    const result = await createRunner(controller, operations, {
+      contextProjection: Object.freeze({
+        ...baseProjection,
+        allocate(input) {
+          const allocation = baseProjection.allocate(input);
+          return Object.freeze({
+            ...allocation,
+            budget: Object.freeze({ unit: allocation.budget.unit, maximum: 0 }),
+          });
+        },
+      }),
+      runtimeEventPublisher: { publish: (event) => events.push(event) },
+    }).run(createAgent(), createRunInput(), createRunConfig(operations));
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "context_projection_failed",
+    });
+    expect(controller.calls).toHaveLength(0);
+    const projection = events.find(
+      (event) => event.name === "context.projection.completed",
+    );
+    expect(projection?.payload).toMatchObject({
+      outcome: "blocked",
+      code: "context_projection_mandatory_overflow",
+      budgetMaximum: 0,
+      projectedAmount: 0,
+    });
+    expect(projection?.payload.blockedCount).toBeGreaterThan(0);
+    expect(events.findIndex((event) => event.name === "context.projection.completed"))
+      .toBeLessThan(events.findIndex((event) => event.name === "run.failed"));
   });
 
   it("executes one exposed Tool through its exact internal Operation binding", async () => {
@@ -332,7 +402,7 @@ describe("Runner semantic integration", () => {
       advance([interactionCandidate("run")], "model_interaction_1"),
       (input) => {
         expect(input.pending).toEqual([]);
-        expect(input.context.observations.at(-1)?.payload).toMatchObject({
+        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
           kind: "interaction",
           status: "resolved",
           value: { accepted: true },
@@ -398,7 +468,7 @@ describe("Runner semantic integration", () => {
       advance([interactionCandidate("none")], "model_interaction_1"),
       () => staleDecision.promise,
       (input) => {
-        expect(input.context.observations.at(-1)?.payload).toMatchObject({
+        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
           kind: "interaction",
           status: "resolved",
         });
@@ -436,16 +506,11 @@ describe("Runner semantic integration", () => {
       () => staleDecision.promise,
       (input) => {
         expect(input.plan).toBeNull();
-        expect(input.context.messages.at(-1)).toMatchObject({
-          role: "user",
-          content: "Inspect the failing tests first.",
-          metadata: {
-            kind: "run_steering",
-            commandId: "steering-1",
-            origin: "user",
-            actorId: "user-1",
-          },
-        });
+        expect(input.context.blocks.find((block) =>
+          block.instructionRole === "user" &&
+          block.payload.kind === "text" &&
+          block.payload.text === "Inspect the failing tests first."
+        )).toBeDefined();
         return complete("Fresh decision", "model_complete_2");
       },
     ]);
@@ -521,7 +586,7 @@ describe("Runner semantic integration", () => {
         kind: "state_transition",
         transition: "handoff",
         input: {
-          expectedRunRevision: 1,
+          expectedRunRevision: 2,
           currentAgent: { id: "agent_001", revision: "1" },
           targetAgent: { id: specialist.id, revision: specialist.revision },
           reason: "Use specialist instructions.",
@@ -1315,6 +1380,23 @@ function operationFailure(owner: string, code: string) {
 
 function snapshotUnknown<T>(value: T): T {
   return deepFreeze(structuredClone(value));
+}
+
+function projectedObservations(
+  projection: ControllerInput["context"],
+): readonly RunObservation[] {
+  return projection.blocks.flatMap((block) => {
+    if (block.payload.kind !== "structured") return [];
+    const value = block.payload.value;
+    if (!isRecord(value) || value.kind !== "run_observation" || !isRecord(value.observation)) {
+      return [];
+    }
+    return [value.observation as unknown as RunObservation];
+  });
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {

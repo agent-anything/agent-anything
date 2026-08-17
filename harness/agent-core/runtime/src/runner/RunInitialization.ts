@@ -1,10 +1,9 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
 import { toAgentRevisionRef } from "@agent-anything/agent-core/agent";
 import type { RunInput } from "@agent-anything/agent-core/input";
-import { createInitialContext } from "@agent-anything/context/context";
+import { createEmptyActiveContext } from "@agent-anything/context/active-context";
 import {
   createInitialRunPermissionState,
-  type RunObservation,
   type RunState,
 } from "../run/index.js";
 import type { ResolvedRunConfig } from "./RunConfig.js";
@@ -15,9 +14,15 @@ export function createInitialRunState<TOutput>(input: {
   readonly input: RunInput;
   readonly config: ResolvedRunConfig;
   readonly startedAt: string;
+  readonly activeContextId: string;
 }): RunState<TOutput> {
   const permissionState = createInitialRunPermissionState(input.config.permissions);
   const agent = toAgentRevisionRef(input.agent);
+  const context = createEmptyActiveContext({
+    id: input.activeContextId,
+    runId: input.runId,
+    createdAt: input.startedAt,
+  });
   return Object.freeze({
     run: Object.freeze({ id: input.runId }),
     revision: 0,
@@ -36,7 +41,7 @@ export function createInitialRunState<TOutput>(input: {
     cancellationRequest: null,
     completedAt: null,
     permission: permissionState,
-    context: createInitialContext<RunObservation>(input.input.task),
+    context,
     plan: null,
     items: Object.freeze([]),
     counters: Object.freeze({ controllerTurns: 0, runActions: 0, observations: 0, consecutiveActionFailures: 0 }),

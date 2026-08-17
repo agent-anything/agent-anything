@@ -20,8 +20,9 @@ describe("Context Projection contracts", () => {
       },
       budget: { unit: "tokens", maximum: 4096 },
       policy: { id: "context-policy", revision: "4" },
-      estimator: { id: "provider-tokenizer", revision: "1", unit: "tokens" },
+      estimator: { id: "provider-tokenizer", revision: "1", unit: "tokens", accuracy: "exact" },
       audiences: ["provider:primary"],
+      mandatoryItems: [{ id: "item-required" }],
       requestedAt: "2026-08-14T00:00:03.000Z",
     });
 
@@ -42,8 +43,9 @@ describe("Context Projection contracts", () => {
       },
       budget: { unit: "tokens", maximum: 4096 },
       policy: { id: "context-policy", revision: "4" },
-      estimator: { id: "provider-tokenizer", revision: "1", unit: "tokens" },
+      estimator: { id: "provider-tokenizer", revision: "1", unit: "tokens", accuracy: "exact" },
       audiences: ["provider:primary"],
+      mandatoryItems: [],
       requestedAt: "2026-08-14T00:00:03.000Z",
       metadata: { bypass: true },
     } as never)).toThrow(ContextContractError);
@@ -57,21 +59,26 @@ describe("Context Projection contracts", () => {
       activeContext: { id: "context-1", runId: "run-1", version: 3 },
       profile: { id: "helarc-controller", revision: "1" },
       policy: { id: "context-policy", revision: "4" },
-      estimator: { id: "provider-tokenizer", revision: "1", unit: "tokens" },
+      estimator: { id: "provider-tokenizer", revision: "1", unit: "tokens", accuracy: "exact" },
+      budget: { unit: "tokens", maximum: 4096 },
       records: [{
         item: { id: "item-1" },
         contribution: { id: "contribution-1", revision: "1" },
+        source: { owner: "runtime", kind: "test", id: "source-1", revision: "1", observedAt: null },
         disposition: "included",
         reason: "included_exact",
         originalPayloadBytes: 5,
         projectedAmount: 2,
+        transformation: null,
       }, {
         item: { id: "item-2" },
         contribution: { id: "contribution-2", revision: "1" },
+        source: { owner: "runtime", kind: "test", id: "source-2", revision: "1", observedAt: null },
         disposition: "omitted",
         reason: "omitted_budget",
         originalPayloadBytes: 10,
         projectedAmount: 0,
+        transformation: null,
       }],
       accounting: {
         unit: "tokens",
@@ -91,7 +98,7 @@ describe("Context Projection contracts", () => {
       id: "projection-1",
       requestId: "projection-request-1",
       activeContext: { id: "context-1", runId: "run-1", version: 3 },
-      estimator: { id: "provider-tokenizer", revision: "1", unit: "tokens" },
+      estimator: { id: "provider-tokenizer", revision: "1", unit: "tokens", accuracy: "exact" },
       blocks: [{
         id: "block-1",
         item: { id: "item-1" },

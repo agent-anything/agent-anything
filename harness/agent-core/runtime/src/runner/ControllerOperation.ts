@@ -1,10 +1,11 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
 import type { RunInput } from "@agent-anything/agent-core/input";
+import { ContextContractError } from "@agent-anything/context/contract";
 import {
-  ContextProjectionError,
-  snapshotContextProjection,
+  projectActiveContext,
   type ContextProjection,
-} from "@agent-anything/context/context";
+  type ProjectionManifest,
+} from "@agent-anything/context/projection";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
 import {
   type ControllerDecision,
@@ -14,7 +15,6 @@ import { projectPlan } from "../plan/index.js";
 import {
   projectPendingRunSubject,
   projectPermissionContext,
-  type RunObservation,
   type RunState,
 } from "../run/index.js";
 import type { RetryEventSink } from "../retry/index.js";
@@ -26,8 +26,26 @@ import type {
 
 export interface PreparedControllerOperation<TOutput> {
   readonly input: ControllerInput<TOutput>;
-  readonly context: ContextProjection<RunObservation>;
+  readonly context: ContextProjection;
+  readonly manifest: ProjectionManifest;
   readonly deadlineAt: string;
+}
+
+export class ContextProjectionPreparationError extends ContextContractError {
+  constructor(
+    readonly manifest: ProjectionManifest,
+    readonly projectionFailure: {
+      readonly code: string;
+      readonly message: string;
+    },
+  ) {
+    super(Object.freeze({
+      code: "context_projection_contract_invalid",
+      message: projectionFailure.message,
+      path: projectionFailure.code,
+    }));
+    this.name = "ContextProjectionPreparationError";
+  }
 }
 
 export interface PrepareControllerOperationInput<TOutput> {
@@ -38,39 +56,63 @@ export interface PrepareControllerOperationInput<TOutput> {
   readonly iteration: number;
   readonly exposure: ToolExposureProof;
   readonly contextProjection: RunnerContextProjection;
+  readonly requestedAt: string;
 }
 
 export function prepareControllerOperation<TOutput>(
   input: PrepareControllerOperationInput<TOutput>,
 ): PreparedControllerOperation<TOutput> {
-  const context = createContextProjection(input);
   const pendingApprovalCount = input.state.pending.filter(
     (candidate) =>
       candidate.kind === "interaction" &&
       candidate.interaction.request.protocol.owner === "permission" &&
       candidate.interaction.request.protocol.kind === "approval",
   ).length;
+  const baseInput = Object.freeze({
+    runId: input.state.run.id,
+    iteration: input.iteration,
+    agent: input.agent,
+    task: input.runInput.task,
+    inputItems: input.runInput.items,
+    toolExposure: input.exposure,
+    plan: input.state.plan === null ? null : projectPlan(input.state.plan),
+    permission: projectPermissionContext(
+      input.config.permissions,
+      input.state.permission,
+      pendingApprovalCount,
+    ),
+    pending: Object.freeze(input.state.pending.map(projectPendingRunSubject)),
+    workspace: input.config.workspace,
+    identity: input.config.identity,
+    metadata: Object.freeze({ ...input.state.metadata }),
+  });
+  const projected = createContextProjection(input, baseInput);
+  if (projected.status === "blocked") {
+    throw new ContextProjectionPreparationError(
+      projected.manifest,
+      projected.failure,
+    );
+  }
+  const manifest = projected.manifest;
+  const context = projected.projection;
   return Object.freeze({
     context,
+    manifest,
     deadlineAt: input.state.deadlineAt,
     input: Object.freeze({
-      runId: input.state.run.id,
-      iteration: input.iteration,
-      agent: input.agent,
-      task: input.runInput.task,
-      inputItems: input.runInput.items,
-      toolExposure: input.exposure,
+      ...baseInput,
       context,
-      plan: input.state.plan === null ? null : projectPlan(input.state.plan),
-      permission: projectPermissionContext(
-        input.config.permissions,
-        input.state.permission,
-        pendingApprovalCount,
-      ),
-      pending: Object.freeze(input.state.pending.map(projectPendingRunSubject)),
-      workspace: input.config.workspace,
-      identity: input.config.identity,
-      metadata: Object.freeze({ ...input.state.metadata }),
+      contextManifest: Object.freeze({
+        id: manifest.id,
+        projectionId: manifest.projectionId,
+        requestId: manifest.requestId,
+        activeContext: manifest.activeContext,
+        profile: manifest.profile,
+        policy: manifest.policy,
+        estimator: manifest.estimator,
+        budget: manifest.budget,
+        accounting: manifest.accounting,
+      }),
     }),
   });
 }
@@ -97,81 +139,36 @@ export function executeControllerOperation<TOutput>(input: {
 
 function createContextProjection<TOutput>(
   input: PrepareControllerOperationInput<TOutput>,
-): ContextProjection<RunObservation> {
+  baseInput: import("../controller/index.js").ControllerPreProjectionInput<TOutput>,
+): ReturnType<typeof projectActiveContext> {
+  const allocation = input.contextProjection.allocate(baseInput);
   const request = Object.freeze({
-    runId: input.state.run.id,
-    controllerIteration: input.iteration,
+    id: `${input.state.run.id}:context-projection:${input.iteration}`,
+    activeContext: input.state.context.ref,
+    consumer: Object.freeze({ owner: "agent-core", kind: "controller", id: input.agent.id }),
     purpose: input.contextProjection.purpose,
-    limits: input.contextProjection.limits,
+    profile: input.contextProjection.profile,
+    budget: allocation.budget,
+    policy: input.contextProjection.policy.ref,
+    estimator: allocation.estimator.ref,
+    audiences: input.contextProjection.audiences,
+    mandatoryItems: Object.freeze([]),
+    requestedAt: input.requestedAt,
   });
-  let projected: ContextProjection<RunObservation>;
   try {
-    projected = input.contextProjection.projector.project({
+    return projectActiveContext({
       context: input.state.context,
       request,
+      estimator: allocation.estimator,
+      policy: input.contextProjection.policy,
+      maxContributionPayloadBytes: input.contextProjection.maxContributionPayloadBytes,
     });
   } catch (error) {
-    if (error instanceof ContextProjectionError) throw error;
-    throw new ContextProjectionError(Object.freeze({
-      code: "context_projection_failed",
-      message: "Context projector failed.",
-      retryable: false,
-      metadata: Object.freeze({
-        ...(error instanceof Error ? { causeName: error.name } : {}),
-      }),
+    if (error instanceof ContextContractError) throw error;
+    throw new ContextContractError(Object.freeze({
+      code: "context_projection_contract_invalid",
+      message: "Context projection failed.",
+      path: error instanceof Error ? error.name : "unknown",
     }));
   }
-  const projection = snapshotContextProjection({ projection: projected, request });
-  assertProjectionDerivation(input.state, projection);
-  return projection;
-}
-
-function assertProjectionDerivation(
-  state: RunState,
-  projection: ContextProjection<RunObservation>,
-): void {
-  const observations = new Map(
-    state.context.observations.map((observation) => [observation.id, observation]),
-  );
-  for (const projected of projection.observations) {
-    const source = observations.get(projected.id);
-    if (
-      source === undefined ||
-      source.runId !== projected.runId ||
-      source.actionId !== projected.actionId ||
-      source.kind !== projected.kind ||
-      source.createdAt !== projected.createdAt
-    ) {
-      throw projectionDerivationError(
-        "Context projector changed or fabricated Observation correlation.",
-      );
-    }
-  }
-
-  const messages = new Map(
-    state.context.messages.map((message) => [message.id, message]),
-  );
-  for (const projected of projection.messages) {
-    const source = messages.get(projected.id);
-    if (source === undefined || source.role !== projected.role) {
-      throw projectionDerivationError(
-        "Context projector changed or fabricated message correlation.",
-      );
-    }
-  }
-  const evidenceRefs = new Set(state.context.evidenceRefs);
-  if (projection.evidenceRefs.some((reference) => !evidenceRefs.has(reference))) {
-    throw projectionDerivationError(
-      "Context projector fabricated an Evidence reference.",
-    );
-  }
-}
-
-function projectionDerivationError(message: string): ContextProjectionError {
-  return new ContextProjectionError(Object.freeze({
-    code: "context_projection_not_derived",
-    message,
-    retryable: false,
-    metadata: Object.freeze({}),
-  }));
 }

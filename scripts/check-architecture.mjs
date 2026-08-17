@@ -127,7 +127,10 @@ const focusedPublicSubpaths = new Map([
   [
     "@agent-anything/context",
     new Set([
-      "@agent-anything/context/context",
+      "@agent-anything/context/contract",
+      "@agent-anything/context/contribution",
+      "@agent-anything/context/active-context",
+      "@agent-anything/context/projection",
       "@agent-anything/context/evidence",
       "@agent-anything/context/persistence",
     ]),
@@ -1006,6 +1009,7 @@ function checkExecutionSourceTopology() {
       packagePath: "harness/agent-core/runtime",
       allowedSourceEntries: [
         "PublicApi.test.ts",
+        "context-contribution",
         "controller",
         "plan",
         "retry",

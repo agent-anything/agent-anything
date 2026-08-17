@@ -6,10 +6,15 @@ import type {
 } from "@agent-anything/agent-runtime/controller";
 import { StructuredOutputError, type ProviderRequestBuildContext, type StructuredOutputFailure } from "@agent-anything/agent-runtime/controller";
 import type { ProviderRequest, ProviderResponse } from "@agent-anything/model-interaction";
+import {
+  composeModelInput,
+  providerMessagesFromComposition,
+} from "@agent-anything/model-interaction/input";
 
 import {
   buildHelarcPromptAssembly,
   HELARC_ACTION_CONTRACT_VERSION,
+  HELARC_MODEL_OUTPUT_RESERVE_BYTES,
   HELARC_PROMPT_ARCHITECTURE_VERSION,
   HELARC_TOOL_CATALOG_VERSION,
 } from "../prompt/HelarcPromptAssembly.js";
@@ -76,10 +81,68 @@ export function buildHelarcProviderRequest(
   input: ControllerInput<HelarcAgentOutput>,
   context: ProviderRequestBuildContext,
 ): ProviderRequest {
-  const promptAssembly = buildHelarcPromptAssembly({ controllerInput: input });
   const correctionMessage = context.correction === null
     ? null
     : buildHelarcCorrectionMessage(context.correction.failure);
+  const promptAssembly = buildHelarcPromptAssembly({
+    controllerInput: input,
+    correctionMessage,
+  });
+  const composition = composeModelInput({
+    id: `${input.runId}:model-input:${input.iteration}:${context.attemptNumber}`,
+    providerId: context.inputAccounting.providerId,
+    model: context.inputAccounting.model,
+    accounting: context.inputAccounting,
+    outputReserve: Object.freeze({
+      unit: input.contextManifest.budget.unit,
+      amount: HELARC_MODEL_OUTPUT_RESERVE_BYTES,
+    }),
+    contextBudget: Object.freeze({
+      unit: input.contextManifest.budget.unit,
+      amount: input.contextManifest.budget.maximum,
+    }),
+    contextProjectedAmount: input.context.accounting.amount,
+    sections: promptAssembly.sections,
+    lineage: Object.freeze({
+      activeContext: Object.freeze({
+        owner: "context",
+        kind: "active_context",
+        id: input.context.activeContext.id,
+        revision: String(input.context.activeContext.version),
+      }),
+      contextProjection: Object.freeze({
+        owner: "context",
+        kind: "context_projection",
+        id: input.context.id,
+        revision: String(input.context.activeContext.version),
+      }),
+      projectionManifest: Object.freeze({
+        owner: "context",
+        kind: "projection_manifest",
+        id: input.contextManifest.id,
+        revision: String(input.contextManifest.activeContext.version),
+      }),
+      toolExposure: Object.freeze({
+        owner: "tools",
+        kind: "tool_exposure",
+        id: input.toolExposure.id,
+        revision: input.toolExposure.selectionRevision,
+      }),
+      protocol: Object.freeze({
+        owner: "helarc",
+        kind: "action_contract",
+        id: HELARC_ACTION_CONTRACT_VERSION,
+        revision: HELARC_ACTION_CONTRACT_VERSION,
+      }),
+      policy: Object.freeze({
+        owner: "context",
+        kind: "projection_policy",
+        id: input.contextManifest.policy.id,
+        revision: input.contextManifest.policy.revision,
+      }),
+    }),
+    composedAt: input.context.createdAt,
+  });
 
   return {
     capability: HELARC_CONTROLLER_CAPABILITY,
@@ -92,22 +155,28 @@ export function buildHelarcProviderRequest(
       actionContractVersion: promptAssembly.versions.actionContractVersion,
       toolCatalogVersion: promptAssembly.versions.toolCatalogVersion,
       exposedToolNames: promptAssembly.exposedToolNames,
-      promptSectionIds: promptAssembly.systemSections.map((section) => section.id),
+      promptSectionIds: promptAssembly.promptSections.map((section) => section.id),
+      modelInputCompositionId: composition.id,
+      contextProjectionId: input.context.id,
+      contextManifestId: input.contextManifest.id,
       structuredOutputAttemptNumber: context.attemptNumber,
       ...(context.correction === null ? {} : {
         structuredOutputCorrectionCategory: context.correction.failure.category,
         structuredOutputCorrectionCode: context.correction.failure.code,
       }),
     },
-    messages: [
-      { role: "system", content: promptAssembly.systemPrompt, metadata: {} },
-      { role: "user", content: promptAssembly.userPrompt, metadata: {} },
-      ...(correctionMessage === null ? [] : [{
-        role: "user" as const,
-        content: correctionMessage,
-        metadata: { kind: "structured-output-correction" },
-      }]),
-    ],
+    messages: providerMessagesFromComposition(composition.sections).map((message) =>
+      message.metadata.modelInputSectionId === "helarc:model-input:structured_output_correction"
+        ? Object.freeze({
+            ...message,
+            metadata: Object.freeze({
+              ...message.metadata,
+              kind: "structured-output-correction",
+            }),
+          })
+        : message
+    ),
+    composition,
   };
 }
 

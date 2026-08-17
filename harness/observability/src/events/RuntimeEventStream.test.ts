@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { RuntimeEvent, RuntimeEventPublisher } from "./RuntimeEvent.js";
 import { RUNTIME_EVENT_SCHEMA_VERSION } from "./RuntimeEvent.js";
-import type { ControllerFinishedRuntimeEventPayload } from "./RuntimeEventPayload.js";
+import type {
+  ContextProjectionCompletedRuntimeEventPayload,
+  ControllerFinishedRuntimeEventPayload,
+} from "./RuntimeEventPayload.js";
 import { RuntimeEventStream } from "./RuntimeEventStream.js";
 
 describe("RuntimeEventStream", () => {
@@ -88,7 +91,81 @@ describe("RuntimeEventStream", () => {
       ["run-1:runtime-event:2", 2],
     ]);
   });
+
+  it("snapshots a payload-free Context transition trace record", () => {
+    const events: RuntimeEvent[] = [];
+    const stream = createStream([{ publish: (event) => events.push(event) }]);
+
+    stream.emit("context.transition.committed", {
+      transitionId: "transition-1",
+      activeContextId: "context-1",
+      baseVersion: 0,
+      committedVersion: 1,
+      proposerOwner: "agent-core",
+      proposerKind: "run_execution",
+      causeKind: "run_initialization",
+      causeId: "run-1",
+      correlationId: "run-1",
+      operationKinds: ["add"],
+    });
+
+    expect(events[0]?.payload).toEqual({
+      transitionId: "transition-1",
+      activeContextId: "context-1",
+      baseVersion: 0,
+      committedVersion: 1,
+      proposerOwner: "agent-core",
+      proposerKind: "run_execution",
+      causeKind: "run_initialization",
+      causeId: "run-1",
+      correlationId: "run-1",
+      operationKinds: ["add"],
+    });
+    expect(events[0]?.payload).not.toHaveProperty("contributions");
+  });
+
+  it("publishes only the bounded Context Manifest summary", () => {
+    const events: RuntimeEvent[] = [];
+    const stream = createStream([{ publish: (event) => events.push(event) }]);
+
+    stream.emit("context.projection.completed", {
+      ...contextProjectionPayload(),
+      manifestRecords: [{ payload: "must-not-escape" }],
+    } as ContextProjectionCompletedRuntimeEventPayload);
+
+    expect(events[0]?.payload).toEqual(contextProjectionPayload());
+    expect(events[0]?.payload).not.toHaveProperty("manifestRecords");
+  });
 });
+
+function contextProjectionPayload(): ContextProjectionCompletedRuntimeEventPayload {
+  return {
+    manifestId: "manifest-1",
+    projectionId: "projection-1",
+    requestId: "request-1",
+    activeContextId: "context-1",
+    activeContextVersion: 2,
+    profileId: "profile-1",
+    profileRevision: "1",
+    policyId: "policy-1",
+    policyRevision: "1",
+    estimatorId: "estimator-1",
+    estimatorRevision: "1",
+    accountingUnit: "bytes",
+    budgetMaximum: 1_024,
+    consideredItemCount: 4,
+    projectedItemCount: 2,
+    projectedAmount: 512,
+    includedCount: 1,
+    transformedCount: 1,
+    referencedCount: 0,
+    omittedCount: 1,
+    rejectedCount: 1,
+    blockedCount: 0,
+    outcome: "projected",
+    code: null,
+  };
+}
 
 function createStream(
   publishers: readonly RuntimeEventPublisher[],

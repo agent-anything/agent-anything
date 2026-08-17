@@ -16,6 +16,7 @@ describe("OpenAICompatibleProvider", () => {
       apiKey: "secret-key",
       model: "model-a",
       timeoutMs: 1000,
+      inputLimit: testInputLimit(),
     }, async (url, init) => {
       calls.push({
         url,
@@ -58,6 +59,7 @@ describe("OpenAICompatibleProvider", () => {
       apiKey: "secret-key",
       model: "model-a",
       timeoutMs: 1000,
+      inputLimit: testInputLimit(),
     }, async () => ({
       ok: false,
       status: 401,
@@ -183,7 +185,12 @@ function config() {
     apiKey: "",
     model: "model-a",
     timeoutMs: 1000,
+    inputLimit: testInputLimit(),
   };
+}
+
+function testInputLimit() {
+  return { maximumBytes: 1_024 * 1_024, source: "host_configured" as const };
 }
 
 function context(): InvocationInterruptionContext {

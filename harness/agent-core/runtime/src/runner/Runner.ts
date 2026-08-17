@@ -29,7 +29,7 @@ import type {
 } from "./RunnerDependencies.js";
 import {
   snapshotContextProjectionRequest,
-} from "@agent-anything/context/context";
+} from "@agent-anything/context/projection";
 import {
   snapshotAgent,
   snapshotRunConfig,
@@ -149,25 +149,61 @@ export class Runner {
 function snapshotRunnerContextProjection(
   input: RunnerDependencies["contextProjection"],
 ): RunnerDependencies["contextProjection"] {
+  if (input === null || typeof input !== "object") {
+    throw new TypeError("Runner requires explicit Context projection configuration.");
+  }
+  if (typeof input.allocate !== "function") {
+    throw new TypeError("Runner requires a Context projection allocation operation.");
+  }
   if (
-    input === null ||
-    typeof input !== "object" ||
-    input.projector === null ||
-    typeof input.projector !== "object" ||
-    typeof input.projector.project !== "function"
+    input.policy === null ||
+    typeof input.policy !== "object" ||
+    typeof input.policy.decide !== "function"
   ) {
-    throw new TypeError("Runner requires an explicit ContextProjectorPort.");
+    throw new TypeError("Runner requires a Context projection policy operation.");
   }
   const request = snapshotContextProjectionRequest({
-    runId: "runner_context_projection_validation",
-    controllerIteration: 1,
+    id: "runner-context-projection-validation",
+    activeContext: Object.freeze({
+      id: "runner-context-validation",
+      runId: "runner-context-validation",
+      version: 0,
+    }),
+    consumer: Object.freeze({
+      owner: "agent-core",
+      kind: "controller",
+      id: "runner-context-validation",
+    }),
     purpose: input.purpose,
-    limits: input.limits,
+    profile: input.profile,
+    budget: Object.freeze({ unit: "bytes", maximum: 0 }),
+    policy: input.policy.ref,
+    estimator: Object.freeze({
+      id: "runner-context-estimator-validation",
+      revision: "1",
+      unit: "bytes",
+      accuracy: "exact",
+    }),
+    audiences: input.audiences,
+    mandatoryItems: Object.freeze([]),
+    requestedAt: "2026-01-01T00:00:00.000Z",
   });
+  if (
+    !Number.isSafeInteger(input.maxContributionPayloadBytes) ||
+    input.maxContributionPayloadBytes < 0
+  ) {
+    throw new TypeError("Runner Context contribution payload limit is invalid.");
+  }
   return Object.freeze({
-    projector: input.projector,
     purpose: request.purpose,
-    limits: request.limits,
+    profile: request.profile,
+    policy: Object.freeze({
+      ref: request.policy,
+      decide: input.policy.decide.bind(input.policy),
+    }),
+    audiences: request.audiences,
+    maxContributionPayloadBytes: input.maxContributionPayloadBytes,
+    allocate: input.allocate.bind(input),
   });
 }
 

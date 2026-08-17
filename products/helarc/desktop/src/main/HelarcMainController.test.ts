@@ -10,6 +10,7 @@ import type {
   ProviderRequest,
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import { createUtf8ModelInputAccounting } from "@agent-anything/model-interaction/input";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1692,9 +1693,10 @@ describe("HelarcMainController", () => {
     expect(controller.getSnapshot().threadSummaries).toHaveLength(1);
 
     expect(provider.requests).toHaveLength(2);
-    const continuedPrompt = provider.requests[1]?.messages.find(
-      (message) => message.role === "user",
-    )?.content ?? "";
+    const continuedPrompt = provider.requests[1]?.messages
+      .filter((message) => message.role === "user")
+      .map((message) => message.content)
+      .join("\n") ?? "";
     expect(continuedPrompt).toContain("Inspect the current implementation");
     expect(continuedPrompt).toContain("No changes needed.");
     expect(continuedPrompt.match(/Summarize the next step/g)).toHaveLength(1);
@@ -1751,6 +1753,7 @@ describe("HelarcMainController", () => {
 });
 
 class CompleteProvider implements Provider {
+  readonly inputAccounting = createDesktopTestInputAccounting("complete-provider");
   readonly descriptor = {
     id: "complete-provider",
     name: "Complete Provider",
@@ -1758,6 +1761,7 @@ class CompleteProvider implements Provider {
       supportsToolPlanning: true,
       supportsStructuredOutput: true,
       supportsStreaming: false,
+      modelInput: this.inputAccounting.capability,
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -1841,6 +1845,7 @@ class DeferredCompleteProvider extends CompleteProvider {
 }
 
 class SecretFailingProvider implements Provider {
+  readonly inputAccounting = createDesktopTestInputAccounting("secret-failing-provider");
   readonly descriptor = {
     id: "secret-failing-provider",
     name: "Secret failing Provider",
@@ -1848,6 +1853,7 @@ class SecretFailingProvider implements Provider {
       supportsToolPlanning: true,
       supportsStructuredOutput: true,
       supportsStreaming: false,
+      modelInput: this.inputAccounting.capability,
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -1872,6 +1878,7 @@ class SecretFailingProvider implements Provider {
 }
 
 class ScriptedProvider implements Provider {
+  readonly inputAccounting = createDesktopTestInputAccounting("scripted-provider");
   readonly descriptor = {
     id: "scripted-provider",
     name: "Scripted Provider",
@@ -1879,6 +1886,7 @@ class ScriptedProvider implements Provider {
       supportsToolPlanning: true,
       supportsStructuredOutput: true,
       supportsStreaming: false,
+      modelInput: this.inputAccounting.capability,
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -1912,6 +1920,20 @@ class ScriptedProvider implements Provider {
       },
     };
   }
+}
+
+function createDesktopTestInputAccounting(providerId: string) {
+  return createUtf8ModelInputAccounting({
+    providerId,
+    model: "desktop-test-model",
+    maximumInputBytes: 4 * 1_024 * 1_024,
+    limitSource: "host_configured",
+    estimator: { id: `${providerId}.utf8-content`, revision: "1" },
+    framing: { id: `${providerId}.framing`, revision: "1" },
+    renderFraming: (sections) => JSON.stringify({
+      roles: sections.map((section) => section.role),
+    }),
+  });
 }
 
 function commandToolCall(

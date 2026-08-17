@@ -1,5 +1,4 @@
 import type { ArtifactRef } from "@agent-anything/agent-core/run";
-import type { ContextFailure } from "../context/ContextFailure.js";
 import type {
   EvidencePersistenceError,
   EvidencePersistencePort,
@@ -11,6 +10,15 @@ import { snapshotEvidenceContribution } from "./EvidenceBuilder.js";
 import type { EvidenceRef } from "./EvidenceRef.js";
 import type { EvidenceContribution } from "./EvidenceSource.js";
 
+export interface EvidenceSettlementFailure {
+  readonly code:
+    | "context_evidence_creation_failed"
+    | "context_evidence_persistence_failed";
+  readonly message: string;
+  readonly retryable: false;
+  readonly metadata: Readonly<Record<string, unknown>>;
+}
+
 export type EvidenceSettlementResult =
   | {
       readonly status: "settled" | "interrupted";
@@ -21,7 +29,7 @@ export type EvidenceSettlementResult =
       readonly status: "failed";
       readonly evidenceRefs: readonly EvidenceRef[];
       readonly artifactRefs: readonly ArtifactRef[];
-      readonly failure: ContextFailure;
+      readonly failure: EvidenceSettlementFailure;
     };
 
 export async function settleEvidenceContribution(input: {
@@ -135,7 +143,7 @@ function settled(status: "settled" | "interrupted", evidenceRefs: readonly Evide
   return Object.freeze({ status, evidenceRefs: Object.freeze([...evidenceRefs]), artifactRefs: Object.freeze([...artifactRefs]) });
 }
 
-function failed(code: string, message: string, metadata: Readonly<Record<string, unknown>>, evidenceRefs: readonly EvidenceRef[], artifactRefs: readonly ArtifactRef[]): EvidenceSettlementResult {
+function failed(code: EvidenceSettlementFailure["code"], message: string, metadata: Readonly<Record<string, unknown>>, evidenceRefs: readonly EvidenceRef[], artifactRefs: readonly ArtifactRef[]): EvidenceSettlementResult {
   return Object.freeze({
     status: "failed" as const,
     evidenceRefs: Object.freeze([...evidenceRefs]),

@@ -51,7 +51,7 @@ describe("ModelInputComposition contract", () => {
   it("fails before transport when mandatory input and reserve exceed the limit", () => {
     expect(() => snapshotModelInputComposition({
       ...validComposition(),
-      limit: { unit: "tokens", maximum: 150 },
+      limit: { unit: "tokens", maximum: 150, source: "provider_reported" },
       accounting: {
         unit: "tokens",
         sectionAmount: 70,
@@ -75,7 +75,7 @@ function validComposition(): ModelInputComposition {
       unit: "tokens",
       accuracy: "exact",
     },
-    limit: { unit: "tokens", maximum: 1000 },
+    limit: { unit: "tokens", maximum: 1000, source: "provider_reported" },
     outputReserve: { unit: "tokens", amount: 100 },
     framing: {
       ref: { id: "chat-framing", revision: "1" },

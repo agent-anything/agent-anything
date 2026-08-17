@@ -8,6 +8,10 @@ import {
   type ProviderRequest,
   type ProviderResponse,
 } from "@agent-anything/model-interaction";
+import {
+  createUtf8ModelInputAccounting,
+  type ProviderModelInputAccounting,
+} from "@agent-anything/model-interaction/input";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import type { FetchLike } from "../http/ProviderHttpTransport.js";
 import { readProviderHttpFailureMetadata } from "../http/ProviderHttpFailureMetadata.js";
@@ -16,26 +20,48 @@ export interface OllamaProviderConfig {
   readonly baseUrl: string;
   readonly model: string;
   readonly timeoutMs: number;
+  readonly inputLimit: {
+    readonly maximumBytes: number;
+    readonly source: "provider_reported" | "host_configured";
+  };
 }
 
 export class OllamaProvider implements Provider {
-  readonly descriptor: ProviderDescriptor = {
-    id: "ollama.generate",
-    name: "Ollama Generate",
-    capabilities: {
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: false,
-    },
-    requestRetryScheduler: { kind: "harness" },
-    metadata: {},
-  };
+  readonly descriptor: ProviderDescriptor;
+  readonly inputAccounting: ProviderModelInputAccounting;
 
   constructor(
     config: OllamaProviderConfig,
     private readonly fetchImpl: FetchLike = globalThis.fetch as FetchLike,
   ) {
     this.config = snapshotConfig(config);
+    this.inputAccounting = createUtf8ModelInputAccounting({
+      providerId: "ollama.generate",
+      model: this.config.model,
+      maximumInputBytes: this.config.inputLimit.maximumBytes,
+      limitSource: this.config.inputLimit.source,
+      estimator: { id: "ollama.generate.utf8-content", revision: "1" },
+      framing: { id: "ollama.generate-framing", revision: "1" },
+      renderFraming: (sections) => JSON.stringify({
+        protocol: "ollama-generate",
+        model: this.config.model,
+        roles: sections.map((section) => section.role),
+        separators: Math.max(0, sections.length - 1),
+        stream: false,
+      }),
+    });
+    this.descriptor = Object.freeze({
+      id: "ollama.generate",
+      name: "Ollama Generate",
+      capabilities: Object.freeze({
+        supportsToolPlanning: true,
+        supportsStructuredOutput: true,
+        supportsStreaming: false,
+        modelInput: this.inputAccounting.capability,
+      }),
+      requestRetryScheduler: Object.freeze({ kind: "harness" as const }),
+      metadata: Object.freeze({}),
+    });
   }
 
   private readonly config: Readonly<OllamaProviderConfig>;
@@ -184,5 +210,20 @@ function snapshotConfig(input: OllamaProviderConfig): Readonly<OllamaProviderCon
   if (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 1) {
     throw new TypeError("Ollama timeout must be a positive integer.");
   }
-  return Object.freeze({ baseUrl, model, timeoutMs: input.timeoutMs });
+  if (
+    input.inputLimit === null ||
+    typeof input.inputLimit !== "object" ||
+    !Number.isSafeInteger(input.inputLimit.maximumBytes) ||
+    input.inputLimit.maximumBytes <= 0 ||
+    (input.inputLimit.source !== "provider_reported" &&
+      input.inputLimit.source !== "host_configured")
+  ) {
+    throw new TypeError("Ollama input limit is invalid.");
+  }
+  return Object.freeze({
+    baseUrl,
+    model,
+    timeoutMs: input.timeoutMs,
+    inputLimit: Object.freeze({ ...input.inputLimit }),
+  });
 }

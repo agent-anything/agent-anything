@@ -2,6 +2,7 @@ export { createControllerTurnTraceOperationId, RUN_TRACE_SCHEMA_VERSION } from "
 export type {
   CommittedRunItemTraceProjection,
   CompleteRunTraceInput,
+  ContextProjectionTraceRecord,
   ControllerTurnTraceAttributes,
   CreateRunTraceAssemblerInput,
   InteractionTraceAttributes,

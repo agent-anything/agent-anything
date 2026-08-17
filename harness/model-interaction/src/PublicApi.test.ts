@@ -5,12 +5,17 @@ import type { RetrySchedulerOwnership } from "./index.js";
 import * as api from "./index.js";
 
 describe("Model Interaction public API", () => {
-  it("exposes only Model Interaction interruption helpers as runtime values", () => {
+  it("exposes focused Model Interaction runtime values from their owner paths", () => {
     expect(Object.keys(api).sort()).toEqual([
       "createProviderAttemptInterruption",
       "providerResultFromInterruption",
     ]);
     expect(Object.keys(inputApi).sort()).toEqual([
+      "ModelInputCompositionError",
+      "allocateModelInputContext",
+      "composeModelInput",
+      "createUtf8ModelInputAccounting",
+      "providerMessagesFromComposition",
       "snapshotModelInputCapability",
       "snapshotModelInputComposition",
     ]);

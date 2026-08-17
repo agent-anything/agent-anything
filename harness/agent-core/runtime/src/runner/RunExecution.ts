@@ -4,12 +4,15 @@ import type { ControllerTurnRef, InvocationInterruptionContext } from "@agent-an
 import type { RunInput } from "@agent-anything/agent-core/input";
 import type { RunActionProvenance, RunActionRef } from "@agent-anything/agent-core/run-action";
 import {
-  applyContextUpdate,
-  createInitialContext,
-  ContextProjectionError,
-  type Context,
-  type ContextProjection,
-} from "@agent-anything/context/context";
+  applyContextTransition,
+  type ActiveContext,
+  type ContextAdmissionProfile,
+  type ContextTransition,
+  type ContextTransitionOperation,
+} from "@agent-anything/context/active-context";
+import { ContextContractError } from "@agent-anything/context/contract";
+import type { ContextContribution } from "@agent-anything/context/contribution";
+import type { ContextProjection, ProjectionManifest } from "@agent-anything/context/projection";
 import {
   RuntimeEventStream,
   type ObservabilityRecordContext,
@@ -117,6 +120,7 @@ import type {
   ResolvedRunnerDependencies,
 } from "./RunnerDependencies.js";
 import {
+  ContextProjectionPreparationError,
   executeControllerOperation,
   prepareControllerOperation,
   type PreparedControllerOperation,
@@ -147,6 +151,16 @@ import { evaluateRunLoopLimits } from "./RunLoopLimits.js";
 import { recordRunnerLifecycle } from "./RunnerObservability.js";
 import { completeRunnerTrace, createRunnerTraceAssembler } from "./RunnerTracing.js";
 import { RunStateWriter } from "./RunStateWriter.js";
+import {
+  createCurrentRunContextAdmissionProfile,
+  createCurrentRunContextContributions,
+  createObservationContextAdmissionProfile,
+  createObservationContextContribution,
+  createSteeringContextAdmissionProfile,
+  createSteeringContextContribution,
+  createTaskContextAdmissionProfile,
+  createTaskContextContribution,
+} from "../context-contribution/index.js";
 
 type TerminalCandidate<TOutput> =
   | { readonly status: "succeeded"; readonly output: TOutput }
@@ -163,7 +177,7 @@ interface CandidateBasis<TOutput> {
   readonly turn: ControllerTurnRef;
   readonly runRevision: number;
   readonly activeAgent: Agent<TOutput>;
-  readonly projection: ContextProjection<RunObservation>;
+  readonly projection: ContextProjection;
   readonly exposure: ReturnType<typeof createControllerToolExposureProof>;
 }
 
@@ -205,6 +219,9 @@ export class RunExecution<TOutput> {
     readonly fingerprint: string;
     readonly command: RunSteeringCommand;
   }>();
+  private readonly pendingContextTransitions = new Map<string, ContextTransition>();
+  private emittedContextTransitionId: string | null = null;
+  private runStartedEventEmitted = false;
   private steeringEpoch = 0;
   private retryProjection: import("./RunHandle.js").RunRetryProjection | null = null;
 
@@ -248,6 +265,7 @@ export class RunExecution<TOutput> {
       input,
       config,
       startedAt: this.startedAt,
+      activeContextId: this.id("active_context"),
     });
     this.writer = new RunStateWriter(
       initial,
@@ -370,11 +388,27 @@ export class RunExecution<TOutput> {
   async run(): Promise<RunResult<TOutput>> {
     this.interruptionCoordinator.start();
     try {
-      this.writer.commitState(() => Object.freeze({ status: "running" as const }));
+      const taskContribution = createTaskContextContribution({
+        id: this.id("context_contribution"),
+        runId: this.runId,
+        task: this.input.task,
+      });
+      this.writer.commitState((current) => Object.freeze({
+        status: "running" as const,
+        context: this.applyContextContributions(
+          current.context,
+          Object.freeze([taskContribution]),
+          createTaskContextAdmissionProfile(),
+          "run_initialization",
+          this.runId,
+        ),
+      }));
       this.emit("run.started", {
         status: "running",
         activeAgentId: this.activeAgent.id,
       }, this.startedAt);
+      this.runStartedEventEmitted = true;
+      this.emitCommittedContextTransition(this.writer.getSnapshot().context);
       const startFailures = await this.recordLifecycle("started");
       if (startFailures.length > 0) {
         return await this.settle({
@@ -473,6 +507,7 @@ export class RunExecution<TOutput> {
     readonly agent: Agent<TOutput>;
     readonly prepared: PreparedControllerOperation<TOutput>;
   }> {
+    this.synchronizeCurrentContext();
     const state = this.writer.getSnapshot();
     const iteration = state.counters.controllerTurns + 1;
     const turn: ControllerTurnRef = Object.freeze({
@@ -484,15 +519,29 @@ export class RunExecution<TOutput> {
       this.config.tools,
       turn.id,
     );
-    const prepared = prepareControllerOperation({
-      agent: this.activeAgent,
-      runInput: this.input,
-      config: this.config,
-      state,
-      iteration,
-      exposure,
-      contextProjection: this.dependencies.contextProjection,
-    });
+    let prepared: PreparedControllerOperation<TOutput>;
+    try {
+      prepared = prepareControllerOperation({
+        agent: this.activeAgent,
+        runInput: this.input,
+        config: this.config,
+        state,
+        iteration,
+        exposure,
+        contextProjection: this.dependencies.contextProjection,
+        requestedAt: this.now(),
+      });
+      this.emitContextProjectionCompleted(prepared.manifest, "projected", null);
+    } catch (error) {
+      if (error instanceof ContextProjectionPreparationError) {
+        this.emitContextProjectionCompleted(
+          error.manifest,
+          "blocked",
+          error.projectionFailure.code,
+        );
+      }
+      throw error;
+    }
     this.emit("controller.started", { turnId: turn.id, iteration });
     try {
       const candidate = await this.interruptionCoordinator.execute(
@@ -558,6 +607,48 @@ export class RunExecution<TOutput> {
       });
       throw error;
     }
+  }
+
+  private synchronizeCurrentContext(): void {
+    const state = this.writer.getSnapshot();
+    const runStateId = this.currentContextContributionId(state.context, "agent-runtime", "run_state")
+      ?? this.id("context_contribution");
+    const planId = this.currentContextContributionId(state.context, "agent-runtime", "run_plan")
+      ?? this.id("context_contribution");
+    const revision = String(state.revision + 1);
+    const contributions = createCurrentRunContextContributions({
+      runStateId,
+      planId,
+      revision,
+      state,
+      plan: state.plan === null ? null : projectPlan(state.plan),
+      createdAt: this.now(),
+    });
+    this.writer.commitState((current) => Object.freeze({
+      context: this.applyContextContributions(
+        current.context,
+        contributions,
+        createCurrentRunContextAdmissionProfile(),
+        "controller_context_prepared",
+        null,
+      ),
+    }));
+  }
+
+  private currentContextContributionId(
+    context: ActiveContext,
+    owner: string,
+    replacementKey: string,
+  ): string | null {
+    const item = context.items.find((candidate) =>
+      "contribution" in candidate &&
+      candidate.lifecycle.kind === "active" &&
+      candidate.contribution.source.owner === owner &&
+      candidate.contribution.handling.replacementKey === replacementKey
+    );
+    return item !== undefined && "contribution" in item
+      ? item.contribution.ref.id
+      : null;
   }
 
   private async processCandidate(
@@ -781,11 +872,10 @@ export class RunExecution<TOutput> {
 
     const previous = state.activeAgent;
     const nextAgent = resolution.agent as Agent<TOutput>;
-    const nextContext = handoffContext(
+    const nextContext = this.handoffContext(
       request.transferPolicy,
       state.context,
       basis.projection,
-      this.input,
     );
     this.activeAgent = nextAgent;
     this.writer.commit({
@@ -809,6 +899,45 @@ export class RunExecution<TOutput> {
       revision: request.targetAgent.revision,
     }], "agent-runtime");
     return true;
+  }
+
+  private handoffContext(
+    policy: SameRunHandoffRequest["transferPolicy"],
+    context: ActiveContext,
+    projection: ContextProjection,
+  ): ActiveContext {
+    if (policy === "all_context") return context;
+    const retained = policy === "bounded_context"
+      ? new Set(projection.blocks.map((block) => block.item.id))
+      : new Set<string>();
+    const operations: ContextTransitionOperation[] = context.items.flatMap((item) =>
+      "contribution" in item && item.lifecycle.kind === "active" && !retained.has(item.ref.id)
+        ? [Object.freeze({
+            kind: "invalidate" as const,
+            item: item.ref,
+            expectedContribution: item.contribution.ref,
+            reason: policy === "fresh_context" ? "handoff_fresh_context" : "handoff_bounded_context",
+          })]
+        : []
+    );
+    const admission: ContextAdmissionProfile = Object.freeze({
+      ref: Object.freeze({ id: "agent-runtime:handoff-context", revision: "1" }),
+      owner: "agent-runtime",
+      sourceKinds: Object.freeze(["handoff"]),
+      disclosure: Object.freeze({ sensitivity: "public", audiences: Object.freeze([]) }),
+      retention: Object.freeze(["history" as const]),
+      instructionRoles: Object.freeze(["data" as const]),
+      necessities: Object.freeze(["optional" as const]),
+      maximumPrecedence: 0,
+      transformations: Object.freeze([]),
+    });
+    return this.applyContextOperations(
+      context,
+      operations,
+      admission,
+      "handoff_context_transfer",
+      null,
+    );
   }
 
   private async applyInteractionCandidate(
@@ -1423,10 +1552,18 @@ export class RunExecution<TOutput> {
       payload,
     });
     const failed = observationFailed(observation);
+    const contribution = createObservationContextContribution({
+      id: this.id("context_contribution"),
+      observation,
+    });
     this.writer.commit({ kind: "observation", observation }, (current) => Object.freeze({
-      context: applyContextUpdate(current.context, {
-        observations: Object.freeze([observation]),
-      }),
+      context: this.applyContextContributions(
+        current.context,
+        Object.freeze([contribution]),
+        createObservationContextAdmissionProfile(observation.owner),
+        "observation_committed",
+        observation.id,
+      ),
       counters: Object.freeze({
         ...current.counters,
         observations: sequence,
@@ -1435,6 +1572,78 @@ export class RunExecution<TOutput> {
           : 0,
       }),
     }));
+  }
+
+  private applyContextContributions(
+    context: ActiveContext,
+    contributions: readonly ContextContribution[],
+    admission: ContextAdmissionProfile,
+    causeKind: string,
+    correlationId: string | null,
+  ): ActiveContext {
+    const operations: ContextTransitionOperation[] = contributions.map((contribution) => {
+      if (contribution.handling.retention === "current") {
+        const current = context.items.find((item) =>
+          "contribution" in item &&
+          item.lifecycle.kind === "active" &&
+          item.contribution.source.owner === contribution.source.owner &&
+          item.contribution.handling.replacementKey === contribution.handling.replacementKey
+        );
+        if (current !== undefined && "contribution" in current) {
+          return Object.freeze({
+            kind: "replace" as const,
+            item: current.ref,
+            expectedContribution: current.contribution.ref,
+            contribution,
+          });
+        }
+      }
+      return Object.freeze({
+        kind: "add" as const,
+        item: Object.freeze({ id: this.id("context_item") }),
+        contribution,
+      });
+    });
+    return this.applyContextOperations(
+      context,
+      operations,
+      admission,
+      causeKind,
+      correlationId,
+    );
+  }
+
+  private applyContextOperations(
+    context: ActiveContext,
+    operations: readonly ContextTransitionOperation[],
+    admission: ContextAdmissionProfile,
+    causeKind: string,
+    correlationId: string | null,
+  ): ActiveContext {
+    if (operations.length === 0) return context;
+    const createdAt = this.now();
+    const transition: ContextTransition = Object.freeze({
+      id: this.id("context_transition"),
+      base: context.ref,
+      proposer: Object.freeze({
+        owner: admission.owner,
+        kind: "run_execution",
+        id: this.runId,
+      }),
+      cause: Object.freeze({ kind: causeKind, id: correlationId }),
+      correlationId,
+      operations: Object.freeze([...operations]),
+      createdAt,
+    });
+    const next = applyContextTransition({
+      context,
+      transition,
+      admission,
+      maxContributionPayloadBytes:
+        this.dependencies.contextProjection.maxContributionPayloadBytes,
+    });
+    this.pendingContextTransitions.set(transition.id, transition);
+    return next;
   }
 
   private openPendingInteraction(pending: PendingInteractionRef): void {
@@ -1558,26 +1767,29 @@ export class RunExecution<TOutput> {
             ? "run_settled_before_application"
             : null,
       });
+      const contribution = status === "applied"
+        ? createSteeringContextContribution({
+            id: this.id("context_contribution"),
+            revision: String(command.acceptedRunRevision),
+            runId: this.runId,
+            commandId: command.commandId,
+            instruction: command.instruction,
+            createdAt: command.submittedAt,
+          })
+        : null;
       this.writer.commit({
         kind: "state_transition",
         transition: "steering",
         steering: application,
       }, (state) => status === "applied"
         ? Object.freeze({
-            context: applyContextUpdate(state.context, {
-              messages: [{
-                id: `steering:${command.commandId}`,
-                role: "user",
-                content: command.instruction,
-                metadata: Object.freeze({
-                  kind: "run_steering",
-                  commandId: command.commandId,
-                  origin: command.attribution.origin,
-                  actorId: command.attribution.actorId,
-                  acceptedRunRevision: command.acceptedRunRevision,
-                }),
-              }],
-            }),
+            context: this.applyContextContributions(
+              state.context,
+              Object.freeze([contribution!]),
+              createSteeringContextAdmissionProfile(),
+              "steering_applied",
+              command.commandId,
+            ),
             plan: null,
           })
         : Object.freeze({}));
@@ -2074,11 +2286,17 @@ export class RunExecution<TOutput> {
   }
 
   private failureFromError(error: unknown): Extract<TerminalCandidate<TOutput>, { readonly status: "failed" }> {
-    if (error instanceof ContextProjectionError) {
+    if (error instanceof ContextContractError) {
       return {
         status: "failed",
         code: "context_projection_failed",
-        failure: createRunFailureCause("context", error.failure),
+        failure: createRunFailureCause("context", Object.freeze({
+          code: error.failure.code,
+          message: error.failure.message,
+          retryable: false,
+          path: error.failure.path,
+          metadata: Object.freeze({ path: error.failure.path }),
+        })),
       };
     }
     if (error instanceof ControllerError) {
@@ -2234,6 +2452,9 @@ export class RunExecution<TOutput> {
   }
 
   private onStateCommitted(state: RunState<TOutput>): void {
+    if (this.runStartedEventEmitted) {
+      this.emitCommittedContextTransition(state.context);
+    }
     while (this.emittedItemCount < state.items.length) {
       const item = state.items[this.emittedItemCount++]!;
       this.emit("run.item.appended", {
@@ -2243,6 +2464,29 @@ export class RunExecution<TOutput> {
       }, item.createdAt);
     }
     this.publishCurrentState();
+  }
+
+  private emitCommittedContextTransition(context: ActiveContext): void {
+    const transitionId = context.appliedTransitionId;
+    if (transitionId === null || transitionId === this.emittedContextTransitionId) return;
+    const transition = this.pendingContextTransitions.get(transitionId);
+    if (transition === undefined) return;
+    this.emit("context.transition.committed", {
+      transitionId,
+      activeContextId: context.ref.id,
+      baseVersion: transition.base.version,
+      committedVersion: context.ref.version,
+      proposerOwner: transition.proposer.owner,
+      proposerKind: transition.proposer.kind,
+      causeKind: transition.cause.kind,
+      causeId: transition.cause.id,
+      correlationId: transition.correlationId,
+      operationKinds: Object.freeze(
+        transition.operations.map((operation) => operation.kind),
+      ),
+    }, transition.createdAt);
+    this.emittedContextTransitionId = transitionId;
+    this.pendingContextTransitions.delete(transitionId);
   }
 
   private publishCurrentState(): void {
@@ -2274,6 +2518,48 @@ export class RunExecution<TOutput> {
     } catch {
       // Notifications remain non-authoritative.
     }
+  }
+
+  private emitContextProjectionCompleted(
+    manifest: ProjectionManifest,
+    outcome: "projected" | "blocked",
+    code: string | null,
+  ): void {
+    const counts = {
+      included: 0,
+      transformed: 0,
+      referenced: 0,
+      omitted: 0,
+      rejected: 0,
+      blocked: 0,
+    };
+    for (const record of manifest.records) counts[record.disposition] += 1;
+    this.emit("context.projection.completed", {
+      manifestId: manifest.id,
+      projectionId: manifest.projectionId,
+      requestId: manifest.requestId,
+      activeContextId: manifest.activeContext.id,
+      activeContextVersion: manifest.activeContext.version,
+      profileId: manifest.profile.id,
+      profileRevision: manifest.profile.revision,
+      policyId: manifest.policy.id,
+      policyRevision: manifest.policy.revision,
+      estimatorId: manifest.estimator.id,
+      estimatorRevision: manifest.estimator.revision,
+      accountingUnit: manifest.accounting.unit,
+      budgetMaximum: manifest.budget.maximum,
+      consideredItemCount: manifest.accounting.consideredItems,
+      projectedItemCount: manifest.accounting.projectedItems,
+      projectedAmount: manifest.accounting.projectedAmount,
+      includedCount: counts.included,
+      transformedCount: counts.transformed,
+      referencedCount: counts.referenced,
+      omittedCount: counts.omitted,
+      rejectedCount: counts.rejected,
+      blockedCount: counts.blocked,
+      outcome,
+      code,
+    });
   }
 
   private emitTerminal(result: RunResult<TOutput>): void {
@@ -2552,22 +2838,6 @@ function sameAgentRef(
   right: { readonly id: string; readonly revision: string },
 ): boolean {
   return left.id === right.id && left.revision === right.revision;
-}
-
-function handoffContext(
-  policy: SameRunHandoffRequest["transferPolicy"],
-  current: Context<RunObservation>,
-  projection: ContextProjection<RunObservation>,
-  input: RunInput,
-): Context<RunObservation> {
-  if (policy === "all_context") return current;
-  if (policy === "fresh_context") return createInitialContext(input.task);
-  return Object.freeze({
-    messages: Object.freeze([...projection.messages]),
-    observations: Object.freeze([...projection.observations]),
-    evidenceRefs: Object.freeze([...projection.evidenceRefs]),
-    metadata: Object.freeze({ ...projection.metadata }),
-  });
 }
 
 function deriveActiveStatus(

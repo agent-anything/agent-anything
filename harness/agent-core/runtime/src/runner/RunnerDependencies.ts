@@ -2,7 +2,13 @@ import type { Agent, AgentRevisionRef } from "@agent-anything/agent-core/agent";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import type { RunActionRef } from "@agent-anything/agent-core/run-action";
-import type { ContextProjectionLimits, ContextProjectionPurpose, ContextProjectorPort } from "@agent-anything/context/context";
+import type {
+  ContextBudgetGrant,
+  ContextProjectionEstimator,
+  ContextProjectionPolicy,
+  ContextProjectionProfile,
+} from "@agent-anything/context/projection";
+import type { ControllerPreProjectionInput } from "../controller/index.js";
 import type { AuditPort, RunTraceObserver, RuntimeEventPublisher, TelemetryPort } from "@agent-anything/observability";
 import type { ActionExecutionCoordinatorDependencies } from "@agent-anything/action-execution/enforcement";
 import type { ActionExecutionObserver } from "@agent-anything/action-execution/enforcement";
@@ -13,7 +19,6 @@ import type { OperationResult } from "@agent-anything/operation-catalog/result";
 import type { CompositeDefinitionRevision } from "@agent-anything/operation-composition/definition";
 import type { CompositeExecutionDependencies } from "@agent-anything/operation-composition/execution";
 import type { RetryExecutor } from "../retry/RetryExecutor.js";
-import type { RunObservation } from "../run/RunObservation.js";
 import type { RunResult } from "../run/RunResult.js";
 import type { RunConfig } from "./RunConfig.js";
 
@@ -38,7 +43,11 @@ export type RunnerIdentityKind =
   | "run_trace"
   | "trace_span"
   | "approval_record"
-  | "authority_record";
+  | "authority_record"
+  | "active_context"
+  | "context_item"
+  | "context_transition"
+  | "context_contribution";
 
 export interface CreateRunnerIdentityInput {
   readonly kind: RunnerIdentityKind;
@@ -50,9 +59,15 @@ export type CreateRunnerIdentity = (input: CreateRunnerIdentityInput) => string;
 export type CreateRunIdentity = () => string;
 
 export interface RunnerContextProjection {
-  readonly projector: ContextProjectorPort<RunObservation, RunObservation>;
-  readonly purpose: ContextProjectionPurpose;
-  readonly limits: ContextProjectionLimits;
+  readonly purpose: string;
+  readonly profile: ContextProjectionProfile;
+  readonly policy: ContextProjectionPolicy;
+  readonly audiences: readonly string[];
+  readonly maxContributionPayloadBytes: number;
+  allocate(input: ControllerPreProjectionInput): {
+    readonly budget: ContextBudgetGrant;
+    readonly estimator: ContextProjectionEstimator;
+  };
 }
 
 export interface InternalOperationExecutionContext {

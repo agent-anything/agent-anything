@@ -26,3 +26,13 @@ export type {
   ReplaceContextOperation,
 } from "./ContextTransition.js";
 export { snapshotContextTransition } from "./ContextTransition.js";
+export type {
+  ContextAdmissionProfile,
+  ContextAdmissionProfileRef,
+} from "./ContextAdmission.js";
+export {
+  admitContextContribution,
+  snapshotContextAdmissionProfile,
+} from "./ContextAdmission.js";
+export type { ApplyContextTransitionInput } from "./ContextTransitionApplication.js";
+export { applyContextTransition } from "./ContextTransitionApplication.js";

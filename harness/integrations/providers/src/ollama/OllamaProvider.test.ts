@@ -144,6 +144,7 @@ function config() {
     baseUrl: "http://localhost:11434/",
     model: "gemma3:4b",
     timeoutMs: 1000,
+    inputLimit: { maximumBytes: 1_024 * 1_024, source: "host_configured" as const },
   };
 }
 

@@ -107,6 +107,7 @@ export {
 export type {
   CommittedRunItemTraceProjection,
   CompleteRunTraceInput,
+  ContextProjectionTraceRecord,
   ControllerTurnTraceAttributes,
   CreateRunTraceAssemblerInput,
   InteractionTraceAttributes,

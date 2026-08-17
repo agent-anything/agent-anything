@@ -1,4 +1,3 @@
-import type { ContextFailure } from "@agent-anything/context/context";
 import type { ProviderFailure } from "@agent-anything/model-interaction";
 import type { AuditFailure, TelemetryFailure } from "@agent-anything/observability";
 import type { ApprovalFailure, PermissionFailure } from "@agent-anything/permission";
@@ -22,6 +21,10 @@ export interface DescendantRunFailure extends RuntimeFailure {
   readonly childRunId: string | null;
 }
 
+export interface RunContextFailure extends RuntimeFailure {
+  readonly path: string;
+}
+
 export type RunFailureCause =
   | { readonly kind: "runtime"; readonly failure: RuntimeFailure }
   | { readonly kind: "model"; readonly failure: ModelFailure }
@@ -36,7 +39,7 @@ export type RunFailureCause =
   | { readonly kind: "tool"; readonly failure: ToolFailure }
   | { readonly kind: "composite"; readonly failure: CompositeFailure }
   | { readonly kind: "descendant"; readonly failure: DescendantRunFailure }
-  | { readonly kind: "context"; readonly failure: ContextFailure }
+  | { readonly kind: "context"; readonly failure: RunContextFailure }
   | { readonly kind: "audit"; readonly failure: AuditFailure }
   | { readonly kind: "telemetry"; readonly failure: TelemetryFailure };
 

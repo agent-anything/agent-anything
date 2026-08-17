@@ -21,3 +21,12 @@ export {
   snapshotContextProjectionRequest,
   snapshotProjectionManifest,
 } from "./ContextProjection.js";
+export type {
+  ActiveContextProjectionResult,
+  ContextProjectionEstimationInput,
+  ContextProjectionEstimator,
+  ContextProjectionFailure,
+  ContextProjectionPolicy,
+  ContextProjectionPolicyDecision,
+} from "./ActiveContextProjection.js";
+export { projectActiveContext } from "./ActiveContextProjection.js";

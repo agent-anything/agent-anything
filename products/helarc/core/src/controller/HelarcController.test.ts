@@ -9,6 +9,7 @@ import type {
   ProviderResponse,
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import { createUtf8ModelInputAccounting } from "@agent-anything/model-interaction/input";
 import {
   createToolCatalogSnapshot,
   type ToolDescriptorInput,
@@ -36,11 +37,24 @@ import {
   HELARC_TOOL_CATALOG_METADATA_KEY,
 } from "../tools/index.js";
 
+const TEST_INPUT_ACCOUNTING = createUtf8ModelInputAccounting({
+  providerId: "fake-provider",
+  model: "helarc-controller-test-model",
+  maximumInputBytes: 4 * 1_024 * 1_024,
+  limitSource: "host_configured",
+  estimator: { id: "fake-provider.utf8-content", revision: "1" },
+  framing: { id: "fake-provider.framing", revision: "1" },
+  renderFraming: (sections) => JSON.stringify({
+    roles: sections.map((section) => section.role),
+  }),
+});
+
 describe("Helarc controller", () => {
   it("builds a provider request from the current Runner state", () => {
     const request = buildHelarcProviderRequest(createControllerInput(), {
       attemptNumber: 1,
       correction: null,
+      inputAccounting: TEST_INPUT_ACCOUNTING,
     });
 
     expect(request.capability).toBe("helarc.code-agent.turn");
@@ -53,21 +67,30 @@ describe("Helarc controller", () => {
         "codeAgent.searchFiles",
       ],
     });
-    expect(request.messages[0]?.content).toContain("You are Helarc, a careful code agent.");
-    expect(request.messages[0]?.content).toContain("update_plan");
-    expect(request.messages[1]?.content).toContain("Task:\nUpdate docs");
-    expect(request.messages[1]?.content).toContain("Current plan:");
-    expect(request.messages.map((message) => message.content).join("\n"))
+    const completeInput = request.messages.map((message) => message.content).join("\n");
+    expect(completeInput).toContain("You are Helarc, a careful code agent.");
+    expect(completeInput).toContain("update_plan");
+    expect(completeInput).toContain("Task:\nUpdate docs");
+    expect(completeInput).toContain("Current plan:");
+    expect(completeInput)
       .not.toContain("D:/projects/agent-anything");
+    expect(request.composition.lineage).toMatchObject({
+      contextProjection: { id: "projection-1" },
+      projectionManifest: { id: "manifest-1" },
+      toolExposure: { id: "tool-exposure-1" },
+    });
   });
 
   it("assembles named prompt sections and an explicit action contract", () => {
     const assembly = buildHelarcPromptAssembly({
       controllerInput: createControllerInput(),
+      correctionMessage: null,
     });
     const contract = createHelarcActionContract();
 
-    expect(assembly.systemSections.map((section) => section.id)).toEqual([
+    expect(assembly.promptSections
+      .filter((section) => section.role === "system")
+      .map((section) => section.id)).toEqual([
       "agent_identity",
       "output_format",
       "action_protocol",
@@ -102,11 +125,13 @@ describe("Helarc controller", () => {
     const request = buildHelarcProviderRequest(input, {
       attemptNumber: 1,
       correction: null,
+      inputAccounting: TEST_INPUT_ACCOUNTING,
     });
 
     expect(request.metadata.exposedToolNames).toContain("codeAgent.runCommand");
-    expect(request.messages[0]?.content).toContain("Active tool catalog (shell-enabled):");
-    expect(request.messages[0]?.content).toContain(
+    const completeInput = request.messages.map((message) => message.content).join("\n");
+    expect(completeInput).toContain("Active tool catalog (shell-enabled):");
+    expect(completeInput).toContain(
       "Assessed from the exact process action and current run authority",
     );
   });
@@ -115,6 +140,7 @@ describe("Helarc controller", () => {
     const rejectedOutput = "private rejected provider output";
     const request = buildHelarcProviderRequest(createControllerInput(), {
       attemptNumber: 2,
+      inputAccounting: TEST_INPUT_ACCOUNTING,
       correction: {
         previousAttemptNumber: 1,
         failure: {
@@ -391,11 +417,30 @@ function createControllerInput(input: {
     inputItems: [],
     toolExposure: createToolExposure(tools),
     context: {
-      messages: [],
-      observations: [],
-      evidenceRefs: [],
-      plan: null,
-      metadata: {},
+      id: "projection-1",
+      requestId: "projection-request-1",
+      activeContext: { id: "context-1", runId: "run-1", version: 1 },
+      estimator: { id: "utf8-bytes", revision: "1", unit: "bytes", accuracy: "exact" },
+      blocks: [],
+      accounting: { unit: "bytes", amount: 0 },
+      manifestId: "manifest-1",
+      createdAt: "2026-07-08T00:00:00.000Z",
+    },
+    contextManifest: {
+      id: "manifest-1",
+      projectionId: "projection-1",
+      requestId: "projection-request-1",
+      activeContext: { id: "context-1", runId: "run-1", version: 1 },
+      profile: { id: "helarc-controller-context", revision: "1" },
+      policy: { id: "helarc-context-policy", revision: "1" },
+      estimator: { id: "utf8-bytes", revision: "1", unit: "bytes", accuracy: "exact" },
+      budget: { unit: "bytes", maximum: 256 * 1_024 },
+      accounting: {
+        unit: "bytes",
+        consideredItems: 0,
+        projectedItems: 0,
+        projectedAmount: 0,
+      },
     },
     plan: null,
     permission: {
@@ -542,6 +587,7 @@ function expectParseError(
 }
 
 class FakeProvider implements Provider {
+  readonly inputAccounting = TEST_INPUT_ACCOUNTING;
   readonly descriptor = {
     id: "fake-provider",
     name: "Fake provider",
@@ -549,6 +595,7 @@ class FakeProvider implements Provider {
       supportsToolPlanning: true,
       supportsStructuredOutput: true,
       supportsStreaming: false,
+      modelInput: this.inputAccounting.capability,
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},

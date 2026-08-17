@@ -26,4 +26,5 @@ export {
   parseHelarcProviderResponse,
   parseStructuredOutput,
 } from "./HelarcController.js";
-export { createHelarcContextProjector } from "./HelarcContextProjector.js";
+export { readHelarcRunObservations } from "./HelarcContextProjection.js";
+export { createHelarcContextProjectionConfiguration } from "./HelarcContextProjectionConfiguration.js";

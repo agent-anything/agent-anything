@@ -2,7 +2,7 @@ import type { AgentRevisionRef } from "@agent-anything/agent-core/agent";
 import type { ArtifactRef, IdentityRef, RunRef } from "@agent-anything/agent-core/run";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { EvidenceRef } from "@agent-anything/context/evidence";
-import type { Context } from "@agent-anything/context/context";
+import type { ActiveContext } from "@agent-anything/context/active-context";
 import type { RunPermissionState } from "./RunPermissionState.js";
 import type { Plan } from "../plan/index.js";
 import type { PendingRunSubject } from "./PendingRunSubject.js";
@@ -29,7 +29,7 @@ interface RunStateBase<TOutput> {
   readonly identity: IdentityRef;
   readonly startedAt: string;
   readonly deadlineAt: string;
-  readonly context: Context<RunObservation>;
+  readonly context: ActiveContext;
   readonly plan: Plan | null;
   readonly items: readonly RunItem<TOutput>[];
   readonly counters: RunCounters;

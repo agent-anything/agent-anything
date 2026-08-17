@@ -8,6 +8,10 @@ import {
   type ProviderRequest,
   type ProviderResponse,
 } from "@agent-anything/model-interaction";
+import {
+  createUtf8ModelInputAccounting,
+  type ProviderModelInputAccounting,
+} from "@agent-anything/model-interaction/input";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import {
   readProviderHttpFailureMetadata,
@@ -19,26 +23,47 @@ export interface OpenAICompatibleProviderConfig {
   readonly apiKey: string;
   readonly model: string;
   readonly timeoutMs: number;
+  readonly inputLimit: {
+    readonly maximumBytes: number;
+    readonly source: "provider_reported" | "host_configured";
+  };
 }
 
 export class OpenAICompatibleProvider implements Provider {
-  readonly descriptor: ProviderDescriptor = {
-    id: "openai-compatible.chat-completions",
-    name: "OpenAI-compatible Chat Completions",
-    capabilities: {
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: false,
-    },
-    requestRetryScheduler: { kind: "harness" },
-    metadata: {},
-  };
+  readonly descriptor: ProviderDescriptor;
+  readonly inputAccounting: ProviderModelInputAccounting;
 
   constructor(
     config: OpenAICompatibleProviderConfig,
     private readonly fetchImpl: FetchLike = globalThis.fetch as FetchLike,
   ) {
     this.config = snapshotConfig(config);
+    this.inputAccounting = createUtf8ModelInputAccounting({
+      providerId: "openai-compatible.chat-completions",
+      model: this.config.model,
+      maximumInputBytes: this.config.inputLimit.maximumBytes,
+      limitSource: this.config.inputLimit.source,
+      estimator: { id: "openai-compatible.utf8-content", revision: "1" },
+      framing: { id: "openai-compatible.chat-completions-framing", revision: "1" },
+      renderFraming: (sections) => JSON.stringify({
+        protocol: "chat-completions",
+        model: this.config.model,
+        roles: sections.map((section) => section.role),
+        stream: false,
+      }),
+    });
+    this.descriptor = Object.freeze({
+      id: "openai-compatible.chat-completions",
+      name: "OpenAI-compatible Chat Completions",
+      capabilities: Object.freeze({
+        supportsToolPlanning: true,
+        supportsStructuredOutput: true,
+        supportsStreaming: false,
+        modelInput: this.inputAccounting.capability,
+      }),
+      requestRetryScheduler: Object.freeze({ kind: "harness" as const }),
+      metadata: Object.freeze({}),
+    });
   }
 
   private readonly config: Readonly<OpenAICompatibleProviderConfig>;
@@ -210,6 +235,26 @@ function snapshotConfig(
     apiKey: requiredString(input.apiKey, "OpenAI-compatible API key", true),
     model: requiredString(input.model, "OpenAI-compatible model"),
     timeoutMs: positiveTimeout(input.timeoutMs),
+    inputLimit: snapshotInputLimit(input.inputLimit, "OpenAI-compatible"),
+  });
+}
+
+function snapshotInputLimit(
+  input: OpenAICompatibleProviderConfig["inputLimit"],
+  owner: string,
+): OpenAICompatibleProviderConfig["inputLimit"] {
+  if (
+    input === null ||
+    typeof input !== "object" ||
+    !Number.isSafeInteger(input.maximumBytes) ||
+    input.maximumBytes <= 0 ||
+    (input.source !== "provider_reported" && input.source !== "host_configured")
+  ) {
+    throw new TypeError(`${owner} input limit is invalid.`);
+  }
+  return Object.freeze({
+    maximumBytes: input.maximumBytes,
+    source: input.source,
   });
 }
 

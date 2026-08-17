@@ -123,6 +123,18 @@ test("rejects Context, Runtime, Product, and adapter ownership in Model Interact
   }
 });
 
+test("rejects Active Context transition application outside RunExecution", () => {
+  const violations = evaluateSourceOwnershipRules({
+    sourcePath: "products/helarc/core/src/controller/HelarcController.ts",
+    text: "const next = applyContextTransition(candidate);",
+  });
+
+  assert.deepEqual(
+    violations.map(({ rule }) => rule),
+    ["active_context_writer"],
+  );
+});
+
 test("test-only physical fixtures do not violate production result ownership", () => {
   const violations = evaluateSourceOwnershipRules({
     sourcePath: "products/helarc/local-environment/src/command/ProcessExecutor.test.ts",

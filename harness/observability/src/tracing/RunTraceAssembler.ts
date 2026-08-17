@@ -1,5 +1,5 @@
 import type { RuntimeEvent, RuntimeEventPublisher } from "../events/index.js";
-import { RUN_TRACE_SCHEMA_VERSION, createControllerTurnTraceOperationId, type CommittedRunItemTraceProjection, type CompleteRunTraceInput, type CreateRunTraceAssemblerInput, type RunTrace, type TraceIssue, type TraceIssueCode, type TraceLink, type TraceSpan, type TraceSpanStatus } from "./RunTrace.js";
+import { RUN_TRACE_SCHEMA_VERSION, createControllerTurnTraceOperationId, type CommittedRunItemTraceProjection, type CompleteRunTraceInput, type ContextProjectionTraceRecord, type ContextTransitionTraceRecord, type CreateRunTraceAssemblerInput, type RunTrace, type TraceIssue, type TraceIssueCode, type TraceLink, type TraceSpan, type TraceSpanStatus } from "./RunTrace.js";
 
 interface MutableSpan {
   spanId: string;
@@ -40,6 +40,8 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
       evidenceCount: null,
       artifactCount: null,
       errorCodes: [],
+      contextTransitions: [],
+      contextProjections: [],
     });
   }
 
@@ -66,6 +68,37 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
         if (this.itemEvents.has(event.payload.itemId)) this.issue("run_item_mismatch", event.id, null);
         else this.itemEvents.set(event.payload.itemId, event);
         break;
+      case "context.transition.committed": {
+        const root = this.spans.get(this.input.runId)!;
+        const contextTransitions = root.attributes.contextTransitions as ContextTransitionTraceRecord[];
+        root.attributes.contextTransitions = [
+          ...contextTransitions,
+          {
+            transitionId: event.payload.transitionId,
+            activeContextId: event.payload.activeContextId,
+            baseVersion: event.payload.baseVersion,
+            committedVersion: event.payload.committedVersion,
+            proposerOwner: event.payload.proposerOwner,
+            proposerKind: event.payload.proposerKind,
+            causeKind: event.payload.causeKind,
+            causeId: event.payload.causeId,
+            correlationId: event.payload.correlationId,
+            operationKinds: [...event.payload.operationKinds],
+          },
+        ];
+        root.links.push(link("runtime_event", event.id));
+        break;
+      }
+      case "context.projection.completed": {
+        const root = this.spans.get(this.input.runId)!;
+        const contextProjections = root.attributes.contextProjections as ContextProjectionTraceRecord[];
+        root.attributes.contextProjections = [
+          ...contextProjections,
+          { ...event.payload },
+        ];
+        root.links.push(link("runtime_event", event.id));
+        break;
+      }
       case "controller.started": {
         const operationId = createControllerTurnTraceOperationId(event.payload.iteration);
         this.openSpan(operationId, "controller", "turn", this.rootSpanId(), event, {

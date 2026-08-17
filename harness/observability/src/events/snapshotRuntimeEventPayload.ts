@@ -1,6 +1,7 @@
 import type {
   RuntimeEventName,
   RuntimeEventPayloadMap,
+  RuntimeContextTransitionOperationKind,
   RuntimeOperationBindingKind,
   RuntimeOperationCorrelationKind,
   RuntimeOperationStatus,
@@ -18,6 +19,21 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
       return freeze({ status: exact(payload.status, "running", "run.started.status"), activeAgentId: token(payload.activeAgentId, "run.started.activeAgentId") }) as RuntimeEventPayloadMap[TName];
     case "run.item.appended":
       return freeze({ itemId: token(payload.itemId, "run.item.appended.itemId"), itemKind: oneOf(payload.itemKind, runItemKinds, "run.item.appended.itemKind"), itemSequence: positive(payload.itemSequence, "run.item.appended.itemSequence") }) as RuntimeEventPayloadMap[TName];
+    case "context.transition.committed":
+      return freeze({
+        transitionId: token(payload.transitionId, "context.transition.committed.transitionId"),
+        activeContextId: token(payload.activeContextId, "context.transition.committed.activeContextId"),
+        baseVersion: nonNegativeInteger(payload.baseVersion, "context.transition.committed.baseVersion"),
+        committedVersion: positive(payload.committedVersion, "context.transition.committed.committedVersion"),
+        proposerOwner: token(payload.proposerOwner, "context.transition.committed.proposerOwner"),
+        proposerKind: token(payload.proposerKind, "context.transition.committed.proposerKind"),
+        causeKind: token(payload.causeKind, "context.transition.committed.causeKind"),
+        causeId: nullableToken(payload.causeId, "context.transition.committed.causeId"),
+        correlationId: nullableToken(payload.correlationId, "context.transition.committed.correlationId"),
+        operationKinds: operationKindArray(payload.operationKinds, "context.transition.committed.operationKinds"),
+      }) as RuntimeEventPayloadMap[TName];
+    case "context.projection.completed":
+      return contextProjectionCompleted(payload) as unknown as RuntimeEventPayloadMap[TName];
     case "run.completed":
     case "run.blocked":
     case "run.failed":
@@ -83,6 +99,7 @@ const terminalStatuses: readonly RuntimeTerminalStatus[] = ["succeeded", "blocke
 const bindingKinds: readonly RuntimeOperationBindingKind[] = ["internal", "direct", "hosted", "composite", "descendant_agent"];
 const correlationKinds: readonly RuntimeOperationCorrelationKind[] = ["run_action", "run_request", "owner_operation", "evaluation_trial"];
 const operationStatuses: readonly RuntimeOperationStatus[] = ["succeeded", "partial", "failed", "unavailable", "denied", "cancelled", "timed_out", "invalid", "unknown_effect"];
+const contextTransitionOperationKinds: readonly RuntimeContextTransitionOperationKind[] = ["add", "replace", "invalidate", "remove"];
 
 function terminal(name: RuntimeEventName, input: Record<string, unknown>): Readonly<Record<string, unknown>> {
   const expected = name === "run.completed" ? "succeeded" : name.slice(4) as RuntimeTerminalStatus;
@@ -99,12 +116,70 @@ function terminal(name: RuntimeEventName, input: Record<string, unknown>): Reado
   });
 }
 
+function contextProjectionCompleted(input: Record<string, unknown>): Readonly<Record<string, unknown>> {
+  const outcome = oneOf(input.outcome, ["projected", "blocked"] as const, "context.projection.completed.outcome");
+  const code = outcome === "projected"
+    ? exact(input.code, null, "context.projection.completed.code")
+    : token(input.code, "context.projection.completed.code");
+  const consideredItemCount = nonNegativeInteger(input.consideredItemCount, "context.projection.completed.consideredItemCount");
+  const projectedItemCount = nonNegativeInteger(input.projectedItemCount, "context.projection.completed.projectedItemCount");
+  const includedCount = nonNegativeInteger(input.includedCount, "context.projection.completed.includedCount");
+  const transformedCount = nonNegativeInteger(input.transformedCount, "context.projection.completed.transformedCount");
+  const referencedCount = nonNegativeInteger(input.referencedCount, "context.projection.completed.referencedCount");
+  const omittedCount = nonNegativeInteger(input.omittedCount, "context.projection.completed.omittedCount");
+  const rejectedCount = nonNegativeInteger(input.rejectedCount, "context.projection.completed.rejectedCount");
+  const blockedCount = nonNegativeInteger(input.blockedCount, "context.projection.completed.blockedCount");
+  if (includedCount + transformedCount + referencedCount !== projectedItemCount) {
+    throw new TypeError("context.projection.completed projected disposition counts must match projectedItemCount.");
+  }
+  if (projectedItemCount + omittedCount + rejectedCount + blockedCount !== consideredItemCount) {
+    throw new TypeError("context.projection.completed disposition counts must match consideredItemCount.");
+  }
+  if ((outcome === "projected" && blockedCount !== 0) || (outcome === "blocked" && blockedCount === 0)) {
+    throw new TypeError("context.projection.completed blockedCount must match outcome.");
+  }
+  const accountingUnit = oneOf(input.accountingUnit, ["bytes", "tokens"] as const, "context.projection.completed.accountingUnit");
+  const budgetMaximum = nonNegativeInteger(input.budgetMaximum, "context.projection.completed.budgetMaximum");
+  const projectedAmount = nonNegativeInteger(input.projectedAmount, "context.projection.completed.projectedAmount");
+  if (projectedAmount > budgetMaximum) {
+    throw new TypeError("context.projection.completed projectedAmount cannot exceed budgetMaximum.");
+  }
+  return freeze({
+    manifestId: token(input.manifestId, "context.projection.completed.manifestId"),
+    projectionId: token(input.projectionId, "context.projection.completed.projectionId"),
+    requestId: token(input.requestId, "context.projection.completed.requestId"),
+    activeContextId: token(input.activeContextId, "context.projection.completed.activeContextId"),
+    activeContextVersion: nonNegativeInteger(input.activeContextVersion, "context.projection.completed.activeContextVersion"),
+    profileId: token(input.profileId, "context.projection.completed.profileId"),
+    profileRevision: token(input.profileRevision, "context.projection.completed.profileRevision"),
+    policyId: token(input.policyId, "context.projection.completed.policyId"),
+    policyRevision: token(input.policyRevision, "context.projection.completed.policyRevision"),
+    estimatorId: token(input.estimatorId, "context.projection.completed.estimatorId"),
+    estimatorRevision: token(input.estimatorRevision, "context.projection.completed.estimatorRevision"),
+    accountingUnit,
+    budgetMaximum,
+    consideredItemCount,
+    projectedItemCount,
+    projectedAmount,
+    includedCount,
+    transformedCount,
+    referencedCount,
+    omittedCount,
+    rejectedCount,
+    blockedCount,
+    outcome,
+    code,
+  });
+}
+
 function record(value: unknown, field: string): asserts value is Record<string, unknown> { if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${field} must be an object.`); }
 function token(value: unknown, field: string): string { if (typeof value !== "string" || value.length === 0 || value !== value.trim()) throw new TypeError(`${field} must be a canonical token.`); return value; }
 function nullableToken(value: unknown, field: string): string | null { return value === null ? null : token(value, field); }
 function positive(value: unknown, field: string): number { if (!Number.isSafeInteger(value) || (value as number) < 1) throw new TypeError(`${field} must be a positive integer.`); return value as number; }
 function nonNegative(value: unknown, field: string): number { if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new TypeError(`${field} must be non-negative.`); return value; }
+function nonNegativeInteger(value: unknown, field: string): number { if (!Number.isSafeInteger(value) || (value as number) < 0) throw new TypeError(`${field} must be a non-negative integer.`); return value as number; }
 function exact<T>(value: unknown, expected: T, field: string): T { if (value !== expected) throw new TypeError(`${field} has an invalid value.`); return expected; }
 function oneOf<T extends string>(value: unknown, values: readonly T[], field: string): T { if (typeof value !== "string" || !values.includes(value as T)) throw new TypeError(`${field} has an unsupported value.`); return value as T; }
 function tokenArray(value: unknown, field: string): readonly string[] { if (!Array.isArray(value)) throw new TypeError(`${field} must be an array.`); return Object.freeze(value.map((entry, index) => token(entry, `${field}[${index}]`))); }
+function operationKindArray(value: unknown, field: string): readonly RuntimeContextTransitionOperationKind[] { if (!Array.isArray(value) || value.length === 0) throw new TypeError(`${field} must be a non-empty array.`); return Object.freeze(value.map((entry, index) => oneOf(entry, contextTransitionOperationKinds, `${field}[${index}]`))); }
 function freeze<T extends Record<string, unknown>>(value: T): Readonly<T> { return Object.freeze(value); }

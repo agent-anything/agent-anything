@@ -1,5 +1,7 @@
 export { RUNTIME_EVENT_SCHEMA_VERSION, type RuntimeEvent, type RuntimeEventEnvelope, type RuntimeEventPublisher, type RuntimeEventSubscriber } from "./RuntimeEvent.js";
 export type {
+  ContextTransitionCommittedRuntimeEventPayload,
+  ContextProjectionCompletedRuntimeEventPayload,
   ControllerFinishedRuntimeEventPayload,
   ControllerStartedRuntimeEventPayload,
   InteractionOpenedRuntimeEventPayload,
@@ -14,6 +16,7 @@ export type {
   RunStartedRuntimeEventPayload,
   RuntimeEventName,
   RuntimeEventPayloadMap,
+  RuntimeContextTransitionOperationKind,
   RuntimeOperationBindingKind,
   RuntimeOperationCorrelationKind,
   RuntimeOperationStatus,

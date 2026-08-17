@@ -1,4 +1,5 @@
 import type {
+  ContextProjectionCompletedRuntimeEventPayload,
   RuntimeOperationBindingKind,
   RuntimeOperationCorrelationKind,
   RuntimeOperationStatus,
@@ -51,7 +52,24 @@ export interface RuntimeRunTraceAttributes {
   readonly evidenceCount: number | null;
   readonly artifactCount: number | null;
   readonly errorCodes: readonly string[];
+  readonly contextTransitions: readonly ContextTransitionTraceRecord[];
+  readonly contextProjections: readonly ContextProjectionTraceRecord[];
 }
+
+export interface ContextTransitionTraceRecord {
+  readonly transitionId: string;
+  readonly activeContextId: string;
+  readonly baseVersion: number;
+  readonly committedVersion: number;
+  readonly proposerOwner: string;
+  readonly proposerKind: string;
+  readonly causeKind: string;
+  readonly causeId: string | null;
+  readonly correlationId: string | null;
+  readonly operationKinds: readonly import("../events/RuntimeEventPayload.js").RuntimeContextTransitionOperationKind[];
+}
+
+export type ContextProjectionTraceRecord = ContextProjectionCompletedRuntimeEventPayload;
 
 export interface ControllerTurnTraceAttributes {
   readonly turnId: string;

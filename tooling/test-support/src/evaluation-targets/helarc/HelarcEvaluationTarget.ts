@@ -75,7 +75,7 @@ import {
   type HelarcPermissionPreset,
 } from "@agent-anything/helarc/configuration";
 import {
-  createHelarcContextProjector,
+  createHelarcContextProjectionConfiguration,
   type HelarcAgentOutput,
 } from "@agent-anything/helarc/controller";
 import {
@@ -467,18 +467,9 @@ async function invokeHelarcTarget(
   });
   const runner = new Runner({
     controller: product.controller,
-    contextProjection: {
-      projector: createHelarcContextProjector(),
-      purpose: "model",
-      limits: {
-        maxMessages: 32,
-        maxMessageLength: 16_000,
-        maxObservations: 32,
-        maxObservationBytes: 64 * 1024,
-        maxEvidenceRefs: 32,
-        maxMetadataEntries: 1,
-      },
-    },
+    contextProjection: createHelarcContextProjectionConfiguration(
+      provider.inputAccounting,
+    ),
     operations: {
       catalog: product.actions.operationCatalog,
       bindings: product.actions.operationBindings,

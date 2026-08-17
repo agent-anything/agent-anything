@@ -3,6 +3,7 @@ export type {
   ControllerCallContext,
   ControllerDecision,
   ControllerInput,
+  ControllerPreProjectionInput,
   ControllerModelItem,
   ControllerRetryContext,
   InteractionRequestCandidate,

@@ -5,6 +5,7 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/model-interaction";
+import { snapshotModelInputComposition } from "@agent-anything/model-interaction/input";
 import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/control";
 import type { RetryAttemptContext, RetryClock } from "../retry/index.js";
 import { RetryExecutor } from "../retry/RetryExecutor.js";
@@ -197,6 +198,7 @@ export class ProviderBackedController<TOutput = unknown>
           const buildContext = Object.freeze({
             attemptNumber: attempt.attempt.attemptNumber,
             correction,
+            inputAccounting: this.input.provider.inputAccounting,
           });
           let request: ProviderRequest;
           try {
@@ -347,7 +349,16 @@ export class ProviderBackedController<TOutput = unknown>
     context: ProviderRequestBuildContext,
   ): Promise<ProviderRequest> {
     try {
-      return snapshotProviderRequest(await this.input.buildRequest(input, context));
+      const request = snapshotProviderRequest(
+        await this.input.buildRequest(input, context),
+      );
+      this.input.provider.inputAccounting.verify({
+        providerId: this.input.provider.descriptor.id,
+        model: request.composition.model,
+        messages: request.messages,
+        composition: request.composition,
+      });
+      return request;
     } catch (error) {
       throw createControllerError(
         "model",
@@ -1434,6 +1445,7 @@ function snapshotProviderRequest(request: ProviderRequest): ProviderRequest {
   if (!isRecord(request.metadata)) {
     throw new TypeError("Provider request metadata must be an object.");
   }
+  const composition = snapshotModelInputComposition(request.composition);
   const messages = request.messages.map((message, index) => {
     if (!isRecord(message)) {
       throw new TypeError(`Provider message ${index} must be an object.`);
@@ -1456,6 +1468,7 @@ function snapshotProviderRequest(request: ProviderRequest): ProviderRequest {
   return Object.freeze({
     messages: Object.freeze(messages) as unknown as ProviderRequest["messages"],
     capability: request.capability,
+    composition,
     metadata: Object.freeze({ ...request.metadata }),
   });
 }
@@ -1468,6 +1481,7 @@ function recreateProviderRequest(request: ProviderRequest): ProviderRequest {
       metadata: { ...message.metadata },
     })),
     capability: request.capability,
+    composition: request.composition,
     metadata: { ...request.metadata },
   };
 }

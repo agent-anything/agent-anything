@@ -5,18 +5,16 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/model-interaction";
+import { FakeProvider } from "@agent-anything/test-support";
 import {
-  FakeProvider,
-  createTestIdentityContextProjector,
-} from "@agent-anything/test-support";
+  composeModelInput,
+  createUtf8ModelInputAccounting,
+  providerMessagesFromComposition,
+} from "@agent-anything/model-interaction/input";
 import type { Agent } from "@agent-anything/agent-core/agent";
-import {
-  createInitialContext,
-  snapshotContextProjection,
-} from "@agent-anything/context/context";
+import { snapshotContextProjection } from "@agent-anything/context/projection";
 import {
   createRunCancellationController,
-  type RunObservation,
 } from "../run/index.js";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { ControllerCallContext, ControllerDecision, ControllerInput } from "./Controller.js";
@@ -38,6 +36,8 @@ import {
 interface TestOutput {
   readonly summary: string;
 }
+
+type TestProviderRequest = Omit<ProviderRequest, "composition">;
 
 describe("ProviderBackedController", () => {
   afterEach(() => vi.useRealTimers());
@@ -62,9 +62,12 @@ describe("ProviderBackedController", () => {
       output: { summary: "Done" },
       modelItems: [modelItem("model_item_1", { summary: "Done" })],
     });
-    expect(provider.requests()).toEqual([
-      request("Run run_001 for task task_001."),
-    ]);
+    expect(provider.requests()).toHaveLength(1);
+    expect(provider.requests()[0]).toMatchObject({
+      capability: "agent-control",
+      messages: [{ role: "user", content: "Run run_001 for task task_001." }],
+      composition: { providerId: "fake-provider", model: "fake-model" },
+    });
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.modelItems)).toBe(true);
   });
@@ -732,7 +735,7 @@ describe("ProviderBackedController", () => {
     });
     expect(provider.requests()).toHaveLength(2);
     expect(buildContexts).toHaveLength(2);
-    expect(buildContexts[0]).toEqual({ attemptNumber: 1, correction: null });
+    expect(buildContexts[0]).toMatchObject({ attemptNumber: 1, correction: null });
     expect(buildContexts[1]).toMatchObject({
       attemptNumber: 2,
       correction: {
@@ -1088,7 +1091,7 @@ function createController(
     buildRequest: (
       input: ControllerInput<TestOutput>,
       context: ProviderRequestBuildContext,
-    ) => ProviderRequest;
+    ) => TestProviderRequest;
     parseResponse: (
       response: ProviderResponse,
       input: ControllerInput<TestOutput>,
@@ -1096,9 +1099,18 @@ function createController(
     maxProviderOutputLength: number;
   }> = {},
 ): ProviderBackedController<TestOutput> {
+  const accountedProvider = ensureTestProviderAccounting(provider);
+  const buildRequest = overrides.buildRequest ?? (() => request("Choose the next action."));
   return new ProviderBackedController({
-    provider,
-    buildRequest: overrides.buildRequest ?? (() => request("Choose the next action.")),
+    provider: accountedProvider,
+    buildRequest(input, context) {
+      return accountTestRequest(
+        buildRequest(input, context),
+        accountedProvider,
+        input,
+        context,
+      );
+    },
     parseResponse:
       overrides.parseResponse ?? (() => finalDecision({ summary: "Done" })),
     structuredOutputContractId: "test-controller-output-v1",
@@ -1110,21 +1122,7 @@ function createController(
 
 function createControllerInput(): ControllerInput<TestOutput> {
   const task = createTask();
-  const context = createInitialContext<RunObservation>(task);
   const toolCatalog = createToolCatalogSnapshot([]);
-  const request = Object.freeze({
-    runId: "run_001",
-    controllerIteration: 1,
-    purpose: "workflow" as const,
-    limits: Object.freeze({
-      maxMessages: 1_000,
-      maxMessageLength: 1_000_000,
-      maxObservations: 1_000,
-      maxObservationBytes: 1_000_000,
-      maxEvidenceRefs: 1_000,
-      maxMetadataEntries: 1_000,
-    }),
-  });
   return {
     runId: "run_001",
     iteration: 1,
@@ -1140,11 +1138,40 @@ function createControllerInput(): ControllerInput<TestOutput> {
       catalog: toolCatalog,
     },
     context: snapshotContextProjection({
-      projection: createTestIdentityContextProjector<RunObservation>().project({
-        context,
-        request,
+      id: "projection-1",
+      requestId: "projection-request-1",
+      activeContext: Object.freeze({ id: "context-1", runId: "run_001", version: 1 }),
+      estimator: Object.freeze({
+        id: "utf8-bytes",
+        revision: "1",
+        unit: "bytes",
+        accuracy: "exact",
       }),
-      request,
+      blocks: Object.freeze([]),
+      accounting: Object.freeze({ unit: "bytes", amount: 0 }),
+      manifestId: "manifest-1",
+      createdAt: task.createdAt,
+    }),
+    contextManifest: Object.freeze({
+      id: "manifest-1",
+      projectionId: "projection-1",
+      requestId: "projection-request-1",
+      activeContext: Object.freeze({ id: "context-1", runId: "run_001", version: 1 }),
+      profile: Object.freeze({ id: "test-controller-context", revision: "1" }),
+      policy: Object.freeze({ id: "test-context-policy", revision: "1" }),
+      estimator: Object.freeze({
+        id: "utf8-bytes",
+        revision: "1",
+        unit: "bytes",
+        accuracy: "exact",
+      }),
+      budget: Object.freeze({ unit: "bytes", maximum: 4 * 1_024 * 1_024 }),
+      accounting: Object.freeze({
+        unit: "bytes",
+        consideredItems: 0,
+        projectedItems: 0,
+        projectedAmount: 0,
+      }),
     }),
     plan: null,
     permission: testPermissionProjection(),
@@ -1247,12 +1274,95 @@ function createTask(): AgentTask {
   };
 }
 
-function request(content: string): ProviderRequest {
+function request(content: string): TestProviderRequest {
   return {
     messages: [{ role: "user", content, metadata: {} }],
     capability: "agent-control",
     metadata: {},
   };
+}
+
+function ensureTestProviderAccounting(provider: Provider): Provider {
+  if (provider.inputAccounting !== undefined) {
+    return provider;
+  }
+  const inputAccounting = createUtf8ModelInputAccounting({
+    providerId: provider.descriptor.id,
+    model: "runtime-controller-test-model",
+    maximumInputBytes: 4 * 1_024 * 1_024,
+    limitSource: "host_configured",
+    estimator: { id: `${provider.descriptor.id}.utf8-content`, revision: "1" },
+    framing: { id: `${provider.descriptor.id}.framing`, revision: "1" },
+    renderFraming: (sections) => JSON.stringify({
+      roles: sections.map((section) => section.role),
+    }),
+  });
+  return {
+    descriptor: {
+      ...provider.descriptor,
+      capabilities: {
+        ...provider.descriptor.capabilities,
+        modelInput: inputAccounting.capability,
+      },
+    },
+    inputAccounting,
+    send: provider.send.bind(provider),
+  };
+}
+
+function accountTestRequest(
+  request: TestProviderRequest,
+  provider: Provider,
+  input: ControllerInput<TestOutput>,
+  context: ProviderRequestBuildContext,
+): ProviderRequest {
+  const sections = request.messages.map((message, index) => Object.freeze({
+    id: `test:model-input:${index}`,
+    source: Object.freeze({
+      owner: "agent-runtime-test",
+      kind: "provider_message",
+      id: String(index),
+      revision: "1",
+    }),
+    kind: "test_message",
+    role: message.role,
+    necessity: "mandatory" as const,
+    content: Object.freeze({ kind: "text" as const, text: message.content }),
+  }));
+  const composition = composeModelInput({
+    id: `${input.runId}:test-model-input:${context.attemptNumber}`,
+    providerId: provider.inputAccounting.providerId,
+    model: provider.inputAccounting.model,
+    accounting: provider.inputAccounting,
+    outputReserve: Object.freeze({ unit: "bytes", amount: 0 }),
+    contextBudget: Object.freeze({ unit: "bytes", amount: 0 }),
+    contextProjectedAmount: 0,
+    sections,
+    lineage: Object.freeze({
+      activeContext: null,
+      contextProjection: null,
+      projectionManifest: null,
+      toolExposure: null,
+      protocol: Object.freeze({
+        owner: "agent-runtime-test",
+        kind: "controller_contract",
+        id: "test-controller-output-v1",
+        revision: "1",
+      }),
+      policy: Object.freeze({
+        owner: "agent-runtime-test",
+        kind: "request_policy",
+        id: "test-request-policy",
+        revision: "1",
+      }),
+    }),
+    composedAt: input.task.createdAt,
+  });
+  return Object.freeze({
+    ...request,
+    messages: providerMessagesFromComposition(composition.sections),
+    composition,
+  });
 }
 
 function succeededResult(output: unknown): ProviderCallResult {

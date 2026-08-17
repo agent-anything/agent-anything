@@ -1,4 +1,4 @@
-
+import type { ModelInputCapability } from "./input/index.js";
 
 export interface ProviderDescriptor {
   id: string;
@@ -22,4 +22,5 @@ export interface ProviderCapabilities {
   supportsToolPlanning: boolean;
   supportsStructuredOutput: boolean;
   supportsStreaming: boolean;
+  modelInput: ModelInputCapability;
 }

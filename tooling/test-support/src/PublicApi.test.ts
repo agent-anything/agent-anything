@@ -11,7 +11,6 @@ describe("Test Support public API", () => {
       "FakeRuntimeEventPublisher",
       "FakeTelemetryPort",
       "createTestContextProjection",
-      "createTestIdentityContextProjector",
     ]);
   });
 });

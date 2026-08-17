@@ -198,12 +198,7 @@ function createInput(observations: readonly RunObservation[]): ControllerInput<H
       exposedTools: [],
       catalog,
     },
-    context: {
-      messages: [],
-      observations,
-      evidenceRefs: [],
-      metadata: {},
-    },
+    context: contextProjection(observations),
     plan: null,
     permission: permissionProjection(),
     pending: [],
@@ -226,6 +221,33 @@ function createInput(observations: readonly RunObservation[]): ControllerInput<H
       metadata: {},
     },
     metadata: {},
+  };
+}
+
+function contextProjection(
+  observations: readonly RunObservation[],
+): ControllerInput<HelarcAgentOutput>["context"] {
+  const blocks = observations.map((observation, index) => ({
+    id: `block-${index + 1}`,
+    item: { id: `item-${index + 1}` },
+    contribution: { id: `contribution-${index + 1}`, revision: "1" },
+    instructionRole: "data" as const,
+    payload: {
+      kind: "structured" as const,
+      value: { kind: "run_observation", observation } as never,
+    },
+    accounting: { unit: "bytes" as const, amount: 0 },
+    transformation: null,
+  }));
+  return {
+    id: "projection-1",
+    requestId: "projection-request-1",
+    activeContext: { id: "context-1", runId: "run-1", version: 1 },
+    estimator: { id: "test", revision: "1", unit: "bytes" },
+    blocks,
+    accounting: { unit: "bytes", amount: 0 },
+    manifestId: "manifest-1",
+    createdAt: "2026-07-08T00:00:00.000Z",
   };
 }
 

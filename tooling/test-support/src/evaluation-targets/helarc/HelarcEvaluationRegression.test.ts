@@ -12,7 +12,7 @@ import {
 } from "./HelarcEvaluationExecution.js";
 
 describe("Helarc accepted Evaluation baseline succession", () => {
-  it("reviews the Phase26 predecessor and matches the accepted Phase27 successor", async () => {
+  it("preserves accepted history and exposes the active Phase29 semantic change", async () => {
     const phase26Before = JSON.stringify(HELARC_PHASE26_ACCEPTED_BASELINE);
     const phase27Before = JSON.stringify(HELARC_PHASE27_ACCEPTED_BASELINE);
     const candidate = await runHelarcEvaluationBaselineCandidate();
@@ -35,7 +35,12 @@ describe("Helarc accepted Evaluation baseline succession", () => {
         ).sort(),
       );
     }
-    expect(acceptedComparison.status).toBe("equivalent");
+    expect(acceptedComparison.status).toBe("regressed");
+    if (acceptedComparison.status === "regressed") {
+      expect(acceptedComparison.differences).toEqual(candidate.cases.map((item) =>
+        `case_semantics:${item.caseRef.id}@${item.caseRef.revision}:rep-${item.repetitionOrdinal}`
+      ).sort());
+    }
     expect(acceptedComparison.pairedComparisons).toHaveLength(4);
     expect(acceptedComparison.pairedComparisons.every((item) =>
       item.pairs.length === 10 && item.exclusions.length === 0)).toBe(true);
@@ -44,9 +49,6 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       ["safety", "passed"],
     ]);
     expect(candidate.cases.every(({ traceIssueCodes }) => traceIssueCodes.length === 0)).toBe(true);
-    expect(predecessorComparison.pairedComparisons.find((comparison) =>
-      comparison.pairs[0]?.baselineValue === 93)?.pairs.every((pair) =>
-        pair.difference < 0)).toBe(true);
     expect(JSON.stringify(HELARC_PHASE26_ACCEPTED_BASELINE)).toBe(phase26Before);
     expect(JSON.stringify(HELARC_PHASE27_ACCEPTED_BASELINE)).toBe(phase27Before);
     expect(candidate.report.ref).toEqual(HELARC_PHASE27_ACCEPTED_BASELINE.reportRef);

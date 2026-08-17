@@ -14,7 +14,9 @@ export type ContextContractFailureCode =
   | "context_contract_invalid"
   | "context_payload_too_large"
   | "context_disclosure_invalid"
+  | "context_admission_rejected"
   | "context_transition_invalid"
+  | "context_transition_conflict"
   | "context_projection_contract_invalid";
 
 export interface ContextContractFailure {

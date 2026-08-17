@@ -33,6 +33,7 @@ import {
   HELARC_PATCH_REVIEW_PROTOCOL,
   type HelarcPatchReviewApplication,
 } from "../composition/HelarcPatchReview.js";
+import { readHelarcRunObservations } from "../controller/HelarcContextProjection.js";
 import type {
   HelarcAgentOutput,
   HelarcChangeIntent,
@@ -154,7 +155,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
         review,
         summary: output.summary,
         priorObservationIds: Object.freeze(
-          controllerInput.context.observations.map(({ id }) => id),
+          readHelarcRunObservations(controllerInput.context).map(({ id }) => id),
         ),
       });
       this.setState(Object.freeze({
@@ -195,7 +196,8 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
   ): Promise<ControllerDecision<HelarcAgentOutput>> {
     const pending = this.pendingReview!;
     const prior = new Set(pending.priorObservationIds);
-    const observation = [...input.context.observations].reverse().find((candidate) =>
+    const observations = readHelarcRunObservations(input.context);
+    const observation = [...observations].reverse().find((candidate) =>
       !prior.has(candidate.id) &&
       candidate.payload.kind === "interaction" &&
       candidate.payload.owner === HELARC_PATCH_REVIEW_PROTOCOL.owner
@@ -274,7 +276,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
       actionName: request.name,
       summary: pending.summary,
       path: accepted.proposal.operation.path,
-      priorObservationIds: Object.freeze(input.context.observations.map(({ id }) => id)),
+      priorObservationIds: Object.freeze(observations.map(({ id }) => id)),
     });
     this.setState(Object.freeze({
       kind: "action_submitted",
@@ -307,7 +309,7 @@ export class HelarcPatchActionController implements Controller<HelarcAgentOutput
   ): ControllerDecision<HelarcAgentOutput> {
     const pending = this.pending!;
     const prior = new Set(pending.priorObservationIds);
-    const observation = [...input.context.observations].reverse().find((candidate) =>
+    const observation = [...readHelarcRunObservations(input.context)].reverse().find((candidate) =>
       !prior.has(candidate.id) && observationMatchesOperation(candidate, pending.operation)
     );
     this.pending = null;

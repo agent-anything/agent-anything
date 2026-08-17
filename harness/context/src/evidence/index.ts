@@ -15,5 +15,6 @@ export {
 } from "./EvidenceBuilder.js";
 export {
   settleEvidenceContribution,
+  type EvidenceSettlementFailure,
   type EvidenceSettlementResult,
 } from "./EvidenceSettlement.js";

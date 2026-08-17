@@ -22,6 +22,44 @@ describe("RunTraceAssembler", () => {
       status: "running",
       activeAgentId: "agent-1",
     }, STARTED_AT);
+    stream.emit("context.transition.committed", {
+      transitionId: "transition-1",
+      activeContextId: "context-1",
+      baseVersion: 0,
+      committedVersion: 1,
+      proposerOwner: "agent-core",
+      proposerKind: "run_execution",
+      causeKind: "run_initialization",
+      causeId: "run-1",
+      correlationId: "run-1",
+      operationKinds: ["add"],
+    }, STARTED_AT);
+    stream.emit("context.projection.completed", {
+      manifestId: "manifest-1",
+      projectionId: "projection-1",
+      requestId: "request-1",
+      activeContextId: "context-1",
+      activeContextVersion: 1,
+      profileId: "profile-1",
+      profileRevision: "1",
+      policyId: "policy-1",
+      policyRevision: "1",
+      estimatorId: "estimator-1",
+      estimatorRevision: "1",
+      accountingUnit: "bytes",
+      budgetMaximum: 1_024,
+      consideredItemCount: 1,
+      projectedItemCount: 1,
+      projectedAmount: 128,
+      includedCount: 1,
+      transformedCount: 0,
+      referencedCount: 0,
+      omittedCount: 0,
+      rejectedCount: 0,
+      blockedCount: 0,
+      outcome: "projected",
+      code: null,
+    }, STARTED_AT);
     stream.emit("controller.started", {
       turnId: "turn-1",
       iteration: 1,
@@ -111,6 +149,25 @@ describe("RunTraceAssembler", () => {
         ["operation", "operation", "succeeded"],
         ["interaction", "interaction", "succeeded"],
       ]);
+    expect(trace.spans[0]?.attributes.contextTransitions).toEqual([{
+      transitionId: "transition-1",
+      activeContextId: "context-1",
+      baseVersion: 0,
+      committedVersion: 1,
+      proposerOwner: "agent-core",
+      proposerKind: "run_execution",
+      causeKind: "run_initialization",
+      causeId: "run-1",
+      correlationId: "run-1",
+      operationKinds: ["add"],
+    }]);
+    expect(trace.spans[0]?.attributes.contextProjections).toEqual([expect.objectContaining({
+      manifestId: "manifest-1",
+      consideredItemCount: 1,
+      projectedItemCount: 1,
+      outcome: "projected",
+      code: null,
+    })]);
     expect(trace.spans[2]).toMatchObject({
       parentSpanId: trace.rootSpanId,
       operationId: "operation-invocation-1",

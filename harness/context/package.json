@@ -20,10 +20,6 @@
       "types": "./src/projection/index.ts",
       "import": "./dist/projection/index.js"
     },
-    "./context": {
-      "types": "./src/context/index.ts",
-      "import": "./dist/context/index.js"
-    },
     "./evidence": {
       "types": "./src/evidence/index.ts",
       "import": "./dist/evidence/index.js"

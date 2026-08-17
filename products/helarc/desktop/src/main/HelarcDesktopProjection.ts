@@ -380,10 +380,43 @@ function projectActivityMetadata(
     "promptArchitectureVersion",
     "actionContractVersion",
     "toolCatalogVersion",
+    "manifestId",
+    "projectionId",
+    "requestId",
+    "activeContextId",
+    "profileId",
+    "profileRevision",
+    "policyId",
+    "policyRevision",
+    "estimatorId",
+    "estimatorRevision",
+    "accountingUnit",
+    "outcome",
+    "code",
+  ] as const;
+
+  const numberKeys = [
+    "activeContextVersion",
+    "budgetMaximum",
+    "consideredItemCount",
+    "projectedItemCount",
+    "projectedAmount",
+    "includedCount",
+    "transformedCount",
+    "referencedCount",
+    "omittedCount",
+    "rejectedCount",
+    "blockedCount",
   ] as const;
 
   for (const key of stringKeys) {
     if (typeof metadata[key] === "string") {
+      projected[key] = metadata[key];
+    }
+  }
+
+  for (const key of numberKeys) {
+    if (typeof metadata[key] === "number" && Number.isFinite(metadata[key])) {
       projected[key] = metadata[key];
     }
   }

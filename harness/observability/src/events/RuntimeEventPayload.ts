@@ -20,6 +20,52 @@ export interface RunItemAppendedRuntimeEventPayload {
   readonly itemSequence: number;
 }
 
+export type RuntimeContextTransitionOperationKind =
+  | "add"
+  | "replace"
+  | "invalidate"
+  | "remove";
+
+export interface ContextTransitionCommittedRuntimeEventPayload {
+  readonly transitionId: string;
+  readonly activeContextId: string;
+  readonly baseVersion: number;
+  readonly committedVersion: number;
+  readonly proposerOwner: string;
+  readonly proposerKind: string;
+  readonly causeKind: string;
+  readonly causeId: string | null;
+  readonly correlationId: string | null;
+  readonly operationKinds: readonly RuntimeContextTransitionOperationKind[];
+}
+
+export interface ContextProjectionCompletedRuntimeEventPayload {
+  readonly manifestId: string;
+  readonly projectionId: string;
+  readonly requestId: string;
+  readonly activeContextId: string;
+  readonly activeContextVersion: number;
+  readonly profileId: string;
+  readonly profileRevision: string;
+  readonly policyId: string;
+  readonly policyRevision: string;
+  readonly estimatorId: string;
+  readonly estimatorRevision: string;
+  readonly accountingUnit: "bytes" | "tokens";
+  readonly budgetMaximum: number;
+  readonly consideredItemCount: number;
+  readonly projectedItemCount: number;
+  readonly projectedAmount: number;
+  readonly includedCount: number;
+  readonly transformedCount: number;
+  readonly referencedCount: number;
+  readonly omittedCount: number;
+  readonly rejectedCount: number;
+  readonly blockedCount: number;
+  readonly outcome: "projected" | "blocked";
+  readonly code: string | null;
+}
+
 interface TerminalRuntimeEventPayload<TStatus extends RuntimeTerminalStatus> {
   readonly status: TStatus;
   readonly code: TStatus extends "succeeded" ? null : string;
@@ -98,6 +144,8 @@ export interface InteractionSettledRuntimeEventPayload {
 export interface RuntimeEventPayloadMap {
   readonly "run.started": RunStartedRuntimeEventPayload;
   readonly "run.item.appended": RunItemAppendedRuntimeEventPayload;
+  readonly "context.transition.committed": ContextTransitionCommittedRuntimeEventPayload;
+  readonly "context.projection.completed": ContextProjectionCompletedRuntimeEventPayload;
   readonly "run.completed": RunCompletedRuntimeEventPayload;
   readonly "run.blocked": RunBlockedRuntimeEventPayload;
   readonly "run.failed": RunFailedRuntimeEventPayload;

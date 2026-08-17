@@ -567,6 +567,10 @@ function titleForEvent(name: string, payload: Readonly<Record<string, unknown>>)
       return `Controller iteration ${payload.iteration ?? ""} started`.trim();
     case "controller.finished": return `Controller ${payload.status ?? "finished"}`;
     case "run.item.appended": return `Run item appended: ${payload.itemKind ?? "unknown"}`;
+    case "context.projection.completed":
+      return payload.outcome === "blocked"
+        ? "Context projection blocked"
+        : "Context projection completed";
     case "approval.requested": return `Approval requested: ${payload.category ?? "action"}`;
     case "approval.resolved":
       return `Approval ${payload.decisionKind ?? payload.resolutionKind ?? "resolved"}`;
@@ -615,6 +619,9 @@ function detailForEvent(name: string, payload: Readonly<Record<string, unknown>>
   }
   if (name === "controller.finished") {
     return typeof payload.controllerAction === "string" ? payload.controllerAction : null;
+  }
+  if (name === "context.projection.completed") {
+    return typeof payload.manifestId === "string" ? payload.manifestId : null;
   }
   if (name === "approval.requested" || name === "approval.resolved") {
     return typeof payload.requestId === "string" ? payload.requestId : null;

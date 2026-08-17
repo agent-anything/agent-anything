@@ -95,7 +95,9 @@ export function createHelarcToolCatalogMetadata(input: {
   };
 }
 
-export function readHelarcToolCatalog(input: ControllerInput): HelarcToolCatalog {
+export function readHelarcToolCatalog(
+  input: Pick<ControllerInput, "metadata" | "toolExposure">,
+): HelarcToolCatalog {
   const metadata = input.metadata[HELARC_TOOL_CATALOG_METADATA_KEY];
   const catalogMetadata = parseHelarcToolCatalogMetadata(metadata);
 

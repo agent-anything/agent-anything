@@ -1,4 +1,3 @@
-import type { ContextObservation } from "@agent-anything/context/context";
 import type { ObservationEnvelope, RunActionRef } from "@agent-anything/agent-core/run-action";
 import type { OperationResult } from "@agent-anything/operation-catalog/result";
 import type { ToolResult } from "@agent-anything/tools/result";
@@ -18,7 +17,13 @@ export type RunObservationPayload =
   | { readonly kind: "operation_rejected"; readonly owner: string; readonly code: string; readonly message: string }
   | { readonly kind: "interaction"; readonly owner: string; readonly status: "resolved" | "expired" | "cancelled" | "invalidated" | "failed"; readonly value: unknown };
 
-export interface RunObservation extends ContextObservation {
+export interface RunObservation {
+  readonly id: string;
+  readonly runId: string;
+  readonly actionId: string;
+  readonly kind: string;
+  readonly createdAt: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
   readonly owner: string;
   readonly runAction: RunActionRef;
   readonly lowerRefs: readonly RunObservationLowerRef[];

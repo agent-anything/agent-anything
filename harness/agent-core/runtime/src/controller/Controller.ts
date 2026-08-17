@@ -3,8 +3,8 @@ import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { IdentityRef } from "@agent-anything/agent-core/run";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { RunInputItem } from "@agent-anything/agent-core/input";
-import type { ContextProjection } from "@agent-anything/context/context";
-import type { RunObservation } from "../run/RunObservation.js";
+import type { ContextProjection } from "@agent-anything/context/projection";
+import type { ProjectionManifest } from "@agent-anything/context/projection";
 import type { PlanProjection } from "../plan/index.js";
 import type { CancellationContext } from "../run/RunCancellation.js";
 import type { PermissionContextProjection } from "../run/RunPermissionState.js";
@@ -88,7 +88,12 @@ export interface ControllerInput<TOutput = unknown> {
   readonly task: AgentTask;
   readonly inputItems: readonly RunInputItem[];
   readonly toolExposure: ToolExposureProof;
-  readonly context: ContextProjection<RunObservation>;
+  readonly context: ContextProjection;
+  readonly contextManifest: Pick<
+    ProjectionManifest,
+    "id" | "projectionId" | "requestId" | "activeContext" | "profile" |
+      "policy" | "estimator" | "budget" | "accounting"
+  >;
   readonly plan: PlanProjection | null;
   readonly permission: PermissionContextProjection;
   readonly pending: readonly PendingRunSubjectProjection[];
@@ -96,6 +101,11 @@ export interface ControllerInput<TOutput = unknown> {
   readonly identity: IdentityRef;
   readonly metadata: Readonly<Record<string, unknown>>;
 }
+
+export type ControllerPreProjectionInput<TOutput = unknown> = Omit<
+  ControllerInput<TOutput>,
+  "context" | "contextManifest"
+>;
 
 export interface ControllerCallContext {
   readonly cancellation: CancellationContext;

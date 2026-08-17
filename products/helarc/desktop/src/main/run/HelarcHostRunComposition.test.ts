@@ -1,4 +1,3 @@
-import type { ContextProjection } from "@agent-anything/context/context";
 import {
   createStaticHostIdentityResolver,
   createStaticHostWorkspaceResolver,
@@ -14,6 +13,7 @@ import type {
   ProviderRequest,
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import { createUtf8ModelInputAccounting } from "@agent-anything/model-interaction/input";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -189,19 +189,33 @@ describe("Helarc Host Run composition", () => {
     });
     expect(result.activity.map((item) => item.kind)).toEqual([
       "run.started",
+      "context.transition.committed",
+      "context.transition.committed",
+      "context.projection.completed",
       "controller.started",
       "run.item.appended",
       "controller.finished",
       "run.item.appended",
       "operation.started",
       "operation.finished",
+      "context.transition.committed",
       "run.item.appended",
+      "context.transition.committed",
+      "context.projection.completed",
       "controller.started",
       "run.item.appended",
       "controller.finished",
       "run.item.appended",
       "run.completed",
     ]);
+    const contextProjection = result.activity.find(
+      (item) => item.kind === "context.projection.completed",
+    );
+    expect(contextProjection?.metadata).toMatchObject({
+      outcome: "projected",
+      accountingUnit: "bytes",
+    });
+    expect(contextProjection?.metadata).not.toHaveProperty("records");
     expect(provider.requests).toHaveLength(2);
     expect(provider.lastControllerInputContexts).toEqual([0, 1]);
     expect(result.activity.find((item) => item.metadata.controllerAction === "call_tool")?.metadata).toMatchObject({
@@ -808,6 +822,7 @@ function unavailableAutomaticReviewer() {
 }
 
 class ScriptedProvider implements Provider {
+  readonly inputAccounting = createHostRunTestInputAccounting("scripted-helarc-provider");
   readonly descriptor = {
     id: "scripted-helarc-provider",
     name: "Scripted Helarc Provider",
@@ -815,6 +830,7 @@ class ScriptedProvider implements Provider {
       supportsToolPlanning: true,
       supportsStructuredOutput: true,
       supportsStreaming: false,
+      modelInput: this.inputAccounting.capability,
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -857,6 +873,7 @@ class ScriptedProvider implements Provider {
 }
 
 class RetryThenCompleteProvider implements Provider {
+  readonly inputAccounting = createHostRunTestInputAccounting("retry-then-complete-provider");
   readonly descriptor = {
     id: "retry-then-complete-provider",
     name: "Retry Then Complete Provider",
@@ -864,6 +881,7 @@ class RetryThenCompleteProvider implements Provider {
       supportsToolPlanning: true,
       supportsStructuredOutput: true,
       supportsStreaming: false,
+      modelInput: this.inputAccounting.capability,
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -896,6 +914,20 @@ class RetryThenCompleteProvider implements Provider {
   }
 }
 
+function createHostRunTestInputAccounting(providerId: string) {
+  return createUtf8ModelInputAccounting({
+    providerId,
+    model: "host-run-test-model",
+    maximumInputBytes: 4 * 1_024 * 1_024,
+    limitSource: "host_configured",
+    estimator: { id: `${providerId}.utf8-content`, revision: "1" },
+    framing: { id: `${providerId}.framing`, revision: "1" },
+    renderFraming: (sections) => JSON.stringify({
+      roles: sections.map((section) => section.role),
+    }),
+  });
+}
+
 function createTask(workspaceRoot: string) {
   const result = createHelarcTask({
     taskId: "helarc-task-1",
@@ -925,34 +957,49 @@ function createTask(workspaceRoot: string) {
 }
 
 function readObservationCount(request: ProviderRequest): number {
-  const content = request.messages.find((message) => message.role === "user")?.content ?? "";
-  const marker = "Observations:";
-  const nextMarker = "Evidence refs:";
-  const index = content.indexOf(marker);
-  const nextIndex = content.indexOf(nextMarker);
-  if (index < 0 || nextIndex < index) {
+  const marker = "Context projection:";
+  const content = request.messages.find((message) =>
+    message.content.startsWith(marker)
+  )?.content;
+  if (content === undefined) {
     return 0;
   }
 
-  try {
-    const json = content.slice(index + marker.length, nextIndex).trim();
-    const parsed = JSON.parse(json) as ContextProjection["observations"];
-    return Array.isArray(parsed) ? parsed.length : 0;
-  } catch {
-    return 0;
-  }
+  return content.slice(marker.length).split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      try {
+        return JSON.parse(line) as unknown;
+      } catch {
+        return null;
+      }
+    })
+    .filter((block) =>
+      typeof block === "object" &&
+      block !== null &&
+      "payload" in block &&
+      typeof block.payload === "object" &&
+      block.payload !== null &&
+      "value" in block.payload &&
+      typeof block.payload.value === "object" &&
+      block.payload.value !== null &&
+      "kind" in block.payload.value &&
+      block.payload.value.kind === "run_observation"
+    ).length;
 }
 
 function readCurrentPlan(request: ProviderRequest): unknown {
-  const content = request.messages.find((message) => message.role === "user")?.content ?? "";
   const marker = "Current plan:";
-  const index = content.indexOf(marker);
-  if (index < 0) {
+  const content = request.messages.find((message) =>
+    message.content.startsWith(marker)
+  )?.content;
+  if (content === undefined) {
     return null;
   }
 
   try {
-    return JSON.parse(content.slice(index + marker.length).trim()) as unknown;
+    return JSON.parse(content.slice(marker.length).trim()) as unknown;
   } catch {
     return null;
   }

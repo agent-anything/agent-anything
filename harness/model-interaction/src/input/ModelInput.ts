@@ -20,6 +20,7 @@ export interface ModelInputEstimatorRef {
 export interface ModelInputLimit {
   readonly unit: ModelInputUnit;
   readonly maximum: number;
+  readonly source: "provider_reported" | "host_configured";
 }
 
 export type ModelInputCapability =
@@ -135,7 +136,7 @@ export function snapshotModelInputCapability(
   if (input.supported !== true) {
     throw new TypeError("ModelInputCapability.supported must be boolean.");
   }
-  const limit = snapshotAmount(input.limit, "ModelInputCapability.limit", "maximum");
+  const limit = snapshotLimit(input.limit, "ModelInputCapability.limit");
   const estimator = snapshotEstimator(input.estimator, "ModelInputCapability.estimator");
   const framingEstimator = snapshotEstimator(
     input.framingEstimator,
@@ -164,7 +165,7 @@ export function snapshotModelInputComposition(
     input.estimator,
     "ModelInputComposition.estimator",
   );
-  const limit = snapshotAmount(input.limit, "ModelInputComposition.limit", "maximum");
+  const limit = snapshotLimit(input.limit, "ModelInputComposition.limit");
   const outputReserve = snapshotAmount(
     input.outputReserve,
     "ModelInputComposition.outputReserve",
@@ -270,6 +271,19 @@ function snapshotAmount<TField extends "amount" | "maximum">(
     unit: input.unit,
     [field]: nonNegativeInteger(input[field], `${path}.${field}`),
   }) as { readonly unit: ModelInputUnit } & Readonly<Record<TField, number>>;
+}
+
+function snapshotLimit(input: ModelInputLimit, path: string): ModelInputLimit {
+  strictRecord(input, path, ["unit", "maximum", "source"]);
+  if (!isUnit(input.unit)) throw new TypeError(`${path}.unit is invalid.`);
+  if (input.source !== "provider_reported" && input.source !== "host_configured") {
+    throw new TypeError(`${path}.source is invalid.`);
+  }
+  return Object.freeze({
+    unit: input.unit,
+    maximum: nonNegativeInteger(input.maximum, `${path}.maximum`),
+    source: input.source,
+  });
 }
 
 function snapshotFraming(input: ModelInputFraming): ModelInputFraming {

@@ -19,5 +19,4 @@ export {
 export { FakeRuntimeEventPublisher } from "./FakeRuntimeEventPublisher.js";
 export {
   createTestContextProjection,
-  createTestIdentityContextProjector,
-} from "./TestIdentityContextProjector.js";
+} from "./TestContextProjectionConfiguration.js";

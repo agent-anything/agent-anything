@@ -6,6 +6,10 @@ import type {
   ProviderRequest,
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import {
+  createUtf8ModelInputAccounting,
+  type ProviderModelInputAccounting,
+} from "@agent-anything/model-interaction/input";
 
 export interface FakeProviderInput {
   descriptor?: Partial<Omit<ProviderDescriptor, "capabilities">> & {
@@ -16,18 +20,32 @@ export interface FakeProviderInput {
 
 export class FakeProvider implements Provider {
   readonly descriptor: ProviderDescriptor;
+  readonly inputAccounting: ProviderModelInputAccounting;
   private readonly results: ProviderCallResult[];
   private readonly recordedRequests: ProviderRequest[] = [];
 
   constructor(input: FakeProviderInput = {}) {
+    const providerId = input.descriptor?.id ?? "fake-provider";
+    this.inputAccounting = createUtf8ModelInputAccounting({
+      providerId,
+      model: "fake-model",
+      maximumInputBytes: 4 * 1_024 * 1_024,
+      limitSource: "host_configured",
+      estimator: { id: "fake-provider.utf8-content", revision: "1" },
+      framing: { id: "fake-provider.framing", revision: "1" },
+      renderFraming: (sections) => JSON.stringify({
+        roles: sections.map((section) => section.role),
+      }),
+    });
     this.descriptor = {
-      id: input.descriptor?.id ?? "fake-provider",
+      id: providerId,
       name: input.descriptor?.name ?? "Fake Provider",
       metadata: input.descriptor?.metadata ?? {},
       capabilities: {
         supportsToolPlanning: true,
         supportsStructuredOutput: true,
         supportsStreaming: false,
+        modelInput: this.inputAccounting.capability,
         ...input.descriptor?.capabilities,
       },
       requestRetryScheduler: input.descriptor?.requestRetryScheduler ?? {

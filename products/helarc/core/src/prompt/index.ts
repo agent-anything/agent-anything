@@ -1,5 +1,4 @@
 export type {
-  HelarcPromptAssemblyInput,
   HelarcPromptAssemblyResult,
   HelarcPromptAssemblyVersions,
   HelarcPromptSection,
