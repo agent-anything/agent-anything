@@ -58,6 +58,7 @@ export class OllamaProvider implements Provider {
         supportsStructuredOutput: true,
         supportsStreaming: false,
         modelInput: this.inputAccounting.capability,
+        continuation: Object.freeze({ supported: false as const }),
       }),
       requestRetryScheduler: Object.freeze({ kind: "harness" as const }),
       metadata: Object.freeze({}),
@@ -70,6 +71,13 @@ export class OllamaProvider implements Provider {
     request: ProviderRequest,
     context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
+    if (request.continuation !== null) {
+      return failed(
+        "invalid_request",
+        "provider_continuation_unsupported",
+        "The selected Ollama Generate endpoint does not support this continuation Contract.",
+      );
+    }
     const attempt = createProviderAttemptInterruption(context, this.config.timeoutMs);
 
     try {
@@ -140,6 +148,7 @@ function mapOllamaGenerateResponse(value: unknown): ProviderCallResult {
   }
 
   return succeeded({
+    responseId: null,
     output: value.response,
     usage: {
       inputTokens: readNumber(value.prompt_eval_count),
@@ -147,6 +156,7 @@ function mapOllamaGenerateResponse(value: unknown): ProviderCallResult {
       totalTokens: readTotalTokens(value),
       metadata: {},
     },
+    continuation: null,
     metadata: {},
   });
 }

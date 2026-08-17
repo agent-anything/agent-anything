@@ -222,6 +222,7 @@ class UnusedProvider implements Provider {
       supportsToolPlanning: true,
       supportsStructuredOutput: true,
       supportsStreaming: false,
+      continuation: { supported: false as const },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},

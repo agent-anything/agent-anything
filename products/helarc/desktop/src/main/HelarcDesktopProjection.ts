@@ -329,6 +329,15 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
     },
     product: {
       phase: projectProductPhase(run.product.phase),
+      continuation: run.product.continuation === null
+        ? null
+        : {
+            branchId: run.product.continuation.branchId,
+            requestId: run.product.continuation.requestId,
+            kind: run.product.continuation.kind,
+            reason: run.product.continuation.reason,
+            occurredAt: run.product.continuation.occurredAt,
+          },
       activity: run.product.activity.map((activity) => ({
         id: activity.id,
         sequence: activity.sequence,

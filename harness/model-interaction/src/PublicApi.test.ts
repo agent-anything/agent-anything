@@ -20,6 +20,9 @@ describe("Model Interaction public API", () => {
       "snapshotModelInputComposition",
     ]);
     expect(Object.keys(continuationApi).sort()).toEqual([
+      "ModelContinuationLifecycle",
+      "checkModelContinuationCompatibility",
+      "createInMemoryModelContinuationStore",
       "snapshotModelContinuationCapability",
       "snapshotModelContinuationCompatibility",
       "snapshotModelContinuationOutcome",

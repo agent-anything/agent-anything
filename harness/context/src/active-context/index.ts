@@ -36,3 +36,15 @@ export {
 } from "./ContextAdmission.js";
 export type { ApplyContextTransitionInput } from "./ContextTransitionApplication.js";
 export { applyContextTransition } from "./ContextTransitionApplication.js";
+export type {
+  ContextRefreshOperation,
+  ContextRefreshProposal,
+  ContextRefreshTarget,
+  ContextSourceRevisionRef,
+  InvalidateContextRefreshProposal,
+  ReplaceContextRefreshProposal,
+} from "./ContextRefresh.js";
+export {
+  deriveContextRefreshOperation,
+  snapshotContextRefreshProposal,
+} from "./ContextRefresh.js";

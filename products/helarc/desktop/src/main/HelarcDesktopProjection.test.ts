@@ -17,9 +17,17 @@ describe("Helarc Desktop IPC projection", () => {
     ]);
     expect(Object.keys(projected.run?.product ?? {}).sort()).toEqual([
       "activity",
+      "continuation",
       "phase",
       "result",
     ]);
+    expect(projected.run?.product.continuation).toEqual({
+      branchId: "product-run-1:main",
+      requestId: "request-1",
+      kind: "reused",
+      reason: null,
+      occurredAt: "2026-07-19T00:00:00.000Z",
+    });
     expect(projected.provider.configured && projected.provider.activeProfile)
       .not.toHaveProperty("storedCredential");
     expect(projected.run?.product.activity[0]?.metadata).toEqual({
@@ -141,6 +149,14 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
           privateTraceState: SECRET,
         },
       }],
+      continuation: {
+        branchId: "product-run-1:main",
+        requestId: "request-1",
+        kind: "reused",
+        reason: null,
+        occurredAt: "2026-07-19T00:00:00.000Z",
+        opaqueState: SECRET,
+      },
       result: null,
       privateProductState: SECRET,
     },

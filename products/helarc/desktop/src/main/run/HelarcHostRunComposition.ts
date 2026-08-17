@@ -11,6 +11,7 @@ import type {
 } from "@agent-anything/action-execution/sandbox";
 import type { ApprovalReviewerBinding, RunResult } from "@agent-anything/agent-runtime/run";
 import { Runner } from "@agent-anything/agent-runtime/runner";
+import type { ContextManifestPersistencePort } from "@agent-anything/context/persistence";
 import {
   createCanonicalActorIdentity,
   createCanonicalEnvironmentIdentity,
@@ -69,6 +70,7 @@ import {
 } from "@agent-anything/helarc-local-environment/filesystem";
 import { createHelarcLocalSandboxGateway } from "@agent-anything/helarc-local-environment/sandbox";
 import type { Provider } from "@agent-anything/model-interaction";
+import type { ModelContinuationStore } from "@agent-anything/model-interaction/continuation";
 import type { RuntimeEvent, RuntimeEventPublisher } from "@agent-anything/observability/events";
 import type { SessionAuthorityPort } from "@agent-anything/permission";
 import type { WorkspaceIdentity } from "@agent-anything/workspace/identity";
@@ -88,6 +90,8 @@ export interface PrepareHelarcHostRunInput {
   readonly identityResolver: HostIdentityResolver;
   readonly identitySelection: HostIdentitySelection;
   readonly provider: Provider;
+  readonly modelContinuationStore?: ModelContinuationStore;
+  readonly contextManifestPersistence?: ContextManifestPersistencePort;
   readonly toolMode: HelarcToolMode;
   readonly permissionPreset: HelarcPermissionPreset;
   readonly automaticApprovalReviewer?: ApprovalReviewerBinding & {
@@ -196,6 +200,7 @@ export async function prepareHelarcHostRun(
     task: input.task,
     workspace: runWorkspace,
     provider: input.provider,
+    modelContinuationStore: input.modelContinuationStore,
     toolMode: input.toolMode,
     codeSource: createLocalCodeSourcePort(now),
     fileActions,
@@ -249,11 +254,18 @@ export async function prepareHelarcHostRun(
     ...product.runMetadata,
     enforcement,
   });
+  const baseContextProjection = createHelarcContextProjectionConfiguration(
+    input.provider.inputAccounting,
+  );
+  const contextProjection = input.contextManifestPersistence === undefined
+    ? baseContextProjection
+    : Object.freeze({
+        ...baseContextProjection,
+        manifestPersistence: input.contextManifestPersistence,
+      });
   const runner = new Runner({
     controller: product.controller,
-    contextProjection: createHelarcContextProjectionConfiguration(
-      input.provider.inputAccounting,
-    ),
+    contextProjection,
     operations: {
       catalog: product.actions.operationCatalog,
       bindings: product.actions.operationBindings,

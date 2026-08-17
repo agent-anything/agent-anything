@@ -42,6 +42,8 @@ describe("OllamaProvider", () => {
       kind: "succeeded",
       response: {
         output: "{\"action\":\"complete\",\"summary\":\"done\"}",
+        responseId: null,
+        continuation: null,
         usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
       },
     });
@@ -67,6 +69,11 @@ describe("OllamaProvider", () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it("truthfully reports the selected Generate endpoint as continuation unsupported", () => {
+    const provider = new OllamaProvider(config());
+    expect(provider.descriptor.capabilities.continuation).toEqual({ supported: false });
   });
 
   it("projects trusted HTTP retry metadata into ProviderFailure", async () => {
@@ -186,6 +193,7 @@ function rejectWhenAborted(signal: AbortSignal): Promise<never> {
 function request(): ProviderRequest {
   return {
     capability: "helarc.code-agent.plan",
+    continuation: null,
     messages: [
       { role: "system", content: "You are concise.", metadata: {} },
       { role: "user", content: "hello", metadata: {} },

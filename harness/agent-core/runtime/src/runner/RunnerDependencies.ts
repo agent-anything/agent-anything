@@ -8,6 +8,7 @@ import type {
   ContextProjectionPolicy,
   ContextProjectionProfile,
 } from "@agent-anything/context/projection";
+import type { ContextManifestPersistencePort } from "@agent-anything/context/persistence";
 import type { ControllerPreProjectionInput } from "../controller/index.js";
 import type { AuditPort, RunTraceObserver, RuntimeEventPublisher, TelemetryPort } from "@agent-anything/observability";
 import type { ActionExecutionCoordinatorDependencies } from "@agent-anything/action-execution/enforcement";
@@ -47,7 +48,8 @@ export type RunnerIdentityKind =
   | "active_context"
   | "context_item"
   | "context_transition"
-  | "context_contribution";
+  | "context_contribution"
+  | "context_refresh";
 
 export interface CreateRunnerIdentityInput {
   readonly kind: RunnerIdentityKind;
@@ -64,6 +66,7 @@ export interface RunnerContextProjection {
   readonly policy: ContextProjectionPolicy;
   readonly audiences: readonly string[];
   readonly maxContributionPayloadBytes: number;
+  readonly manifestPersistence?: ContextManifestPersistencePort;
   allocate(input: ControllerPreProjectionInput): {
     readonly budget: ContextBudgetGrant;
     readonly estimator: ContextProjectionEstimator;

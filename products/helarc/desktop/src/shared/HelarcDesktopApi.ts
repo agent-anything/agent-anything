@@ -248,6 +248,22 @@ export interface HelarcRunActivitySnapshot {
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
+export interface HelarcModelContinuationSnapshot {
+  readonly branchId: string;
+  readonly requestId: string;
+  readonly kind:
+    | "reused"
+    | "advanced"
+    | "reset"
+    | "unavailable"
+    | "rejected"
+    | "cancelled"
+    | "failed"
+    | "compacted";
+  readonly reason: string | null;
+  readonly occurredAt: string;
+}
+
 export interface HelarcRunProductResultSnapshot {
   readonly status: "completed" | "rejected" | "failed" | "blocked" | "cancelled";
   readonly output: {
@@ -303,6 +319,7 @@ export interface HelarcRunSnapshot {
   readonly product: {
     readonly phase: HelarcProductPhaseSnapshot;
     readonly activity: readonly HelarcRunActivitySnapshot[];
+    readonly continuation: HelarcModelContinuationSnapshot | null;
     readonly result: HelarcRunProductResultSnapshot | null;
   };
 }

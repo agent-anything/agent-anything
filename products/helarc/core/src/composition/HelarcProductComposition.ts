@@ -36,6 +36,11 @@ import {
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
 import type { Provider } from "@agent-anything/model-interaction";
 import {
+  ModelContinuationLifecycle,
+  type ModelContinuationSafeEvent,
+  type ModelContinuationStore,
+} from "@agent-anything/model-interaction/continuation";
+import {
   createInteractionProtocolRegistrySnapshot,
   type InteractionProtocolRegistrySnapshot,
 } from "@agent-anything/interaction/coordination";
@@ -86,6 +91,7 @@ export interface CreateHelarcProductCompositionInput {
   readonly fileActions: HelarcFileActionContribution;
   readonly commandActions: HelarcCommandActionContribution | null;
   readonly permissionRequests?: HelarcPermissionRequestApplicationPort | null;
+  readonly modelContinuationStore?: ModelContinuationStore;
   readonly now?: () => string;
 }
 
@@ -149,6 +155,18 @@ export async function createHelarcProductComposition(
       }
     }
   };
+  const continuation = new ModelContinuationLifecycle({
+    store: input.modelContinuationStore,
+    now: input.now,
+    events: Object.freeze({
+      publish(event: ModelContinuationSafeEvent) {
+        publishProductUpdate({
+          kind: "continuation_changed",
+          continuation: event,
+        });
+      },
+    }),
+  });
   const providerController = new HelarcTracingController(
     new ProviderBackedController<HelarcAgentOutput>({
       provider: input.provider,
@@ -158,6 +176,7 @@ export async function createHelarcProductComposition(
       maxProviderOutputLength: HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
       retryExecutor: createSystemRetryExecutor(retryClock),
       retryClock,
+      continuation,
     }),
     controllerTraceByOperationId,
   );

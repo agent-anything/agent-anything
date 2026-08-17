@@ -30,3 +30,8 @@ export type {
   ContextProjectionPolicyDecision,
 } from "./ActiveContextProjection.js";
 export { projectActiveContext } from "./ActiveContextProjection.js";
+export type { SafeProjectionManifest } from "./SafeProjectionManifest.js";
+export {
+  createSafeProjectionManifest,
+  snapshotSafeProjectionManifest,
+} from "./SafeProjectionManifest.js";

@@ -60,6 +60,7 @@ export class OpenAICompatibleProvider implements Provider {
         supportsStructuredOutput: true,
         supportsStreaming: false,
         modelInput: this.inputAccounting.capability,
+        continuation: Object.freeze({ supported: false as const }),
       }),
       requestRetryScheduler: Object.freeze({ kind: "harness" as const }),
       metadata: Object.freeze({}),
@@ -72,6 +73,13 @@ export class OpenAICompatibleProvider implements Provider {
     request: ProviderRequest,
     context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
+    if (request.continuation !== null) {
+      return failed(
+        "invalid_request",
+        "provider_continuation_unsupported",
+        "OpenAI-compatible Chat Completions does not support this continuation Contract.",
+      );
+    }
     const attempt = createProviderAttemptInterruption(context, this.config.timeoutMs);
 
     try {
@@ -156,8 +164,10 @@ function mapChatCompletionResponse(value: unknown): ProviderCallResult {
   }
 
   return succeeded({
+    responseId: typeof value.id === "string" ? value.id : null,
     output: content,
     usage: readUsage(value.usage),
+    continuation: null,
     metadata: {},
   });
 }

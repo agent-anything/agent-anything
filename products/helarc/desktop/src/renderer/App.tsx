@@ -651,6 +651,9 @@ export function RunTimelinePanel({
       <div className="run-summary">
         <strong>{acceptedTask?.prompt ?? run?.host.taskId ?? "Run"}</strong>
         <span>{runStatusLabel(run?.display.status ?? "running")}</span>
+        {run?.product.continuation ? (
+          <span>{`Model continuity: ${run.product.continuation.kind}`}</span>
+        ) : null}
       </div>
       {activity.map((event) => {
         const trace = formatTraceMetadata(event.metadata);
@@ -717,6 +720,12 @@ export function RunTerminalPanel({
           <dt>Events</dt>
           <dd>{run.product.activity.length}</dd>
         </div>
+        {run.product.continuation ? (
+          <div>
+            <dt>Model continuity</dt>
+            <dd>{run.product.continuation.kind}</dd>
+          </div>
+        ) : null}
         <div>
           <dt>Started</dt>
           <dd>{formatTimestamp(run.host.startedAt)}</dd>

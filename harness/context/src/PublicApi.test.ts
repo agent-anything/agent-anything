@@ -26,16 +26,20 @@ describe("Context public API", () => {
       "admitContextContribution",
       "applyContextTransition",
       "createEmptyActiveContext",
+      "deriveContextRefreshOperation",
       "snapshotActiveContext",
       "snapshotActiveContextRef",
       "snapshotContextAdmissionProfile",
+      "snapshotContextRefreshProposal",
       "snapshotContextTransition",
     ]);
     expect(Object.keys(projectionApi).sort()).toEqual([
+      "createSafeProjectionManifest",
       "projectActiveContext",
       "snapshotContextProjection",
       "snapshotContextProjectionRequest",
       "snapshotProjectionManifest",
+      "snapshotSafeProjectionManifest",
     ]);
     expect(Object.keys(evidenceApi).sort()).toEqual([
       "EvidenceBuilder",

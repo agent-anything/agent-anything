@@ -911,6 +911,8 @@ function scriptedSuccess(output: unknown, sequence: number): ProviderCallResult 
     kind: "succeeded" as const,
     response: {
       output,
+      responseId: null,
+      continuation: null,
       usage: {
         inputTokens,
         outputTokens,

@@ -24,6 +24,7 @@ describe("OpenAICompatibleProvider", () => {
         body: JSON.parse(init.body) as unknown,
       });
       return okResponse({
+        id: "response-1",
         choices: [{ message: { content: "{\"action\":\"complete\",\"summary\":\"done\"}" } }],
         usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
       });
@@ -48,6 +49,8 @@ describe("OpenAICompatibleProvider", () => {
       kind: "succeeded",
       response: {
         output: "{\"action\":\"complete\",\"summary\":\"done\"}",
+        responseId: "response-1",
+        continuation: null,
         usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
       },
     });
@@ -79,6 +82,21 @@ describe("OpenAICompatibleProvider", () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain("secret-key");
+  });
+
+  it("truthfully rejects continuation for Chat Completions before transport", async () => {
+    const fetchImpl = vi.fn(async () => okResponse({ choices: [] }));
+    const provider = new OpenAICompatibleProvider(config(), fetchImpl);
+
+    expect(provider.descriptor.capabilities.continuation).toEqual({ supported: false });
+    await expect(provider.send({
+      ...request(),
+      continuation: continuationRef(),
+    }, context())).resolves.toMatchObject({
+      kind: "failed",
+      failure: { code: "provider_continuation_unsupported" },
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("projects trusted HTTP retry metadata into ProviderFailure", async () => {
@@ -232,7 +250,31 @@ function request(): ProviderRequest {
   return {
     capability: "helarc.code-agent.plan",
     messages: [{ role: "user", content: "hello", metadata: {} }],
+    continuation: null,
     metadata: {},
+  };
+}
+
+function continuationRef(): ProviderRequest["continuation"] & object {
+  return {
+    id: "continuation-1",
+    providerId: "helarc-openai-compatible",
+    model: "model-a",
+    mechanism: "response_chaining",
+    predecessor: null,
+    branchId: "branch-1",
+    requestId: "request-1",
+    responseId: "response-1",
+    activeContext: { id: "context-1", runId: "run-1", version: 1 },
+    protocol: { id: "protocol-1", revision: "1" },
+    toolExposure: { id: "tools-1", revision: "1" },
+    policy: { id: "policy-1", revision: "1" },
+    state: {
+      kind: "opaque_provider_state",
+      handle: "opaque-state",
+      sensitivity: "restricted",
+    },
+    createdAt: "2026-08-17T00:00:00.000Z",
   };
 }
 

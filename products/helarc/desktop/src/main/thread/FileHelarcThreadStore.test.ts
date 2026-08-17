@@ -355,6 +355,7 @@ function progressCommit(
         sequence,
         phase: { kind: "none" },
         activity: [],
+        continuation: null,
         result: null,
       },
     },

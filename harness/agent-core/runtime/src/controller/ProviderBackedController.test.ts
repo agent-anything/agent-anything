@@ -11,6 +11,10 @@ import {
   createUtf8ModelInputAccounting,
   providerMessagesFromComposition,
 } from "@agent-anything/model-interaction/input";
+import {
+  createInMemoryModelContinuationStore,
+  ModelContinuationLifecycle,
+} from "@agent-anything/model-interaction/continuation";
 import type { Agent } from "@agent-anything/agent-core/agent";
 import { snapshotContextProjection } from "@agent-anything/context/projection";
 import {
@@ -70,6 +74,91 @@ describe("ProviderBackedController", () => {
     });
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.modelItems)).toBe(true);
+  });
+
+  it("reuses correlated Provider continuation while retaining complete current input", async () => {
+    const requests: ProviderRequest[] = [];
+    const store = createInMemoryModelContinuationStore();
+    const provider: Provider = {
+      descriptor: continuationProviderDescriptor(),
+      async send(candidate) {
+        requests.push(candidate);
+        const ordinal = requests.length;
+        return continuationSucceededResult(
+          { summary: `Done ${ordinal}` },
+          `response-${ordinal}`,
+          `state-${ordinal}`,
+        );
+      },
+    };
+    const controller = createController(provider, {
+      continuation: new ModelContinuationLifecycle({ store }),
+      parseResponse: (response) => finalDecision(response.output),
+    });
+
+    await controller.next(createControllerInput(), callContext());
+    await controller.next(createControllerInput(), callContext());
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0].continuation).toBeNull();
+    expect(requests[1].continuation).toMatchObject({
+      responseId: "response-1",
+      state: { handle: "state-1" },
+    });
+    expect(requests[1].messages).toEqual(requests[0].messages);
+    expect(requests[1].composition.sections).toEqual(
+      requests[0].composition.sections,
+    );
+  });
+
+  it("performs exactly one non-Retry reset after correlated Provider rejection", async () => {
+    const requests: ProviderRequest[] = [];
+    const store = createInMemoryModelContinuationStore();
+    const provider: Provider = {
+      descriptor: continuationProviderDescriptor(),
+      async send(candidate) {
+        requests.push(candidate);
+        if (requests.length === 1) {
+          return continuationSucceededResult(
+            { summary: "Seeded" },
+            "response-1",
+            "state-1",
+          );
+        }
+        if (requests.length === 2) {
+          if (candidate.continuation === null) {
+            throw new Error("Expected continuation reuse.");
+          }
+          return {
+            kind: "continuation_rejected",
+            continuationId: candidate.continuation.id,
+            providerCode: "invalid_previous_response",
+          };
+        }
+        return continuationSucceededResult(
+          { summary: "Reconstructed" },
+          "response-2",
+          "state-2",
+        );
+      },
+    };
+    const controller = createController(provider, {
+      continuation: new ModelContinuationLifecycle({ store }),
+      parseResponse: (response) => finalDecision(response.output),
+    });
+
+    await controller.next(createControllerInput(), callContext());
+    await expect(controller.next(createControllerInput(), callContext()))
+      .resolves.toMatchObject({
+        kind: "propose_completion",
+        output: { summary: "Reconstructed" },
+      });
+
+    expect(requests).toHaveLength(3);
+    expect(requests[1].continuation).not.toBeNull();
+    expect(requests[2].continuation).toBeNull();
+    expect(requests[2].messages).toEqual(requests[1].messages);
+    expect(requests[2].composition).toEqual(requests[1].composition);
   });
 
   it("preserves ordered candidates and validates their model-item references", async () => {
@@ -1097,6 +1186,7 @@ function createController(
       input: ControllerInput<TestOutput>,
     ) => ControllerDecision<TestOutput>;
     maxProviderOutputLength: number;
+    continuation: ModelContinuationLifecycle;
   }> = {},
 ): ProviderBackedController<TestOutput> {
   const accountedProvider = ensureTestProviderAccounting(provider);
@@ -1117,6 +1207,7 @@ function createController(
     maxProviderOutputLength: overrides.maxProviderOutputLength ?? 10_000,
     retryExecutor: createSystemRetryExecutor(),
     retryClock: systemRetryClock,
+    continuation: overrides.continuation,
   });
 }
 
@@ -1278,6 +1369,7 @@ function request(content: string): TestProviderRequest {
   return {
     messages: [{ role: "user", content, metadata: {} }],
     capability: "agent-control",
+    continuation: null,
     metadata: {},
   };
 }
@@ -1342,7 +1434,12 @@ function accountTestRequest(
       activeContext: null,
       contextProjection: null,
       projectionManifest: null,
-      toolExposure: null,
+      toolExposure: Object.freeze({
+        owner: "agent-core",
+        kind: "tool_exposure",
+        id: input.toolExposure.id,
+        revision: input.toolExposure.selectionRevision,
+      }),
       protocol: Object.freeze({
         owner: "agent-runtime-test",
         kind: "controller_contract",
@@ -1370,6 +1467,29 @@ function succeededResult(output: unknown): ProviderCallResult {
     kind: "succeeded",
     response: {
       output,
+      responseId: null,
+      continuation: null,
+      usage: null,
+      metadata: {},
+    },
+  };
+}
+
+function continuationSucceededResult(
+  output: unknown,
+  responseId: string,
+  handle: string,
+): ProviderCallResult {
+  return {
+    kind: "succeeded",
+    response: {
+      output,
+      responseId,
+      continuation: {
+        kind: "opaque_provider_state",
+        handle,
+        sensitivity: "restricted",
+      },
       usage: null,
       metadata: {},
     },
@@ -1509,9 +1629,25 @@ function providerDescriptor(id: string) {
       supportsToolPlanning: true,
       supportsStructuredOutput: true,
       supportsStreaming: false,
+      continuation: { supported: false as const },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
+  };
+}
+
+function continuationProviderDescriptor() {
+  const descriptor = providerDescriptor("continuation-provider");
+  return {
+    ...descriptor,
+    capabilities: {
+      ...descriptor.capabilities,
+      continuation: {
+        supported: true as const,
+        mechanism: "response_chaining" as const,
+        supportsCompaction: false,
+      },
+    },
   };
 }
 

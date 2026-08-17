@@ -7,12 +7,16 @@ import type {
   HelarcActivityItem,
   HelarcProductResult,
 } from "../composition/HelarcProductResult.js";
+import type { ModelContinuationSafeEvent } from "@agent-anything/model-interaction/continuation";
+
+export type HelarcModelContinuationProjection = ModelContinuationSafeEvent;
 
 export interface HelarcProductRunProjection {
   readonly runId: string;
   readonly sequence: number;
   readonly phase: HelarcProductPhase;
   readonly activity: readonly HelarcActivityItem[];
+  readonly continuation: HelarcModelContinuationProjection | null;
   readonly result: HelarcProductResult | null;
 }
 
@@ -41,9 +45,15 @@ export interface HelarcProductResultProjectionUpdate
   readonly result: HelarcProductResult;
 }
 
+export interface HelarcModelContinuationProjectionUpdate
+  extends HelarcProductProjectionUpdateBase<"continuation_changed"> {
+  readonly continuation: HelarcModelContinuationProjection;
+}
+
 export type HelarcProductRunProjectionUpdate =
   | HelarcProductPhaseProjectionUpdate
   | HelarcProductActivityProjectionUpdate
+  | HelarcModelContinuationProjectionUpdate
   | HelarcProductResultProjectionUpdate;
 
 export type HelarcProductRunProjectionRejectionCode =
@@ -112,6 +122,7 @@ export function createHelarcProductRunProjection(runId: string): HelarcProductRu
     sequence: 0,
     phase: Object.freeze({ kind: "none" as const }),
     activity: Object.freeze([]),
+    continuation: null,
     result: null,
   });
 }
@@ -157,6 +168,12 @@ export function reduceHelarcProductRunProjection(
           activity: Object.freeze([...current.activity, activity]),
         }));
       }
+      case "continuation_changed":
+        return appliedProduct(Object.freeze({
+          ...current,
+          sequence: update.sequence,
+          continuation: snapshotContinuationProjection(update.continuation),
+        }));
       case "result_settled":
         return appliedProduct(Object.freeze({
           ...current,
@@ -311,6 +328,25 @@ function snapshotActivity(activity: HelarcActivityItem): HelarcActivityItem {
     throw new TypeError("Product activity is invalid.");
   }
   return Object.freeze({ ...activity, metadata: Object.freeze({ ...activity.metadata }) });
+}
+
+function snapshotContinuationProjection(
+  value: HelarcModelContinuationProjection,
+): HelarcModelContinuationProjection {
+  const allowedKinds = new Set([
+    "reused", "advanced", "reset", "unavailable", "rejected", "cancelled",
+    "failed", "compacted",
+  ]);
+  if (
+    value === null || typeof value !== "object" ||
+    !hasIdentity(value.branchId) || !hasIdentity(value.requestId) ||
+    !allowedKinds.has(value.kind) ||
+    (value.reason !== null && typeof value.reason !== "string") ||
+    !hasIdentity(value.occurredAt) || !Number.isFinite(Date.parse(value.occurredAt))
+  ) {
+    throw new TypeError("Model continuation projection is invalid.");
+  }
+  return Object.freeze({ ...value });
 }
 
 function snapshotProductResult(result: HelarcProductResult): HelarcProductResult {

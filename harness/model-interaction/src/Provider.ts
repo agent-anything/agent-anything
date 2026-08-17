@@ -20,6 +20,11 @@ export type ProviderCallResult<TOutput = unknown> =
   | {
       readonly kind: "cancellation_unconfirmed";
       readonly failure: ProviderFailure;
+    }
+  | {
+      readonly kind: "continuation_rejected";
+      readonly continuationId: string;
+      readonly providerCode: string | null;
     };
 
 export interface Provider {

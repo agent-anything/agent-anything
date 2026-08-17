@@ -1,4 +1,5 @@
 import type { ModelInputCapability } from "./input/index.js";
+import type { ModelContinuationCapability } from "./continuation/index.js";
 
 export interface ProviderDescriptor {
   id: string;
@@ -23,4 +24,5 @@ export interface ProviderCapabilities {
   supportsStructuredOutput: boolean;
   supportsStreaming: boolean;
   modelInput: ModelInputCapability;
+  continuation: ModelContinuationCapability;
 }

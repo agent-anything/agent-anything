@@ -46,6 +46,7 @@ export class FakeProvider implements Provider {
         supportsStructuredOutput: true,
         supportsStreaming: false,
         modelInput: this.inputAccounting.capability,
+        continuation: { supported: false },
         ...input.descriptor?.capabilities,
       },
       requestRetryScheduler: input.descriptor?.requestRetryScheduler ?? {

@@ -177,6 +177,7 @@ export function buildHelarcProviderRequest(
         : message
     ),
     composition,
+    continuation: null,
   };
 }
 

@@ -61,8 +61,10 @@ import {
   type HelarcTaskInputError,
 } from "@agent-anything/helarc/task";
 import type { RunInputItem } from "@agent-anything/agent-core/input";
+import type { ContextManifestPersistencePort } from "@agent-anything/context/persistence";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { Provider } from "@agent-anything/model-interaction";
+import type { ModelContinuationStore } from "@agent-anything/model-interaction/continuation";
 import { basename, isAbsolute, normalize } from "node:path";
 import type { HelarcProductRunStartTarget } from "../shared/HelarcDesktopCommand.js";
 import type { HelarcProviderProfileStoreError } from "./provider/HelarcProviderProfileStore.js";
@@ -280,6 +282,8 @@ export interface HelarcMainControllerInput {
   threadSummaries?: HelarcThreadSummary[];
   taskTemplates?: HelarcTaskTemplate[];
   threadStore?: HelarcThreadStore;
+  modelContinuationStore?: ModelContinuationStore;
+  contextManifestPersistence?: ContextManifestPersistencePort;
 }
 
 export type HelarcRuntimeToolMode = "read-only" | "shell-enabled";
@@ -315,6 +319,10 @@ export class HelarcMainController {
   private currentThreadRecord: HelarcThreadRecord | null = null;
   private lastPatchReview: CompletedPatchReview | null = null;
   private readonly threadStore: HelarcThreadStore;
+  private readonly modelContinuationStore: ModelContinuationStore | undefined;
+  private readonly contextManifestPersistence:
+    | ContextManifestPersistencePort
+    | undefined;
   private provider: HelarcProviderSnapshot;
   private providerInstance: Provider | null;
   private readonly runtimeToolMode: HelarcRuntimeToolMode;
@@ -363,6 +371,8 @@ export class HelarcMainController {
     this.nextTaskNumber = resolveNextTaskNumber(input.threadSummaries ?? []);
     this.taskTemplates = input.taskTemplates ?? createBuiltInHelarcTaskTemplates();
     this.threadStore = input.threadStore ?? new InMemoryHelarcThreadStore();
+    this.modelContinuationStore = input.modelContinuationStore;
+    this.contextManifestPersistence = input.contextManifestPersistence;
     this.runtimeToolMode = input.runtimeToolMode ?? "read-only";
     this.provider = input.providerConfigError
       ? {
@@ -596,6 +606,8 @@ export class HelarcMainController {
         productRunId: runId,
         sessionId: threadId,
         provider: providerInstance,
+        modelContinuationStore: this.modelContinuationStore,
+        contextManifestPersistence: this.contextManifestPersistence,
         inputItems,
         toolMode: this.runtimeToolMode,
         permissionPreset: preparedStart.prepared.run.permissionPreset,

@@ -5,6 +5,7 @@ import type { RunInput } from "@agent-anything/agent-core/input";
 import type { RunActionProvenance, RunActionRef } from "@agent-anything/agent-core/run-action";
 import {
   applyContextTransition,
+  deriveContextRefreshOperation,
   type ActiveContext,
   type ContextAdmissionProfile,
   type ContextTransition,
@@ -12,7 +13,11 @@ import {
 } from "@agent-anything/context/active-context";
 import { ContextContractError } from "@agent-anything/context/contract";
 import type { ContextContribution } from "@agent-anything/context/contribution";
-import type { ContextProjection, ProjectionManifest } from "@agent-anything/context/projection";
+import {
+  createSafeProjectionManifest,
+  type ContextProjection,
+  type ProjectionManifest,
+} from "@agent-anything/context/projection";
 import {
   RuntimeEventStream,
   type ObservabilityRecordContext,
@@ -531,9 +536,15 @@ export class RunExecution<TOutput> {
         contextProjection: this.dependencies.contextProjection,
         requestedAt: this.now(),
       });
+      await this.persistSafeContextManifest(prepared.manifest, "projected", null);
       this.emitContextProjectionCompleted(prepared.manifest, "projected", null);
     } catch (error) {
       if (error instanceof ContextProjectionPreparationError) {
+        await this.persistSafeContextManifest(
+          error.manifest,
+          "blocked",
+          error.projectionFailure.code,
+        );
         this.emitContextProjectionCompleted(
           error.manifest,
           "blocked",
@@ -1590,11 +1601,30 @@ export class RunExecution<TOutput> {
           item.contribution.handling.replacementKey === contribution.handling.replacementKey
         );
         if (current !== undefined && "contribution" in current) {
-          return Object.freeze({
-            kind: "replace" as const,
-            item: current.ref,
-            expectedContribution: current.contribution.ref,
-            contribution,
+          return deriveContextRefreshOperation({
+            context,
+            proposal: Object.freeze({
+              id: this.id("context_refresh"),
+              kind: "replace" as const,
+              owner: contribution.source.owner,
+              target: Object.freeze({
+                context: context.ref,
+                item: current.ref,
+                contribution: current.contribution.ref,
+                source: Object.freeze({
+                  owner: current.contribution.source.owner,
+                  kind: current.contribution.source.kind,
+                  id: current.contribution.source.id,
+                  revision: current.contribution.source.revision,
+                }),
+              }),
+              cause: causeKind,
+              correlationId,
+              contribution,
+              createdAt: contribution.createdAt,
+            }),
+            maxContributionPayloadBytes:
+              this.dependencies.contextProjection.maxContributionPayloadBytes,
           });
         }
       }
@@ -2560,6 +2590,24 @@ export class RunExecution<TOutput> {
       outcome,
       code,
     });
+  }
+
+  private async persistSafeContextManifest(
+    manifest: ProjectionManifest,
+    outcome: "projected" | "blocked",
+    code: string | null,
+  ): Promise<void> {
+    const persistence = this.dependencies.contextProjection.manifestPersistence;
+    if (persistence === undefined) return;
+    try {
+      await persistence.persistManifest(createSafeProjectionManifest({
+        manifest,
+        outcome,
+        code,
+      }));
+    } catch {
+      // Optional safe Manifest persistence cannot advance or fail the Run.
+    }
   }
 
   private emitTerminal(result: RunResult<TOutput>): void {

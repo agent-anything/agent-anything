@@ -6,6 +6,12 @@ import type {
   ProviderResponse,
 } from "@agent-anything/model-interaction";
 import { snapshotModelInputComposition } from "@agent-anything/model-interaction/input";
+import { snapshotModelContinuationRef } from "@agent-anything/model-interaction/continuation";
+import {
+  ModelContinuationLifecycle,
+  type ModelContinuationPreparation,
+  type ModelContinuationRequestLineage,
+} from "@agent-anything/model-interaction/continuation";
 import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/control";
 import type { RetryAttemptContext, RetryClock } from "../retry/index.js";
 import { RetryExecutor } from "../retry/RetryExecutor.js";
@@ -76,6 +82,7 @@ export interface ProviderBackedControllerInput<TOutput = unknown> {
   readonly maxProviderOutputLength: number;
   readonly retryExecutor: RetryExecutor;
   readonly retryClock: RetryClock;
+  readonly continuation?: ModelContinuationLifecycle;
 }
 
 type ProviderRetryCategory =
@@ -94,6 +101,14 @@ interface ProviderAttemptFailure {
   readonly failure: ProviderFailure;
   readonly deadlineReason: RetryAttemptContext["deadlineReason"];
 }
+
+type ProviderRequestSettlement =
+  | { readonly kind: "response"; readonly response: ProviderResponse }
+  | {
+      readonly kind: "continuation_rejected";
+      readonly continuationId: string;
+      readonly providerCode: string | null;
+    };
 
 type StructuredOutputRetryCategory =
   | StructuredOutputFailureCategory
@@ -118,7 +133,10 @@ type StructuredOutputAttemptFailure =
 export class ProviderBackedController<TOutput = unknown>
   implements Controller<TOutput>
 {
+  private readonly continuation: ModelContinuationLifecycle;
+
   constructor(private readonly input: ProviderBackedControllerInput<TOutput>) {
+    this.continuation = input.continuation ?? new ModelContinuationLifecycle();
     if (
       !Number.isInteger(input.maxProviderOutputLength) ||
       input.maxProviderOutputLength <= 0
@@ -216,14 +234,16 @@ export class ProviderBackedController<TOutput = unknown>
             return interruptedBeforeProvider;
           }
 
-          providerRequestNumber += 1;
           let response: ProviderResponse;
           try {
             response = await this.sendRequest(
               request,
               controllerInput,
               callContext,
-              providerRequestNumber,
+              () => {
+                providerRequestNumber += 1;
+                return providerRequestNumber;
+              },
             );
           } catch (error) {
             if (matchesActiveCancellationError(error, callContext)) {
@@ -374,8 +394,104 @@ export class ProviderBackedController<TOutput = unknown>
     request: ProviderRequest,
     controllerInput: ControllerInput<TOutput>,
     callContext: ControllerCallContext,
-    providerRequestNumber: number,
+    nextProviderRequestNumber: () => number,
   ): Promise<ProviderResponse> {
+    const preparation = await this.continuation.prepare({
+      capability: this.input.provider.descriptor.capabilities.continuation,
+      lineage: continuationLineage(request, controllerInput),
+    });
+    const preparedRequest = withContinuation(request, preparation.continuation);
+    let settlement: ProviderRequestSettlement;
+    try {
+      settlement = await this.executeProviderRequest(
+        preparedRequest,
+        controllerInput,
+        callContext,
+        nextProviderRequestNumber(),
+      );
+    } catch (error) {
+      await this.recordContinuationInterruption(preparation, callContext, error);
+      throw error;
+    }
+
+    if (settlement.kind === "continuation_rejected") {
+      if (
+        preparation.continuation === null ||
+        settlement.continuationId !== preparation.continuation.id
+      ) {
+        await this.continuation.failed(
+          preparation,
+          "continuation_rejection_uncorrelated",
+          "Provider continuation rejection did not match the request.",
+        );
+        throw createControllerError(
+          "provider",
+          "provider_request_failed",
+          "Provider returned an uncorrelated continuation rejection.",
+          false,
+          { providerId: this.input.provider.descriptor.id },
+          "settled_failure",
+        );
+      }
+      const resetOutcome = await this.continuation.rejectAndReset(
+        preparation,
+        settlement.providerCode,
+      );
+      if (resetOutcome.kind === "failed") {
+        throw createControllerError(
+          "provider",
+          "provider_request_failed",
+          "Provider continuation could not be reset safely.",
+          false,
+          { providerId: this.input.provider.descriptor.id },
+          "settled_failure",
+        );
+      }
+      const resetPreparation: ModelContinuationPreparation = Object.freeze({
+        lineage: preparation.lineage,
+        continuation: null,
+        outcome: resetOutcome,
+      });
+      try {
+        settlement = await this.executeProviderRequest(
+          withContinuation(request, null),
+          controllerInput,
+          callContext,
+          nextProviderRequestNumber(),
+        );
+      } catch (error) {
+        await this.recordContinuationInterruption(resetPreparation, callContext, error);
+        throw error;
+      }
+      if (settlement.kind === "continuation_rejected") {
+        await this.continuation.failed(
+          resetPreparation,
+          "continuation_reset_rejected",
+          "Provider rejected the reconstructed request after continuation reset.",
+        );
+        throw createControllerError(
+          "provider",
+          "provider_request_failed",
+          "Provider rejected the reconstructed request.",
+          false,
+          { providerId: this.input.provider.descriptor.id },
+          "settled_failure",
+        );
+      }
+      await this.advanceContinuation(resetPreparation, settlement.response);
+      return settlement.response;
+    }
+
+    await this.advanceContinuation(preparation, settlement.response);
+    return settlement.response;
+  }
+
+  private async executeProviderRequest(
+    request: ProviderRequest,
+    controllerInput: ControllerInput<TOutput>,
+    callContext: ControllerCallContext,
+    providerRequestNumber: number,
+  ): Promise<ProviderRequestSettlement> {
     const operation = createProviderRetryOperation(
       controllerInput,
       callContext.retry.deadlineAt,
@@ -385,7 +501,11 @@ export class ProviderBackedController<TOutput = unknown>
     const budgetId = `${operation.operationId}:budget:1`;
     let result;
     try {
-      result = await this.input.retryExecutor.execute(
+      result = await this.input.retryExecutor.execute<
+        ProviderRequestSettlement,
+        ProviderAttemptFailure,
+        string
+      >(
         {
           operation,
           budgetId,
@@ -469,6 +589,56 @@ export class ProviderBackedController<TOutput = unknown>
           this.input.provider.descriptor.id,
         );
     }
+  }
+
+  private async advanceContinuation(
+    preparation: ModelContinuationPreparation,
+    response: ProviderResponse,
+  ): Promise<void> {
+    const capability = this.input.provider.descriptor.capabilities.continuation;
+    if (!capability.supported) {
+      if (response.continuation !== null) {
+        await this.continuation.failed(
+          preparation,
+          "continuation_capability_mismatch",
+          "Provider returned continuation state while declaring it unsupported.",
+        );
+      }
+      return;
+    }
+    if (response.responseId === null || response.continuation === null) {
+      await this.continuation.failed(
+        preparation,
+        "continuation_result_missing",
+        "Continuation-capable Provider returned no correlated continuation state.",
+      );
+      return;
+    }
+    await this.continuation.advance({
+      preparation,
+      mechanism: capability.mechanism,
+      responseId: response.responseId,
+      state: response.continuation,
+    });
+  }
+
+  private async recordContinuationInterruption(
+    preparation: ModelContinuationPreparation,
+    callContext: ControllerCallContext,
+    error: unknown,
+  ): Promise<void> {
+    if (
+      callContext.cancellation.signal.aborted ||
+      matchesActiveCancellationError(error, callContext)
+    ) {
+      await this.continuation.cancelled(preparation);
+      return;
+    }
+    await this.continuation.failed(
+      preparation,
+      "continuation_transport_failed",
+      "Provider transport failed before continuation could advance.",
+    );
   }
 
   private assertOutputLength(response: ProviderResponse): void {
@@ -1046,7 +1216,22 @@ function providerAttemptResult(
 
   switch (result.kind) {
     case "succeeded":
-      return { kind: "succeeded" as const, value: result.response };
+      return {
+        kind: "succeeded" as const,
+        value: Object.freeze({
+          kind: "response" as const,
+          response: result.response,
+        }),
+      };
+    case "continuation_rejected":
+      return {
+        kind: "succeeded" as const,
+        value: Object.freeze({
+          kind: "continuation_rejected" as const,
+          continuationId: result.continuationId,
+          providerCode: result.providerCode,
+        }),
+      };
     case "failed":
       return {
         kind: "failed" as const,
@@ -1446,6 +1631,9 @@ function snapshotProviderRequest(request: ProviderRequest): ProviderRequest {
     throw new TypeError("Provider request metadata must be an object.");
   }
   const composition = snapshotModelInputComposition(request.composition);
+  const continuation = request.continuation === null
+    ? null
+    : snapshotModelContinuationRef(request.continuation);
   const messages = request.messages.map((message, index) => {
     if (!isRecord(message)) {
       throw new TypeError(`Provider message ${index} must be an object.`);
@@ -1469,6 +1657,7 @@ function snapshotProviderRequest(request: ProviderRequest): ProviderRequest {
     messages: Object.freeze(messages) as unknown as ProviderRequest["messages"],
     capability: request.capability,
     composition,
+    continuation,
     metadata: Object.freeze({ ...request.metadata }),
   });
 }
@@ -1482,8 +1671,53 @@ function recreateProviderRequest(request: ProviderRequest): ProviderRequest {
     })),
     capability: request.capability,
     composition: request.composition,
+    continuation: request.continuation,
     metadata: { ...request.metadata },
   };
+}
+
+function withContinuation(
+  request: ProviderRequest,
+  continuation: ProviderRequest["continuation"],
+): ProviderRequest {
+  return Object.freeze({
+    ...request,
+    continuation,
+  });
+}
+
+function continuationLineage<TOutput>(
+  request: ProviderRequest,
+  input: ControllerInput<TOutput>,
+): ModelContinuationRequestLineage {
+  const lineage = request.composition.lineage;
+  if (lineage.toolExposure === null) {
+    throw new TypeError("Provider continuation requires exact Tool exposure lineage.");
+  }
+  return Object.freeze({
+    providerId: request.composition.providerId,
+    model: request.composition.model,
+    branchId: `${input.runId}:main`,
+    requestId: request.composition.id,
+    activeContext: Object.freeze({
+      id: input.context.activeContext.id,
+      runId: input.context.activeContext.runId,
+      version: input.context.activeContext.version,
+    }),
+    protocol: continuationRevision(lineage.protocol, "protocol"),
+    toolExposure: continuationRevision(lineage.toolExposure, "toolExposure"),
+    policy: continuationRevision(lineage.policy, "policy"),
+  });
+}
+
+function continuationRevision(
+  input: { readonly id: string; readonly revision: string | null },
+  path: string,
+) {
+  if (input.revision === null) {
+    throw new TypeError(`Provider continuation ${path} revision is required.`);
+  }
+  return Object.freeze({ id: input.id, revision: input.revision });
 }
 
 function isRecord(candidate: unknown): candidate is Record<string, unknown> {

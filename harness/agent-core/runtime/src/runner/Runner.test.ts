@@ -181,6 +181,37 @@ describe("Runner semantic integration", () => {
       .toBeLessThan(events.findIndex((event) => event.name === "run.failed"));
   });
 
+  it("persists only a safe Projection Manifest without making persistence authoritative", async () => {
+    const operations = createOperationFixture([]);
+    const baseProjection = createTestContextProjection();
+    const persistManifest = vi.fn(async () => ({
+      kind: "failed" as const,
+      code: "test_manifest_store_unavailable",
+      message: "Manifest Store is unavailable.",
+    }));
+
+    const result = await createRunner(
+      new ScriptedController([complete("Done")]),
+      operations,
+      {
+        contextProjection: Object.freeze({
+          ...baseProjection,
+          manifestPersistence: { persistManifest },
+        }),
+      },
+    ).run(createAgent(), createRunInput(), createRunConfig(operations));
+
+    expect(result.status).toBe("succeeded");
+    expect(persistManifest).toHaveBeenCalledTimes(1);
+    const persisted = persistManifest.mock.calls[0]?.[0];
+    expect(persisted).toMatchObject({
+      schemaVersion: 1,
+      outcome: "projected",
+      code: null,
+    });
+    expect(persisted).not.toHaveProperty("records");
+  });
+
   it("executes one exposed Tool through its exact internal Operation binding", async () => {
     const operation = operationRef("read-file");
     const handler = internalHandler("handler.read-file", "code-workspace", {

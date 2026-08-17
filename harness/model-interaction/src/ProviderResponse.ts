@@ -1,8 +1,12 @@
 
 
+import type { ModelOpaqueContinuationState } from "./continuation/index.js";
+
 export interface ProviderResponse<TOutput = unknown> {
+  readonly responseId: string | null;
   readonly output: TOutput;
   readonly usage: ProviderUsage | null;
+  readonly continuation: ModelOpaqueContinuationState | null;
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 

@@ -11,6 +11,8 @@ export type {
   HelarcProductActivityProjectionUpdate,
   HelarcProductPhaseProjectionUpdate,
   HelarcProductResultProjectionUpdate,
+  HelarcModelContinuationProjection,
+  HelarcModelContinuationProjectionUpdate,
   HelarcProductRunProjection,
   HelarcProductRunProjectionListener,
   HelarcProductRunProjectionReduction,

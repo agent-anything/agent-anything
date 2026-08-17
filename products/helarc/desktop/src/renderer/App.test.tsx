@@ -330,6 +330,7 @@ function runProjection(input: {
     product: {
       phase: { kind: "none" },
       activity,
+      continuation: null,
       result: terminal
         ? {
             status: status === "completed" ? "completed" : status,

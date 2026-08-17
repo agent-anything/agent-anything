@@ -4,6 +4,7 @@ import type { ContextContribution } from "../contribution/ContextContribution.js
 import { measureContextPayload } from "../contribution/ContextContribution.js";
 import { createEmptyActiveContext } from "./ActiveContext.js";
 import type { ContextAdmissionProfile } from "./ContextAdmission.js";
+import { deriveContextRefreshOperation } from "./ContextRefresh.js";
 import { applyContextTransition } from "./ContextTransitionApplication.js";
 
 describe("ContextTransition application", () => {
@@ -73,6 +74,51 @@ describe("ContextTransition application", () => {
     expect("contribution" in removed.items[0]!).toBe(false);
     expect(JSON.stringify(removed)).not.toContain("secret value");
   });
+
+  it("derives an owner replacement only from exact retained source lineage", () => {
+    const initial = emptyContext();
+    const first = contribution("current-1", "1", "current", "workspace", "first");
+    const added = apply(initial, "add-current", [
+      { kind: "add", item: { id: "item-current" }, contribution: first },
+    ]);
+    const replacement = contribution("current-1", "2", "current", "workspace", "second");
+    const operation = deriveContextRefreshOperation({
+      context: added,
+      proposal: refreshProposal(added, first, replacement),
+      maxContributionPayloadBytes: 1_024,
+    });
+
+    expect(operation).toMatchObject({
+      kind: "replace",
+      item: { id: "item-current" },
+      expectedContribution: first.ref,
+      contribution: { ref: replacement.ref },
+    });
+  });
+
+  it("rejects a refresh whose source revision is stale", () => {
+    const initial = emptyContext();
+    const first = contribution("current-1", "1", "current", "workspace", "first");
+    const added = apply(initial, "add-current", [
+      { kind: "add", item: { id: "item-current" }, contribution: first },
+    ]);
+    const proposal = refreshProposal(
+      added,
+      first,
+      contribution("current-1", "2", "current", "workspace", "second"),
+    );
+    expectFailure(() => deriveContextRefreshOperation({
+      context: added,
+      proposal: {
+        ...proposal,
+        target: {
+          ...proposal.target,
+          source: { ...proposal.target.source, revision: "stale" },
+        },
+      },
+      maxContributionPayloadBytes: 1_024,
+    }), "context_transition_conflict");
+  });
 });
 
 function emptyContext() {
@@ -126,6 +172,33 @@ function profile(): ContextAdmissionProfile {
     necessities: Object.freeze(["optional"]),
     maximumPrecedence: 100,
     transformations: Object.freeze(["truncate"]),
+  });
+}
+
+function refreshProposal(
+  context: ReturnType<typeof emptyContext>,
+  retained: ContextContribution,
+  replacement: ContextContribution,
+) {
+  return Object.freeze({
+    id: "refresh-1",
+    kind: "replace" as const,
+    owner: retained.source.owner,
+    target: Object.freeze({
+      context: context.ref,
+      item: Object.freeze({ id: "item-current" }),
+      contribution: retained.ref,
+      source: Object.freeze({
+        owner: retained.source.owner,
+        kind: retained.source.kind,
+        id: retained.source.id,
+        revision: retained.source.revision,
+      }),
+    }),
+    cause: "owner_refresh",
+    correlationId: null,
+    contribution: replacement,
+    createdAt: at(2),
   });
 }
 

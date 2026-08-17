@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HelarcMainController } from "./HelarcMainController.js";
 import { registerHelarcIpc } from "./ipc.js";
+import { FileHelarcContextManifestStore } from "./context-manifest/index.js";
+import { FileHelarcModelContinuationStore } from "./model-continuity/index.js";
 import { createHelarcProvider } from "./provider/createHelarcProvider.js";
 import { createElectronProviderCredentialStore } from "./provider/createElectronProviderCredentialStore.js";
 import { FileHelarcProviderProfileStore } from "./provider/HelarcProviderProfileStore.js";
@@ -47,6 +49,16 @@ async function createWindow(): Promise<void> {
   const threadStore = new FileHelarcThreadStore(
     join(userDataPath, "threads.json"),
   );
+  const modelContinuationStore = new FileHelarcModelContinuationStore(
+    join(userDataPath, "model-continuations.json"),
+  );
+  const contextManifestStore = new FileHelarcContextManifestStore(
+    join(userDataPath, "context-manifests.json"),
+  );
+  await Promise.all([
+    modelContinuationStore.listContinuations(),
+    contextManifestStore.listManifests(),
+  ]);
   const controller = new HelarcMainController({
     provider: providerConfig.ok ? createHelarcProvider(providerConfig.config) : null,
     providerConfigError: providerConfig.ok ? null : providerConfig.error,
@@ -54,6 +66,8 @@ async function createWindow(): Promise<void> {
     workspaceProfiles: await workspaceProfileStore.listProfiles(),
     threadSummaries: await threadStore.listThreadSummaries(),
     threadStore,
+    modelContinuationStore,
+    contextManifestPersistence: contextManifestStore,
   });
   registerHelarcIpc({
     window,

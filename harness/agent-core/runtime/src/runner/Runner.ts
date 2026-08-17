@@ -194,6 +194,12 @@ function snapshotRunnerContextProjection(
   ) {
     throw new TypeError("Runner Context contribution payload limit is invalid.");
   }
+  if (
+    input.manifestPersistence !== undefined &&
+    typeof input.manifestPersistence.persistManifest !== "function"
+  ) {
+    throw new TypeError("Runner Context Manifest persistence port is invalid.");
+  }
   return Object.freeze({
     purpose: request.purpose,
     profile: request.profile,
@@ -204,6 +210,16 @@ function snapshotRunnerContextProjection(
     audiences: request.audiences,
     maxContributionPayloadBytes: input.maxContributionPayloadBytes,
     allocate: input.allocate.bind(input),
+    ...(input.manifestPersistence === undefined
+      ? {}
+      : {
+          manifestPersistence: Object.freeze({
+            persistManifest:
+              input.manifestPersistence.persistManifest.bind(
+                input.manifestPersistence,
+              ),
+          }),
+        }),
   });
 }
 

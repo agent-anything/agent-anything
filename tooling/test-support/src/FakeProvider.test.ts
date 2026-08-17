@@ -45,6 +45,7 @@ describe("FakeProvider", () => {
           },
         ],
         capability: "tool-planning",
+        continuation: null,
         metadata: {
           requestId: "request_001",
         },
@@ -88,6 +89,7 @@ describe("FakeProvider", () => {
         supportsToolPlanning: true,
         supportsStructuredOutput: true,
         supportsStreaming: true,
+        continuation: { supported: false },
       },
     });
   });
@@ -105,6 +107,7 @@ function createRequest(requestId: string): ProviderRequest {
       },
     ],
     capability: "tool-planning",
+    continuation: null,
     metadata: {
       requestId,
     },
@@ -121,6 +124,8 @@ function succeeded(output: string): ProviderCallResult<string> {
 function createResponse(output: string): ProviderResponse<string> {
   return {
     output,
+    responseId: null,
+    continuation: null,
     usage: {
       inputTokens: 10,
       outputTokens: 5,

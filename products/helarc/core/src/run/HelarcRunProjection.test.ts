@@ -45,6 +45,30 @@ describe("Helarc product Run projection", () => {
     expect(Object.isFrozen(projection.result?.output.safeErrors)).toBe(true);
   });
 
+  it("retains only the safe Model Continuation lifecycle projection", () => {
+    const projection = applyProduct(createHelarcProductRunProjection("run-1"), {
+      kind: "continuation_changed",
+      runId: "run-1",
+      sequence: 1,
+      continuation: {
+        branchId: "run-1:main",
+        requestId: "request-1",
+        kind: "reused",
+        reason: null,
+        occurredAt: "2026-08-17T00:00:00.000Z",
+      },
+    });
+
+    expect(projection.continuation).toEqual({
+      branchId: "run-1:main",
+      requestId: "request-1",
+      kind: "reused",
+      reason: null,
+      occurredAt: "2026-08-17T00:00:00.000Z",
+    });
+    expect(Object.isFrozen(projection.continuation)).toBe(true);
+  });
+
   it("rejects stale, cross-Run, duplicate activity, and post-terminal updates", () => {
     const initial = createHelarcProductRunProjection("run-1");
     const active = applyProduct(initial, {

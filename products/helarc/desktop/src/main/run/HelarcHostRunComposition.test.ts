@@ -831,6 +831,7 @@ class ScriptedProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
       modelInput: this.inputAccounting.capability,
+      continuation: { supported: false as const },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -864,8 +865,10 @@ class ScriptedProvider implements Provider {
     return {
       kind: "succeeded",
       response: {
+        responseId: null,
         output,
         usage: null,
+        continuation: null,
         metadata: {},
       },
     };
@@ -882,6 +885,7 @@ class RetryThenCompleteProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
       modelInput: this.inputAccounting.capability,
+      continuation: { supported: false as const },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -906,8 +910,10 @@ class RetryThenCompleteProvider implements Provider {
     return {
       kind: "succeeded",
       response: {
+        responseId: null,
         output: { action: "complete", summary: "Recovered after retry." },
         usage: null,
+        continuation: null,
         metadata: {},
       },
     };

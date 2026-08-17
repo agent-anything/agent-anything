@@ -58,7 +58,7 @@ export interface ModelContinuationRef {
 export type ModelContinuationIncompatibilityReason =
   | "provider_changed"
   | "model_changed"
-  | "predecessor_changed"
+  | "mechanism_changed"
   | "branch_changed"
   | "active_context_changed"
   | "protocol_changed"
@@ -86,6 +86,10 @@ export interface ModelCompactionRef {
 export type ModelContinuationOutcome =
   | {
       readonly kind: "reused";
+      readonly continuation: ModelContinuationRef;
+    }
+  | {
+      readonly kind: "advanced";
       readonly continuation: ModelContinuationRef;
     }
   | {
@@ -200,9 +204,10 @@ export function snapshotModelContinuationOutcome(
   ]);
   switch (input.kind) {
     case "reused":
+    case "advanced":
       strictRecord(input, "ModelContinuationOutcome", ["kind", "continuation"]);
       return Object.freeze({
-        kind: "reused",
+        kind: input.kind,
         continuation: snapshotModelContinuationRef(input.continuation),
       });
     case "reset":
@@ -362,7 +367,8 @@ function isIncompatibilityReason(
   value: unknown,
 ): value is ModelContinuationIncompatibilityReason {
   return value === "provider_changed" || value === "model_changed" ||
-    value === "predecessor_changed" || value === "branch_changed" ||
+    value === "mechanism_changed" ||
+    value === "branch_changed" ||
     value === "active_context_changed" || value === "protocol_changed" ||
     value === "tool_exposure_changed" || value === "policy_changed";
 }

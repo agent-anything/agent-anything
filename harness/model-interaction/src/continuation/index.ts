@@ -16,3 +16,19 @@ export {
   snapshotModelContinuationOutcome,
   snapshotModelContinuationRef,
 } from "./ModelContinuation.js";
+export type {
+  ModelContinuationEventSink,
+  ModelContinuationCompactor,
+  ModelCompactionCallResult,
+  ModelContinuationLifecycleInput,
+  ModelContinuationPreparation,
+  ModelContinuationRequestLineage,
+  ModelContinuationSafeEvent,
+  ModelContinuationStore,
+  ModelContinuationStoreCommitResult,
+} from "./ModelContinuationLifecycle.js";
+export {
+  checkModelContinuationCompatibility,
+  createInMemoryModelContinuationStore,
+  ModelContinuationLifecycle,
+} from "./ModelContinuationLifecycle.js";

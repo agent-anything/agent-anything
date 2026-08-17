@@ -596,6 +596,7 @@ class FakeProvider implements Provider {
       supportsStructuredOutput: true,
       supportsStreaming: false,
       modelInput: this.inputAccounting.capability,
+      continuation: { supported: false as const },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
