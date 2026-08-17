@@ -135,6 +135,69 @@ test("rejects Active Context transition application outside RunExecution", () =>
   );
 });
 
+test("rejects superseded Context categories and semantic processing", () => {
+  const superseded = evaluateSourceOwnershipRules({
+    sourcePath: "harness/context/src/active-context/Legacy.ts",
+    text: "export interface ContextUpdate { observations: ContextObservation[] }",
+  });
+  const semantic = evaluateSourceOwnershipRules({
+    sourcePath: "harness/context/src/projection/SemanticProjection.ts",
+    text: "const ordered = rankByRelevance(items);",
+  });
+
+  assert.deepEqual(superseded.map(({ rule }) => rule), ["superseded_context_contract"]);
+  assert.deepEqual(semantic.map(({ rule }) => rule), ["context_semantic_processing"]);
+});
+
+test("rejects prompt traversal of Active Context internals", () => {
+  const violations = evaluateSourceOwnershipRules({
+    sourcePath: "products/helarc/core/src/prompt/LegacyPrompt.ts",
+    text: 'import type { ActiveContext } from "@agent-anything/context/active-context";',
+  });
+
+  assert.deepEqual(
+    violations.map(({ rule }) => rule),
+    ["prompt_context_internal_traversal"],
+  );
+});
+
+test("requires complete Provider composition and Controller verification", () => {
+  const request = evaluateSourceOwnershipRules({
+    sourcePath: "harness/model-interaction/src/ProviderRequest.ts",
+    text: "export interface ProviderRequest { readonly messages: readonly unknown[]; }",
+  });
+  const controller = evaluateSourceOwnershipRules({
+    sourcePath: "harness/agent-core/runtime/src/controller/ProviderBackedController.ts",
+    text: "return provider.send(request);",
+  });
+
+  assert.deepEqual(
+    request.map(({ rule }) => rule),
+    ["provider_request_complete_composition"],
+  );
+  assert.deepEqual(
+    controller.map(({ rule }) => rule),
+    ["model_input_composition_verification"],
+  );
+});
+
+test("rejects opaque Provider continuation in canonical Context, Run, and Product state", () => {
+  for (const sourcePath of [
+    "harness/context/src/active-context/ActiveContext.ts",
+    "harness/agent-core/contracts/src/run/RunState.ts",
+    "products/helarc/core/src/work-context/HelarcWorkContext.ts",
+  ]) {
+    const violations = evaluateSourceOwnershipRules({
+      sourcePath,
+      text: "readonly continuation: ModelContinuationRef;",
+    });
+    assert.deepEqual(
+      violations.map(({ rule }) => rule),
+      ["provider_continuation_authority_leakage"],
+    );
+  }
+});
+
 test("test-only physical fixtures do not violate production result ownership", () => {
   const violations = evaluateSourceOwnershipRules({
     sourcePath: "products/helarc/local-environment/src/command/ProcessExecutor.test.ts",

@@ -1,4 +1,5 @@
 import {
+  HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
   HELARC_PHASE27_ACCEPTED_BASELINE,
   compareHelarcEvaluationBaseline,
   projectHelarcEvaluationBaselineSignature,
@@ -15,6 +16,10 @@ const comparison = compareHelarcEvaluationBaseline(
   HELARC_PHASE27_ACCEPTED_BASELINE,
   systemCandidate,
 );
+const acceptedComparison = compareHelarcEvaluationBaseline(
+  HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
+  systemCandidate,
+);
 
 process.stdout.write(`${JSON.stringify({
   schemaVersion: 1,
@@ -23,8 +28,13 @@ process.stdout.write(`${JSON.stringify({
     reportRef: HELARC_PHASE27_ACCEPTED_BASELINE.reportRef,
     acceptanceRef: HELARC_PHASE27_ACCEPTED_BASELINE.acceptanceRef,
   },
+  acceptedSuccessor: {
+    reportRef: HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE.reportRef,
+    acceptanceRef: HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE.acceptanceRef,
+  },
   systemCandidate: projectSystemCandidate(signature),
   predecessorComparison: projectPredecessorComparison(comparison),
+  acceptedSuccessorComparison: projectPredecessorComparison(acceptedComparison),
   contextContinuity: projectContextContinuityCandidate(contextContinuity),
   limitations: [
     "The deterministic candidate does not claim general model intelligence.",

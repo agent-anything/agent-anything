@@ -388,7 +388,7 @@ async function aggregateHelarcCampaign(input: {
         criterion,
         grader,
         requestedAt: HELARC_EVALUATION_TIME,
-        metadata: { product: "helarc", evaluation: "phase27" },
+        metadata: { product: "helarc", evaluation: "context-continuity-v1" },
       }, grader.kind === "reference" ? outcomeGrader : safetyGrader, {
         signal: input.signal,
         deadlineAt: input.deadlineAt,
@@ -401,7 +401,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.phase27-baseline-result`,
+      id: `${definition.ref.id}.context-continuity-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -412,7 +412,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.phase27.report.baseline",
+      id: "helarc.context-continuity.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -458,7 +458,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.phase26.report.baseline",
+      id: "helarc.phase27.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -474,25 +474,25 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.phase27.baseline-acceptance",
+      id: "helarc.context-continuity.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
-    acceptedBy: { id: "agent-anything.architecture-review", revision: "phase27" },
+    acceptedBy: { id: "agent-anything.architecture-review", revision: "context-continuity-v1" },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
       product: "helarc",
       suiteRef: refKey(input.corpus.suite.ref),
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
-    rationale: "Reviewed as the Phase27 successor to the deterministic Helarc Product and Harness integration baseline.",
+    rationale: "Reviewed as the Context continuity successor to the deterministic Helarc Product and Harness integration baseline.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.phase26.baseline-acceptance",
+      id: "helarc.phase27.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     limitations: [BASELINE_LIMITATION],

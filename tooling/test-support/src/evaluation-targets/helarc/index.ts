@@ -37,5 +37,9 @@ export {
   HELARC_PHASE27_ACCEPTED_BASELINE,
   HELARC_PHASE27_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcPhase27Baseline.js";
+export {
+  HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
+  HELARC_CONTEXT_CONTINUITY_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcContextContinuityBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";

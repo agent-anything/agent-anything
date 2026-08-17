@@ -42,6 +42,15 @@ export function evaluateSourceOwnershipRules({
     const isContextContractSource =
       /^harness\/context\/src\/(?:contract|contribution|active-context|projection)\//.test(path);
     if (
+      path.startsWith("harness/context/src/") &&
+      /\b(?:ContextUpdate|ContextMessage|ContextObservation|ContextEvidenceRef|ContextMetadata)\b/.test(text)
+    ) {
+      reject(
+        "superseded_context_contract",
+        "Superseded category-based Context contracts cannot return to the final Context package.",
+      );
+    }
+    if (
       isContextContractSource &&
       /@agent-anything\/(?:agent-runtime|model-interaction|tools|action-execution|host|helarc)/.test(text)
     ) {
@@ -63,6 +72,58 @@ export function evaluateSourceOwnershipRules({
       reject(
         "context_generic_metadata_escape_hatch",
         "Final Context Contracts require owned typed fields instead of generic metadata.",
+      );
+    }
+    if (
+      isContextContractSource &&
+      /\b(?:semanticRank|rankByRelevance|semanticSummarize|summarizeContext)\b/.test(text)
+    ) {
+      reject(
+        "context_semantic_processing",
+        "Context cannot own semantic ranking or semantic summarization.",
+      );
+    }
+
+    if (
+      path.startsWith("products/helarc/core/src/prompt/") &&
+      /@agent-anything\/context\/(?:active-context|contribution)/.test(text)
+    ) {
+      reject(
+        "prompt_context_internal_traversal",
+        "Product prompt sources must consume a fixed Context Projection instead of Active Context internals.",
+      );
+    }
+
+    if (
+      path === "harness/model-interaction/src/ProviderRequest.ts" &&
+      !/readonly\s+composition\s*:\s*ModelInputComposition\s*;/.test(text)
+    ) {
+      reject(
+        "provider_request_complete_composition",
+        "ProviderRequest must carry one complete immutable Model Input Composition.",
+      );
+    }
+    if (
+      path === "harness/agent-core/runtime/src/controller/ProviderBackedController.ts" &&
+      (!/inputAccounting\.verify\s*\(/.test(text) || !/request\.composition\b/.test(text))
+    ) {
+      reject(
+        "model_input_composition_verification",
+        "The Provider-backed Controller must verify final messages against the accepted complete composition.",
+      );
+    }
+
+    const isCanonicalContextOrRunState =
+      path.startsWith("harness/context/src/") ||
+      path.startsWith("harness/agent-core/contracts/src/");
+    const isHelarcSemanticRecord = path.startsWith("products/helarc/core/src/");
+    if (
+      (isCanonicalContextOrRunState || isHelarcSemanticRecord) &&
+      /\b(?:ModelContinuationRef|ModelOpaqueContinuationState)\b/.test(text)
+    ) {
+      reject(
+        "provider_continuation_authority_leakage",
+        "Opaque Provider continuation cannot become Context, Agent Core Run state, or Product semantic state.",
       );
     }
 

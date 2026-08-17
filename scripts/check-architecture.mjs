@@ -55,6 +55,7 @@ const focusedPublicSubpaths = new Map([
   [
     "@agent-anything/test-support",
     new Set([
+      "@agent-anything/test-support/context-continuity-evaluation",
       "@agent-anything/test-support/evaluation-targets/helarc",
       "@agent-anything/test-support/phase-27",
     ]),
@@ -767,8 +768,24 @@ function checkContextHostAndMcpSourceTopology() {
   const areas = [
     {
       packagePath: "harness/context",
-      sourceAreas: ["context", "evidence", "persistence"],
-      forbiddenPaths: ["src/index.ts", "src/observation"],
+      sourceAreas: [
+        "active-context",
+        "contract",
+        "contribution",
+        "evidence",
+        "persistence",
+        "projection",
+      ],
+      allowedSourceEntries: [
+        "PublicApi.test.ts",
+        "active-context",
+        "contract",
+        "contribution",
+        "evidence",
+        "persistence",
+        "projection",
+      ],
+      forbiddenPaths: ["src/index.ts", "src/context", "src/observation"],
     },
     {
       packagePath: "harness/host",

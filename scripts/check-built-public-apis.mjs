@@ -407,6 +407,8 @@ const expectedLowerValueExports = {
     "createTestContextProjection",
   ],
   "@agent-anything/test-support/evaluation-targets/helarc": [
+    "HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE",
+    "HELARC_CONTEXT_CONTINUITY_BASELINE_ACCEPTANCE",
     "HELARC_EVALUATION_CORPUS_REVISION",
     "HELARC_EVALUATION_TARGET_ADAPTER_REVISION",
     "HELARC_EVALUATION_TIME",
