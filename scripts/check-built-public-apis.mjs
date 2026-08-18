@@ -68,6 +68,16 @@ const packageExportKeys = {
     "./report",
     "./trial",
   ],
+  "harness/validation": [
+    "./assessment",
+    "./completion",
+    "./definition",
+    "./evidence",
+    "./execution",
+    "./persistence",
+    "./projection",
+    "./subject",
+  ],
   "harness/model-interaction": [".", "./continuation", "./input"],
   "tooling/test-support": [".", "./context-continuity-evaluation", "./evaluation-targets/helarc", "./phase-27"],
   "harness/safety/action-execution": [
@@ -878,6 +888,44 @@ const expectedRemoteIntegrationValueExports = {
   "@agent-anything/remote-integrations/transport": [],
 };
 
+const expectedValidationValueExports = {
+  "@agent-anything/validation/definition": [
+    "createValidationFailure",
+    "snapshotValidationRequirement",
+    "snapshotValidationSpecification",
+  ],
+  "@agent-anything/validation/subject": [
+    "snapshotValidationSubjectSnapshot",
+  ],
+  "@agent-anything/validation/execution": [
+    "snapshotCheckAttempt",
+    "snapshotCheckDefinition",
+    "snapshotCheckResult",
+  ],
+  "@agent-anything/validation/evidence": [
+    "snapshotValidationEvidence",
+  ],
+  "@agent-anything/validation/assessment": [
+    "snapshotValidationAssessment",
+    "snapshotValidationCurrentRequirementState",
+    "snapshotValidationCurrentSnapshot",
+  ],
+  "@agent-anything/validation/completion": [
+    "snapshotCompletionGateDecision",
+    "snapshotCompletionGateInput",
+  ],
+  "@agent-anything/validation/projection": [
+    "snapshotValidationContextProjection",
+    "snapshotValidationEvaluationProjection",
+    "snapshotValidationHostProjection",
+    "snapshotValidationObservabilityProjection",
+    "snapshotValidationRunnerProjection",
+  ],
+  "@agent-anything/validation/persistence": [
+    "snapshotValidationPersistenceReceipt",
+  ],
+};
+
 const expectedProviderIntegrationValueExports = {
   "@agent-anything/provider-integrations/http": ["readProviderHttpFailureMetadata"],
   "@agent-anything/provider-integrations/ollama": ["OllamaProvider"],
@@ -1015,6 +1063,21 @@ if (process.argv.includes("--evaluation-only")) {
     join(repoRoot, "harness/evaluation"),
   );
   console.log("Built Evaluation public API check passed.");
+  process.exit(0);
+}
+
+if (process.argv.includes("--validation-only")) {
+  checkBuiltSurfaces(
+    expectedValidationValueExports,
+    [
+      "@agent-anything/validation",
+      "@agent-anything/validation/internal",
+      "@agent-anything/validation/common",
+      "@agent-anything/validation/shared",
+    ],
+    join(repoRoot, "harness/validation"),
+  );
+  console.log("Built Validation public API check passed.");
   process.exit(0);
 }
 
@@ -1159,6 +1222,16 @@ checkBuiltSurfaces(
     "@agent-anything/evaluation/internal",
   ],
   join(repoRoot, "harness/evaluation"),
+);
+checkBuiltSurfaces(
+  expectedValidationValueExports,
+  [
+    "@agent-anything/validation",
+    "@agent-anything/validation/internal",
+    "@agent-anything/validation/common",
+    "@agent-anything/validation/shared",
+  ],
+  join(repoRoot, "harness/validation"),
 );
 checkBuiltSurfaces(
   expectedValueExports,

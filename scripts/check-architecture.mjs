@@ -91,6 +91,19 @@ const focusedPublicSubpaths = new Map([
     ]),
   ],
   [
+    "@agent-anything/validation",
+    new Set([
+      "@agent-anything/validation/assessment",
+      "@agent-anything/validation/completion",
+      "@agent-anything/validation/definition",
+      "@agent-anything/validation/evidence",
+      "@agent-anything/validation/execution",
+      "@agent-anything/validation/persistence",
+      "@agent-anything/validation/projection",
+      "@agent-anything/validation/subject",
+    ]),
+  ],
+  [
     "@agent-anything/operation-catalog",
     new Set([
       "@agent-anything/operation-catalog/identity",
@@ -584,6 +597,16 @@ function checkArchitectureSource(file, text, isTestOnly) {
     rel === "products/helarc/desktop/src/main/thread/HelarcThreadStore.ts"
   ) {
     report("removed_history_path", { file, message: "Restores a removed legacy history source path." });
+  }
+  if (
+    rel.startsWith("harness/validation/src/") &&
+    /\/src\/(?:internal|common|shared)\//.test(rel)
+  ) {
+    report("validation_ambiguous_source_owner", {
+      file,
+      owner,
+      message: "Validation source must belong to one of its eight explicit Contract families.",
+    });
   }
   if (
     rel.startsWith("products/helarc/") &&

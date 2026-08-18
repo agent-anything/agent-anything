@@ -1,0 +1,60 @@
+{
+  "name": "@agent-anything/validation",
+  "version": "0.0.0",
+  "description": "Run-scoped Validation contracts and trusted completion decision ports for Agent Harness.",
+  "type": "module",
+  "exports": {
+    "./definition": {
+      "types": "./src/definition/index.ts",
+      "import": "./dist/definition/index.js"
+    },
+    "./subject": {
+      "types": "./src/subject/index.ts",
+      "import": "./dist/subject/index.js"
+    },
+    "./execution": {
+      "types": "./src/execution/index.ts",
+      "import": "./dist/execution/index.js"
+    },
+    "./evidence": {
+      "types": "./src/evidence/index.ts",
+      "import": "./dist/evidence/index.js"
+    },
+    "./assessment": {
+      "types": "./src/assessment/index.ts",
+      "import": "./dist/assessment/index.js"
+    },
+    "./completion": {
+      "types": "./src/completion/index.ts",
+      "import": "./dist/completion/index.js"
+    },
+    "./projection": {
+      "types": "./src/projection/index.ts",
+      "import": "./dist/projection/index.js"
+    },
+    "./persistence": {
+      "types": "./src/persistence/index.ts",
+      "import": "./dist/persistence/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "agentAnything": {
+    "architecture": {
+      "kind": "harness",
+      "component": "validation"
+    }
+  },
+  "license": "Apache-2.0",
+  "private": true,
+  "dependencies": {
+    "@agent-anything/agent-core": "workspace:*",
+    "@agent-anything/canonical-action": "workspace:*",
+    "@agent-anything/context": "workspace:*",
+    "@agent-anything/operation-catalog": "workspace:*"
+  }
+}

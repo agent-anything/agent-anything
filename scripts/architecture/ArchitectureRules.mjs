@@ -39,6 +39,12 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/operation-catalog",
   ],
   "@agent-anything/evaluation": ["@agent-anything/agent-core"],
+  "@agent-anything/validation": [
+    "@agent-anything/agent-core",
+    "@agent-anything/canonical-action",
+    "@agent-anything/context",
+    "@agent-anything/operation-catalog",
+  ],
   "@agent-anything/agent-runtime": [
     "@agent-anything/action-execution",
     "@agent-anything/agent-core",

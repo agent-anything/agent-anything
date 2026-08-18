@@ -303,6 +303,21 @@ importers:
         specifier: ^25.9.1
         version: 25.9.1
 
+  harness/validation:
+    dependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core/contracts
+      '@agent-anything/canonical-action':
+        specifier: workspace:*
+        version: link:../safety/canonical-action
+      '@agent-anything/context':
+        specifier: workspace:*
+        version: link:../context
+      '@agent-anything/operation-catalog':
+        specifier: workspace:*
+        version: link:../operation-catalog
+
   harness/workspace: {}
 
   products/helarc/code-agent:
