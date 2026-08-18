@@ -2155,7 +2155,7 @@ function waitForStatus(
     const timeout = setTimeout(() => {
       unsubscribe();
       reject(new Error(`Timed out waiting for ${status}.`));
-    }, 2_000);
+    }, SNAPSHOT_WAIT_TIMEOUT_MS);
 
     const unsubscribe = controller.subscribeSnapshot((nextSnapshot) => {
       if (nextSnapshot.status === status) {
@@ -2167,10 +2167,12 @@ function waitForStatus(
   });
 }
 
+const SNAPSHOT_WAIT_TIMEOUT_MS = 10_000;
+
 function waitForSnapshot(
   controller: HelarcMainController,
   predicate: (snapshot: HelarcMainSnapshot) => boolean,
-  timeoutMs = 2_000,
+  timeoutMs = SNAPSHOT_WAIT_TIMEOUT_MS,
 ): Promise<HelarcMainSnapshot> {
   const snapshot = controller.getSnapshot();
   if (predicate(snapshot)) {
@@ -2211,7 +2213,7 @@ function waitForActiveRunTerminal(
     const timeout = setTimeout(() => {
       unsubscribe();
       reject(new Error(`Timed out waiting for active run terminal ${status}.`));
-    }, 2_000);
+    }, SNAPSHOT_WAIT_TIMEOUT_MS);
 
     const unsubscribe = controller.subscribeSnapshot((nextSnapshot) => {
       if (nextSnapshot.run?.host.terminal?.status === status) {

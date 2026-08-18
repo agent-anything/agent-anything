@@ -280,7 +280,8 @@ export async function createHelarcValidationComposition(
   const runner: Omit<RunnerValidationComposition, "completionGate"> = Object.freeze({
     executionFactory,
     preparation,
-    ...(checkRequests === null ? {} : { checkRequests, checkResults }),
+    checkRequests,
+    checkResults: checkRequests === null ? null : checkResults,
   } satisfies Omit<RunnerValidationComposition, "completionGate">);
   return Object.freeze({ profile, runner, operation, profileRevision });
 }

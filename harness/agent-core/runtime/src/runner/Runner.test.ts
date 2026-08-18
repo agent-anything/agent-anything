@@ -54,7 +54,10 @@ import {
 } from "@agent-anything/action-execution/registration";
 import { createSandboxExecutionGateway } from "@agent-anything/action-execution/sandbox";
 import { createAllowAllActionPolicyPort } from "@agent-anything/governance/policy";
-import { createTestContextProjection } from "@agent-anything/test-support";
+import {
+  createTestContextProjection,
+  createTestValidationExecutionFactory,
+} from "@agent-anything/test-support";
 import {
   CurrentValidationCompletionGate,
   type CompletionGateInput,
@@ -65,7 +68,6 @@ import {
   type ValidationOwnerRef,
 } from "@agent-anything/validation/definition";
 import {
-  createNoCheckValidationExecutionFactory,
   DefaultValidationExecutionFactory,
   type CheckDefinition,
   type CheckResult,
@@ -333,8 +335,11 @@ describe("Runner semantic integration", () => {
       operations,
       {
         validation: {
-          executionFactory: createNoCheckValidationExecutionFactory({ now: () => NOW }),
+          executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
           completionGate: gate,
+          preparation: null,
+          checkRequests: null,
+          checkResults: null,
         },
       },
     ).run(createAgent(), createRunInput(), createRunConfig(operations));
@@ -365,8 +370,11 @@ describe("Runner semantic integration", () => {
       operations,
       {
         validation: {
-          executionFactory: createNoCheckValidationExecutionFactory({ now: () => NOW }),
+          executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
           completionGate: gate,
+          preparation: null,
+          checkRequests: null,
+          checkResults: null,
         },
       },
     ).start(createAgent(), createRunInput(), createRunConfig(operations));
@@ -407,8 +415,11 @@ describe("Runner semantic integration", () => {
       operations,
       {
         validation: {
-          executionFactory: createNoCheckValidationExecutionFactory({ now: () => NOW }),
+          executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
           completionGate: gate,
+          preparation: null,
+          checkRequests: null,
+          checkResults: null,
         },
         runtimeEventPublisher: { publish: (event) => events.push(event) },
       },
@@ -1690,8 +1701,11 @@ function createRunConfig(
 
 function createTestValidationComposition(): RunnerDependencies["validation"] {
   return Object.freeze({
-    executionFactory: createNoCheckValidationExecutionFactory({ now: () => NOW }),
+    executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
     completionGate: new CurrentValidationCompletionGate(() => NOW),
+    preparation: null,
+    checkRequests: null,
+    checkResults: null,
   });
 }
 
@@ -1870,6 +1884,8 @@ function createValidationScenario(input: ValidationScenario): RunnerDependencies
   const composition: RunnerDependencies["validation"] = {
     executionFactory,
     completionGate: new CurrentValidationCompletionGate(() => NOW),
+    checkRequests: null,
+    checkResults: null,
     preparation: {
       async prepare({ execution, automaticEffectfulChecks }, interruption) {
         await execution.captureSubject({

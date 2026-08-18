@@ -59,7 +59,6 @@ export {
   snapshotCheckResult,
 } from "./ValidationExecution.js";
 export {
-  createNoCheckValidationExecutionFactory,
   DefaultValidationExecutionFactory,
   ValidationExecution,
 } from "./RunScopedValidationExecution.js";

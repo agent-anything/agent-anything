@@ -388,7 +388,7 @@ async function aggregateHelarcCampaign(input: {
         criterion,
         grader,
         requestedAt: HELARC_EVALUATION_TIME,
-        metadata: { product: "helarc", evaluation: "validation-gate-v1" },
+        metadata: { product: "helarc", evaluation: "validation-profile-v1" },
       }, grader.kind === "reference" ? outcomeGrader : safetyGrader, {
         signal: input.signal,
         deadlineAt: input.deadlineAt,
@@ -401,7 +401,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.validation-gate-baseline-result`,
+      id: `${definition.ref.id}.validation-profile-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -412,7 +412,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.validation-gate.report.baseline",
+      id: "helarc.validation-profile.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -458,7 +458,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.context-continuity.report.baseline",
+      id: "helarc.validation-gate.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -474,25 +474,25 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.validation-gate.baseline-acceptance",
+      id: "helarc.validation-profile.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
-    acceptedBy: { id: "agent-anything.architecture-review", revision: "validation-gate-v1" },
+    acceptedBy: { id: "agent-anything.architecture-review", revision: "validation-profile-v1" },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
       product: "helarc",
       suiteRef: refKey(input.corpus.suite.ref),
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
-    rationale: "Reviewed as the Validation Gate successor to the Context continuity baseline.",
+    rationale: "Reviewed as the Product Validation profile successor to the Validation Gate baseline.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.context-continuity.baseline-acceptance",
+      id: "helarc.validation-gate.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     limitations: [BASELINE_LIMITATION],

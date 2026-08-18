@@ -168,9 +168,9 @@ export interface RunnerOperationComposition {
 export interface RunnerValidationComposition {
   readonly executionFactory: ValidationExecutionFactory;
   readonly completionGate: CompletionGatePort;
-  readonly preparation?: RunnerValidationPreparationPort;
-  readonly checkRequests?: RunnerValidationCheckRequestResolverPort;
-  readonly checkResults?: RunnerValidationCheckResultProcessorPort;
+  readonly preparation: RunnerValidationPreparationPort | null;
+  readonly checkRequests: RunnerValidationCheckRequestResolverPort | null;
+  readonly checkResults: RunnerValidationCheckResultProcessorPort | null;
 }
 
 export interface RunnerValidationPreparationPort {

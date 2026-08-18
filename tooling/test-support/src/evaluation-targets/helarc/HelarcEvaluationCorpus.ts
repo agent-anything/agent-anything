@@ -760,16 +760,12 @@ function createCapturePolicy(): EvaluationCapturePolicy {
       captureSlot("artifact-observations", "agent-core", true, graderConsumers),
       captureSlot("interaction-review", "helarc.product", true, graderConsumers),
       captureSlot("trace-summary", "observability", true, graderConsumers),
-      captureSlot("validation-summary", "validation", false, []),
+      captureSlot("validation-summary", "validation", true, []),
     ],
     createdAt: HELARC_EVALUATION_TIME,
     metadata: { product: "helarc", corpusRevision: HELARC_EVALUATION_CORPUS_REVISION },
     limitations: [
       systemBaselineLimitation(),
-      limitation(
-        "validation_not_realized",
-        "Validation capture remains explicitly unavailable until its owning component is realized.",
-      ),
     ],
   });
 }

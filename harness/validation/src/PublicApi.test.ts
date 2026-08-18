@@ -22,7 +22,6 @@ describe("Validation public API", () => {
       "DefaultValidationExecutionFactory",
       "ValidationExecution",
       "ValidationExecutionError",
-      "createNoCheckValidationExecutionFactory",
       "snapshotCheckAttempt",
       "snapshotCheckDefinition",
       "snapshotCheckResult",

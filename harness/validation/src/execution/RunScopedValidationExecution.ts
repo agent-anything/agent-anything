@@ -1257,28 +1257,6 @@ export class DefaultValidationExecutionFactory implements ValidationExecutionFac
   }
 }
 
-export function createNoCheckValidationExecutionFactory(input: {
-  readonly now: () => string;
-  readonly createId?: (kind: import("./ValidationExecutionAdapters.js").ValidationGeneratedRecordKind) => string;
-}): ValidationExecutionFactory {
-  if (typeof input.now !== "function") {
-    throw new TypeError("No-check Validation execution requires a clock.");
-  }
-  let sequence = 0;
-  return new DefaultValidationExecutionFactory({
-    clock: { now: input.now },
-    identities: {
-      nextId: (kind) => input.createId?.(kind) ?? `${kind}-${++sequence}`,
-    },
-    subjectAdapters: { resolve: () => null },
-    subjectFreshness: { resolve: () => null },
-    pureChecks: { resolve: () => null },
-    operationChecks: { resolve: () => null },
-    interpreters: { resolve: () => null },
-    assessmentMethods: { resolve: () => null },
-  });
-}
-
 const TRUSTED_SOURCE_KINDS = new Set([
   "product_configuration",
   "run_invocation",

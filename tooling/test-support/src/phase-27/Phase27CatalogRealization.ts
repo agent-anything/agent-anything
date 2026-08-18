@@ -84,6 +84,12 @@ const evaluationEvidence = [
   "tooling/test-support/src/evaluation-targets/helarc/HelarcEvaluationTarget.test.ts",
   "tooling/test-support/src/evaluation-targets/helarc/HelarcEvaluationRegression.test.ts",
 ] as const;
+const validationEvidence = [
+  "harness/validation/src/execution/ValidationExecution.test.ts",
+  "harness/validation/src/completion/CurrentValidationCompletionGate.test.ts",
+  "harness/agent-core/runtime/src/runner/Runner.test.ts",
+  "products/helarc/core/src/validation/HelarcValidationComposition.test.ts",
+] as const;
 
 export const PHASE27_CATALOG_REALIZATION_REGISTRY = deepFreeze([
   registered(record("P24-CAP-D001", "helarc.code-workspace", "code.workspace.list@1", "direct", "file_system.read", "Phase27", ["P23-S-001", "P23-S-007"], runnerEvidence), ["helarc.code-workspace/list-files@1"], ["helarc.code-workspace.file.direct@1"]),
@@ -122,9 +128,9 @@ export const PHASE27_CATALOG_REALIZATION_REGISTRY = deepFreeze([
   unavailable(record("P24-CAP-X001", "context", "agent.context.candidate.admit@1", "internal", "effect_free", "Phase29", ["P23-S-006", "P23-S-007", "P23-S-011"], ["harness/context/src/context/ContextProjection.test.ts"]), "context_construction_not_realized"),
   unavailable(record("P24-CAP-X002", "context", "agent.context.project@1", "internal", "effect_free", "Phase29", ["P23-S-001", "P23-S-006", "P23-S-007"], ["harness/context/src/context/ContextProjection.test.ts"]), "context_construction_not_realized"),
   unavailable(record("P24-CAP-X003", "context", "agent.context.continuation.compact@1", "internal", "effect_free", "Phase29", ["P23-S-003", "P23-S-007", "P23-S-011"], ["harness/context/src/context/ContextProjection.test.ts"]), "context_continuation_not_realized"),
-  unavailable(record("P24-CAP-V001", "validation", "code.validation.check.execute@1", "composite", "child_owned", "Phase30", ["P23-S-002", "P23-S-004", "P23-S-005"], actionEvidence), "validation_not_realized"),
-  unavailable(record("P24-CAP-V002", "validation", "code.validation.requirement.assess@1", "internal", "effect_free", "Phase30", ["P23-S-002", "P23-S-004", "P23-S-011"], runnerEvidence), "validation_not_realized"),
-  unavailable(record("P24-CAP-V003", "validation", "agent.completion.validation-gate@1", "internal", "effect_free", "Phase30", ["P23-S-002", "P23-S-004", "P23-S-005"], runnerEvidence), "validation_not_realized"),
+  registered(record("P24-CAP-V001", "validation", "code.validation.check.execute@1", "composite", "child_owned", "Phase30", ["P23-S-002", "P23-S-004", "P23-S-005"], validationEvidence), ["helarc/run-validation-check@1"], ["helarc.validation.command-check@1"]),
+  registered(record("P24-CAP-V002", "validation", "code.validation.requirement.assess@1", "internal", "effect_free", "Phase30", ["P23-S-002", "P23-S-004", "P23-S-011"], validationEvidence), ["validation/finding-assessment@1"], ["validation/run-scoped-execution@1"]),
+  registered(record("P24-CAP-V003", "validation", "agent.completion.validation-gate@1", "internal", "effect_free", "Phase30", ["P23-S-002", "P23-S-004", "P23-S-005"], validationEvidence), ["validation/current-completion-gate@1"], ["agent-runtime/runner-completion-gate@1"]),
 
   registered(record("P24-CAP-E001", "evaluation", "code.evaluation.trial.execute@1", "internal", "child_owned", "Phase26", ["P23-S-001", "P23-S-002", "P23-S-009"], evaluationEvidence), ["evaluation/helarc-trial@1"], ["evaluation/helarc-target@1"]),
   registered(record("P24-CAP-E002", "evaluation", "code.evaluation.capture.grade@1", "internal", "effect_free", "Phase26", ["P23-S-002", "P23-S-009", "P23-S-011"], evaluationEvidence), ["evaluation/helarc-grade@1"], ["evaluation/helarc-grader@1"]),

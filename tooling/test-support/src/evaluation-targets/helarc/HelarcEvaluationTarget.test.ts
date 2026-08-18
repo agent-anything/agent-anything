@@ -158,6 +158,25 @@ describe("Helarc Phase26 Evaluation target", () => {
       owner: "provider",
       code: "provider_request_failed",
     });
+    const validationSummary = completed.capture.capture.slots.find(
+      (slot) => slot.slotId === "validation-summary",
+    );
+    expect(validationSummary).toMatchObject({
+      owner: "validation",
+      required: true,
+      status: "captured",
+      content: {
+        kind: "inline",
+        value: {
+          status: "not_required",
+          gateStatus: "completion_eligible",
+        },
+      },
+    });
+    const serializedValidation = JSON.stringify(validationSummary);
+    expect(serializedValidation).not.toContain("rootPath");
+    expect(serializedValidation).not.toContain("rawEvidence");
+    expect(serializedValidation).not.toContain("commandLine");
     const serialized = JSON.stringify(providerFailure);
     expect(serialized).not.toContain(secret);
     expect(serialized).not.toContain("agent-anything-helarc-eval-");

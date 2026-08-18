@@ -41,5 +41,13 @@ export {
   HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
   HELARC_CONTEXT_CONTINUITY_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcContextContinuityBaseline.js";
+export {
+  HELARC_VALIDATION_GATE_ACCEPTED_BASELINE,
+  HELARC_VALIDATION_GATE_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcValidationGateBaseline.js";
+export {
+  HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE,
+  HELARC_VALIDATION_PROFILE_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcValidationProfileBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";

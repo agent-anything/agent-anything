@@ -20,7 +20,6 @@ import type {
 } from "@agent-anything/action-execution/enforcement";
 import { Runner } from "@agent-anything/agent-runtime/runner";
 import { CurrentValidationCompletionGate } from "@agent-anything/validation/completion";
-import { createNoCheckValidationExecutionFactory } from "@agent-anything/validation/execution";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import {
@@ -84,6 +83,7 @@ import {
   HELARC_RUN_COMMAND_BINDING,
   HELARC_RUN_COMMAND_OPERATION,
 } from "@agent-anything/helarc/tools";
+import { bindHelarcValidationCompletionGate } from "@agent-anything/helarc/validation";
 import { createHelarcTask } from "@agent-anything/helarc/task";
 import {
   createCodeAgentCanonicalWorkspaceRoots,
@@ -486,10 +486,10 @@ async function invokeHelarcTarget(
         retry: createEvaluationActionRetryPort(),
       },
     },
-    validation: {
-      executionFactory: createNoCheckValidationExecutionFactory({ now: clock.now }),
-      completionGate: new CurrentValidationCompletionGate(clock.now),
-    },
+    validation: bindHelarcValidationCompletionGate(
+      product.validation,
+      new CurrentValidationCompletionGate(clock.now),
+    ),
     interactions: product.interactions,
     runtimeEventPublisher: runtimePublisher,
     runTraceObserver: {
@@ -548,7 +548,10 @@ async function invokeHelarcTarget(
         enforcement: "disabled",
         metadata: {},
       },
-      validation: createEvaluationValidationConfig(),
+      validation: Object.freeze({
+        profile: product.validation.profile,
+        completion: createEvaluationValidationCompletionConfig(),
+      }),
       limits: {
         maxIterations: 5,
         maxActions: 8,
@@ -656,7 +659,7 @@ async function invokeHelarcTarget(
   });
 }
 
-function createEvaluationValidationConfig() {
+function createEvaluationValidationCompletionConfig() {
   const owner = (id: string) => Object.freeze({
     owner: "helarc-evaluation",
     kind: "validation",
@@ -664,19 +667,10 @@ function createEvaluationValidationConfig() {
     revision: "1",
   });
   return Object.freeze({
-    profile: Object.freeze({
-      ref: owner("empty-profile"),
-      specification: Object.freeze({ id: "empty-specification", revision: "1" }),
-      source: Object.freeze({ ...owner("profile-source"), sourceKind: "run_invocation" as const }),
-      admittedBy: owner("profile-admission"),
-      requirements: Object.freeze([]),
-    }),
-    completion: Object.freeze({
-      policy: owner("current-validation-gate"),
-      outputContract: owner("helarc-output-contract"),
-      conditions: Object.freeze([]),
-      maximumDurationMs: 1_000,
-    }),
+    policy: owner("current-validation-gate"),
+    outputContract: owner("helarc-output-contract"),
+    conditions: Object.freeze([]),
+    maximumDurationMs: 1_000,
   });
 }
 
@@ -906,7 +900,17 @@ function captureHelarcMaterial(
       })),
       issues: material.trace.issues.map((issue) => issue.code),
     }),
-    unavailable("validation-summary", "validation"),
+    captured("validation-summary", "validation", {
+      status: material.product.validation.status,
+      snapshotRevision: material.product.validation.snapshotRevision,
+      counts: material.product.validation.counts.map((count) => ({
+        state: count.state,
+        count: count.count,
+      })),
+      activeChecks: material.product.validation.activeChecks,
+      gateStatus: material.product.validation.gateStatus,
+      safeReasons: material.product.validation.safeReasons,
+    }),
   ];
   const measurements: EvaluationMeasurement[] = [
     measurement("latency_ms", "runtime", "run-trace", "ms", traceDuration),
@@ -938,14 +942,7 @@ function captureHelarcMaterial(
     measurements,
     startedAt: HELARC_EVALUATION_TIME,
     completedAt: HELARC_EVALUATION_TIME,
-    limitations: [
-      TARGET_LIMITATION,
-      Object.freeze({
-        code: "validation_not_realized",
-        message: "Validation capture is unavailable because its owning component is not realized.",
-        metadata: Object.freeze({}),
-      }),
-    ],
+    limitations: [TARGET_LIMITATION],
     metadata: {
       adapter: "helarc-phase26",
       scenario: material.caseDefinition.scenario,
@@ -967,23 +964,6 @@ function captured(
     status: "captured" as const,
     content: Object.freeze({ kind: "inline" as const, value }),
     reason: null,
-  });
-}
-
-function unavailable(slotId: string, owner: string): EvaluationCaptureContribution {
-  return Object.freeze({
-    slotId,
-    owner,
-    schemaRef: { schemaId: `helarc.phase26.capture.${slotId}`, revision: "v1" },
-    sensitivity: "public" as const,
-    status: "unavailable" as const,
-    content: null,
-    reason: Object.freeze({
-      code: "owner_not_realized",
-      message: "The Validation owner is not available in Phase26.",
-      sourceOwner: owner,
-      details: Object.freeze({}),
-    }),
   });
 }
 

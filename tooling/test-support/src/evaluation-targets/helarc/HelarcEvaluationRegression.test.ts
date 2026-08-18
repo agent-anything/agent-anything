@@ -9,6 +9,10 @@ import {
   HELARC_VALIDATION_GATE_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcValidationGateBaseline.js";
 import {
+  HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE,
+  HELARC_VALIDATION_PROFILE_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcValidationProfileBaseline.js";
+import {
   compareHelarcEvaluationBaseline,
   projectHelarcEvaluationBaselineSignature,
   runHelarcEvaluationBaselineCandidate,
@@ -16,25 +20,26 @@ import {
 } from "./HelarcEvaluationExecution.js";
 
 describe("Helarc accepted Evaluation baseline succession", () => {
-  it("preserves accepted history and proves the Validation Gate successor", async () => {
+  it("preserves accepted history and proves the Product Validation profile successor", async () => {
     const phase26Before = JSON.stringify(HELARC_PHASE26_ACCEPTED_BASELINE);
     const phase27Before = JSON.stringify(HELARC_PHASE27_ACCEPTED_BASELINE);
     const contextContinuityBefore = JSON.stringify(HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE);
     const validationGateBefore = JSON.stringify(HELARC_VALIDATION_GATE_ACCEPTED_BASELINE);
+    const validationProfileBefore = JSON.stringify(HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE);
     const candidate = await runHelarcEvaluationBaselineCandidate();
     const predecessorComparison = compareHelarcEvaluationBaseline(
-      HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
+      HELARC_VALIDATION_GATE_ACCEPTED_BASELINE,
       candidate,
     );
     const acceptedComparison = compareHelarcEvaluationBaseline(
-      HELARC_VALIDATION_GATE_ACCEPTED_BASELINE,
+      HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE,
       candidate,
     );
 
     expect(predecessorComparison.status).toBe("regressed");
     if (predecessorComparison.status === "regressed") {
       expect(predecessorComparison.differences).toEqual(
-        HELARC_VALIDATION_GATE_BASELINE_ACCEPTANCE.changedCaseSemanticDigests.flatMap((slug) =>
+        HELARC_VALIDATION_PROFILE_BASELINE_ACCEPTANCE.changedCaseSemanticDigests.flatMap((slug) =>
           [1, 2].map((ordinal) =>
             `case_semantics:helarc.phase26.case.${slug}@v1:rep-${ordinal}`
           )
@@ -56,39 +61,46 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       .toBe(contextContinuityBefore);
     expect(JSON.stringify(HELARC_VALIDATION_GATE_ACCEPTED_BASELINE))
       .toBe(validationGateBefore);
-    expect(candidate.report.ref).toEqual(HELARC_VALIDATION_GATE_ACCEPTED_BASELINE.reportRef);
+    expect(JSON.stringify(HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE))
+      .toBe(validationProfileBefore);
+    expect(candidate.report.ref).toEqual(HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.ref)
-      .toEqual(HELARC_VALIDATION_GATE_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.report.supersedes)
-      .toEqual(HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE.reportRef);
+      .toEqual(HELARC_VALIDATION_GATE_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.supersedes)
-      .toEqual(HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_VALIDATION_GATE_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.metrics.map(({ ref }) => ref)).toEqual(
-      HELARC_VALIDATION_GATE_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
+      HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
     );
-    expect(HELARC_VALIDATION_GATE_ACCEPTED_BASELINE.reportRef).not.toEqual(
-      HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE.reportRef,
+    expect(HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE.reportRef).not.toEqual(
+      HELARC_VALIDATION_GATE_ACCEPTED_BASELINE.reportRef,
     );
-    expect(HELARC_VALIDATION_GATE_ACCEPTED_BASELINE.acceptanceRef).not.toEqual(
-      HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE.acceptanceRef,
+    expect(HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE.acceptanceRef).not.toEqual(
+      HELARC_VALIDATION_GATE_ACCEPTED_BASELINE.acceptanceRef,
     );
+    expect(HELARC_VALIDATION_GATE_BASELINE_ACCEPTANCE.predecessorReportRef)
+      .toEqual(HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE.reportRef);
+    expect(HELARC_VALIDATION_PROFILE_BASELINE_ACCEPTANCE.predecessorReportRef)
+      .toEqual(HELARC_VALIDATION_GATE_ACCEPTED_BASELINE.reportRef);
     expect(Object.isFrozen(HELARC_PHASE26_ACCEPTED_BASELINE)).toBe(true);
     expect(Object.isFrozen(HELARC_PHASE27_ACCEPTED_BASELINE)).toBe(true);
     expect(Object.isFrozen(HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE)).toBe(true);
     expect(Object.isFrozen(HELARC_VALIDATION_GATE_ACCEPTED_BASELINE)).toBe(true);
+    expect(Object.isFrozen(HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE)).toBe(true);
   }, 120_000);
 
   it("reports a safety regression even when paired latency improves", () => {
     const improvedLatencyAndUnsafe = changeAcceptedBaselineForRegression();
     const comparison = compareHelarcEvaluationBaseline(
-      HELARC_VALIDATION_GATE_ACCEPTED_BASELINE,
+      HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE,
       improvedLatencyAndUnsafe,
     );
 
     expect(comparison.status).toBe("regressed");
     if (comparison.status !== "regressed") return;
     expect(comparison.differences).toContain("gate:safety:failed");
-    const latencyIndex = HELARC_VALIDATION_GATE_ACCEPTED_BASELINE.metrics.findIndex(
+    const latencyIndex = HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE.metrics.findIndex(
       (metric) => metric.definitionRef.id.endsWith(".latency"),
     );
     const latency = comparison.pairedComparisons[latencyIndex];
@@ -98,7 +110,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
 
 function changeAcceptedBaselineForRegression(): HelarcEvaluationBaselineSignature {
   const baseline = projectHelarcEvaluationBaselineSignature(
-    HELARC_VALIDATION_GATE_ACCEPTED_BASELINE,
+    HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE,
   );
   return Object.freeze({
     ...baseline,

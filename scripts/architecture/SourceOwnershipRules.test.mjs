@@ -24,6 +24,20 @@ test("accepts current owner-directed source forms", () => {
       sourcePath: "tooling/test-support/src/conformance/CatalogRealization.ts",
       text: "export interface CatalogRealizationRecord {}",
     },
+    {
+      sourcePath: "products/helarc/core/src/validation/HelarcValidationComposition.ts",
+      text: [
+        'import type { CompositeDefinition } from "@agent-anything/operation-composition/definition";',
+        'import type { CodeSourcePort } from "@agent-anything/helarc-code-agent/source";',
+      ].join("\n"),
+    },
+    {
+      sourcePath: "harness/agent-core/runtime/src/runner/RunExecution.ts",
+      text: [
+        "const completion = await this.evaluateCompletionGate(turn, output);",
+        'if (completion.kind === "succeeded") { return this.settle({ status: "succeeded" }); }',
+      ].join("\n"),
+    },
   ];
 
   for (const fixture of fixtures) {
@@ -196,6 +210,70 @@ test("rejects opaque Provider continuation in canonical Context, Run, and Produc
       ["provider_continuation_authority_leakage"],
     );
   }
+});
+
+test("rejects detailed Validation authority in bounded state and consumer surfaces", () => {
+  for (const sourcePath of [
+    "harness/agent-core/contracts/src/run/RunState.ts",
+    "harness/context/src/projection/ContextProjection.ts",
+    "harness/host/src/projection/HostRunProjection.ts",
+    "harness/observability/src/projection/RunTraceProjection.ts",
+    "products/helarc/core/src/result/HelarcProductResult.ts",
+    "products/helarc/desktop/src/shared/HelarcMainSnapshot.ts",
+  ]) {
+    const violations = evaluateSourceOwnershipRules({
+      sourcePath,
+      text: "readonly validation: ValidationLedgerSnapshot;",
+    });
+    assert.deepEqual(
+      violations.map(({ rule }) => rule),
+      ["validation_detailed_state_leakage"],
+    );
+  }
+});
+
+test("rejects physical execution and semantic processor dependencies in Validation owners", () => {
+  const physical = evaluateSourceOwnershipRules({
+    sourcePath: "products/helarc/core/src/validation/PhysicalValidation.ts",
+    text: 'import { executor } from "@agent-anything/helarc-local-environment/command";',
+  });
+  const semantic = evaluateSourceOwnershipRules({
+    sourcePath: "harness/validation/src/execution/LanguageValidation.ts",
+    text: 'import { parse } from "@vendor/tree-sitter-typescript";',
+  });
+
+  assert.deepEqual(
+    physical.map(({ rule }) => rule),
+    ["product_validation_physical_execution_dependency"],
+  );
+  assert.deepEqual(
+    semantic.map(({ rule }) => rule),
+    ["validation_semantic_processor_dependency"],
+  );
+});
+
+test("requires the Runner Completion Gate before success settlement", () => {
+  const violations = evaluateSourceOwnershipRules({
+    sourcePath: "harness/agent-core/runtime/src/runner/RunExecution.ts",
+    text: 'return this.settle({ status: "succeeded" });',
+  });
+
+  assert.deepEqual(
+    violations.map(({ rule }) => rule),
+    ["runner_completion_gate_required"],
+  );
+});
+
+test("rejects production no-check Validation factories", () => {
+  const violations = evaluateSourceOwnershipRules({
+    sourcePath: "harness/validation/src/execution/NoCheckFactory.ts",
+    text: "export function createNoCheckValidationExecutionFactory() {}",
+  });
+
+  assert.deepEqual(
+    violations.map(({ rule }) => rule),
+    ["production_validation_bypass"],
+  );
 });
 
 test("test-only physical fixtures do not violate production result ownership", () => {

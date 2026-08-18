@@ -48,11 +48,14 @@ describe("Phase27 catalog realization registry", () => {
       "P24-CAP-I004",
       "P24-CAP-I005",
       "P24-CAP-I006",
+      "P24-CAP-V001",
+      "P24-CAP-V002",
+      "P24-CAP-V003",
       "P24-CAP-E001",
       "P24-CAP-E002",
       "P24-CAP-E003",
     ]);
-    expect(unavailable).toHaveLength(39);
+    expect(unavailable).toHaveLength(36);
     for (const record of registered) {
       if (record.disposition.status !== "registered") continue;
       expect(record.disposition.registrationRefs.length).toBeGreaterThan(0);

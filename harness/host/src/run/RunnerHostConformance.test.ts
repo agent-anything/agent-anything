@@ -31,9 +31,11 @@ import {
   type RunConfig,
   type RunnerOperationComposition,
 } from "@agent-anything/agent-runtime/runner";
-import { createTestContextProjection } from "@agent-anything/test-support";
+import {
+  createTestContextProjection,
+  createTestValidationExecutionFactory,
+} from "@agent-anything/test-support";
 import { CurrentValidationCompletionGate } from "@agent-anything/validation/completion";
-import { createNoCheckValidationExecutionFactory } from "@agent-anything/validation/execution";
 import { createHostRunManager } from "./HostRunManager.js";
 
 interface TestOutput {
@@ -237,8 +239,11 @@ function createRunConfig(tools: RunConfig["tools"]): RunConfig {
 
 function createTestValidationComposition() {
   return Object.freeze({
-    executionFactory: createNoCheckValidationExecutionFactory({ now: () => NOW }),
+    executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
     completionGate: new CurrentValidationCompletionGate(() => NOW),
+    preparation: null,
+    checkRequests: null,
+    checkResults: null,
   });
 }
 

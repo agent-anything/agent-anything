@@ -127,6 +127,68 @@ export function evaluateSourceOwnershipRules({
       );
     }
 
+    const isBoundedValidationConsumer =
+      path.startsWith("harness/agent-core/contracts/src/") ||
+      path.startsWith("harness/context/src/") ||
+      path.startsWith("harness/host/src/") ||
+      path.startsWith("harness/observability/src/") ||
+      path.startsWith("products/helarc/desktop/src/shared/") ||
+      /^products\/helarc\/core\/src\/(?:result|run|work-context)\//.test(path);
+    if (
+      isBoundedValidationConsumer &&
+      /\b(?:ValidationExecution(?:Port|Factory)?|ValidationLedgerSnapshot|ValidationRecord|ValidationEvidence|ValidationAssessment|ValidationSubjectSnapshot|ValidationCurrentRequirementState|CheckAttempt|CheckResult)\b/.test(text)
+    ) {
+      reject(
+        "validation_detailed_state_leakage",
+        "Canonical state and consumer-facing surfaces must use bounded Validation projections instead of detailed Validation records or execution authority.",
+      );
+    }
+
+    const isProductValidationSource = path.startsWith("products/helarc/core/src/validation/");
+    if (
+      isProductValidationSource &&
+      /from\s+["']@agent-anything\/(?:action-execution|helarc-local-environment)(?:[/'"]|$)/.test(text)
+    ) {
+      reject(
+        "product_validation_physical_execution_dependency",
+        "Product Validation may compose Operations and exact adapters but cannot depend on physical execution, sandbox, or local-environment implementations.",
+      );
+    }
+
+    const isValidationSource =
+      path.startsWith("harness/validation/src/") ||
+      path.startsWith("products/helarc/core/src/validation/") ||
+      path.startsWith("products/helarc/code-agent/src/validation/");
+    if (
+      isValidationSource &&
+      /from\s+["'][^"']*(?:tree-sitter|language-server|semantic-search|code-understanding|source-indexer|ast-parser|compiler-adapter)[^"']*["']/.test(text)
+    ) {
+      reject(
+        "validation_semantic_processor_dependency",
+        "Validation Contracts and composition cannot depend on language-specific or Code Understanding processors.",
+      );
+    }
+
+    if (
+      path === "harness/agent-core/runtime/src/runner/RunExecution.ts" &&
+      (
+        !/const\s+completion\s*=\s*await\s+this\.evaluateCompletionGate\s*\(/.test(text) ||
+        !/if\s*\(completion\.kind\s*===\s*["']succeeded["']\)\s*\{[\s\S]*?this\.settle\s*\(\{\s*status:\s*["']succeeded["']/.test(text)
+      )
+    ) {
+      reject(
+        "runner_completion_gate_required",
+        "RunExecution must evaluate the Completion Gate and may settle succeeded only from its succeeded branch.",
+      );
+    }
+
+    if (/\bcreateNoCheckValidationExecutionFactory\b/.test(text)) {
+      reject(
+        "production_validation_bypass",
+        "Production sources cannot provide or consume a no-check Validation execution bypass.",
+      );
+    }
+
     const isModelInputContractSource =
       /^harness\/model-interaction\/src\/(?:input|continuation)\//.test(path) ||
       path === "harness/model-interaction/src/ModelInteractionContractValidation.ts";

@@ -581,11 +581,13 @@ export class RunExecution<TOutput> {
       expectedRevision: 0,
     }, this.invocationInterruption());
     try {
-      await this.dependencies.validation.preparation?.prepare({
-        run: Object.freeze({ id: this.runId }),
-        execution,
-        automaticEffectfulChecks: this.createAutomaticEffectfulValidationCheckPort(),
-      }, this.invocationInterruption());
+      if (this.dependencies.validation.preparation !== null) {
+        await this.dependencies.validation.preparation.prepare({
+          run: Object.freeze({ id: this.runId }),
+          execution,
+          automaticEffectfulChecks: this.createAutomaticEffectfulValidationCheckPort(),
+        }, this.invocationInterruption());
+      }
     } catch (error) {
       if (error instanceof ValidationExecutionError) throw error;
       throw new ValidationExecutionError(createValidationFailure({
@@ -1672,7 +1674,7 @@ export class RunExecution<TOutput> {
     readonly requestOrigin: OperationRequestOrigin;
   }): Promise<boolean> {
     const resolver = this.dependencies.validation.checkRequests;
-    if (resolver === undefined) return false;
+    if (resolver === null) return false;
     let resolved: Awaited<ReturnType<typeof resolver.resolve>>;
     try {
       resolved = await resolver.resolve({
@@ -1719,7 +1721,7 @@ export class RunExecution<TOutput> {
     interruption: InvocationInterruptionContext,
   ): Promise<void> {
     const processor = this.dependencies.validation.checkResults;
-    if (processor === undefined) return;
+    if (processor === null) return;
     try {
       await processor.process({
         run: Object.freeze({ id: this.runId }),
