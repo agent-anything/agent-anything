@@ -11,6 +11,8 @@ import type {
 } from "@agent-anything/action-execution/sandbox";
 import type { ApprovalReviewerBinding, RunResult } from "@agent-anything/agent-runtime/run";
 import { Runner } from "@agent-anything/agent-runtime/runner";
+import { CurrentValidationCompletionGate } from "@agent-anything/validation/completion";
+import { createNoCheckValidationExecutionFactory } from "@agent-anything/validation/execution";
 import type { ContextManifestPersistencePort } from "@agent-anything/context/persistence";
 import {
   createCanonicalActorIdentity,
@@ -281,6 +283,10 @@ export async function prepareHelarcHostRun(
         now,
       },
     },
+    validation: {
+      executionFactory: createNoCheckValidationExecutionFactory({ now }),
+      completionGate: new CurrentValidationCompletionGate(now),
+    },
     interactions: product.interactions,
     runtimeEventPublisher: productRuntimeEventPublisher,
     now,
@@ -305,6 +311,7 @@ export async function prepareHelarcHostRun(
         enforcement,
         metadata: runMetadata,
       },
+      validation: createHelarcValidationConfig(),
       limits: {
         maxIterations: 5,
         maxActions: 8,
@@ -398,6 +405,30 @@ export async function prepareHelarcHostRun(
         }),
       });
     },
+  });
+}
+
+function createHelarcValidationConfig() {
+  const owner = (id: string) => Object.freeze({
+    owner: "helarc",
+    kind: "validation",
+    id,
+    revision: "1",
+  });
+  return Object.freeze({
+    profile: Object.freeze({
+      ref: owner("empty-profile"),
+      specification: Object.freeze({ id: "empty-specification", revision: "1" }),
+      source: Object.freeze({ ...owner("profile-source"), sourceKind: "product_configuration" as const }),
+      admittedBy: owner("profile-admission"),
+      requirements: Object.freeze([]),
+    }),
+    completion: Object.freeze({
+      policy: owner("current-validation-gate"),
+      outputContract: owner("agent-output-contract"),
+      conditions: Object.freeze([]),
+      maximumDurationMs: 5_000,
+    }),
   });
 }
 

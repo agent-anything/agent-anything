@@ -340,8 +340,9 @@ function progressCommit(
         startedAt: STARTED_AT,
         plan: null,
         pendingInteractions: [],
-        retry: null,
-        cancellation: null,
+      retry: null,
+      validation: null,
+      cancellation: null,
         enforcement: {
           selected: "disabled",
           status: "not_exercised",

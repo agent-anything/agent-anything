@@ -61,6 +61,7 @@
     "@agent-anything/operation-catalog": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/tools": "workspace:*",
+    "@agent-anything/validation": "workspace:*",
     "@agent-anything/workspace": "workspace:*"
   },
   "devDependencies": {

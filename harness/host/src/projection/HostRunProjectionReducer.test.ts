@@ -111,6 +111,28 @@ describe("HostRunProjectionReducer", () => {
     expect(projection).toMatchObject({ status: "running", pendingInteractions: [] });
   });
 
+  it("projects only the bounded Host Validation view from a RunHandle snapshot", () => {
+    const validation = Object.freeze({
+      snapshot: Object.freeze({ runId: "run-1", revision: 7 }),
+      counts: Object.freeze([
+        Object.freeze({ state: "satisfied" as const, count: 1 }),
+      ]),
+      activeChecks: 0,
+      gateStatus: "completion_eligible" as const,
+      safeReasons: Object.freeze(["validation_completion_eligible"]),
+      updatedAt: NOW,
+    });
+    const projection = apply(initialProjection(), runOperationUpdate(1, {
+      sequence: 1,
+      runRevision: 3,
+      validation,
+    }));
+
+    expect(projection.validation).toEqual(validation);
+    expect(JSON.stringify(projection.validation)).not.toContain("evidence");
+    expect(JSON.stringify(projection.validation)).not.toContain("command");
+  });
+
   it("projects canonical Action attempt and settlement without executor payload", () => {
     let projection = apply(initialProjection(), runtimeUpdate(1, "run.started", {
       status: "running",
@@ -294,10 +316,12 @@ function runOperationUpdate(
     snapshot: {
       runId: "run-1",
       sequence: 1,
+      runRevision: 1,
       status: "running",
       lastRunItemSequence: 0,
       plan: null,
       retry: null,
+      validation: null,
       pendingInteractions: [],
       result: null,
       ...overrides,

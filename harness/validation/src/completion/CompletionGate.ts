@@ -43,11 +43,23 @@ export interface CompletionGateConditionRef extends ValidationOwnerRef {
   readonly satisfied: boolean;
 }
 
+export interface CompletionGateConfiguration {
+  readonly policy: CompletionGatePolicyRef;
+  readonly outputContract: ValidationOwnerRef;
+  readonly conditions: readonly CompletionGateConditionRef[];
+  readonly maximumDurationMs: number;
+}
+
 export interface CompletionGateLifecycleBasis {
   readonly runRevision: number;
   readonly status: "running" | "waiting";
   readonly cancellationRevision: number;
   readonly deadlineAt: string | null;
+}
+
+export interface CompletionGateRequirementState {
+  readonly current: ValidationCurrentRequirementState;
+  readonly disposition: ValidationCompletionDisposition | null;
 }
 
 export interface CompletionGateInput {
@@ -59,7 +71,7 @@ export interface CompletionGateInput {
   readonly outputContract: ValidationOwnerRef;
   readonly specification: ValidationSpecificationRef | null;
   readonly validationSnapshot: ValidationCurrentSnapshotRef;
-  readonly mandatoryStates: readonly ValidationCurrentRequirementState[];
+  readonly mandatoryStates: readonly CompletionGateRequirementState[];
   readonly pendingWork: readonly ValidationOwnerRef[];
   readonly conditions: readonly CompletionGateConditionRef[];
   readonly lifecycle: CompletionGateLifecycleBasis;
@@ -119,6 +131,27 @@ export interface CompletionGatePort {
   ): Promise<CompletionGateDecision>;
 }
 
+export function snapshotCompletionGateConfiguration(
+  input: CompletionGateConfiguration,
+): CompletionGateConfiguration {
+  strictRecord(input, "CompletionGateConfiguration", [
+    "policy", "outputContract", "conditions", "maximumDurationMs",
+  ]);
+  return deepFreeze({
+    policy: ownerRef(input.policy, "CompletionGateConfiguration.policy"),
+    outputContract: ownerRef(input.outputContract, "CompletionGateConfiguration.outputContract"),
+    conditions: unique(input.conditions.map((condition, index) => {
+      const path = `CompletionGateConfiguration.conditions[${index}]`;
+      strictRecord(condition, path, ["owner", "kind", "id", "revision", "required", "satisfied"]);
+      if (typeof condition.required !== "boolean" || typeof condition.satisfied !== "boolean") {
+        throw new TypeError(`${path} flags must be boolean.`);
+      }
+      return { ...ownerRefFields(condition, path), required: condition.required, satisfied: condition.satisfied };
+    }), ownerKey, "CompletionGateConfiguration.conditions"),
+    maximumDurationMs: positiveInteger(input.maximumDurationMs, "CompletionGateConfiguration.maximumDurationMs"),
+  });
+}
+
 export function snapshotCompletionGateInput(input: CompletionGateInput): CompletionGateInput {
   strictRecord(input, "CompletionGateInput", [
     "invocation", "run", "turn", "proposal", "proposalOutputDigest", "outputContract",
@@ -151,9 +184,21 @@ export function snapshotCompletionGateInput(input: CompletionGateInput): Complet
     outputContract: ownerRef(input.outputContract, "CompletionGateInput.outputContract"),
     specification: input.specification === null ? null : revisionRef(input.specification, "CompletionGateInput.specification"),
     validationSnapshot: snapshotRef(input.validationSnapshot, "CompletionGateInput.validationSnapshot"),
-    mandatoryStates: unique(input.mandatoryStates.map((state) =>
-      snapshotValidationCurrentRequirementState(state)),
-      (state) => `${state.requirement.id}@${state.requirement.revision}`,
+    mandatoryStates: unique(input.mandatoryStates.map((item, index) => {
+      strictRecord(item, `CompletionGateInput.mandatoryStates[${index}]`, ["current", "disposition"]);
+      if (item.current.status === "satisfied") {
+        if (item.disposition !== null) {
+          throw new TypeError(`CompletionGateInput.mandatoryStates[${index}].disposition must be null for satisfied state.`);
+        }
+      } else {
+        disposition(item.disposition, `CompletionGateInput.mandatoryStates[${index}].disposition`);
+      }
+      return {
+        current: snapshotValidationCurrentRequirementState(item.current),
+        disposition: item.disposition,
+      };
+    }),
+      (item) => `${item.current.requirement.id}@${item.current.requirement.revision}`,
       "CompletionGateInput.mandatoryStates"),
     pendingWork: unique(input.pendingWork.map((item, index) => ownerRef(item, `CompletionGateInput.pendingWork[${index}]`)),
       ownerKey, "CompletionGateInput.pendingWork"),

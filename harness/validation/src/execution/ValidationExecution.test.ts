@@ -252,6 +252,36 @@ describe("Run-scoped ValidationExecution", () => {
     expect(result.actionSettlement).toEqual(settlement.actionSettlement);
   });
 
+  it("does not let an interpreter rewrite an unsuccessful lower Operation as completed", async () => {
+    const lower = {
+      ...lowerSettlement("none"),
+      operationStatus: "denied" as const,
+      operationFailure: {
+        owner: "permission",
+        code: "permission_denied",
+        message: "Permission denied the Operation.",
+        retryable: false,
+        metadata: {},
+      },
+    };
+    const rig = createRig({
+      requestSettlement: async () => lower,
+      interpret: async () => completedInterpretation(),
+    });
+    await bootstrap(rig, effectfulDefinition());
+
+    const result = await runCheck(rig, {
+      runAction: { run: RUN, id: "run-action-1", sequence: 1 },
+    });
+
+    expect(result).toMatchObject({
+      status: "denied",
+      findings: [],
+      coverage: { ratio: 0 },
+      failure: { code: "validation_check_operation_denied" },
+    });
+  });
+
   it("blocks Retry when lower effect certainty is unknown", async () => {
     const rig = createRig({
       requestSettlement: async () => lowerSettlement("unknown"),
@@ -679,6 +709,8 @@ function lowerSettlement(effectCertainty: ValidationLowerCheckSettlement["effect
   return {
     operationInvocation,
     operationResult: { invocation: operationInvocation, id: "operation-result-1" },
+    operationStatus: "succeeded",
+    operationFailure: null,
     actionSettlement: { action: { id: "canonical-action-1" }, id: "action-settlement-1" },
     effectCertainty,
     output: owner("operation-output"),

@@ -42,6 +42,7 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
       errorCodes: [],
       contextTransitions: [],
       contextProjections: [],
+      validation: [],
     });
   }
 
@@ -184,6 +185,50 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
           code: event.payload.code,
         });
         break;
+      case "validation.check.started":
+        this.appendValidationTrace(event, {
+          event: "check_started",
+          snapshotRevision: event.payload.snapshotRevision,
+          subjectId: event.payload.attemptId,
+          status: "running",
+          code: null,
+          durationMs: null,
+          coverageRatio: null,
+        });
+        break;
+      case "validation.check.finished":
+        this.appendValidationTrace(event, {
+          event: "check_finished",
+          snapshotRevision: event.payload.snapshotRevision,
+          subjectId: event.payload.attemptId,
+          status: event.payload.status,
+          code: event.payload.code,
+          durationMs: event.payload.durationMs,
+          coverageRatio: event.payload.coverageRatio,
+        });
+        break;
+      case "validation.assessment.committed":
+        this.appendValidationTrace(event, {
+          event: "assessment_committed",
+          snapshotRevision: event.payload.snapshotRevision,
+          subjectId: event.payload.assessmentId,
+          status: event.payload.verdict,
+          code: null,
+          durationMs: null,
+          coverageRatio: null,
+        });
+        break;
+      case "validation.gate.evaluated":
+        this.appendValidationTrace(event, {
+          event: "gate_evaluated",
+          snapshotRevision: event.payload.snapshotRevision,
+          subjectId: event.payload.gateId,
+          status: event.payload.status,
+          code: event.payload.reasonCodes[0] ?? null,
+          durationMs: null,
+          coverageRatio: null,
+        });
+        break;
       case "run.completed":
       case "run.blocked":
       case "run.failed":
@@ -196,6 +241,18 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
   }
 
   getSnapshot(): RunTrace { return this.snapshot(this.completed ? this.finalStatus() : "active"); }
+
+  private appendValidationTrace(
+    event: RuntimeEvent,
+    record: import("./RunTrace.js").ValidationTraceRecord,
+  ): void {
+    const root = this.spans.get(this.input.runId)!;
+    root.attributes.validation = [
+      ...(root.attributes.validation as import("./RunTrace.js").ValidationTraceRecord[]),
+      Object.freeze(record),
+    ];
+    root.links.push(link("runtime_event", event.id));
+  }
 
   complete(input: CompleteRunTraceInput): RunTrace {
     if (this.completed) return this.getSnapshot();

@@ -43,7 +43,36 @@ import {
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import { createCanonicalWorkspaceIdentity } from "@agent-anything/canonical-action/subject";
+import {
+  createActionRegistrationSnapshot,
+  type ActionAdapterDescriptor,
+  type ActionExecutorDescriptor,
+} from "@agent-anything/canonical-action/registration";
+import {
+  createPreparedAction,
+  type OperationActionAdapter,
+} from "@agent-anything/action-execution/registration";
+import { createSandboxExecutionGateway } from "@agent-anything/action-execution/sandbox";
+import { createAllowAllActionPolicyPort } from "@agent-anything/governance/policy";
 import { createTestContextProjection } from "@agent-anything/test-support";
+import {
+  CurrentValidationCompletionGate,
+  type CompletionGateInput,
+  type CompletionGatePort,
+} from "@agent-anything/validation/completion";
+import {
+  createValidationFailure,
+  type ValidationOwnerRef,
+} from "@agent-anything/validation/definition";
+import {
+  createNoCheckValidationExecutionFactory,
+  DefaultValidationExecutionFactory,
+  type CheckDefinition,
+  type CheckResult,
+  type ValidationCheckInterpretation,
+  type ValidationExecutionPort,
+} from "@agent-anything/validation/execution";
+import type { ValidationSubjectSnapshot } from "@agent-anything/validation/subject";
 import type {
   Controller,
   ControllerCallContext,
@@ -105,11 +134,304 @@ describe("Runner semantic integration", () => {
       finalOutput: { summary: "Done" },
     });
     expect(result.items.map(({ payload }) => payload.kind)).toEqual([
+      "validation_feedback",
       "controller_turn",
+      "validation_feedback",
       "terminal_transition",
     ]);
-    expect(result.items.map(({ ref }) => ref.sequence)).toEqual([1, 2]);
+    expect(result.items.map(({ ref }) => ref.sequence)).toEqual([1, 2, 3, 4]);
     expect(controller.calls).toHaveLength(1);
+  });
+
+  it("blocks completion when one mandatory Requirement remains unassessed", async () => {
+    const operations = createOperationFixture([]);
+    const events: RuntimeEvent[] = [];
+    const result = await createRunner(
+      new ScriptedController([complete("Not yet eligible")]),
+      operations,
+      { runtimeEventPublisher: { publish: (event) => events.push(event) } },
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { validation: createMandatoryValidationConfig("block") }),
+    );
+
+    expect(result, JSON.stringify(result, null, 2)).toMatchObject({
+      status: "blocked",
+      code: "validation_blocked",
+    });
+    expect(result.items.some((item) => item.payload.kind === "validation_feedback")).toBe(true);
+    expect(events).toContainEqual(expect.objectContaining({
+      name: "validation.gate.evaluated",
+      payload: expect.objectContaining({ status: "blocked_unassessed", disposition: "block" }),
+    }));
+  });
+
+  it("satisfies a mandatory Requirement through a pure automatic Check without fabricating action state", async () => {
+    const operations = createOperationFixture([]);
+    const events: RuntimeEvent[] = [];
+    const validation = createValidationScenario({ kind: "pure_automatic" });
+    const result = await createRunner(
+      new ScriptedController([complete("Validated")]),
+      operations,
+      {
+        validation,
+        runtimeEventPublisher: { publish: (event) => events.push(event) },
+      },
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { validation: createMandatoryValidationConfig("block") }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(result.items.filter(({ payload }) => payload.kind === "run_action"))
+      .toHaveLength(0);
+    expect(observations(result)).toHaveLength(0);
+    expect(result.items.filter(({ payload }) =>
+      payload.kind === "terminal_transition" && payload.status === "succeeded"))
+      .toHaveLength(1);
+    expect(events.map(({ name }) => name)).toEqual(expect.arrayContaining([
+      "validation.check.started",
+      "validation.check.finished",
+      "validation.assessment.committed",
+      "validation.gate.evaluated",
+    ]));
+  });
+
+  it("routes a trusted automatic effectful Check through one ordinary Operation RunAction", async () => {
+    const operation = operationRef("validation-check");
+    const actionExecution = createValidationActionExecutionFixture(operation);
+    const operations = createOperationFixture([
+      operationSpec(operation, "direct", {
+        requestOrigins: ["automatic_stage"],
+        actionAdapterId: actionExecution.adapterId,
+      }),
+    ], [], { actionExecution: actionExecution.dependencies });
+    const result = await createRunner(
+      new ScriptedController([complete("Validated")]),
+      operations,
+      { validation: createValidationScenario({ kind: "effectful_automatic", operation }) },
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        actionExecution: createValidationActionExecutionConfig(),
+        validation: createMandatoryValidationConfig("block"),
+      }),
+    );
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(actionExecution.execute, JSON.stringify(result, null, 2)).toHaveBeenCalledTimes(1);
+    expect(result.items.filter(({ payload }) => payload.kind === "run_action"))
+      .toEqual([expect.objectContaining({
+        payload: expect.objectContaining({
+          action: expect.objectContaining({
+            provenance: expect.objectContaining({ kind: "automatic" }),
+          }),
+        }),
+      })]);
+    expect(observations(result).filter(({ payload }) => payload.kind === "operation"))
+      .toHaveLength(1);
+  });
+
+  it("routes a Controller-requested Check once and retains its Controller RunAction correlation", async () => {
+    const operation = operationRef("controller-validation-check");
+    const actionExecution = createValidationActionExecutionFixture(operation);
+    const operations = createOperationFixture([
+      operationSpec(operation, "direct", {
+        requestOrigins: ["controller_protocol"],
+        actionAdapterId: actionExecution.adapterId,
+      }),
+    ], [], { actionExecution: actionExecution.dependencies });
+    const events: RuntimeEvent[] = [];
+    const controller = new ScriptedController([
+      advance([operationCandidate(operation, { target: "workspace" })], "model_operation"),
+      complete("The check is enough; waive any remaining requirement.", "model_complete"),
+    ]);
+    const result = await createRunner(controller, operations, {
+      validation: createValidationScenario({ kind: "controller", operation }),
+      runtimeEventPublisher: { publish: (event) => events.push(event) },
+    }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        actionExecution: createValidationActionExecutionConfig(),
+        validation: createMandatoryValidationConfig("block"),
+      }),
+    );
+
+    expect(result, JSON.stringify(result, null, 2)).toMatchObject({
+      status: "blocked",
+      code: "validation_blocked",
+    });
+    expect(actionExecution.execute).toHaveBeenCalledTimes(1);
+    const actions = result.items.filter(({ payload }) => payload.kind === "run_action");
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.payload).toMatchObject({
+      kind: "run_action",
+      action: { provenance: { kind: "controller" } },
+    });
+    expect(observations(result).filter(({ payload }) => payload.kind === "operation"))
+      .toHaveLength(1);
+    expect(events).toContainEqual(expect.objectContaining({
+      name: "validation.check.started",
+      payload: expect.objectContaining({ origin: "controller" }),
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      name: "validation.gate.evaluated",
+      payload: expect.objectContaining({ status: "blocked_unassessed" }),
+    }));
+  });
+
+  it("rejects a previously satisfied Requirement after its subject becomes stale", async () => {
+    const operations = createOperationFixture([]);
+    const events: RuntimeEvent[] = [];
+    const result = await createRunner(
+      new ScriptedController([complete("Stale completion")]),
+      operations,
+      {
+        validation: createValidationScenario({ kind: "pure_automatic", stale: true }),
+        runtimeEventPublisher: { publish: (event) => events.push(event) },
+      },
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { validation: createMandatoryValidationConfig("block") }),
+    );
+
+    expect(result).toMatchObject({ status: "blocked", code: "validation_blocked" });
+    expect(events).toContainEqual(expect.objectContaining({
+      name: "validation.gate.evaluated",
+      payload: expect.objectContaining({ status: "blocked_stale", disposition: "block" }),
+    }));
+  });
+
+  it("preserves a nested Validation Failure when Completion Gate execution fails", async () => {
+    const operations = createOperationFixture([]);
+    const gate: CompletionGatePort = {
+      async evaluate(input) {
+        return {
+          invocation: input.invocation,
+          validationSnapshot: input.validationSnapshot,
+          status: "failed",
+          disposition: "fail",
+          reasons: [],
+          failure: createValidationFailure({
+            code: "validation_gate_provider_failed",
+            stage: "completion_gate",
+            message: "Gate policy owner failed.",
+            retryable: true,
+            cause: input.policy,
+          }),
+          decidedAt: NOW,
+        };
+      },
+    };
+    const result = await createRunner(
+      new ScriptedController([complete("Done")]),
+      operations,
+      {
+        validation: {
+          executionFactory: createNoCheckValidationExecutionFactory({ now: () => NOW }),
+          completionGate: gate,
+        },
+      },
+    ).run(createAgent(), createRunInput(), createRunConfig(operations));
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "validation_failed",
+      failure: {
+        kind: "validation",
+        failure: { code: "validation_gate_provider_failed", stage: "completion_gate" },
+      },
+    });
+  });
+
+  it("lets accepted cancellation outrank an in-flight eligible gate decision", async () => {
+    const operations = createOperationFixture([]);
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const gate: CompletionGatePort = {
+      async evaluate(input) {
+        entered.resolve();
+        await release.promise;
+        return eligibleGateDecision(input);
+      },
+    };
+    const handle = createRunner(
+      new ScriptedController([complete("Late completion")]),
+      operations,
+      {
+        validation: {
+          executionFactory: createNoCheckValidationExecutionFactory({ now: () => NOW }),
+          completionGate: gate,
+        },
+      },
+    ).start(createAgent(), createRunInput(), createRunConfig(operations));
+    await entered.promise;
+
+    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status)
+      .toBe("accepted");
+    release.resolve();
+    const result = await handle.wait();
+
+    expect(result.status).toBe("cancelled");
+    expect(result.items.filter((item) =>
+      item.payload.kind === "terminal_transition" && item.payload.status === "succeeded"))
+      .toHaveLength(0);
+  });
+
+  it("discards a gate decision whose Run basis was invalidated by steering", async () => {
+    const operations = createOperationFixture([]);
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const events: RuntimeEvent[] = [];
+    let gateCalls = 0;
+    const gate: CompletionGatePort = {
+      async evaluate(input) {
+        gateCalls += 1;
+        if (gateCalls === 1) {
+          entered.resolve();
+          await release.promise;
+        }
+        return eligibleGateDecision(input);
+      },
+    };
+    const handle = createRunner(
+      new ScriptedController([
+        complete("Stale completion", "model_complete_1"),
+        complete("Fresh completion", "model_complete_2"),
+      ]),
+      operations,
+      {
+        validation: {
+          executionFactory: createNoCheckValidationExecutionFactory({ now: () => NOW }),
+          completionGate: gate,
+        },
+        runtimeEventPublisher: { publish: (event) => events.push(event) },
+      },
+    ).start(createAgent(), createRunInput(), createRunConfig(operations));
+    await entered.promise;
+    const expectedRunRevision = handle.getSnapshot().runRevision;
+    expect(handle.steer({
+      commandId: "gate-steering",
+      expectedRunRevision,
+      instruction: "Re-evaluate completion against current state.",
+      attribution: { origin: "user", actorId: "user-1" },
+      submittedAt: NOW,
+    }).status).toBe("accepted_for_application");
+    release.resolve();
+
+    const result = await handle.wait();
+    expect(result).toMatchObject({
+      status: "succeeded",
+      finalOutput: { summary: "Fresh completion" },
+    });
+    expect(gateCalls).toBe(2);
+    expect(events.filter((event) => event.name === "validation.gate.evaluated"))
+      .toHaveLength(2);
   });
 
   it("publishes committed Context transitions only after Runner state commits", async () => {
@@ -126,7 +448,9 @@ describe("Runner semantic integration", () => {
     );
     expect(transitions.map((event) => event.payload.operationKinds)).toEqual([
       ["add"],
+      ["add"],
       ["add", "add"],
+      ["replace"],
     ]);
     expect(transitions[0]?.payload).not.toHaveProperty("contribution");
     const projections = events.filter(
@@ -617,7 +941,7 @@ describe("Runner semantic integration", () => {
         kind: "state_transition",
         transition: "handoff",
         input: {
-          expectedRunRevision: 2,
+          expectedRunRevision: 3,
           currentAgent: { id: "agent_001", revision: "1" },
           targetAgent: { id: specialist.id, revision: specialist.revision },
           reason: "Use specialist instructions.",
@@ -977,6 +1301,152 @@ function createOperationFixture(
   });
 }
 
+function createValidationActionExecutionFixture(operation: OperationRevisionRef) {
+  const adapterDescriptor: ActionAdapterDescriptor = {
+    id: `adapter.${operation.operation.name}`,
+    version: "1",
+    requestSchemaRevision: "request-1",
+  };
+  const executorDescriptor: ActionExecutorDescriptor = {
+    id: `executor.${operation.operation.name}`,
+    version: "1",
+    invocationContractVersion: "1",
+    physicalPayloadSchemaRevision: "payload-1",
+  };
+  const registrations = createActionRegistrationSnapshot([{
+    registrationId: `action-registration.${operation.operation.name}`,
+    revision: "1",
+    operation,
+    binding: { operation, revision: "binding-1" },
+    adapter: adapterDescriptor,
+    executor: executorDescriptor,
+    effectFamilies: ["filesystem"],
+    sandboxRequirementRevision: "sandbox-requirement-1",
+    maxInvocationBytes: 64 * 1024,
+    maxPhysicalResultBytes: 64 * 1024,
+  }]);
+  const adapter: OperationActionAdapter = {
+    descriptor: adapterDescriptor,
+    async prepare(resolved, context) {
+      return {
+        status: "prepared" as const,
+        prepared: await createPreparedAction(resolved, context, {
+          effectSet: {
+            kind: "effects",
+            values: [{
+              kind: "file_system",
+              operation: "read",
+              targets: [{
+                platform: "win32",
+                path: "D:/workspace/README.md",
+                resolvedPath: "D:/workspace/README.md",
+                workspaceRootId: "workspace_001",
+                resolutionFingerprint: SHA_A,
+              }],
+            }],
+          },
+          requestedAuthority: null,
+          targetAssertions: [],
+          approval: null,
+          safeSummary: {
+            kind: "file_system",
+            headline: "Validate workspace state",
+            operations: [{
+              operation: "read",
+              sourceLabel: "README.md",
+              destinationLabel: null,
+            }],
+          },
+          preparedInvocation: {
+            contractVersion: "1",
+            executorId: executorDescriptor.id,
+            executorVersion: executorDescriptor.version,
+            payload: { target: "D:/workspace/README.md" },
+          },
+          replayBasis: "none",
+          semanticBasis: { operation: "validation-read" },
+        }),
+      };
+    },
+    async revalidate() {
+      return { status: "valid" as const, recordId: "validation-revalidation-1" };
+    },
+    async settle(_prepared, settlement) {
+      const succeeded = settlement.status === "succeeded";
+      return {
+        operationInvocationId: settlement.operationInvocation.id,
+        settlement,
+        status: succeeded
+          ? "succeeded" as const
+          : settlement.status === "unknown_effect"
+            ? "unknown_effect" as const
+            : settlement.status === "denied"
+              ? "denied" as const
+              : "failed" as const,
+        output: succeeded ? settlement.payload : null,
+        failure: succeeded
+          ? null
+          : {
+              owner: settlement.causeOwner ?? "action-execution",
+              code: settlement.causeRef ?? settlement.status,
+              message: settlement.causeRef ?? settlement.status,
+            },
+      };
+    },
+  };
+  const execute = vi.fn(async () => ({
+    status: "completed" as const,
+    effectState: "settled" as const,
+    payload: { passed: true },
+  }));
+  const dependencies: NonNullable<RunnerOperationComposition["actionExecution"]> = {
+    registrations,
+    adapters: [{ adapter }],
+    policy: createAllowAllActionPolicyPort(() => NOW),
+    sandbox: createSandboxExecutionGateway({
+      executors: [{
+        descriptor: executorDescriptor,
+        validatePayload(candidate): candidate is { passed: boolean } {
+          return typeof candidate === "object" && candidate !== null &&
+            "passed" in candidate && typeof candidate.passed === "boolean";
+        },
+        execute,
+      }],
+    }),
+    records: {
+      async recordPreEffect() {
+        return { recordId: "validation-pre-effect-1" };
+      },
+      async recordPostEffect() {
+        return { recordId: "validation-post-effect-1" };
+      },
+    },
+    retry: {
+      async decide() {
+        return { status: "stop" as const, code: "validation_action_retry_disabled" };
+      },
+      async wait() {
+        return "elapsed" as const;
+      },
+    },
+    now: () => NOW,
+  };
+  return Object.freeze({ adapterId: adapterDescriptor.id, dependencies, execute });
+}
+
+function createValidationActionExecutionConfig(): NonNullable<RunConfig["actionExecution"]> {
+  return Object.freeze({
+    policySnapshotId: "policy-1",
+    securityContext: Object.freeze({
+      workspace: canonicalWorkspace(),
+      actor: Object.freeze({ identityId: "user_001", kind: "user" as const }),
+      environment: canonicalEnvironment(),
+    }),
+    enforcement: "disabled" as const,
+    metadata: Object.freeze({}),
+  });
+}
+
 function resolvedBinding(
   spec: OperationSpec,
   input: OperationBindingResolutionInput<unknown, unknown>,
@@ -1091,6 +1561,7 @@ function createRunner(
     controller,
     contextProjection: createTestContextProjection(),
     operations,
+    validation: createTestValidationComposition(),
     interactions: createInteractionProtocolRegistrySnapshot("interaction-registry-1", []),
     now: () => NOW,
     createRunId: () => `run_${String(++runSequence).padStart(3, "0")}`,
@@ -1154,6 +1625,7 @@ function createRunConfig(
   overrides: {
     readonly tools?: RunConfig["tools"];
     readonly actionExecution?: RunConfig["actionExecution"];
+    readonly validation?: RunConfig["validation"];
     readonly limits?: Partial<Omit<RunConfig["limits"], "plan">>;
     readonly descendantDepth?: number;
   } = {},
@@ -1180,6 +1652,7 @@ function createRunConfig(
     permissions: createTestPermissionConfig(),
     tools: overrides.tools ?? emptyToolSelection(operations),
     actionExecution: overrides.actionExecution ?? null,
+    validation: overrides.validation ?? createTestValidationConfig(),
     limits: {
       maxIterations: 12,
       maxActions: 24,
@@ -1213,6 +1686,348 @@ function createRunConfig(
       ? {}
       : { descendantDepth: overrides.descendantDepth }),
   };
+}
+
+function createTestValidationComposition(): RunnerDependencies["validation"] {
+  return Object.freeze({
+    executionFactory: createNoCheckValidationExecutionFactory({ now: () => NOW }),
+    completionGate: new CurrentValidationCompletionGate(() => NOW),
+  });
+}
+
+function createTestValidationConfig(): RunConfig["validation"] {
+  const owner = (id: string) => Object.freeze({
+    owner: "test-runtime",
+    kind: "validation",
+    id,
+    revision: "1",
+  });
+  return Object.freeze({
+    profile: Object.freeze({
+      ref: owner("empty-profile"),
+      specification: Object.freeze({ id: "empty-specification", revision: "1" }),
+      source: Object.freeze({
+        ...owner("empty-profile-source"),
+        sourceKind: "run_invocation" as const,
+      }),
+      admittedBy: owner("profile-admission"),
+      requirements: Object.freeze([]),
+    }),
+    completion: Object.freeze({
+      policy: owner("current-validation-gate"),
+      outputContract: owner("test-output-contract"),
+      conditions: Object.freeze([]),
+      maximumDurationMs: 1_000,
+    }),
+  });
+}
+
+function createMandatoryValidationConfig(
+  disposition: "continue" | "wait" | "block" | "fail",
+): RunConfig["validation"] {
+  const base = createTestValidationConfig();
+  const source = Object.freeze({
+    owner: "test-runtime",
+    kind: "validation",
+    id: "mandatory-source",
+    revision: "1",
+    sourceKind: "run_invocation" as const,
+  });
+  return Object.freeze({
+    ...base,
+    profile: Object.freeze({
+      ...base.profile,
+      ref: Object.freeze({ ...base.profile.ref, id: "mandatory-profile" }),
+      specification: Object.freeze({ id: "mandatory-specification", revision: "1" }),
+      source,
+      requirements: Object.freeze([Object.freeze({
+        ref: Object.freeze({ id: "mandatory-requirement", revision: "1" }),
+        source,
+        kind: "test",
+        claim: "The required Validation claim is satisfied.",
+        purpose: "Protect successful completion.",
+        necessity: "mandatory" as const,
+        subjectKinds: Object.freeze(["test_subject"]),
+        checkFamilies: Object.freeze(["test_check"]),
+        assessmentMethod: Object.freeze({
+          owner: "test-runtime", kind: "assessment_method", id: "test-method", revision: "1",
+        }),
+        freshness: Object.freeze({ required: true, maximumAgeMs: null }),
+        coverage: Object.freeze({ kind: "complete" as const, minimumRatio: 1 }),
+        evidence: Object.freeze({
+          minimumAdmittedCount: 1,
+          acceptedSourceKinds: Object.freeze(["check_result"]),
+          conflictingEvidence: "inconclusive" as const,
+        }),
+        limits: Object.freeze({ maximumAttempts: 1, maximumDurationMs: 1_000, maximumCostUnits: null }),
+        disclosure: Object.freeze({ sensitivity: "internal" as const, audiences: Object.freeze(["runner"]) }),
+        completionHandling: Object.freeze({
+          unassessed: disposition,
+          pending: disposition,
+          violated: disposition,
+          inconclusive: disposition,
+          stale: disposition,
+        }),
+      })]),
+    }),
+  });
+}
+
+type ValidationScenario =
+  | { readonly kind: "pure_automatic"; readonly stale?: boolean }
+  | { readonly kind: "effectful_automatic"; readonly operation: OperationRevisionRef }
+  | { readonly kind: "controller"; readonly operation: OperationRevisionRef };
+
+function createValidationScenario(input: ValidationScenario): RunnerDependencies["validation"] {
+  const requirement = Object.freeze({ id: "mandatory-requirement", revision: "1" });
+  const subjectRef = Object.freeze({ id: "validation-subject", revision: "1" });
+  const adapter = validationOwner("validation-subject-adapter", "subject_adapter");
+  const evaluator = validationOwner("validation-pure-evaluator", "check_evaluator");
+  const interpreter = validationOwner("validation-result-interpreter", "result_interpreter");
+  const assessmentMethod = validationOwner("test-method", "assessment_method");
+  const definition = validationScenarioDefinition(input, evaluator, interpreter);
+  let identitySequence = 0;
+  let capturedSubject: ValidationSubjectSnapshot | null = null;
+  const executionFactory = new DefaultValidationExecutionFactory({
+    clock: { now: () => NOW },
+    identities: { nextId: (kind) => `${kind}-${++identitySequence}` },
+    subjectAdapters: {
+      resolve: (ref) => ref.id === adapter.id ? {
+        ref: adapter,
+        subjectKinds: ["test_subject"],
+        async capture({ run }) {
+          capturedSubject = Object.freeze({
+            ref: subjectRef,
+            run,
+            owner: "test-runtime",
+            kind: "test_subject",
+            stateRefs: Object.freeze([validationOwner("mandatory-source")]),
+            capturedAt: NOW,
+            environment: null,
+            scope: Object.freeze([{ key: "workspace", value: "workspace_001" }]),
+            coverage: Object.freeze({ kind: "complete" as const, ratio: 1 }),
+            fingerprint: Object.freeze({
+              algorithm: "sha256",
+              value: "validation-subject-v1",
+              basis: "test workspace state",
+            }),
+            sensitivity: "internal" as const,
+            audiences: Object.freeze(["validation"]),
+            adapter,
+          });
+          return { status: "captured" as const, snapshot: capturedSubject };
+        },
+        async rehydrate() {
+          return capturedSubject === null
+            ? {
+                status: "unavailable" as const,
+                failure: createValidationFailure({
+                  code: "validation_subject_not_captured",
+                  stage: "subject",
+                  message: "Validation subject has not been captured.",
+                  retryable: false,
+                  cause: adapter,
+                }),
+              }
+            : { status: "captured" as const, snapshot: capturedSubject };
+        },
+      } : null,
+    },
+    subjectFreshness: {
+      resolve: () => ({
+        checkFreshness: async () => input.kind === "pure_automatic" && input.stale === true
+          ? {
+              status: "stale" as const,
+              snapshot: subjectRef,
+              current: Object.freeze({ id: "validation-subject", revision: "2" }),
+              change: validationOwner("workspace-change", "subject_change"),
+            }
+          : { status: "current" as const, snapshot: subjectRef },
+      }),
+    },
+    pureChecks: {
+      resolve: (ref) => ref.id === evaluator.id ? {
+        evaluate: async () => completedValidationInterpretation(),
+      } : null,
+    },
+    operationChecks: { resolve: () => null },
+    interpreters: {
+      resolve: (ref) => ref.id === interpreter.id ? {
+        interpret: async () => completedValidationInterpretation(),
+      } : null,
+    },
+    assessmentMethods: {
+      resolve: (ref) => ref.id === assessmentMethod.id ? {
+        assess: async () => ({
+          verdict: "satisfied" as const,
+          basis: "The admitted Check Result satisfies the Requirement.",
+          coverage: { ratio: 1, basis: "complete admitted Check Result" },
+          limitations: [],
+        }),
+      } : null,
+    },
+  });
+  const composition: RunnerDependencies["validation"] = {
+    executionFactory,
+    completionGate: new CurrentValidationCompletionGate(() => NOW),
+    preparation: {
+      async prepare({ execution, automaticChecks }, interruption) {
+        await execution.captureSubject({
+          requirement,
+          adapter,
+          kind: "test_subject",
+          requestedSource: validationOwner("mandatory-source"),
+          expectedRevision: await validationRevision(execution),
+        }, interruption);
+        await execution.admitCheckDefinition({
+          definition,
+          expectedRevision: await validationRevision(execution),
+        }, interruption);
+        if (input.kind === "controller") return;
+        const checkRequest = {
+          requirement,
+          subject: subjectRef,
+          definition: definition.ref,
+          predecessor: null,
+          environment: null,
+          configuration: null,
+          coverageTarget: 1,
+        } as const;
+        const result = input.kind === "effectful_automatic"
+          ? await automaticChecks.execute(checkRequest, interruption)
+          : await execution.executeCheck({
+              ...checkRequest,
+              origin: "trusted_automatic",
+              runAction: null,
+              expectedRevision: await validationRevision(execution),
+            }, interruption);
+        await admitValidationResultAndAssess(execution, result, interruption);
+        if (input.kind === "pure_automatic" && input.stale === true) {
+          await execution.checkSubjectFreshness({
+            requirement,
+            snapshot: subjectRef,
+            expectedRevision: await validationRevision(execution),
+          }, interruption);
+        }
+      },
+    },
+  };
+  return input.kind !== "controller"
+    ? Object.freeze(composition)
+    : Object.freeze({
+        ...composition,
+        checkRequests: {
+          async resolve(request) {
+            if (!sameOperationRef(request.operation, input.operation)) return null;
+            return Object.freeze({
+              requirement,
+              subject: subjectRef,
+              definition: definition.ref,
+              predecessor: null,
+              environment: null,
+              configuration: null,
+              coverageTarget: 1,
+            });
+          },
+        },
+      });
+}
+
+function validationScenarioDefinition(
+  input: ValidationScenario,
+  evaluator: ValidationOwnerRef,
+  interpreter: ValidationOwnerRef,
+): CheckDefinition {
+  return Object.freeze({
+    ref: Object.freeze({ id: "validation-check", revision: "1" }),
+    owner: "test-runtime",
+    family: "test_check",
+    requirementKinds: Object.freeze(["test"]),
+    subjectKinds: Object.freeze(["test_subject"]),
+    acceptedOrigins: Object.freeze([
+      input.kind === "controller" ? "controller" as const : "trusted_automatic" as const,
+    ]),
+    effect: input.kind === "pure_automatic"
+      ? Object.freeze({ kind: "pure" as const, evaluator, operationBinding: null })
+      : Object.freeze({
+          kind: "effectful" as const,
+          evaluator: null,
+          operationBinding: Object.freeze({
+            operation: input.operation,
+            revision: "binding-1",
+          }),
+        }),
+    resultInterpreter: interpreter,
+    environmentNeeds: Object.freeze([]),
+    maximumDurationMs: 1_000,
+    maximumAttempts: 1,
+    maximumCostUnits: null,
+    retryPolicy: "never",
+    evidencePolicyRevision: "1",
+  });
+}
+
+function completedValidationInterpretation(): ValidationCheckInterpretation {
+  return Object.freeze({
+    status: "completed",
+    findings: Object.freeze([Object.freeze({
+      owner: "test-runtime",
+      claim: "The required Validation Check completed successfully.",
+      polarity: "supports" as const,
+      severity: "info" as const,
+      sourceRefs: Object.freeze([validationOwner("check-output", "check_output")]),
+      limitations: Object.freeze([]),
+    })]),
+    coverage: Object.freeze({ ratio: 1, basis: "complete test Check" }),
+    costUnits: null,
+    limitations: Object.freeze([]),
+    failure: null,
+  });
+}
+
+async function admitValidationResultAndAssess(
+  execution: ValidationExecutionPort,
+  result: CheckResult,
+  interruption: import("@agent-anything/agent-core/control").InvocationInterruptionContext,
+): Promise<void> {
+  const requirement = Object.freeze({ id: "mandatory-requirement", revision: "1" });
+  const subject = Object.freeze({ id: "validation-subject", revision: "1" });
+  const evidence = Object.freeze({ id: "validation-evidence", revision: "1" });
+  await execution.admitEvidence({
+    evidence: Object.freeze({
+      ref: evidence,
+      requirement,
+      subject,
+      source: Object.freeze({ kind: "check_result" as const, result: result.ref }),
+      admission: Object.freeze({ status: "admitted" as const, failure: null }),
+      coverage: result.coverage,
+      sensitivity: "internal" as const,
+      audiences: Object.freeze(["validation"]),
+      limitations: result.limitations,
+      createdAt: NOW,
+    }),
+    expectedRevision: await validationRevision(execution),
+  }, interruption);
+  await execution.assessRequirement({
+    requirement,
+    subject,
+    evidenceRefs: Object.freeze([evidence]),
+    expectedRevision: await validationRevision(execution),
+  }, interruption);
+}
+
+async function validationRevision(execution: ValidationExecutionPort): Promise<number> {
+  return (await execution.readCurrentSnapshot()).ref.revision;
+}
+
+function validationOwner(id: string, kind = "validation"): ValidationOwnerRef {
+  return Object.freeze({ owner: "test-runtime", kind, id, revision: "1" });
+}
+
+function sameOperationRef(left: OperationRevisionRef, right: OperationRevisionRef): boolean {
+  return left.operation.namespace === right.operation.namespace &&
+    left.operation.name === right.operation.name &&
+    left.revision === right.revision;
 }
 
 function disabledRetryPolicy() {
@@ -1435,6 +2250,18 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
   seen.add(value);
   for (const child of Object.values(value)) deepFreeze(child, seen);
   return Object.freeze(value);
+}
+
+function eligibleGateDecision(input: CompletionGateInput) {
+  return Object.freeze({
+    invocation: input.invocation,
+    validationSnapshot: input.validationSnapshot,
+    status: "completion_eligible" as const,
+    disposition: null,
+    reasons: Object.freeze([]) as readonly [],
+    failure: null,
+    decidedAt: NOW,
+  });
 }
 
 function deferred<T>() {

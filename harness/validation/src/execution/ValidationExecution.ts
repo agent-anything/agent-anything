@@ -8,7 +8,11 @@ import type {
   OperationBindingRevisionRef,
   OperationInvocationRef,
 } from "@agent-anything/operation-catalog/identity";
-import type { OperationResultRef } from "@agent-anything/operation-catalog/result";
+import type {
+  OperationFailure,
+  OperationResult,
+  OperationResultRef,
+} from "@agent-anything/operation-catalog/result";
 import {
   createValidationFailure,
   type ValidationFailure,
@@ -41,6 +45,7 @@ import type {
   ValidationObservabilityProjection,
   ValidationRunnerProjection,
 } from "../projection/index.js";
+import type { ValidationOperationCheckResolverPort } from "./ValidationExecutionAdapters.js";
 
 export type ValidationCheckOrigin =
   | "controller"
@@ -249,6 +254,8 @@ export interface ValidationExecutionPersistenceFailure {
 export interface ValidationLowerCheckSettlement {
   readonly operationInvocation: OperationInvocationRef;
   readonly operationResult: OperationResultRef;
+  readonly operationStatus: OperationResult["status"];
+  readonly operationFailure: OperationFailure | null;
   readonly actionSettlement: ActionSettlementRef | null;
   readonly effectCertainty: ActionEffectCertainty;
   readonly output: ValidationOwnerRef | null;
@@ -326,6 +333,7 @@ export interface ValidationExecutionPort {
 
 export interface ValidationExecutionFactoryInput {
   readonly run: RunRef;
+  readonly operationChecks: ValidationOperationCheckResolverPort;
 }
 
 export interface ValidationExecutionFactory {

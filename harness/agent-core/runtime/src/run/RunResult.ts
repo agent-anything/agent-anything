@@ -71,7 +71,7 @@ export function createSucceededRunResult<TOutput>(input: CreateRunResultBaseInpu
   return deepFreeze({ ...base(input), status: "succeeded", code: null, finalOutput, cancellation: null, failure: null, relatedFailures: [] });
 }
 export function createBlockedRunResult<TOutput = never>(input: CreateRunResultBaseInput<TOutput>, code: RunBlockedCode): BlockedRunResult<TOutput> {
-  if (code !== "runtime_no_safe_path") {
+  if (code !== "runtime_no_safe_path" && code !== "validation_blocked") {
     throw new TypeError("Blocked RunResult code is invalid.");
   }
   return deepFreeze({ ...base(input), status: "blocked", code, finalOutput: null, cancellation: null, failure: null, relatedFailures: [] });
@@ -184,13 +184,20 @@ function assertRunFailureCause(value: RunFailureCause, field: string): void {
   const kinds = new Set([
     "runtime", "model", "provider", "operation", "interaction", "approval",
     "permission", "policy", "action_execution", "sandbox", "tool", "composite",
-    "descendant", "context", "audit", "telemetry",
+    "descendant", "context", "audit", "telemetry", "validation",
   ]);
   if (!isRecord(value) || !kinds.has(String(value.kind)) || !isRecord(value.failure)) {
     throw new TypeError(`${field} must be a valid RunFailureCause.`);
   }
   token(value.failure.code as string, `${field}.failure.code`);
   token(value.failure.message as string, `${field}.failure.message`);
+  if (value.kind === "validation") {
+    token(value.failure.stage as string, `${field}.failure.stage`);
+    if (typeof value.failure.retryable !== "boolean") {
+      throw new TypeError(`${field}.failure.retryable must be boolean.`);
+    }
+    return;
+  }
   if (!isRecord(value.failure.metadata)) {
     throw new TypeError(`${field}.failure.metadata must be an object.`);
   }
@@ -210,7 +217,8 @@ function assertFailureCode(code: RunFailureCode): void {
   if (![
     "runtime_execution_failed", "runtime_limit_exceeded", "runtime_deadline_exceeded",
     "context_projection_failed", "controller_failed", "operation_failed",
-    "interaction_failed", "required_finalization_failed", "unknown_effect",
+    "interaction_failed", "required_finalization_failed", "validation_failed",
+    "unknown_effect",
   ].includes(code)) {
     throw new TypeError("Failed RunResult code is invalid.");
   }

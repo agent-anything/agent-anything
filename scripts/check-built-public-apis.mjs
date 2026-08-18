@@ -891,6 +891,8 @@ const expectedRemoteIntegrationValueExports = {
 const expectedValidationValueExports = {
   "@agent-anything/validation/definition": [
     "createValidationFailure",
+    "materializeValidationProfile",
+    "snapshotValidationProfile",
     "snapshotValidationRequirement",
     "snapshotValidationSpecification",
   ],
@@ -901,6 +903,7 @@ const expectedValidationValueExports = {
     "DefaultValidationExecutionFactory",
     "ValidationExecution",
     "ValidationExecutionError",
+    "createNoCheckValidationExecutionFactory",
     "snapshotCheckAttempt",
     "snapshotCheckDefinition",
     "snapshotCheckResult",
@@ -914,6 +917,8 @@ const expectedValidationValueExports = {
     "snapshotValidationCurrentSnapshot",
   ],
   "@agent-anything/validation/completion": [
+    "CurrentValidationCompletionGate",
+    "snapshotCompletionGateConfiguration",
     "snapshotCompletionGateDecision",
     "snapshotCompletionGateInput",
   ],

@@ -191,6 +191,8 @@ describe("Helarc Host Run composition", () => {
       "run.started",
       "context.transition.committed",
       "context.transition.committed",
+      "run.item.appended",
+      "context.transition.committed",
       "context.projection.completed",
       "controller.started",
       "run.item.appended",
@@ -205,6 +207,9 @@ describe("Helarc Host Run composition", () => {
       "controller.started",
       "run.item.appended",
       "controller.finished",
+      "validation.gate.evaluated",
+      "context.transition.committed",
+      "run.item.appended",
       "run.item.appended",
       "run.completed",
     ]);

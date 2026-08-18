@@ -177,6 +177,18 @@ export function createSteeringContextAdmissionProfile(): ContextAdmissionProfile
   });
 }
 
+export function createValidationContextAdmissionProfile(): ContextAdmissionProfile {
+  return admissionProfile({
+    owner: "validation",
+    sourceKinds: ["current_snapshot"],
+    audiences: ["model"],
+    retention: ["current"],
+    instructionRoles: ["data"],
+    necessities: ["optional"],
+    maximumPrecedence: 0,
+  });
+}
+
 function admissionProfile(input: {
   readonly owner: string;
   readonly sourceKinds: readonly string[];

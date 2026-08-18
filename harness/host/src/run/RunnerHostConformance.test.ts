@@ -32,6 +32,8 @@ import {
   type RunnerOperationComposition,
 } from "@agent-anything/agent-runtime/runner";
 import { createTestContextProjection } from "@agent-anything/test-support";
+import { CurrentValidationCompletionGate } from "@agent-anything/validation/completion";
+import { createNoCheckValidationExecutionFactory } from "@agent-anything/validation/execution";
 import { createHostRunManager } from "./HostRunManager.js";
 
 interface TestOutput {
@@ -103,6 +105,7 @@ function createManager(controller: Controller<TestOutput>) {
     controller,
     contextProjection: createTestContextProjection(),
     operations: emptyOperations(),
+    validation: createTestValidationComposition(),
     interactions: createInteractionProtocolRegistrySnapshot("interaction-registry-1", []),
     createRunId: () => "run-host-conformance",
     now: () => NOW,
@@ -200,6 +203,7 @@ function createRunConfig(tools: RunConfig["tools"]): RunConfig {
     permissions: permissionConfig(),
     tools,
     actionExecution: null,
+    validation: createTestValidationConfig(),
     limits: {
       maxIterations: 4,
       maxActions: 4,
@@ -229,6 +233,37 @@ function createRunConfig(tools: RunConfig["tools"]): RunConfig {
     },
     metadata: {},
   };
+}
+
+function createTestValidationComposition() {
+  return Object.freeze({
+    executionFactory: createNoCheckValidationExecutionFactory({ now: () => NOW }),
+    completionGate: new CurrentValidationCompletionGate(() => NOW),
+  });
+}
+
+function createTestValidationConfig(): RunConfig["validation"] {
+  const owner = (id: string) => Object.freeze({
+    owner: "host-conformance",
+    kind: "validation",
+    id,
+    revision: "1",
+  });
+  return Object.freeze({
+    profile: Object.freeze({
+      ref: owner("empty-profile"),
+      specification: Object.freeze({ id: "empty-specification", revision: "1" }),
+      source: Object.freeze({ ...owner("profile-source"), sourceKind: "run_invocation" as const }),
+      admittedBy: owner("profile-admission"),
+      requirements: Object.freeze([]),
+    }),
+    completion: Object.freeze({
+      policy: owner("current-validation-gate"),
+      outputContract: owner("test-output-contract"),
+      conditions: Object.freeze([]),
+      maximumDurationMs: 1_000,
+    }),
+  });
 }
 
 function permissionConfig(): ResolvedRunPermissionConfig {

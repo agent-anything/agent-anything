@@ -58,6 +58,7 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/operation-composition",
     "@agent-anything/permission",
     "@agent-anything/tools",
+    "@agent-anything/validation",
     "@agent-anything/workspace",
   ],
   "@agent-anything/remote-integrations": [
@@ -92,6 +93,7 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/observability",
     "@agent-anything/permission",
     "@agent-anything/agent-runtime",
+    "@agent-anything/validation",
     "@agent-anything/workspace",
   ],
 });
@@ -141,6 +143,7 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/permission",
     "@agent-anything/provider-integrations",
     "@agent-anything/agent-runtime",
+    "@agent-anything/validation",
     "@agent-anything/workspace",
     "lucide-react",
     "react",
@@ -167,6 +170,7 @@ export const TOOLING_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/operation-catalog",
     "@agent-anything/permission",
     "@agent-anything/tools",
+    "@agent-anything/validation",
     "@agent-anything/workspace",
   ],
 });

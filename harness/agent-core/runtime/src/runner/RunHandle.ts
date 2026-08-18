@@ -15,6 +15,7 @@ import type {
 } from "../run/index.js";
 import type { PlanProjection } from "../plan/index.js";
 import type { RetryEvent } from "../retry/index.js";
+import type { ValidationHostProjection } from "@agent-anything/validation/projection";
 
 export interface RunPendingInteractionProjection {
   readonly envelope: SafeInteractionEnvelope<unknown>;
@@ -39,6 +40,7 @@ export interface RunOperationSnapshot<TOutput = unknown> {
   readonly lastRunItemSequence: number;
   readonly plan: PlanProjection | null;
   readonly retry: RunRetryProjection | null;
+  readonly validation: ValidationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
   readonly result: RunResult<TOutput> | null;
 }
@@ -64,6 +66,7 @@ export interface RunExecutionUpdate<TOutput> {
   readonly lastRunItemSequence: number;
   readonly plan: PlanProjection | null;
   readonly retry: RunRetryProjection | null;
+  readonly validation: ValidationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
   readonly result: RunResult<TOutput> | null;
 }
@@ -92,6 +95,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       lastRunItemSequence: 0,
       plan: null,
       retry: null,
+      validation: null,
       pendingInteractions: Object.freeze([]),
       result: null,
     });
@@ -123,6 +127,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       lastRunItemSequence: update.lastRunItemSequence,
       plan: update.plan,
       retry: update.retry,
+      validation: update.validation,
       pendingInteractions: update.pendingInteractions,
       result: update.result,
     });
@@ -212,6 +217,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
         lastRunItemSequence: result.items.at(-1)?.ref.sequence ?? 0,
         plan: this.snapshot.plan,
         retry: this.snapshot.retry,
+        validation: this.snapshot.validation,
         pendingInteractions: Object.freeze([]),
         result,
       });

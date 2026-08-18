@@ -44,6 +44,11 @@ export class Runner {
     if (!dependencies.controller || typeof dependencies.controller.next !== "function") {
       throw new TypeError("Runner requires a Controller.");
     }
+    if (!dependencies.validation ||
+        typeof dependencies.validation.executionFactory?.create !== "function" ||
+        typeof dependencies.validation.completionGate?.evaluate !== "function") {
+      throw new TypeError("Runner requires explicit Validation execution and Completion Gate dependencies.");
+    }
 
     const now = dependencies.now ?? (() => new Date().toISOString());
     const contextProjection = snapshotRunnerContextProjection(

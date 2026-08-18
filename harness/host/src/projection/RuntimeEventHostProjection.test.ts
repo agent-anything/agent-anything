@@ -142,4 +142,39 @@ describe("Host RuntimeEvent projection", () => {
     });
     expect(projected.payload).not.toHaveProperty("records");
   });
+
+  it("keeps only safe Validation correlation and excludes detailed evidence", () => {
+    const event = Object.freeze({
+      schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
+      id: "event-4",
+      runId: "run-1",
+      taskId: "task-1",
+      sequence: 4,
+      name: "validation.check.finished",
+      occurredAt: "2026-08-03T00:00:00.000Z",
+      payload: Object.freeze({
+        snapshotRevision: 7,
+        attemptId: "attempt-1",
+        status: "completed",
+        code: null,
+        durationMs: 25,
+        coverageRatio: 1,
+        rawEvidence: { command: "secret command", output: "private output" },
+        findings: [{ claim: "private finding" }],
+      }),
+    }) as unknown as RuntimeEvent;
+
+    const projected = projectRuntimeEventForHost(event);
+
+    expect(projected.payload).toEqual({
+      snapshotRevision: 7,
+      attemptId: "attempt-1",
+      status: "completed",
+      code: null,
+      durationMs: 25,
+      coverageRatio: 1,
+    });
+    expect(projected.payload).not.toHaveProperty("rawEvidence");
+    expect(projected.payload).not.toHaveProperty("findings");
+  });
 });

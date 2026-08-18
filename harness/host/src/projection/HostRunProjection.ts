@@ -15,6 +15,7 @@ import type {
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { InteractionRequestRef } from "@agent-anything/interaction/protocol";
 import type { InteractionTransportReceipt } from "@agent-anything/interaction/records";
+import type { ValidationHostProjection } from "@agent-anything/validation/projection";
 
 export type HostRunProjectionStatus =
   | "starting"
@@ -144,6 +145,7 @@ export interface HostRunProjection {
   readonly plan: HostPlanProjection | null;
   readonly pendingInteractions: readonly HostPendingInteractionProjection[];
   readonly retry: HostRetryProjection | null;
+  readonly validation: ValidationHostProjection | null;
   readonly cancellation: HostCancellationProjection | null;
   readonly enforcement: HostEnforcementProjection;
   readonly terminal: HostTerminalRunProjection | null;
@@ -266,6 +268,7 @@ export function createHostRunProjection(
     plan: null,
     pendingInteractions: Object.freeze([]),
     retry: null,
+    validation: null,
     cancellation: null,
     enforcement: Object.freeze({
       selected: input.enforcement,

@@ -12,6 +12,8 @@ describe("Validation public API", () => {
   it("exposes only the eight focused value surfaces", () => {
     expect(Object.keys(definition).sort()).toEqual([
       "createValidationFailure",
+      "materializeValidationProfile",
+      "snapshotValidationProfile",
       "snapshotValidationRequirement",
       "snapshotValidationSpecification",
     ]);
@@ -20,6 +22,7 @@ describe("Validation public API", () => {
       "DefaultValidationExecutionFactory",
       "ValidationExecution",
       "ValidationExecutionError",
+      "createNoCheckValidationExecutionFactory",
       "snapshotCheckAttempt",
       "snapshotCheckDefinition",
       "snapshotCheckResult",
@@ -31,6 +34,8 @@ describe("Validation public API", () => {
       "snapshotValidationCurrentSnapshot",
     ]);
     expect(Object.keys(completion).sort()).toEqual([
+      "CurrentValidationCompletionGate",
+      "snapshotCompletionGateConfiguration",
       "snapshotCompletionGateDecision",
       "snapshotCompletionGateInput",
     ]);

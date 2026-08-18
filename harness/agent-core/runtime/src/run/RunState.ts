@@ -11,12 +11,19 @@ import type { RunCancellationRequest } from "./RunCancellation.js";
 import type { RunFailureCause } from "./RunFailure.js";
 import type { RunItem } from "./RunItem.js";
 import type { RunBlockedCode, RunFailureCode } from "./RunStatus.js";
+import type { ValidationCurrentSnapshotRef } from "@agent-anything/validation/assessment";
+import type { CompletionGateInvocationRef } from "@agent-anything/validation/completion";
 
 export interface RunCounters {
   readonly controllerTurns: number;
   readonly runActions: number;
   readonly observations: number;
   readonly consecutiveActionFailures: number;
+}
+
+export interface RunValidationState {
+  readonly snapshot: ValidationCurrentSnapshotRef;
+  readonly gate: CompletionGateInvocationRef | null;
 }
 
 interface RunStateBase<TOutput> {
@@ -35,6 +42,7 @@ interface RunStateBase<TOutput> {
   readonly counters: RunCounters;
   readonly pending: readonly PendingRunSubject[];
   readonly permission: RunPermissionState;
+  readonly validation: RunValidationState;
   readonly evidenceRefs: readonly EvidenceRef[];
   readonly artifactRefs: readonly ArtifactRef[];
   readonly metadata: Readonly<Record<string, unknown>>;

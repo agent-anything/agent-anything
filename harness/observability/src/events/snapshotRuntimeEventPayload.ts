@@ -91,10 +91,41 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
         code: nullableToken(payload.code, "interaction.settled.code"),
         terminalRecordId: token(payload.terminalRecordId, "interaction.settled.terminalRecordId"),
       }) as RuntimeEventPayloadMap[TName];
+    case "validation.check.started":
+      return freeze({
+        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "validation.check.started.snapshotRevision"),
+        attemptId: token(payload.attemptId, "validation.check.started.attemptId"),
+        requirementId: token(payload.requirementId, "validation.check.started.requirementId"),
+        origin: oneOf(payload.origin, ["controller", "trusted_automatic", "trusted_workflow", "owner_request"] as const, "validation.check.started.origin"),
+      }) as RuntimeEventPayloadMap[TName];
+    case "validation.check.finished":
+      return freeze({
+        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "validation.check.finished.snapshotRevision"),
+        attemptId: token(payload.attemptId, "validation.check.finished.attemptId"),
+        status: oneOf(payload.status, ["invalid", "unavailable", "denied", "cancelled", "timed_out", "failed", "partial", "completed"] as const, "validation.check.finished.status"),
+        code: nullableToken(payload.code, "validation.check.finished.code"),
+        durationMs: nonNegative(payload.durationMs, "validation.check.finished.durationMs"),
+        coverageRatio: ratio(payload.coverageRatio, "validation.check.finished.coverageRatio"),
+      }) as RuntimeEventPayloadMap[TName];
+    case "validation.assessment.committed":
+      return freeze({
+        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "validation.assessment.committed.snapshotRevision"),
+        requirementId: token(payload.requirementId, "validation.assessment.committed.requirementId"),
+        assessmentId: token(payload.assessmentId, "validation.assessment.committed.assessmentId"),
+        verdict: oneOf(payload.verdict, ["satisfied", "violated", "inconclusive"] as const, "validation.assessment.committed.verdict"),
+      }) as RuntimeEventPayloadMap[TName];
+    case "validation.gate.evaluated":
+      return freeze({
+        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "validation.gate.evaluated.snapshotRevision"),
+        gateId: token(payload.gateId, "validation.gate.evaluated.gateId"),
+        status: oneOf(payload.status, ["completion_eligible", "blocked_unassessed", "blocked_pending", "blocked_stale", "blocked_violated", "blocked_inconclusive", "invalid", "failed"] as const, "validation.gate.evaluated.status"),
+        disposition: payload.disposition === null ? null : oneOf(payload.disposition, ["continue", "wait", "block", "fail"] as const, "validation.gate.evaluated.disposition"),
+        reasonCodes: tokenArray(payload.reasonCodes, "validation.gate.evaluated.reasonCodes"),
+      }) as RuntimeEventPayloadMap[TName];
   }
 }
 
-const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "observation", "state_transition", "pending_transition", "cancellation_transition", "terminal_transition"];
+const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "observation", "state_transition", "pending_transition", "cancellation_transition", "validation_feedback", "terminal_transition"];
 const terminalStatuses: readonly RuntimeTerminalStatus[] = ["succeeded", "blocked", "failed", "cancelled"];
 const bindingKinds: readonly RuntimeOperationBindingKind[] = ["internal", "direct", "hosted", "composite", "descendant_agent"];
 const correlationKinds: readonly RuntimeOperationCorrelationKind[] = ["run_action", "run_request", "owner_operation", "evaluation_trial"];
@@ -182,4 +213,5 @@ function exact<T>(value: unknown, expected: T, field: string): T { if (value !==
 function oneOf<T extends string>(value: unknown, values: readonly T[], field: string): T { if (typeof value !== "string" || !values.includes(value as T)) throw new TypeError(`${field} has an unsupported value.`); return value as T; }
 function tokenArray(value: unknown, field: string): readonly string[] { if (!Array.isArray(value)) throw new TypeError(`${field} must be an array.`); return Object.freeze(value.map((entry, index) => token(entry, `${field}[${index}]`))); }
 function operationKindArray(value: unknown, field: string): readonly RuntimeContextTransitionOperationKind[] { if (!Array.isArray(value) || value.length === 0) throw new TypeError(`${field} must be a non-empty array.`); return Object.freeze(value.map((entry, index) => oneOf(entry, contextTransitionOperationKinds, `${field}[${index}]`))); }
+function ratio(value: unknown, field: string): number { if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) throw new TypeError(`${field} must be between 0 and 1.`); return value; }
 function freeze<T extends Record<string, unknown>>(value: T): Readonly<T> { return Object.freeze(value); }

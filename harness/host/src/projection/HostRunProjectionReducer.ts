@@ -155,6 +155,7 @@ function applyRunOperation(
     plan: snapshot.plan,
     pendingInteractions: Object.freeze(pendingInteractions),
     retry: projectRetry(snapshot.retry),
+    validation: snapshot.validation,
   });
 }
 

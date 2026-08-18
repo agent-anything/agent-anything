@@ -9,6 +9,7 @@ import type { OperationFailure } from "@agent-anything/operation-catalog/result"
 import type { InteractionFailure } from "@agent-anything/interaction/protocol";
 import type { CompositeFailure } from "@agent-anything/operation-composition/result";
 import type { ModelFailure } from "../controller/ModelFailure.js";
+import type { ValidationFailure } from "@agent-anything/validation/definition";
 
 export interface RuntimeFailure {
   readonly code: string;
@@ -41,7 +42,8 @@ export type RunFailureCause =
   | { readonly kind: "descendant"; readonly failure: DescendantRunFailure }
   | { readonly kind: "context"; readonly failure: RunContextFailure }
   | { readonly kind: "audit"; readonly failure: AuditFailure }
-  | { readonly kind: "telemetry"; readonly failure: TelemetryFailure };
+  | { readonly kind: "telemetry"; readonly failure: TelemetryFailure }
+  | { readonly kind: "validation"; readonly failure: ValidationFailure };
 
 export type RunFailureKind = RunFailureCause["kind"];
 export type RunFailureForKind<TKind extends RunFailureKind> = Extract<
@@ -58,4 +60,11 @@ export function createRunFailureCause<TKind extends RunFailureKind>(
 
 export const runFailureCode = (cause: RunFailureCause): string => cause.failure.code;
 export const runFailureMessage = (cause: RunFailureCause): string => cause.failure.message;
-export const runFailureMetadata = (cause: RunFailureCause): Readonly<Record<string, unknown>> => cause.failure.metadata;
+export const runFailureMetadata = (cause: RunFailureCause): Readonly<Record<string, unknown>> =>
+  cause.kind === "validation"
+    ? Object.freeze({
+        stage: cause.failure.stage,
+        retryable: cause.failure.retryable,
+        cause: cause.failure.cause,
+      })
+    : cause.failure.metadata;

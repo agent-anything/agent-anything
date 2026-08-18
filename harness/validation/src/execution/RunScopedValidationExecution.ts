@@ -351,6 +351,7 @@ export class ValidationExecution implements ValidationExecutionPort {
         const interpreter = this.dependencies.interpreters.resolve(definition.resultInterpreter);
         if (!interpreter) this.fail("validation_check_interpreter_unavailable", "check", "Check result interpreter is unavailable.", true, definition.resultInterpreter);
         interpretation = await interpreter.interpret({ requirement, subject, definition, attempt, settlement: lower }, interruption);
+        interpretation = this.constrainLowerOperationInterpretation(interpretation, lower);
       }
     } catch (error) {
       if (error instanceof ValidationExecutionError) {
@@ -647,7 +648,7 @@ export class ValidationExecution implements ValidationExecutionPort {
         },
         payload,
         scope: { runId: this.run.id, ownerScope: "validation" },
-        disclosure: { sensitivity: "internal", audiences: ["controller"] },
+        disclosure: { sensitivity: "internal", audiences: ["model"] },
         handling: {
           retention: "current",
           replacementKey: `validation-current-${this.run.id}`,
@@ -1002,6 +1003,16 @@ export class ValidationExecution implements ValidationExecutionPort {
     if (lower.actionSettlement === null) {
       this.fail("validation_action_settlement_missing", "check", "Operation-backed Check requires canonical Action settlement.");
     }
+    const operationStatuses = [
+      "succeeded", "partial", "failed", "unavailable", "denied", "cancelled",
+      "timed_out", "invalid", "unknown_effect",
+    ];
+    if (!operationStatuses.includes(lower.operationStatus)) {
+      this.fail("validation_lower_operation_status_invalid", "check", "Lower Operation status is invalid.");
+    }
+    if ((lower.operationStatus === "succeeded") !== (lower.operationFailure === null)) {
+      this.fail("validation_lower_operation_failure_invalid", "check", "Lower Operation Failure does not match its status.");
+    }
     isoDateTime(lower.startedAt, "ValidationLowerCheckSettlement.startedAt");
     isoDateTime(lower.finishedAt, "ValidationLowerCheckSettlement.finishedAt");
     if (lower.costUnits !== null &&
@@ -1011,6 +1022,40 @@ export class ValidationExecution implements ValidationExecutionPort {
     if (Date.parse(lower.finishedAt) < Date.parse(lower.startedAt)) {
       this.fail("validation_lower_settlement_time_invalid", "check", "Lower settlement cannot finish before it starts.");
     }
+  }
+
+  private constrainLowerOperationInterpretation(
+    interpretation: ValidationCheckInterpretation,
+    lower: ValidationLowerCheckSettlement,
+  ): ValidationCheckInterpretation {
+    if (lower.operationStatus === "succeeded" || lower.operationStatus === "partial" ||
+        (interpretation.status !== "completed" && interpretation.status !== "partial")) {
+      return interpretation;
+    }
+    const status = lower.operationStatus === "cancelled"
+      ? "cancelled" as const
+      : lower.operationStatus === "timed_out"
+        ? "timed_out" as const
+        : lower.operationStatus === "denied"
+          ? "denied" as const
+          : lower.operationStatus === "unavailable"
+            ? "unavailable" as const
+            : lower.operationStatus === "invalid"
+              ? "invalid" as const
+              : "failed" as const;
+    return {
+      status,
+      findings: [],
+      coverage: { ratio: 0, basis: `lower Operation ${lower.operationStatus}` },
+      costUnits: lower.costUnits,
+      limitations: [],
+      failure: this.failure(
+        `validation_check_operation_${lower.operationStatus}`,
+        "check",
+        "Lower Operation did not produce an eligible Check outcome.",
+        lower.operationFailure?.retryable ?? false,
+      ),
+    };
   }
 
   private assertSpecificationAdmission(
@@ -1179,8 +1224,33 @@ export class DefaultValidationExecutionFactory implements ValidationExecutionFac
   constructor(private readonly dependencies: ValidationExecutionDependencies) {}
 
   async create(input: ValidationExecutionFactoryInput): Promise<ValidationExecutionPort> {
-    return new ValidationExecution(input, this.dependencies);
+    return new ValidationExecution(input, {
+      ...this.dependencies,
+      operationChecks: input.operationChecks,
+    });
   }
+}
+
+export function createNoCheckValidationExecutionFactory(input: {
+  readonly now: () => string;
+  readonly createId?: (kind: import("./ValidationExecutionAdapters.js").ValidationGeneratedRecordKind) => string;
+}): ValidationExecutionFactory {
+  if (typeof input.now !== "function") {
+    throw new TypeError("No-check Validation execution requires a clock.");
+  }
+  let sequence = 0;
+  return new DefaultValidationExecutionFactory({
+    clock: { now: input.now },
+    identities: {
+      nextId: (kind) => input.createId?.(kind) ?? `${kind}-${++sequence}`,
+    },
+    subjectAdapters: { resolve: () => null },
+    subjectFreshness: { resolve: () => null },
+    pureChecks: { resolve: () => null },
+    operationChecks: { resolve: () => null },
+    interpreters: { resolve: () => null },
+    assessmentMethods: { resolve: () => null },
+  });
 }
 
 const TRUSTED_SOURCE_KINDS = new Set([

@@ -11,10 +11,11 @@ import type { RunSteeringApplication } from "./RunSteering.js";
 import type { RunFailureCause } from "./RunFailure.js";
 import type { RunObservation } from "./RunObservation.js";
 import type { RunBlockedCode, RunFailureCode, RunResultStatus } from "./RunStatus.js";
+import type { ValidationRunnerProjection } from "@agent-anything/validation/projection";
 
 export type RuntimeRunActionSubject =
   | { readonly kind: "state_transition"; readonly transition: "plan_update" | "handoff" }
-  | { readonly kind: "operation"; readonly invocationId: string | null; readonly requestOrigin: "controller_protocol" | "tool_request" | "composite" | "descendant" }
+  | { readonly kind: "operation"; readonly invocationId: string | null; readonly requestOrigin: "automatic_stage" | "controller_protocol" | "tool_request" | "composite" | "descendant" }
   | { readonly kind: "interaction"; readonly request: InteractionRequestRef | null };
 
 export type RuntimeRunAction = RunActionEnvelope<RuntimeRunActionSubject>;
@@ -55,6 +56,10 @@ export type RunItemPayload<TOutput = unknown> =
       readonly recordRef: string | null;
     }
   | { readonly kind: "cancellation_transition"; readonly transition: "requested" | "settled"; readonly cancellation: RunCancellationSummary }
+  | {
+      readonly kind: "validation_feedback";
+      readonly validation: ValidationRunnerProjection;
+    }
   | {
       readonly kind: "terminal_transition";
       readonly status: RunResultStatus;

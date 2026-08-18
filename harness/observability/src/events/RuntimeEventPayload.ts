@@ -5,6 +5,7 @@ export type RuntimeRunItemKind =
   | "state_transition"
   | "pending_transition"
   | "cancellation_transition"
+  | "validation_feedback"
   | "terminal_transition";
 
 export type RuntimeTerminalStatus = "succeeded" | "blocked" | "failed" | "cancelled";
@@ -141,6 +142,37 @@ export interface InteractionSettledRuntimeEventPayload {
   readonly terminalRecordId: string;
 }
 
+export interface ValidationCheckStartedRuntimeEventPayload {
+  readonly snapshotRevision: number;
+  readonly attemptId: string;
+  readonly requirementId: string;
+  readonly origin: "controller" | "trusted_automatic" | "trusted_workflow" | "owner_request";
+}
+
+export interface ValidationCheckFinishedRuntimeEventPayload {
+  readonly snapshotRevision: number;
+  readonly attemptId: string;
+  readonly status: "invalid" | "unavailable" | "denied" | "cancelled" | "timed_out" | "failed" | "partial" | "completed";
+  readonly code: string | null;
+  readonly durationMs: number;
+  readonly coverageRatio: number;
+}
+
+export interface ValidationAssessmentCommittedRuntimeEventPayload {
+  readonly snapshotRevision: number;
+  readonly requirementId: string;
+  readonly assessmentId: string;
+  readonly verdict: "satisfied" | "violated" | "inconclusive";
+}
+
+export interface ValidationGateEvaluatedRuntimeEventPayload {
+  readonly snapshotRevision: number;
+  readonly gateId: string;
+  readonly status: "completion_eligible" | "blocked_unassessed" | "blocked_pending" | "blocked_stale" | "blocked_violated" | "blocked_inconclusive" | "invalid" | "failed";
+  readonly disposition: "continue" | "wait" | "block" | "fail" | null;
+  readonly reasonCodes: readonly string[];
+}
+
 export interface RuntimeEventPayloadMap {
   readonly "run.started": RunStartedRuntimeEventPayload;
   readonly "run.item.appended": RunItemAppendedRuntimeEventPayload;
@@ -156,6 +188,10 @@ export interface RuntimeEventPayloadMap {
   readonly "operation.finished": OperationFinishedRuntimeEventPayload;
   readonly "interaction.opened": InteractionOpenedRuntimeEventPayload;
   readonly "interaction.settled": InteractionSettledRuntimeEventPayload;
+  readonly "validation.check.started": ValidationCheckStartedRuntimeEventPayload;
+  readonly "validation.check.finished": ValidationCheckFinishedRuntimeEventPayload;
+  readonly "validation.assessment.committed": ValidationAssessmentCommittedRuntimeEventPayload;
+  readonly "validation.gate.evaluated": ValidationGateEvaluatedRuntimeEventPayload;
 }
 
 export type RuntimeEventName = keyof RuntimeEventPayloadMap;

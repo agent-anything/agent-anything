@@ -15,6 +15,8 @@ import {
   type RuntimeFailure,
 } from "../run/index.js";
 import type { RunConfig, ValidatedRunConfig } from "./RunConfig.js";
+import { snapshotCompletionGateConfiguration } from "@agent-anything/validation/completion";
+import { snapshotValidationProfile } from "@agent-anything/validation/definition";
 
 export { snapshotAgent, snapshotRunInput };
 
@@ -51,6 +53,10 @@ export function snapshotRunConfig(
     }
     const tools = snapshotToolSelectionRevision(config.tools);
     const actionExecution = snapshotActionExecution(config.actionExecution);
+    const validation = Object.freeze({
+      profile: snapshotValidationProfile(config.validation.profile),
+      completion: snapshotCompletionGateConfiguration(config.validation.completion),
+    });
     if (
       actionExecution !== null &&
       actionExecution.securityContext.environment.environmentId !==
@@ -111,6 +117,7 @@ export function snapshotRunConfig(
         permissions,
         tools,
         actionExecution,
+        validation,
         limits,
         audit: config.audit,
         telemetry: config.telemetry,

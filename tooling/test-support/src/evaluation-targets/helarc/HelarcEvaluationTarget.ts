@@ -19,6 +19,8 @@ import type {
   ActionRetryDecisionPort,
 } from "@agent-anything/action-execution/enforcement";
 import { Runner } from "@agent-anything/agent-runtime/runner";
+import { CurrentValidationCompletionGate } from "@agent-anything/validation/completion";
+import { createNoCheckValidationExecutionFactory } from "@agent-anything/validation/execution";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import {
@@ -484,6 +486,10 @@ async function invokeHelarcTarget(
         retry: createEvaluationActionRetryPort(),
       },
     },
+    validation: {
+      executionFactory: createNoCheckValidationExecutionFactory({ now: clock.now }),
+      completionGate: new CurrentValidationCompletionGate(clock.now),
+    },
     interactions: product.interactions,
     runtimeEventPublisher: runtimePublisher,
     runTraceObserver: {
@@ -542,6 +548,7 @@ async function invokeHelarcTarget(
         enforcement: "disabled",
         metadata: {},
       },
+      validation: createEvaluationValidationConfig(),
       limits: {
         maxIterations: 5,
         maxActions: 8,
@@ -642,6 +649,30 @@ async function invokeHelarcTarget(
       product.actions.toolSelection,
     ),
     retryCount: terminalProjection.retry?.scheduledCount ?? 0,
+  });
+}
+
+function createEvaluationValidationConfig() {
+  const owner = (id: string) => Object.freeze({
+    owner: "helarc-evaluation",
+    kind: "validation",
+    id,
+    revision: "1",
+  });
+  return Object.freeze({
+    profile: Object.freeze({
+      ref: owner("empty-profile"),
+      specification: Object.freeze({ id: "empty-specification", revision: "1" }),
+      source: Object.freeze({ ...owner("profile-source"), sourceKind: "run_invocation" as const }),
+      admittedBy: owner("profile-admission"),
+      requirements: Object.freeze([]),
+    }),
+    completion: Object.freeze({
+      policy: owner("current-validation-gate"),
+      outputContract: owner("helarc-output-contract"),
+      conditions: Object.freeze([]),
+      maximumDurationMs: 1_000,
+    }),
   });
 }
 

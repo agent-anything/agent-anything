@@ -95,6 +95,18 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "code",
     "terminalRecordId",
   ],
+  "validation.check.started": [
+    "snapshotRevision", "attemptId", "requirementId", "origin",
+  ],
+  "validation.check.finished": [
+    "snapshotRevision", "attemptId", "status", "code", "durationMs", "coverageRatio",
+  ],
+  "validation.assessment.committed": [
+    "snapshotRevision", "requirementId", "assessmentId", "verdict",
+  ],
+  "validation.gate.evaluated": [
+    "snapshotRevision", "gateId", "status", "disposition", "reasonCodes",
+  ],
 };
 
 export function projectRuntimeEventForHost(event: RuntimeEvent): RuntimeEvent {

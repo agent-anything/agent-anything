@@ -24,3 +24,12 @@ export {
   snapshotValidationRequirement,
   snapshotValidationSpecification,
 } from "./ValidationDefinition.js";
+export type {
+  MaterializedValidationProfile,
+  ValidationProfile,
+  ValidationRequirementTemplate,
+} from "./ValidationProfile.js";
+export {
+  materializeValidationProfile,
+  snapshotValidationProfile,
+} from "./ValidationProfile.js";

@@ -13,6 +13,7 @@ export type {
   RunTraceSpanIdentityInput,
   RunTraceStatus,
   RuntimeRunTraceAttributes,
+  ValidationTraceRecord,
   TerminalRunResultTraceProjection,
   TraceAttributeMap,
   TraceAttributesFor,

@@ -109,6 +109,33 @@ describe("RunTraceAssembler", () => {
       code: null,
       terminalRecordId: "interaction-terminal-1",
     }, COMPLETED_AT);
+    stream.emit("validation.check.started", {
+      snapshotRevision: 4,
+      attemptId: "validation-attempt-1",
+      requirementId: "requirement-1",
+      origin: "trusted_automatic",
+    }, STARTED_AT);
+    stream.emit("validation.check.finished", {
+      snapshotRevision: 5,
+      attemptId: "validation-attempt-1",
+      status: "completed",
+      code: null,
+      durationMs: 25,
+      coverageRatio: 1,
+    }, COMPLETED_AT);
+    stream.emit("validation.assessment.committed", {
+      snapshotRevision: 7,
+      requirementId: "requirement-1",
+      assessmentId: "assessment-1",
+      verdict: "satisfied",
+    }, COMPLETED_AT);
+    stream.emit("validation.gate.evaluated", {
+      snapshotRevision: 8,
+      gateId: "gate-1",
+      status: "completion_eligible",
+      disposition: null,
+      reasonCodes: ["validation_completion_eligible"],
+    }, COMPLETED_AT);
     stream.emit("run.item.appended", {
       itemId: "item-1",
       itemKind: "run_action",
@@ -168,6 +195,44 @@ describe("RunTraceAssembler", () => {
       outcome: "projected",
       code: null,
     })]);
+    expect(trace.spans[0]?.attributes.validation).toEqual([
+      {
+        event: "check_started",
+        snapshotRevision: 4,
+        subjectId: "validation-attempt-1",
+        status: "running",
+        code: null,
+        durationMs: null,
+        coverageRatio: null,
+      },
+      {
+        event: "check_finished",
+        snapshotRevision: 5,
+        subjectId: "validation-attempt-1",
+        status: "completed",
+        code: null,
+        durationMs: 25,
+        coverageRatio: 1,
+      },
+      {
+        event: "assessment_committed",
+        snapshotRevision: 7,
+        subjectId: "assessment-1",
+        status: "satisfied",
+        code: null,
+        durationMs: null,
+        coverageRatio: null,
+      },
+      {
+        event: "gate_evaluated",
+        snapshotRevision: 8,
+        subjectId: "gate-1",
+        status: "completion_eligible",
+        code: "validation_completion_eligible",
+        durationMs: null,
+        coverageRatio: null,
+      },
+    ]);
     expect(trace.spans[2]).toMatchObject({
       parentSpanId: trace.rootSpanId,
       operationId: "operation-invocation-1",

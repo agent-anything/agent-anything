@@ -21,6 +21,10 @@ export type {
   RuntimeOperationCorrelationKind,
   RuntimeOperationStatus,
   RuntimeRunItemKind,
+  ValidationAssessmentCommittedRuntimeEventPayload,
+  ValidationCheckFinishedRuntimeEventPayload,
+  ValidationCheckStartedRuntimeEventPayload,
+  ValidationGateEvaluatedRuntimeEventPayload,
   RuntimeTerminalStatus,
 } from "./RuntimeEventPayload.js";
 export { RuntimeEventStream, type CreateRuntimeEventStreamInput, type RuntimeEventIdentityFactory, type RuntimeEventIdentityInput } from "./RuntimeEventStream.js";

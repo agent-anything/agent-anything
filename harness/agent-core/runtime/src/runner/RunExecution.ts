@@ -55,6 +55,26 @@ import {
   type ActionExecutionResult,
 } from "@agent-anything/action-execution/enforcement";
 import { createCanonicalSha256Digest } from "@agent-anything/canonical-action/subject";
+import {
+  snapshotCompletionGateDecision,
+  snapshotCompletionGateInput,
+  type CompletionGateDecision,
+  type CompletionGateInput,
+} from "@agent-anything/validation/completion";
+import {
+  createValidationFailure,
+  materializeValidationProfile,
+  type ValidationFailure,
+  type ValidationRequirement,
+} from "@agent-anything/validation/definition";
+import {
+  ValidationExecutionError,
+  type ValidationExecutionPort,
+  type ValidationOperationCheckInput,
+  type ValidationOperationCheckResolverPort,
+  type ValidationLowerCheckSettlement,
+} from "@agent-anything/validation/execution";
+import type { ValidationHostProjection, ValidationRunnerProjection } from "@agent-anything/validation/projection";
 import { createActionPermissionAssessmentPort } from "@agent-anything/permission/authority";
 import {
   APPROVAL_INTERACTION_PROTOCOL,
@@ -122,6 +142,8 @@ import {
 import type { RunExecutionUpdate } from "./RunHandle.js";
 import type { ResolvedRunConfig } from "./RunConfig.js";
 import type {
+  RunnerAutomaticValidationCheckPort,
+  RunnerAutomaticValidationCheckRequest,
   ResolvedRunnerDependencies,
 } from "./RunnerDependencies.js";
 import {
@@ -165,11 +187,12 @@ import {
   createSteeringContextContribution,
   createTaskContextAdmissionProfile,
   createTaskContextContribution,
+  createValidationContextAdmissionProfile,
 } from "../context-contribution/index.js";
 
 type TerminalCandidate<TOutput> =
   | { readonly status: "succeeded"; readonly output: TOutput }
-  | { readonly status: "blocked"; readonly code: "runtime_no_safe_path" }
+  | { readonly status: "blocked"; readonly code: import("../run/index.js").RunBlockedCode }
   | {
       readonly status: "failed";
       readonly code: RunFailureCode;
@@ -229,6 +252,11 @@ export class RunExecution<TOutput> {
   private runStartedEventEmitted = false;
   private steeringEpoch = 0;
   private retryProjection: import("./RunHandle.js").RunRetryProjection | null = null;
+  private validationExecution: ValidationExecutionPort | null = null;
+  private validationRequirements: readonly ValidationRequirement[] = Object.freeze([]);
+  private validationClosed = false;
+  private validationHostProjection: ValidationHostProjection | null = null;
+  private readonly emittedValidationRecordKeys = new Set<string>();
 
   constructor(
     private readonly runId: string,
@@ -414,6 +442,8 @@ export class RunExecution<TOutput> {
       }, this.startedAt);
       this.runStartedEventEmitted = true;
       this.emitCommittedContextTransition(this.writer.getSnapshot().context);
+      this.emitCommittedRunItems(this.writer.getSnapshot());
+      await this.initializeValidation();
       const startFailures = await this.recordLifecycle("started");
       if (startFailures.length > 0) {
         return await this.settle({
@@ -458,10 +488,27 @@ export class RunExecution<TOutput> {
           continue;
         }
         if (decision.decision.kind === "propose_completion") {
-          return await this.settle({
-            status: "succeeded",
-            output: decision.decision.output,
-          });
+          const completion = await this.evaluateCompletionGate(
+            decision.turn,
+            decision.decision.output,
+          );
+          if (completion.kind === "succeeded") {
+            return await this.settle({ status: "succeeded", output: decision.decision.output });
+          }
+          if (completion.kind === "blocked") {
+            return await this.settle({ status: "blocked", code: "validation_blocked" });
+          }
+          if (completion.kind === "failed") {
+            return await this.settle({
+              status: "failed",
+              code: "validation_failed",
+              failure: createRunFailureCause("validation", completion.failure),
+            });
+          }
+          if (completion.kind === "cancelled") {
+            return await this.settle({ status: "cancelled" });
+          }
+          continue;
         }
         if (decision.decision.kind === "propose_stop") {
           return await this.settle({
@@ -503,6 +550,584 @@ export class RunExecution<TOutput> {
       this.interactions.close();
       this.interruptionCoordinator.dispose();
     }
+  }
+
+  private async initializeValidation(): Promise<void> {
+    const execution = await this.dependencies.validation.executionFactory.create({
+      run: Object.freeze({ id: this.runId }),
+      operationChecks: this.createValidationOperationCheckResolver(),
+    });
+    if (!execution || typeof execution.admitSpecification !== "function") {
+      throw new ValidationExecutionError(createValidationFailure({
+        code: "validation_execution_unavailable",
+        stage: "admission",
+        message: "Validation execution factory did not create a valid Run-scoped execution.",
+        retryable: false,
+        cause: this.config.validation.profile.ref,
+      }), 0);
+    }
+    this.validationExecution = execution;
+    const materialized = materializeValidationProfile({
+      profile: this.config.validation.profile,
+      run: { id: this.runId },
+      createdAt: this.startedAt,
+    });
+    this.validationRequirements = materialized.requirements;
+    await execution.admitSpecification({
+      specification: materialized.specification,
+      requirements: materialized.requirements,
+      expectedRevision: 0,
+    }, this.invocationInterruption());
+    try {
+      await this.dependencies.validation.preparation?.prepare({
+        run: Object.freeze({ id: this.runId }),
+        execution,
+        automaticChecks: this.createAutomaticValidationCheckPort(),
+      }, this.invocationInterruption());
+    } catch (error) {
+      if (error instanceof ValidationExecutionError) throw error;
+      throw new ValidationExecutionError(createValidationFailure({
+        code: "validation_preparation_failed",
+        stage: "admission",
+        message: error instanceof Error ? error.message : "Validation preparation failed.",
+        retryable: false,
+        cause: this.config.validation.profile.ref,
+      }), (await execution.readCurrentSnapshot()).ref.revision);
+    }
+    await this.commitValidationFeedback(null);
+  }
+
+  private async evaluateCompletionGate(
+    turn: ControllerTurnRef,
+    output: TOutput,
+  ): Promise<
+    | { readonly kind: "succeeded" | "continue" | "cancelled" | "blocked" }
+    | { readonly kind: "failed"; readonly failure: ValidationFailure }
+  > {
+    const execution = this.requireValidationExecution();
+    const runState = this.writer.getSnapshot();
+    if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
+    if (runState.status !== "running" && runState.status !== "waiting") {
+      return { kind: "continue" };
+    }
+    const current = await execution.readCurrentSnapshot();
+    const gateSteeringEpoch = this.steeringEpoch;
+    const outputDigest = await createCanonicalSha256Digest(
+      "agent-anything.validation.completion-output.v1",
+      output,
+    );
+    const proposal = Object.freeze({
+      id: this.id("validation_proposal"),
+      revision: outputDigest,
+    });
+    const invocation = Object.freeze({
+      id: this.id("validation_gate"),
+      revision: "1",
+    });
+    const mandatoryStates = current.requirementStates.flatMap((state) => {
+      const requirement = this.validationRequirements.find((candidate) =>
+        candidate.ref.id === state.requirement.id &&
+        candidate.ref.revision === state.requirement.revision);
+      if (requirement?.necessity !== "mandatory") return [];
+      return [Object.freeze({
+        current: state,
+        disposition: state.status === "satisfied"
+          ? null
+          : requirement.completionHandling[state.status],
+      })];
+    });
+    const requestedAt = this.now();
+    const configuredDeadline = Date.parse(requestedAt) +
+      this.config.validation.completion.maximumDurationMs;
+    const deadlineAt = new Date(Math.min(
+      Date.parse(runState.deadlineAt),
+      configuredDeadline,
+    )).toISOString();
+    const gateInput = snapshotCompletionGateInput({
+      invocation,
+      run: runState.run,
+      turn,
+      proposal,
+      proposalOutputDigest: outputDigest,
+      outputContract: this.config.validation.completion.outputContract,
+      specification: current.specification,
+      validationSnapshot: current.ref,
+      mandatoryStates,
+      pendingWork: mandatoryStates.flatMap((item) =>
+        item.current.pendingAttempts.map((attempt) => Object.freeze({
+          owner: "validation",
+          kind: "check_attempt",
+          id: attempt.id,
+          revision: String(attempt.ordinal),
+        }))),
+      conditions: this.config.validation.completion.conditions,
+      lifecycle: {
+        runRevision: runState.revision,
+        status: runState.status,
+        cancellationRevision: this.config.cancellation.context.request === null ? 0 : 1,
+        deadlineAt,
+      },
+      policy: this.config.validation.completion.policy,
+      correlation: this.config.validation.profile.ref,
+      requestedAt,
+    });
+
+    let decision: CompletionGateDecision;
+    try {
+      decision = snapshotCompletionGateDecision(await this.invokeCompletionGate(gateInput));
+    } catch (error) {
+      if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
+      return {
+        kind: "failed",
+        failure: error instanceof ValidationExecutionError
+          ? error.failure
+          : createValidationFailure({
+              code: "validation_gate_failed",
+              stage: "completion_gate",
+              message: error instanceof Error ? error.message : "Completion Gate evaluation failed.",
+              retryable: false,
+              cause: this.config.validation.completion.policy,
+            }),
+      };
+    }
+    const afterGate = this.writer.getSnapshot();
+    const currentAfterGate = await execution.readCurrentSnapshot();
+    if (currentAfterGate.ref.revision !== current.ref.revision ||
+        decision.invocation.id !== invocation.id ||
+        decision.invocation.revision !== invocation.revision ||
+        decision.validationSnapshot.runId !== current.ref.runId ||
+        decision.validationSnapshot.revision !== current.ref.revision) {
+      return { kind: "continue" };
+    }
+    const runBasisCurrent = afterGate.revision === runState.revision &&
+      this.steeringEpoch === gateSteeringEpoch &&
+      this.config.cancellation.context.request === null;
+    const inputRevision = await createCanonicalSha256Digest(
+      "agent-anything.validation.completion-gate-input.v1",
+      gateInput,
+    );
+    await execution.recordCompletionGate({
+      record: { ref: invocation, inputRevision, decision },
+      expectedRevision: current.ref.revision,
+    }, this.invocationInterruption());
+    if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
+    if (!runBasisCurrent || this.writer.getSnapshot().revision !== runState.revision) {
+      return { kind: "continue" };
+    }
+    await this.commitValidationFeedback(decision);
+
+    if (decision.status === "completion_eligible") return { kind: "succeeded" };
+    if (decision.status === "invalid" || decision.status === "failed") {
+      return { kind: "failed", failure: decision.failure };
+    }
+    if (decision.disposition === "fail") {
+      return {
+        kind: "failed",
+        failure: createValidationFailure({
+          code: "validation_completion_policy_failed",
+          stage: "completion_gate",
+          message: decision.reasons[0].message,
+          retryable: false,
+          cause: this.config.validation.completion.policy,
+        }),
+      };
+    }
+    if (decision.disposition === "block") return { kind: "blocked" };
+    if (decision.disposition === "wait" && gateInput.pendingWork.length === 0) {
+      return {
+        kind: "failed",
+        failure: createValidationFailure({
+          code: "validation_gate_wait_without_pending_work",
+          stage: "completion_gate",
+          message: "Completion Gate requested waiting without exact active pending work.",
+          retryable: false,
+          cause: this.config.validation.completion.policy,
+        }),
+      };
+    }
+    return { kind: "continue" };
+  }
+
+  private async invokeCompletionGate(input: CompletionGateInput): Promise<CompletionGateDecision> {
+    const delay = Math.max(
+      1,
+      Date.parse(input.lifecycle.deadlineAt!) - Date.parse(input.requestedAt),
+    );
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const interruption = this.invocationInterruption();
+    let removeAbortListener: (() => void) | undefined;
+    const timedOut = new Promise<CompletionGateDecision>((_resolve, reject) => {
+      timeout = setTimeout(() => reject(new ValidationExecutionError(
+        createValidationFailure({
+          code: "validation_gate_timed_out",
+          stage: "completion_gate",
+          message: "Completion Gate evaluation exceeded its deadline.",
+          retryable: true,
+          cause: this.config.validation.completion.policy,
+        }),
+        input.validationSnapshot.revision,
+      )), delay);
+    });
+    const cancelled = new Promise<CompletionGateDecision>((_resolve, reject) => {
+      const onAbort = () => reject(new ValidationExecutionError(
+        createValidationFailure({
+          code: "validation_gate_cancelled",
+          stage: "completion_gate",
+          message: "Completion Gate evaluation was cancelled.",
+          retryable: false,
+          cause: this.config.validation.completion.policy,
+        }),
+        input.validationSnapshot.revision,
+      ));
+      if (interruption.signal.aborted) onAbort();
+      else {
+        interruption.signal.addEventListener("abort", onAbort, { once: true });
+        removeAbortListener = () => interruption.signal.removeEventListener("abort", onAbort);
+      }
+    });
+    try {
+      return await Promise.race([
+        this.dependencies.validation.completionGate.evaluate(
+          input,
+          interruption,
+        ),
+        timedOut,
+        cancelled,
+      ]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+      removeAbortListener?.();
+    }
+  }
+
+  private async commitValidationFeedback(
+    decision: CompletionGateDecision | null,
+  ): Promise<void> {
+    const runState = this.writer.getSnapshot();
+    if (this.config.cancellation.context.request !== null ||
+        this.terminalResult !== null ||
+        (runState.status !== "running" && runState.status !== "waiting")) {
+      return;
+    }
+    const execution = this.requireValidationExecution();
+    await this.emitValidationRecords(execution);
+    const projection = await execution.projectRunner();
+    const contextProjection = await execution.projectContext({
+      maxPayloadBytes: this.dependencies.contextProjection.maxContributionPayloadBytes,
+    });
+    const hostProjection = await execution.projectHost();
+    if (projection.snapshot.runId !== this.runId ||
+        contextProjection.snapshot.runId !== this.runId ||
+        contextProjection.snapshot.revision !== projection.snapshot.revision) {
+      throw new ValidationExecutionError(createValidationFailure({
+        code: "validation_projection_mismatch",
+        stage: "projection",
+        message: "Validation projections do not describe the current Run snapshot.",
+        retryable: false,
+        cause: null,
+      }), projection.snapshot.revision);
+    }
+    if (hostProjection.snapshot.runId !== this.runId ||
+        hostProjection.snapshot.revision !== projection.snapshot.revision) {
+      throw new ValidationExecutionError(createValidationFailure({
+        code: "validation_host_projection_mismatch",
+        stage: "projection",
+        message: "Validation Host projection does not match the current Run snapshot.",
+        retryable: false,
+        cause: null,
+      }), projection.snapshot.revision);
+    }
+    this.validationHostProjection = hostProjection;
+    this.writer.commit({
+      kind: "validation_feedback",
+      validation: projection,
+    }, (current) => Object.freeze({
+      status: decision?.disposition === "wait"
+        ? "waiting" as const
+        : current.status === "waiting"
+          ? "running" as const
+          : current.status,
+      validation: Object.freeze({
+        snapshot: projection.snapshot,
+        gate: projection.gate,
+      }),
+      context: contextProjection.contribution === null
+        ? current.context
+        : this.applyContextContributions(
+            current.context,
+            Object.freeze([contextProjection.contribution]),
+            createValidationContextAdmissionProfile(),
+            "validation_feedback",
+            projection.gate?.id ?? null,
+          ),
+    }));
+  }
+
+  private async emitValidationRecords(execution: ValidationExecutionPort): Promise<void> {
+    const history = await execution.readHistory();
+    const snapshotRevision = (await execution.readCurrentSnapshot()).ref.revision;
+    for (const item of history) {
+      if (item.kind === "check_attempt") {
+        const key = `check_attempt:${item.record.ref.id}:${item.record.ref.ordinal}`;
+        if (this.emittedValidationRecordKeys.has(key) || item.record.startedAt === null) continue;
+        this.emittedValidationRecordKeys.add(key);
+        this.emit("validation.check.started", {
+          snapshotRevision,
+          attemptId: item.record.ref.id,
+          requirementId: item.record.requirement.id,
+          origin: item.record.origin,
+        }, item.record.startedAt);
+      } else if (item.kind === "check_result") {
+        const key = `check_result:${item.record.ref.id}@${item.record.ref.revision}`;
+        if (this.emittedValidationRecordKeys.has(key)) continue;
+        this.emittedValidationRecordKeys.add(key);
+        this.emit("validation.check.finished", {
+          snapshotRevision,
+          attemptId: item.record.attempt.id,
+          status: item.record.status,
+          code: item.record.failure?.code ?? null,
+          durationMs: Date.parse(item.record.finishedAt) - Date.parse(item.record.startedAt),
+          coverageRatio: item.record.coverage.ratio,
+        }, item.record.finishedAt);
+      } else if (item.kind === "assessment") {
+        const key = `assessment:${item.record.ref.id}@${item.record.ref.revision}`;
+        if (this.emittedValidationRecordKeys.has(key)) continue;
+        this.emittedValidationRecordKeys.add(key);
+        this.emit("validation.assessment.committed", {
+          snapshotRevision,
+          requirementId: item.record.requirement.id,
+          assessmentId: item.record.ref.id,
+          verdict: item.record.verdict,
+        }, item.record.assessedAt);
+      } else if (item.kind === "completion_gate") {
+        const key = `completion_gate:${item.record.ref.id}@${item.record.ref.revision}`;
+        if (this.emittedValidationRecordKeys.has(key)) continue;
+        this.emittedValidationRecordKeys.add(key);
+        this.emit("validation.gate.evaluated", {
+          snapshotRevision,
+          gateId: item.record.ref.id,
+          status: item.record.decision.status,
+          disposition: item.record.decision.disposition,
+          reasonCodes: Object.freeze(item.record.decision.reasons.map((reason) => reason.code)),
+        }, item.record.decision.decidedAt);
+      }
+    }
+  }
+
+  private requireValidationExecution(): ValidationExecutionPort {
+    if (this.validationExecution === null) {
+      throw new ValidationExecutionError(createValidationFailure({
+        code: "validation_execution_unavailable",
+        stage: "admission",
+        message: "Run-scoped Validation execution is not initialized.",
+        retryable: false,
+        cause: this.config.validation.profile.ref,
+      }), 0);
+    }
+    return this.validationExecution;
+  }
+
+  private createValidationOperationCheckResolver(): ValidationOperationCheckResolverPort {
+    return Object.freeze({
+      resolve: (definition: import("@agent-anything/validation/execution").CheckDefinition) => definition.effect.kind === "effectful"
+        ? Object.freeze({
+            requestSettlement: (
+              input: ValidationOperationCheckInput,
+              interruption: InvocationInterruptionContext,
+            ) => this.executeValidationOperationCheck(input, interruption),
+          })
+        : null,
+    });
+  }
+
+  private createAutomaticValidationCheckPort(): RunnerAutomaticValidationCheckPort {
+    return Object.freeze({
+      execute: async (
+        request: RunnerAutomaticValidationCheckRequest,
+        interruption: InvocationInterruptionContext,
+      ) => {
+        const execution = this.requireValidationExecution();
+        const current = await execution.readCurrentSnapshot();
+        const invocationId = this.id("operation_invocation");
+        const action = this.materializeAutomaticValidationRunAction(
+          request.definition.id,
+          invocationId,
+        );
+        return execution.executeCheck({
+          ...request,
+          origin: "trusted_automatic",
+          runAction: action.ref,
+          expectedRevision: current.ref.revision,
+        }, interruption);
+      },
+    });
+  }
+
+  private async executeValidationOperationCheck(
+    input: ValidationOperationCheckInput,
+    interruption: InvocationInterruptionContext,
+  ): Promise<ValidationLowerCheckSettlement> {
+    if (input.definition.effect.kind !== "effectful") {
+      return this.rejectValidationOperationCheck(
+        "validation_operation_check_binding_invalid",
+        "An operation-backed Validation Check requires an effectful definition.",
+      );
+    }
+    if (interruption.signal.aborted || this.config.cancellation.context.request !== null) {
+      return this.rejectValidationOperationCheck(
+        "validation_operation_check_cancelled",
+        "Validation operation Check was cancelled before dispatch.",
+      );
+    }
+    if (input.attempt.runAction === null) {
+      return this.rejectValidationOperationCheck(
+        "validation_effectful_check_action_required",
+        "An effectful Validation Check requires a Runner-materialized RunAction.",
+      );
+    }
+    const action = this.findRunAction(input.attempt.runAction);
+    if (action === null) {
+      return this.rejectValidationOperationCheck(
+        "validation_run_action_missing",
+        "Validation Check references a RunAction that is not committed in this Run.",
+      );
+    }
+    if (action.subject.kind !== "operation" || action.subject.invocationId === null) {
+      return this.rejectValidationOperationCheck(
+        "validation_run_action_subject_invalid",
+        "An operation-backed Validation Check requires an Operation RunAction.",
+      );
+    }
+    const invocationId = action.subject.invocationId;
+    const automatic = action.provenance.kind === "automatic";
+
+    const result = await this.executeOperation({
+      action,
+      operation: input.definition.effect.operationBinding.operation,
+      request: Object.freeze({
+        requirement: input.requirement.ref,
+        subject: input.subject.ref,
+        checkDefinition: input.definition.ref,
+        attempt: input.attempt.ref,
+        configuration: input.attempt.configuration,
+      }),
+      requestOrigin: automatic ? "automatic_stage" : "controller_protocol",
+      invocationId,
+      parentInvocation: null,
+      basis: Object.freeze({
+        owner: "validation",
+        kind: "check_attempt",
+        id: input.attempt.ref.id,
+        revision: String(input.attempt.ref.ordinal),
+      }),
+    });
+    if (result === null) {
+      return this.rejectValidationOperationCheck(
+        "validation_operation_check_unavailable",
+        "Validation Check Operation could not be dispatched.",
+      );
+    }
+    this.commitOperationObservation(action, Object.freeze({ result, toolResult: null }));
+    const settlementRef = result.lowerRefs.find((reference) =>
+      reference.owner === "canonical-action" && reference.kind === "action_settlement");
+    const actionId = typeof result.metadata.actionId === "string"
+      ? result.metadata.actionId
+      : null;
+    const effectCertainty = isActionEffectCertainty(result.metadata.effectCertainty)
+      ? result.metadata.effectCertainty
+      : result.status === "succeeded"
+        ? "confirmed"
+        : result.status === "partial"
+          ? "partial"
+          : result.status === "unknown_effect"
+            ? "unknown"
+            : "none";
+    return Object.freeze({
+      operationInvocation: result.ref.invocation,
+      operationResult: result.ref,
+      operationStatus: result.status,
+      operationFailure: result.failure,
+      actionSettlement: settlementRef === undefined || actionId === null
+        ? null
+        : Object.freeze({ action: Object.freeze({ id: actionId }), id: settlementRef.id }),
+      effectCertainty,
+      output: result.status === "succeeded" || result.status === "partial"
+        ? Object.freeze({
+            owner: result.semanticOwner,
+            kind: "operation_result",
+            id: result.ref.id,
+            revision: "1",
+          })
+        : null,
+      costUnits: typeof result.metadata.costUnits === "number" &&
+          Number.isFinite(result.metadata.costUnits) && result.metadata.costUnits >= 0
+        ? result.metadata.costUnits
+        : null,
+      startedAt: result.startedAt,
+      finishedAt: result.finishedAt,
+    });
+  }
+
+  private materializeAutomaticValidationRunAction(
+    checkAttemptId: string,
+    invocationId: string,
+  ): RuntimeRunAction {
+    const state = this.writer.getSnapshot();
+    const sequence = state.counters.runActions + 1;
+    const action: RuntimeRunAction = Object.freeze({
+      ref: Object.freeze({
+        run: state.run,
+        id: this.id("run_action", sequence),
+        sequence,
+      }),
+      provenance: Object.freeze({
+        kind: "automatic" as const,
+        trigger: Object.freeze({ owner: "validation", operationId: checkAttemptId }),
+      }),
+      subject: Object.freeze({
+        kind: "operation" as const,
+        invocationId,
+        requestOrigin: "automatic_stage" as const,
+      }),
+      basis: Object.freeze({
+        runRevision: state.revision,
+        activeAgentId: state.activeAgent.id,
+        controllerProjectionRevision: null,
+      }),
+      materializedAt: this.now(),
+    });
+    this.writer.commit({ kind: "run_action", action }, (current) => Object.freeze({
+      counters: Object.freeze({ ...current.counters, runActions: sequence }),
+    }));
+    return action;
+  }
+
+  private findRunAction(ref: RunActionRef): RuntimeRunAction | null {
+    if (ref.run.id !== this.runId) return null;
+    for (const item of this.writer.getSnapshot().items) {
+      if (item.payload.kind !== "run_action") continue;
+      const candidate = item.payload.action;
+      if (candidate.ref.id === ref.id && candidate.ref.sequence === ref.sequence) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  private async rejectValidationOperationCheck(
+    code: `validation_${string}`,
+    message: string,
+  ): Promise<never> {
+    const revision = this.validationExecution === null
+      ? 0
+      : (await this.validationExecution.readCurrentSnapshot()).ref.revision;
+    throw new ValidationExecutionError(createValidationFailure({
+      code,
+      stage: "check",
+      message,
+      retryable: false,
+      cause: null,
+    }), revision);
   }
 
   private async nextDecision(): Promise<{
@@ -1019,15 +1644,24 @@ export class RunExecution<TOutput> {
       operation = toolCall.operationRevision;
       request = toolCall.input;
     }
+    const requestOrigin: OperationRequestOrigin = toolCall === null
+      ? "controller_protocol"
+      : toolCall.origin === "model"
+        ? "tool_request"
+        : "trusted_workflow";
+    if (await this.executeControllerValidationCheck({
+      action,
+      operation: operation!,
+      request,
+      requestOrigin,
+    })) {
+      return null;
+    }
     const executed = await this.executeOperation({
       action,
       operation: operation!,
       request,
-      requestOrigin: toolCall === null
-        ? "controller_protocol"
-        : toolCall.origin === "model"
-          ? "tool_request"
-          : "trusted_workflow",
+      requestOrigin,
       invocationId,
       parentInvocation: null,
       basis: toolCall ?? candidate,
@@ -1037,6 +1671,49 @@ export class RunExecution<TOutput> {
       ? null
       : adaptToolResult(toolCall, executed);
     return Object.freeze({ result: executed, toolResult });
+  }
+
+  private async executeControllerValidationCheck(input: {
+    readonly action: RuntimeRunAction;
+    readonly operation: OperationRevisionRef;
+    readonly request: unknown;
+    readonly requestOrigin: OperationRequestOrigin;
+  }): Promise<boolean> {
+    const resolver = this.dependencies.validation.checkRequests;
+    if (resolver === undefined) return false;
+    let resolved: Awaited<ReturnType<typeof resolver.resolve>>;
+    try {
+      resolved = await resolver.resolve({
+        run: Object.freeze({ id: this.runId }),
+        runAction: input.action.ref,
+        operation: input.operation,
+        request: input.request,
+        requestOrigin: input.requestOrigin,
+      });
+    } catch (error) {
+      throw new ValidationExecutionError(createValidationFailure({
+        code: "validation_check_request_resolution_failed",
+        stage: "check",
+        message: error instanceof Error
+          ? error.message
+          : "Validation Check request resolution failed.",
+        retryable: false,
+        cause: null,
+      }), (await this.requireValidationExecution().readCurrentSnapshot()).ref.revision);
+    }
+    if (resolved === null) return false;
+    const execution = this.requireValidationExecution();
+    const current = await execution.readCurrentSnapshot();
+    await execution.executeCheck({
+      ...resolved,
+      origin: input.requestOrigin === "trusted_workflow"
+        ? "trusted_workflow"
+        : "controller",
+      runAction: input.action.ref,
+      expectedRevision: current.ref.revision,
+    }, this.invocationInterruption());
+    await this.commitValidationFeedback(null);
+    return true;
   }
 
   private async executeOperation(input: {
@@ -2241,6 +2918,11 @@ export class RunExecution<TOutput> {
       finalization.dispose();
     }
 
+    if (terminal.status === "succeeded" &&
+        this.config.cancellation.context.request !== null) {
+      terminal = { status: "cancelled" };
+    }
+
     const completedAt = this.now();
     const cancellationRequest = this.config.cancellation.context.request;
     const payload: RunItemPayload<TOutput> = terminal.status === "succeeded"
@@ -2279,6 +2961,7 @@ export class RunExecution<TOutput> {
       cancellationRequest,
       completedAt,
     ));
+    await this.closeValidation(completedAt);
     const state = this.writer.getSnapshot();
     const base = {
       runId: this.runId,
@@ -2316,6 +2999,13 @@ export class RunExecution<TOutput> {
   }
 
   private failureFromError(error: unknown): Extract<TerminalCandidate<TOutput>, { readonly status: "failed" }> {
+    if (error instanceof ValidationExecutionError) {
+      return {
+        status: "failed",
+        code: "validation_failed",
+        failure: createRunFailureCause("validation", error.failure),
+      };
+    }
     if (error instanceof ContextContractError) {
       return {
         status: "failed",
@@ -2356,6 +3046,20 @@ export class RunExecution<TOutput> {
         error instanceof Error ? { causeName: error.name } : {},
       ),
     };
+  }
+
+  private async closeValidation(closedAt: string): Promise<void> {
+    if (this.validationExecution === null || this.validationClosed) return;
+    this.validationClosed = true;
+    const current = await this.validationExecution.readCurrentSnapshot();
+    try {
+      await this.validationExecution.closeCurrentState({
+        expectedRevision: current.ref.revision,
+        closedAt,
+      });
+    } catch {
+      // Terminal Run truth is already committed; late Validation close failure is diagnostic only.
+    }
   }
 
   private operationFailureResult(
@@ -2484,7 +3188,12 @@ export class RunExecution<TOutput> {
   private onStateCommitted(state: RunState<TOutput>): void {
     if (this.runStartedEventEmitted) {
       this.emitCommittedContextTransition(state.context);
+      this.emitCommittedRunItems(state);
     }
+    this.publishCurrentState();
+  }
+
+  private emitCommittedRunItems(state: RunState<TOutput>): void {
     while (this.emittedItemCount < state.items.length) {
       const item = state.items[this.emittedItemCount++]!;
       this.emit("run.item.appended", {
@@ -2493,7 +3202,6 @@ export class RunExecution<TOutput> {
         itemSequence: item.ref.sequence,
       }, item.createdAt);
     }
-    this.publishCurrentState();
   }
 
   private emitCommittedContextTransition(context: ActiveContext): void {
@@ -2530,6 +3238,7 @@ export class RunExecution<TOutput> {
       lastRunItemSequence: state.items.at(-1)?.ref.sequence ?? 0,
       plan: state.plan === null ? null : projectPlan(state.plan),
       retry: this.retryProjection,
+      validation: this.validationHostProjection,
       pendingInteractions: Object.freeze([
         ...this.interactions.getPendingProjections(),
         ...childPending,
@@ -2752,6 +3461,13 @@ function operationFailure(owner: string, code: string, message = code): Operatio
     retryable: false,
     metadata: Object.freeze({}),
   });
+}
+
+function isActionEffectCertainty(
+  value: unknown,
+): value is import("@agent-anything/canonical-action/settlement").ActionEffectCertainty {
+  return value === "none" || value === "confirmed" ||
+    value === "partial" || value === "unknown";
 }
 
 function operationResultFromAction(

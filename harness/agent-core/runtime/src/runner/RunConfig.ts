@@ -11,6 +11,8 @@ import type { PlanLimits } from "../plan/index.js";
 import type { RetryPolicy } from "../retry/index.js";
 import type { CancellationLimits, RunCancellationController } from "../run/index.js";
 import type { ResolvedRunPermissionConfig } from "../run/index.js";
+import type { CompletionGateConfiguration } from "@agent-anything/validation/completion";
+import type { ValidationProfile } from "@agent-anything/validation/definition";
 
 export type RunInfrastructureRequirement = "optional" | "required";
 
@@ -44,12 +46,18 @@ export interface RunActionExecutionConfig {
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
+export interface RunValidationConfig {
+  readonly profile: ValidationProfile;
+  readonly completion: CompletionGateConfiguration;
+}
+
 export interface RunConfig {
   readonly workspace: WorkspaceSelection | null;
   readonly identity: IdentityRef;
   readonly permissions: ResolvedRunPermissionConfig;
   readonly tools: ToolSelectionRevision;
   readonly actionExecution: RunActionExecutionConfig | null;
+  readonly validation: RunValidationConfig;
   readonly limits: RunLimits;
   readonly audit: RunInfrastructureRequirement;
   readonly telemetry: RunInfrastructureRequirement;

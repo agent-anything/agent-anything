@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   createValidationFailure,
+  materializeValidationProfile,
+  snapshotValidationProfile,
   snapshotValidationRequirement,
   snapshotValidationSpecification,
   type ValidationOwnerRef,
@@ -25,6 +27,27 @@ import { snapshotValidationPersistenceReceipt } from "./persistence/index.js";
 const NOW = "2026-08-18T00:00:00.000Z";
 
 describe("Validation Contract foundation", () => {
+  it("keeps a reusable profile Run-neutral and materializes exact Run records once", () => {
+    const { specification: _specification, createdAt: _createdAt, ...template } = requirementInput();
+    const profile = snapshotValidationProfile({
+      ref: owner("profile"),
+      specification: ref("profile-specification"),
+      source: source("task_contract"),
+      admittedBy: owner("profile-admission"),
+      requirements: [template],
+    });
+    const materialized = materializeValidationProfile({
+      profile,
+      run: { id: "run-1" },
+      createdAt: NOW,
+    });
+
+    expect("run" in profile).toBe(false);
+    expect(materialized.specification.run.id).toBe("run-1");
+    expect(materialized.requirements[0]?.specification).toEqual(profile.specification);
+    expect(Object.isFrozen(materialized.requirements)).toBe(true);
+  });
+
   it("admits only trusted immutable Specification and Requirement shapes", () => {
     const requirement = snapshotValidationRequirement(requirementInput());
     const specification = snapshotValidationSpecification({
@@ -322,13 +345,16 @@ function completionInput(): CompletionGateInput {
     specification: ref("specification"),
     validationSnapshot: { runId: "run-1", revision: 1 },
     mandatoryStates: [{
-      requirement: ref("requirement"),
-      status: "unassessed",
-      subject: null,
-      assessment: null,
-      pendingAttempts: [],
-      limitations: [],
-      updatedAt: NOW,
+      current: {
+        requirement: ref("requirement"),
+        status: "unassessed",
+        subject: null,
+        assessment: null,
+        pendingAttempts: [],
+        limitations: [],
+        updatedAt: NOW,
+      },
+      disposition: "continue",
     }],
     pendingWork: [],
     conditions: [],
