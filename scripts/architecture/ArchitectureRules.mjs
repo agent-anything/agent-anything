@@ -100,9 +100,11 @@ export const HARNESS_PRODUCTION_DEPENDENCIES = Object.freeze({
 
 export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
   "@agent-anything/helarc-code-agent": [
+    "@agent-anything/agent-core",
     "@agent-anything/canonical-action",
     "@agent-anything/operation-catalog",
     "@agent-anything/tools",
+    "@agent-anything/validation",
     "@agent-anything/workspace",
   ],
   "@agent-anything/helarc": [
@@ -116,8 +118,10 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/model-interaction",
     "@agent-anything/observability",
     "@agent-anything/operation-catalog",
+    "@agent-anything/operation-composition",
     "@agent-anything/agent-runtime",
     "@agent-anything/tools",
+    "@agent-anything/validation",
     "@agent-anything/workspace",
   ],
   "@agent-anything/helarc-local-environment": [

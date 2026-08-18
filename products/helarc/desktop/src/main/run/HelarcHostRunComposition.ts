@@ -12,7 +12,6 @@ import type {
 import type { ApprovalReviewerBinding, RunResult } from "@agent-anything/agent-runtime/run";
 import { Runner } from "@agent-anything/agent-runtime/runner";
 import { CurrentValidationCompletionGate } from "@agent-anything/validation/completion";
-import { createNoCheckValidationExecutionFactory } from "@agent-anything/validation/execution";
 import type { ContextManifestPersistencePort } from "@agent-anything/context/persistence";
 import {
   createCanonicalActorIdentity,
@@ -61,6 +60,7 @@ import {
   HELARC_RUN_COMMAND_BINDING,
   HELARC_RUN_COMMAND_OPERATION,
 } from "@agent-anything/helarc/tools";
+import { bindHelarcValidationCompletionGate } from "@agent-anything/helarc/validation";
 import type { CodeAgentCommandLimits } from "@agent-anything/helarc-local-environment/command";
 import {
   createHelarcLocalCommandActionCapability,
@@ -282,11 +282,14 @@ export async function prepareHelarcHostRun(
         retry: createStopActionRetryPort(),
         now,
       },
+      ...(product.actions.composite === null ? {} : {
+        composite: product.actions.composite,
+      }),
     },
-    validation: {
-      executionFactory: createNoCheckValidationExecutionFactory({ now }),
-      completionGate: new CurrentValidationCompletionGate(now),
-    },
+    validation: bindHelarcValidationCompletionGate(
+      product.validation,
+      new CurrentValidationCompletionGate(now),
+    ),
     interactions: product.interactions,
     runtimeEventPublisher: productRuntimeEventPublisher,
     now,
@@ -311,7 +314,10 @@ export async function prepareHelarcHostRun(
         enforcement,
         metadata: runMetadata,
       },
-      validation: createHelarcValidationConfig(),
+      validation: {
+        profile: product.validation.profile,
+        completion: createHelarcValidationCompletionConfig(),
+      },
       limits: {
         maxIterations: 5,
         maxActions: 8,
@@ -392,7 +398,11 @@ export async function prepareHelarcHostRun(
       return Object.freeze({
         activeRun,
         result: activeRun.wait().then((outcome): HelarcHostRunResult => {
-          const productResult = product.projectResult(outcome.runResult, enforcement);
+          const productResult = product.projectResult(
+            outcome.runResult,
+            enforcement,
+            activeRun.getProjection().validation,
+          );
           return Object.freeze({
             kind: "run_result",
             productRunId: input.productRunId,
@@ -408,7 +418,7 @@ export async function prepareHelarcHostRun(
   });
 }
 
-function createHelarcValidationConfig() {
+function createHelarcValidationCompletionConfig() {
   const owner = (id: string) => Object.freeze({
     owner: "helarc",
     kind: "validation",
@@ -416,19 +426,10 @@ function createHelarcValidationConfig() {
     revision: "1",
   });
   return Object.freeze({
-    profile: Object.freeze({
-      ref: owner("empty-profile"),
-      specification: Object.freeze({ id: "empty-specification", revision: "1" }),
-      source: Object.freeze({ ...owner("profile-source"), sourceKind: "product_configuration" as const }),
-      admittedBy: owner("profile-admission"),
-      requirements: Object.freeze([]),
-    }),
-    completion: Object.freeze({
-      policy: owner("current-validation-gate"),
-      outputContract: owner("agent-output-contract"),
-      conditions: Object.freeze([]),
-      maximumDurationMs: 5_000,
-    }),
+    policy: owner("current-validation-gate"),
+    outputContract: owner("agent-output-contract"),
+    conditions: Object.freeze([]),
+    maximumDurationMs: 5_000,
   });
 }
 

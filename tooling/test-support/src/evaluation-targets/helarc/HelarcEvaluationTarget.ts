@@ -622,7 +622,11 @@ async function invokeHelarcTarget(
   signal.removeEventListener("abort", onAbort);
   patchReviews.assertHealthy();
   const terminalProjection = active.getProjection();
-  const productResult = product.projectResult(hostResult.runResult, "disabled");
+  const productResult = product.projectResult(
+    hostResult.runResult,
+    "disabled",
+    terminalProjection.validation,
+  );
   if (trace === null) throw new TypeError("Helarc Evaluation requires one complete RunTrace.");
   const observationRef = createEvaluationRecordRef({
     id: `${trial.ref.id}.observation`,

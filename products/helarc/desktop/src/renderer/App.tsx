@@ -683,6 +683,7 @@ export function RunTerminalPanel({
   const terminal = run.host.terminal;
   if (terminal === null) return null;
   const safeOutput = run.product.result?.output ?? null;
+  const validation = run.product.result?.validation ?? null;
   const failed = run.display.status === "failed" || run.display.status === "blocked" ||
     run.display.status === "rejected" || run.display.status === "cancelled";
 
@@ -708,6 +709,12 @@ export function RunTerminalPanel({
           <div>
             <dt>Execution</dt>
             <dd>{enforcementLabel(safeOutput.enforcement)}</dd>
+          </div>
+        ) : null}
+        {validation ? (
+          <div>
+            <dt>Validation</dt>
+            <dd>{validationLabel(validation)}</dd>
           </div>
         ) : null}
         {terminal.code ? (
@@ -1204,6 +1211,29 @@ function enforcementLabel(
     case "denied": return `${enforcement.selected} denied`;
     case "interrupted": return "Interrupted";
     case "failed": return "Failed";
+  }
+}
+
+function validationLabel(
+  validation: NonNullable<ActiveRunProjection["product"]["result"]>["validation"],
+): string {
+  switch (validation.status) {
+    case "not_required":
+      return "Not required";
+    case "pending":
+      return validation.activeChecks > 0
+        ? `${validation.activeChecks} check${validation.activeChecks === 1 ? "" : "s"} running`
+        : "Pending";
+    case "satisfied":
+      return "Satisfied";
+    case "attention_required": {
+      const count = validation.counts
+        .filter(({ state }) => state === "violated" || state === "inconclusive" || state === "stale")
+        .reduce((total, entry) => total + entry.count, 0);
+      return count > 0 ? `Attention required (${count})` : "Attention required";
+    }
+    case "unavailable":
+      return "Unavailable";
   }
 }
 

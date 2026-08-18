@@ -238,6 +238,8 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain(runtimeStatus);
     expect(html).toContain("Terminal summary");
     expect(html).toContain("Unisolated");
+    expect(html).toContain("Validation");
+    expect(html).toContain("Not required");
     expect(html).toContain("Event summary");
   });
 });
@@ -318,6 +320,7 @@ function runProjection(input: {
       taskId: "task-1",
       startedAt: "2026-07-05T01:00:00.000Z",
       runRevision: 0,
+      validation: null,
       pendingInteractions: [],
       terminal: terminal
         ? {
@@ -334,6 +337,15 @@ function runProjection(input: {
       result: terminal
         ? {
             status: status === "completed" ? "completed" : status,
+            validation: {
+              status: "not_required",
+              snapshotRevision: 1,
+              counts: [],
+              activeChecks: 0,
+              gateStatus: "completion_eligible",
+              safeReasons: [],
+              updatedAt: "2026-07-05T01:00:01.000Z",
+            },
             output: {
               taskId: "task-1",
               workspace: {

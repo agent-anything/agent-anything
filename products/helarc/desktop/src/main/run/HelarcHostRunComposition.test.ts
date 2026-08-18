@@ -423,7 +423,7 @@ describe("Helarc Host Run composition", () => {
       automaticApprovalReviewer: automaticReviewer("decline"),
     });
 
-    expect(result.product.status).toBe("blocked");
+    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("blocked");
     expect(result.runResult.items.some((item) =>
       item.payload.kind === "pending_transition" &&
       item.payload.transition === "opened" &&
@@ -457,7 +457,7 @@ describe("Helarc Host Run composition", () => {
       automaticApprovalReviewer: unavailableAutomaticReviewer(),
     });
 
-    expect(result.product.status).toBe("blocked");
+    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("blocked");
     expect(result.runResult.items.some((item) =>
       item.payload.kind === "pending_transition" &&
       item.payload.transition === "opened" &&
@@ -491,7 +491,7 @@ describe("Helarc Host Run composition", () => {
       permissionPreset: "full_access",
     });
 
-    expect(result.product.status).toBe("completed");
+    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("completed");
     expect(result.product.output.agentSummary).toBe("Shell command completed.");
     expect(result.product.output.safeErrors).toEqual([]);
     const commandResults = result.runResult.items.flatMap((item) =>

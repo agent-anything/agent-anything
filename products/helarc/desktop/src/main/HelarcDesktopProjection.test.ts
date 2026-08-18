@@ -14,6 +14,7 @@ describe("Helarc Desktop IPC projection", () => {
       "startedAt",
       "taskId",
       "terminal",
+      "validation",
     ]);
     expect(Object.keys(projected.run?.product ?? {}).sort()).toEqual([
       "activity",
@@ -27,6 +28,14 @@ describe("Helarc Desktop IPC projection", () => {
       kind: "reused",
       reason: null,
       occurredAt: "2026-07-19T00:00:00.000Z",
+    });
+    expect(projected.run?.host.validation).toEqual({
+      snapshotRevision: 3,
+      counts: [{ state: "pending", count: 1 }],
+      activeChecks: 1,
+      gateStatus: null,
+      safeReasons: ["validation_pending"],
+      updatedAt: "2026-07-19T00:00:00.000Z",
     });
     expect(projected.provider.configured && projected.provider.activeProfile)
       .not.toHaveProperty("storedCredential");
@@ -126,6 +135,15 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
       plan: { privatePlanState: SECRET },
       pendingInteractions,
       retry: { privateRetryState: SECRET },
+      validation: {
+        snapshot: { runId: "harness-run-1", revision: 3 },
+        counts: [{ state: "pending", count: 1 }],
+        activeChecks: 1,
+        gateStatus: null,
+        safeReasons: ["validation_pending"],
+        updatedAt: "2026-07-19T00:00:00.000Z",
+        privateValidationState: SECRET,
+      },
       cancellation: { privateCancellationState: SECRET },
       enforcement: { privateAttemptState: SECRET },
       terminal: null,

@@ -133,10 +133,27 @@ describe("HelarcProductResult", () => {
       result,
       null,
       "disabled",
+      {
+        snapshot: { runId: "run-1", revision: 7 },
+        counts: [{ state: "violated", count: 1 }],
+        activeChecks: 0,
+        gateStatus: "blocked_violated",
+        safeReasons: ["mandatory_validation_violated"],
+        updatedAt: COMPLETED_AT,
+      },
     );
 
     expect(projected.status).toBe("failed");
     expect(projected.runResult).toMatchObject({ status: "failed", code: "unknown_effect" });
+    expect(projected.validation).toEqual({
+      status: "attention_required",
+      snapshotRevision: 7,
+      counts: [{ state: "violated", count: 1 }],
+      activeChecks: 0,
+      gateStatus: "blocked_violated",
+      safeReasons: ["mandatory_validation_violated"],
+      updatedAt: COMPLETED_AT,
+    });
     expect(projected.runActions).toEqual([
       expect.objectContaining({
         runActionId: "run-action-1",

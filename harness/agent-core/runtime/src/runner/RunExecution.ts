@@ -69,6 +69,7 @@ import {
 } from "@agent-anything/validation/definition";
 import {
   ValidationExecutionError,
+  type CheckResult,
   type ValidationExecutionPort,
   type ValidationOperationCheckInput,
   type ValidationOperationCheckResolverPort,
@@ -142,8 +143,9 @@ import {
 import type { RunExecutionUpdate } from "./RunHandle.js";
 import type { ResolvedRunConfig } from "./RunConfig.js";
 import type {
-  RunnerAutomaticValidationCheckPort,
-  RunnerAutomaticValidationCheckRequest,
+  RunnerAutomaticEffectfulValidationCheckPort,
+  RunnerAutomaticEffectfulValidationCheckRequest,
+  RunnerValidationCheckRequest,
   ResolvedRunnerDependencies,
 } from "./RunnerDependencies.js";
 import {
@@ -582,7 +584,7 @@ export class RunExecution<TOutput> {
       await this.dependencies.validation.preparation?.prepare({
         run: Object.freeze({ id: this.runId }),
         execution,
-        automaticChecks: this.createAutomaticValidationCheckPort(),
+        automaticEffectfulChecks: this.createAutomaticEffectfulValidationCheckPort(),
       }, this.invocationInterruption());
     } catch (error) {
       if (error instanceof ValidationExecutionError) throw error;
@@ -940,10 +942,10 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private createAutomaticValidationCheckPort(): RunnerAutomaticValidationCheckPort {
+  private createAutomaticEffectfulValidationCheckPort(): RunnerAutomaticEffectfulValidationCheckPort {
     return Object.freeze({
       execute: async (
-        request: RunnerAutomaticValidationCheckRequest,
+        request: RunnerAutomaticEffectfulValidationCheckRequest,
         interruption: InvocationInterruptionContext,
       ) => {
         const execution = this.requireValidationExecution();
@@ -953,12 +955,14 @@ export class RunExecution<TOutput> {
           request.definition.id,
           invocationId,
         );
-        return execution.executeCheck({
+        const result = await execution.executeCheck({
           ...request,
           origin: "trusted_automatic",
           runAction: action.ref,
           expectedRevision: current.ref.revision,
         }, interruption);
+        await this.processValidationCheckResult(request, result, interruption);
+        return result;
       },
     });
   }
@@ -1044,27 +1048,15 @@ export class RunExecution<TOutput> {
             : "none";
     return Object.freeze({
       operationInvocation: result.ref.invocation,
-      operationResult: result.ref,
-      operationStatus: result.status,
-      operationFailure: result.failure,
+      operationResult: result,
       actionSettlement: settlementRef === undefined || actionId === null
         ? null
         : Object.freeze({ action: Object.freeze({ id: actionId }), id: settlementRef.id }),
       effectCertainty,
-      output: result.status === "succeeded" || result.status === "partial"
-        ? Object.freeze({
-            owner: result.semanticOwner,
-            kind: "operation_result",
-            id: result.ref.id,
-            revision: "1",
-          })
-        : null,
       costUnits: typeof result.metadata.costUnits === "number" &&
           Number.isFinite(result.metadata.costUnits) && result.metadata.costUnits >= 0
         ? result.metadata.costUnits
         : null,
-      startedAt: result.startedAt,
-      finishedAt: result.finishedAt,
     });
   }
 
@@ -1704,7 +1696,7 @@ export class RunExecution<TOutput> {
     if (resolved === null) return false;
     const execution = this.requireValidationExecution();
     const current = await execution.readCurrentSnapshot();
-    await execution.executeCheck({
+    const result = await execution.executeCheck({
       ...resolved,
       origin: input.requestOrigin === "trusted_workflow"
         ? "trusted_workflow"
@@ -1712,8 +1704,41 @@ export class RunExecution<TOutput> {
       runAction: input.action.ref,
       expectedRevision: current.ref.revision,
     }, this.invocationInterruption());
+    await this.processValidationCheckResult(
+      resolved,
+      result,
+      this.invocationInterruption(),
+    );
     await this.commitValidationFeedback(null);
     return true;
+  }
+
+  private async processValidationCheckResult(
+    request: RunnerValidationCheckRequest,
+    result: CheckResult,
+    interruption: InvocationInterruptionContext,
+  ): Promise<void> {
+    const processor = this.dependencies.validation.checkResults;
+    if (processor === undefined) return;
+    try {
+      await processor.process({
+        run: Object.freeze({ id: this.runId }),
+        execution: this.requireValidationExecution(),
+        request,
+        result,
+      }, interruption);
+    } catch (error) {
+      if (error instanceof ValidationExecutionError) throw error;
+      throw new ValidationExecutionError(createValidationFailure({
+        code: "validation_check_result_processing_failed",
+        stage: "assessment",
+        message: error instanceof Error
+          ? error.message
+          : "Validation Check Result processing failed.",
+        retryable: false,
+        cause: null,
+      }), (await this.requireValidationExecution().readCurrentSnapshot()).ref.revision);
+    }
   }
 
   private async executeOperation(input: {

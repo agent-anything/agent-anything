@@ -11,6 +11,7 @@ import { HELARC_RUN_COMMAND_TOOL } from "../tools/HelarcCommandOperation.js";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import type { HelarcPatchOutcome } from "../review/HelarcPatchActionController.js";
 import type { HelarcControllerTraceProjection } from "../observability/index.js";
+import type { ValidationHostProjection, ValidationStateCount } from "@agent-anything/validation/projection";
 
 export type HelarcProductStatus =
   | "completed"
@@ -123,8 +124,18 @@ export interface HelarcInteractionSummary {
 }
 
 export interface HelarcValidationCommunication {
-  readonly status: "not_evaluated";
-  readonly assessments: readonly never[];
+  readonly status:
+    | "not_required"
+    | "pending"
+    | "satisfied"
+    | "attention_required"
+    | "unavailable";
+  readonly snapshotRevision: number | null;
+  readonly counts: readonly ValidationStateCount[];
+  readonly activeChecks: number;
+  readonly gateStatus: ValidationHostProjection["gateStatus"];
+  readonly safeReasons: readonly string[];
+  readonly updatedAt: string | null;
 }
 
 export interface HelarcEnforcementSummary {
@@ -164,6 +175,7 @@ export function projectHelarcProductResult(
   runResult: RunResult<HelarcAgentOutput>,
   patchOutcome: HelarcPatchOutcome | null,
   selectedEnforcement: SandboxEnforcement,
+  validation: ValidationHostProjection | null,
 ): HelarcProductResult {
   const agentOutput = runResult.status === "succeeded" ? runResult.finalOutput : null;
   const safeErrors = collectSafeRunErrors(runResult);
@@ -209,10 +221,7 @@ export function projectHelarcProductResult(
     composites,
     children,
     interactions,
-    validation: Object.freeze({
-      status: "not_evaluated" as const,
-      assessments: Object.freeze([] as never[]),
-    }),
+    validation: projectValidationCommunication(validation),
     uncertainty,
     residualRisk: Object.freeze(uncertainty.length === 0 ? [] : [
       "One or more effects could not be confirmed from the terminal Run record.",
@@ -222,6 +231,41 @@ export function projectHelarcProductResult(
       "Inspect the recorded failure or unresolved effect before continuing.",
     ]),
     artifactRefs: Object.freeze([...runResult.artifactRefs]),
+  });
+}
+
+function projectValidationCommunication(
+  validation: ValidationHostProjection | null,
+): HelarcValidationCommunication {
+  if (validation === null) {
+    return Object.freeze({
+      status: "unavailable" as const,
+      snapshotRevision: null,
+      counts: Object.freeze([]),
+      activeChecks: 0,
+      gateStatus: null,
+      safeReasons: Object.freeze(["validation_projection_unavailable"]),
+      updatedAt: null,
+    });
+  }
+  const count = (state: ValidationStateCount["state"]) =>
+    validation.counts.find((entry) => entry.state === state)?.count ?? 0;
+  const total = validation.counts.reduce((sum, entry) => sum + entry.count, 0);
+  const status: HelarcValidationCommunication["status"] = total === 0
+    ? "not_required"
+    : validation.activeChecks > 0 || count("pending") > 0 || count("unassessed") > 0
+      ? "pending"
+      : count("violated") > 0 || count("inconclusive") > 0 || count("stale") > 0
+        ? "attention_required"
+        : "satisfied";
+  return Object.freeze({
+    status,
+    snapshotRevision: validation.snapshot.revision,
+    counts: Object.freeze(validation.counts.map((entry) => Object.freeze({ ...entry }))),
+    activeChecks: validation.activeChecks,
+    gateStatus: validation.gateStatus,
+    safeReasons: Object.freeze([...validation.safeReasons]),
+    updatedAt: validation.updatedAt,
   });
 }
 

@@ -34,12 +34,13 @@ export function createLocalCodeSourcePort(
           workspace: input.workspace,
           rootName: input.expected.target.rootName,
           path: input.expected.target.path,
-          operation: input.expected.baseline.kind === "absent" ? "create" : "update",
+          operation: "observe",
           maxContentBytes: input.maxContentBytes,
         }, now);
         if (!sameSnapshotBasis(current, input.expected)) {
           return Object.freeze({
             status: "changed" as const,
+            snapshot: current,
             owner: "helarc.code-workspace" as const,
             code: "code_source_baseline_changed",
             message: "The source target no longer matches the reviewed proposal baseline.",
@@ -80,6 +81,40 @@ async function captureSnapshot(
     });
   }
 
+  if (input.operation === "observe") {
+    try {
+      return await capturePresentSnapshot(input, now);
+    } catch (error) {
+      if (!(error instanceof FileSystemError) || error.code !== "file_not_found") {
+        throw error;
+      }
+      const target = await resolveWritableTarget({
+        workspace: input.workspace,
+        rootName: input.rootName,
+        path: input.path,
+        overwrite: false,
+      });
+      return Object.freeze({
+        target: Object.freeze({
+          rootName: target.resolved.rootName,
+          workspaceId: target.resolved.workspaceId,
+          path: target.resolved.relativePath,
+        }),
+        baseline: Object.freeze({ kind: "absent" as const }),
+        content: null,
+        contentRef: null,
+        capturedAt: now(),
+      });
+    }
+  }
+
+  return capturePresentSnapshot(input, now);
+}
+
+async function capturePresentSnapshot(
+  input: CaptureCodeSourceInput,
+  now: () => string,
+): Promise<CodeSourceSnapshot> {
   const target = await resolveExistingTarget({
     workspace: input.workspace,
     rootName: input.rootName,

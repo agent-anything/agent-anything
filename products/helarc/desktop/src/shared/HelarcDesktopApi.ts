@@ -264,8 +264,54 @@ export interface HelarcModelContinuationSnapshot {
   readonly occurredAt: string;
 }
 
+export type HelarcValidationStateSnapshot =
+  | "unassessed"
+  | "pending"
+  | "satisfied"
+  | "violated"
+  | "inconclusive"
+  | "stale";
+
+export type HelarcValidationGateStatusSnapshot =
+  | "completion_eligible"
+  | "blocked_unassessed"
+  | "blocked_pending"
+  | "blocked_stale"
+  | "blocked_violated"
+  | "blocked_inconclusive"
+  | "invalid"
+  | "failed";
+
+export interface HelarcHostValidationSnapshot {
+  readonly snapshotRevision: number;
+  readonly counts: readonly {
+    readonly state: HelarcValidationStateSnapshot;
+    readonly count: number;
+  }[];
+  readonly activeChecks: number;
+  readonly gateStatus: HelarcValidationGateStatusSnapshot | null;
+  readonly safeReasons: readonly string[];
+  readonly updatedAt: string;
+}
+
+export interface HelarcProductValidationSnapshot {
+  readonly status:
+    | "not_required"
+    | "pending"
+    | "satisfied"
+    | "attention_required"
+    | "unavailable";
+  readonly snapshotRevision: number | null;
+  readonly counts: HelarcHostValidationSnapshot["counts"];
+  readonly activeChecks: number;
+  readonly gateStatus: HelarcValidationGateStatusSnapshot | null;
+  readonly safeReasons: readonly string[];
+  readonly updatedAt: string | null;
+}
+
 export interface HelarcRunProductResultSnapshot {
   readonly status: "completed" | "rejected" | "failed" | "blocked" | "cancelled";
+  readonly validation: HelarcProductValidationSnapshot;
   readonly output: {
     readonly taskId: string;
     readonly workspace: {
@@ -309,6 +355,7 @@ export interface HelarcRunSnapshot {
     readonly taskId: string;
     readonly startedAt: string;
     readonly runRevision: number;
+    readonly validation: HelarcHostValidationSnapshot | null;
     readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
     readonly terminal: {
       readonly status: "completed" | "blocked" | "failed" | "cancelled";
@@ -681,6 +728,7 @@ export interface HelarcHostRunStatusSnapshot {
     | "failed"
     | "cancelled";
   readonly startedAt: string;
+  readonly validation: HelarcHostValidationSnapshot | null;
   readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
   readonly terminal: HelarcRunSnapshot["host"]["terminal"];
 }

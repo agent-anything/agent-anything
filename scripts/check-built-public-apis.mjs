@@ -106,6 +106,7 @@ const packageExportKeys = {
   "products/helarc/code-agent": [
     "./file-operation",
     "./source",
+    "./validation",
     "./workspace",
   ],
   "products/helarc/core": [
@@ -123,6 +124,7 @@ const packageExportKeys = {
     "./task",
     "./thread",
     "./tools",
+    "./validation",
     "./work-context",
   ],
   "products/helarc/local-environment": [
@@ -671,6 +673,12 @@ const expectedValueExports = {
   ],
   "@agent-anything/helarc-code-agent/workspace": ["resolveWorkspacePath"],
   "@agent-anything/helarc-code-agent/source": [],
+  "@agent-anything/helarc-code-agent/validation": [
+    "EXACT_CODE_SOURCE_CHECK_FAMILY",
+    "EXACT_CODE_SOURCE_EVALUATOR_REF",
+    "EXACT_CODE_SOURCE_SUBJECT_KIND",
+    "createExactCodeSourceValidationContribution",
+  ],
   "@agent-anything/helarc-code-agent/file-operation": [
     "CODE_AGENT_CREATE_FILE_TOOL",
     "CODE_AGENT_DELETE_FILE_TOOL",
@@ -802,6 +810,16 @@ const expectedValueExports = {
     "projectHelarcProductResult",
   ],
   "@agent-anything/helarc/artifacts": ["createHelarcArtifact"],
+  "@agent-anything/helarc/validation": [
+    "HELARC_RUN_VALIDATION_CHECK_BINDING",
+    "HELARC_RUN_VALIDATION_CHECK_OPERATION",
+    "HELARC_RUN_VALIDATION_CHECK_TOOL",
+    "bindHelarcValidationCompletionGate",
+    "createHelarcValidationCheckConfigurationRegistry",
+    "createHelarcValidationCheckOperationContribution",
+    "createHelarcValidationComposition",
+    "parseHelarcRunValidationCheckRequest",
+  ],
   "@agent-anything/helarc-local-environment/command": [
     "HELARC_LOCAL_COMMAND_ACTION_ADAPTER_ID",
     "createHelarcLocalCommandActionCapability",

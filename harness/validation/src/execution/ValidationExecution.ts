@@ -9,7 +9,6 @@ import type {
   OperationInvocationRef,
 } from "@agent-anything/operation-catalog/identity";
 import type {
-  OperationFailure,
   OperationResult,
   OperationResultRef,
 } from "@agent-anything/operation-catalog/result";
@@ -253,15 +252,10 @@ export interface ValidationExecutionPersistenceFailure {
 
 export interface ValidationLowerCheckSettlement {
   readonly operationInvocation: OperationInvocationRef;
-  readonly operationResult: OperationResultRef;
-  readonly operationStatus: OperationResult["status"];
-  readonly operationFailure: OperationFailure | null;
+  readonly operationResult: OperationResult;
   readonly actionSettlement: ActionSettlementRef | null;
   readonly effectCertainty: ActionEffectCertainty;
-  readonly output: ValidationOwnerRef | null;
   readonly costUnits: number | null;
-  readonly startedAt: string;
-  readonly finishedAt: string;
 }
 
 export interface CheckFindingInput {

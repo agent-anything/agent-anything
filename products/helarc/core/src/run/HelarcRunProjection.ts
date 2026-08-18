@@ -385,8 +385,13 @@ function snapshotProductResult(result: HelarcProductResult): HelarcProductResult
       Object.freeze({ ...interaction })
     )),
     validation: Object.freeze({
-      status: "not_evaluated" as const,
-      assessments: Object.freeze([] as never[]),
+      status: result.validation.status,
+      snapshotRevision: result.validation.snapshotRevision,
+      counts: Object.freeze(result.validation.counts.map((entry) => Object.freeze({ ...entry }))),
+      activeChecks: result.validation.activeChecks,
+      gateStatus: result.validation.gateStatus,
+      safeReasons: Object.freeze([...result.validation.safeReasons]),
+      updatedAt: result.validation.updatedAt,
     }),
     uncertainty: Object.freeze([...result.uncertainty]),
     residualRisk: Object.freeze([...result.residualRisk]),

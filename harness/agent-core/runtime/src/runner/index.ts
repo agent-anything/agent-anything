@@ -5,11 +5,12 @@ export type {
 export type {
   RunnerContextProjection,
   RunInvocationOptions,
-  RunnerAutomaticValidationCheckPort,
-  RunnerAutomaticValidationCheckRequest,
+  RunnerAutomaticEffectfulValidationCheckPort,
+  RunnerAutomaticEffectfulValidationCheckRequest,
   RunnerDependencies,
   RunnerValidationCheckRequest,
   RunnerValidationCheckRequestResolverPort,
+  RunnerValidationCheckResultProcessorPort,
   RunnerValidationComposition,
   RunnerValidationPreparationPort,
 } from "./RunnerDependencies.js";

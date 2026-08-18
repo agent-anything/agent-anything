@@ -170,6 +170,7 @@ export interface RunnerValidationComposition {
   readonly completionGate: CompletionGatePort;
   readonly preparation?: RunnerValidationPreparationPort;
   readonly checkRequests?: RunnerValidationCheckRequestResolverPort;
+  readonly checkResults?: RunnerValidationCheckResultProcessorPort;
 }
 
 export interface RunnerValidationPreparationPort {
@@ -177,20 +178,20 @@ export interface RunnerValidationPreparationPort {
     input: {
       readonly run: RunRef;
       readonly execution: ValidationExecutionPort;
-      readonly automaticChecks: RunnerAutomaticValidationCheckPort;
+      readonly automaticEffectfulChecks: RunnerAutomaticEffectfulValidationCheckPort;
     },
     interruption: InvocationInterruptionContext,
   ): Promise<void>;
 }
 
-export type RunnerAutomaticValidationCheckRequest = Omit<
+export type RunnerAutomaticEffectfulValidationCheckRequest = Omit<
   ValidationCheckRequest,
   "origin" | "runAction" | "expectedRevision"
 >;
 
-export interface RunnerAutomaticValidationCheckPort {
+export interface RunnerAutomaticEffectfulValidationCheckPort {
   execute(
-    request: RunnerAutomaticValidationCheckRequest,
+    request: RunnerAutomaticEffectfulValidationCheckRequest,
     interruption: InvocationInterruptionContext,
   ): Promise<CheckResult>;
 }
@@ -213,6 +214,15 @@ export interface RunnerValidationCheckRequestResolverPort {
     readonly request: unknown;
     readonly requestOrigin: OperationRequestOrigin;
   }): Promise<RunnerValidationCheckRequest | null>;
+}
+
+export interface RunnerValidationCheckResultProcessorPort {
+  process(input: {
+    readonly run: RunRef;
+    readonly execution: ValidationExecutionPort;
+    readonly request: RunnerValidationCheckRequest;
+    readonly result: CheckResult;
+  }, interruption: InvocationInterruptionContext): Promise<void>;
 }
 
 export interface RunnerDependencies {

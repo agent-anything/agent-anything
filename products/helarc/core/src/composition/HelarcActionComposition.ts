@@ -35,6 +35,10 @@ import {
   createHelarcCommandOperationContribution,
   HELARC_RUN_COMMAND_TOOL,
 } from "../tools/HelarcCommandOperation.js";
+import {
+  HELARC_RUN_VALIDATION_CHECK_TOOL,
+  type HelarcValidationCheckOperationContribution,
+} from "../validation/HelarcValidationCheckOperation.js";
 
 const MODEL_FILE_TOOLS = new Set([
   CODE_AGENT_LIST_FILES_TOOL,
@@ -59,12 +63,17 @@ export interface HelarcFileActionContribution extends HelarcPhysicalActionContri
 
 export interface HelarcCommandActionContribution extends HelarcPhysicalActionContribution {
   readonly actionAdapterId: string;
+  readonly environment: {
+    readonly id: string;
+    readonly revision: string;
+  };
 }
 
 export interface CreateHelarcActionCompositionInput {
   readonly admittedAt: string;
   readonly file: HelarcFileActionContribution;
   readonly command: HelarcCommandActionContribution | null;
+  readonly validation: HelarcValidationCheckOperationContribution | null;
 }
 
 export interface HelarcActionComposition {
@@ -74,6 +83,7 @@ export interface HelarcActionComposition {
   readonly registrations: ActionRegistrationSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
   readonly executors: readonly ActionExecutor[];
+  readonly composite: HelarcValidationCheckOperationContribution["composite"] | null;
 }
 
 export function createHelarcActionComposition(
@@ -93,6 +103,7 @@ export function createHelarcActionComposition(
   const operationEntries = [
     ...file.operations,
     ...(command?.operations ?? []),
+    ...(input.validation?.operations ?? []),
   ];
   const operationCatalog = createOperationCatalogSnapshot({
     id: "helarc.operations",
@@ -101,11 +112,11 @@ export function createHelarcActionComposition(
   });
   const operationBindings = createOperationBindingResolverSnapshot(
     "helarc.operation-bindings.v1",
-    [...file.bindings, ...(command?.bindings ?? [])],
+    [...file.bindings, ...(command?.bindings ?? []), ...(input.validation?.bindings ?? [])],
   );
   const toolRegistrations = createToolRegistrationSnapshot(
     operationCatalog,
-    [...file.tools, ...(command?.tools ?? [])],
+    [...file.tools, ...(command?.tools ?? []), ...(input.validation?.tools ?? [])],
   );
   const toolSelection = createFixedLocalToolSelection(
     toolRegistrations,
@@ -129,6 +140,7 @@ export function createHelarcActionComposition(
     registrations,
     adapters: Object.freeze(physical.flatMap((contribution) => contribution.adapters)),
     executors: Object.freeze(physical.flatMap((contribution) => contribution.executors)),
+    composite: input.validation?.composite ?? null,
   });
 }
 
@@ -137,7 +149,8 @@ export function validateHelarcToolInput(schema: unknown, candidate: unknown): bo
 }
 
 function selectionOrigins(name: string): readonly ("model" | "workflow")[] {
-  if (MODEL_FILE_TOOLS.has(name) || name === HELARC_RUN_COMMAND_TOOL) {
+  if (MODEL_FILE_TOOLS.has(name) || name === HELARC_RUN_COMMAND_TOOL ||
+      name === HELARC_RUN_VALIDATION_CHECK_TOOL) {
     return Object.freeze(["model" as const]);
   }
   if (WORKFLOW_FILE_TOOLS.has(name)) {

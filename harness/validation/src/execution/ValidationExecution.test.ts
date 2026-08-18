@@ -1,4 +1,5 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import { createOperationResult } from "@agent-anything/operation-catalog/result";
 import { describe, expect, it } from "vitest";
 import type { ValidationAssessmentDraft } from "./ValidationExecutionAdapters.js";
 import {
@@ -248,22 +249,12 @@ describe("Run-scoped ValidationExecution", () => {
 
     expect(operationCalls).toBe(1);
     expect(pureCalls).toBe(0);
-    expect(result.operationResult).toEqual(settlement.operationResult);
+    expect(result.operationResult).toEqual(settlement.operationResult.ref);
     expect(result.actionSettlement).toEqual(settlement.actionSettlement);
   });
 
   it("does not let an interpreter rewrite an unsuccessful lower Operation as completed", async () => {
-    const lower = {
-      ...lowerSettlement("none"),
-      operationStatus: "denied" as const,
-      operationFailure: {
-        owner: "permission",
-        code: "permission_denied",
-        message: "Permission denied the Operation.",
-        retryable: false,
-        metadata: {},
-      },
-    };
+    const lower = lowerSettlement("none", "denied");
     const rig = createRig({
       requestSettlement: async () => lower,
       interpret: async () => completedInterpretation(),
@@ -698,7 +689,10 @@ function failedInterpretation(): ValidationCheckInterpretation {
   };
 }
 
-function lowerSettlement(effectCertainty: ValidationLowerCheckSettlement["effectCertainty"]): ValidationLowerCheckSettlement {
+function lowerSettlement(
+  effectCertainty: ValidationLowerCheckSettlement["effectCertainty"],
+  status: "succeeded" | "denied" = "succeeded",
+): ValidationLowerCheckSettlement {
   const operationInvocation = {
     id: "operation-invocation-1",
     operation: {
@@ -708,15 +702,29 @@ function lowerSettlement(effectCertainty: ValidationLowerCheckSettlement["effect
   } as const;
   return {
     operationInvocation,
-    operationResult: { invocation: operationInvocation, id: "operation-result-1" },
-    operationStatus: "succeeded",
-    operationFailure: null,
+    operationResult: createOperationResult({
+      ref: { invocation: operationInvocation, id: "operation-result-1" },
+      binding: { operation: operationInvocation.operation, revision: "binding-v1" },
+      semanticOwner: "validation",
+      status,
+      output: status === "succeeded" ? { passed: true } : null,
+      failure: status === "succeeded"
+        ? null
+        : {
+            owner: "permission",
+            code: "permission_denied",
+            message: "Permission denied the Operation.",
+            retryable: false,
+            metadata: {},
+          },
+      startedAt: NOW,
+      finishedAt: NOW,
+      lowerRefs: [],
+      metadata: {},
+    }),
     actionSettlement: { action: { id: "canonical-action-1" }, id: "action-settlement-1" },
     effectCertainty,
-    output: owner("operation-output"),
     costUnits: 1,
-    startedAt: NOW,
-    finishedAt: NOW,
   };
 }
 

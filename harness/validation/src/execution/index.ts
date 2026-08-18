@@ -34,6 +34,7 @@ export type {
 export type {
   ValidationAssessmentDraft,
   ValidationAssessmentMethodInput,
+  ValidationAssessmentEvidence,
   ValidationAssessmentMethodPort,
   ValidationAssessmentMethodResolverPort,
   ValidationCheckInterpretationInput,

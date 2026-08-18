@@ -5,6 +5,7 @@ import {
   CODE_AGENT_SEARCH_FILES_TOOL,
 } from "@agent-anything/helarc-code-agent/file-operation";
 import { HELARC_RUN_COMMAND_TOOL } from "./HelarcCommandOperation.js";
+import { HELARC_RUN_VALIDATION_CHECK_TOOL } from "../validation/HelarcValidationCheckOperation.js";
 
 import type { ToolAnnotations, ToolDescriptor } from "@agent-anything/tools/catalog";
 
@@ -39,6 +40,7 @@ const HELARC_TOOL_ORDER = [
   CODE_AGENT_READ_FILE_TOOL,
   CODE_AGENT_SEARCH_FILES_TOOL,
   HELARC_RUN_COMMAND_TOOL,
+  HELARC_RUN_VALIDATION_CHECK_TOOL,
 ] as const;
 
 const HELARC_TOOL_PURPOSES: Record<string, string> = {
@@ -46,6 +48,7 @@ const HELARC_TOOL_PURPOSES: Record<string, string> = {
   [CODE_AGENT_READ_FILE_TOOL]: "Read one file inside a declared task workspace root.",
   [CODE_AGENT_SEARCH_FILES_TOOL]: "Search text across files inside a declared task workspace root.",
   [HELARC_RUN_COMMAND_TOOL]: "Run a process inside a declared task workspace root.",
+  [HELARC_RUN_VALIDATION_CHECK_TOOL]: "Run one admitted engineering validation command and assess its declared claim.",
 };
 
 export function createHelarcToolCatalogFromDescriptors(input: {
@@ -121,6 +124,7 @@ export function buildHelarcToolCatalogText(catalog: HelarcToolCatalog): string {
 
   if (catalog.mode === "shell-enabled") {
     lines.push("Use codeAgent.runCommand only when command execution is necessary and cannot be represented as a patch proposal.");
+    lines.push("Use codeAgent.runValidationCheck when command output must support an admitted engineering validation claim.");
   }
 
   return lines.join("\n");
@@ -133,7 +137,7 @@ function createCatalogItem(
     name: tool.name,
     purpose: tool.description ?? HELARC_TOOL_PURPOSES[tool.name] ?? "Execute the registered tool.",
     annotations: tool.annotations,
-    permission: tool.name === HELARC_RUN_COMMAND_TOOL
+    permission: tool.name === HELARC_RUN_COMMAND_TOOL || tool.name === HELARC_RUN_VALIDATION_CHECK_TOOL
       ? "Assessed from the exact process action and current run authority"
       : "Assessed from canonical filesystem effects and current run authority",
   };
@@ -155,7 +159,8 @@ function parseHelarcToolCatalogMetadata(value: unknown): HelarcToolCatalogMetada
 function inferCatalogMode(
   tools: readonly Pick<ToolDescriptor, "name">[],
 ): HelarcToolCatalogMode {
-  return tools.some((tool) => tool.name === HELARC_RUN_COMMAND_TOOL)
+  return tools.some((tool) => tool.name === HELARC_RUN_COMMAND_TOOL ||
+    tool.name === HELARC_RUN_VALIDATION_CHECK_TOOL)
     ? "shell-enabled"
     : "read-only";
 }

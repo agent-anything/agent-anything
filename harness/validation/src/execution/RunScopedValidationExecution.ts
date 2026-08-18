@@ -456,9 +456,31 @@ export class ValidationExecution implements ValidationExecutionPort {
     if (evidence.length < requirement.evidence.minimumAdmittedCount) {
       this.fail("validation_assessment_evidence_insufficient", "assessment", "Assessment has insufficient admitted Evidence.");
     }
+    const resolvedEvidence = evidence.map((item) => {
+      if (item.source.kind === "check_result") {
+        const result = this.results.get(revisionKey(item.source.result));
+        if (!result) {
+          this.fail("validation_assessment_evidence_source_missing", "assessment", "Admitted Evidence references a missing Check Result.");
+        }
+        return deepFreeze({
+          evidence: item,
+          source: { kind: "check_result" as const, result },
+        });
+      }
+      if (item.source.kind === "context_evidence") {
+        return deepFreeze({
+          evidence: item,
+          source: { kind: "context_evidence" as const, evidenceRef: item.source.evidence },
+        });
+      }
+      return deepFreeze({
+        evidence: item,
+        source: { kind: "owner_record" as const, record: item.source.record },
+      });
+    });
     const method = this.dependencies.assessmentMethods.resolve(requirement.assessmentMethod);
     if (!method) this.fail("validation_assessment_method_unavailable", "assessment", "Assessment method is unavailable.", true, requirement.assessmentMethod);
-    const draft = await method.assess({ requirement, subject, evidence }, interruption);
+    const draft = await method.assess({ requirement, subject, evidence: resolvedEvidence }, interruption);
     this.assertInterruption(interruption, "assessment");
     this.assertMutation(request.expectedRevision, "assessment");
     const maximumSupportedCoverage = Math.min(
@@ -773,7 +795,7 @@ export class ValidationExecution implements ValidationExecutionPort {
   ): Promise<CheckResult> {
     const attemptKey = attemptRefKey(attempt.ref);
     if (this.resultByAttempt.has(attemptKey)) this.fail("validation_check_settlement_duplicate", "check", "Check Attempt is already settled.");
-    const finishedAt = lower?.finishedAt ?? this.now();
+    const finishedAt = lower?.operationResult.finishedAt ?? this.now();
     const timedOut = Date.parse(finishedAt) > Date.parse(attempt.deadlineAt);
     const actualCost = lower?.costUnits ?? input.costUnits;
     const costExceeded = attempt.costLimitUnits !== null &&
@@ -821,11 +843,11 @@ export class ValidationExecution implements ValidationExecutionPort {
         attempt: attempt.ref,
         status: interpretation.status,
         findings,
-        operationResult: lower?.operationResult ?? null,
+        operationResult: lower?.operationResult.ref ?? null,
         actionSettlement: lower?.actionSettlement ?? null,
         coverage: interpretation.coverage,
         costUnits: interpretation.costUnits,
-        startedAt: lower?.startedAt ?? attempt.startedAt ?? attempt.requestedAt,
+        startedAt: lower?.operationResult.startedAt ?? attempt.startedAt ?? attempt.requestedAt,
         finishedAt,
         limitations: interpretation.limitations,
         failure: interpretation.failure,
@@ -836,7 +858,7 @@ export class ValidationExecution implements ValidationExecutionPort {
         attempt: attempt.ref,
         status: "failed",
         findings: [],
-        operationResult: lower?.operationResult ?? null,
+        operationResult: lower?.operationResult.ref ?? null,
         actionSettlement: lower?.actionSettlement ?? null,
         coverage: { ratio: 0, basis: "invalid check interpretation" },
         costUnits: actualCost,
@@ -997,7 +1019,10 @@ export class ValidationExecution implements ValidationExecutionPort {
     if (expected.operation.namespace !== actual.operation.namespace ||
         expected.operation.name !== actual.operation.name ||
         expected.revision !== actual.revision ||
-        lower.operationResult.invocation.id !== lower.operationInvocation.id) {
+        lower.operationResult.ref.invocation.id !== lower.operationInvocation.id ||
+        lower.operationResult.ref.invocation.operation.operation.namespace !== actual.operation.namespace ||
+        lower.operationResult.ref.invocation.operation.operation.name !== actual.operation.name ||
+        lower.operationResult.ref.invocation.operation.revision !== actual.revision) {
       this.fail("validation_lower_settlement_correlation_invalid", "check", "Lower operation settlement correlation is invalid.");
     }
     if (lower.actionSettlement === null) {
@@ -1007,19 +1032,19 @@ export class ValidationExecution implements ValidationExecutionPort {
       "succeeded", "partial", "failed", "unavailable", "denied", "cancelled",
       "timed_out", "invalid", "unknown_effect",
     ];
-    if (!operationStatuses.includes(lower.operationStatus)) {
+    if (!operationStatuses.includes(lower.operationResult.status)) {
       this.fail("validation_lower_operation_status_invalid", "check", "Lower Operation status is invalid.");
     }
-    if ((lower.operationStatus === "succeeded") !== (lower.operationFailure === null)) {
+    if ((lower.operationResult.status === "succeeded") !== (lower.operationResult.failure === null)) {
       this.fail("validation_lower_operation_failure_invalid", "check", "Lower Operation Failure does not match its status.");
     }
-    isoDateTime(lower.startedAt, "ValidationLowerCheckSettlement.startedAt");
-    isoDateTime(lower.finishedAt, "ValidationLowerCheckSettlement.finishedAt");
+    isoDateTime(lower.operationResult.startedAt, "ValidationLowerCheckSettlement.operationResult.startedAt");
+    isoDateTime(lower.operationResult.finishedAt, "ValidationLowerCheckSettlement.operationResult.finishedAt");
     if (lower.costUnits !== null &&
         (typeof lower.costUnits !== "number" || !Number.isFinite(lower.costUnits) || lower.costUnits < 0)) {
       this.fail("validation_lower_settlement_cost_invalid", "check", "Lower settlement cost must be non-negative.");
     }
-    if (Date.parse(lower.finishedAt) < Date.parse(lower.startedAt)) {
+    if (Date.parse(lower.operationResult.finishedAt) < Date.parse(lower.operationResult.startedAt)) {
       this.fail("validation_lower_settlement_time_invalid", "check", "Lower settlement cannot finish before it starts.");
     }
   }
@@ -1028,32 +1053,33 @@ export class ValidationExecution implements ValidationExecutionPort {
     interpretation: ValidationCheckInterpretation,
     lower: ValidationLowerCheckSettlement,
   ): ValidationCheckInterpretation {
-    if (lower.operationStatus === "succeeded" || lower.operationStatus === "partial" ||
+    const operationStatus = lower.operationResult.status;
+    if (operationStatus === "succeeded" || operationStatus === "partial" ||
         (interpretation.status !== "completed" && interpretation.status !== "partial")) {
       return interpretation;
     }
-    const status = lower.operationStatus === "cancelled"
+    const status = operationStatus === "cancelled"
       ? "cancelled" as const
-      : lower.operationStatus === "timed_out"
+      : operationStatus === "timed_out"
         ? "timed_out" as const
-        : lower.operationStatus === "denied"
+        : operationStatus === "denied"
           ? "denied" as const
-          : lower.operationStatus === "unavailable"
+          : operationStatus === "unavailable"
             ? "unavailable" as const
-            : lower.operationStatus === "invalid"
+            : operationStatus === "invalid"
               ? "invalid" as const
               : "failed" as const;
     return {
       status,
       findings: [],
-      coverage: { ratio: 0, basis: `lower Operation ${lower.operationStatus}` },
+      coverage: { ratio: 0, basis: `lower Operation ${operationStatus}` },
       costUnits: lower.costUnits,
       limitations: [],
       failure: this.failure(
-        `validation_check_operation_${lower.operationStatus}`,
+        `validation_check_operation_${operationStatus}`,
         "check",
         "Lower Operation did not produce an eligible Check outcome.",
-        lower.operationFailure?.retryable ?? false,
+        lower.operationResult.failure?.retryable ?? false,
       ),
     };
   }

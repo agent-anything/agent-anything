@@ -3,6 +3,7 @@ import { createSystemRetryExecutor, systemRetryClock } from "@agent-anything/age
 import type { Controller } from "@agent-anything/agent-runtime/controller";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
+import type { ValidationHostProjection } from "@agent-anything/validation/projection";
 import type { Agent } from "@agent-anything/agent-core/agent";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
@@ -35,6 +36,11 @@ import {
 } from "../review/HelarcPatchActionController.js";
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
 import type { Provider } from "@agent-anything/model-interaction";
+import {
+  createHelarcValidationComposition,
+  type HelarcExactTargetValidationRequirement,
+  type HelarcValidationComposition,
+} from "../validation/index.js";
 import {
   ModelContinuationLifecycle,
   type ModelContinuationSafeEvent,
@@ -90,6 +96,7 @@ export interface CreateHelarcProductCompositionInput {
   readonly codeSource: CodeSourcePort;
   readonly fileActions: HelarcFileActionContribution;
   readonly commandActions: HelarcCommandActionContribution | null;
+  readonly validationTargets?: readonly HelarcExactTargetValidationRequirement[];
   readonly permissionRequests?: HelarcPermissionRequestApplicationPort | null;
   readonly modelContinuationStore?: ModelContinuationStore;
   readonly now?: () => string;
@@ -100,6 +107,7 @@ export interface HelarcProductComposition {
   readonly controller: Controller<HelarcAgentOutput>;
   readonly actions: Awaited<ReturnType<typeof createHelarcActionComposition>>;
   readonly interactions: InteractionProtocolRegistrySnapshot;
+  readonly validation: HelarcValidationComposition;
   readonly runMetadata: Readonly<Record<string, unknown>>;
   getProductProjection(): HelarcProductRunProjection;
   subscribeProductProjection(listener: HelarcProductRunProjectionListener): () => void;
@@ -110,6 +118,7 @@ export interface HelarcProductComposition {
   projectResult(
     runResult: RunResult<HelarcAgentOutput>,
     selectedEnforcement: SandboxEnforcement,
+    validation: ValidationHostProjection | null,
   ): HelarcProductResult;
 }
 
@@ -119,11 +128,22 @@ export async function createHelarcProductComposition(
   if (input.toolMode === "shell-enabled" && input.commandActions === null) {
     throw new TypeError("Shell-enabled Helarc composition requires a command Action contribution.");
   }
-  const admittedAt = (input.now ?? (() => new Date().toISOString()))();
+  const now = input.now ?? (() => new Date().toISOString());
+  const admittedAt = now();
+  const validation = await createHelarcValidationComposition({
+    toolMode: input.toolMode,
+    workspace: input.workspace,
+    codeSource: input.codeSource,
+    commandEnvironment: input.commandActions?.environment ?? null,
+    exactTargets: input.validationTargets,
+    admittedAt,
+    now,
+  });
   const actions = createHelarcActionComposition({
     admittedAt,
     file: input.fileActions,
     command: input.toolMode === "shell-enabled" ? input.commandActions : null,
+    validation: validation.operation,
   });
   const interactions = createHelarcInteractionComposition(input.permissionRequests ?? null);
   const retryClock = createHelarcRetryClock(input.now);
@@ -204,6 +224,7 @@ export async function createHelarcProductComposition(
     controller: patchController,
     actions,
     interactions,
+    validation,
     runMetadata,
     getProductProjection(): HelarcProductRunProjection {
       return productProjection;
@@ -229,6 +250,7 @@ export async function createHelarcProductComposition(
     projectResult(
       runResult: RunResult<HelarcAgentOutput>,
       selectedEnforcement: SandboxEnforcement,
+      validationProjection: ValidationHostProjection | null,
     ): HelarcProductResult {
       const result = projectHelarcProductResult(
         input.task,
@@ -236,6 +258,7 @@ export async function createHelarcProductComposition(
         runResult,
         patchController.getPatchOutcome(),
         selectedEnforcement,
+        validationProjection,
       );
       publishProductUpdate({ kind: "result_settled", result });
       return result;

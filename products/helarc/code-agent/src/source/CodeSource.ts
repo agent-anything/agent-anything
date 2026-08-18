@@ -2,6 +2,7 @@ import type { FileBaseline } from "@agent-anything/canonical-action/subject";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 
 export type CodeSourceOperation =
+  | "observe"
   | "list"
   | "read"
   | "search"
@@ -33,7 +34,7 @@ export interface CaptureCodeSourceInput {
   readonly workspace: WorkspaceSelection | null;
   readonly rootName?: string;
   readonly path: string;
-  readonly operation: "create" | "update" | "delete";
+  readonly operation: "observe" | "create" | "update" | "delete";
   readonly maxContentBytes: number;
 }
 
@@ -55,7 +56,14 @@ export type CodeSourceCaptureResult =
 export type CodeSourceRehydrationResult =
   | { readonly status: "matched"; readonly snapshot: CodeSourceSnapshot }
   | {
-      readonly status: "changed" | "invalid" | "unavailable" | "failed";
+      readonly status: "changed";
+      readonly snapshot: CodeSourceSnapshot;
+      readonly owner: "helarc.code-workspace";
+      readonly code: string;
+      readonly message: string;
+    }
+  | {
+      readonly status: "invalid" | "unavailable" | "failed";
       readonly owner: "helarc.code-workspace";
       readonly code: string;
       readonly message: string;

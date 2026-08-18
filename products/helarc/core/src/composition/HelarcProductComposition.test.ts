@@ -99,7 +99,7 @@ describe("HelarcProductComposition", () => {
         message: `Provider failed with ${secret}.`,
         metadata: { apiKey: secret },
       },
-    }), "disabled");
+    }), "disabled", null);
 
     expect(result.output.safeErrors).toEqual([{
       code: "provider_request_failed",

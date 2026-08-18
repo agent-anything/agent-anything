@@ -34,7 +34,8 @@
     "test": "vitest run --passWithNoTests",
     "test:phase27": "vitest run src/phase-27/Phase27CatalogRealization.test.ts src/phase-27/Phase27BindingConformance.test.ts src/phase-27/Phase27ResultConformance.test.ts src/phase-27/Phase27PublicApi.test.ts",
     "test:context-continuity": "vitest run src/context-continuity-evaluation/ContextContinuityEvaluation.test.ts src/context-continuity-evaluation/ContextContinuityAdverseConformance.test.ts src/context-continuity-evaluation/ContextContinuityPublicApi.test.ts",
-    "test:evaluation": "vitest run src/evaluation-targets/helarc/HelarcEvaluationRegression.test.ts src/context-continuity-evaluation/ContextContinuityEvaluation.test.ts src/context-continuity-evaluation/ContextContinuityAdverseConformance.test.ts",
+    "test:validation-behavior": "vitest run src/validation-behavior/ValidationBehaviorConformance.test.ts src/validation-behavior/ValidationBehaviorEvaluation.test.ts",
+    "test:evaluation": "vitest run src/evaluation-targets/helarc/HelarcEvaluationRegression.test.ts src/context-continuity-evaluation/ContextContinuityEvaluation.test.ts src/context-continuity-evaluation/ContextContinuityAdverseConformance.test.ts src/validation-behavior/ValidationBehaviorEvaluation.test.ts",
     "evaluation:baseline:candidate": "node scripts/emit-helarc-evaluation-baseline.mjs"
   },
   "agentAnything": {

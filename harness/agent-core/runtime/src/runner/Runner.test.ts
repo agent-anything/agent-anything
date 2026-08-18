@@ -1871,7 +1871,7 @@ function createValidationScenario(input: ValidationScenario): RunnerDependencies
     executionFactory,
     completionGate: new CurrentValidationCompletionGate(() => NOW),
     preparation: {
-      async prepare({ execution, automaticChecks }, interruption) {
+      async prepare({ execution, automaticEffectfulChecks }, interruption) {
         await execution.captureSubject({
           requirement,
           adapter,
@@ -1894,7 +1894,7 @@ function createValidationScenario(input: ValidationScenario): RunnerDependencies
           coverageTarget: 1,
         } as const;
         const result = input.kind === "effectful_automatic"
-          ? await automaticChecks.execute(checkRequest, interruption)
+          ? await automaticEffectfulChecks.execute(checkRequest, interruption)
           : await execution.executeCheck({
               ...checkRequest,
               origin: "trusted_automatic",
@@ -1990,6 +1990,9 @@ async function admitValidationResultAndAssess(
   result: CheckResult,
   interruption: import("@agent-anything/agent-core/control").InvocationInterruptionContext,
 ): Promise<void> {
+  if (result.status !== "completed" && result.status !== "partial") {
+    throw new Error(`Test Validation Check did not produce eligible Evidence: ${JSON.stringify(result)}`);
+  }
   const requirement = Object.freeze({ id: "mandatory-requirement", revision: "1" });
   const subject = Object.freeze({ id: "validation-subject", revision: "1" });
   const evidence = Object.freeze({ id: "validation-evidence", revision: "1" });

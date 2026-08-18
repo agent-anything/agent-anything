@@ -95,6 +95,10 @@ export interface CreateHelarcLocalCommandActionCapabilityInput {
 
 export interface HelarcLocalCommandActionCapability {
   readonly actionAdapterId: string;
+  readonly environment: {
+    readonly id: string;
+    readonly revision: string;
+  };
   readonly registrations: ActionRegistrationSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
   readonly executors: readonly ActionExecutor[];
@@ -154,6 +158,7 @@ export async function createHelarcLocalCommandActionCapability(
   );
   return Object.freeze({
     actionAdapterId: HELARC_LOCAL_COMMAND_ACTION_ADAPTER_ID,
+    environment: Object.freeze({ id: environment.id, revision: environment.digest }),
     registrations,
     adapters: Object.freeze([Object.freeze({ adapter })]),
     executors: Object.freeze([createCommandExecutor(

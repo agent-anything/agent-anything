@@ -20,6 +20,7 @@ import type {
   CheckAttempt,
   CheckDefinition,
   CheckFindingInput,
+  CheckResult,
   ValidationCheckInterpretation,
   ValidationLowerCheckSettlement,
 } from "./ValidationExecution.js";
@@ -96,7 +97,15 @@ export interface ValidationCheckInterpreterResolverPort {
 export interface ValidationAssessmentMethodInput {
   readonly requirement: ValidationRequirement;
   readonly subject: ValidationSubjectSnapshot;
-  readonly evidence: readonly ValidationEvidence[];
+  readonly evidence: readonly ValidationAssessmentEvidence[];
+}
+
+export interface ValidationAssessmentEvidence {
+  readonly evidence: ValidationEvidence;
+  readonly source:
+    | { readonly kind: "check_result"; readonly result: CheckResult }
+    | { readonly kind: "context_evidence"; readonly evidenceRef: string }
+    | { readonly kind: "owner_record"; readonly record: ValidationOwnerRef };
 }
 
 export interface ValidationAssessmentDraft {

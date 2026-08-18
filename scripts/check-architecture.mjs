@@ -218,6 +218,7 @@ const focusedPublicSubpaths = new Map([
       "@agent-anything/helarc/task",
       "@agent-anything/helarc/thread",
       "@agent-anything/helarc/tools",
+      "@agent-anything/helarc/validation",
       "@agent-anything/helarc/work-context",
     ]),
   ],
@@ -226,6 +227,7 @@ const focusedPublicSubpaths = new Map([
     new Set([
       "@agent-anything/helarc-code-agent/file-operation",
       "@agent-anything/helarc-code-agent/source",
+      "@agent-anything/helarc-code-agent/validation",
       "@agent-anything/helarc-code-agent/workspace",
     ]),
   ],
@@ -1083,6 +1085,7 @@ function checkExecutionSourceTopology() {
         "task",
         "thread",
         "tools",
+        "validation",
         "work-context",
       ],
     },
@@ -1092,6 +1095,7 @@ function checkExecutionSourceTopology() {
         "PublicApi.test.ts",
         "file-operation",
         "source",
+        "validation",
         "workspace",
       ],
       forbiddenPaths: [

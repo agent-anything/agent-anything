@@ -328,6 +328,9 @@ importers:
 
   products/helarc/code-agent:
     dependencies:
+      '@agent-anything/agent-core':
+        specifier: workspace:*
+        version: link:../../../harness/agent-core/contracts
       '@agent-anything/canonical-action':
         specifier: workspace:*
         version: link:../../../harness/safety/canonical-action
@@ -337,6 +340,9 @@ importers:
       '@agent-anything/tools':
         specifier: workspace:*
         version: link:../../../harness/tools
+      '@agent-anything/validation':
+        specifier: workspace:*
+        version: link:../../../harness/validation
       '@agent-anything/workspace':
         specifier: workspace:*
         version: link:../../../harness/workspace
@@ -380,9 +386,15 @@ importers:
       '@agent-anything/operation-catalog':
         specifier: workspace:*
         version: link:../../../harness/operation-catalog
+      '@agent-anything/operation-composition':
+        specifier: workspace:*
+        version: link:../../../harness/operation-composition
       '@agent-anything/tools':
         specifier: workspace:*
         version: link:../../../harness/tools
+      '@agent-anything/validation':
+        specifier: workspace:*
+        version: link:../../../harness/validation
       '@agent-anything/workspace':
         specifier: workspace:*
         version: link:../../../harness/workspace
