@@ -17,6 +17,9 @@ describe("Validation public API", () => {
     ]);
     expect(Object.keys(subject).sort()).toEqual(["snapshotValidationSubjectSnapshot"]);
     expect(Object.keys(execution).sort()).toEqual([
+      "DefaultValidationExecutionFactory",
+      "ValidationExecution",
+      "ValidationExecutionError",
       "snapshotCheckAttempt",
       "snapshotCheckDefinition",
       "snapshotCheckResult",

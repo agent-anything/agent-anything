@@ -61,8 +61,14 @@ export type ValidationSubjectCaptureResult =
 export interface ValidationSubjectAdapter {
   readonly ref: ValidationSubjectAdapterRef;
   readonly subjectKinds: readonly string[];
-  capture(input: ValidationSubjectCaptureInput): Promise<ValidationSubjectCaptureResult>;
-  rehydrate(ref: ValidationSubjectSnapshotRef): Promise<ValidationSubjectCaptureResult>;
+  capture(
+    input: ValidationSubjectCaptureInput,
+    interruption: import("@agent-anything/agent-core/control").InvocationInterruptionContext,
+  ): Promise<ValidationSubjectCaptureResult>;
+  rehydrate(
+    ref: ValidationSubjectSnapshotRef,
+    interruption: import("@agent-anything/agent-core/control").InvocationInterruptionContext,
+  ): Promise<ValidationSubjectCaptureResult>;
 }
 
 export type ValidationSubjectFreshnessOutcome =
@@ -82,6 +88,7 @@ export type ValidationSubjectFreshnessOutcome =
 export interface ValidationSubjectFreshnessPort {
   checkFreshness(
     snapshot: ValidationSubjectSnapshotRef,
+    interruption: import("@agent-anything/agent-core/control").InvocationInterruptionContext,
   ): Promise<ValidationSubjectFreshnessOutcome>;
 }
 

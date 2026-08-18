@@ -898,6 +898,9 @@ const expectedValidationValueExports = {
     "snapshotValidationSubjectSnapshot",
   ],
   "@agent-anything/validation/execution": [
+    "DefaultValidationExecutionFactory",
+    "ValidationExecution",
+    "ValidationExecutionError",
     "snapshotCheckAttempt",
     "snapshotCheckDefinition",
     "snapshotCheckResult",

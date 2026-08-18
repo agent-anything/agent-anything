@@ -106,6 +106,7 @@ export interface ValidationRequirement {
   readonly ref: ValidationRequirementRef;
   readonly specification: ValidationSpecificationRef;
   readonly source: ValidationTrustedSourceRef;
+  readonly kind: string;
   readonly claim: string;
   readonly purpose: string;
   readonly necessity: ValidationNecessity;
@@ -168,7 +169,7 @@ export function snapshotValidationRequirement(
   input: ValidationRequirement,
 ): ValidationRequirement {
   strictRecord(input, "ValidationRequirement", [
-    "ref", "specification", "source", "claim", "purpose", "necessity", "subjectKinds",
+    "ref", "specification", "source", "kind", "claim", "purpose", "necessity", "subjectKinds",
     "checkFamilies", "assessmentMethod", "freshness", "coverage", "evidence", "limits",
     "disclosure", "completionHandling", "createdAt",
   ]);
@@ -212,6 +213,7 @@ export function snapshotValidationRequirement(
     ref: snapshotRequirementRef(input.ref, "ValidationRequirement.ref"),
     specification: snapshotSpecificationRef(input.specification, "ValidationRequirement.specification"),
     source: snapshotSourceRef(input.source, "ValidationRequirement.source"),
+    kind: token(input.kind, "ValidationRequirement.kind"),
     claim: text(input.claim, "ValidationRequirement.claim"),
     purpose: text(input.purpose, "ValidationRequirement.purpose"),
     subjectKinds: tokenList(input.subjectKinds, "ValidationRequirement.subjectKinds"),

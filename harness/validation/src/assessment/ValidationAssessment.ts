@@ -1,7 +1,11 @@
 import type { RunRef } from "@agent-anything/agent-core/run";
-import type { ValidationRequirementRef, ValidationSpecificationRef } from "../definition/index.js";
+import type {
+  ValidationAssessmentMethodRef,
+  ValidationRequirementRef,
+  ValidationSpecificationRef,
+} from "../definition/index.js";
 import type { CheckAttemptRef } from "../execution/index.js";
-import type { ValidationEvidenceRef } from "../evidence/index.js";
+import type { ValidationEvidenceCoverage, ValidationEvidenceRef } from "../evidence/index.js";
 import type { ValidationSubjectSnapshotRef } from "../subject/index.js";
 
 export type ValidationAssessmentVerdict = "satisfied" | "violated" | "inconclusive";
@@ -15,8 +19,9 @@ export interface ValidationAssessment {
   readonly ref: ValidationAssessmentRef;
   readonly requirement: ValidationRequirementRef;
   readonly subject: ValidationSubjectSnapshotRef;
-  readonly method: { readonly owner: string; readonly id: string; readonly revision: string };
+  readonly method: ValidationAssessmentMethodRef;
   readonly evidenceRefs: readonly ValidationEvidenceRef[];
+  readonly coverage: ValidationEvidenceCoverage;
   readonly verdict: ValidationAssessmentVerdict;
   readonly basis: string;
   readonly limitations: readonly string[];
@@ -81,7 +86,7 @@ export interface ValidationCurrentSnapshot {
 export function snapshotValidationAssessment(input: ValidationAssessment): ValidationAssessment {
   strictRecord(input, "ValidationAssessment", [
     "ref", "requirement", "subject", "method", "evidenceRefs", "verdict", "basis",
-    "limitations", "assessedAt",
+    "coverage", "limitations", "assessedAt",
   ]);
   if (!["satisfied", "violated", "inconclusive"].includes(input.verdict)) {
     throw new TypeError("ValidationAssessment.verdict is unsupported.");
@@ -100,6 +105,7 @@ export function snapshotValidationAssessment(input: ValidationAssessment): Valid
     method: methodRef(input.method),
     evidenceRefs: unique(input.evidenceRefs.map((item, index) => revisionRef(item, `ValidationAssessment.evidenceRefs[${index}]`)),
       (item) => `${item.id}@${item.revision}`, "ValidationAssessment.evidenceRefs"),
+    coverage: coverage(input.coverage),
     basis: nonEmpty(input.basis, "ValidationAssessment.basis"),
     limitations: textList(input.limitations, "ValidationAssessment.limitations", true),
     assessedAt: isoDateTime(input.assessedAt, "ValidationAssessment.assessedAt"),
@@ -170,8 +176,23 @@ function snapshotCurrentState(input: ValidationCurrentRequirementState, path: st
 }
 
 function methodRef(input: ValidationAssessment["method"]): ValidationAssessment["method"] {
-  strictRecord(input, "ValidationAssessment.method", ["owner", "id", "revision"]);
-  return { owner: token(input.owner, "ValidationAssessment.method.owner"), id: token(input.id, "ValidationAssessment.method.id"), revision: token(input.revision, "ValidationAssessment.method.revision") };
+  strictRecord(input, "ValidationAssessment.method", ["owner", "kind", "id", "revision"]);
+  return {
+    owner: token(input.owner, "ValidationAssessment.method.owner"),
+    kind: token(input.kind, "ValidationAssessment.method.kind"),
+    id: token(input.id, "ValidationAssessment.method.id"),
+    revision: token(input.revision, "ValidationAssessment.method.revision"),
+  };
+}
+function coverage(input: ValidationEvidenceCoverage): ValidationEvidenceCoverage {
+  strictRecord(input, "ValidationAssessment.coverage", ["ratio", "basis"]);
+  if (typeof input.ratio !== "number" || !Number.isFinite(input.ratio) || input.ratio < 0 || input.ratio > 1) {
+    throw new TypeError("ValidationAssessment.coverage.ratio must be between 0 and 1.");
+  }
+  return {
+    ratio: input.ratio,
+    basis: nonEmpty(input.basis, "ValidationAssessment.coverage.basis"),
+  };
 }
 function revisionRef(input: { readonly id: string; readonly revision: string }, path: string) {
   strictRecord(input, path, ["id", "revision"]);

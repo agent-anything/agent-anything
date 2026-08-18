@@ -1,7 +1,7 @@
 import type { ValidationAssessment, ValidationCurrentSnapshot } from "../assessment/index.js";
 import type { CompletionGateRecord } from "../completion/index.js";
 import type { ValidationRequirement, ValidationSpecification } from "../definition/index.js";
-import type { CheckAttempt, CheckDefinition, CheckResult } from "../execution/index.js";
+import type { CheckAttempt, CheckDefinition, CheckFinding, CheckResult } from "../execution/index.js";
 import type { ValidationEvidence } from "../evidence/index.js";
 import type { ValidationSubjectSnapshot } from "../subject/index.js";
 
@@ -11,6 +11,7 @@ export type ValidationPersistenceRecord =
   | { readonly kind: "subject"; readonly record: ValidationSubjectSnapshot }
   | { readonly kind: "check_definition"; readonly record: CheckDefinition }
   | { readonly kind: "check_attempt"; readonly record: CheckAttempt }
+  | { readonly kind: "check_finding"; readonly record: CheckFinding }
   | { readonly kind: "check_result"; readonly record: CheckResult }
   | { readonly kind: "evidence"; readonly record: ValidationEvidence }
   | { readonly kind: "assessment"; readonly record: ValidationAssessment }
@@ -60,7 +61,7 @@ export function snapshotValidationPersistenceReceipt(
 
 const RECORD_KINDS: readonly ValidationPersistenceReceipt["recordKind"][] = [
   "specification", "requirement", "subject", "check_definition", "check_attempt",
-  "check_result", "evidence", "assessment", "completion_gate", "current_snapshot",
+  "check_finding", "check_result", "evidence", "assessment", "completion_gate", "current_snapshot",
 ];
 
 function strictRecord(input: unknown, path: string, keys: readonly string[]): asserts input is Record<string, unknown> {
