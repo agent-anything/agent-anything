@@ -70,6 +70,12 @@ describe("Helarc controller", () => {
     const completeInput = request.messages.map((message) => message.content).join("\n");
     expect(completeInput).toContain("You are Helarc, a careful code agent.");
     expect(completeInput).toContain("update_plan");
+    expect(completeInput).toContain(
+      "status pending, in_progress, or completed",
+    );
+    expect(completeInput).toContain(
+      'Input JSON Schema: {"additionalProperties":false,"properties":{"path":{"type":"string"},"recursive":{"type":"boolean"}},"required":["path"],"type":"object"}',
+    );
     expect(completeInput).toContain("Task:\nUpdate docs");
     expect(completeInput).toContain("Current plan:");
     expect(completeInput)
@@ -522,7 +528,17 @@ function tool(
     },
     name,
     description,
-    inputSchema: {},
+    inputSchema: name === "codeAgent.listFiles"
+      ? {
+          type: "object",
+          additionalProperties: false,
+          required: ["path"],
+          properties: {
+            path: { type: "string" },
+            recursive: { type: "boolean" },
+          },
+        }
+      : {},
     schemaRevisions: {
       dialect: "json-schema-2020-12",
       input: "1",

@@ -84,9 +84,9 @@ describe("Helarc workbench shell", () => {
             event("event-1", "tool.proposed", "Tool call proposed", "info", {
               controllerAction: "call_tool",
               requestedToolName: "codeAgent.readFile",
-              promptArchitectureVersion: "helarc-prompt-v1",
-              actionContractVersion: "helarc-action-v1",
-              toolCatalogVersion: "helarc-tool-catalog-v1",
+              promptArchitectureVersion: "helarc-prompt-v2",
+              actionContractVersion: "helarc-action-v2",
+              toolCatalogVersion: "helarc-tool-catalog-v2",
               exposedToolNames: [
                 "codeAgent.listFiles",
                 "codeAgent.readFile",
@@ -101,7 +101,7 @@ describe("Helarc workbench shell", () => {
 
     expect(html).toContain("action call_tool");
     expect(html).toContain("tool codeAgent.readFile");
-    expect(html).toContain("versions helarc-prompt-v1, helarc-action-v1, helarc-tool-catalog-v1");
+    expect(html).toContain("versions helarc-prompt-v2, helarc-action-v2, helarc-tool-catalog-v2");
     expect(html).toContain("tools codeAgent.listFiles, codeAgent.readFile, codeAgent.searchFiles");
   });
 

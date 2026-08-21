@@ -7,13 +7,18 @@ import {
 import { HELARC_RUN_COMMAND_TOOL } from "./HelarcCommandOperation.js";
 import { HELARC_RUN_VALIDATION_CHECK_TOOL } from "../validation/HelarcValidationCheckOperation.js";
 
-import type { ToolAnnotations, ToolDescriptor } from "@agent-anything/tools/catalog";
+import type {
+  ToolAnnotations,
+  ToolDescriptor,
+  ToolJsonObject,
+} from "@agent-anything/tools/catalog";
 
 export type HelarcToolCatalogMode = "read-only" | "shell-enabled";
 
 export interface HelarcToolCatalogItem {
   name: string;
   purpose: string;
+  inputSchema: ToolJsonObject;
   annotations: ToolAnnotations;
   permission: string;
 }
@@ -21,6 +26,7 @@ export interface HelarcToolCatalogItem {
 export interface HelarcToolDescriptorSummary {
   name: string;
   description?: string | null;
+  inputSchema: ToolJsonObject;
   annotations: ToolAnnotations;
 }
 
@@ -74,16 +80,19 @@ export function createDefaultHelarcToolCatalog(): HelarcToolCatalog {
       {
         name: CODE_AGENT_LIST_FILES_TOOL,
         description: HELARC_TOOL_PURPOSES[CODE_AGENT_LIST_FILES_TOOL],
+        inputSchema: defaultFileToolInputSchema("list"),
         annotations: { readOnlyHint: true },
       },
       {
         name: CODE_AGENT_READ_FILE_TOOL,
         description: HELARC_TOOL_PURPOSES[CODE_AGENT_READ_FILE_TOOL],
+        inputSchema: defaultFileToolInputSchema("read"),
         annotations: { readOnlyHint: true },
       },
       {
         name: CODE_AGENT_SEARCH_FILES_TOOL,
         description: HELARC_TOOL_PURPOSES[CODE_AGENT_SEARCH_FILES_TOOL],
+        inputSchema: defaultFileToolInputSchema("search"),
         annotations: { readOnlyHint: true },
       },
     ],
@@ -114,7 +123,7 @@ export function buildHelarcToolCatalogText(catalog: HelarcToolCatalog): string {
   const lines = [
     `Active tool catalog (${catalog.mode}):`,
     ...catalog.tools.map((tool) => (
-      `- ${tool.name}: ${tool.purpose} Permission: ${tool.permission}.`
+      `- ${tool.name}: ${tool.purpose} Input JSON Schema: ${JSON.stringify(tool.inputSchema)}. Permission: ${tool.permission}.`
     )),
   ];
 
@@ -136,11 +145,28 @@ function createCatalogItem(
   return {
     name: tool.name,
     purpose: tool.description ?? HELARC_TOOL_PURPOSES[tool.name] ?? "Execute the registered tool.",
+    inputSchema: tool.inputSchema,
     annotations: tool.annotations,
     permission: tool.name === HELARC_RUN_COMMAND_TOOL || tool.name === HELARC_RUN_VALIDATION_CHECK_TOOL
       ? "Assessed from the exact process action and current run authority"
       : "Assessed from canonical filesystem effects and current run authority",
   };
+}
+
+function defaultFileToolInputSchema(operation: "list" | "read" | "search"): ToolJsonObject {
+  const properties: Record<string, ToolJsonObject> = {
+    rootName: { type: "string" },
+    path: { type: "string" },
+  };
+  const required = ["path"];
+  if (operation === "list") {
+    properties.recursive = { type: "boolean" };
+  }
+  if (operation === "search") {
+    properties.query = { type: "string", minLength: 1 };
+    required.push("query");
+  }
+  return { type: "object", additionalProperties: false, required, properties };
 }
 
 function parseHelarcToolCatalogMetadata(value: unknown): HelarcToolCatalogMetadata | null {

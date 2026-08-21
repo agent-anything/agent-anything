@@ -135,6 +135,27 @@ describe("Helarc Host Run composition", () => {
     expect(provider.requests).toHaveLength(1);
   });
 
+  it("keeps the complete Run deadline separate from one Provider request window", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-run-deadline-"));
+    const startedAt = Date.parse("2026-08-20T00:00:00.000Z");
+    let elapsedMs = 0;
+    const provider = new ScriptedProvider(
+      [{ action: "complete", summary: "Completed after a long model request." }],
+      () => {
+        elapsedMs = 31_000;
+      },
+    );
+
+    const result = await executeReadOnlyTestHostRun({
+      ...createTask(workspaceRoot),
+      provider,
+      now: () => new Date(startedAt + elapsedMs).toISOString(),
+    });
+
+    expect(result.runResult).toMatchObject({ status: "succeeded" });
+    expect(result.product).toMatchObject({ status: "completed" });
+  });
+
   it("fails Host Workspace acquisition before a Runner can start", async () => {
     const provider = new ScriptedProvider([
       { action: "complete", summary: "Must not run." },
@@ -226,9 +247,9 @@ describe("Helarc Host Run composition", () => {
     expect(result.activity.find((item) => item.metadata.controllerAction === "call_tool")?.metadata).toMatchObject({
       controllerAction: "call_tool",
       requestedToolName: "codeAgent.listFiles",
-      promptArchitectureVersion: "helarc-prompt-v1",
-      actionContractVersion: "helarc-action-v1",
-      toolCatalogVersion: "helarc-tool-catalog-v1",
+      promptArchitectureVersion: "helarc-prompt-v2",
+      actionContractVersion: "helarc-action-v2",
+      toolCatalogVersion: "helarc-tool-catalog-v2",
       exposedToolNames: [
         "codeAgent.listFiles",
         "codeAgent.readFile",
@@ -558,6 +579,45 @@ describe("Helarc Host Run composition", () => {
     ]);
   });
 
+  it("allows bounded Controller correction after three rejected Actions", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-action-correction-"));
+    const provider = new ScriptedProvider([
+      {
+        action: "update_plan",
+        plan: [{ step: "Inspect workspace", status: "started" }],
+      },
+      {
+        action: "call_tool",
+        toolName: "codeAgent.listFiles",
+        input: { directory: "." },
+      },
+      {
+        action: "call_tool",
+        toolName: "codeAgent.readFile",
+        input: { file: "Program.cs" },
+      },
+      {
+        action: "complete",
+        summary: "Corrected the rejected decisions.",
+      },
+    ]);
+
+    const result = await executeReadOnlyTestHostRun({
+      ...createTask(workspaceRoot),
+      provider,
+    });
+
+    expect(result.runResult).toMatchObject({ status: "succeeded" });
+    expect(result.product.status).toBe("completed");
+    expect(result.product.runActions.map(({ status }) => status)).toEqual([
+      "rejected",
+      "rejected",
+      "rejected",
+    ]);
+    expect(provider.requests).toHaveLength(4);
+    expect(provider.lastControllerInputContexts).toEqual([0, 1, 2, 3]);
+  });
+
   it("materializes and applies an accepted proposed patch", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-patch-accepted-"));
     await mkdir(join(workspaceRoot, "src"));
@@ -845,7 +905,10 @@ class ScriptedProvider implements Provider {
   readonly lastControllerInputContexts: number[] = [];
   readonly lastControllerInputPlans: unknown[] = [];
 
-  constructor(private readonly outputs: unknown[]) {}
+  constructor(
+    private readonly outputs: unknown[],
+    private readonly beforeResponse: () => void = () => {},
+  ) {}
 
   async send(
     request: ProviderRequest,
@@ -854,6 +917,7 @@ class ScriptedProvider implements Provider {
     this.requests.push(request);
     this.lastControllerInputContexts.push(readObservationCount(request));
     this.lastControllerInputPlans.push(readCurrentPlan(request));
+    this.beforeResponse();
     const output = this.outputs.shift();
     if (!output) {
       return {

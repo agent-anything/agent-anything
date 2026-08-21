@@ -11,6 +11,7 @@ export interface HelarcControllerActionDescription {
   purpose: string;
   requiredFields: string[];
   optionalFields: string[];
+  constraints: string[];
 }
 
 export interface HelarcActionDecisionRule {
@@ -38,36 +39,55 @@ const HELARC_ACTION_DESCRIPTIONS: HelarcControllerActionDescription[] = [
     purpose: "Request one tool execution from the active tool catalog.",
     requiredFields: ["action", "toolName", "input"],
     optionalFields: ["reason"],
+    constraints: [
+      "toolName must exactly match one Tool in the active Tool catalog",
+      "input must be an object satisfying that Tool's published input JSON Schema",
+    ],
   },
   {
     action: "request_permissions",
     purpose: "Request a scoped filesystem or network permission delta before continuing.",
     requiredFields: ["action", "rootId", "permissions", "reason"],
     optionalFields: [],
+    constraints: [
+      "rootId and reason must be non-empty strings",
+      "permissions must be an object describing the requested permission delta",
+    ],
   },
   {
     action: "update_plan",
     purpose: "Create or update the Runner-owned task plan when planning improves execution.",
     requiredFields: ["action", "plan"],
     optionalFields: ["explanation"],
+    constraints: [
+      "plan must be a non-empty array of objects with non-empty string step and status pending, in_progress, or completed",
+      "at most one Plan step may use status in_progress",
+    ],
   },
   {
     action: "complete",
     purpose: "Finish the task when the answer is ready or no file change is needed.",
     requiredFields: ["action", "summary"],
     optionalFields: [],
+    constraints: ["summary must be a non-empty string"],
   },
   {
     action: "propose",
     purpose: "Propose one file creation, update, or deletion for Helarc patch review.",
     requiredFields: ["action", "summary", "change"],
     optionalFields: [],
+    constraints: [
+      "summary must be a non-empty string",
+      "change must contain operation create, update, or delete and a non-empty relative path",
+      "create and update changes must include string content",
+    ],
   },
   {
     action: "stop",
     purpose: "Stop safely when the task cannot continue.",
     requiredFields: ["action", "reason"],
     optionalFields: [],
+    constraints: ["reason must be a non-empty string"],
   },
 ];
 
@@ -120,7 +140,12 @@ const HELARC_ACTION_DECISION_RULES: HelarcActionDecisionRule[] = [
 
 export function createHelarcActionContract(): HelarcActionContract {
   return {
-    actions: HELARC_ACTION_DESCRIPTIONS.map((action) => ({ ...action })),
+    actions: HELARC_ACTION_DESCRIPTIONS.map((action) => ({
+      ...action,
+      requiredFields: [...action.requiredFields],
+      optionalFields: [...action.optionalFields],
+      constraints: [...action.constraints],
+    })),
     decisionRules: HELARC_ACTION_DECISION_RULES.map((rule) => ({ ...rule })),
   };
 }
@@ -146,5 +171,8 @@ function formatActionDescription(action: HelarcControllerActionDescription): str
     ? `, and optional ${action.optionalFields.join(", ")}`
     : "";
 
-  return `For ${action.action}, return ${required}${optional}.`;
+  return [
+    `For ${action.action}, return ${required}${optional}.`,
+    ...action.constraints.map((constraint) => `- ${constraint}.`),
+  ].join("\n");
 }

@@ -18,9 +18,9 @@ import {
   type HelarcToolCatalog,
 } from "../tools/HelarcToolCatalog.js";
 
-export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v1";
-export const HELARC_ACTION_CONTRACT_VERSION = "helarc-action-v1";
-export const HELARC_TOOL_CATALOG_VERSION = "helarc-tool-catalog-v1";
+export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v2";
+export const HELARC_ACTION_CONTRACT_VERSION = "helarc-action-v2";
+export const HELARC_TOOL_CATALOG_VERSION = "helarc-tool-catalog-v2";
 export const HELARC_CONTEXT_PROJECTION_FORMAT_VERSION = "helarc-context-projection-v1";
 export const HELARC_CONTEXT_SECTION_HEADER = "Context projection:";
 export const HELARC_MODEL_OUTPUT_RESERVE_BYTES = 256_000;

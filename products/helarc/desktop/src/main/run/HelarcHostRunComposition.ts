@@ -82,6 +82,8 @@ import {
 } from "@agent-anything/workspace/selection";
 import { createHelarcHostPermissionComposition } from "./HelarcHostPermissionComposition.js";
 
+const HELARC_RUN_MAX_DURATION_MS = 30 * 60_000;
+
 export interface PrepareHelarcHostRunInput {
   readonly sessionId: string;
   readonly productRunId: string;
@@ -321,8 +323,8 @@ export async function prepareHelarcHostRun(
       limits: {
         maxIterations: 5,
         maxActions: 8,
-        maxConsecutiveActionFailures: 1,
-        maxDurationMs: 30_000,
+        maxConsecutiveActionFailures: 3,
+        maxDurationMs: HELARC_RUN_MAX_DURATION_MS,
         maxPendingInteractions: 8,
         maxDescendantRuns: 4,
         maxDescendantDepth: 2,
