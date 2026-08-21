@@ -17,7 +17,7 @@ describe("createHelarcAgent", () => {
     });
   });
 
-  it("normalizes a valid proposal and rejects incomplete change intent", () => {
+  it("rejects non-terminal controller decisions as Agent output", () => {
     const output = createHelarcAgent().output;
 
     expect(output.validate({
@@ -25,20 +25,8 @@ describe("createHelarcAgent", () => {
       summary: "Create a file.",
       change: { operation: "create", path: "empty.txt", content: "" },
     })).toEqual({
-      valid: true,
-      output: {
-        kind: "propose",
-        summary: "Create a file.",
-        change: { operation: "create", path: "empty.txt", content: "" },
-      },
-    });
-    expect(output.validate({
-      kind: "propose",
-      summary: "Create a file.",
-      change: { operation: "create", path: "empty.txt" },
-    })).toEqual({
       valid: false,
-      message: "Helarc proposed change is invalid.",
+      message: "Helarc output kind is invalid.",
     });
   });
 });

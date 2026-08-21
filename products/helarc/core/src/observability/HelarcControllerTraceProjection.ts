@@ -14,8 +14,6 @@ export interface HelarcControllerTraceProjection {
   readonly toolCatalogVersion: string | null;
   readonly exposedToolNames: readonly string[];
   readonly requestedToolName: string | null;
-  readonly patchOperation: string | null;
-  readonly patchPath: string | null;
 }
 
 export class HelarcTracingController<TOutput = unknown> implements Controller<TOutput> {
@@ -80,8 +78,6 @@ function createHelarcControllerTraceProjection(
     toolCatalogVersion: readTraceString(source.toolCatalogVersion),
     exposedToolNames: Object.freeze(readTraceStringArray(source.exposedToolNames)),
     requestedToolName: readTraceString(source.requestedToolName),
-    patchOperation: readTraceString(source.patchOperation),
-    patchPath: readTraceString(source.patchPath),
   });
 }
 

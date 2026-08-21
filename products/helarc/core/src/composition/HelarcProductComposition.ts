@@ -15,7 +15,6 @@ import type {
 import {
   buildHelarcProviderRequest,
   HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
-  HELARC_PERMISSION_REQUEST_PROTOCOL,
   parseHelarcProviderResponse,
   type HelarcAgentOutput,
 } from "../controller/HelarcController.js";
@@ -30,10 +29,6 @@ import {
   projectHelarcControllerTraceForEvent,
   type HelarcControllerTraceProjection,
 } from "../observability/index.js";
-import {
-  HelarcPatchActionController,
-  type HelarcPatchActionState,
-} from "../review/HelarcPatchActionController.js";
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
 import type { Provider } from "@agent-anything/model-interaction";
 import {
@@ -50,15 +45,6 @@ import {
   createInteractionProtocolRegistrySnapshot,
   type InteractionProtocolRegistrySnapshot,
 } from "@agent-anything/interaction/coordination";
-import {
-  snapshotInteractionRequest,
-  type InteractionProtocol,
-  type InteractionRequestRef,
-} from "@agent-anything/interaction/protocol";
-import type {
-  HelarcProductPhase,
-} from "./HelarcPatchReview.js";
-import { createHelarcPatchReviewProtocol } from "./HelarcPatchReview.js";
 import {
   createHelarcActionComposition,
   type HelarcCommandActionContribution,
@@ -97,7 +83,6 @@ export interface CreateHelarcProductCompositionInput {
   readonly fileActions: HelarcFileActionContribution;
   readonly commandActions: HelarcCommandActionContribution | null;
   readonly validationTargets?: readonly HelarcExactTargetValidationRequirement[];
-  readonly permissionRequests?: HelarcPermissionRequestApplicationPort | null;
   readonly modelContinuationStore?: ModelContinuationStore;
   readonly now?: () => string;
 }
@@ -145,7 +130,10 @@ export async function createHelarcProductComposition(
     command: input.toolMode === "shell-enabled" ? input.commandActions : null,
     validation: validation.operation,
   });
-  const interactions = createHelarcInteractionComposition(input.permissionRequests ?? null);
+  const interactions = createInteractionProtocolRegistrySnapshot(
+    "helarc.interactions.v2",
+    [],
+  );
   const retryClock = createHelarcRetryClock(input.now);
   const controllerTraceByOperationId = new Map<
     string,
@@ -200,17 +188,6 @@ export async function createHelarcProductComposition(
     }),
     controllerTraceByOperationId,
   );
-  const patchController = new HelarcPatchActionController({
-    controller: providerController,
-    codeSource: input.codeSource,
-    onStateChanged: (state) => {
-      const phase = productPhaseForPatchState(state);
-      if (phase !== null) {
-        publishProductUpdate({ kind: "phase_changed", phase });
-      }
-    },
-    now: input.now,
-  });
   const runMetadata = Object.freeze({
     product: "helarc",
     toolMode: input.toolMode,
@@ -221,7 +198,7 @@ export async function createHelarcProductComposition(
 
   return Object.freeze({
     agent: createHelarcAgent(),
-    controller: patchController,
+    controller: providerController,
     actions,
     interactions,
     validation,
@@ -256,7 +233,6 @@ export async function createHelarcProductComposition(
         input.task,
         input.workspace,
         runResult,
-        patchController.getPatchOutcome(),
         selectedEnforcement,
         validationProjection,
       );
@@ -272,148 +248,4 @@ function createHelarcRetryClock(
   return now === undefined
     ? systemRetryClock
     : Object.freeze({ now: () => new Date(now()) });
-}
-
-function productPhaseForPatchState(
-  state: HelarcPatchActionState,
-): HelarcProductPhase | null {
-  if (state.kind === "none") {
-    return Object.freeze({ kind: "none" });
-  }
-  if (state.kind === "review_requested") {
-    return Object.freeze({
-      kind: "patch_review_requested",
-      proposalId: state.proposalId,
-      proposalRevision: state.proposalRevision,
-      reviewId: state.reviewId,
-    });
-  }
-  return Object.freeze({
-    kind: "patch_action_submitted",
-    proposalId: state.proposalId,
-    proposalRevision: state.proposalRevision,
-    reviewId: state.reviewId,
-    requestVersion: state.requestVersion,
-  });
-}
-
-export interface HelarcPermissionRequestSubject {
-  readonly runId: string;
-  readonly rootId: string;
-  readonly permissions: Readonly<Record<string, unknown>>;
-  readonly reason: string;
-}
-
-export interface HelarcPermissionRequestApplicationPort {
-  apply(input: {
-    readonly request: InteractionRequestRef<"permission_request">;
-    readonly subject: HelarcPermissionRequestSubject;
-    readonly accepted: boolean;
-    readonly reason: string | null;
-  }): Promise<unknown> | unknown;
-}
-
-function createHelarcInteractionComposition(
-  application: HelarcPermissionRequestApplicationPort | null,
-): InteractionProtocolRegistrySnapshot {
-  type Submission = { readonly accepted: boolean; readonly reason: string | null };
-  type Resolution = Submission;
-  const subjects = new Map<string, HelarcPermissionRequestSubject>();
-  const protocolImplementation: InteractionProtocol<
-    "permission_request",
-    HelarcPermissionRequestSubject,
-    Readonly<Record<string, unknown>>,
-    Submission,
-    Resolution,
-    unknown
-  > = {
-    ref: HELARC_PERMISSION_REQUEST_PROTOCOL,
-    createRequest(requestInput) {
-      const subject = snapshotPermissionSubject(requestInput.subject);
-      const request = snapshotInteractionRequest({
-        ref: {
-          id: requestInput.requestId,
-          protocol: HELARC_PERMISSION_REQUEST_PROTOCOL,
-          requestVersion: requestInput.requestVersion,
-          subject: requestInput.subjectRef,
-        },
-        subject,
-        correlation: requestInput.correlation,
-        parentRunAction: requestInput.parentRunAction,
-        presentation: snapshotData(requestInput.presentation) as Readonly<Record<string, unknown>>,
-        expiresAt: requestInput.expiresAt,
-        createdAt: requestInput.createdAt,
-      }, snapshotPermissionSubject, (value) => snapshotData(value) as Readonly<Record<string, unknown>>);
-      subjects.set(request.ref.id, subject);
-      return request;
-    },
-    validateSubmission(_request, candidate) {
-      if (!isRecord(candidate) || typeof candidate.accepted !== "boolean") {
-        throw new TypeError("Helarc permission request submission requires accepted.");
-      }
-      if (candidate.reason !== undefined && candidate.reason !== null && typeof candidate.reason !== "string") {
-        throw new TypeError("Helarc permission request reason must be text or null.");
-      }
-      return Object.freeze({
-        accepted: candidate.accepted,
-        reason: typeof candidate.reason === "string" ? candidate.reason : null,
-      });
-    },
-    resolve({ submission }) {
-      return submission;
-    },
-    async apply({ request, resolution }) {
-      const subject = subjects.get(request.id);
-      subjects.delete(request.id);
-      if (subject === undefined) {
-        return Object.freeze({ status: "failed", code: "permission_request_subject_missing" });
-      }
-      if (application === null) {
-        return Object.freeze({ status: "unavailable", code: "permission_request_application_unavailable" });
-      }
-      return application.apply({
-        request,
-        subject,
-        accepted: resolution.accepted,
-        reason: resolution.reason,
-      });
-    },
-  };
-  const protocol = Object.freeze(protocolImplementation);
-  const patchReview = createHelarcPatchReviewProtocol();
-  return createInteractionProtocolRegistrySnapshot(
-    "helarc.interactions.v1",
-    [
-      { ref: HELARC_PERMISSION_REQUEST_PROTOCOL, protocol },
-      { ref: patchReview.ref, protocol: patchReview },
-    ],
-  );
-}
-
-function snapshotPermissionSubject(input: HelarcPermissionRequestSubject): HelarcPermissionRequestSubject {
-  if (!isRecord(input) || typeof input.runId !== "string" || typeof input.rootId !== "string" ||
-    !isRecord(input.permissions) || typeof input.reason !== "string") {
-    throw new TypeError("Helarc permission request subject is invalid.");
-  }
-  return Object.freeze({
-    runId: input.runId,
-    rootId: input.rootId,
-    permissions: snapshotData(input.permissions) as Readonly<Record<string, unknown>>,
-    reason: input.reason,
-  });
-}
-
-function snapshotData<T>(value: T): T {
-  return deepFreeze(structuredClone(value));
-}
-
-function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
-  if (value === null || typeof value !== "object" || seen.has(value)) return value;
-  seen.add(value);
-  for (const child of Object.values(value)) deepFreeze(child, seen);
-  return Object.freeze(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

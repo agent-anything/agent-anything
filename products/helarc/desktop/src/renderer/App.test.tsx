@@ -1,3 +1,4 @@
+import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { HelarcMainSnapshot } from "../shared/HelarcDesktopApi.js";
@@ -82,15 +83,17 @@ describe("Helarc workbench shell", () => {
         run={runProjection({
           activity: [
             event("event-1", "tool.proposed", "Tool call proposed", "info", {
-              controllerAction: "call_tool",
-              requestedToolName: "codeAgent.readFile",
-              promptArchitectureVersion: "helarc-prompt-v2",
-              actionContractVersion: "helarc-action-v2",
-              toolCatalogVersion: "helarc-tool-catalog-v2",
+              controllerAction: "tool_call",
+              requestedToolName: "Read",
+              promptArchitectureVersion: "helarc-prompt-v3",
+              actionContractVersion: "helarc-model-decision-v1",
+              toolCatalogVersion: "helarc-tool-catalog-v3",
               exposedToolNames: [
-                "codeAgent.listFiles",
-                "codeAgent.readFile",
-                "codeAgent.searchFiles",
+                "Read",
+                "Glob",
+                "Grep",
+                "Edit",
+                "Write",
               ],
             }),
           ],
@@ -99,10 +102,10 @@ describe("Helarc workbench shell", () => {
       />,
     );
 
-    expect(html).toContain("action call_tool");
-    expect(html).toContain("tool codeAgent.readFile");
-    expect(html).toContain("versions helarc-prompt-v2, helarc-action-v2, helarc-tool-catalog-v2");
-    expect(html).toContain("tools codeAgent.listFiles, codeAgent.readFile, codeAgent.searchFiles");
+    expect(html).toContain("action tool_call");
+    expect(html).toContain("tool Read");
+    expect(html).toContain("versions helarc-prompt-v3, helarc-model-decision-v1, helarc-tool-catalog-v3");
+    expect(html).toContain("tools Read, Glob, Grep, Edit, Write");
   });
 
   it("renders active Thread messages", () => {
@@ -354,8 +357,6 @@ function runProjection(input: {
               },
               agentSummary: "Terminal summary",
               runtimeStatus,
-              patchStatus: null,
-              appliedPath: null,
               enforcement: {
                 selected: "disabled",
                 status: "unisolated",

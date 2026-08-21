@@ -1,4 +1,3 @@
-import type { HelarcPatchReviewSubmission } from "@agent-anything/helarc/composition";
 import { HOST_COMMAND_VERSION } from "@agent-anything/host/transport";
 import type {
   ApprovalDecisionKind,
@@ -268,8 +267,6 @@ describe("HelarcMainController", () => {
             output: {
               agentSummary: "No changes needed.",
               runtimeStatus: "succeeded",
-              patchStatus: null,
-              appliedPath: null,
               safeErrors: [],
             },
           },
@@ -657,7 +654,7 @@ describe("HelarcMainController", () => {
       provider: new ScriptedProvider([
         commandToolCall(markerPath),
         {
-          action: "stop",
+          kind: "stop",
           reason: "Permission was denied.",
         },
       ]),
@@ -807,7 +804,7 @@ describe("HelarcMainController", () => {
       provider: new ScriptedProvider([
         commandToolCall(markerPath),
         {
-          action: "complete",
+          kind: "completion",
           summary: "Permission was granted for this run.",
         },
       ]),
@@ -1008,7 +1005,7 @@ describe("HelarcMainController", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-read-only-default-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const unsupportedShellCall = {
-      action: "call_tool",
+      kind: "tool_call",
       reason: "Try a shell command.",
       toolName: "codeAgent.runCommand",
       input: {
@@ -1100,7 +1097,7 @@ describe("HelarcMainController", () => {
       runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
         {
-          action: "complete",
+          kind: "completion",
           summary: "First Run completed.",
         },
         commandToolCall(markerPath, "Keep the second Run active."),
@@ -1159,299 +1156,6 @@ describe("HelarcMainController", () => {
     });
     await secondCancelled;
   });
-
-  it("correlates patch review decisions and applies accepted patches", async () => {
-    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-patch-"));
-    await mkdir(join(workspaceRoot, "src"));
-    const targetPath = join(workspaceRoot, "src", "created.txt");
-    const controller = new HelarcMainController({
-      provider: new ScriptedProvider([
-        {
-          action: "propose",
-          summary: "Create a file.",
-          change: {
-            operation: "create",
-            path: "src/created.txt",
-            content: "created\n",
-          },
-        },
-      ]),
-    });
-    controller.selectWorkspacePath(workspaceRoot);
-
-    const waiting = waitForPendingPatchReview(controller);
-    const completed = waitForSnapshot(
-      controller,
-      (snapshot) =>
-        snapshot.status === "completed"
-        && snapshot.activeThread?.artifacts.length === 3,
-    );
-    const result = await controller.startRun({
-      taskText: "Create file",
-      target: { kind: "new_thread" },
-    });
-
-    expect(result).toMatchObject({ ok: true });
-    const waitingSnapshot = await waiting;
-    expect(pendingPatchReview(waitingSnapshot)).toMatchObject({
-      operation: "create",
-      path: "src/created.txt",
-      proposedContent: "created\n",
-    });
-
-    const staleSubmission = patchSubmission(waitingSnapshot, "accepted", {
-      submissionId: "stale-submission",
-    });
-    expect(dispatchPatchReviewCommand(controller, {
-      ...staleSubmission,
-      interactionRequest: {
-        ...staleSubmission.interactionRequest,
-        subject: {
-          ...staleSubmission.interactionRequest.subject,
-          id: "stale-review",
-        },
-      },
-    })).toMatchObject({
-      status: "handled",
-      result: { status: "rejected", code: "interaction_not_pending" },
-    });
-
-    const acceptedSubmission = patchSubmission(waitingSnapshot, "accepted", {
-      payload: { decision: "accepted", reason: "Apply it." },
-    });
-    const applying = waitForStatus(controller, "applying_patch");
-    expect(dispatchPatchReviewCommand(controller, acceptedSubmission)).toMatchObject({
-      status: "handled",
-      result: { status: "accepted_for_resolution" },
-    });
-    await applying;
-
-    const completedSnapshot = await completed;
-    expect(completedSnapshot).toMatchObject({
-      status: "completed",
-      run: {
-        display: { status: "completed", terminal: true },
-        product: {
-          phase: { kind: "none" },
-          result: {
-            output: {
-              patchStatus: "applied",
-              appliedPath: "src/created.txt",
-              safeErrors: [],
-            },
-          },
-        },
-      },
-      activeThread: {
-        artifacts: [
-          {
-            kind: "final-output",
-            title: "Final output",
-            summary: "Create a file.",
-          },
-          {
-            kind: "proposal-revision",
-            title: "Patch proposal: create src/created.txt",
-            summary: "Accepted create patch for src/created.txt.",
-          },
-          {
-            kind: "applied-change",
-            title: "Applied patch: src/created.txt",
-            summary: "Applied create to src/created.txt.",
-          },
-        ],
-      },
-    });
-    await expect(readFile(targetPath, "utf8")).resolves.toBe("created\n");
-    expect(dispatchPatchReviewCommand(controller, {
-      ...acceptedSubmission,
-      submissionId: "late-patch-submission",
-    })).toMatchObject({
-      status: "rejected",
-      code: "host_command_run_not_active",
-    });
-  });
-
-  it("cancels a pending patch review and rejects its late decision", async () => {
-    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-patch-cancel-"));
-    await mkdir(join(workspaceRoot, "src"));
-    const targetPath = join(workspaceRoot, "src", "cancelled.txt");
-    const controller = new HelarcMainController({
-      provider: new ScriptedProvider([{
-        action: "propose",
-        summary: "Create a file.",
-        change: {
-          operation: "create",
-          path: "src/cancelled.txt",
-          content: "must not be created\n",
-        },
-      }]),
-    });
-    controller.selectWorkspacePath(workspaceRoot);
-
-    const waiting = waitForPendingPatchReview(controller);
-    const cancelled = waitForProductResult(controller, "cancelled");
-    controller.startRun({
-      taskText: "Create then cancel",
-      target: { kind: "new_thread" },
-    });
-    const waitingSnapshot = await waiting;
-    const lateSubmission = patchSubmission(waitingSnapshot, "accepted", {
-      submissionId: "late-after-patch-cancel",
-    });
-
-    expect(dispatchCancellationCommand(
-      controller,
-      pendingPatchReview(waitingSnapshot).runId,
-    )).toMatchObject({
-      status: "handled",
-      result: { status: "accepted" },
-      projection: { status: "cancelling" },
-    });
-    const cancelledSnapshot = await cancelled;
-    expect(cancelledSnapshot).toMatchObject({
-      status: "cancelled",
-      run: {
-        display: { status: "cancelled", terminal: true },
-        product: {
-          phase: { kind: "none" },
-          result: { output: { runtimeStatus: "cancelled", patchStatus: null } },
-        },
-      },
-    });
-    expect(dispatchPatchReviewCommand(controller, lateSubmission)).toMatchObject({
-      status: "handled",
-      result: { status: "rejected", code: "run_settled" },
-    });
-    await expect(access(targetPath)).rejects.toThrow();
-  });
-
-  it("completes a desktop-host inspect-review-apply scenario", async () => {
-    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-scenario-"));
-    const storePath = await threadFilePath();
-    const threadStore = new FileHelarcThreadStore(storePath);
-    await mkdir(join(workspaceRoot, "src"));
-    const targetPath = join(workspaceRoot, "src", "existing.txt");
-    await writeFile(targetPath, "before\n");
-    const provider = new ScriptedProvider([
-      {
-        action: "call_tool",
-        reason: "Inspect the target file.",
-        toolName: "codeAgent.readFile",
-        input: { path: "src/existing.txt" },
-      },
-      {
-        action: "propose",
-        summary: "Update the target file.",
-        change: {
-          operation: "update",
-          path: "src/existing.txt",
-          content: "after\n",
-        },
-      },
-    ]);
-    const controller = new HelarcMainController({ provider, threadStore });
-    controller.selectWorkspacePath(workspaceRoot);
-
-    const waitingForReview = waitForPendingPatchReview(controller);
-    const completed = waitForProductResult(controller, "completed");
-    const persisted = waitForSnapshot(
-      controller,
-      (snapshot) =>
-        snapshot.status === "completed"
-        && snapshot.threadSummaries[0]?.latestRun?.status === "completed",
-      15_000,
-    );
-    const result = await controller.startRun({
-      taskText: "Update existing file",
-      target: { kind: "new_thread" },
-    });
-
-    expect(result).toMatchObject({ ok: true });
-    const reviewSnapshot = await waitingForReview;
-    expect(reviewSnapshot.run?.product.activity.map((item) => item.kind)).toContain("operation.finished");
-    expect(pendingPatchReview(reviewSnapshot)).toMatchObject({
-      operation: "update",
-      path: "src/existing.txt",
-      originalContent: "before\n",
-      proposedContent: "after\n",
-    });
-
-    dispatchPatchReviewCommand(controller, patchSubmission(reviewSnapshot, "accepted", {
-      payload: { decision: "accepted", reason: "Apply scenario change." },
-    }));
-
-    const completedSnapshot = await completed;
-    expect(completedSnapshot).toMatchObject({
-      status: "completed",
-      run: {
-        product: {
-          result: {
-            output: {
-              agentSummary: "Update the target file.",
-              patchStatus: "applied",
-              appliedPath: "src/existing.txt",
-              safeErrors: [],
-            },
-          },
-        },
-      },
-    });
-    await expect(readFile(targetPath, "utf8")).resolves.toBe("after\n");
-    await persisted;
-
-    await expect(threadStore.loadThread("helarc-thread-1")).resolves.toMatchObject({
-      messages: [
-        {
-          role: "user",
-          content: "Update existing file",
-          relatedRunIds: ["helarc-run-1"],
-        },
-        {
-          role: "assistant",
-          content: "Update the target file.",
-          relatedRunIds: ["helarc-run-1"],
-          relatedArtifactIds: expect.arrayContaining([
-            "helarc-run-1-artifact-final-output",
-            "helarc-run-1-artifact-patch-proposal",
-            "helarc-run-1-artifact-applied-patch",
-          ]),
-        },
-      ],
-      runs: [{
-        id: "helarc-run-1",
-        terminal: {
-          host: { status: "completed" },
-          product: {
-            status: "completed",
-            output: {
-              runtimeStatus: "succeeded",
-              patchStatus: "applied",
-              appliedPath: "src/existing.txt",
-            },
-          },
-        },
-        artifactIds: expect.arrayContaining([
-          "helarc-run-1-artifact-final-output",
-          "helarc-run-1-artifact-patch-proposal",
-          "helarc-run-1-artifact-applied-patch",
-        ]),
-      }],
-      artifacts: expect.arrayContaining([
-        expect.objectContaining({ kind: "final-output", runId: "helarc-run-1" }),
-        expect.objectContaining({ kind: "proposal-revision", runId: "helarc-run-1" }),
-        expect.objectContaining({ kind: "applied-change", runId: "helarc-run-1" }),
-      ]),
-    });
-
-    const document = JSON.parse(await readFile(storePath, "utf8")) as {
-      aggregates: Array<{ commitLedger: Array<{ kind: string }> }>;
-    };
-    const commitKinds = document.aggregates[0]?.commitLedger.map(({ kind }) => kind) ?? [];
-    expect(commitKinds[0]).toBe("run_start");
-    expect(commitKinds.at(-1)).toBe("run_terminal");
-    expect(commitKinds.filter((kind) => kind === "run_terminal")).toHaveLength(1);
-  }, 20_000);
 
   it("reserves the active slot before asynchronous preparation", async () => {
     const controller = new HelarcMainController({ provider: new CompleteProvider() });
@@ -1777,7 +1481,7 @@ class CompleteProvider implements Provider {
       response: {
         responseId: null,
         output: {
-          action: "complete",
+          kind: "completion",
           summary: "No changes needed.",
         },
         usage: null,
@@ -1838,7 +1542,7 @@ class DeferredCompleteProvider extends CompleteProvider {
       response: {
         responseId: null,
         output: {
-          action: "complete",
+          kind: "completion",
           summary: "No changes needed.",
         },
         usage: null,
@@ -1950,7 +1654,7 @@ function commandToolCall(
   reason = "Create a governed marker file.",
 ) {
   return {
-    action: "call_tool",
+    kind: "tool_call",
     reason,
     toolName: "codeAgent.runCommand",
     input: {
@@ -1980,22 +1684,6 @@ function pendingApproval(snapshot: HelarcMainSnapshot) {
     interactionRequest: pending.request,
     pendingVersion: pending.request.requestVersion,
     phase: pending.phase === "pending" ? "reviewing" as const : pending.phase,
-  };
-}
-
-function pendingPatchReview(snapshot: HelarcMainSnapshot) {
-  const pending = snapshot.run?.host.pendingInteractions.find(
-    (candidate) => candidate.request.protocol.owner === "helarc" &&
-      candidate.request.protocol.kind === "patch_review" &&
-      candidate.request.protocol.revision === "1",
-  );
-  if (pending === undefined) {
-    throw new Error("Expected a pending patch review.");
-  }
-  return {
-    ...(pending.presentation as import("@agent-anything/helarc/composition").HelarcPatchReviewPresentation),
-    interactionRequest: pending.request,
-    phase: pending.phase,
   };
 }
 
@@ -2066,49 +1754,6 @@ function dispatchCancellationCommand(
   }, "run.cancel");
 }
 
-interface PatchInteractionSubmission {
-  readonly submissionId: string;
-  readonly runId: string;
-  readonly interactionRequest: InteractionRequestRef;
-  readonly payload: HelarcPatchReviewSubmission;
-}
-
-function patchSubmission(
-  snapshot: HelarcMainSnapshot,
-  decision: "accepted" | "rejected" | "request_revision",
-  overrides: Partial<PatchInteractionSubmission> = {},
-): PatchInteractionSubmission {
-  const pending = pendingPatchReview(snapshot);
-  return {
-    submissionId: "desktop-patch-submission-1",
-    runId: pending.runId,
-    interactionRequest: pending.interactionRequest,
-    payload: {
-      decision,
-      reason: decision === "accepted" ? null : "Rejected in test.",
-    },
-    ...overrides,
-  };
-}
-
-function dispatchPatchReviewCommand(
-  controller: HelarcMainController,
-  submission: PatchInteractionSubmission,
-  commandId = `host-patch-${submission.submissionId}`,
-) {
-  return controller.dispatchHostCommand({
-    version: HOST_COMMAND_VERSION,
-    commandId,
-    runId: submission.runId,
-    kind: "interaction.submit",
-    payload: {
-      request: submission.interactionRequest,
-      submissionId: submission.submissionId,
-      payload: submission.payload,
-    },
-  }, "interaction.submit");
-}
-
 function waitForPendingApproval(
   controller: HelarcMainController,
 ): Promise<HelarcMainSnapshot> {
@@ -2116,18 +1761,6 @@ function waitForPendingApproval(
     controller,
     (snapshot) => snapshot.run?.host.pendingInteractions.some(
       (candidate) => candidate.request.protocol.kind === "approval",
-    ) === true,
-  );
-}
-
-function waitForPendingPatchReview(
-  controller: HelarcMainController,
-): Promise<HelarcMainSnapshot> {
-  return waitForSnapshot(
-    controller,
-    (snapshot) => snapshot.run?.host.pendingInteractions.some(
-      (candidate) => candidate.request.protocol.owner === "helarc" &&
-        candidate.request.protocol.kind === "patch_review",
     ) === true,
   );
 }

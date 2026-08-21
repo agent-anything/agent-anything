@@ -131,7 +131,6 @@ describe("HelarcProductResult", () => {
         additional: [],
       },
       result,
-      null,
       "disabled",
       {
         snapshot: { runId: "run-1", revision: 7 },

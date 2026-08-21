@@ -230,13 +230,13 @@ describe("Helarc IPC", () => {
     const snapshot = mainSnapshot("running");
     const request = {
       id: "interaction-1",
-      protocol: { owner: "helarc", kind: "patch-review", revision: "1" },
+      protocol: { owner: "permission", kind: "action-approval", revision: "1" },
       requestVersion: 2,
       subject: {
-        owner: "helarc",
-        kind: "patch-proposal",
-        id: "proposal-1",
-        revision: "proposal-revision-2",
+        owner: "canonical-action",
+        kind: "action",
+        id: "action-1",
+        revision: "2",
       },
     };
     const dispatchHostCommand = vi.fn((candidate: unknown, expectedKind: string) => {
@@ -274,7 +274,7 @@ describe("Helarc IPC", () => {
           receipt: {
             receiptId: "interaction-receipt-1",
             request,
-            submissionId: "patch-review-submission-1",
+            submissionId: "approval-submission-1",
             status: "accepted_for_resolution",
             recordedAt: "2026-08-03T00:00:01.000Z",
             privateDigest: PRIVATE_RESULT,
@@ -304,7 +304,7 @@ describe("Helarc IPC", () => {
       kind: "interaction.submit",
       payload: {
         request,
-        submissionId: "patch-review-submission-1",
+        submissionId: "approval-submission-1",
         payload: { optionId: "accept" },
       },
     };
@@ -340,7 +340,7 @@ describe("Helarc IPC", () => {
           status: "accepted_for_resolution",
           receipt: {
             receiptId: "interaction-receipt-1",
-            submissionId: "patch-review-submission-1",
+            submissionId: "approval-submission-1",
             request: { id: "interaction-1", requestVersion: 2 },
           },
         },

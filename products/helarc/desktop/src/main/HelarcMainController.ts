@@ -49,12 +49,7 @@ import {
   type HelarcRunProjectionUpdate,
   type HelarcRunProviderRef,
 } from "@agent-anything/helarc/run";
-import type {
-  HelarcPatchReviewPresentation,
-  HelarcPatchReviewSubmission,
-  HelarcProductResult,
-} from "@agent-anything/helarc/composition";
-import { HELARC_PATCH_REVIEW_PROTOCOL } from "@agent-anything/helarc/composition";
+import type { HelarcProductResult } from "@agent-anything/helarc/composition";
 import {
   createBuiltInHelarcTaskTemplates,
   type HelarcTaskTemplate,
@@ -115,8 +110,6 @@ export type HelarcMainSnapshotStatus =
   | "running"
   | "cancelling"
   | "waiting_for_approval"
-  | "waiting_for_patch_review"
-  | "applying_patch"
   | "completed"
   | "rejected"
   | "failed"
@@ -317,7 +310,6 @@ export class HelarcMainController {
   private threadSummaries: HelarcThreadSummarySnapshot[] = [];
   private readonly taskTemplates: HelarcTaskTemplate[];
   private currentThreadRecord: HelarcThreadRecord | null = null;
-  private lastPatchReview: CompletedPatchReview | null = null;
   private readonly threadStore: HelarcThreadStore;
   private readonly modelContinuationStore: ModelContinuationStore | undefined;
   private readonly contextManifestPersistence:
@@ -431,20 +423,7 @@ export class HelarcMainController {
     candidate: unknown,
     expectedKind: HostCommandKind,
   ): HostCommandReceipt {
-    const patchSubmission = expectedKind === "interaction.submit"
-      ? this.capturePendingPatchSubmission(candidate)
-      : null;
-    const receipt = this.hostCommandDispatcher.dispatch(candidate, expectedKind);
-    if (
-      patchSubmission !== null &&
-      receipt.status === "handled" &&
-      receipt.kind === "interaction.submit" &&
-      (receipt.result.status === "accepted_for_resolution" ||
-        receipt.result.status === "duplicate_identical")
-    ) {
-      this.lastPatchReview = patchSubmission;
-    }
-    return receipt;
+    return this.hostCommandDispatcher.dispatch(candidate, expectedKind);
   }
 
   queryRunStatus(candidate: unknown): HostRunStatusQueryReceipt {
@@ -499,7 +478,6 @@ export class HelarcMainController {
     this.runProjection = null;
     this.lastError = null;
     this.currentThreadRecord = null;
-    this.lastPatchReview = null;
     this.detachRunProjectionSubscriptions();
     return this.publishSnapshot();
   }
@@ -585,7 +563,6 @@ export class HelarcMainController {
     this.acceptedTask = null;
     this.runProjection = null;
     this.lastError = null;
-    this.lastPatchReview = null;
     this.publishSnapshot();
 
     let startCommitted = false;
@@ -703,7 +680,6 @@ export class HelarcMainController {
     if (slot.kind === "empty") {
       this.acceptedTask = null;
       this.runProjection = null;
-      this.lastPatchReview = null;
       this.detachRunProjectionSubscriptions();
     }
     this.currentThreadRecord = record;
@@ -1033,35 +1009,6 @@ export class HelarcMainController {
     this.runProjectionUnsubscribers = [];
   }
 
-  private capturePendingPatchSubmission(candidate: unknown): CompletedPatchReview | null {
-    const command = asRecord(candidate);
-    const commandPayload = asRecord(command?.payload);
-    const request = asRecord(commandPayload?.request);
-    const protocol = asRecord(request?.protocol);
-    const submission = asRecord(commandPayload?.payload);
-    if (
-      command?.kind !== "interaction.submit" ||
-      protocol?.owner !== HELARC_PATCH_REVIEW_PROTOCOL.owner ||
-      protocol.kind !== HELARC_PATCH_REVIEW_PROTOCOL.kind ||
-      protocol.revision !== HELARC_PATCH_REVIEW_PROTOCOL.revision ||
-      request === null ||
-      submission === null ||
-      !isPatchReviewSubmission(submission)
-    ) return null;
-    const pending = this.runProjection?.host.pendingInteractions.find((interaction) =>
-      sameInteractionRequest(interaction.request, request)
-    );
-    const review = pending === undefined
-      ? null
-      : readPatchReviewPresentation(pending.presentation);
-    if (review === null) return null;
-    return Object.freeze({
-      review,
-      decision: submission.decision,
-      reason: submission.reason,
-    });
-  }
-
   private getCurrentStatus(): HelarcMainSnapshotStatus {
     if (this.runProjection !== null) return this.runProjection.display.status;
     if (this.activeRunSlot.kind === "reserved") return "starting";
@@ -1192,7 +1139,6 @@ export class HelarcMainController {
       run,
       outcome.terminal,
       outcome.product,
-      this.lastPatchReview,
     );
     const assistantMessage = createAssistantTerminalMessage(
       record,
@@ -1248,12 +1194,6 @@ export class HelarcMainController {
   }
 }
 
-interface CompletedPatchReview {
-  review: HelarcPatchReviewPresentation;
-  decision: "accepted" | "rejected" | "request_revision" | null;
-  reason: string | null;
-}
-
 class HelarcDesktopPersistenceError extends Error {
   constructor(readonly persistenceCode: string, message: string) {
     super(message);
@@ -1298,7 +1238,6 @@ function createTerminalArtifacts(
   run: HelarcPersistedRun,
   terminal: HostTerminalRunProjection,
   product: HelarcProductResult,
-  patchReview: CompletedPatchReview | null,
 ): HelarcArtifact[] {
   const artifacts: HelarcArtifact[] = [];
   const safeOutput = product.output;
@@ -1322,8 +1261,6 @@ function createTerminalArtifacts(
         ? {
             agentSummary: safeOutput.agentSummary,
             runtimeStatus: safeOutput.runtimeStatus,
-            patchStatus: safeOutput.patchStatus,
-            appliedPath: safeOutput.appliedPath,
             enforcement: {
               selected: safeOutput.enforcement.selected,
               status: safeOutput.enforcement.status,
@@ -1334,76 +1271,6 @@ function createTerminalArtifacts(
     });
     if (artifact) {
       artifacts.push(artifact);
-    }
-  }
-
-  if (patchReview) {
-    const patchSummary = createPatchArtifactSummary(patchReview);
-    const proposal = createArtifact({
-      id: `${run.id}-artifact-patch-proposal`,
-      threadId: record.thread.id,
-      runId: run.id,
-      kind: "proposal-revision",
-      title: `Patch proposal: ${patchReview.review.operation} ${patchReview.review.path}`,
-      summary: patchSummary,
-      createdAt: terminal.completedAt,
-      producer: { kind: "review", owner: "helarc", refId: patchReview.review.reviewId },
-      sourceRefs: [{
-        owner: "helarc",
-        kind: "proposal_revision",
-        id: patchReview.review.proposalId,
-        revision: String(patchReview.review.proposalRevision),
-      }],
-      effectRefs: [],
-      completeness: "complete",
-      limitations: [],
-      payload: {
-        operation: patchReview.review.operation,
-        path: patchReview.review.path,
-        summary: patchReview.review.summary,
-        rationale: patchReview.review.rationale,
-        decision: patchReview.decision,
-        reason: patchReview.reason,
-        originalContentBytes: patchReview.review.originalContentBytes,
-        proposedContentBytes: patchReview.review.proposedContentBytes,
-        status: safeOutput?.patchStatus ?? null,
-      },
-    });
-    if (proposal) {
-      artifacts.push(proposal);
-    }
-
-    if (patchReview.decision === "accepted" && safeOutput?.patchStatus === "applied") {
-      const applied = createArtifact({
-        id: `${run.id}-artifact-applied-patch`,
-        threadId: record.thread.id,
-        runId: run.id,
-        kind: "applied-change",
-        title: `Applied patch: ${patchReview.review.path}`,
-        summary: safeOutput.appliedPath
-          ? `Applied ${patchReview.review.operation} to ${safeOutput.appliedPath}.`
-          : `Applied ${patchReview.review.operation} patch.`,
-        createdAt: terminal.completedAt,
-        producer: { kind: "product", owner: "helarc", refId: run.id },
-        sourceRefs: [{
-          owner: "helarc",
-          kind: "proposal_revision",
-          id: patchReview.review.proposalId,
-          revision: String(patchReview.review.proposalRevision),
-        }],
-        effectRefs: operationEffectArtifactRefs(product),
-        completeness: "complete",
-        limitations: [...product.uncertainty, ...product.residualRisk],
-        payload: {
-          operation: patchReview.review.operation,
-          path: safeOutput.appliedPath ?? patchReview.review.path,
-          reason: patchReview.reason,
-          status: safeOutput.patchStatus,
-        },
-      });
-      if (applied) {
-        artifacts.push(applied);
-      }
     }
   }
 
@@ -1500,152 +1367,6 @@ function operationEffectArtifactRefs(product: HelarcProductResult): readonly Hel
     id: effect.operationResultId,
     revision: null,
   }));
-}
-
-function createPatchArtifactSummary(patchReview: CompletedPatchReview): string {
-  if (patchReview.decision === "accepted") {
-    return `Accepted ${patchReview.review.operation} patch for ${patchReview.review.path}.`;
-  }
-
-  if (patchReview.decision === "rejected") {
-    return `Rejected ${patchReview.review.operation} patch for ${patchReview.review.path}.`;
-  }
-
-  return `Proposed ${patchReview.review.operation} patch for ${patchReview.review.path}.`;
-}
-
-function asRecord(candidate: unknown): Record<string, unknown> | null {
-  return candidate !== null && typeof candidate === "object" && !Array.isArray(candidate)
-    ? candidate as Record<string, unknown>
-    : null;
-}
-
-function sameInteractionRequest(
-  left: {
-    readonly id: string;
-    readonly protocol: { readonly owner: string; readonly kind: string; readonly revision: string };
-    readonly requestVersion: number;
-    readonly subject: {
-      readonly owner: string;
-      readonly kind: string;
-      readonly id: string;
-      readonly revision: string;
-    };
-  },
-  right: Record<string, unknown>,
-): boolean {
-  const protocol = asRecord(right.protocol);
-  const subject = asRecord(right.subject);
-  return right.id === left.id &&
-    right.requestVersion === left.requestVersion &&
-    protocol?.owner === left.protocol.owner &&
-    protocol.kind === left.protocol.kind &&
-    protocol.revision === left.protocol.revision &&
-    subject?.owner === left.subject.owner &&
-    subject.kind === left.subject.kind &&
-    subject.id === left.subject.id &&
-    subject.revision === left.subject.revision;
-}
-
-function isPatchReviewSubmission(
-  candidate: Record<string, unknown>,
-): candidate is Record<string, unknown> & HelarcPatchReviewSubmission {
-  if (!hasExactKeys(candidate, ["decision", "reason"])) return false;
-  if (
-    candidate.decision !== "accepted" &&
-    candidate.decision !== "rejected" &&
-    candidate.decision !== "request_revision"
-  ) return false;
-  if (candidate.reason !== null && typeof candidate.reason !== "string") return false;
-  return candidate.decision === "accepted" ||
-    (typeof candidate.reason === "string" && candidate.reason.trim().length > 0);
-}
-
-function readPatchReviewPresentation(candidate: unknown): HelarcPatchReviewPresentation | null {
-  const record = asRecord(candidate);
-  if (
-    record === null ||
-    !hasExactKeys(record, [
-      "runId",
-      "proposalId",
-      "proposalRevision",
-      "reviewId",
-      "rootName",
-      "workspaceId",
-      "path",
-      "operation",
-      "summary",
-      "rationale",
-      "originalContent",
-      "proposedContent",
-      "originalContentBytes",
-      "proposedContentBytes",
-    ]) ||
-    !isIdentity(record.runId) ||
-    !isIdentity(record.proposalId) ||
-    !isPositiveInteger(record.proposalRevision) ||
-    !isIdentity(record.reviewId) ||
-    !isBoundedText(record.rootName, 512, false) ||
-    !isIdentity(record.workspaceId) ||
-    !isBoundedText(record.path, 4_096, false) ||
-    (record.operation !== "create" && record.operation !== "update" && record.operation !== "delete") ||
-    !isBoundedText(record.summary, 4_096, false) ||
-    !isBoundedText(record.rationale, 8_192, false) ||
-    !isNullableBoundedText(record.originalContent, 1_000_000) ||
-    !isNullableBoundedText(record.proposedContent, 1_000_000) ||
-    !isNullableByteLength(record.originalContentBytes) ||
-    !isNullableByteLength(record.proposedContentBytes)
-  ) return null;
-  return Object.freeze({
-    runId: record.runId,
-    proposalId: record.proposalId,
-    proposalRevision: record.proposalRevision,
-    reviewId: record.reviewId,
-    rootName: record.rootName,
-    workspaceId: record.workspaceId,
-    path: record.path,
-    operation: record.operation,
-    summary: record.summary,
-    rationale: record.rationale,
-    originalContent: record.originalContent,
-    proposedContent: record.proposedContent,
-    originalContentBytes: record.originalContentBytes,
-    proposedContentBytes: record.proposedContentBytes,
-  });
-}
-
-function hasExactKeys(candidate: Record<string, unknown>, fields: readonly string[]): boolean {
-  const actual = Object.keys(candidate).sort();
-  const expected = [...fields].sort();
-  return actual.length === expected.length &&
-    actual.every((field, index) => field === expected[index]);
-}
-
-function isIdentity(candidate: unknown): candidate is string {
-  return typeof candidate === "string" && candidate.length > 0 && !/\s/.test(candidate);
-}
-
-function isPositiveInteger(candidate: unknown): candidate is number {
-  return Number.isSafeInteger(candidate) && (candidate as number) > 0;
-}
-
-function isNullableByteLength(candidate: unknown): candidate is number | null {
-  return candidate === null ||
-    (Number.isSafeInteger(candidate) && (candidate as number) >= 0);
-}
-
-function isBoundedText(
-  candidate: unknown,
-  maxLength: number,
-  allowEmpty: boolean,
-): candidate is string {
-  return typeof candidate === "string" &&
-    candidate.length <= maxLength &&
-    (allowEmpty || candidate.trim().length > 0);
-}
-
-function isNullableBoundedText(candidate: unknown, maxLength: number): candidate is string | null {
-  return candidate === null || isBoundedText(candidate, maxLength, true);
 }
 
 function createAssistantTerminalMessageContent(

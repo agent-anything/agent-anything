@@ -19,56 +19,25 @@ import {
   HELARC_TOOL_CATALOG_VERSION,
 } from "../prompt/HelarcPromptAssembly.js";
 import { readHelarcToolCatalog } from "../tools/HelarcToolCatalog.js";
+import {
+  HelarcModelDecisionError,
+  parseHelarcModelDecision,
+  type HelarcModelDecision,
+  type HelarcModelDecisionErrorCode,
+} from "./HelarcModelDecision.js";
 
 export const HELARC_CONTROLLER_CAPABILITY = "helarc.code-agent.turn";
 export const HELARC_CONTROLLER_OUTPUT_MAX_LENGTH = 64_000;
-export const HELARC_PERMISSION_REQUEST_PROTOCOL = Object.freeze({
-  owner: "helarc",
-  kind: "permission_request",
-  revision: "1",
-});
+export type HelarcAgentOutput = { kind: "complete"; summary: string };
 
-export type HelarcChangeOperationKind = "create" | "update" | "delete";
-
-export interface HelarcChangeIntent {
-  operation: HelarcChangeOperationKind;
-  path: string;
-  content?: string;
-}
-
-export type HelarcAgentOutput =
-  | { kind: "complete"; summary: string }
-  | { kind: "propose"; summary: string; change: HelarcChangeIntent };
-
-export type HelarcProviderStructuredOutput =
-  | { action: "call_tool"; reason?: string; toolName: string; input: unknown }
-  | {
-      action: "request_permissions";
-      rootId: string;
-      permissions: Record<string, unknown>;
-      reason: string;
-    }
-  | { action: "update_plan"; explanation?: string; plan: unknown }
-  | { action: "complete"; summary: string }
-  | { action: "propose"; summary: string; change: HelarcChangeIntent }
-  | { action: "stop"; reason: string };
+export type HelarcProviderStructuredOutput = HelarcModelDecision;
 
 export type HelarcControllerParseErrorCode =
   | "controller_output_too_large"
   | "controller_output_not_json"
   | "controller_output_invalid"
-  | "controller_action_invalid"
-  | "controller_tool_name_required"
-  | "controller_tool_input_required"
-  | "controller_tool_input_invalid"
   | "controller_tool_name_unsupported"
-  | "controller_summary_required"
-  | "controller_change_required"
-  | "controller_change_operation_required"
-  | "controller_change_operation_invalid"
-  | "controller_change_path_required"
-  | "controller_change_content_required"
-  | "controller_stop_reason_required";
+  | HelarcModelDecisionErrorCode;
 
 export class HelarcControllerParseError extends StructuredOutputError {
   constructor(readonly code: HelarcControllerParseErrorCode) {
@@ -230,8 +199,8 @@ export function parseHelarcProviderResponse(
   const modelItem = createModelItem(output, input);
   const modelItems = Object.freeze([modelItem]) as readonly [ControllerModelItem];
 
-  switch (output.action) {
-    case "call_tool":
+  switch (output.kind) {
+    case "tool_call":
       assertToolNameSupported(output.toolName, input);
       return Object.freeze({
         kind: "advance",
@@ -250,38 +219,7 @@ export function parseHelarcProviderResponse(
         modelItems,
       });
 
-    case "request_permissions":
-      return Object.freeze({
-        kind: "advance",
-        candidates: oneCandidate(Object.freeze({
-          kind: "interaction_request" as const,
-          protocol: HELARC_PERMISSION_REQUEST_PROTOCOL,
-          subject: Object.freeze({
-            runId: input.runId,
-            rootId: output.rootId,
-            permissions: output.permissions,
-            reason: output.reason,
-          }),
-          subjectRef: Object.freeze({
-            owner: "helarc",
-            kind: "permission_request",
-            id: `${input.runId}:permission:${input.iteration}`,
-            revision: "1",
-          }),
-          presentation: Object.freeze({
-            rootId: output.rootId,
-            permissions: output.permissions,
-            reason: output.reason,
-          }),
-          requestVersion: 1,
-          expiresAt: null,
-          blockingScope: "run" as const,
-          modelItemId: modelItem.id,
-        })),
-        modelItems,
-      });
-
-    case "update_plan":
+    case "plan_update":
       return Object.freeze({
         kind: "advance",
         candidates: oneCandidate(Object.freeze({
@@ -301,79 +239,25 @@ export function parseHelarcProviderResponse(
     case "stop":
       return Object.freeze({ kind: "propose_stop", reason: output.reason, modelItems });
 
-    case "complete":
+    case "completion":
       return Object.freeze({
         kind: "propose_completion",
         output: Object.freeze({ kind: "complete", summary: output.summary }),
         modelItems,
       });
 
-    case "propose":
-      return Object.freeze({
-        kind: "propose_completion",
-        output: Object.freeze({
-          kind: "propose",
-          summary: output.summary,
-          change: Object.freeze({ ...output.change }),
-        }),
-        modelItems,
-      });
   }
 }
 
 export function parseStructuredOutput(output: unknown): HelarcProviderStructuredOutput {
   const value = normalizeProviderOutput(output);
-  if (!isRecord(value)) {
+  try {
+    return parseHelarcModelDecision(value);
+  } catch (error) {
+    if (error instanceof HelarcModelDecisionError) {
+      throw new HelarcControllerParseError(error.code);
+    }
     throw new HelarcControllerParseError("controller_output_invalid");
-  }
-
-  const action = readString(value, "action");
-  switch (action) {
-    case "call_tool":
-      return parseCallToolOutput(value);
-    case "request_permissions":
-      return {
-        action,
-        rootId: readRequiredString(
-          value,
-          "rootId",
-          "controller_tool_input_invalid",
-        ),
-        permissions: readRequiredRecord(
-          value,
-          "permissions",
-          "controller_tool_input_invalid",
-        ),
-        reason: readRequiredString(
-          value,
-          "reason",
-          "controller_tool_input_invalid",
-        ),
-      };
-    case "update_plan":
-      return {
-        action,
-        explanation: readOptionalString(value, "explanation"),
-        plan: value.plan,
-      };
-    case "complete":
-      return {
-        action,
-        summary: readRequiredString(value, "summary", "controller_summary_required"),
-      };
-    case "propose":
-      return {
-        action,
-        summary: readRequiredString(value, "summary", "controller_summary_required"),
-        change: parseChangeIntent(value.change),
-      };
-    case "stop":
-      return {
-        action,
-        reason: readRequiredString(value, "reason", "controller_stop_reason_required"),
-      };
-    default:
-      throw new HelarcControllerParseError("controller_action_invalid");
   }
 }
 
@@ -404,15 +288,6 @@ function normalizeProviderOutput(output: unknown): unknown {
   }
 }
 
-function parseCallToolOutput(value: Record<string, unknown>): HelarcProviderStructuredOutput {
-  return {
-    action: "call_tool",
-    toolName: readRequiredString(value, "toolName", "controller_tool_name_required"),
-    input: readRequiredToolInput(value),
-    reason: readOptionalString(value, "reason"),
-  };
-}
-
 function assertToolNameSupported(
   toolName: string,
   input: ControllerInput<HelarcAgentOutput>,
@@ -431,96 +306,18 @@ function createControllerTraceMetadata(
   const toolCatalog = readHelarcToolCatalog(input);
   const metadata: Record<string, unknown> = {
     source: "helarc-controller",
-    controllerAction: output.action,
+    controllerAction: output.kind,
     promptArchitectureVersion: HELARC_PROMPT_ARCHITECTURE_VERSION,
     actionContractVersion: HELARC_ACTION_CONTRACT_VERSION,
     toolCatalogVersion: HELARC_TOOL_CATALOG_VERSION,
     exposedToolNames: toolCatalog.tools.map((tool) => tool.name),
   };
 
-  if (output.action === "call_tool") {
+  if (output.kind === "tool_call") {
     metadata.requestedToolName = output.toolName;
-  }
-  if (output.action === "propose") {
-    metadata.patchOperation = output.change.operation;
-    metadata.patchPath = output.change.path;
   }
 
   return Object.freeze(metadata);
-}
-
-function readRequiredToolInput(value: Record<string, unknown>): Record<string, unknown> {
-  if (!Object.hasOwn(value, "input")) {
-    throw new HelarcControllerParseError("controller_tool_input_required");
-  }
-  if (!isRecord(value.input)) {
-    throw new HelarcControllerParseError("controller_tool_input_invalid");
-  }
-  return value.input;
-}
-
-function parseChangeIntent(value: unknown): HelarcChangeIntent {
-  if (!isRecord(value)) {
-    throw new HelarcControllerParseError("controller_change_required");
-  }
-
-  const operation = readRequiredString(
-    value,
-    "operation",
-    "controller_change_operation_required",
-  );
-  if (operation !== "create" && operation !== "update" && operation !== "delete") {
-    throw new HelarcControllerParseError("controller_change_operation_invalid");
-  }
-
-  const path = readRequiredString(value, "path", "controller_change_path_required");
-  const content = readRawOptionalString(value, "content");
-  if ((operation === "create" || operation === "update") && content === undefined) {
-    throw new HelarcControllerParseError("controller_change_content_required");
-  }
-
-  return content === undefined ? { operation, path } : { operation, path, content };
-}
-
-function readString(value: Record<string, unknown>, key: string): string | undefined {
-  return typeof value[key] === "string" ? value[key] : undefined;
-}
-
-function readOptionalString(value: Record<string, unknown>, key: string): string | undefined {
-  const field = readString(value, key)?.trim();
-  return field && field.length > 0 ? field : undefined;
-}
-
-function readRawOptionalString(value: Record<string, unknown>, key: string): string | undefined {
-  return typeof value[key] === "string" ? value[key] : undefined;
-}
-
-function readRequiredString(
-  value: Record<string, unknown>,
-  key: string,
-  code: HelarcControllerParseErrorCode,
-): string {
-  const field = readOptionalString(value, key);
-  if (!field) {
-    throw new HelarcControllerParseError(code);
-  }
-  return field;
-}
-
-function readRequiredRecord(
-  value: Record<string, unknown>,
-  key: string,
-  code: HelarcControllerParseErrorCode,
-): Record<string, unknown> {
-  const field = value[key];
-  if (!isRecord(field)) {
-    throw new HelarcControllerParseError(code);
-  }
-  return field;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function oneCandidate<T extends ProgressionCandidate>(candidate: T): readonly [T] {

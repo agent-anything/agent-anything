@@ -62,12 +62,9 @@ import {
 } from "@agent-anything/host/context";
 import {
   createHostRunManager,
-  type HostActiveRun,
 } from "@agent-anything/host/run";
 import {
   createHelarcProductComposition,
-  HELARC_PATCH_REVIEW_PROTOCOL,
-  snapshotHelarcPatchReviewPresentation,
   type HelarcProductResult,
   validateHelarcToolInput,
 } from "@agent-anything/helarc/composition";
@@ -129,12 +126,6 @@ interface ApprovalDecisionRecord {
   readonly decision: "decline" | null;
 }
 
-interface PatchReviewRecord {
-  readonly decision: "accepted" | "rejected" | null;
-  readonly operation: "create" | "update" | "delete" | null;
-  readonly path: string | null;
-}
-
 interface HelarcEvaluationLeaseMaterial {
   readonly trialRef: EvaluationRecordRef;
   readonly caseDefinition: HelarcEvaluationCaseDefinition;
@@ -152,7 +143,6 @@ interface HelarcEvaluationCaptureMaterial {
   readonly trace: RunTrace;
   readonly before: WorkspaceSnapshot;
   readonly after: WorkspaceSnapshot;
-  readonly patchReview: PatchReviewRecord;
   readonly approval: ApprovalDecisionRecord;
   readonly providerRequests: readonly ProviderRequest[];
   readonly actionNames: readonly string[];
@@ -423,9 +413,6 @@ async function invokeHelarcTarget(
     identityId: runContext.identity.id,
     automaticReviewer: approval,
   });
-  const patchReviews = new DeterministicPatchReviewResponder(
-    caseDefinition.script.patchReviewDecision,
-  );
   const provider = new FakeProvider({
     descriptor: {
       id: "helarc-phase26-scripted-provider",
@@ -610,7 +597,6 @@ async function invokeHelarcTarget(
       metadata: runMetadata,
     },
   });
-  const unsubscribePatchReviews = patchReviews.attach(active);
   const onAbort = () => {
     active.cancel({
       origin: "host",
@@ -621,9 +607,7 @@ async function invokeHelarcTarget(
   signal.addEventListener("abort", onAbort, { once: true });
   if (signal.aborted) onAbort();
   const hostResult = await active.wait();
-  unsubscribePatchReviews();
   signal.removeEventListener("abort", onAbort);
-  patchReviews.assertHealthy();
   const terminalProjection = active.getProjection();
   const productResult = product.projectResult(
     hostResult.runResult,
@@ -648,7 +632,6 @@ async function invokeHelarcTarget(
     trace,
     before: lease.before,
     after: await snapshotWorkspace(lease.root),
-    patchReview: patchReviews.record,
     approval: approval.record,
     providerRequests: Object.freeze(provider.requests()),
     actionNames: collectObservedToolNames(
@@ -702,7 +685,6 @@ function targetObservation(
       data: Object.freeze({
         productStatus: material.product.status,
         runtimeStatus: material.runResult.status,
-        patchStatus: material.product.output.patchStatus,
         enforcementStatus: material.product.output.enforcement.status,
         activityCount: material.runResult.items.length,
       }),
@@ -859,8 +841,6 @@ function captureHelarcMaterial(
     captured("product-outcome", "helarc.product", {
       status: material.product.status,
       runtimeStatus: material.product.output.runtimeStatus,
-      patchStatus: material.product.output.patchStatus,
-      appliedPath: material.product.output.appliedPath,
       agentSummary: material.product.output.agentSummary,
       enforcement: {
         selected: material.product.output.enforcement.selected,
@@ -885,9 +865,6 @@ function captureHelarcMaterial(
       artifacts: material.runResult.artifactRefs.map((item) => sha256(item)),
     }),
     captured("interaction-review", "helarc.product", {
-      patchDecision: material.patchReview.decision,
-      patchOperation: material.patchReview.operation,
-      patchPath: material.patchReview.path,
       approvalDecision: material.approval.decision,
     }),
     captured("trace-summary", "observability", {
@@ -1178,76 +1155,6 @@ class DeterministicApprovalReviewer {
       }),
       rationale: null,
     });
-  }
-}
-
-class DeterministicPatchReviewResponder {
-  #record: PatchReviewRecord = Object.freeze({ decision: null, operation: null, path: null });
-  #failure: Error | null = null;
-  readonly #submittedRequests = new Set<string>();
-
-  constructor(private readonly decision: "accepted" | "rejected" | null) {}
-
-  get record(): PatchReviewRecord {
-    return this.#record;
-  }
-
-  attach(active: HostActiveRun): () => void {
-    const respond = (projection: ReturnType<HostActiveRun["getProjection"]>): void => {
-      for (const pending of projection.pendingInteractions) {
-        if (
-          pending.phase !== "pending" ||
-          pending.request.protocol.owner !== HELARC_PATCH_REVIEW_PROTOCOL.owner ||
-          pending.request.protocol.kind !== HELARC_PATCH_REVIEW_PROTOCOL.kind ||
-          pending.request.protocol.revision !== HELARC_PATCH_REVIEW_PROTOCOL.revision
-        ) {
-          continue;
-        }
-        const requestKey = `${pending.request.id}@${pending.request.requestVersion}`;
-        if (this.#submittedRequests.has(requestKey)) continue;
-        this.#submittedRequests.add(requestKey);
-        try {
-          if (this.decision === null) {
-            throw new TypeError("The deterministic evaluation Case did not define a Patch review decision.");
-          }
-          const presentation = snapshotHelarcPatchReviewPresentation(pending.presentation as never);
-          const outcome = active.submitInteraction({
-            request: pending.request,
-            submissionId: `${pending.request.id}.evaluation-${this.decision}`,
-            payload: Object.freeze({
-              decision: this.decision,
-              reason: this.decision === "accepted"
-                ? "Accepted by the deterministic Phase26 reviewer."
-                : "Rejected by the deterministic Phase26 reviewer.",
-            }),
-          });
-          if (outcome.status === "rejected") {
-            throw new TypeError(`Deterministic Patch review submission was rejected: ${outcome.code}.`);
-          }
-          this.#record = Object.freeze({
-            decision: this.decision,
-            operation: presentation.operation,
-            path: presentation.path,
-          });
-        } catch (error) {
-          this.#failure = error instanceof Error
-            ? error
-            : new TypeError("Deterministic Patch review submission failed.");
-          active.cancel({
-            origin: "host",
-            reasonCode: "host_requested",
-            reason: "Evaluation Patch review automation failed.",
-          });
-        }
-      }
-    };
-    const unsubscribe = active.subscribe(respond);
-    respond(active.getProjection());
-    return unsubscribe;
-  }
-
-  assertHealthy(): void {
-    if (this.#failure !== null) throw this.#failure;
   }
 }
 

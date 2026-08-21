@@ -400,8 +400,6 @@ function terminalCommit(): HelarcRunTerminalCommit {
           workspace: { primaryId: "workspace-1", additionalIds: [] },
           agentSummary: "Done",
           runtimeStatus: "succeeded",
-          patchStatus: null,
-          appliedPath: null,
           enforcement: { selected: "disabled", status: "not_exercised", code: null },
           safeErrors: [],
         },

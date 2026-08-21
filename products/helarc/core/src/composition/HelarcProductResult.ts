@@ -9,7 +9,6 @@ import type {
 import { projectRuntimeEventForHost } from "@agent-anything/host/projection";
 import { HELARC_RUN_COMMAND_TOOL } from "../tools/HelarcCommandOperation.js";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
-import type { HelarcPatchOutcome } from "../review/HelarcPatchActionController.js";
 import type { HelarcControllerTraceProjection } from "../observability/index.js";
 import type { ValidationHostProjection, ValidationStateCount } from "@agent-anything/validation/projection";
 
@@ -19,8 +18,6 @@ export type HelarcProductStatus =
   | "failed"
   | "blocked"
   | "cancelled";
-
-export type HelarcPatchStatus = "proposed" | "applied" | "rejected" | "failed";
 
 export interface HelarcActivityItem {
   readonly id: string;
@@ -40,8 +37,6 @@ export interface HelarcProductOutput {
   };
   readonly agentSummary: string | null;
   readonly runtimeStatus: RunResultStatus;
-  readonly patchStatus: HelarcPatchStatus | null;
-  readonly appliedPath: string | null;
   readonly enforcement: HelarcEnforcementSummary;
   readonly safeErrors: readonly { readonly code: string; readonly message: string }[];
 }
@@ -173,15 +168,11 @@ export function projectHelarcProductResult(
   task: AgentTask,
   workspace: WorkspaceSelection,
   runResult: RunResult<HelarcAgentOutput>,
-  patchOutcome: HelarcPatchOutcome | null,
   selectedEnforcement: SandboxEnforcement,
   validation: ValidationHostProjection | null,
 ): HelarcProductResult {
   const agentOutput = runResult.status === "succeeded" ? runResult.finalOutput : null;
   const safeErrors = collectSafeRunErrors(runResult);
-  for (const error of patchOutcome?.errors ?? []) {
-    appendSafeError(safeErrors, error.code, error.message);
-  }
   const effects = collectEffects(runResult);
   const runActions = collectRunActions(runResult);
   const actions = collectCanonicalActions(effects);
@@ -189,12 +180,10 @@ export function projectHelarcProductResult(
   const children = collectChildren(effects);
   const interactions = collectInteractions(runResult);
   const uncertainty = collectUncertainty(runResult, effects);
-  const incompleteWork = collectIncompleteWork(runResult, patchOutcome, effects, runActions, composites);
+  const incompleteWork = collectIncompleteWork(runResult, effects, runActions, composites);
 
   return Object.freeze({
-    status: patchOutcome === null
-      ? mapRunStatus(runResult.status)
-      : mapPatchOutcomeStatus(patchOutcome.status),
+    status: mapRunStatus(runResult.status),
     runResult: Object.freeze({
       runId: runResult.runId,
       status: runResult.status,
@@ -210,8 +199,6 @@ export function projectHelarcProductResult(
       }),
       agentSummary: agentOutput?.summary ?? null,
       runtimeStatus: runResult.status,
-      patchStatus: patchOutcome?.patchStatus ?? null,
-      appliedPath: patchOutcome?.appliedPath ?? null,
       enforcement: Object.freeze(createEnforcementSummary(runResult, selectedEnforcement)),
       safeErrors: Object.freeze(safeErrors.map((error) => Object.freeze({ ...error }))),
     }),
@@ -269,12 +256,6 @@ function projectValidationCommunication(
   });
 }
 
-function mapPatchOutcomeStatus(
-  status: HelarcPatchOutcome["status"],
-): HelarcProductStatus {
-  return status;
-}
-
 export function mapRuntimeEventToHelarcActivity(
   event: RuntimeEvent,
   controllerTrace: HelarcControllerTraceProjection | null = null,
@@ -320,10 +301,6 @@ function controllerTraceMetadata(
     ...(trace.requestedToolName === null
       ? {}
       : { requestedToolName: trace.requestedToolName }),
-    ...(trace.patchOperation === null
-      ? {}
-      : { patchOperation: trace.patchOperation }),
-    ...(trace.patchPath === null ? {} : { patchPath: trace.patchPath }),
   };
 }
 
@@ -513,16 +490,12 @@ function collectUncertainty(
 
 function collectIncompleteWork(
   runResult: RunResult<HelarcAgentOutput>,
-  patchOutcome: HelarcPatchOutcome | null,
   effects: readonly HelarcEffectSummary[],
   runActions: readonly HelarcRunActionSummary[],
   composites: readonly HelarcCompositeWorkSummary[],
 ): readonly string[] {
   const values: string[] = [];
   if (runResult.status !== "succeeded") values.push(`Run ended with status '${runResult.status}'.`);
-  if (patchOutcome !== null && patchOutcome.patchStatus !== "applied") {
-    values.push(`Patch workflow ended with status '${patchOutcome.patchStatus}'.`);
-  }
   if (effects.some(({ status }) => status === "partial" || status === "unknown_effect")) {
     values.push("One or more Operation effects remain partial or unresolved.");
   }
@@ -580,8 +553,12 @@ function safeProductErrorMessage(code: string): string {
   if (code.startsWith("session_authority_") || code.startsWith("policy_amendment_")) {
     return "Permission state could not be updated.";
   }
-  if (code.startsWith("patch_") || code.startsWith("action_") || code.startsWith("filesystem_")) {
-    return "The proposed file change could not be applied.";
+  if (
+    code.startsWith("action_") ||
+    code.startsWith("file_") ||
+    code.startsWith("filesystem_")
+  ) {
+    return "The requested file operation could not be completed.";
   }
   if (code.startsWith("sandbox_") || code.startsWith("tool_")) {
     return "The requested action could not be completed.";

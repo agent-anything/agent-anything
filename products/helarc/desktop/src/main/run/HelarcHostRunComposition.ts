@@ -19,10 +19,7 @@ import {
   createCanonicalSha256Digest,
   createCanonicalWorkspaceIdentity,
 } from "@agent-anything/canonical-action/subject";
-import {
-  createAllowAllActionPolicyPort,
-  type PersistentPolicyAmendmentPort,
-} from "@agent-anything/governance";
+import type { PersistentPolicyAmendmentPort } from "@agent-anything/governance";
 import {
   createInMemoryHostPolicyAmendmentStore,
   createInMemoryHostSessionAuthorityStore,
@@ -81,6 +78,7 @@ import {
   type WorkspaceSelection,
 } from "@agent-anything/workspace/selection";
 import { createHelarcHostPermissionComposition } from "./HelarcHostPermissionComposition.js";
+import { createHelarcHostActionPolicy } from "./HelarcHostActionPolicy.js";
 
 const HELARC_RUN_MAX_DURATION_MS = 30 * 60_000;
 
@@ -278,7 +276,10 @@ export async function prepareHelarcHostRun(
       actionExecution: {
         registrations: product.actions.registrations,
         adapters: product.actions.adapters,
-        policy: createAllowAllActionPolicyPort(now),
+        policy: createHelarcHostActionPolicy({
+          permissionPreset: input.permissionPreset,
+          now,
+        }),
         sandbox,
         records: createInvocationLocalActionRecordPort(),
         retry: createStopActionRetryPort(),
@@ -311,7 +312,7 @@ export async function prepareHelarcHostRun(
       permissions: permissions.permissions,
       tools: product.actions.toolSelection,
       actionExecution: {
-        policySnapshotId: "helarc.allow-all.v1",
+        policySnapshotId: `helarc.action-policy.v1:${input.permissionPreset}`,
         securityContext,
         enforcement,
         metadata: runMetadata,

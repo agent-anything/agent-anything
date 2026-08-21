@@ -546,12 +546,11 @@ function checkArchitectureSource(file, text, isTestOnly) {
   }
   const codeAgentToolConstants = text.match(/\bCODE_AGENT_[A-Z0-9_]+_TOOL\b/g) ?? [];
   const retainedCodeWorkspaceToolConstants = new Set([
-    "CODE_AGENT_LIST_FILES_TOOL",
-    "CODE_AGENT_READ_FILE_TOOL",
-    "CODE_AGENT_SEARCH_FILES_TOOL",
-    "CODE_AGENT_CREATE_FILE_TOOL",
-    "CODE_AGENT_UPDATE_FILE_TOOL",
-    "CODE_AGENT_DELETE_FILE_TOOL",
+    "CODE_AGENT_READ_TOOL",
+    "CODE_AGENT_GLOB_TOOL",
+    "CODE_AGENT_GREP_TOOL",
+    "CODE_AGENT_EDIT_TOOL",
+    "CODE_AGENT_WRITE_TOOL",
   ]);
   const removedCodeAgentToolConstant = codeAgentToolConstants.find(
     (symbol) => !retainedCodeWorkspaceToolConstants.has(symbol),
@@ -1080,7 +1079,6 @@ function checkExecutionSourceTopology() {
         "observability",
         "prompt",
         "result",
-        "review",
         "run",
         "task",
         "thread",
@@ -1088,6 +1086,7 @@ function checkExecutionSourceTopology() {
         "validation",
         "work-context",
       ],
+      forbiddenPaths: ["src/review"],
     },
     {
       packagePath: "products/helarc/code-agent",

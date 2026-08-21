@@ -19,7 +19,7 @@ import {
   resolveExistingTarget,
   resolveWritableTarget,
 } from "./FileSystemBoundary.js";
-import type { CodeSourceOperation } from "@agent-anything/helarc-code-agent/source";
+import type { CodeFileOperationKind } from "@agent-anything/helarc-code-agent/file-operation";
 
 type FileSystemPlatform = "win32" | "posix";
 
@@ -82,29 +82,28 @@ export async function prepareFileSystemTarget(input: {
   readonly platform: FileSystemPlatform;
   readonly rootName?: string;
   readonly path: string;
-  readonly operation: CodeSourceOperation;
+  readonly operation: CodeFileOperationKind | "directory";
 }): Promise<PreparedFileSystemTarget> {
-  const mutation = input.operation === "create" || input.operation === "update" ||
-    input.operation === "delete";
-  const target = input.operation === "create"
+  const mutation = input.operation === "edit" || input.operation === "write";
+  const target = input.operation === "write"
     ? await resolveWritableTarget({
         workspace: input.workspace,
         rootName: input.rootName,
         path: input.path,
-        overwrite: false,
+        overwrite: true,
       })
     : await resolveExistingTarget({
         workspace: input.workspace,
         rootName: input.rootName,
         path: input.path,
-        expectedKind: input.operation === "list"
+        expectedKind: input.operation === "directory"
           ? "directory"
-          : input.operation === "read" || mutation
+          : input.operation === "read" || input.operation === "edit"
             ? "file"
             : "fileOrDirectory",
       });
 
-  if (mutation && input.operation !== "create") {
+  if (mutation && !("created" in target && target.created)) {
     const lexicalStats = await lstat(target.resolved.absolutePath);
     if (lexicalStats.isSymbolicLink()) {
       throw new TypeError("File mutation targets must not be symbolic links.");
@@ -137,7 +136,7 @@ export async function prepareFileSystemTarget(input: {
     throw new TypeError("Selected workspace root identity changed before Action preparation.");
   }
 
-  const baseline = input.operation === "create"
+  const baseline = input.operation === "write" && "created" in target && target.created
     ? ({ kind: "absent" } as const)
     : await createBaseline(target.canonicalTarget, target.stats, input.platform);
   const isWorkspaceRootTarget = sameCanonicalPath(
@@ -183,7 +182,8 @@ export async function prepareFileSystemTarget(input: {
 
 export async function inspectPreparedFileSystemTarget(input: {
   readonly platform: FileSystemPlatform;
-  readonly operation: CodeSourceOperation;
+  readonly operation: CodeFileOperationKind | "directory";
+  readonly expectedBaseline: FileBaseline;
   readonly workspaceRootIdentity: CanonicalWorkspaceRootIdentity;
   readonly workspaceRoot: string;
   readonly canonicalRoot: string;
@@ -209,17 +209,17 @@ export async function inspectPreparedFileSystemTarget(input: {
 
   let resolvedTarget: string;
   let baseline: FileBaseline;
-  if (input.operation === "create") {
+  if (input.expectedBaseline.kind === "absent") {
     try {
       await lstat(input.path);
-      throw new TypeError("Create target now exists.");
+      throw new TypeError("Prepared file target now exists.");
     } catch (error) {
       if (!isNodeError(error, "ENOENT")) throw error;
     }
     const parent = await realpath(dirname(input.path));
     resolvedTarget = join(parent, basename(input.path));
     if (!sameCanonicalPath(resolvedTarget, input.canonicalTarget, input.platform)) {
-      throw new TypeError("Create target resolution changed.");
+      throw new TypeError("Prepared file target resolution changed.");
     }
     baseline = Object.freeze({ kind: "absent" as const });
   } else {

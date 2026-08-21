@@ -1,8 +1,4 @@
 import type { HostRunProjection } from "@agent-anything/host/projection";
-import {
-  HELARC_PATCH_REVIEW_PROTOCOL,
-  type HelarcProductPhase,
-} from "../composition/HelarcPatchReview.js";
 import type {
   HelarcActivityItem,
   HelarcProductResult,
@@ -10,6 +6,8 @@ import type {
 import type { ModelContinuationSafeEvent } from "@agent-anything/model-interaction/continuation";
 
 export type HelarcModelContinuationProjection = ModelContinuationSafeEvent;
+
+export type HelarcProductPhase = { readonly kind: "none" };
 
 export interface HelarcProductRunProjection {
   readonly runId: string;
@@ -30,11 +28,6 @@ interface HelarcProductProjectionUpdateBase<TKind extends string> {
   readonly sequence: number;
 }
 
-export interface HelarcProductPhaseProjectionUpdate
-  extends HelarcProductProjectionUpdateBase<"phase_changed"> {
-  readonly phase: HelarcProductPhase;
-}
-
 export interface HelarcProductActivityProjectionUpdate
   extends HelarcProductProjectionUpdateBase<"activity_appended"> {
   readonly activity: HelarcActivityItem;
@@ -51,7 +44,6 @@ export interface HelarcModelContinuationProjectionUpdate
 }
 
 export type HelarcProductRunProjectionUpdate =
-  | HelarcProductPhaseProjectionUpdate
   | HelarcProductActivityProjectionUpdate
   | HelarcModelContinuationProjectionUpdate
   | HelarcProductResultProjectionUpdate;
@@ -74,8 +66,6 @@ export type HelarcRunDisplayStatus =
   | "starting"
   | "running"
   | "waiting_for_approval"
-  | "waiting_for_patch_review"
-  | "applying_patch"
   | "cancelling"
   | "completed"
   | "rejected"
@@ -146,12 +136,6 @@ export function reduceHelarcProductRunProjection(
 
   try {
     switch (update.kind) {
-      case "phase_changed":
-        return appliedProduct(Object.freeze({
-          ...current,
-          sequence: update.sequence,
-          phase: snapshotProductPhase(update.phase),
-        }));
       case "activity_appended": {
         const activity = snapshotActivity(update.activity);
         const previous = current.activity.at(-1);
@@ -255,23 +239,6 @@ export function deriveHelarcRunDisplayProjection(
   )) {
     return display("waiting_for_approval", false, "host");
   }
-  const pendingPatchReview = host.pendingInteractions.find((pending) =>
-    pending.request.protocol.owner === HELARC_PATCH_REVIEW_PROTOCOL.owner &&
-    pending.request.protocol.kind === HELARC_PATCH_REVIEW_PROTOCOL.kind &&
-    pending.request.protocol.revision === HELARC_PATCH_REVIEW_PROTOCOL.revision
-  );
-  if (pendingPatchReview !== undefined) {
-    return display(
-      pendingPatchReview.phase === "submitted_for_resolution"
-        ? "applying_patch"
-        : "waiting_for_patch_review",
-      false,
-      "host",
-    );
-  }
-  if (product.phase.kind === "patch_action_submitted") {
-    return display("applying_patch", false, "product");
-  }
   return display(host.status === "starting" ? "starting" : "running", false, "host");
 }
 
@@ -287,32 +254,6 @@ function snapshotUnifiedProjection(
     product,
     display: deriveHelarcRunDisplayProjection(host, product),
   });
-}
-
-function snapshotProductPhase(phase: HelarcProductPhase): HelarcProductPhase {
-  if (phase?.kind === "none") return Object.freeze({ kind: "none" });
-  if (phase?.kind === "patch_review_requested") {
-    if (
-      !hasIdentity(phase.proposalId) ||
-      !Number.isSafeInteger(phase.proposalRevision) || phase.proposalRevision < 1 ||
-      !hasIdentity(phase.reviewId)
-    ) {
-      throw new TypeError("Patch review phase is invalid.");
-    }
-    return Object.freeze({ ...phase });
-  }
-  if (phase?.kind === "patch_action_submitted") {
-    if (
-      !hasIdentity(phase.proposalId) ||
-      !Number.isSafeInteger(phase.proposalRevision) || phase.proposalRevision < 1 ||
-      !hasIdentity(phase.reviewId) || !Number.isSafeInteger(phase.requestVersion) ||
-      phase.requestVersion < 1
-    ) {
-      throw new TypeError("Submitted Patch Action phase is invalid.");
-    }
-    return Object.freeze({ ...phase });
-  }
-  throw new TypeError("Product phase is invalid.");
 }
 
 function snapshotActivity(activity: HelarcActivityItem): HelarcActivityItem {

@@ -16,7 +16,6 @@
     "./prompt": { "types": "./src/prompt/index.ts", "import": "./dist/prompt/index.js" },
     "./controller": { "types": "./src/controller/index.ts", "import": "./dist/controller/index.js" },
     "./tools": { "types": "./src/tools/index.ts", "import": "./dist/tools/index.js" },
-    "./review": { "types": "./src/review/index.ts", "import": "./dist/review/index.js" },
     "./result": { "types": "./src/result/index.ts", "import": "./dist/result/index.js" },
     "./artifacts": { "types": "./src/artifacts/index.ts", "import": "./dist/artifacts/index.js" },
     "./composition": { "types": "./src/composition/index.ts", "import": "./dist/composition/index.js" },

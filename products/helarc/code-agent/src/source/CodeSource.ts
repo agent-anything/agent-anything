@@ -75,66 +75,70 @@ export interface CodeSourcePort {
 }
 
 export interface CodeAgentFileLimits {
-  readonly maxListEntries: number;
+  readonly maxGlobEntries: number;
   readonly maxReadBytes: number;
+  readonly maxReadLines: number;
   readonly maxSearchFileBytes: number;
-  readonly maxSearchMatches: number;
+  readonly maxGrepMatches: number;
+  readonly maxGrepContextLines: number;
   readonly maxWriteBytes: number;
 }
 
-export type WorkspaceFileEntryKind = "file" | "directory" | "symbolicLink" | "other";
-
-export interface WorkspaceFileEntry {
-  readonly path: string;
-  readonly kind: WorkspaceFileEntryKind;
-  readonly sizeBytes: number | null;
+export interface CodeFileBaselineOutput {
+  readonly target_id: string;
+  readonly file_path: string;
+  readonly byte_length: number;
+  readonly content_digest: string;
 }
 
-export interface ListFilesOutput {
-  readonly rootName: string;
-  readonly workspaceId: string;
-  readonly path: string;
-  readonly entries: readonly WorkspaceFileEntry[];
+export interface CodeFileReadOutput extends CodeFileBaselineOutput {
+  readonly content: string;
+  readonly start_line: number;
+  readonly end_line: number;
+  readonly total_lines: number;
   readonly truncated: boolean;
 }
 
-export interface ReadFileOutput {
-  readonly rootName: string;
-  readonly workspaceId: string;
-  readonly path: string;
-  readonly content: string;
-  readonly sizeBytes: number;
+export interface CodeFileGlobOutput {
+  readonly matches: readonly string[];
+  readonly truncated: boolean;
+  readonly omitted_count: number;
 }
 
-export interface FileSearchMatch {
-  readonly path: string;
+export interface CodeFileGrepContentEntry {
+  readonly file_path: string;
   readonly line: number;
   readonly column: number;
-  readonly preview: string;
+  readonly text: string;
+  readonly before: readonly string[];
+  readonly after: readonly string[];
 }
 
-export interface SearchFilesOutput {
-  readonly rootName: string;
-  readonly workspaceId: string;
-  readonly path: string;
-  readonly query: string;
-  readonly matches: readonly FileSearchMatch[];
+export type CodeFileGrepEntry =
+  | CodeFileGrepContentEntry
+  | { readonly file_path: string }
+  | { readonly file_path: string; readonly count: number };
+
+export interface CodeFileGrepOutput {
+  readonly output_mode: "content" | "files_with_matches" | "count";
+  readonly entries: readonly CodeFileGrepEntry[];
   readonly truncated: boolean;
-  readonly skippedFiles: number;
+  readonly omitted_count: number;
 }
 
-export interface FileWriteOutput {
-  readonly rootName: string;
-  readonly workspaceId: string;
-  readonly path: string;
-  readonly bytesWritten: number;
-  readonly created: boolean;
-  readonly replaced: boolean;
+export interface CodeFileEditOutput {
+  readonly target_id: string;
+  readonly file_path: string;
+  readonly operation: "updated";
+  readonly replacement_count: number;
+  readonly previous_baseline: CodeFileBaselineOutput;
+  readonly current_baseline: CodeFileBaselineOutput;
 }
 
-export interface DeleteFileOutput {
-  readonly rootName: string;
-  readonly workspaceId: string;
-  readonly path: string;
-  readonly deleted: true;
+export interface CodeFileWriteOutput {
+  readonly target_id: string;
+  readonly file_path: string;
+  readonly operation: "created" | "replaced";
+  readonly previous_baseline: CodeFileBaselineOutput | null;
+  readonly current_baseline: CodeFileBaselineOutput;
 }

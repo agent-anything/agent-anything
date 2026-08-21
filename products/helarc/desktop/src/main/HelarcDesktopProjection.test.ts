@@ -41,8 +41,8 @@ describe("Helarc Desktop IPC projection", () => {
       .not.toHaveProperty("storedCredential");
     expect(projected.run?.product.activity[0]?.metadata).toEqual({
       status: "running",
-      controllerAction: "call_tool",
-      exposedToolNames: ["codeAgent.readFile"],
+      controllerAction: "tool_call",
+      exposedToolNames: ["Read", "Glob", "Grep", "Edit", "Write"],
     });
     expect(JSON.stringify(projected)).not.toContain(SECRET);
   });
@@ -162,8 +162,8 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
         detail: null,
         metadata: {
           status: "running",
-          controllerAction: "call_tool",
-          exposedToolNames: ["codeAgent.readFile"],
+          controllerAction: "tool_call",
+          exposedToolNames: ["Read", "Glob", "Grep", "Edit", "Write"],
           privateTraceState: SECRET,
         },
       }],

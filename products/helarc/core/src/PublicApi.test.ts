@@ -49,12 +49,10 @@ describe("Helarc public API", () => {
       "reduceHelarcRunProjection",
     ]);
     expect(Object.keys(compositionApi).sort()).toEqual([
-      "HELARC_PATCH_REVIEW_PROTOCOL",
       "createHelarcActionComposition",
       "createHelarcProductComposition",
       "mapRuntimeEventToHelarcActivity",
       "projectHelarcProductResult",
-      "snapshotHelarcPatchReviewPresentation",
       "validateHelarcToolInput",
     ]);
     expect(controllerApi).toHaveProperty("parseHelarcModelDecision");

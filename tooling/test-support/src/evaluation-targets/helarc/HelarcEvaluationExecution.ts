@@ -401,7 +401,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.validation-profile-baseline-result`,
+      id: `${definition.ref.id}.file-tools-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -412,7 +412,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.validation-profile.report.baseline",
+      id: "helarc.file-tools.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -458,7 +458,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.validation-gate.report.baseline",
+      id: "helarc.validation-profile.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -474,25 +474,25 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.validation-profile.baseline-acceptance",
+      id: "helarc.file-tools.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
-    acceptedBy: { id: "agent-anything.architecture-review", revision: "validation-profile-v1" },
+    acceptedBy: { id: "agent-anything.architecture-review", revision: "file-tools-v1" },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
       product: "helarc",
       suiteRef: refKey(input.corpus.suite.ref),
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
-    rationale: "Reviewed as the Product Validation profile successor to the Validation Gate baseline.",
+    rationale: "Reviewed as the file Tool operating-surface successor to the Product Validation profile baseline.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.validation-gate.baseline-acceptance",
+      id: "helarc.validation-profile.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     limitations: [BASELINE_LIMITATION],
@@ -588,12 +588,10 @@ function actualClaim(capture: EvaluationCapture) {
   return Object.freeze({
     productStatus: product.status,
     runStatus: run.status,
-    patchStatus: product.patchStatus,
     agentSummary: product.agentSummary,
     workspaceFiles: workspace.files,
     requiredActionNames: run.actionNames,
     retryCount: run.retryCount,
-    patchReviewDecision: interaction.patchDecision,
     approvalDecision: interaction.approvalDecision,
   });
 }
@@ -602,12 +600,10 @@ function normalizeExpectedClaim(expected: HelarcEvaluationExpectedClaim) {
   return Object.freeze({
     productStatus: expected.productStatus,
     runStatus: expected.runStatus,
-    patchStatus: expected.patchStatus,
     agentSummary: expected.agentSummary,
     workspaceFiles: normalizeWorkspace(expected.workspaceFiles),
     requiredActionNames: [...expected.requiredActionNames].sort(),
     retryCount: expected.retryCount,
-    patchReviewDecision: expected.patchReviewDecision,
     approvalDecision: expected.approvalDecision,
   });
 }

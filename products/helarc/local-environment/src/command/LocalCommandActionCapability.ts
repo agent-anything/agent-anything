@@ -191,7 +191,7 @@ function createCommandAdapter(
           platform: context.environment.platform,
           rootName: parsed.rootName,
           path: parsed.cwd,
-          operation: "list",
+          operation: "directory",
         });
         const executable = await resolveCommandExecutable({
           command: parsed.command,
@@ -249,7 +249,8 @@ function createCommandAdapter(
         }
         const actualCwd = await inspectPreparedFileSystemTarget({
           platform: context.environment.platform,
-          operation: "list",
+          operation: "directory",
+          expectedBaseline: payload.cwdBaseline,
           workspaceRootIdentity: root.expected,
           workspaceRoot: payload.workspaceRoot,
           canonicalRoot: payload.canonicalRoot,

@@ -15,12 +15,11 @@ import {
   type OperationCatalogSnapshot,
 } from "@agent-anything/operation-catalog/catalog";
 import {
-  CODE_AGENT_CREATE_FILE_TOOL,
-  CODE_AGENT_DELETE_FILE_TOOL,
-  CODE_AGENT_LIST_FILES_TOOL,
-  CODE_AGENT_READ_FILE_TOOL,
-  CODE_AGENT_SEARCH_FILES_TOOL,
-  CODE_AGENT_UPDATE_FILE_TOOL,
+  CODE_AGENT_EDIT_TOOL,
+  CODE_AGENT_GLOB_TOOL,
+  CODE_AGENT_GREP_TOOL,
+  CODE_AGENT_READ_TOOL,
+  CODE_AGENT_WRITE_TOOL,
   createCodeFileOperationContribution,
   type CodeFileActionAdapterIds,
 } from "@agent-anything/helarc-code-agent/file-operation";
@@ -41,14 +40,11 @@ import {
 } from "../validation/HelarcValidationCheckOperation.js";
 
 const MODEL_FILE_TOOLS = new Set([
-  CODE_AGENT_LIST_FILES_TOOL,
-  CODE_AGENT_READ_FILE_TOOL,
-  CODE_AGENT_SEARCH_FILES_TOOL,
-]);
-const WORKFLOW_FILE_TOOLS = new Set([
-  CODE_AGENT_CREATE_FILE_TOOL,
-  CODE_AGENT_UPDATE_FILE_TOOL,
-  CODE_AGENT_DELETE_FILE_TOOL,
+  CODE_AGENT_READ_TOOL,
+  CODE_AGENT_GLOB_TOOL,
+  CODE_AGENT_GREP_TOOL,
+  CODE_AGENT_EDIT_TOOL,
+  CODE_AGENT_WRITE_TOOL,
 ]);
 
 export interface HelarcPhysicalActionContribution {
@@ -152,9 +148,6 @@ function selectionOrigins(name: string): readonly ("model" | "workflow")[] {
   if (MODEL_FILE_TOOLS.has(name) || name === HELARC_RUN_COMMAND_TOOL ||
       name === HELARC_RUN_VALIDATION_CHECK_TOOL) {
     return Object.freeze(["model" as const]);
-  }
-  if (WORKFLOW_FILE_TOOLS.has(name)) {
-    return Object.freeze(["workflow" as const]);
   }
   throw new TypeError(`Helarc Tool '${name}' has no Product selection policy.`);
 }

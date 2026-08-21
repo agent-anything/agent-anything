@@ -3,9 +3,7 @@ import type {
   OperationBindingResolverRegistration,
 } from "@agent-anything/operation-catalog/binding";
 import { snapshotResolvedOperationBinding } from "@agent-anything/operation-catalog/binding";
-import type {
-  RegisteredOperation,
-} from "@agent-anything/operation-catalog/catalog";
+import type { RegisteredOperation } from "@agent-anything/operation-catalog/catalog";
 import type {
   OperationBindingRevisionRef,
   OperationRevisionRef,
@@ -14,36 +12,58 @@ import { operationRevisionKey } from "@agent-anything/operation-catalog/identity
 import type { ToolJsonObject } from "@agent-anything/tools/catalog";
 import type { ToolRegistrationInput } from "@agent-anything/tools/registration";
 
-export const CODE_AGENT_LIST_FILES_TOOL = "codeAgent.listFiles";
-export const CODE_AGENT_READ_FILE_TOOL = "codeAgent.readFile";
-export const CODE_AGENT_SEARCH_FILES_TOOL = "codeAgent.searchFiles";
-export const CODE_AGENT_CREATE_FILE_TOOL = "codeAgent.createFile";
-export const CODE_AGENT_UPDATE_FILE_TOOL = "codeAgent.updateFile";
-export const CODE_AGENT_DELETE_FILE_TOOL = "codeAgent.deleteFile";
+export const CODE_AGENT_READ_TOOL = "Read";
+export const CODE_AGENT_GLOB_TOOL = "Glob";
+export const CODE_AGENT_GREP_TOOL = "Grep";
+export const CODE_AGENT_EDIT_TOOL = "Edit";
+export const CODE_AGENT_WRITE_TOOL = "Write";
 
 export type CodeFileToolName =
-  | typeof CODE_AGENT_LIST_FILES_TOOL
-  | typeof CODE_AGENT_READ_FILE_TOOL
-  | typeof CODE_AGENT_SEARCH_FILES_TOOL
-  | typeof CODE_AGENT_CREATE_FILE_TOOL
-  | typeof CODE_AGENT_UPDATE_FILE_TOOL
-  | typeof CODE_AGENT_DELETE_FILE_TOOL;
+  | typeof CODE_AGENT_READ_TOOL
+  | typeof CODE_AGENT_GLOB_TOOL
+  | typeof CODE_AGENT_GREP_TOOL
+  | typeof CODE_AGENT_EDIT_TOOL
+  | typeof CODE_AGENT_WRITE_TOOL;
 
-export type CodeFileOperationKind =
-  | "list"
-  | "read"
-  | "search"
-  | "create"
-  | "update"
-  | "delete";
+export type CodeFileOperationKind = "read" | "glob" | "grep" | "edit" | "write";
 
 export type CodeFileOperationRequest =
-  | { readonly operation: "list"; readonly rootName?: string; readonly path: string; readonly recursive?: boolean }
-  | { readonly operation: "read"; readonly rootName?: string; readonly path: string }
-  | { readonly operation: "search"; readonly rootName?: string; readonly path: string; readonly query: string }
-  | { readonly operation: "create"; readonly rootName?: string; readonly path: string; readonly content: string }
-  | { readonly operation: "update"; readonly rootName?: string; readonly path: string; readonly content: string; readonly expectedContentDigest: string }
-  | { readonly operation: "delete"; readonly rootName?: string; readonly path: string; readonly expectedContentDigest: string };
+  | {
+      readonly operation: "read";
+      readonly file_path: string;
+      readonly offset?: number;
+      readonly limit?: number;
+    }
+  | {
+      readonly operation: "glob";
+      readonly pattern: string;
+      readonly path?: string;
+    }
+  | {
+      readonly operation: "grep";
+      readonly pattern: string;
+      readonly path?: string;
+      readonly glob?: string;
+      readonly output_mode?: "content" | "files_with_matches" | "count";
+      readonly case_sensitive?: boolean;
+      readonly before_context?: number;
+      readonly after_context?: number;
+      readonly offset?: number;
+      readonly limit?: number;
+      readonly multiline?: boolean;
+    }
+  | {
+      readonly operation: "edit";
+      readonly file_path: string;
+      readonly old_string: string;
+      readonly new_string: string;
+      readonly replace_all?: boolean;
+    }
+  | {
+      readonly operation: "write";
+      readonly file_path: string;
+      readonly content: string;
+    };
 
 export interface CodeFileOperationContribution {
   readonly operations: readonly RegisteredOperation[];
@@ -51,28 +71,24 @@ export interface CodeFileOperationContribution {
   readonly tools: readonly ToolRegistrationInput[];
 }
 
-export type CodeFileActionAdapterIds = Readonly<
-  Record<CodeFileOperationKind, string>
->;
+export type CodeFileActionAdapterIds = Readonly<Record<CodeFileOperationKind, string>>;
 
-const REVISION = "1";
-const BINDING_REVISION = "1";
-const RESOLVER_ID = "helarc.code-workspace.file.direct";
+const REVISION = "2";
+const BINDING_REVISION = "2";
+const RESOLVER_ID = "helarc.code-agent.file.direct";
 
 const SPECS = Object.freeze([
-  spec("list-files", CODE_AGENT_LIST_FILES_TOOL, "list", "eager_tool", ["model"]),
-  spec("read-file", CODE_AGENT_READ_FILE_TOOL, "read", "eager_tool", ["model"]),
-  spec("search-files", CODE_AGENT_SEARCH_FILES_TOOL, "search", "eager_tool", ["model"]),
-  spec("create-file", CODE_AGENT_CREATE_FILE_TOOL, "create", "workflow_only", ["workflow"]),
-  spec("update-file", CODE_AGENT_UPDATE_FILE_TOOL, "update", "workflow_only", ["workflow"]),
-  spec("delete-file", CODE_AGENT_DELETE_FILE_TOOL, "delete", "workflow_only", ["workflow"]),
+  spec("read", CODE_AGENT_READ_TOOL, "read"),
+  spec("glob", CODE_AGENT_GLOB_TOOL, "glob"),
+  spec("grep", CODE_AGENT_GREP_TOOL, "grep"),
+  spec("edit", CODE_AGENT_EDIT_TOOL, "edit"),
+  spec("write", CODE_AGENT_WRITE_TOOL, "write"),
 ]);
 
 export function createCodeFileOperationContribution(input: {
   readonly actionAdapterIds: CodeFileActionAdapterIds;
   readonly admittedAt: string;
 }): CodeFileOperationContribution {
-  const operations = SPECS.map((item) => operationRegistration(item, input.admittedAt));
   const bindings: readonly OperationBindingResolverRegistration[] = Object.freeze([{
     resolver: Object.freeze({
       id: RESOLVER_ID,
@@ -89,24 +105,24 @@ export function createCodeFileOperationContribution(input: {
             binding: request.registration.binding.ref,
             request: request.request,
             resolverRevision: REVISION,
-            resolutionFingerprint: `${request.context.invocation.id}:direct:${input.actionAdapterIds[item.requestOperation]}`,
+            resolutionFingerprint:
+              `${request.context.invocation.id}:direct:${input.actionAdapterIds[item.requestOperation]}`,
             actionAdapterId: input.actionAdapterIds[item.requestOperation],
           }, snapshotRequest),
         });
       },
     }),
   }]);
-  const tools = SPECS.map((item) => toolRegistration(item, input.admittedAt));
   return Object.freeze({
-    operations: Object.freeze(operations),
+    operations: Object.freeze(SPECS.map((item) => operationRegistration(item, input.admittedAt))),
     bindings,
-    tools: Object.freeze(tools),
+    tools: Object.freeze(SPECS.map((item) => toolRegistration(item, input.admittedAt))),
   });
 }
 
 export function operationRefForCodeFileTool(name: CodeFileToolName): OperationRevisionRef {
   const item = SPECS.find((candidate) => candidate.toolName === name);
-  if (item === undefined) throw new TypeError(`Unknown Code Workspace Tool: ${name}.`);
+  if (item === undefined) throw new TypeError(`Unknown Code Agent file Tool: ${name}.`);
   return item.operation;
 }
 
@@ -114,13 +130,11 @@ export function bindingRefForCodeFileTool(
   name: CodeFileToolName,
 ): OperationBindingRevisionRef {
   const item = SPECS.find((candidate) => candidate.toolName === name);
-  if (item === undefined) throw new TypeError(`Unknown Code Workspace Tool: ${name}.`);
+  if (item === undefined) throw new TypeError(`Unknown Code Agent file Tool: ${name}.`);
   return item.binding;
 }
 
-export function codeFileOperationForRef(
-  ref: OperationRevisionRef,
-): CodeFileOperationKind {
+export function codeFileOperationForRef(ref: OperationRevisionRef): CodeFileOperationKind {
   return specForOperation(ref).requestOperation;
 }
 
@@ -129,19 +143,15 @@ interface CodeFileSpec {
   readonly binding: OperationBindingRevisionRef;
   readonly toolName: CodeFileToolName;
   readonly requestOperation: CodeFileOperationKind;
-  readonly exposure: "eager_tool" | "workflow_only";
-  readonly origins: readonly ("model" | "workflow")[];
 }
 
 function spec(
   operationName: string,
   toolName: CodeFileToolName,
   requestOperation: CodeFileOperationKind,
-  exposure: CodeFileSpec["exposure"],
-  origins: CodeFileSpec["origins"],
 ): CodeFileSpec {
   const operation = Object.freeze({
-    operation: Object.freeze({ namespace: "helarc.code-workspace", name: operationName }),
+    operation: Object.freeze({ namespace: "helarc.code-agent.file", name: operationName }),
     revision: REVISION,
   });
   return Object.freeze({
@@ -149,26 +159,24 @@ function spec(
     binding: Object.freeze({ operation, revision: BINDING_REVISION }),
     toolName,
     requestOperation,
-    exposure,
-    origins: Object.freeze([...origins]),
   });
 }
 
 function operationRegistration(item: CodeFileSpec, admittedAt: string): RegisteredOperation {
   return {
-    admissionId: `helarc.code-workspace.${item.operation.operation.name}.admission.v1`,
+    admissionId: `helarc.code-agent.file.${item.requestOperation}.admission.v2`,
     operation: {
       ref: item.operation,
-      semanticOwner: "helarc.code-workspace",
-      requestSchemaRevision: "1",
-      resultSchemaRevision: "1",
+      semanticOwner: "helarc.code-agent",
+      requestSchemaRevision: "2",
+      resultSchemaRevision: "2",
       roles: {
-        requestOrigins: item.origins.map((origin) => origin === "model" ? "tool_request" as const : "trusted_workflow" as const),
-        exposure: item.exposure,
+        requestOrigins: ["tool_request"],
+        exposure: "eager_tool",
         runControl: "direct",
         trust: "canonical_external_effect",
         participation: "semantic_owner",
-        domainPurpose: `code-workspace.${item.requestOperation}`,
+        domainPurpose: `file.${item.requestOperation}`,
       },
     },
     binding: {
@@ -177,19 +185,20 @@ function operationRegistration(item: CodeFileSpec, admittedAt: string): Register
       resolverId: RESOLVER_ID,
       resolverRevision: REVISION,
     },
-    sourceRevision: "1",
-    allowedRequestOrigins: item.origins.map((origin) => origin === "model" ? "tool_request" as const : "trusted_workflow" as const),
+    sourceRevision: "2",
+    allowedRequestOrigins: ["tool_request"],
     admittedAt,
     retirement: null,
   };
 }
 
 function toolRegistration(item: CodeFileSpec, admittedAt: string): ToolRegistrationInput {
+  const mutation = item.requestOperation === "edit" || item.requestOperation === "write";
   return {
-    admissionId: `helarc.tool.${item.operation.operation.name}.admission.v1`,
+    admissionId: `helarc.tool.file.${item.requestOperation}.admission.v2`,
     descriptor: {
       ref: {
-        tool: { namespace: "helarc.code-agent", name: item.operation.operation.name },
+        tool: { namespace: "helarc.code-agent", name: item.requestOperation },
         revision: REVISION,
       },
       name: item.toolName,
@@ -197,76 +206,118 @@ function toolRegistration(item: CodeFileSpec, admittedAt: string): ToolRegistrat
       inputSchema: schema(item.requestOperation),
       schemaRevisions: {
         dialect: "json-schema-2020-12",
-        input: "1",
-        output: null,
-        translation: "native-1",
+        input: "2",
+        output: "2",
+        translation: "native-2",
       },
       annotations: {
-        title: description(item.requestOperation),
-        readOnlyHint: !["create", "update", "delete"].includes(item.requestOperation),
-        destructiveHint: ["update", "delete"].includes(item.requestOperation),
-        idempotentHint: item.requestOperation !== "create",
+        title: item.toolName,
+        readOnlyHint: !mutation,
+        destructiveHint: mutation,
+        idempotentHint: item.requestOperation !== "edit",
         openWorldHint: false,
       },
       source: {
         kind: "product",
-        sourceId: "helarc.code-workspace",
-        sourceRevision: "1",
+        sourceId: "helarc.code-agent",
+        sourceRevision: "2",
         activationEpoch: null,
       },
       operationBinding: { operation: item.operation, revision: BINDING_REVISION },
       retirement: null,
       metadata: {
-        profile: item.exposure === "workflow_only" ? "workflow" : "read-only",
+        profile: mutation ? "workspace-write" : "workspace-read",
         requestOperation: item.requestOperation,
       },
     },
-    allowedOrigins: item.origins,
+    allowedOrigins: ["model"],
     admittedAt,
   };
 }
 
 function schema(operation: CodeFileOperationKind): ToolJsonObject {
-  const properties: Record<string, ToolJsonObject> = {
-    rootName: { type: "string" },
-    path: { type: "string" },
-  };
-  const required = ["path"];
-  if (operation === "list") properties.recursive = { type: "boolean" };
-  if (operation === "search") {
-    properties.query = { type: "string", minLength: 1 };
-    required.push("query");
+  switch (operation) {
+    case "read":
+      return objectSchema(["file_path"], {
+        file_path: pathSchema(),
+        offset: positiveInteger(),
+        limit: positiveInteger(),
+      });
+    case "glob":
+      return objectSchema(["pattern"], {
+        pattern: boundedString(),
+        path: pathSchema(),
+      });
+    case "grep":
+      return objectSchema(["pattern"], {
+        pattern: boundedString(),
+        path: pathSchema(),
+        glob: boundedString(),
+        output_mode: { enum: ["content", "files_with_matches", "count"] },
+        case_sensitive: { type: "boolean" },
+        before_context: nonNegativeInteger(),
+        after_context: nonNegativeInteger(),
+        offset: positiveInteger(),
+        limit: positiveInteger(),
+        multiline: { type: "boolean" },
+      });
+    case "edit":
+      return objectSchema(["file_path", "old_string", "new_string"], {
+        file_path: pathSchema(),
+        old_string: { type: "string", minLength: 1 },
+        new_string: { type: "string" },
+        replace_all: { type: "boolean" },
+      });
+    case "write":
+      return objectSchema(["file_path", "content"], {
+        file_path: pathSchema(),
+        content: { type: "string" },
+      });
   }
-  if (operation === "create" || operation === "update") {
-    properties.content = { type: "string" };
-    required.push("content");
-  }
-  if (operation === "update" || operation === "delete") {
-    properties.expectedContentDigest = { type: "string", pattern: "^sha256:[a-f0-9]{64}$" };
-    required.push("expectedContentDigest");
-  }
-  return { type: "object", additionalProperties: false, required, properties };
 }
 
 function description(operation: CodeFileOperationKind): string {
   return ({
-    list: "List files inside a selected Code Workspace root.",
-    read: "Read one UTF-8 file inside a selected Code Workspace root.",
-    search: "Search UTF-8 files inside a selected Code Workspace root.",
-    create: "Create one reviewed UTF-8 file inside a selected Code Workspace root.",
-    update: "Replace one reviewed UTF-8 file inside a selected Code Workspace root.",
-    delete: "Delete one reviewed file inside a selected Code Workspace root.",
+    read: "Read bounded textual content from one exact Workspace file.",
+    glob: "Find Workspace paths with one bounded glob pattern.",
+    grep: "Search Workspace text with one bounded regular expression.",
+    edit: "Replace exact text against one current file baseline.",
+    write: "Create or replace complete content for one exact Workspace file.",
   } as const)[operation];
+}
+
+function objectSchema(
+  required: readonly string[],
+  properties: Readonly<Record<string, ToolJsonObject>>,
+): ToolJsonObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [...required],
+    properties: { ...properties },
+  };
+}
+
+function pathSchema(): ToolJsonObject {
+  return { type: "string", minLength: 1, maxLength: 4_096 };
+}
+
+function boundedString(): ToolJsonObject {
+  return { type: "string", minLength: 1, maxLength: 4_096 };
+}
+
+function positiveInteger(): ToolJsonObject {
+  return { type: "integer", minimum: 1 };
+}
+
+function nonNegativeInteger(): ToolJsonObject {
+  return { type: "integer", minimum: 0 };
 }
 
 function specForOperation(ref: OperationRevisionRef): CodeFileSpec {
   const key = operationRevisionKey(ref);
-  const item = SPECS.find(
-    (candidate) => operationRevisionKey(candidate.operation) === key,
-  );
-  if (item === undefined) {
-    throw new TypeError(`Unknown Code Workspace Operation revision: ${key}.`);
-  }
+  const item = SPECS.find((candidate) => operationRevisionKey(candidate.operation) === key);
+  if (item === undefined) throw new TypeError(`Unknown Code Agent file Operation: ${key}.`);
   return item;
 }
 
@@ -275,18 +326,23 @@ function snapshotRequest<T>(input: T): T {
 }
 
 function cloneValue(input: unknown): unknown {
-  if (input === null || typeof input === "string" || typeof input === "number" || typeof input === "boolean") return input;
+  if (
+    input === null || typeof input === "string" || typeof input === "number" ||
+    typeof input === "boolean"
+  ) return input;
   if (Array.isArray(input)) return input.map(cloneValue);
   if (typeof input !== "object" || Object.getPrototypeOf(input) !== Object.prototype) {
     throw new TypeError("Code file Operation request must contain plain serializable data.");
   }
-  return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, cloneValue(value)]));
+  return Object.fromEntries(
+    Object.entries(input).map(([key, value]) => [key, cloneValue(value)]),
+  );
 }
 
 function deepFreeze<T>(input: T): T {
-  if (input !== null && typeof input === "object" && !Object.isFrozen(input)) {
-    for (const value of Object.values(input)) deepFreeze(value);
+  if (typeof input === "object" && input !== null && !Object.isFrozen(input)) {
     Object.freeze(input);
+    for (const value of Object.values(input)) deepFreeze(value);
   }
   return input;
 }

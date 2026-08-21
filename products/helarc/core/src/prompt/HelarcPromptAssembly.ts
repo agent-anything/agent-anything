@@ -18,9 +18,9 @@ import {
   type HelarcToolCatalog,
 } from "../tools/HelarcToolCatalog.js";
 
-export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v2";
-export const HELARC_ACTION_CONTRACT_VERSION = "helarc-action-v2";
-export const HELARC_TOOL_CATALOG_VERSION = "helarc-tool-catalog-v2";
+export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v3";
+export const HELARC_ACTION_CONTRACT_VERSION = "helarc-model-decision-v1";
+export const HELARC_TOOL_CATALOG_VERSION = "helarc-tool-catalog-v3";
 export const HELARC_CONTEXT_PROJECTION_FORMAT_VERSION = "helarc-context-projection-v1";
 export const HELARC_CONTEXT_SECTION_HEADER = "Context projection:";
 export const HELARC_MODEL_OUTPUT_RESERVE_BYTES = 256_000;
@@ -32,7 +32,6 @@ export type HelarcPromptSectionId =
   | "action_decision_rules"
   | "tool_catalog"
   | "permission_safety"
-  | "patch_workflow"
   | "stop_protocol"
   | "safe_output_boundary"
   | "task"
@@ -142,19 +141,14 @@ function buildSystemPromptSections(
     promptSection(
       "permission_safety",
       "system",
-      "Do not call shell, write, patch, or long-running process tools unless the host explicitly enables them.",
-    ),
-    promptSection(
-      "patch_workflow",
-      "system",
-      "For propose change, use operation create/update/delete, path, and content when needed.",
+      "Use only the active Tool catalog. Permission, approval, policy, and sandbox decisions are enforced by the host from the exact requested action.",
     ),
     promptSection(
       "stop_protocol",
       "system",
       [
-        "For complete, return action and summary.",
-        "For stop, return action and reason.",
+        "For completion, return kind and summary.",
+        "For stop, return kind and reason.",
       ].join("\n"),
     ),
     promptSection(

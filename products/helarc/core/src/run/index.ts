@@ -9,7 +9,7 @@ export type {
 } from "./HelarcRun.js";
 export type {
   HelarcProductActivityProjectionUpdate,
-  HelarcProductPhaseProjectionUpdate,
+  HelarcProductPhase,
   HelarcProductResultProjectionUpdate,
   HelarcModelContinuationProjection,
   HelarcModelContinuationProjectionUpdate,

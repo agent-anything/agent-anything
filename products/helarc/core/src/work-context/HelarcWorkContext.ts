@@ -1157,8 +1157,6 @@ function isCompatibleProductTerminal(
     !output.workspace.additionalIds.every(hasText) ||
     (output.agentSummary !== null && typeof output.agentSummary !== "string") ||
     !isRuntimeResultStatus(output.runtimeStatus) ||
-    !isPatchStatus(output.patchStatus) ||
-    (output.appliedPath !== null && typeof output.appliedPath !== "string") ||
     !isEnforcementSummary(output.enforcement) || !Array.isArray(output.safeErrors) ||
     !output.safeErrors.every((error) =>
       error !== null && typeof error === "object" && hasText(error.code) && hasText(error.message)
@@ -1246,11 +1244,6 @@ function isCancellationSummary(value: unknown): boolean {
 function isRuntimeResultStatus(value: unknown): boolean {
   return value === "succeeded" || value === "blocked" || value === "failed" ||
     value === "cancelled";
-}
-
-function isPatchStatus(value: unknown): boolean {
-  return value === null || value === "proposed" || value === "applied" ||
-    value === "rejected" || value === "failed";
 }
 
 function isEnforcementSummary(value: unknown): boolean {

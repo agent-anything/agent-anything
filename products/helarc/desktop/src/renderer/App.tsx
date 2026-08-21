@@ -12,6 +12,7 @@ import {
   Settings,
   ShieldCheck,
 } from "lucide-react";
+import * as React from "react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type {
   HelarcMainSnapshot,
@@ -51,7 +52,6 @@ const initialSnapshot: HelarcMainSnapshot = {
 type ActiveRunProjection = NonNullable<HelarcMainSnapshot["run"]>;
 type PendingInteractionView = ActiveRunProjection["host"]["pendingInteractions"][number];
 type PendingApprovalView = Extract<PendingInteractionView, { family: "approval" }>;
-type PendingPatchReviewView = Extract<PendingInteractionView, { family: "patch_review" }>;
 
 type SidePanelMode = "review" | "threads" | "settings";
 
@@ -66,10 +66,9 @@ export function App() {
   const [interactionSubmissionError, setInteractionSubmissionError] = useState<string | null>(null);
   const [runControlError, setRunControlError] = useState<string | null>(null);
   const pendingApproval = getPendingApproval(snapshot.run);
-  const pendingPatchReview = getPendingPatchReview(snapshot.run);
   const runActive = isRunActive(snapshot.status);
   const selectedThread = snapshot.threadSummaries.find((thread) => thread.id === selectedThreadId) ?? null;
-  const activePanelMode: SidePanelMode = pendingApproval || pendingPatchReview
+  const activePanelMode: SidePanelMode = pendingApproval
     ? "review"
     : sidePanelMode;
 
@@ -297,45 +296,6 @@ export function App() {
     }
   }
 
-  async function resolvePatchReview(
-    decision: "accepted" | "rejected" | "request_revision",
-  ) {
-    const api = getHelarcApi();
-    const runId = snapshot.run?.harnessRunId;
-    if (!api || !runId || !pendingPatchReview || pendingPatchReview.phase !== "pending") {
-      return;
-    }
-
-    setIsBusy(true);
-    try {
-      const response = await api.submitInteraction({
-        commandId: createCommandId("interaction.submit"),
-        submissionId: globalThis.crypto.randomUUID(),
-        runId,
-        request: pendingPatchReview.request,
-        payload: {
-          decision,
-          reason: decision === "accepted"
-            ? "Accepted from Helarc desktop."
-            : decision === "rejected"
-              ? "Rejected from Helarc desktop."
-              : "Revision requested from Helarc desktop.",
-        },
-      });
-      setSnapshot(response.snapshot);
-      setInteractionSubmissionError(
-        response.receipt.status === "rejected"
-          ? response.receipt.code
-          : response.receipt.kind === "interaction.submit" &&
-              response.receipt.result.status === "rejected"
-            ? response.receipt.result.code
-            : null,
-      );
-    } finally {
-      setIsBusy(false);
-    }
-  }
-
   const workspaceLabel = snapshot.workspace
     ? snapshot.workspace.path
     : "No workspace selected";
@@ -457,7 +417,7 @@ export function App() {
                 ? <Settings size={19} aria-hidden="true" />
                 : <ShieldCheck size={19} aria-hidden="true" />}
           </div>
-          <div className={activePanelMode !== "review" || pendingApproval || pendingPatchReview || snapshot.run?.display.terminal || snapshot.error
+          <div className={activePanelMode !== "review" || pendingApproval || snapshot.run?.display.terminal || snapshot.error
             ? "review-content"
             : "review-empty"}
           >
@@ -477,54 +437,6 @@ export function App() {
                 isBusy={isBusy}
                 onSubmit={(option) => void submitApprovalDecision(option)}
               />
-            ) : pendingPatchReview ? (
-              <div className="patch-panel">
-                <FileCode2 size={24} aria-hidden="true" />
-                <strong>{pendingPatchReview.presentation.summary}</strong>
-                <span>{pendingPatchReview.presentation.operation} - {pendingPatchReview.presentation.path}</span>
-                <div className="patch-preview">
-                  <section>
-                    <span>Original</span>
-                    <pre>{pendingPatchReview.presentation.originalContent ?? ""}</pre>
-                  </section>
-                  <section>
-                    <span>Proposed</span>
-                    <pre>{pendingPatchReview.presentation.proposedContent ?? ""}</pre>
-                  </section>
-                </div>
-                {pendingPatchReview.phase === "submitted_for_resolution" ? (
-                  <span>Submitted for resolution</span>
-                ) : null}
-                {interactionSubmissionError ? (
-                  <span className="error-text">{interactionSubmissionError}</span>
-                ) : null}
-                <div className="permission-actions">
-                  <button
-                    className="secondary-button danger"
-                    type="button"
-                    onClick={() => void resolvePatchReview("rejected")}
-                    disabled={isBusy || pendingPatchReview.phase !== "pending"}
-                  >
-                    Reject
-                  </button>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => void resolvePatchReview("request_revision")}
-                    disabled={isBusy || pendingPatchReview.phase !== "pending"}
-                  >
-                    Request revision
-                  </button>
-                  <button
-                    className="primary-button compact"
-                    type="button"
-                    onClick={() => void resolvePatchReview("accepted")}
-                    disabled={isBusy || pendingPatchReview.phase !== "pending"}
-                  >
-                    Apply
-                  </button>
-                </div>
-              </div>
             ) : snapshot.run?.display.terminal ? (
               <RunTerminalPanel
                 title={terminalTitle(snapshot)}
@@ -741,18 +653,6 @@ export function RunTerminalPanel({
           <dt>Completed</dt>
           <dd>{formatTimestamp(terminal.completedAt)}</dd>
         </div>
-        {safeOutput?.patchStatus ? (
-          <div>
-            <dt>Patch</dt>
-            <dd>{safeOutput.patchStatus}</dd>
-          </div>
-        ) : null}
-        {safeOutput?.appliedPath ? (
-          <div>
-            <dt>Applied</dt>
-            <dd>{safeOutput.appliedPath}</dd>
-          </div>
-        ) : null}
       </dl>
       {safeOutput !== null && safeOutput.safeErrors.length > 0 ? (
         <ul className="error-list">
@@ -1090,9 +990,7 @@ function isRunActive(status: HelarcMainSnapshot["status"]): boolean {
   return status === "starting" ||
     status === "running" ||
     status === "cancelling" ||
-    status === "waiting_for_approval" ||
-    status === "waiting_for_patch_review" ||
-    status === "applying_patch";
+    status === "waiting_for_approval";
 }
 
 function isRunCancellable(status: ActiveRunProjection["display"]["status"]): boolean {
@@ -1132,10 +1030,6 @@ function terminalTitle(snapshot: HelarcMainSnapshot): string {
     return "Run blocked";
   }
 
-  if (snapshot.run?.product.result?.output.patchStatus === "applied") {
-    return "Patch applied";
-  }
-
   return "Run completed";
 }
 
@@ -1160,8 +1054,6 @@ function formatTraceMetadata(metadata: Record<string, unknown>): string | null {
 
   const parts = [`action ${action}`];
   const requestedToolName = readMetadataString(metadata, "requestedToolName");
-  const patchOperation = readMetadataString(metadata, "patchOperation");
-  const patchPath = readMetadataString(metadata, "patchPath");
   const versions = [
     readMetadataString(metadata, "promptArchitectureVersion"),
     readMetadataString(metadata, "actionContractVersion"),
@@ -1171,10 +1063,6 @@ function formatTraceMetadata(metadata: Record<string, unknown>): string | null {
 
   if (requestedToolName) {
     parts.push(`tool ${requestedToolName}`);
-  }
-
-  if (patchOperation && patchPath) {
-    parts.push(`patch ${patchOperation} ${patchPath}`);
   }
 
   if (versions.length > 0) {
@@ -1318,12 +1206,6 @@ function defaultGrantedPermissions(
 function getPendingApproval(run: HelarcMainSnapshot["run"]): PendingApprovalView | null {
   return run?.host.pendingInteractions.find(
     (interaction): interaction is PendingApprovalView => interaction.family === "approval",
-  ) ?? null;
-}
-
-function getPendingPatchReview(run: HelarcMainSnapshot["run"]): PendingPatchReviewView | null {
-  return run?.host.pendingInteractions.find(
-    (interaction): interaction is PendingPatchReviewView => interaction.family === "patch_review",
   ) ?? null;
 }
 

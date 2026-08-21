@@ -33,13 +33,13 @@ import {
 import type { ProviderCallResult } from "@agent-anything/model-interaction";
 
 export const HELARC_EVALUATION_TIME = "2026-08-12T00:00:00.000Z";
-export const HELARC_EVALUATION_CORPUS_REVISION = "phase26-corpus-v1";
-export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION = "phase26-target-v2";
+export const HELARC_EVALUATION_CORPUS_REVISION = "helarc-file-tools-corpus-v1";
+export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION = "helarc-file-tools-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
   | "search"
-  | "controlled_patch"
+  | "controlled_file_write"
   | "denied_command"
   | "malformed_output_retry";
 
@@ -65,7 +65,6 @@ export interface HelarcEvaluationScript {
   readonly responses: readonly ProviderCallResult[];
   readonly toolMode: HelarcEvaluationToolMode;
   readonly permissionPreset: HelarcEvaluationPermissionPreset;
-  readonly patchReviewDecision: "accepted" | "rejected" | null;
 }
 
 export interface HelarcEvaluationExpectedClaim {
@@ -73,12 +72,10 @@ export interface HelarcEvaluationExpectedClaim {
   readonly caseRef: EvaluationRecordRef;
   readonly productStatus: "completed" | "blocked";
   readonly runStatus: "succeeded" | "blocked";
-  readonly patchStatus: "applied" | null;
   readonly agentSummary: string | null;
   readonly workspaceFiles: readonly HelarcEvaluationFixtureFile[];
   readonly requiredActionNames: readonly string[];
   readonly retryCount: number;
-  readonly patchReviewDecision: "accepted" | null;
   readonly approvalDecision: "decline" | null;
 }
 
@@ -323,16 +320,16 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-v1",
-    "agent.revision": "helarc-code-agent-v1",
-    "prompt.revision": "helarc-prompt-v1",
-    "action-contract.revision": "helarc-action-v1",
+    "product.revision": "helarc-product-file-tools-v1",
+    "agent.revision": "helarc-code-agent-file-tools-v1",
+    "prompt.revision": "helarc-prompt-v3",
+    "action-contract.revision": "helarc-model-decision-v1",
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "phase26-batch4",
+    "source.revision": "helarc-file-tools-v1",
     "provider.revision": "scripted-provider-v1",
     "model.revision": "scripted-controller-output-v1",
-    "tool-profile.revision": "helarc-tool-catalog-v1",
-    "action-registration.revision": "helarc-action-registration-v1",
+    "tool-profile.revision": "helarc-tool-catalog-v3",
+    "action-registration.revision": "helarc-file-action-registration-v2",
     "sandbox.enforcement": "disabled",
     "permission.preset": "case-declared",
     "reviewer.profile": "case-declared-deterministic",
@@ -353,7 +350,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
         key: item.key,
         owner: item.owner,
         required: item.required,
-        sourceRevision: "phase26-batch4",
+        sourceRevision: "helarc-file-tools-v1",
         schemaRef: item.schemaRef,
         status: "unavailable" as const,
         representation: null,
@@ -404,29 +401,27 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       },
       outputs: [
         {
-          action: "call_tool",
+          kind: "tool_call",
           reason: "List the fixture files.",
-          toolName: "codeAgent.listFiles",
-          input: { path: ".", recursive: true },
+          toolName: "Glob",
+          input: { pattern: "**/*" },
         },
         {
-          action: "call_tool",
+          kind: "tool_call",
           reason: "Read the declared source file.",
-          toolName: "codeAgent.readFile",
-          input: { path: "src/index.ts" },
+          toolName: "Read",
+          input: { file_path: "src/index.ts" },
         },
-        { action: "complete", summary: "The fixture exports phase26Value with value 42." },
+        { kind: "completion", summary: "The fixture exports phase26Value with value 42." },
       ],
       productStatus: "completed",
       runStatus: "succeeded",
-      patchStatus: null,
       agentSummary: "The fixture exports phase26Value with value 42.",
       expectedAddedFiles: {},
-      requiredActionNames: ["codeAgent.listFiles", "codeAgent.readFile"],
+      requiredActionNames: ["Glob", "Read"],
       retryCount: 0,
       toolMode: "read-only",
       permissionPreset: "full_access",
-      patchReviewDecision: null,
       approvalDecision: null,
     }),
     caseDefinition({
@@ -439,51 +434,53 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       },
       outputs: [
         {
-          action: "call_tool",
+          kind: "tool_call",
           reason: "Search for the requested symbol.",
-          toolName: "codeAgent.searchFiles",
-          input: { path: ".", query: "targetSymbol" },
+          toolName: "Grep",
+          input: { path: ".", pattern: "targetSymbol" },
         },
-        { action: "complete", summary: "targetSymbol is declared in src/feature.ts." },
+        { kind: "completion", summary: "targetSymbol is declared in src/feature.ts." },
       ],
       productStatus: "completed",
       runStatus: "succeeded",
-      patchStatus: null,
       agentSummary: "targetSymbol is declared in src/feature.ts.",
       expectedAddedFiles: {},
-      requiredActionNames: ["codeAgent.searchFiles"],
+      requiredActionNames: ["Grep"],
       retryCount: 0,
       toolMode: "read-only",
       permissionPreset: "full_access",
-      patchReviewDecision: null,
       approvalDecision: null,
     }),
     caseDefinition({
-      id: "controlled-patch",
-      scenario: "controlled_patch",
+      id: "controlled-file-write",
+      scenario: "controlled_file_write",
       prompt: "Create src/generated.txt containing phase26 followed by a newline.",
       fixtureFiles: {
         "src/existing.txt": "existing\n",
       },
-      outputs: [{
-        action: "propose",
-        summary: "Create the requested generated file.",
-        change: {
-          operation: "create",
-          path: "src/generated.txt",
-          content: "phase26\n",
+      outputs: [
+        {
+          kind: "tool_call",
+          toolName: "Write",
+          reason: "Create the requested generated file.",
+          input: {
+            file_path: "src/generated.txt",
+            content: "phase26\n",
+          },
         },
-      }],
+        {
+          kind: "completion",
+          summary: "Created the requested generated file.",
+        },
+      ],
       productStatus: "completed",
       runStatus: "succeeded",
-      patchStatus: "applied",
-      agentSummary: "Create the requested generated file.",
+      agentSummary: "Created the requested generated file.",
       expectedAddedFiles: { "src/generated.txt": "phase26\n" },
-      requiredActionNames: ["codeAgent.createFile"],
+      requiredActionNames: ["Write"],
       retryCount: 0,
       toolMode: "read-only",
       permissionPreset: "full_access",
-      patchReviewDecision: "accepted",
       approvalDecision: null,
     }),
     caseDefinition({
@@ -495,29 +492,27 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       },
       outputs: [
         {
-          action: "call_tool",
+          kind: "tool_call",
           reason: "Attempt the requested command under permission control.",
           toolName: "codeAgent.runCommand",
           input: {
-            command: "node",
+            command: process.execPath,
             args: ["-e", "require('node:fs').writeFileSync('denied.txt', 'must-not-exist')"],
             cwd: ".",
             timeoutMs: 1_000,
             reason: "Create the requested marker.",
           },
         },
-        { action: "stop", reason: "The requested command was denied." },
+        { kind: "stop", reason: "The requested command was denied." },
       ],
       productStatus: "blocked",
       runStatus: "blocked",
-      patchStatus: null,
       agentSummary: null,
       expectedAddedFiles: {},
       requiredActionNames: ["codeAgent.runCommand"],
       retryCount: 0,
       toolMode: "shell-enabled",
       permissionPreset: "approve_for_me",
-      patchReviewDecision: null,
       approvalDecision: "decline",
     }),
     caseDefinition({
@@ -529,18 +524,16 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       },
       outputs: [
         "{ malformed structured output",
-        { action: "complete", summary: "Recovered from malformed structured output." },
+        { kind: "completion", summary: "Recovered from malformed structured output." },
       ],
       productStatus: "completed",
       runStatus: "succeeded",
-      patchStatus: null,
       agentSummary: "Recovered from malformed structured output.",
       expectedAddedFiles: {},
       requiredActionNames: [],
       retryCount: 1,
       toolMode: "read-only",
       permissionPreset: "full_access",
-      patchReviewDecision: null,
       approvalDecision: null,
     }),
   ].sort((left, right) => left.definition.ref.id.localeCompare(right.definition.ref.id));
@@ -554,14 +547,12 @@ function caseDefinition(input: {
   readonly outputs: readonly unknown[];
   readonly productStatus: HelarcEvaluationExpectedClaim["productStatus"];
   readonly runStatus: HelarcEvaluationExpectedClaim["runStatus"];
-  readonly patchStatus: HelarcEvaluationExpectedClaim["patchStatus"];
   readonly agentSummary: string | null;
   readonly expectedAddedFiles: Readonly<Record<string, string>>;
   readonly requiredActionNames: readonly string[];
   readonly retryCount: number;
   readonly toolMode: HelarcEvaluationToolMode;
   readonly permissionPreset: HelarcEvaluationPermissionPreset;
-  readonly patchReviewDecision: "accepted" | null;
   readonly approvalDecision: "decline" | null;
 }): HelarcEvaluationCaseDefinition {
   const caseRef = ref(`helarc.phase26.case.${input.id}`);
@@ -609,19 +600,16 @@ function caseDefinition(input: {
       scriptedSuccess(output, index + 1))),
     toolMode: input.toolMode,
     permissionPreset: input.permissionPreset,
-    patchReviewDecision: input.patchReviewDecision,
   });
   const expectedClaim: HelarcEvaluationExpectedClaim = Object.freeze({
     ref: claimRef,
     caseRef,
     productStatus: input.productStatus,
     runStatus: input.runStatus,
-    patchStatus: input.patchStatus,
     agentSummary: input.agentSummary,
     workspaceFiles,
     requiredActionNames: Object.freeze([...input.requiredActionNames].sort()),
     retryCount: input.retryCount,
-    patchReviewDecision: input.patchReviewDecision,
     approvalDecision: input.approvalDecision,
   });
   return Object.freeze({

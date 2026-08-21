@@ -8,12 +8,11 @@ import { createFailedRunResult } from "@agent-anything/agent-runtime/run";
 import { createActionRegistrationSnapshot } from "@agent-anything/canonical-action/registration";
 import {
   bindingRefForCodeFileTool,
-  CODE_AGENT_CREATE_FILE_TOOL,
-  CODE_AGENT_DELETE_FILE_TOOL,
-  CODE_AGENT_LIST_FILES_TOOL,
-  CODE_AGENT_READ_FILE_TOOL,
-  CODE_AGENT_SEARCH_FILES_TOOL,
-  CODE_AGENT_UPDATE_FILE_TOOL,
+  CODE_AGENT_EDIT_TOOL,
+  CODE_AGENT_GLOB_TOOL,
+  CODE_AGENT_GREP_TOOL,
+  CODE_AGENT_READ_TOOL,
+  CODE_AGENT_WRITE_TOOL,
   operationRefForCodeFileTool,
   type CodeFileActionAdapterIds,
   type CodeFileToolName,
@@ -47,7 +46,7 @@ describe("HelarcProductComposition", () => {
     expect("runner" in composition).toBe(false);
   });
 
-  it("keeps the model catalog narrower than trusted mutation registrations", async () => {
+  it("exposes the accepted five-file-Tool surface through one registered Operation path", async () => {
     const composition = await createHelarcProductComposition({
       runId: "run-1",
       ...createTask("D:/workspace"),
@@ -61,16 +60,14 @@ describe("HelarcProductComposition", () => {
       "controller-request-1",
     );
     expect(exposure.catalog.tools.map(({ name }) => name)).toEqual([
-      "codeAgent.listFiles",
-      "codeAgent.readFile",
-      "codeAgent.searchFiles",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Read",
+      "Write",
     ]);
     expect(composition.actions.registrations.registrations.map(({ operation }) => operation.operation.name))
-      .toEqual(expect.arrayContaining([
-        "create-file",
-        "update-file",
-        "delete-file",
-      ]));
+      .toEqual(["edit", "glob", "grep", "read", "write"]);
   });
 
   it("projects trusted failures into bounded product messages without leaking raw data", async () => {
@@ -135,12 +132,11 @@ function createTask(workspaceRoot: string) {
 }
 
 const FILE_TOOLS = [
-  CODE_AGENT_LIST_FILES_TOOL,
-  CODE_AGENT_READ_FILE_TOOL,
-  CODE_AGENT_SEARCH_FILES_TOOL,
-  CODE_AGENT_CREATE_FILE_TOOL,
-  CODE_AGENT_UPDATE_FILE_TOOL,
-  CODE_AGENT_DELETE_FILE_TOOL,
+  CODE_AGENT_READ_TOOL,
+  CODE_AGENT_GLOB_TOOL,
+  CODE_AGENT_GREP_TOOL,
+  CODE_AGENT_EDIT_TOOL,
+  CODE_AGENT_WRITE_TOOL,
 ] as const;
 
 function createLocalContributions() {
@@ -182,14 +178,13 @@ function createLocalContributions() {
 
 function requestOperation(
   name: CodeFileToolName,
-): "list" | "read" | "search" | "create" | "update" | "delete" {
+): "read" | "glob" | "grep" | "edit" | "write" {
   return ({
-    [CODE_AGENT_LIST_FILES_TOOL]: "list",
-    [CODE_AGENT_READ_FILE_TOOL]: "read",
-    [CODE_AGENT_SEARCH_FILES_TOOL]: "search",
-    [CODE_AGENT_CREATE_FILE_TOOL]: "create",
-    [CODE_AGENT_UPDATE_FILE_TOOL]: "update",
-    [CODE_AGENT_DELETE_FILE_TOOL]: "delete",
+    [CODE_AGENT_READ_TOOL]: "read",
+    [CODE_AGENT_GLOB_TOOL]: "glob",
+    [CODE_AGENT_GREP_TOOL]: "grep",
+    [CODE_AGENT_EDIT_TOOL]: "edit",
+    [CODE_AGENT_WRITE_TOOL]: "write",
   } as const)[name];
 }
 

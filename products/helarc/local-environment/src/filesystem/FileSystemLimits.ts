@@ -2,10 +2,12 @@ import type { CodeAgentFileLimits } from "@agent-anything/helarc-code-agent/sour
 import { FileSystemError } from "./FileSystemError.js";
 
 export const defaultCodeAgentFileLimits: CodeAgentFileLimits = {
-  maxListEntries: 1_000,
+  maxGlobEntries: 1_000,
   maxReadBytes: 1_000_000,
+  maxReadLines: 2_000,
   maxSearchFileBytes: 1_000_000,
-  maxSearchMatches: 100,
+  maxGrepMatches: 100,
+  maxGrepContextLines: 20,
   maxWriteBytes: 1_000_000,
 };
 

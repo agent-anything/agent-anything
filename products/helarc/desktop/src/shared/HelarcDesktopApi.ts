@@ -88,8 +88,6 @@ export type HelarcMainSnapshotStatus =
   | "running"
   | "cancelling"
   | "waiting_for_approval"
-  | "waiting_for_patch_review"
-  | "applying_patch"
   | "completed"
   | "rejected"
   | "failed"
@@ -185,23 +183,6 @@ export interface HelarcInteractionRequestRefSnapshot {
   readonly subject: HelarcInteractionSubjectRefSnapshot;
 }
 
-export interface HelarcPatchReviewPresentationSnapshot {
-  readonly runId: string;
-  readonly proposalId: string;
-  readonly proposalRevision: number;
-  readonly reviewId: string;
-  readonly rootName: string;
-  readonly workspaceId: string;
-  readonly path: string;
-  readonly operation: "create" | "update" | "delete";
-  readonly summary: string;
-  readonly rationale: string;
-  readonly originalContent: string | null;
-  readonly proposedContent: string | null;
-  readonly originalContentBytes: number | null;
-  readonly proposedContentBytes: number | null;
-}
-
 interface HelarcPendingInteractionSnapshotBase<TFamily extends string> {
   readonly family: TFamily;
   readonly request: HelarcInteractionRequestRefSnapshot;
@@ -215,28 +196,11 @@ export type HelarcPendingInteractionSnapshot =
   | (HelarcPendingInteractionSnapshotBase<"approval"> & {
       readonly presentation: HelarcApprovalReviewRequestSnapshot;
     })
-  | (HelarcPendingInteractionSnapshotBase<"patch_review"> & {
-      readonly presentation: HelarcPatchReviewPresentationSnapshot;
-    })
   | (HelarcPendingInteractionSnapshotBase<"unsupported"> & {
       readonly presentation: null;
     });
 
-export type HelarcProductPhaseSnapshot =
-  | { readonly kind: "none" }
-  | {
-      readonly kind: "patch_review_requested";
-      readonly proposalId: string;
-      readonly proposalRevision: number;
-      readonly reviewId: string;
-    }
-  | {
-      readonly kind: "patch_action_submitted";
-      readonly proposalId: string;
-      readonly proposalRevision: number;
-      readonly reviewId: string;
-      readonly requestVersion: number;
-    };
+export type HelarcProductPhaseSnapshot = { readonly kind: "none" };
 
 export interface HelarcRunActivitySnapshot {
   readonly id: string;
@@ -320,8 +284,6 @@ export interface HelarcRunProductResultSnapshot {
     };
     readonly agentSummary: string | null;
     readonly runtimeStatus: "succeeded" | "blocked" | "failed" | "cancelled";
-    readonly patchStatus: "proposed" | "applied" | "rejected" | "failed" | null;
-    readonly appliedPath: string | null;
     readonly enforcement: {
       readonly selected: "managed" | "external" | "disabled";
       readonly status:

@@ -20,21 +20,19 @@ describe("Helarc controller trace projection", () => {
   it("records allowlisted controller trace metadata by Run and operation", async () => {
     const traceByOperationId = new Map<string, HelarcControllerTraceProjection>();
     const controller = new HelarcTracingController(new FakeController({
-      kind: "final_output",
-      output: { kind: "propose", summary: "Create file." },
+      kind: "propose_completion",
+      output: { kind: "complete", summary: "Inspection complete." },
       modelItems: [{
         id: "run-1:model:1",
         kind: "assistant_action",
-        content: { action: "propose" },
+        content: { kind: "completion", summary: "Inspection complete." },
         metadata: {
           source: "helarc-controller",
-          controllerAction: "propose",
-          promptArchitectureVersion: "helarc-prompt-v2",
-          actionContractVersion: "helarc-action-v2",
-          toolCatalogVersion: "helarc-tool-catalog-v2",
-          exposedToolNames: ["codeAgent.readFile"],
-          patchOperation: "create",
-          patchPath: "empty.txt",
+          controllerAction: "completion",
+          promptArchitectureVersion: "helarc-prompt-v3",
+          actionContractVersion: "helarc-model-decision-v1",
+          toolCatalogVersion: "helarc-tool-catalog-v3",
+          exposedToolNames: ["Read"],
           rawPrompt: "secret",
         },
       }],
@@ -47,14 +45,12 @@ describe("Helarc controller trace projection", () => {
       operationId: "controller-turn:1",
       iteration: 1,
       source: "helarc-controller",
-      controllerAction: "propose",
-      promptArchitectureVersion: "helarc-prompt-v2",
-      actionContractVersion: "helarc-action-v2",
-      toolCatalogVersion: "helarc-tool-catalog-v2",
-      exposedToolNames: ["codeAgent.readFile"],
+      controllerAction: "completion",
+      promptArchitectureVersion: "helarc-prompt-v3",
+      actionContractVersion: "helarc-model-decision-v1",
+      toolCatalogVersion: "helarc-tool-catalog-v3",
+      exposedToolNames: ["Read"],
       requestedToolName: null,
-      patchOperation: "create",
-      patchPath: "empty.txt",
     });
   });
 
@@ -64,14 +60,12 @@ describe("Helarc controller trace projection", () => {
       operationId: "controller-turn:1",
       iteration: 1,
       source: null,
-      controllerAction: "call_tool",
+      controllerAction: "tool_call",
       promptArchitectureVersion: null,
       actionContractVersion: null,
       toolCatalogVersion: null,
       exposedToolNames: Object.freeze([]),
-      requestedToolName: "codeAgent.readFile",
-      patchOperation: null,
-      patchPath: null,
+      requestedToolName: "Read",
     });
     const traceByOperationId = new Map<string, HelarcControllerTraceProjection>([
       [createControllerTurnTraceOperationId(1), trace],

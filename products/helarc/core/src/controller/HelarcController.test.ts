@@ -1,6 +1,11 @@
-import { ProviderBackedController, StructuredOutputError } from "@agent-anything/agent-runtime/controller";
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import {
+  ProviderBackedController,
+  StructuredOutputError,
+  type ControllerCallContext,
+  type ControllerInput,
+} from "@agent-anything/agent-runtime/controller";
 import { createSystemRetryExecutor, systemRetryClock } from "@agent-anything/agent-runtime/retry";
-import type { ControllerCallContext, ControllerInput } from "@agent-anything/agent-runtime/controller";
 import { createRunCancellationController } from "@agent-anything/agent-runtime/run";
 import type {
   Provider,
@@ -8,12 +13,8 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/model-interaction";
-import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { createUtf8ModelInputAccounting } from "@agent-anything/model-interaction/input";
-import {
-  createToolCatalogSnapshot,
-  type ToolDescriptorInput,
-} from "@agent-anything/tools/catalog";
+import { createToolCatalogSnapshot, type ToolDescriptorInput } from "@agent-anything/tools/catalog";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
 import { describe, expect, it } from "vitest";
 import {
@@ -28,10 +29,7 @@ import {
   type HelarcAgentOutput,
   type HelarcControllerParseErrorCode,
 } from "./index.js";
-import {
-  buildHelarcPromptAssembly,
-  HELARC_ACTION_CONTRACT_VERSION,
-} from "../prompt/index.js";
+import { buildHelarcPromptAssembly, HELARC_ACTION_CONTRACT_VERSION } from "../prompt/index.js";
 import {
   createHelarcToolCatalogMetadata,
   HELARC_TOOL_CATALOG_METADATA_KEY,
@@ -44,42 +42,30 @@ const TEST_INPUT_ACCOUNTING = createUtf8ModelInputAccounting({
   limitSource: "host_configured",
   estimator: { id: "fake-provider.utf8-content", revision: "1" },
   framing: { id: "fake-provider.framing", revision: "1" },
-  renderFraming: (sections) => JSON.stringify({
-    roles: sections.map((section) => section.role),
-  }),
+  renderFraming: (sections) => JSON.stringify({ roles: sections.map(({ role }) => role) }),
 });
 
 describe("Helarc controller", () => {
-  it("builds a provider request from the current Runner state", () => {
+  it("builds a request with the accepted decision and Tool Contracts", () => {
     const request = buildHelarcProviderRequest(createControllerInput(), {
       attemptNumber: 1,
       correction: null,
       inputAccounting: TEST_INPUT_ACCOUNTING,
     });
 
-    expect(request.capability).toBe("helarc.code-agent.turn");
     expect(request.metadata).toMatchObject({
       runId: "run-1",
-      controllerIteration: 1,
-      exposedToolNames: [
-        "codeAgent.listFiles",
-        "codeAgent.readFile",
-        "codeAgent.searchFiles",
-      ],
+      promptArchitectureVersion: "helarc-prompt-v3",
+      actionContractVersion: "helarc-model-decision-v1",
+      toolCatalogVersion: "helarc-tool-catalog-v3",
+      exposedToolNames: ["Read", "Glob", "Grep", "Edit", "Write"],
     });
-    const completeInput = request.messages.map((message) => message.content).join("\n");
-    expect(completeInput).toContain("You are Helarc, a careful code agent.");
-    expect(completeInput).toContain("update_plan");
-    expect(completeInput).toContain(
-      "status pending, in_progress, or completed",
-    );
-    expect(completeInput).toContain(
-      'Input JSON Schema: {"additionalProperties":false,"properties":{"path":{"type":"string"},"recursive":{"type":"boolean"}},"required":["path"],"type":"object"}',
-    );
-    expect(completeInput).toContain("Task:\nUpdate docs");
-    expect(completeInput).toContain("Current plan:");
-    expect(completeInput)
-      .not.toContain("D:/projects/agent-anything");
+    const prompt = request.messages.map(({ content }) => content).join("\n");
+    expect(prompt).toContain("tool_call, plan_update, completion, stop");
+    expect(prompt).toContain("A successful Edit or Write is an Observation");
+    expect(prompt).toContain('"file_path"');
+    expect(prompt).toContain("Task:\nUpdate docs");
+    expect(prompt).not.toContain("D:/projects/agent-anything");
     expect(request.composition.lineage).toMatchObject({
       contextProjection: { id: "projection-1" },
       projectionManifest: { id: "manifest-1" },
@@ -87,63 +73,37 @@ describe("Helarc controller", () => {
     });
   });
 
-  it("assembles named prompt sections and an explicit action contract", () => {
+  it("assembles the four-decision model Contract without a proposal workflow", () => {
     const assembly = buildHelarcPromptAssembly({
       controllerInput: createControllerInput(),
       correctionMessage: null,
     });
     const contract = createHelarcActionContract();
 
-    expect(assembly.promptSections
-      .filter((section) => section.role === "system")
-      .map((section) => section.id)).toEqual([
-      "agent_identity",
-      "output_format",
-      "action_protocol",
-      "action_decision_rules",
-      "tool_catalog",
-      "permission_safety",
-      "patch_workflow",
-      "stop_protocol",
-      "safe_output_boundary",
-    ]);
-    expect(contract.actions.map((item) => item.action)).toEqual([
-      "call_tool",
-      "request_permissions",
-      "update_plan",
-      "complete",
-      "propose",
+    expect(assembly.promptSections.filter(({ role }) => role === "system").map(({ id }) => id))
+      .toEqual([
+        "agent_identity",
+        "output_format",
+        "action_protocol",
+        "action_decision_rules",
+        "tool_catalog",
+        "permission_safety",
+        "stop_protocol",
+        "safe_output_boundary",
+      ]);
+    expect(contract.decisions.map(({ kind }) => kind)).toEqual([
+      "tool_call",
+      "plan_update",
+      "completion",
       "stop",
     ]);
     expect(buildHelarcActionProtocolText(contract))
-      .toContain("For call_tool, return action, toolName, input, and optional reason.");
-    expect(buildHelarcActionProtocolText(contract))
-      .toContain("For request_permissions, return action, rootId, permissions, reason.");
+      .toContain("For tool_call, return kind, toolName, input, and optional reason.");
     expect(buildHelarcActionDecisionRulesText(contract))
-      .toContain("Use update_plan only when an explicit plan improves multi-step execution");
+      .toContain("Use plan_update only when an explicit plan improves the current work");
   });
 
-  it("uses the active shell-enabled tool catalog", () => {
-    const input = createControllerInput({
-      tools: [...READ_ONLY_TOOLS, tool("codeAgent.runCommand", "Run a command.", "risky")],
-      mode: "shell-enabled",
-    });
-    const request = buildHelarcProviderRequest(input, {
-      attemptNumber: 1,
-      correction: null,
-      inputAccounting: TEST_INPUT_ACCOUNTING,
-    });
-
-    expect(request.metadata.exposedToolNames).toContain("codeAgent.runCommand");
-    const completeInput = request.messages.map((message) => message.content).join("\n");
-    expect(completeInput).toContain("Active tool catalog (shell-enabled):");
-    expect(completeInput).toContain(
-      "Assessed from the exact process action and current run authority",
-    );
-  });
-
-  it("builds bounded correction diagnostics without copying rejected output", () => {
-    const rejectedOutput = "private rejected provider output";
+  it("builds bounded correction diagnostics", () => {
     const request = buildHelarcProviderRequest(createControllerInput(), {
       attemptNumber: 2,
       inputAccounting: TEST_INPUT_ACCOUNTING,
@@ -156,193 +116,117 @@ describe("Helarc controller", () => {
         },
       },
     });
-
     expect(request.metadata).toMatchObject({
       structuredOutputAttemptNumber: 2,
-      structuredOutputCorrectionCategory: "structured_output_syntax",
       structuredOutputCorrectionCode: "controller_output_not_json",
     });
     expect(request.messages.at(-1)).toMatchObject({
       role: "user",
       metadata: { kind: "structured-output-correction" },
     });
-    expect(request.messages.at(-1)?.content).toContain(
-      "Return one valid JSON object without markdown.",
-    );
-    expect(JSON.stringify(request)).not.toContain(rejectedOutput);
   });
 
-  it("classifies known protocol errors as explicit correction failures", () => {
-    try {
-      parseStructuredOutput("{");
-    } catch (error) {
-      expect(error).toBeInstanceOf(StructuredOutputError);
-      expect((error as StructuredOutputError).failure).toEqual({
-        category: "structured_output_syntax",
-        code: "controller_output_not_json",
-        correctionFeedback: "Return one valid JSON object without markdown or surrounding text.",
-      });
-      return;
-    }
-    throw new Error("Expected structured-output correction failure.");
-  });
-
-  it("maps call_tool to a tool action without accepting a model-owned action id", () => {
+  it("maps one Tool decision to one model-origin Operation request", () => {
     const decision = parseHelarcProviderResponse(response({
-      action: "call_tool",
-      toolCallId: "model-owned-id",
-      reason: "Inspect files.",
-      toolName: "codeAgent.listFiles",
-      input: { path: "." },
+      kind: "tool_call",
+      toolName: "Read",
+      input: { file_path: "src/index.ts" },
+      reason: "Inspect the current file.",
     }), createControllerInput());
-
     expect(decision).toMatchObject({
       kind: "advance",
       candidates: [{
         kind: "operation_request",
         origin: "tool_request",
         tool: {
-          name: "codeAgent.listFiles",
-          input: { path: "." },
+          name: "Read",
+          input: { file_path: "src/index.ts" },
           origin: "model",
           controllerRequestId: "controller-request-1",
         },
-        modelItemId: "run-1:model:1",
       }],
       modelItems: [{
-        id: "run-1:model:1",
-        kind: "assistant_action",
-        metadata: {
-          source: "helarc-controller",
-          controllerAction: "call_tool",
-          requestedToolName: "codeAgent.listFiles",
-        },
+        metadata: { controllerAction: "tool_call", requestedToolName: "Read" },
       }],
     });
-    expect(decision.kind === "advance" ? decision.candidates[0] : {}).not.toHaveProperty("id");
   });
 
-  it("maps update_plan to the Runner-owned internal action", () => {
-    const decision = parseHelarcProviderResponse(response({
-      action: "update_plan",
-      explanation: "This task has multiple steps.",
+  it("maps a Plan update to one Runner-owned state transition", () => {
+    expect(parseHelarcProviderResponse(response({
+      kind: "plan_update",
+      explanation: "The task has multiple steps.",
       plan: [
         { step: "Inspect files", status: "in_progress" },
-        { step: "Prepare change", status: "pending" },
+        { step: "Apply exact change", status: "pending" },
       ],
-    }), createControllerInput());
-
-    expect(decision).toMatchObject({
+    }), createControllerInput())).toMatchObject({
       kind: "advance",
       candidates: [{
         kind: "state_transition",
         transition: "plan_update",
         input: {
-          explanation: "This task has multiple steps.",
+          explanation: "The task has multiple steps.",
           plan: [
             { step: "Inspect files", status: "in_progress" },
-            { step: "Prepare change", status: "pending" },
+            { step: "Apply exact change", status: "pending" },
           ],
         },
       }],
     });
   });
 
-  it("maps request_permissions to the Runner-owned permission Action", () => {
-    const decision = parseHelarcProviderResponse(response({
-      action: "request_permissions",
-      rootId: "workspace",
-      permissions: { fileSystem: { write: ["output.txt"] } },
-      reason: "Write the requested output.",
-    }), createControllerInput());
-
-    expect(decision).toMatchObject({
-      kind: "advance",
-      candidates: [{
-        kind: "interaction_request",
-        protocol: {
-          owner: "helarc",
-          kind: "permission_request",
-          revision: "1",
-        },
-        subject: {
-          rootId: "workspace",
-          permissions: { fileSystem: { write: ["output.txt"] } },
-          reason: "Write the requested output.",
-        },
-        modelItemId: "run-1:model:1",
-      }],
-    });
-  });
-
   it.each([
     [
-      { action: "complete", summary: "No change is needed." },
-      { kind: "propose_completion", output: { kind: "complete", summary: "No change is needed." } },
+      { kind: "completion", summary: "The task is complete." },
+      { kind: "propose_completion", output: { kind: "complete", summary: "The task is complete." } },
     ],
     [
-      {
-        action: "propose",
-        summary: "Create empty.txt.",
-        change: { operation: "create", path: "empty.txt", content: "" },
-      },
-      {
-        kind: "propose_completion",
-        output: {
-          kind: "propose",
-          summary: "Create empty.txt.",
-          change: { operation: "create", path: "empty.txt", content: "" },
-        },
-      },
-    ],
-    [
-      { action: "stop", reason: "Cannot continue safely." },
+      { kind: "stop", reason: "Cannot continue safely." },
       { kind: "propose_stop", reason: "Cannot continue safely." },
     ],
-  ])("maps terminal provider output %#", (output, expected) => {
+  ])("maps terminal provider decision %#", (output, expected) => {
     expect(parseHelarcProviderResponse(response(output), createControllerInput()))
       .toMatchObject(expected);
   });
 
-  it.each<[
-    string,
-    unknown,
-    HelarcControllerParseErrorCode,
-  ]>([
+  it.each<[string, unknown, HelarcControllerParseErrorCode]>([
     ["invalid JSON", "{", "controller_output_not_json"],
-    ["unknown action", { action: "rename_file" }, "controller_action_invalid"],
-    ["missing tool name", { action: "call_tool", input: {} }, "controller_tool_name_required"],
-    ["missing tool input", { action: "call_tool", toolName: "codeAgent.readFile" }, "controller_tool_input_required"],
-    ["non-object tool input", { action: "call_tool", toolName: "codeAgent.readFile", input: [] }, "controller_tool_input_invalid"],
-    ["missing summary", { action: "complete" }, "controller_summary_required"],
-    ["missing change", { action: "propose", summary: "Change it." }, "controller_change_required"],
-    ["invalid operation", { action: "propose", summary: "Change it.", change: { operation: "move", path: "a" } }, "controller_change_operation_invalid"],
-    ["missing create content", { action: "propose", summary: "Create it.", change: { operation: "create", path: "a" } }, "controller_change_content_required"],
-    ["missing stop reason", { action: "stop" }, "controller_stop_reason_required"],
+    ["legacy action shape", { action: "complete", summary: "Done." }, "model_decision_field_invalid"],
+    ["unsupported decision", { kind: "propose", summary: "Change it." }, "model_decision_kind_invalid"],
+    ["missing Tool input", { kind: "tool_call", toolName: "Read" }, "model_decision_tool_input_invalid"],
+    ["non-object Tool input", { kind: "tool_call", toolName: "Read", input: [] }, "model_decision_tool_input_invalid"],
+    ["empty summary", { kind: "completion", summary: "" }, "model_decision_field_invalid"],
   ])("rejects %s", (_label, output, code) => {
     expectParseError(() => parseStructuredOutput(output), code);
   });
 
-  it("rejects tools outside the active catalog", () => {
+  it("classifies invalid JSON for structured-output correction", () => {
+    try {
+      parseStructuredOutput("{");
+    } catch (error) {
+      expect(error).toBeInstanceOf(StructuredOutputError);
+      expect((error as StructuredOutputError).failure.category).toBe("structured_output_syntax");
+      return;
+    }
+    throw new Error("Expected StructuredOutputError.");
+  });
+
+  it("rejects Tools outside the active catalog", () => {
     expectParseError(() => parseHelarcProviderResponse(response({
-      action: "call_tool",
-      toolName: "codeAgent.runCommand",
-      input: { command: "npm" },
+      kind: "tool_call",
+      toolName: "RunCommand",
+      input: { command: "npm test" },
     }), createControllerInput()), "controller_tool_name_unsupported");
   });
 
   it("rejects oversized string output", () => {
-    const output = JSON.stringify({ action: "complete", summary: "done" })
+    const output = JSON.stringify({ kind: "completion", summary: "done" })
       .padEnd(HELARC_CONTROLLER_OUTPUT_MAX_LENGTH + 1, " ");
-
-    expectParseError(
-      () => parseStructuredOutput(output),
-      "controller_output_too_large",
-    );
+    expectParseError(() => parseStructuredOutput(output), "controller_output_too_large");
   });
 
-  it("drives ProviderBackedController with Helarc request and response adapters", async () => {
-    const provider = new FakeProvider({ action: "complete", summary: "Done." });
+  it("drives ProviderBackedController with the accepted adapters", async () => {
+    const provider = new FakeProvider({ kind: "completion", summary: "Done." });
     const controller = new ProviderBackedController<HelarcAgentOutput>({
       provider,
       buildRequest: buildHelarcProviderRequest,
@@ -352,52 +236,21 @@ describe("Helarc controller", () => {
       retryExecutor: createSystemRetryExecutor(),
       retryClock: systemRetryClock,
     });
-
-    const decision = await controller.next(createControllerInput(), controllerCallContext());
-
+    expect(await controller.next(createControllerInput(), controllerCallContext()))
+      .toMatchObject({ kind: "propose_completion", output: { summary: "Done." } });
     expect(provider.requests).toHaveLength(1);
-    expect(decision).toMatchObject({
-      kind: "propose_completion",
-      output: { kind: "complete", summary: "Done." },
-    });
   });
 });
 
-const READ_ONLY_TOOLS = [
-  tool("codeAgent.listFiles", "List files.", "safe"),
-  tool("codeAgent.readFile", "Read a file.", "safe"),
-  tool("codeAgent.searchFiles", "Search files.", "safe"),
+const FILE_TOOLS = [
+  tool("Read", true),
+  tool("Glob", true),
+  tool("Grep", true),
+  tool("Edit", false),
+  tool("Write", false),
 ];
 
-function controllerCallContext(): ControllerCallContext {
-  const policy = {
-    maxRetries: 0,
-    delay: {
-      kind: "exponential_jitter" as const,
-      baseDelayMs: 0,
-      maxDelayMs: 0,
-      multiplier: 2 as const,
-      jitterRatio: 0.1 as const,
-    },
-    retryableCategories: [] as string[],
-    serverDelay: { mode: "ignore" as const },
-  };
-  return {
-    cancellation: createRunCancellationController({ runId: "run-1" }).context,
-    retry: {
-      providerRequest: policy,
-      structuredOutput: policy,
-      deadlineAt: "2099-01-01T00:00:00.000Z",
-      events: { emit() {} },
-    },
-  };
-}
-
-function createControllerInput(input: {
-  tools?: ToolDescriptorInput[];
-  mode?: "read-only" | "shell-enabled";
-} = {}): ControllerInput<HelarcAgentOutput> {
-  const tools = input.tools ?? READ_ONLY_TOOLS;
+function createControllerInput(): ControllerInput<HelarcAgentOutput> {
   return {
     runId: "run-1",
     iteration: 1,
@@ -406,11 +259,7 @@ function createControllerInput(input: {
       revision: "1",
       name: "Helarc",
       instructions: "Complete the code task.",
-      output: {
-        validate(candidate) {
-          return { valid: true, output: candidate as HelarcAgentOutput };
-        },
-      },
+      output: { validate: (candidate) => ({ valid: true, output: candidate as HelarcAgentOutput }) },
       metadata: {},
     },
     task: {
@@ -421,7 +270,7 @@ function createControllerInput(input: {
       metadata: {},
     },
     inputItems: [],
-    toolExposure: createToolExposure(tools),
+    toolExposure: createToolExposure(FILE_TOOLS),
     context: {
       id: "projection-1",
       requestId: "projection-request-1",
@@ -441,12 +290,7 @@ function createControllerInput(input: {
       policy: { id: "helarc-context-policy", revision: "1" },
       estimator: { id: "utf8-bytes", revision: "1", unit: "bytes", accuracy: "exact" },
       budget: { unit: "bytes", maximum: 256 * 1_024 },
-      accounting: {
-        unit: "bytes",
-        consideredItems: 0,
-        projectedItems: 0,
-        projectedAmount: 0,
-      },
+      accounting: { unit: "bytes", consideredItems: 0, projectedItems: 0, projectedAmount: 0 },
     },
     plan: null,
     permission: {
@@ -456,20 +300,9 @@ function createControllerInput(input: {
         environmentId: "test-environment",
         enforcement: "enforced",
         workspaceRootCount: 1,
-        fileSystem: {
-          unrestricted: false,
-          allowsRead: true,
-          allowsWrite: false,
-          hasDenials: false,
-          managed: false,
-        },
+        fileSystem: { unrestricted: false, allowsRead: true, allowsWrite: false, hasDenials: false, managed: false },
         process: { unrestricted: false },
-        network: {
-          enabled: false,
-          profileRestricted: false,
-          managedRestricted: false,
-          hasDenials: false,
-        },
+        network: { enabled: false, profileRestricted: false, managedRestricted: false, hasDenials: false },
         managedConstraintSetId: "test-constraints",
         canRequestAdditionalPermissions: true,
       },
@@ -482,93 +315,41 @@ function createControllerInput(input: {
         sessionAuthorityCount: 0,
         policyAmendmentCount: 0,
       },
-      approval: {
-        canRequest: true,
-        reviewer: "user",
-        pendingCount: 0,
-      },
+      approval: { canRequest: true, reviewer: "user", pendingCount: 0 },
     },
     pending: [],
     workspace: {
-      primary: {
-        id: "workspace-1",
-        name: "Workspace",
-        rootRef: "workspace://root",
-        trustState: "trusted",
-        source: "test",
-        policyRefs: [],
-        metadata: {},
-      },
+      primary: { id: "workspace-1", name: "Workspace", rootRef: "workspace://root", trustState: "trusted", source: "test", policyRefs: [], metadata: {} },
       additional: [],
     },
-    identity: {
-      id: "identity-1",
-      kind: "anonymous",
-      displayName: "Test identity",
-      metadata: {},
-    },
+    identity: { id: "identity-1", kind: "anonymous", displayName: "Test identity", metadata: {} },
     metadata: {
-      [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
-        mode: input.mode ?? "read-only",
-      }),
+      [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({ mode: "read-only" }),
     },
   };
 }
 
-function tool(
-  name: string,
-  description: string,
-  risk: "safe" | "risky",
-): ToolDescriptorInput {
-  const operationName = name.replace(/^codeAgent\./, "");
+function tool(name: string, readOnly: boolean): ToolDescriptorInput {
+  const operationName = name.toLowerCase();
   return {
-    ref: {
-      tool: { namespace: "helarc.code-agent", name: operationName },
-      revision: "1",
-    },
+    ref: { tool: { namespace: "helarc.code-agent", name: operationName }, revision: "2" },
     name,
-    description,
-    inputSchema: name === "codeAgent.listFiles"
-      ? {
-          type: "object",
-          additionalProperties: false,
-          required: ["path"],
-          properties: {
-            path: { type: "string" },
-            recursive: { type: "boolean" },
-          },
-        }
+    description: `${name} a Workspace file.`,
+    inputSchema: name === "Read"
+      ? { type: "object", additionalProperties: false, required: ["file_path"], properties: { file_path: { type: "string" } } }
       : {},
-    schemaRevisions: {
-      dialect: "json-schema-2020-12",
-      input: "1",
-      output: null,
-      translation: "1",
-    },
-    annotations: {
-      readOnlyHint: risk === "safe",
-      destructiveHint: risk === "risky",
-    },
-    source: {
-      kind: "product",
-      sourceId: "helarc",
-      sourceRevision: "1",
-      activationEpoch: null,
-    },
+    schemaRevisions: { dialect: "json-schema-2020-12", input: "2", output: "2", translation: "native-2" },
+    annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly },
+    source: { kind: "product", sourceId: "helarc.code-agent", sourceRevision: "2", activationEpoch: null },
     operationBinding: {
-      operation: {
-        operation: { namespace: "helarc.code-agent", name: operationName },
-        revision: "1",
-      },
-      revision: "1",
+      operation: { operation: { namespace: "helarc.code-agent.file", name: operationName }, revision: "2" },
+      revision: "2",
     },
     metadata: {},
   };
 }
 
-function createToolExposure(
-  tools: readonly ToolDescriptorInput[],
-): ToolExposureProof {
+function createToolExposure(tools: readonly ToolDescriptorInput[]): ToolExposureProof {
   const catalog = createToolCatalogSnapshot(tools);
   return Object.freeze({
     id: "tool-exposure-1",
@@ -580,18 +361,24 @@ function createToolExposure(
   });
 }
 
-function response(output: unknown): ProviderResponse {
+function controllerCallContext(): ControllerCallContext {
+  const policy = {
+    maxRetries: 0,
+    delay: { kind: "exponential_jitter" as const, baseDelayMs: 0, maxDelayMs: 0, multiplier: 2 as const, jitterRatio: 0.1 as const },
+    retryableCategories: [] as string[],
+    serverDelay: { mode: "ignore" as const },
+  };
   return {
-    output,
-    usage: null,
-    metadata: {},
+    cancellation: createRunCancellationController({ runId: "run-1" }).context,
+    retry: { providerRequest: policy, structuredOutput: policy, deadlineAt: "2099-01-01T00:00:00.000Z", events: { emit() {} } },
   };
 }
 
-function expectParseError(
-  action: () => unknown,
-  code: HelarcControllerParseErrorCode,
-): void {
+function response(output: unknown): ProviderResponse {
+  return { output, usage: null, metadata: {} };
+}
+
+function expectParseError(action: () => unknown, code: HelarcControllerParseErrorCode): void {
   try {
     action();
   } catch (error) {
@@ -621,10 +408,7 @@ class FakeProvider implements Provider {
 
   constructor(private readonly output: unknown) {}
 
-  async send(
-    request: ProviderRequest,
-    _context: InvocationInterruptionContext,
-  ): Promise<ProviderCallResult> {
+  async send(request: ProviderRequest, _context: InvocationInterruptionContext): Promise<ProviderCallResult> {
     this.requests.push(request);
     return { kind: "succeeded", response: response(this.output) };
   }

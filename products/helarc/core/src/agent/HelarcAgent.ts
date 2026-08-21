@@ -1,8 +1,5 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
-import type {
-  HelarcAgentOutput,
-  HelarcChangeIntent,
-} from "../controller/HelarcController.js";
+import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 
 export function createHelarcAgent(): Agent<HelarcAgentOutput> {
   return Object.freeze({
@@ -16,37 +13,14 @@ export function createHelarcAgent(): Agent<HelarcAgentOutput> {
         if (!isRecord(candidate) || typeof candidate.summary !== "string") {
           return { valid: false as const, message: "Helarc output requires a summary." };
         }
-        if (candidate.kind === "complete") {
-          return {
-            valid: true as const,
-            output: Object.freeze({
-              kind: "complete" as const,
-              summary: candidate.summary,
-            }),
-          };
-        }
-        if (candidate.kind !== "propose" || !isRecord(candidate.change)) {
+        if (candidate.kind !== "complete") {
           return { valid: false as const, message: "Helarc output kind is invalid." };
         }
-        const operation = candidate.change.operation;
-        const path = candidate.change.path;
-        const content = candidate.change.content;
-        if (
-          (operation !== "create" && operation !== "update" && operation !== "delete") ||
-          typeof path !== "string" ||
-          ((operation === "create" || operation === "update") && typeof content !== "string")
-        ) {
-          return { valid: false as const, message: "Helarc proposed change is invalid." };
-        }
-        const change: HelarcChangeIntent = operation === "delete"
-          ? { operation, path }
-          : { operation, path, content: content as string };
         return {
           valid: true as const,
           output: Object.freeze({
-            kind: "propose" as const,
+            kind: "complete" as const,
             summary: candidate.summary,
-            change: Object.freeze(change),
           }),
         };
       },

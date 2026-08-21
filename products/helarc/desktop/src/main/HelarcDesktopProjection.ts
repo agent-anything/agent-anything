@@ -6,7 +6,6 @@ import type {
   HostCommandReceipt,
   HostRunStatusQueryReceipt,
 } from "@agent-anything/host/transport";
-import { HELARC_PATCH_REVIEW_PROTOCOL } from "@agent-anything/helarc/composition";
 import type { HelarcMainSnapshot as MainSnapshot } from "./HelarcMainController.js";
 import type {
   HelarcAdditionalPermissionsSnapshot,
@@ -16,7 +15,6 @@ import type {
   HelarcInteractionRequestRefSnapshot,
   HelarcMainSnapshot as DesktopSnapshot,
   HelarcPendingInteractionSnapshot,
-  HelarcPatchReviewPresentationSnapshot,
   HelarcProductPhaseSnapshot,
   HelarcRunStatusResponse,
   HelarcRunSnapshot,
@@ -371,8 +369,6 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
               },
               agentSummary: run.product.result.output.agentSummary,
               runtimeStatus: run.product.result.output.runtimeStatus,
-              patchStatus: run.product.result.output.patchStatus,
-              appliedPath: run.product.result.output.appliedPath,
               enforcement: {
                 selected: run.product.result.output.enforcement.selected,
                 status: run.product.result.output.enforcement.status,
@@ -410,8 +406,6 @@ function projectActivityMetadata(
     "status",
     "controllerAction",
     "requestedToolName",
-    "patchOperation",
-    "patchPath",
     "promptArchitectureVersion",
     "actionContractVersion",
     "toolCatalogVersion",
@@ -469,22 +463,8 @@ function projectActivityMetadata(
 function projectProductPhase(
   phase: NonNullable<MainSnapshot["run"]>["product"]["phase"],
 ): HelarcProductPhaseSnapshot {
-  if (phase.kind === "none") return { kind: "none" };
-  if (phase.kind === "patch_action_submitted") {
-    return {
-      kind: phase.kind,
-      proposalId: phase.proposalId,
-      proposalRevision: phase.proposalRevision,
-      reviewId: phase.reviewId,
-      requestVersion: phase.requestVersion,
-    };
-  }
-  return {
-    kind: "patch_review_requested",
-    proposalId: phase.proposalId,
-    proposalRevision: phase.proposalRevision,
-    reviewId: phase.reviewId,
-  };
+  if (phase.kind !== "none") throw new TypeError("Helarc Product phase is invalid.");
+  return { kind: "none" };
 }
 
 function projectPendingInteraction(
@@ -509,12 +489,6 @@ function projectPendingInteraction(
     } catch {
       return { ...base, family: "unsupported", presentation: null };
     }
-  }
-  if (sameProtocol(pending.request.protocol, HELARC_PATCH_REVIEW_PROTOCOL)) {
-    const presentation = projectPatchReviewPresentation(pending.presentation);
-    return presentation === null
-      ? { ...base, family: "unsupported", presentation: null }
-      : { ...base, family: "patch_review", presentation };
   }
   return { ...base, family: "unsupported", presentation: null };
 }
@@ -551,39 +525,6 @@ function projectInteractionRequestRef(
   };
 }
 
-function projectPatchReviewPresentation(
-  value: unknown,
-): HelarcPatchReviewPresentationSnapshot | null {
-  if (!isRecord(value)) return null;
-  if (
-    !isIdentity(value.runId) || !isIdentity(value.proposalId) ||
-    !Number.isSafeInteger(value.proposalRevision) || (value.proposalRevision as number) < 1 ||
-    !isIdentity(value.reviewId) || typeof value.rootName !== "string" ||
-    !isIdentity(value.workspaceId) || typeof value.path !== "string" ||
-    (value.operation !== "create" && value.operation !== "update" && value.operation !== "delete") ||
-    typeof value.summary !== "string" || typeof value.rationale !== "string" ||
-    !isNullableString(value.originalContent) || !isNullableString(value.proposedContent) ||
-    !isNullableNonNegativeInteger(value.originalContentBytes) ||
-    !isNullableNonNegativeInteger(value.proposedContentBytes)
-  ) return null;
-  return {
-    runId: value.runId,
-    proposalId: value.proposalId,
-    proposalRevision: value.proposalRevision as number,
-    reviewId: value.reviewId,
-    rootName: value.rootName,
-    workspaceId: value.workspaceId,
-    path: value.path,
-    operation: value.operation,
-    summary: value.summary,
-    rationale: value.rationale,
-    originalContent: value.originalContent,
-    proposedContent: value.proposedContent,
-    originalContentBytes: value.originalContentBytes as number | null,
-    proposedContentBytes: value.proposedContentBytes as number | null,
-  };
-}
-
 function requireApprovalReviewRequest(value: unknown): ApprovalReviewRequest {
   if (!isRecord(value) || ![
     "commandExecution",
@@ -607,18 +548,6 @@ function sameProtocol(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isIdentity(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && !/\s/.test(value);
-}
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === "string";
-}
-
-function isNullableNonNegativeInteger(value: unknown): value is number | null {
-  return value === null || Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
 function projectApprovalRequest(

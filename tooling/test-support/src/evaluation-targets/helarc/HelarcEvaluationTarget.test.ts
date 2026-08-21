@@ -22,11 +22,11 @@ function candidate(): Promise<HelarcEvaluationBaselineArtifact> {
   return sharedCandidate;
 }
 
-describe("Helarc Phase26 Evaluation target", () => {
+describe("Helarc deterministic Evaluation target", () => {
   it("declares five deterministic Cases and adapts external manifests without bundled data", () => {
     const corpus = createHelarcEvaluationCorpus();
     expect(corpus.cases.map((item) => item.scenario)).toEqual([
-      "controlled_patch",
+      "controlled_file_write",
       "denied_command",
       "inspect_and_complete",
       "malformed_output_retry",
