@@ -99,6 +99,7 @@ import type { InteractionTerminalRecord } from "@agent-anything/interaction/reco
 import {
   adaptToolSemanticResult,
   type ToolResult,
+  type ToolSettlementRef,
 } from "@agent-anything/tools/result";
 import { materializeToolCall, type ToolCall } from "@agent-anything/tools/invocation";
 import { createControllerToolExposureProof } from "@agent-anything/tools/selection";
@@ -110,6 +111,7 @@ import {
   type OperationRequestCandidate,
   type ProgressionCandidate,
   type SameRunHandoffRequest,
+  type ToolRequestCandidate,
 } from "../controller/index.js";
 import {
   abandonPlan,
@@ -145,6 +147,7 @@ import type { ResolvedRunConfig } from "./RunConfig.js";
 import type {
   RunnerAutomaticEffectfulValidationCheckPort,
   RunnerAutomaticEffectfulValidationCheckRequest,
+  DescendantRunPreparation,
   RunnerValidationCheckRequest,
   ResolvedRunnerDependencies,
 } from "./RunnerDependencies.js";
@@ -221,6 +224,12 @@ interface QueuedInteractionSettlement {
   readonly terminal: InteractionTerminalRecord;
   readonly settlement: RuntimeInteractionSettlement;
   readonly action: RuntimeRunAction | null;
+  readonly toolCall: ToolCall | null;
+}
+
+interface InteractionActionContext {
+  readonly action: RuntimeRunAction;
+  readonly toolCall: ToolCall | null;
 }
 
 export class RunExecution<TOutput> {
@@ -242,7 +251,7 @@ export class RunExecution<TOutput> {
     number
   >();
   private readonly childHandles = new Set<import("./RunHandle.js").RunHandle>();
-  private readonly interactionActions = new Map<string, RuntimeRunAction>();
+  private readonly interactionActions = new Map<string, InteractionActionContext>();
   private readonly interactionSettlements: QueuedInteractionSettlement[] = [];
   private readonly steeringQueue: RunSteeringCommand[] = [];
   private readonly steeringLedger = new Map<string, {
@@ -1303,6 +1312,8 @@ export class RunExecution<TOutput> {
       ? this.id("operation_invocation")
       : candidate.kind === "interaction_request"
         ? this.id("interaction_request", this.nextInteractionRequest++)
+        : candidate.kind === "tool_request"
+          ? this.id("tool_call")
         : null;
     const action = this.materializeControllerRunAction(
       candidate,
@@ -1318,12 +1329,13 @@ export class RunExecution<TOutput> {
           : this.applyHandoffCandidate(action, candidate.input, basis);
       case "interaction_request":
         return this.applyInteractionCandidate(action, candidate, reservedId!);
+      case "tool_request":
+        return this.executeToolCandidate(action, candidate, reservedId!, basis.exposure);
       case "operation_request": {
         const outcome = await this.executeOperationCandidate(
           action,
           candidate,
           reservedId!,
-          basis.exposure,
         );
         if (outcome !== null) {
           this.commitOperationObservation(action, outcome);
@@ -1365,6 +1377,11 @@ export class RunExecution<TOutput> {
             invocationId: reservedId,
             requestOrigin: candidate.origin,
           })
+        : candidate.kind === "tool_request"
+          ? Object.freeze({
+              kind: "tool" as const,
+              toolCallId: reservedId!,
+            })
         : Object.freeze({
             kind: "interaction" as const,
             request: Object.freeze({
@@ -1594,15 +1611,134 @@ export class RunExecution<TOutput> {
         owner: opened.owner,
         status: "failed",
         value: Object.freeze({ code: opened.code }),
+        toolResult: null,
       }, [], opened.owner);
       return candidate.blockingScope !== "none";
     }
-    this.interactionActions.set(interactionRequestKey(opened.pending.request), action);
+    this.interactionActions.set(
+      interactionRequestKey(opened.pending.request),
+      Object.freeze({ action, toolCall: null }),
+    );
     if (candidate.blockingScope === "none") return false;
     const settlement = await opened.completion;
     this.drainInteractionSettlements();
     if (this.interactionActions.delete(interactionRequestKey(opened.pending.request))) {
-      this.commitInteractionObservation(action, settlement);
+      this.commitInteractionObservation(action, settlement, null);
+    }
+    return true;
+  }
+
+  private async executeToolCandidate(
+    action: RuntimeRunAction,
+    candidate: ToolRequestCandidate,
+    toolCallId: string,
+    exposure: ReturnType<typeof createControllerToolExposureProof>,
+  ): Promise<boolean> {
+    const materialized = materializeToolCall({
+      candidate: candidate.tool,
+      selection: this.config.tools,
+      exposure,
+      parentRunAction: action.ref,
+      toolCallId,
+      createdAt: this.now(),
+      validateInput: this.dependencies.operations.validateToolInput,
+    });
+    if (materialized.status === "rejected") {
+      this.commitObservation(action, {
+        kind: "tool_rejected",
+        code: materialized.code,
+        message: materialized.message,
+      }, [], "tools");
+      return false;
+    }
+    const call = materialized.call;
+    switch (call.binding.kind) {
+      case "operation": {
+        const result = await this.executeOperation({
+          action,
+          operation: call.binding.operation,
+          request: call.input,
+          requestOrigin: call.origin === "model" ? "tool_request" : "trusted_workflow",
+          invocationId: this.id("operation_invocation"),
+          parentInvocation: null,
+          basis: call,
+        });
+        if (result !== null) {
+          this.commitOperationObservation(action, {
+            result,
+            toolResult: adaptToolResult(call, result),
+          });
+          if (result.status === "unknown_effect") {
+            await this.settle({
+              status: "failed",
+              code: "unknown_effect",
+              failure: createRunFailureCause("operation", result.failure),
+            });
+            return true;
+          }
+        }
+        return false;
+      }
+      case "interaction":
+        return this.executeToolInteraction(action, call);
+      case "descendant_agent":
+        await this.executeToolDescendant(action, call);
+        return false;
+    }
+    return false;
+  }
+
+  private async executeToolInteraction(
+    action: RuntimeRunAction,
+    call: ToolCall,
+  ): Promise<boolean> {
+    if (call.binding.kind !== "interaction") return false;
+    const requestId = this.id("interaction_request", this.nextInteractionRequest++);
+    const opened = this.interactions.open({
+      requestId,
+      protocol: call.binding.protocol,
+      subject: call.input,
+      subjectRef: Object.freeze({
+        owner: call.binding.protocol.owner,
+        kind: `${call.binding.protocol.kind}_tool_call`,
+        id: call.toolCallId,
+        revision: call.toolRevision.revision,
+      }),
+      correlation: this.runActionCorrelation(action),
+      parentRunAction: action.ref,
+      presentation: call.input,
+      requestVersion: 1,
+      expiresAt: null,
+      blockingScope: call.binding.blockingScope,
+      createdAt: call.createdAt,
+    });
+    if (opened.status !== "opened") {
+      const result = failedToolResult(
+        call,
+        Object.freeze({ owner: opened.owner, kind: "interaction_request", id: requestId, revision: "1" }),
+        opened.code,
+        opened.message,
+        call.createdAt,
+        this.now(),
+      );
+      this.commitObservation(action, {
+        kind: "interaction",
+        owner: opened.owner,
+        status: "failed",
+        value: Object.freeze({ code: opened.code }),
+        toolResult: result,
+      }, [toolResultLowerRef(result)], opened.owner);
+      return call.binding.blockingScope !== "none";
+    }
+    this.interactionActions.set(
+      interactionRequestKey(opened.pending.request),
+      Object.freeze({ action, toolCall: call }),
+    );
+    if (call.binding.blockingScope === "none") return false;
+    const settlement = await opened.completion;
+    this.drainInteractionSettlements();
+    if (this.interactionActions.delete(interactionRequestKey(opened.pending.request))) {
+      this.commitInteractionObservation(action, settlement, call);
     }
     return true;
   }
@@ -1611,38 +1747,10 @@ export class RunExecution<TOutput> {
     action: RuntimeRunAction,
     candidate: OperationRequestCandidate,
     invocationId: string,
-    exposure: ReturnType<typeof createControllerToolExposureProof>,
   ): Promise<OperationExecutionOutcome | null> {
-    let operation = candidate.origin === "controller_protocol"
-      ? candidate.operation
-      : null;
-    let request = candidate.origin === "controller_protocol"
-      ? candidate.request
-      : null;
-    let toolCall: ToolCall | null = null;
-    if (candidate.origin === "tool_request") {
-      const materialized = materializeToolCall({
-        candidate: candidate.tool,
-        selection: this.config.tools,
-        exposure,
-        parentRunAction: action.ref,
-        toolCallId: this.id("tool_call"),
-        createdAt: this.now(),
-        validateInput: this.dependencies.operations.validateToolInput,
-      });
-      if (materialized.status === "rejected") {
-        this.commitRejectedOperation(action, "tools", materialized.code, materialized.message);
-        return null;
-      }
-      toolCall = materialized.call;
-      operation = toolCall.operationRevision;
-      request = toolCall.input;
-    }
-    const requestOrigin: OperationRequestOrigin = toolCall === null
-      ? "controller_protocol"
-      : toolCall.origin === "model"
-        ? "tool_request"
-        : "trusted_workflow";
+    const operation = candidate.operation;
+    const request = candidate.request;
+    const requestOrigin: OperationRequestOrigin = "controller_protocol";
     if (await this.executeControllerValidationCheck({
       action,
       operation: operation!,
@@ -1658,13 +1766,10 @@ export class RunExecution<TOutput> {
       requestOrigin,
       invocationId,
       parentInvocation: null,
-      basis: toolCall ?? candidate,
+      basis: candidate,
     });
     if (executed === null) return null;
-    const toolResult = toolCall === null
-      ? null
-      : adaptToolResult(toolCall, executed);
-    return Object.freeze({ result: executed, toolResult });
+    return Object.freeze({ result: executed, toolResult: null });
   }
 
   private async executeControllerValidationCheck(input: {
@@ -2179,6 +2284,173 @@ export class RunExecution<TOutput> {
     }
   }
 
+  private async executeToolDescendant(
+    action: RuntimeRunAction,
+    call: ToolCall,
+  ): Promise<void> {
+    if (call.binding.kind !== "descendant_agent") return;
+    const startedAt = this.now();
+    const relationId = this.id("descendant_relation");
+    const unavailable =
+      this.dependencies.operations.descendants === undefined ||
+      this.descendantCount >= this.config.limits.maxDescendantRuns ||
+      this.config.descendantDepth >= this.config.limits.maxDescendantDepth;
+    if (unavailable) {
+      this.commitDescendantToolObservation(
+        action,
+        call,
+        relationId,
+        null,
+        "unavailable",
+        null,
+        operationFailure("agent-runtime", "descendant_run_unavailable"),
+        startedAt,
+      );
+      return;
+    }
+
+    let prepared: DescendantRunPreparation;
+    try {
+      prepared = await this.dependencies.operations.descendants.prepare({
+        parentRunId: this.runId,
+        parentRunAction: action.ref,
+        targetAgent: call.binding.agent,
+        delegatedInput: call.input,
+        parentConfig: this.config,
+      });
+    } catch {
+      this.commitDescendantToolObservation(
+        action,
+        call,
+        relationId,
+        null,
+        "failed",
+        null,
+        operationFailure("agent-runtime", "descendant_run_preparation_failed"),
+        startedAt,
+      );
+      return;
+    }
+    if (!sameAgentRef(prepared.agent, call.binding.agent)) {
+      this.commitDescendantToolObservation(
+        action,
+        call,
+        relationId,
+        null,
+        "invalid",
+        null,
+        operationFailure("agent-runtime", "descendant_agent_mismatch"),
+        startedAt,
+      );
+      return;
+    }
+
+    this.descendantCount += 1;
+    const childRunner = new (await import("./Runner.js")).Runner({
+      ...this.dependencies,
+      createRunId: () => `${relationId}:run`,
+    });
+    const child = childRunner.start(prepared.agent, prepared.input, {
+      ...prepared.config,
+      descendantDepth: this.config.descendantDepth + 1,
+    });
+    this.childHandles.add(child);
+    const pending: PendingRunSubject = Object.freeze({
+      kind: "descendant_run",
+      relationId,
+      childRunId: child.runId,
+      branchId: action.ref.id,
+      required: true,
+      openedInRunRevision: this.writer.getSnapshot().revision,
+    });
+    this.addPending(pending);
+    const cancelChild = (): void => {
+      if (this.config.cancellation.context.request !== null) {
+        child.cancel({
+          origin: "parent_run",
+          reasonCode: "parent_run_cancelled",
+          parentRunId: this.runId,
+        });
+      }
+    };
+    this.config.cancellation.context.signal.addEventListener("abort", cancelChild, { once: true });
+    const unsubscribe = child.subscribe(() => this.publishCurrentState());
+    try {
+      const childResult = await child.wait();
+      const mapped = prepared.mapResult(childResult);
+      this.commitDescendantToolObservation(
+        action,
+        call,
+        relationId,
+        child.runId,
+        mapped.status,
+        mapped.output,
+        mapped.failure,
+        startedAt,
+      );
+    } finally {
+      unsubscribe();
+      this.childHandles.delete(child);
+      this.config.cancellation.context.signal.removeEventListener("abort", cancelChild);
+      this.removePending(pending, "resolved", null);
+    }
+  }
+
+  private commitDescendantToolObservation(
+    action: RuntimeRunAction,
+    call: ToolCall,
+    relationId: string,
+    childRunId: string | null,
+    status: import("./RunnerDependencies.js").DescendantOperationOutcome["status"],
+    output: unknown,
+    failure: OperationFailure | null,
+    startedAt: string,
+  ): void {
+    const finishedAt = this.now();
+    const settlement = Object.freeze({
+      owner: "agent-runtime",
+      kind: "descendant_run",
+      id: childRunId ?? relationId,
+      revision: childRunId === null ? null : "terminal",
+    });
+    const toolResult = status === "succeeded"
+      ? succeededToolResult(call, settlement, output ?? Object.freeze({ childRunId }), startedAt, finishedAt)
+      : status === "partial"
+        ? partialToolResult(
+            call,
+            settlement,
+            output ?? Object.freeze({ childRunId }),
+            failure ?? operationFailure("agent-runtime", "descendant_run_partial"),
+            startedAt,
+            finishedAt,
+          )
+        : failedToolResult(
+            call,
+            settlement,
+            failure?.code ?? `descendant_run_${status}`,
+            failure?.message ?? `Descendant Run settled as ${status}.`,
+            startedAt,
+            finishedAt,
+            status === "timed_out" ? "timeout" : "failed",
+          );
+    this.commitObservation(action, {
+      kind: "descendant_run",
+      childRunId,
+      status,
+      output,
+      failure,
+      toolResult,
+    }, [
+      {
+        owner: "agent-runtime",
+        kind: "descendant_run_result",
+        id: childRunId ?? relationId,
+        revision: settlement.revision,
+      },
+      toolResultLowerRef(toolResult),
+    ], "agent-runtime");
+  }
+
   private commitOperationObservation(
     action: RuntimeRunAction,
     outcome: OperationExecutionOutcome,
@@ -2223,27 +2495,62 @@ export class RunExecution<TOutput> {
   private commitInteractionObservation(
     action: RuntimeRunAction,
     settlement: RuntimeInteractionSettlement,
+    call: ToolCall | null,
   ): void {
     if (settlement.status === "resolved") {
+      const toolResult = call === null
+        ? null
+        : succeededToolResult(
+            call,
+            Object.freeze({
+              owner: settlement.outcome.request.protocol.owner,
+              kind: "interaction_request",
+              id: settlement.outcome.request.id,
+              revision: String(settlement.outcome.request.requestVersion),
+            }),
+            settlement.applicationValue ?? Object.freeze({ request: settlement.outcome.request }),
+            call.createdAt,
+            this.now(),
+          );
       this.commitObservation(action, {
         kind: "interaction",
         owner: settlement.outcome.request.protocol.owner,
         status: "resolved",
         value: settlement.applicationValue,
-      }, [{
-        owner: settlement.outcome.request.protocol.owner,
-        kind: "interaction_resolution",
-        id: settlement.outcome.resolution.resolutionId,
-        revision: settlement.outcome.resolution.resolutionRevision,
-      }], settlement.outcome.request.protocol.owner);
+        toolResult,
+      }, [
+        {
+          owner: settlement.outcome.request.protocol.owner,
+          kind: "interaction_resolution",
+          id: settlement.outcome.resolution.resolutionId,
+          revision: settlement.outcome.resolution.resolutionRevision,
+        },
+        ...(toolResult === null ? [] : [toolResultLowerRef(toolResult)]),
+      ], settlement.outcome.request.protocol.owner);
       return;
     }
+    const toolResult = call === null
+      ? null
+      : failedToolResult(
+          call,
+          Object.freeze({
+            owner: settlement.owner,
+            kind: "interaction_request",
+            id: settlement.request.id,
+            revision: String(settlement.request.requestVersion),
+          }),
+          settlement.code,
+          `Interaction settled as ${settlement.status}.`,
+          call.createdAt,
+          this.now(),
+        );
     this.commitObservation(action, {
       kind: "interaction",
       owner: settlement.owner,
       status: settlement.status,
       value: Object.freeze({ code: settlement.code }),
-    }, [], settlement.owner);
+      toolResult,
+    }, toolResult === null ? [] : [toolResultLowerRef(toolResult)], settlement.owner);
   }
 
   private commitObservation(
@@ -2457,11 +2764,13 @@ export class RunExecution<TOutput> {
     settlement: RuntimeInteractionSettlement,
   ): void {
     const key = interactionRequestKey(pending.request);
+    const context = this.interactionActions.get(key) ?? null;
     this.interactionSettlements.push(Object.freeze({
       pending,
       terminal,
       settlement,
-      action: this.interactionActions.get(key) ?? null,
+      action: context?.action ?? null,
+      toolCall: context?.toolCall ?? null,
     }));
     this.interactionActions.delete(key);
   }
@@ -2472,7 +2781,11 @@ export class RunExecution<TOutput> {
       const queued = this.interactionSettlements.shift()!;
       this.settlePendingInteraction(queued.pending, queued.terminal, queued.settlement);
       if (queued.action !== null) {
-        this.commitInteractionObservation(queued.action, queued.settlement);
+        this.commitInteractionObservation(
+          queued.action,
+          queued.settlement,
+          queued.toolCall,
+        );
       }
       count += 1;
     }
@@ -3607,17 +3920,99 @@ function adaptToolResult(call: ToolCall, result: OperationResult): ToolResult | 
   }
 }
 
+function succeededToolResult(
+  call: ToolCall,
+  settlement: ToolSettlementRef,
+  output: unknown,
+  startedAt: string,
+  finishedAt: string,
+): ToolResult {
+  if (output === null || output === undefined) {
+    throw new TypeError("Succeeded Tool result requires output.");
+  }
+  return Object.freeze({
+    toolCall: Object.freeze({ toolCallId: call.toolCallId, toolRevision: call.toolRevision }),
+    settlement,
+    status: "succeeded" as const,
+    output,
+    startedAt,
+    finishedAt,
+    metadata: Object.freeze({ bindingKind: call.binding.kind }),
+  });
+}
+
+function partialToolResult(
+  call: ToolCall,
+  settlement: ToolSettlementRef,
+  output: unknown,
+  failure: OperationFailure,
+  startedAt: string,
+  finishedAt: string,
+): ToolResult {
+  if (output === null || output === undefined) {
+    throw new TypeError("Partial Tool result requires usable output.");
+  }
+  return Object.freeze({
+    toolCall: Object.freeze({ toolCallId: call.toolCallId, toolRevision: call.toolRevision }),
+    settlement,
+    status: "partial" as const,
+    output,
+    outputUsability: "validated" as const,
+    error: Object.freeze({
+      code: failure.code,
+      message: failure.message,
+      metadata: failure.metadata,
+    }),
+    startedAt,
+    finishedAt,
+    metadata: Object.freeze({ bindingKind: call.binding.kind }),
+  });
+}
+
+function failedToolResult(
+  call: ToolCall,
+  settlement: ToolSettlementRef,
+  code: string,
+  message: string,
+  startedAt: string,
+  finishedAt: string,
+  status: "failed" | "timeout" = "failed",
+): ToolResult {
+  return Object.freeze({
+    toolCall: Object.freeze({ toolCallId: call.toolCallId, toolRevision: call.toolRevision }),
+    settlement,
+    status,
+    error: Object.freeze({ code, message }),
+    startedAt,
+    finishedAt,
+    metadata: Object.freeze({ bindingKind: call.binding.kind }),
+  });
+}
+
+function toolResultLowerRef(result: ToolResult): RunObservation["lowerRefs"][number] {
+  return Object.freeze({
+    owner: "tools",
+    kind: "tool_result",
+    id: result.toolCall.toolCallId,
+    revision: result.toolCall.toolRevision.revision,
+  });
+}
+
 function observationFailed(observation: RunObservation): boolean {
   switch (observation.payload.kind) {
     case "operation":
       return observation.payload.result.status !== "succeeded" &&
         observation.payload.result.status !== "partial";
     case "operation_rejected":
+    case "tool_rejected":
       return true;
     case "handoff":
       return observation.payload.status !== "applied";
     case "interaction":
       return observation.payload.status !== "resolved";
+    case "descendant_run":
+      return observation.payload.status !== "succeeded" &&
+        observation.payload.status !== "partial";
     case "plan_update":
       return observation.payload.result.status === "rejected";
   }

@@ -3,6 +3,7 @@ export type {
   ToolResult,
   ToolResultBase,
   ToolResultError,
+  ToolSettlementRef,
   ToolSemanticResult,
   ToolSemanticResultAdapter,
 } from "./ToolResult.js";

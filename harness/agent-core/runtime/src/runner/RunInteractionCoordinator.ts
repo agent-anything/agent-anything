@@ -10,6 +10,7 @@ import {
 } from "@agent-anything/interaction/coordination";
 import type {
   InteractionProtocolRef,
+  InteractionRequest,
   InteractionRequestRef,
   SafeInteractionEnvelope,
   InteractionSubjectRef,
@@ -62,6 +63,7 @@ export type OpenRuntimeInteractionResult =
 
 interface ActiveInteraction {
   readonly protocol: CapturedInteractionProtocol;
+  readonly request: InteractionRequest<string, unknown, unknown>;
   readonly execution: InteractionExecution;
   readonly pending: PendingInteractionRef;
   readonly envelope: SafeInteractionEnvelope<unknown>;
@@ -160,6 +162,7 @@ export class RunInteractionCoordinator {
       }, snapshotUnknown);
       const active: ActiveInteraction = {
         protocol,
+        request,
         execution,
         pending,
         envelope,
@@ -304,9 +307,9 @@ export class RunInteractionCoordinator {
   private async resolveSubmission(active: ActiveInteraction, input: InteractionSubmissionInput): Promise<void> {
     if (!this.active.has(requestKey(input.request))) return;
     try {
-      const submission = active.protocol.validateSubmission(input.request, input.payload);
+      const submission = active.protocol.validateSubmission(active.request, input.payload);
       const resolutionValue = active.protocol.resolve({
-        request: input.request,
+        request: active.request,
         submissionId: input.submissionId,
         submission,
         receivedAt: input.receivedAt,
@@ -318,7 +321,7 @@ export class RunInteractionCoordinator {
         resolutionRevision: String(input.request.requestVersion),
       });
       const applicationValue = await active.protocol.apply({
-        request: input.request,
+        request: active.request,
         resolution: resolutionValue,
         resolvedAt,
       });

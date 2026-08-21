@@ -867,7 +867,9 @@ function validateProgressionCandidate(
         modelItemId,
       });
     }
-    if (candidate.origin === "tool_request" && isRecord(candidate.tool)) {
+    throw decisionContractError("controller_operation_request_invalid");
+  }
+  if (candidate.kind === "tool_request" && isRecord(candidate.tool)) {
       const revision = candidate.tool.revision;
       if (revision !== null && typeof revision !== "string") {
         throw decisionContractError("controller_tool_revision_invalid");
@@ -885,8 +887,7 @@ function validateProgressionCandidate(
         throw decisionContractError("controller_tool_provenance_invalid");
       }
       return Object.freeze({
-        kind: "operation_request" as const,
-        origin: "tool_request" as const,
+        kind: "tool_request" as const,
         tool: Object.freeze({
           name: nonEmptyDecisionText(candidate.tool.name),
           revision: revision as string | null,
@@ -898,8 +899,6 @@ function validateProgressionCandidate(
         }),
         modelItemId,
       });
-    }
-    throw decisionContractError("controller_operation_request_invalid");
   }
   if (candidate.kind === "interaction_request") {
     const blockingScope = candidate.blockingScope;
@@ -936,8 +935,7 @@ function assertProviderBackedDecisionProvenance<TOutput>(
   if (decision.kind !== "advance") return;
   for (const candidate of decision.candidates) {
     if (
-      candidate.kind === "operation_request" &&
-      candidate.origin === "tool_request" &&
+      candidate.kind === "tool_request" &&
       (
         candidate.tool.origin !== "model" ||
         candidate.tool.controllerRequestId !== controllerRequestId

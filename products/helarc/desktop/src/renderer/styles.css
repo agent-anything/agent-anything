@@ -587,6 +587,7 @@ h2 {
 }
 
 .permission-panel,
+.clarification-panel,
 .patch-panel,
 .result-panel,
 .history-list,
@@ -601,6 +602,7 @@ h2 {
 }
 
 .permission-panel strong,
+.clarification-panel > strong,
 .patch-panel strong,
 .result-panel strong,
 .history-list strong,
@@ -655,6 +657,61 @@ h2 {
 
 .permission-actions {
   justify-content: flex-end;
+}
+
+.clarification-panel {
+  display: grid;
+  width: 100%;
+  gap: 12px;
+  color: #33414a;
+}
+
+.clarification-question {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 0 12px;
+  border: 0;
+  border-bottom: 1px solid #e0e4e1;
+}
+
+.clarification-question legend {
+  width: 100%;
+  margin-bottom: 4px;
+  color: #26343e;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.clarification-option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  font-size: 12px;
+}
+
+.clarification-option input {
+  margin: 2px 0 0;
+}
+
+.clarification-option span {
+  display: grid;
+  gap: 2px;
+}
+
+.clarification-option small {
+  color: #66737a;
+  line-height: 1.4;
+}
+
+.clarification-question textarea {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
 }
 
 .patch-preview {

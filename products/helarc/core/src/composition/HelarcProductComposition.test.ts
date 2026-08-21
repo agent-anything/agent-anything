@@ -50,7 +50,7 @@ describe("HelarcProductComposition", () => {
     expect("runner" in composition).toBe(false);
   });
 
-  it("exposes the admitted Code Agent Tool surface through registered Operation paths", async () => {
+  it("exposes the admitted Code Agent Tool surface through its exact semantic bindings", async () => {
     const composition = await createHelarcProductComposition({
       runId: "run-1",
       ...createTask("D:/workspace"),
@@ -64,8 +64,17 @@ describe("HelarcProductComposition", () => {
     );
     expect(exposure.catalog.tools.map(({ name }) => name)).toEqual(expect.arrayContaining([
       "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "TaskStop",
-      "codeAgent.runValidationCheck",
+      "AskUserQuestion", "Agent", "codeAgent.runValidationCheck",
     ]));
+    expect(exposure.catalog.tools.find(({ name }) => name === "AskUserQuestion")?.binding.kind)
+      .toBe("interaction");
+    expect(exposure.catalog.tools.find(({ name }) => name === "Agent")?.binding.kind)
+      .toBe("descendant_agent");
+    expect(composition.interactions.protocols).toContainEqual({
+      owner: "helarc",
+      kind: "clarification",
+      revision: "1",
+    });
     expect(composition.actions.registrations.registrations.map(({ operation }) => operation.operation.name))
       .toEqual(expect.arrayContaining(["edit", "glob", "grep", "read", "write", "shell-execute", "task-stop"]));
   });

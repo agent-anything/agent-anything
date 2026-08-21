@@ -30,10 +30,6 @@ import {
   type HelarcControllerParseErrorCode,
 } from "./index.js";
 import { buildHelarcPromptAssembly, HELARC_ACTION_CONTRACT_VERSION } from "../prompt/index.js";
-import {
-  createHelarcToolCatalogMetadata,
-  HELARC_TOOL_CATALOG_METADATA_KEY,
-} from "../tools/index.js";
 
 const TEST_INPUT_ACCOUNTING = createUtf8ModelInputAccounting({
   providerId: "fake-provider",
@@ -55,10 +51,10 @@ describe("Helarc controller", () => {
 
     expect(request.metadata).toMatchObject({
       runId: "run-1",
-      promptArchitectureVersion: "helarc-prompt-v3",
+      promptArchitectureVersion: "helarc-prompt-v4",
       actionContractVersion: "helarc-model-decision-v1",
-      toolCatalogVersion: "helarc-tool-catalog-v3",
-      exposedToolNames: ["Read", "Glob", "Grep", "Edit", "Write"],
+      toolExposureVersion: "trusted-tool-exposure-v1",
+      exposedToolNames: ["Edit", "Glob", "Grep", "Read", "Write"],
     });
     const prompt = request.messages.map(({ content }) => content).join("\n");
     expect(prompt).toContain("tool_call, plan_update, completion, stop");
@@ -126,7 +122,7 @@ describe("Helarc controller", () => {
     });
   });
 
-  it("maps one Tool decision to one model-origin Operation request", () => {
+  it("maps one Tool decision to one model-origin Tool request", () => {
     const decision = parseHelarcProviderResponse(response({
       kind: "tool_call",
       toolName: "Read",
@@ -136,8 +132,7 @@ describe("Helarc controller", () => {
     expect(decision).toMatchObject({
       kind: "advance",
       candidates: [{
-        kind: "operation_request",
-        origin: "tool_request",
+        kind: "tool_request",
         tool: {
           name: "Read",
           input: { file_path: "src/index.ts" },
@@ -323,9 +318,7 @@ function createControllerInput(): ControllerInput<HelarcAgentOutput> {
       additional: [],
     },
     identity: { id: "identity-1", kind: "anonymous", displayName: "Test identity", metadata: {} },
-    metadata: {
-      [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata(),
-    },
+    metadata: {},
   };
 }
 
@@ -341,7 +334,8 @@ function tool(name: string, readOnly: boolean): ToolDescriptorInput {
     schemaRevisions: { dialect: "json-schema-2020-12", input: "2", output: "2", translation: "native-2" },
     annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly },
     source: { kind: "product", sourceId: "helarc.code-agent", sourceRevision: "2", activationEpoch: null },
-    operationBinding: {
+    binding: {
+      kind: "operation",
       operation: { operation: { namespace: "helarc.code-agent.file", name: operationName }, revision: "2" },
       revision: "2",
     },

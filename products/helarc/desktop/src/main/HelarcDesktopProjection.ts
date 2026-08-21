@@ -19,6 +19,7 @@ import type {
   HelarcRunStatusResponse,
   HelarcRunSnapshot,
 } from "../shared/HelarcDesktopApi.js";
+import { HELARC_CLARIFICATION_PROTOCOL } from "@agent-anything/helarc/interaction";
 
 export function projectHelarcDesktopSnapshot(snapshot: MainSnapshot): DesktopSnapshot {
   return {
@@ -408,7 +409,7 @@ function projectActivityMetadata(
     "requestedToolName",
     "promptArchitectureVersion",
     "actionContractVersion",
-    "toolCatalogVersion",
+    "toolExposureVersion",
     "manifestId",
     "projectionId",
     "requestId",
@@ -490,7 +491,50 @@ function projectPendingInteraction(
       return { ...base, family: "unsupported", presentation: null };
     }
   }
+  if (sameProtocol(pending.request.protocol, HELARC_CLARIFICATION_PROTOCOL)) {
+    try {
+      return {
+        ...base,
+        family: "clarification",
+        presentation: projectClarificationPresentation(pending.presentation),
+      };
+    } catch {
+      return { ...base, family: "unsupported", presentation: null };
+    }
+  }
   return { ...base, family: "unsupported", presentation: null };
+}
+
+function projectClarificationPresentation(candidate: unknown) {
+  if (candidate === null || typeof candidate !== "object" || !Array.isArray((candidate as { questions?: unknown }).questions)) {
+    throw new TypeError("Helarc clarification presentation is invalid.");
+  }
+  const questions = (candidate as { questions: unknown[] }).questions.map((item) => {
+    if (item === null || typeof item !== "object") throw new TypeError("Helarc clarification question is invalid.");
+    const question = item as Record<string, unknown>;
+    if (typeof question.id !== "string" || typeof question.prompt !== "string" || typeof question.allow_multiple !== "boolean") {
+      throw new TypeError("Helarc clarification question is invalid.");
+    }
+    const options = question.options === undefined
+      ? []
+      : Array.isArray(question.options)
+        ? question.options.map((option) => {
+            if (option === null || typeof option !== "object") throw new TypeError("Helarc clarification option is invalid.");
+            const value = option as Record<string, unknown>;
+            if (typeof value.label !== "string" || typeof value.description !== "string") {
+              throw new TypeError("Helarc clarification option is invalid.");
+            }
+            return { label: value.label, description: value.description };
+          })
+        : (() => { throw new TypeError("Helarc clarification options are invalid."); })();
+    return {
+      id: question.id,
+      prompt: question.prompt,
+      options,
+      allowMultiple: question.allow_multiple,
+    };
+  });
+  return { questions };
 }
 
 function projectInteractionTransportReceipt(receipt: {

@@ -1,9 +1,16 @@
 import type { OperationInvocationRef } from "@agent-anything/operation-catalog/identity";
 import type { ToolCall } from "../invocation/index.js";
 
+export interface ToolSettlementRef {
+  readonly owner: string;
+  readonly kind: string;
+  readonly id: string;
+  readonly revision: string | null;
+}
+
 export interface ToolResultBase {
   readonly toolCall: Pick<ToolCall, "toolCallId" | "toolRevision">;
-  readonly operationInvocation: OperationInvocationRef;
+  readonly settlement: ToolSettlementRef;
   readonly startedAt: string;
   readonly finishedAt: string;
   readonly metadata: Readonly<Record<string, unknown>>;
@@ -48,7 +55,12 @@ export function adaptToolSemanticResult<TOutput>(
   ) return null;
   const base = Object.freeze({
     toolCall: Object.freeze({ toolCallId: call.toolCallId, toolRevision: call.toolRevision }),
-    operationInvocation: result.operationInvocation,
+    settlement: Object.freeze({
+      owner: "operation-catalog",
+      kind: "operation_invocation",
+      id: result.operationInvocation.id,
+      revision: result.operationInvocation.operation.revision,
+    }),
     startedAt: result.startedAt,
     finishedAt: result.finishedAt,
     metadata: Object.freeze({ ...result.metadata }),

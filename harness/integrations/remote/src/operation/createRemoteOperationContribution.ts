@@ -196,7 +196,7 @@ function toolRegistration(
         sourceRevision: registration.source.sourceRevision,
         activationEpoch: registration.source.activationEpoch,
       }),
-      operationBinding: registration.binding,
+      binding: { kind: "operation" as const, ...registration.binding },
       retirement: null,
       metadata: Object.freeze({
         remoteServerId: registration.server.serverId,

@@ -1,17 +1,4 @@
-export type {
-  HelarcToolCatalog,
-  HelarcToolCatalogItem,
-  HelarcToolCatalogMetadata,
-  HelarcToolDescriptorSummary,
-} from "./HelarcToolCatalog.js";
-export {
-  buildHelarcToolCatalogText,
-  createDefaultHelarcToolCatalog,
-  createHelarcToolCatalogFromDescriptors,
-  createHelarcToolCatalogMetadata,
-  HELARC_TOOL_CATALOG_METADATA_KEY,
-  readHelarcToolCatalog,
-} from "./HelarcToolCatalog.js";
+export { buildHelarcToolExposureText } from "./HelarcToolExposurePrompt.js";
 export * from "./HelarcCommandOperation.js";
 export type {
   HelarcBaselineToolContract,

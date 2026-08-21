@@ -60,8 +60,10 @@ export interface InteractionRequest<
 export interface InteractionResolveInput<
   TKind extends string,
   TSubmission,
+  TSubject = unknown,
+  TPresentation = unknown,
 > {
-  readonly request: InteractionRequestRef<TKind>;
+  readonly request: InteractionRequest<TKind, TSubject, TPresentation>;
   readonly submissionId: string;
   readonly submission: TSubmission;
   readonly receivedAt: string;
@@ -70,8 +72,10 @@ export interface InteractionResolveInput<
 export interface InteractionApplyInput<
   TKind extends string,
   TResolution,
+  TSubject = unknown,
+  TPresentation = unknown,
 > {
-  readonly request: InteractionRequestRef<TKind>;
+  readonly request: InteractionRequest<TKind, TSubject, TPresentation>;
   readonly resolution: TResolution;
   readonly resolvedAt: string;
 }
@@ -88,10 +92,15 @@ export interface InteractionProtocol<
   createRequest(
     input: InteractionCreateInput<TSubject, TPresentation>,
   ): InteractionRequest<TKind, TSubject, TPresentation>;
-  validateSubmission(request: InteractionRequestRef<TKind>, candidate: unknown): TSubmission;
-  resolve(input: InteractionResolveInput<TKind, TSubmission>): TResolution;
+  validateSubmission(
+    request: InteractionRequest<TKind, TSubject, TPresentation>,
+    candidate: unknown,
+  ): TSubmission;
+  resolve(
+    input: InteractionResolveInput<TKind, TSubmission, TSubject, TPresentation>,
+  ): TResolution;
   apply(
-    input: InteractionApplyInput<TKind, TResolution>,
+    input: InteractionApplyInput<TKind, TResolution, TSubject, TPresentation>,
   ): TApplication | Promise<TApplication>;
 }
 

@@ -1,5 +1,5 @@
 import type {
-  ToolOperationBindingRef,
+  ToolBindingRef,
   ToolRevisionRef,
   ToolSchemaRevisionRefs,
   ToolSourceRef,
@@ -30,7 +30,7 @@ export interface ToolDescriptor {
   readonly schemaRevisions: ToolSchemaRevisionRefs;
   readonly annotations: ToolAnnotations;
   readonly source: ToolSourceRef;
-  readonly operationBinding: ToolOperationBindingRef;
+  readonly binding: ToolBindingRef;
   readonly retirement: ToolRetirement | null;
   readonly metadata: ToolJsonObject;
   readonly fingerprint: string;
@@ -48,7 +48,7 @@ export type ToolDescriptorInput = Omit<ToolDescriptor, "fingerprint" | "annotati
 };
 
 export interface ToolCatalogSnapshot {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly catalogId: string;
   readonly revision: string;
   readonly tools: readonly ToolDescriptor[];
@@ -59,7 +59,7 @@ export type ToolCatalogValidationCode =
   | "tool_identity_invalid"
   | "tool_revision_duplicate"
   | "tool_name_duplicate"
-  | "tool_operation_binding_invalid"
+  | "tool_binding_invalid"
   | "tool_schema_revision_invalid"
   | "tool_data_not_serializable";
 
@@ -91,9 +91,9 @@ export function createToolCatalogSnapshot(
   }
   tools.sort((left, right) => toolRevisionKey(left.ref).localeCompare(toolRevisionKey(right.ref)));
   const frozen = Object.freeze(tools);
-  const catalogId = createToolContractIdentity("agent-anything.tool-catalog.v2", frozen);
+  const catalogId = createToolContractIdentity("agent-anything.tool-catalog.v3", frozen);
   return Object.freeze({
-    schemaVersion: 2 as const,
+    schemaVersion: 3 as const,
     catalogId,
     revision: catalogId,
     tools: frozen,
@@ -114,7 +114,7 @@ function snapshotDescriptor(input: ToolDescriptorInput, index: number): ToolDesc
   const path = `tools[${index}]`;
   assertExactRecord(input, path, [
     "ref", "name", "description", "inputSchema", "outputSchema",
-    "schemaRevisions", "annotations", "source", "operationBinding",
+    "schemaRevisions", "annotations", "source", "binding",
     "retirement", "metadata",
   ]);
   const rawRef = assertExactRecord(input.ref, `${path}.ref`, ["tool", "revision"]);
@@ -147,19 +147,7 @@ function snapshotDescriptor(input: ToolDescriptorInput, index: number): ToolDesc
     sourceRevision: rawSource.sourceRevision === null ? null : token(rawSource.sourceRevision, `${path}.source.sourceRevision`),
     activationEpoch: rawSource.activationEpoch as number | null,
   });
-  const rawBinding = assertExactRecord(input.operationBinding, `${path}.operationBinding`, ["operation", "revision"]);
-  const rawOperationRevision = assertExactRecord(rawBinding.operation, `${path}.operationBinding.operation`, ["operation", "revision"]);
-  const rawOperation = assertExactRecord(rawOperationRevision.operation, `${path}.operationBinding.operation.operation`, ["namespace", "name"]);
-  const operationBinding: ToolOperationBindingRef = Object.freeze({
-    operation: Object.freeze({
-      operation: Object.freeze({
-        namespace: token(rawOperation.namespace, `${path}.operationBinding.operation.operation.namespace`),
-        name: token(rawOperation.name, `${path}.operationBinding.operation.operation.name`),
-      }),
-      revision: token(rawOperationRevision.revision, `${path}.operationBinding.operation.revision`),
-    }),
-    revision: token(rawBinding.revision, `${path}.operationBinding.revision`),
-  });
+  const binding = snapshotBinding(input.binding, `${path}.binding`);
   const annotations = snapshotAnnotations(input.annotations ?? {}, `${path}.annotations`);
   const base = {
     ref,
@@ -170,7 +158,7 @@ function snapshotDescriptor(input: ToolDescriptorInput, index: number): ToolDesc
     schemaRevisions: schemas,
     annotations,
     source,
-    operationBinding,
+    binding,
     retirement: input.retirement == null
       ? null
       : snapshotRetirement(input.retirement, `${path}.retirement`),
@@ -178,8 +166,61 @@ function snapshotDescriptor(input: ToolDescriptorInput, index: number): ToolDesc
   };
   return Object.freeze({
     ...base,
-    fingerprint: createToolContractIdentity("agent-anything.tool-revision.v2", base),
+    fingerprint: createToolContractIdentity("agent-anything.tool-revision.v3", base),
   });
+}
+
+function snapshotBinding(input: ToolBindingRef, path: string): ToolBindingRef {
+  const raw = assertRecord(input, path);
+  switch (raw.kind) {
+    case "operation": {
+      assertExactRecord(input, path, ["kind", "operation", "revision"]);
+      const operationRevision = assertExactRecord(raw.operation, `${path}.operation`, ["operation", "revision"]);
+      const operation = assertExactRecord(operationRevision.operation, `${path}.operation.operation`, ["namespace", "name"]);
+      return Object.freeze({
+        kind: "operation" as const,
+        operation: Object.freeze({
+          operation: Object.freeze({
+            namespace: token(operation.namespace, `${path}.operation.operation.namespace`),
+            name: token(operation.name, `${path}.operation.operation.name`),
+          }),
+          revision: token(operationRevision.revision, `${path}.operation.revision`),
+        }),
+        revision: token(raw.revision, `${path}.revision`),
+      });
+    }
+    case "interaction": {
+      assertExactRecord(input, path, ["kind", "protocol", "blockingScope", "revision"]);
+      const protocol = assertExactRecord(raw.protocol, `${path}.protocol`, ["owner", "kind", "revision"]);
+      if (!["none", "branch", "run"].includes(String(raw.blockingScope))) {
+        fail("tool_binding_invalid", "Tool Interaction binding has an invalid blocking scope.", `${path}.blockingScope`);
+      }
+      return Object.freeze({
+        kind: "interaction" as const,
+        protocol: Object.freeze({
+          owner: token(protocol.owner, `${path}.protocol.owner`),
+          kind: token(protocol.kind, `${path}.protocol.kind`),
+          revision: token(protocol.revision, `${path}.protocol.revision`),
+        }),
+        blockingScope: raw.blockingScope as "none" | "branch" | "run",
+        revision: token(raw.revision, `${path}.revision`),
+      });
+    }
+    case "descendant_agent": {
+      assertExactRecord(input, path, ["kind", "agent", "revision"]);
+      const agent = assertExactRecord(raw.agent, `${path}.agent`, ["id", "revision"]);
+      return Object.freeze({
+        kind: "descendant_agent" as const,
+        agent: Object.freeze({
+          id: token(agent.id, `${path}.agent.id`),
+          revision: token(agent.revision, `${path}.agent.revision`),
+        }),
+        revision: token(raw.revision, `${path}.revision`),
+      });
+    }
+    default:
+      return fail("tool_binding_invalid", "Tool binding kind is unsupported.", `${path}.kind`);
+  }
 }
 
 function snapshotJsonObject(input: unknown, path: string): ToolJsonObject {

@@ -226,20 +226,124 @@ describe("Helarc Host Run composition", () => {
     expect(result.activity.find((item) => item.metadata.controllerAction === "tool_call")?.metadata).toMatchObject({
       controllerAction: "tool_call",
       requestedToolName: "Glob",
-      promptArchitectureVersion: "helarc-prompt-v3",
+      promptArchitectureVersion: "helarc-prompt-v4",
       actionContractVersion: "helarc-model-decision-v1",
-      toolCatalogVersion: "helarc-tool-catalog-v3",
+      toolExposureVersion: "trusted-tool-exposure-v1",
       exposedToolNames: [
-        "Read",
+        "Edit",
         "Glob",
         "Grep",
-        "Edit",
+        "Read",
         "Write",
+        "Agent",
+        "AskUserQuestion",
         nativeShellTool(),
-        "TaskStop",
         "codeAgent.runValidationCheck",
+        "TaskStop",
       ],
     });
+  });
+
+  it("asks one correlated clarification and resumes the same Run", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-clarification-"));
+    const provider = new ScriptedProvider([
+      {
+        kind: "tool_call",
+        toolName: "AskUserQuestion",
+        input: {
+          questions: [{
+            id: "scope",
+            prompt: "Which package should be inspected?",
+            options: [{
+              label: "Runtime",
+              description: "Inspect the runtime package.",
+            }],
+            allow_multiple: false,
+          }],
+        },
+      },
+      { kind: "completion", summary: "Clarification received." },
+    ]);
+    const prepared = await prepareTestHostRun({
+      ...createTask(workspaceRoot),
+      provider,
+    });
+    const composition = prepared.start();
+    await waitUntil(() => composition.activeRun.getStatus().pendingInteractions.length === 1);
+    const pending = composition.activeRun.getStatus().pendingInteractions[0]!;
+
+    expect(pending.presentation).toMatchObject({
+      questions: [{ id: "scope", prompt: "Which package should be inspected?" }],
+    });
+    expect(composition.activeRun.submitInteraction({
+      request: pending.request,
+      submissionId: "clarification-submission-1",
+      payload: {
+        answers: [{
+          question_id: "scope",
+          selected_labels: ["Runtime"],
+          text: null,
+        }],
+      },
+    }).status).toBe("accepted_for_resolution");
+
+    const result = await composition.result;
+    expect(result.runResult.status).toBe("succeeded");
+    expect(result.product.interactions).toEqual([
+      expect.objectContaining({ owner: "helarc", status: "resolved" }),
+    ]);
+    expect(result.runResult.items).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        kind: "observation",
+        observation: expect.objectContaining({
+          payload: expect.objectContaining({
+            kind: "interaction",
+            toolResult: expect.objectContaining({ status: "succeeded" }),
+          }),
+        }),
+      }),
+    }));
+    expect(provider.requests).toHaveLength(2);
+  });
+
+  it("delegates one Agent Tool call to an isolated descendant Run", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-descendant-"));
+    const provider = new ScriptedProvider([
+      {
+        kind: "tool_call",
+        toolName: "Agent",
+        input: {
+          prompt: "Inspect the runtime contracts.",
+          description: "Contract inspection",
+        },
+      },
+      { kind: "completion", summary: "Child inspection complete." },
+      { kind: "completion", summary: "Parent received the child result." },
+    ]);
+
+    const result = await executeTestHostRun({
+      ...createTask(workspaceRoot),
+      provider,
+    });
+
+    expect(result.runResult.status).toBe("succeeded");
+    expect(result.product.children).toEqual([
+      expect.objectContaining({ owner: "agent-runtime", status: "succeeded" }),
+    ]);
+    expect(result.runResult.items).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        kind: "observation",
+        observation: expect.objectContaining({
+          payload: expect.objectContaining({
+            kind: "descendant_run",
+            status: "succeeded",
+            toolResult: expect.objectContaining({ status: "succeeded" }),
+          }),
+        }),
+      }),
+    }));
+    expect(operationResults(result)).toEqual([]);
+    expect(provider.requests).toHaveLength(3);
   });
 
   it("projects Provider request retry history through Runner activity", async () => {
@@ -1079,4 +1183,12 @@ function createShellInput(markerPath: string) {
 
 function nativeShellTool(): "Bash" | "PowerShell" {
   return process.platform === "win32" ? "PowerShell" : "Bash";
+}
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("Timed out waiting for Helarc Host Run state.");
 }

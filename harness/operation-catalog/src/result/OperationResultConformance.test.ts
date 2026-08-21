@@ -1,9 +1,9 @@
-import { createOperationResult } from "@agent-anything/operation-catalog/result";
+import { createOperationResult } from "./index.js";
 import { describe, expect, it } from "vitest";
 
 const NOW = "2026-08-14T00:00:00.000Z";
 
-describe("Phase27 result-layer conformance", () => {
+describe("Operation result conformance", () => {
   it("keeps physical success as lower evidence when semantic interpretation fails", () => {
     const result = createOperationResult({
       ...base("semantic-failure"),
@@ -53,7 +53,7 @@ describe("Phase27 result-layer conformance", () => {
         failure: failure(`operation_${status}`),
       });
       expect(result.output).toBeNull();
-      expect(result.failure.owner).toBe("phase27.semantic-owner");
+      expect(result.failure.owner).toBe("operation.semantic-owner");
     }
   });
 
@@ -69,7 +69,7 @@ describe("Phase27 result-layer conformance", () => {
 
 function base(name: string) {
   const operation = {
-    operation: { namespace: "phase27.conformance", name },
+    operation: { namespace: "operation.conformance", name },
     revision: "1",
   };
   return {
@@ -78,7 +78,7 @@ function base(name: string) {
       id: `result-${name}`,
     },
     binding: { operation, revision: "binding-1" },
-    semanticOwner: "phase27.semantic-owner",
+    semanticOwner: "operation.semantic-owner",
     startedAt: NOW,
     finishedAt: NOW,
     lowerRefs: [],
@@ -88,7 +88,7 @@ function base(name: string) {
 
 function failure(code: string) {
   return {
-    owner: "phase27.semantic-owner",
+    owner: "operation.semantic-owner",
     code,
     message: code,
     retryable: false,

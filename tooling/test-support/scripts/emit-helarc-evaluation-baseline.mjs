@@ -1,6 +1,6 @@
 import {
-  HELARC_FILE_TOOLS_ACCEPTED_BASELINE,
   HELARC_SHELL_TOOLS_ACCEPTED_BASELINE,
+  HELARC_TOOL_EXPOSURE_ACCEPTED_BASELINE,
   compareHelarcEvaluationBaseline,
   projectHelarcEvaluationBaselineSignature,
   runHelarcEvaluationBaselineCandidate,
@@ -13,11 +13,11 @@ const systemCandidate = await runHelarcEvaluationBaselineCandidate();
 const signature = projectHelarcEvaluationBaselineSignature(systemCandidate);
 const contextContinuity = await runContextContinuityEvaluationCandidate();
 const comparison = compareHelarcEvaluationBaseline(
-  HELARC_FILE_TOOLS_ACCEPTED_BASELINE,
+  HELARC_SHELL_TOOLS_ACCEPTED_BASELINE,
   systemCandidate,
 );
 const acceptedComparison = compareHelarcEvaluationBaseline(
-  HELARC_SHELL_TOOLS_ACCEPTED_BASELINE,
+  HELARC_TOOL_EXPOSURE_ACCEPTED_BASELINE,
   systemCandidate,
 );
 
@@ -25,12 +25,12 @@ process.stdout.write(`${JSON.stringify({
   schemaVersion: 1,
   kind: "context_continuity_and_helarc_evaluation_candidate",
   predecessor: {
-    reportRef: HELARC_FILE_TOOLS_ACCEPTED_BASELINE.reportRef,
-    acceptanceRef: HELARC_FILE_TOOLS_ACCEPTED_BASELINE.acceptanceRef,
-  },
-  acceptedSuccessor: {
     reportRef: HELARC_SHELL_TOOLS_ACCEPTED_BASELINE.reportRef,
     acceptanceRef: HELARC_SHELL_TOOLS_ACCEPTED_BASELINE.acceptanceRef,
+  },
+  acceptedSuccessor: {
+    reportRef: HELARC_TOOL_EXPOSURE_ACCEPTED_BASELINE.reportRef,
+    acceptanceRef: HELARC_TOOL_EXPOSURE_ACCEPTED_BASELINE.acceptanceRef,
   },
   systemCandidate: projectSystemCandidate(signature),
   predecessorComparison: projectPredecessorComparison(comparison),

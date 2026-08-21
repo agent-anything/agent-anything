@@ -2,7 +2,7 @@ import type {
   HelarcEvaluationBaselineMetricSignature,
   HelarcEvaluationBaselineSignature,
 } from "../HelarcEvaluationExecution.js";
-import { HELARC_PHASE27_ACCEPTED_BASELINE } from "./HelarcPhase27Baseline.js";
+import { HELARC_PHASE26_ACCEPTED_BASELINE } from "./HelarcPhase26Baseline.js";
 
 const CASE_SEMANTIC_DIGESTS = Object.freeze({
   "controlled-patch": "b01fcbe43c7a782c6b87192a3761e2c316cfd7b287bb9ca331c2599b816699ba",
@@ -41,16 +41,37 @@ const LATENCY_UNCERTAINTY = Object.freeze({
   upper: 113.439542092186,
 });
 
+const PREDECESSOR_REPORT_REF = Object.freeze({
+  id: "helarc.phase27.report.baseline",
+  revision: HELARC_PHASE26_ACCEPTED_BASELINE.targetSnapshotRef.revision,
+});
+const PREDECESSOR_ACCEPTANCE_REF = Object.freeze({
+  id: "helarc.phase27.baseline-acceptance",
+  revision: HELARC_PHASE26_ACCEPTED_BASELINE.targetSnapshotRef.revision,
+});
+const PUBLICATION_LIMITATIONS = Object.freeze([
+  Object.freeze({
+    code: "deterministic_system_baseline_only",
+    message: "This corpus measures deterministic Product and Harness integration, not general model intelligence.",
+    metadata: Object.freeze({}),
+  }),
+  Object.freeze({
+    code: "environment_specific_baseline",
+    message: "The accepted Target Snapshot is exact to the declared operating system, architecture, and Node major version.",
+    metadata: Object.freeze({}),
+  }),
+]) satisfies HelarcEvaluationBaselineSignature["publication"]["limitations"];
+
 const REPORT_REF = Object.freeze({
   id: "helarc.context-continuity.report.baseline",
-  revision: HELARC_PHASE27_ACCEPTED_BASELINE.targetSnapshotRef.revision,
+  revision: HELARC_PHASE26_ACCEPTED_BASELINE.targetSnapshotRef.revision,
 });
 const ACCEPTANCE_REF = Object.freeze({
   id: "helarc.context-continuity.baseline-acceptance",
-  revision: HELARC_PHASE27_ACCEPTED_BASELINE.targetSnapshotRef.revision,
+  revision: HELARC_PHASE26_ACCEPTED_BASELINE.targetSnapshotRef.revision,
 });
 
-const metrics = HELARC_PHASE27_ACCEPTED_BASELINE.metrics.map((metric) =>
+const metrics = HELARC_PHASE26_ACCEPTED_BASELINE.metrics.map((metric) =>
   Object.freeze({
     ...metric,
     ref: contextContinuityMetricResultRef(metric.ref),
@@ -68,14 +89,14 @@ const metrics = HELARC_PHASE27_ACCEPTED_BASELINE.metrics.map((metric) =>
 );
 
 export const HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE = deepFreeze({
-  ...HELARC_PHASE27_ACCEPTED_BASELINE,
+  ...HELARC_PHASE26_ACCEPTED_BASELINE,
   targetManifestDigest: "de0b62d128f7350f5c4e3a578454b03da807b337a6f254cb6e0c7df6e246d120",
   reportRef: REPORT_REF,
   acceptanceRef: ACCEPTANCE_REF,
   publication: {
-    ...HELARC_PHASE27_ACCEPTED_BASELINE.publication,
+    ...HELARC_PHASE26_ACCEPTED_BASELINE.publication,
     reportRef: REPORT_REF,
-    metricSummaries: HELARC_PHASE27_ACCEPTED_BASELINE.publication.metricSummaries.map((summary) =>
+    metricSummaries: HELARC_PHASE26_ACCEPTED_BASELINE.publication.metricSummaries.map((summary) =>
       Object.freeze({
         ...summary,
         metricRef: contextContinuityMetricResultRef(summary.metricRef),
@@ -87,22 +108,24 @@ export const HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE = deepFreeze({
           : {}),
       })
     ),
-    dimensionSummaries: HELARC_PHASE27_ACCEPTED_BASELINE.publication.dimensionSummaries.map(
+    dimensionSummaries: HELARC_PHASE26_ACCEPTED_BASELINE.publication.dimensionSummaries.map(
       (summary) => Object.freeze({
         ...summary,
         metricRefs: Object.freeze(summary.metricRefs.map(contextContinuityMetricResultRef)),
       }),
     ),
-    gateOutcomes: HELARC_PHASE27_ACCEPTED_BASELINE.publication.gateOutcomes.map(
+    gateOutcomes: HELARC_PHASE26_ACCEPTED_BASELINE.publication.gateOutcomes.map(
       (outcome) => Object.freeze({
         ...outcome,
         metricRef: contextContinuityMetricResultRef(outcome.metricRef),
       }),
     ),
+    limitations: PUBLICATION_LIMITATIONS,
   },
   metrics,
-  cases: HELARC_PHASE27_ACCEPTED_BASELINE.cases.map((caseResult) => Object.freeze({
+  cases: HELARC_PHASE26_ACCEPTED_BASELINE.cases.map((caseResult) => Object.freeze({
     ...caseResult,
+    traceIssueCodes: Object.freeze([]),
     semanticDigest: CASE_SEMANTIC_DIGESTS[caseSlug(caseResult.caseRef.id)],
   })),
 } satisfies HelarcEvaluationBaselineSignature);
@@ -111,9 +134,9 @@ export const HELARC_CONTEXT_CONTINUITY_BASELINE_ACCEPTANCE = deepFreeze({
   schemaVersion: 1,
   kind: "helarc_context_continuity_baseline_successor_acceptance",
   acceptedAt: "2026-08-17T00:00:00.000Z",
-  predecessorAcceptanceRef: HELARC_PHASE27_ACCEPTED_BASELINE.acceptanceRef,
+  predecessorAcceptanceRef: PREDECESSOR_ACCEPTANCE_REF,
   successorAcceptanceRef: ACCEPTANCE_REF,
-  predecessorReportRef: HELARC_PHASE27_ACCEPTED_BASELINE.reportRef,
+  predecessorReportRef: PREDECESSOR_REPORT_REF,
   successorReportRef: REPORT_REF,
   retainedIdentities: Object.freeze([
     "target",
@@ -138,12 +161,12 @@ function contextContinuityMetricResultRef(refValue: {
   readonly id: string;
   readonly revision: string;
 }) {
-  if (!refValue.id.endsWith(".phase27-baseline-result")) {
+  if (!refValue.id.endsWith(".baseline-result")) {
     throw new TypeError(`Unknown predecessor Metric result '${refValue.id}'.`);
   }
   return Object.freeze({
     id: refValue.id.replace(
-      /\.phase27-baseline-result$/,
+      /\.baseline-result$/,
       ".context-continuity-baseline-result",
     ),
     revision: refValue.revision,

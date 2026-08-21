@@ -3,6 +3,7 @@ import {
   snapshotInteractionRequestRef,
   type InteractionProtocol,
   type InteractionProtocolRef,
+  type InteractionRequest,
   type InteractionRequestRef,
 } from "../protocol/index.js";
 import { denseArray, fail, strictRecord, token } from "../internal/validation.js";
@@ -43,9 +44,9 @@ export interface InteractionProtocolRegistration<
 export interface CapturedInteractionProtocol {
   readonly ref: InteractionProtocolRef;
   createRequest(input: Parameters<InteractionProtocol<string, unknown, unknown, unknown, unknown, unknown>["createRequest"]>[0]): ReturnType<InteractionProtocol<string, unknown, unknown, unknown, unknown, unknown>["createRequest"]>;
-  validateSubmission(request: InteractionRequestRef, candidate: unknown): unknown;
-  resolve(input: { readonly request: InteractionRequestRef; readonly submissionId: string; readonly submission: unknown; readonly receivedAt: string }): unknown;
-  apply(input: { readonly request: InteractionRequestRef; readonly resolution: unknown; readonly resolvedAt: string }): unknown | Promise<unknown>;
+  validateSubmission(request: InteractionRequest<string, unknown, unknown>, candidate: unknown): unknown;
+  resolve(input: { readonly request: InteractionRequest<string, unknown, unknown>; readonly submissionId: string; readonly submission: unknown; readonly receivedAt: string }): unknown;
+  apply(input: { readonly request: InteractionRequest<string, unknown, unknown>; readonly resolution: unknown; readonly resolvedAt: string }): unknown | Promise<unknown>;
 }
 
 export interface InteractionProtocolRegistrySnapshot {

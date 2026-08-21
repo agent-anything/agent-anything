@@ -24,7 +24,7 @@ describe("Host RuntimeEvent projection", () => {
         controllerAction: "call_tool",
         promptArchitectureVersion: "helarc-prompt-v1",
         actionContractVersion: "helarc-action-v1",
-        toolCatalogVersion: "helarc-tool-catalog-v1",
+        toolExposureVersion: "helarc-tool-exposure-v1",
         exposedToolNames: ["codeAgent.readFile"],
         requestedToolName: "codeAgent.readFile",
         patchOperation: "create",
@@ -44,6 +44,7 @@ describe("Host RuntimeEvent projection", () => {
     });
     expect(projected.payload).not.toHaveProperty("controllerAction");
     expect(projected.payload).not.toHaveProperty("promptArchitectureVersion");
+    expect(projected.payload).not.toHaveProperty("toolExposureVersion");
     expect(projected.payload).not.toHaveProperty("requestedToolName");
     expect(projected.payload).not.toHaveProperty("patchOperation");
     expect(projected.payload).not.toHaveProperty("rawPrompt");

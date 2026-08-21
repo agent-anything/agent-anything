@@ -57,7 +57,6 @@ const focusedPublicSubpaths = new Map([
     new Set([
       "@agent-anything/test-support/context-continuity-evaluation",
       "@agent-anything/test-support/evaluation-targets/helarc",
-      "@agent-anything/test-support/phase-27",
     ]),
   ],
   [
@@ -210,6 +209,7 @@ const focusedPublicSubpaths = new Map([
       "@agent-anything/helarc/composition",
       "@agent-anything/helarc/configuration",
       "@agent-anything/helarc/controller",
+      "@agent-anything/helarc/interaction",
       "@agent-anything/helarc/observability",
       "@agent-anything/helarc/prompt",
       "@agent-anything/helarc/result",
@@ -1076,6 +1076,7 @@ function checkExecutionSourceTopology() {
         "configuration",
         "controller",
         "index.ts",
+        "interaction",
         "observability",
         "prompt",
         "result",

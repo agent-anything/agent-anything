@@ -33,10 +33,6 @@ export {
 } from "./HelarcEvaluationExecution.js";
 export { HELARC_PHASE26_ACCEPTED_BASELINE } from "./baseline/HelarcPhase26Baseline.js";
 export {
-  HELARC_PHASE27_ACCEPTED_BASELINE,
-  HELARC_PHASE27_BASELINE_ACCEPTANCE,
-} from "./baseline/HelarcPhase27Baseline.js";
-export {
   HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
   HELARC_CONTEXT_CONTINUITY_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcContextContinuityBaseline.js";
@@ -56,6 +52,10 @@ export {
   HELARC_SHELL_TOOLS_ACCEPTED_BASELINE,
   HELARC_SHELL_TOOLS_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcShellToolsBaseline.js";
+export {
+  HELARC_TOOL_EXPOSURE_ACCEPTED_BASELINE,
+  HELARC_TOOL_EXPOSURE_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcToolExposureBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export type {

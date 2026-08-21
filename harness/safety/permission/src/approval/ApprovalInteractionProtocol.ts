@@ -60,13 +60,6 @@ export type ApprovalInteractionProtocol = InteractionProtocol<
 export function createApprovalInteractionProtocol(
   handlers: ApprovalInteractionHandlers,
 ): ApprovalInteractionProtocol {
-  const subjects = new Map<string, ApprovalInteractionSubject>();
-  const requests = new Map<string, InteractionRequest<
-    "approval",
-    ApprovalInteractionSubject,
-    ApprovalReviewRequest
-  >>();
-
   return Object.freeze({
     ref: snapshotInteractionProtocolRef(APPROVAL_INTERACTION_PROTOCOL),
     createRequest(input: InteractionCreateInput<
@@ -89,7 +82,7 @@ export function createApprovalInteractionProtocol(
           "Approval Interaction must bind the exact canonical Action subject revision.",
         );
       }
-      const request = snapshotInteractionRequest({
+      return snapshotInteractionRequest({
         ref: {
           id: input.requestId,
           protocol: APPROVAL_INTERACTION_PROTOCOL,
@@ -103,21 +96,21 @@ export function createApprovalInteractionProtocol(
         expiresAt: input.expiresAt,
         createdAt: input.createdAt,
       }, snapshotApprovalSubject, (presentation) => presentation);
-      const key = requestKey(request.ref.id, request.ref.requestVersion);
-      subjects.set(key, request.subject);
-      requests.set(key, request);
-      return request;
     },
     validateSubmission(
-      request: InteractionRequestRef<"approval">,
+      request: InteractionRequest<
+        "approval",
+        ApprovalInteractionSubject,
+        ApprovalReviewRequest
+      >,
       candidate: unknown,
     ) {
-      const subject = requireSubject(subjects, request.id, request.requestVersion);
+      const subject = request.subject;
       const submission = snapshotApprovalDecisionSubmission(
         candidate as ApprovalDecisionSubmission,
       );
       if (
-        submission.requestId !== request.id ||
+        submission.requestId !== request.ref.id ||
         submission.pendingVersion !== subject.pendingVersion ||
         submission.runId !== subject.requirement.subject.runId
       ) {
@@ -125,29 +118,34 @@ export function createApprovalInteractionProtocol(
       }
       return submission;
     },
-    resolve(input: InteractionResolveInput<"approval", ApprovalDecisionSubmission>) {
-      const subject = requireSubject(
-        subjects,
-        input.request.id,
-        input.request.requestVersion,
-      );
+    resolve(input: InteractionResolveInput<
+      "approval",
+      ApprovalDecisionSubmission,
+      ApprovalInteractionSubject,
+      ApprovalReviewRequest
+    >) {
+      const subject = input.request.subject;
       const decision = handlers.validateDecision(
         subject,
         input.submission,
-        input.request,
+        input.request.ref,
       );
       return Object.freeze({
         resolutionId: `approval-resolution:${input.submissionId}`,
         decision,
       });
     },
-    apply(input: InteractionApplyInput<"approval", ApprovalInteractionResolution>) {
-      const subject = requireSubject(
-        subjects,
-        input.request.id,
-        input.request.requestVersion,
+    apply(input: InteractionApplyInput<
+      "approval",
+      ApprovalInteractionResolution,
+      ApprovalInteractionSubject,
+      ApprovalReviewRequest
+    >) {
+      return handlers.applyDecision(
+        input.request.subject,
+        input.resolution,
+        input.request.ref,
       );
-      return handlers.applyDecision(subject, input.resolution, input.request);
     },
   });
 }
@@ -178,20 +176,4 @@ function snapshotApprovalSubject(
     pendingVersion: input.pendingVersion,
     createdAt: input.createdAt,
   });
-}
-
-function requireSubject(
-  subjects: ReadonlyMap<string, ApprovalInteractionSubject>,
-  requestId: string,
-  requestVersion: number,
-): ApprovalInteractionSubject {
-  const subject = subjects.get(requestKey(requestId, requestVersion));
-  if (subject === undefined) {
-    throw new TypeError("Approval Interaction request is unknown to this protocol instance.");
-  }
-  return subject;
-}
-
-function requestKey(requestId: string, requestVersion: number): string {
-  return `${requestId}:${requestVersion}`;
 }

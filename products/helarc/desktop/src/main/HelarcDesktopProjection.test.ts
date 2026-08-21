@@ -103,6 +103,55 @@ describe("Helarc Desktop IPC projection", () => {
     });
     expect(JSON.stringify(projected)).not.toContain(SECRET);
   });
+
+  it("projects clarification questions without protocol-private fields", () => {
+    const projected = projectHelarcDesktopSnapshot(snapshotWithRun([{
+      request: {
+        id: "clarification-1",
+        protocol: { owner: "helarc", kind: "clarification", revision: "1" },
+        requestVersion: 1,
+        subject: {
+          owner: "helarc",
+          kind: "clarification_tool_call",
+          id: "tool-call-1",
+          revision: "1",
+        },
+      },
+      presentation: {
+        questions: [{
+          id: "scope",
+          prompt: "Which scope should be updated?",
+          options: [
+            { label: "Runtime", description: "Update the runtime package." },
+            { label: "Product", description: "Update the product package." },
+          ],
+          allow_multiple: false,
+          privateQuestionState: SECRET,
+        }],
+        privateProtocolState: SECRET,
+      },
+      disclosureClass: "internal",
+      expiresAt: null,
+      blockingScope: "run",
+      phase: "pending",
+    }]));
+
+    expect(projected.run?.host.pendingInteractions[0]).toMatchObject({
+      family: "clarification",
+      presentation: {
+        questions: [{
+          id: "scope",
+          prompt: "Which scope should be updated?",
+          options: [
+            { label: "Runtime", description: "Update the runtime package." },
+            { label: "Product", description: "Update the product package." },
+          ],
+          allowMultiple: false,
+        }],
+      },
+    });
+    expect(JSON.stringify(projected)).not.toContain(SECRET);
+  });
 });
 
 function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSnapshot {

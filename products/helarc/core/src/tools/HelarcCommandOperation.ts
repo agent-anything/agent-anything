@@ -83,7 +83,7 @@ function tool(admissionId: string, contract: ReturnType<typeof findHelarcBaselin
       schemaRevisions: { dialect: "json-schema-2020-12", input: "1", output: "1", translation: "native-1" },
       annotations: contract.annotations,
       source: { kind: "product", sourceId: "helarc", sourceRevision: "1", activationEpoch: null },
-      operationBinding, retirement: null, metadata: { profile: "code-agent" },
+      binding: { kind: "operation", ...operationBinding }, retirement: null, metadata: { profile: "code-agent" },
     },
     allowedOrigins: ["model"], admittedAt,
   };

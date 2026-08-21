@@ -23,12 +23,12 @@ describe("Helarc work context domain", () => {
       id: " thread-1 ",
       revision: 0,
       workspace: threadWorkspace(),
-      title: " Implement Phase27 ",
+      title: " Refactor parser ",
       createdAt: NOW,
       updatedAt: NOW,
     })).toMatchObject({
       ok: true,
-      thread: { id: "thread-1", revision: 0, title: "Implement Phase27", latestRunId: null },
+      thread: { id: "thread-1", revision: 0, title: "Refactor parser", latestRunId: null },
     });
 
     expect(createHelarcMessage({
@@ -196,7 +196,7 @@ function thread(): HelarcThread {
     id: "thread-1",
     revision: 1,
     workspace: threadWorkspace(),
-    title: "Phase27",
+    title: "Refactor parser",
     status: "open",
     createdAt: NOW,
     updatedAt: NOW,
@@ -211,7 +211,7 @@ function message(): HelarcMessage {
     threadId: "thread-1",
     sequence: 1,
     role: "user",
-    content: "Implement Phase27.",
+    content: "Refactor the parser.",
     source: { kind: "user_input", owner: "desktop", refId: "input-1" },
     correlation: { runId: "run-1", interactionRequestId: null, reviewId: null },
     createdAt: NOW,

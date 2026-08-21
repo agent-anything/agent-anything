@@ -4,6 +4,9 @@ export type {
   RunValidationConfig,
 } from "./RunConfig.js";
 export type {
+  DescendantOperationOutcome,
+  DescendantRunCompositionPort,
+  DescendantRunPreparation,
   RunnerContextProjection,
   RunInvocationOptions,
   RunnerAutomaticEffectfulValidationCheckPort,

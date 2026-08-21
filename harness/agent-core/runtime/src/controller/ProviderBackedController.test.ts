@@ -171,8 +171,7 @@ describe("ProviderBackedController", () => {
           kind: "advance",
           candidates: [
             {
-              kind: "operation_request",
-              origin: "tool_request",
+              kind: "tool_request",
               tool: {
                 name: "workspace.readFile",
                 revision: null,
@@ -204,7 +203,7 @@ describe("ProviderBackedController", () => {
       throw new Error("Expected advance decision.");
     }
     expect(result.candidates.map((candidate) => candidate.kind)).toEqual([
-      "operation_request",
+      "tool_request",
       "state_transition",
     ]);
     expect(result.candidates.map((candidate) => candidate.modelItemId)).toEqual([
@@ -218,8 +217,7 @@ describe("ProviderBackedController", () => {
     const result = validateControllerDecision({
       kind: "advance",
       candidates: [{
-        kind: "operation_request",
-        origin: "tool_request",
+        kind: "tool_request",
         tool: {
           name: "workspace.createFile",
           revision: null,
@@ -235,7 +233,7 @@ describe("ProviderBackedController", () => {
     expect(result).toMatchObject({
       kind: "advance",
       candidates: [{
-        kind: "operation_request",
+        kind: "tool_request",
         tool: { origin: "workflow", controllerRequestId: null },
       }],
     });
@@ -249,8 +247,7 @@ describe("ProviderBackedController", () => {
           return {
             kind: "advance",
             candidates: [{
-              kind: "operation_request",
-              origin: "tool_request",
+              kind: "tool_request",
               tool: {
                 name: "workspace.createFile",
                 revision: null,

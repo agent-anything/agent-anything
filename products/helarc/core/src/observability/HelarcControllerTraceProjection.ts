@@ -11,7 +11,7 @@ export interface HelarcControllerTraceProjection {
   readonly controllerAction: string | null;
   readonly promptArchitectureVersion: string | null;
   readonly actionContractVersion: string | null;
-  readonly toolCatalogVersion: string | null;
+  readonly toolExposureVersion: string | null;
   readonly exposedToolNames: readonly string[];
   readonly requestedToolName: string | null;
 }
@@ -75,7 +75,7 @@ function createHelarcControllerTraceProjection(
     controllerAction: readTraceString(source.controllerAction),
     promptArchitectureVersion: readTraceString(source.promptArchitectureVersion),
     actionContractVersion: readTraceString(source.actionContractVersion),
-    toolCatalogVersion: readTraceString(source.toolCatalogVersion),
+    toolExposureVersion: readTraceString(source.toolExposureVersion),
     exposedToolNames: Object.freeze(readTraceStringArray(source.exposedToolNames)),
     requestedToolName: readTraceString(source.requestedToolName),
   });

@@ -18,7 +18,7 @@ export interface SelectedTool {
 }
 
 export interface ToolSelectionRevision {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly selectionId: string;
   readonly revision: string;
   readonly toolCatalogId: string;
@@ -65,7 +65,7 @@ export function createFixedLocalToolSelection(
   });
   tools.sort((left, right) => toolRevisionKey(left.registration.descriptor.ref).localeCompare(toolRevisionKey(right.registration.descriptor.ref)));
   const frozen = Object.freeze(tools);
-  const selectionId = createToolContractIdentity("agent-anything.fixed-local-tool-selection.v2", {
+  const selectionId = createToolContractIdentity("agent-anything.fixed-local-tool-selection.v3", {
     toolCatalogId: registrations.toolCatalog.catalogId,
     operationCatalogId: operationCatalog.id,
     operationCatalogRevision: operationCatalog.revision,
@@ -75,7 +75,7 @@ export function createFixedLocalToolSelection(
     })),
   });
   return Object.freeze({
-    schemaVersion: 2 as const,
+    schemaVersion: 3 as const,
     selectionId,
     revision: selectionId,
     toolCatalogId: registrations.toolCatalog.catalogId,
@@ -110,8 +110,8 @@ export function createControllerToolExposureProof(
 export function snapshotToolSelectionRevision(
   input: ToolSelectionRevision,
 ): ToolSelectionRevision {
-  if (input === null || typeof input !== "object" || input.schemaVersion !== 2) {
-    throw invalid("tool_selection_invalid", "Tool selection must use schema version 2.");
+  if (input === null || typeof input !== "object" || input.schemaVersion !== 3) {
+    throw invalid("tool_selection_invalid", "Tool selection must use schema version 3.");
   }
   if (!Array.isArray(input.tools)) {
     throw invalid("tool_selection_invalid", "Tool selection entries must be an array.");
@@ -132,9 +132,7 @@ export function snapshotToolSelectionRevision(
     const registration = selected.registration;
     if (
       registration.descriptor.fingerprint !== descriptor.fingerprint ||
-      operationRevisionKey(registration.operation.operation.ref) !==
-        operationRevisionKey(descriptor.operationBinding.operation) ||
-      registration.operation.binding.ref.revision !== descriptor.operationBinding.revision
+      !bindingRegistrationMatchesDescriptor(registration, descriptor)
     ) {
       throw invalid("tool_selection_invalid", `Tool revision '${key}' has an incoherent registration.`);
     }
@@ -142,13 +140,13 @@ export function snapshotToolSelectionRevision(
     const registrationBase = Object.freeze({
       admissionId: token(registration.admissionId),
       descriptor,
-      operation: registration.operation,
+      binding: registration.binding,
       allowedOrigins,
       admittedAt: token(registration.admittedAt),
     });
     if (
       registration.registrationFingerprint !==
-      createToolContractIdentity("agent-anything.tool-registration.v2", registrationBase)
+      createToolContractIdentity("agent-anything.tool-registration.v3", registrationBase)
     ) {
       throw invalid("tool_selection_invalid", `Tool revision '${key}' has an invalid registration fingerprint.`);
     }
@@ -163,7 +161,7 @@ export function snapshotToolSelectionRevision(
   });
   tools.sort((left, right) => toolRevisionKey(left.registration.descriptor.ref).localeCompare(toolRevisionKey(right.registration.descriptor.ref)));
   const frozen = Object.freeze(tools);
-  const expectedId = createToolContractIdentity("agent-anything.fixed-local-tool-selection.v2", {
+  const expectedId = createToolContractIdentity("agent-anything.fixed-local-tool-selection.v3", {
     toolCatalogId: token(input.toolCatalogId),
     operationCatalogId: token(input.operationCatalogId),
     operationCatalogRevision: token(input.operationCatalogRevision),
@@ -179,7 +177,7 @@ export function snapshotToolSelectionRevision(
     throw invalid("tool_selection_invalid", "Tool selection identity does not match its immutable contents.");
   }
   return Object.freeze({
-    schemaVersion: 2,
+    schemaVersion: 3,
     selectionId: expectedId,
     revision: expectedId,
     toolCatalogId: input.toolCatalogId,
@@ -187,6 +185,31 @@ export function snapshotToolSelectionRevision(
     operationCatalogRevision: input.operationCatalogRevision,
     tools: frozen,
   });
+}
+
+function bindingRegistrationMatchesDescriptor(
+  registration: RegisteredTool,
+  descriptor: ToolDescriptor,
+): boolean {
+  if (registration.binding.kind !== descriptor.binding.kind) return false;
+  switch (registration.binding.kind) {
+    case "operation":
+      return descriptor.binding.kind === "operation" &&
+        operationRevisionKey(registration.binding.operation.operation.ref) ===
+          operationRevisionKey(descriptor.binding.operation) &&
+        registration.binding.operation.binding.ref.revision === descriptor.binding.revision;
+    case "interaction":
+      return descriptor.binding.kind === "interaction" &&
+        registration.binding.ref.revision === descriptor.binding.revision &&
+        registration.binding.ref.protocol.owner === descriptor.binding.protocol.owner &&
+        registration.binding.ref.protocol.kind === descriptor.binding.protocol.kind &&
+        registration.binding.ref.protocol.revision === descriptor.binding.protocol.revision;
+    case "descendant_agent":
+      return descriptor.binding.kind === "descendant_agent" &&
+        registration.binding.ref.revision === descriptor.binding.revision &&
+        registration.binding.ref.agent.id === descriptor.binding.agent.id &&
+        registration.binding.ref.agent.revision === descriptor.binding.agent.revision;
+  }
 }
 
 export function findSelectedTool(

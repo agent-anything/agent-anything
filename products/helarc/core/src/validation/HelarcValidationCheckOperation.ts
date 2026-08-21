@@ -215,7 +215,7 @@ export function createHelarcValidationCheckOperationContribution(input: {
         sourceRevision: "1",
         activationEpoch: null,
       },
-      operationBinding: HELARC_RUN_VALIDATION_CHECK_BINDING,
+      binding: { kind: "operation", ...HELARC_RUN_VALIDATION_CHECK_BINDING },
       retirement: null,
       metadata: { profile: "code-agent", purpose: "validation" },
     },

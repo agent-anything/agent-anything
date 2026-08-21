@@ -18,9 +18,35 @@ export interface ToolSchemaRevisionRefs {
 }
 
 export interface ToolOperationBindingRef {
+  readonly kind: "operation";
   readonly operation: OperationRevisionRef;
   readonly revision: string;
 }
+
+export interface ToolInteractionBindingRef {
+  readonly kind: "interaction";
+  readonly protocol: {
+    readonly owner: string;
+    readonly kind: string;
+    readonly revision: string;
+  };
+  readonly blockingScope: "none" | "branch" | "run";
+  readonly revision: string;
+}
+
+export interface ToolDescendantAgentBindingRef {
+  readonly kind: "descendant_agent";
+  readonly agent: {
+    readonly id: string;
+    readonly revision: string;
+  };
+  readonly revision: string;
+}
+
+export type ToolBindingRef =
+  | ToolOperationBindingRef
+  | ToolInteractionBindingRef
+  | ToolDescendantAgentBindingRef;
 
 export interface ToolSourceRef {
   readonly kind: "harness" | "product" | "mcp" | "plugin" | "remote";

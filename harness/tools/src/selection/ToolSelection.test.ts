@@ -156,7 +156,7 @@ function registration(
         sourceRevision: "1",
         activationEpoch: null,
       },
-      operationBinding: { operation, revision: "binding-1" },
+      binding: { kind: "operation", operation, revision: "binding-1" },
     },
     allowedOrigins: ["model", "workflow"],
     admittedAt: "2026-08-13T00:00:00.000Z",

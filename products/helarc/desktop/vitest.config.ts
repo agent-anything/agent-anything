@@ -17,6 +17,7 @@ export default defineConfig({
       "@agent-anything/helarc/composition": resolve(currentDir, "../core/src/composition/index.ts"),
       "@agent-anything/helarc/task": resolve(currentDir, "../core/src/task/index.ts"),
       "@agent-anything/helarc/controller": resolve(currentDir, "../core/src/controller/index.ts"),
+      "@agent-anything/helarc/interaction": resolve(currentDir, "../core/src/interaction/index.ts"),
       "@agent-anything/helarc/prompt": resolve(currentDir, "../core/src/prompt/index.ts"),
       "@agent-anything/helarc/tools": resolve(currentDir, "../core/src/tools/index.ts"),
       "@agent-anything/helarc/validation": resolve(currentDir, "../core/src/validation/index.ts"),

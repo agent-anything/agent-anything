@@ -16,6 +16,7 @@ import type { ValidationRunnerProjection } from "@agent-anything/validation/proj
 export type RuntimeRunActionSubject =
   | { readonly kind: "state_transition"; readonly transition: "plan_update" | "handoff" }
   | { readonly kind: "operation"; readonly invocationId: string | null; readonly requestOrigin: "automatic_stage" | "controller_protocol" | "tool_request" | "composite" | "descendant" }
+  | { readonly kind: "tool"; readonly toolCallId: string }
   | { readonly kind: "interaction"; readonly request: InteractionRequestRef | null };
 
 export type RuntimeRunAction = RunActionEnvelope<RuntimeRunActionSubject>;

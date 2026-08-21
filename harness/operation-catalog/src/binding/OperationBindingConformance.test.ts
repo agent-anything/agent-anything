@@ -4,17 +4,16 @@ import {
   type OperationBindingKind,
   type OperationBindingResolutionInput,
   type ResolvedOperationBinding,
-} from "@agent-anything/operation-catalog/binding";
+} from "./index.js";
 import {
   createOperationCatalogSnapshot,
   type RegisteredOperation,
-} from "@agent-anything/operation-catalog/catalog";
+} from "../catalog/index.js";
 import type {
   OperationInvocationContext,
   OperationRevisionRef,
-} from "@agent-anything/operation-catalog/identity";
+} from "../identity/index.js";
 import { describe, expect, it } from "vitest";
-import { PHASE27_BINDING_CONFORMANCE } from "./Phase27CatalogRealization.js";
 
 const NOW = "2026-08-14T00:00:00.000Z";
 const KINDS: readonly OperationBindingKind[] = [
@@ -25,19 +24,19 @@ const KINDS: readonly OperationBindingKind[] = [
   "descendant_agent",
 ];
 
-describe("Phase27 Operation binding conformance", () => {
+describe("Operation binding conformance", () => {
   it("resolves every binding form with exact identity, revision, and fingerprint", async () => {
     const entries = KINDS.map(registration);
     const catalog = createOperationCatalogSnapshot({
-      id: "phase27.binding-conformance",
+      id: "operation.binding-conformance",
       revision: "1",
       entries,
     });
     const resolvers = createOperationBindingResolverSnapshot(
-      "phase27.binding-resolvers.v1",
+      "operation.binding-resolvers.v1",
       KINDS.map((kind) => ({
         resolver: {
-          id: `phase27.${kind}.resolver`,
+          id: `operation.${kind}.resolver`,
           revision: "1",
           async resolve(input: OperationBindingResolutionInput<unknown, unknown>) {
             return {
@@ -69,20 +68,10 @@ describe("Phase27 Operation binding conformance", () => {
         parentInvocation: null,
         binding: entry.binding.ref,
         resolverRevision: "1",
-        resolutionFingerprint: `phase27:${entry.binding.kind}:fingerprint`,
+        resolutionFingerprint: `operation:${entry.binding.kind}:fingerprint`,
       });
       expect(Object.isFrozen(resolution.binding)).toBe(true);
     }
-  });
-
-  it("preserves the accepted parent Action and child cardinality invariants", () => {
-    expect(PHASE27_BINDING_CONFORMANCE).toEqual([
-      expect.objectContaining({ bindingFamily: "internal", parentActionCount: 1, childActionCardinality: "none", childRunCardinality: "none" }),
-      expect.objectContaining({ bindingFamily: "direct", parentActionCount: 1, childActionCardinality: "none", childRunCardinality: "none" }),
-      expect.objectContaining({ bindingFamily: "hosted", parentActionCount: 1, childActionCardinality: "none", childRunCardinality: "none" }),
-      expect.objectContaining({ bindingFamily: "composite", parentActionCount: 0, childActionCardinality: "bounded", childRunCardinality: "none" }),
-      expect.objectContaining({ bindingFamily: "descendant_agent", parentActionCount: 0, childActionCardinality: "none", childRunCardinality: "one" }),
-    ]);
   });
 
   it("reports a missing trusted resolver as typed unavailability", async () => {
@@ -98,7 +87,7 @@ describe("Phase27 Operation binding conformance", () => {
     expect(resolution).toEqual({
       status: "unavailable",
       code: "resolver_unavailable",
-      resolverId: "phase27.hosted.resolver",
+      resolverId: "operation.hosted.resolver",
     });
   });
 });
@@ -106,10 +95,10 @@ describe("Phase27 Operation binding conformance", () => {
 function registration(kind: OperationBindingKind): RegisteredOperation {
   const operation = operationRef(kind);
   return {
-    admissionId: `phase27.${kind}.admission`,
+    admissionId: `operation.${kind}.admission`,
     operation: {
       ref: operation,
-      semanticOwner: `phase27.${kind}.owner`,
+      semanticOwner: `operation.${kind}.owner`,
       requestSchemaRevision: "1",
       resultSchemaRevision: "1",
       roles: {
@@ -126,13 +115,13 @@ function registration(kind: OperationBindingKind): RegisteredOperation {
           : kind === "descendant_agent"
             ? "descendant_adapter"
             : "semantic_owner",
-        domainPurpose: `phase27.${kind}.conformance`,
+        domainPurpose: `operation.${kind}.conformance`,
       },
     },
     binding: {
       ref: { operation, revision: "binding-1" },
       kind,
-      resolverId: `phase27.${kind}.resolver`,
+      resolverId: `operation.${kind}.resolver`,
       resolverRevision: "1",
     },
     sourceRevision: "1",
@@ -153,30 +142,30 @@ function resolved(
     binding: input.registration.binding.ref,
     request: input.request,
     resolverRevision: "1",
-    resolutionFingerprint: `phase27:${kind}:fingerprint`,
+    resolutionFingerprint: `operation:${kind}:fingerprint`,
   };
   switch (kind) {
     case "internal":
-      return { ...base, kind, handlerId: "phase27.internal.handler" };
+      return { ...base, kind, handlerId: "operation.internal.handler" };
     case "direct":
-      return { ...base, kind, actionAdapterId: "phase27.direct.adapter" };
+      return { ...base, kind, actionAdapterId: "operation.direct.adapter" };
     case "hosted":
       return {
         ...base,
         kind,
-        actionAdapterId: "phase27.hosted.adapter",
-        hostedEndpointRef: "phase27.hosted.endpoint",
+        actionAdapterId: "operation.hosted.adapter",
+        hostedEndpointRef: "operation.hosted.endpoint",
       };
     case "composite":
-      return { ...base, kind, compositeDefinitionRef: "phase27.composite.v1" };
+      return { ...base, kind, compositeDefinitionRef: "operation.composite.v1" };
     case "descendant_agent":
-      return { ...base, kind, agentRef: { id: "phase27.agent", revision: "1" } };
+      return { ...base, kind, agentRef: { id: "operation.agent", revision: "1" } };
   }
 }
 
 function operationRef(kind: OperationBindingKind): OperationRevisionRef {
   return {
-    operation: { namespace: "phase27.conformance", name: kind },
+    operation: { namespace: "operation.conformance", name: kind },
     revision: "1",
   };
 }
@@ -186,7 +175,7 @@ function invocationContext(operation: OperationRevisionRef): OperationInvocation
     invocation: { id: `invocation-${operation.operation.name}`, operation },
     correlation: {
       kind: "owner_operation",
-      owner: "phase27.conformance",
+      owner: "operation.conformance",
       operationId: `operation-${operation.operation.name}`,
       operationRevision: "1",
     },

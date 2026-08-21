@@ -5,6 +5,7 @@ import type { HelarcMainSnapshot } from "../shared/HelarcDesktopApi.js";
 import {
   App,
   ApprovalPromptPanel,
+  ClarificationPromptPanel,
   ThreadTimeline,
   RunTerminalPanel,
   RunTimelinePanel,
@@ -57,6 +58,51 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Submitted for resolution");
   });
 
+  it("renders bounded clarification questions and answer controls", () => {
+    const html = renderToStaticMarkup(
+      <ClarificationPromptPanel
+        clarification={{
+          family: "clarification",
+          phase: "pending",
+          request: {
+            id: "clarification-1",
+            protocol: { owner: "helarc", kind: "clarification", revision: "1" },
+            requestVersion: 1,
+            subject: {
+              owner: "helarc",
+              kind: "clarification_tool_call",
+              id: "tool-call-1",
+              revision: "1",
+            },
+          },
+          disclosureClass: "internal",
+          expiresAt: null,
+          blockingScope: "run",
+          presentation: {
+            questions: [{
+              id: "scope",
+              prompt: "Which scope should be updated?",
+              options: [
+                { label: "Runtime", description: "Update the runtime package." },
+                { label: "Product", description: "Update the product package." },
+              ],
+              allowMultiple: false,
+            }],
+          },
+        }}
+        submissionError={null}
+        isBusy={false}
+        onSubmit={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Which scope should be updated?");
+    expect(html).toContain("Runtime");
+    expect(html).toContain("Product");
+    expect(html).toContain("Update the runtime package.");
+    expect(html).toContain("Submit");
+  });
+
   it("renders the active run timeline from safe run events", () => {
     const html = renderToStaticMarkup(
       <RunTimelinePanel
@@ -85,9 +131,9 @@ describe("Helarc workbench shell", () => {
             event("event-1", "tool.proposed", "Tool call proposed", "info", {
               controllerAction: "tool_call",
               requestedToolName: "Read",
-              promptArchitectureVersion: "helarc-prompt-v3",
+              promptArchitectureVersion: "helarc-prompt-v4",
               actionContractVersion: "helarc-model-decision-v1",
-              toolCatalogVersion: "helarc-tool-catalog-v3",
+              toolExposureVersion: "trusted-tool-exposure-v1",
               exposedToolNames: [
                 "Read",
                 "Glob",
@@ -104,7 +150,7 @@ describe("Helarc workbench shell", () => {
 
     expect(html).toContain("action tool_call");
     expect(html).toContain("tool Read");
-    expect(html).toContain("versions helarc-prompt-v3, helarc-model-decision-v1, helarc-tool-catalog-v3");
+    expect(html).toContain("versions helarc-prompt-v4, helarc-model-decision-v1, trusted-tool-exposure-v1");
     expect(html).toContain("tools Read, Glob, Grep, Edit, Write");
   });
 

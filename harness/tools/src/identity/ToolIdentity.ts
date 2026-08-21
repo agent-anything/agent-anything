@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 
 export type {
   ToolKey,
+  ToolBindingRef,
+  ToolDescendantAgentBindingRef,
+  ToolInteractionBindingRef,
   ToolOperationBindingRef,
   ToolRevisionRef,
   ToolSchemaRevisionRefs,

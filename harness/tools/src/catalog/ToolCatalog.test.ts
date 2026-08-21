@@ -29,7 +29,7 @@ describe("ToolCatalog", () => {
     inputSchema.required[0] = "changed";
 
     expect(catalog).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       tools: [{
         ref: { tool: { namespace: "code-agent", name: "read-file" }, revision: "1" },
         name: "codeAgent.readFile",
@@ -46,7 +46,8 @@ describe("ToolCatalog", () => {
           sourceRevision: "1",
           activationEpoch: null,
         },
-        operationBinding: {
+        binding: {
+          kind: "operation",
           operation: {
             operation: { namespace: "code", name: "read-file" },
             revision: "1",
@@ -161,7 +162,8 @@ function descriptor(name: string): ToolDescriptorInput {
       sourceRevision: "1",
       activationEpoch: null,
     },
-    operationBinding: {
+    binding: {
+      kind: "operation",
       operation: {
         operation: { namespace: "code", name: operationName },
         revision: "1",

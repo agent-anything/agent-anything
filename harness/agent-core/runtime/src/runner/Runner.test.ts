@@ -32,6 +32,7 @@ import {
 import {
   createFixedLocalToolSelection,
 } from "@agent-anything/tools/selection";
+import type { ToolBindingRef } from "@agent-anything/tools/identity";
 import {
   createToolRegistrationSnapshot,
   type ToolRegistrationInput,
@@ -606,8 +607,7 @@ describe("Runner semantic integration", () => {
     const tools = createToolSelection(operations, operation, "codeAgent.readFile");
     const controller = new ScriptedController([
       (input) => advance([{
-        kind: "operation_request",
-        origin: "tool_request",
+        kind: "tool_request",
         tool: {
           name: "codeAgent.readFile",
           revision: "1",
@@ -651,6 +651,152 @@ describe("Runner semantic integration", () => {
       .toHaveLength(1);
   });
 
+  it("routes an exposed interaction Tool directly through its Interaction protocol", async () => {
+    const operations = createOperationFixture([]);
+    const interaction = testInteractionProtocol();
+    const tools = createSemanticToolSelection(
+      operations,
+      "AskUserQuestion",
+      {
+        kind: "interaction",
+        protocol: interaction.ref,
+        blockingScope: "run",
+        revision: "interaction-binding-1",
+      },
+    );
+    const controller = new ScriptedController([
+      (input) => advance([toolCandidate(
+        "AskUserQuestion",
+        { question: "Continue?" },
+        input.toolExposure.controllerRequestId,
+      )], "model_tool_1"),
+      (input) => {
+        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+          kind: "interaction",
+          status: "resolved",
+          value: { accepted: true },
+          toolResult: {
+            status: "succeeded",
+            output: { accepted: true },
+          },
+        });
+        return complete("Clarification complete", "model_complete_2");
+      },
+    ]);
+    const handle = createRunner(controller, operations, {
+      interactions: interaction.registry,
+    }).start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools }),
+    );
+    const pending = await waitForPendingInteraction(handle);
+
+    expect(pending.envelope.presentation).toEqual({ question: "Continue?" });
+    expect(handle.submitInteraction({
+      request: pending.envelope.request,
+      submissionId: "submission_1",
+      contentDigest: "sha256:accepted",
+      payload: { accepted: true },
+      receivedAt: NOW,
+    }).status).toBe("accepted_for_resolution");
+
+    const result = await handle.wait();
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(observations(result).some(({ payload }) => payload.kind === "operation"))
+      .toBe(false);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        kind: "run_action",
+        action: expect.objectContaining({
+          subject: expect.objectContaining({ kind: "tool" }),
+        }),
+      }),
+    }));
+  });
+
+  it("routes an exposed Agent Tool directly to one bounded descendant Run", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    let operations!: OperationFixture;
+    let tools!: RunConfig["tools"];
+    const controller = new ScriptedController([
+      (input) => advance([toolCandidate(
+        "Agent",
+        { prompt: "Inspect the contracts." },
+        input.toolExposure.controllerRequestId,
+      )], "model_tool_1"),
+      (input) => {
+        expect(input.agent).toMatchObject({ id: childAgent.id, revision: childAgent.revision });
+        return complete("Child complete", "model_child_complete");
+      },
+      (input) => {
+        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+          kind: "descendant_run",
+          status: "succeeded",
+          output: { summary: "Child complete" },
+          toolResult: {
+            status: "succeeded",
+            output: { summary: "Child complete" },
+          },
+        });
+        return complete("Parent complete", "model_parent_complete");
+      },
+    ]);
+    operations = createOperationFixture([], [], {
+      descendants: {
+        async prepare({ delegatedInput }) {
+          return {
+            agent: childAgent,
+            input: createRunInput("task_child", delegatedInput),
+            config: createRunConfig(operations, { tools }),
+            contextManifestRef: "context-manifest-1",
+            visibility: "parent_and_host" as const,
+            mapResult(result) {
+              return result.status === "succeeded"
+                ? { status: "succeeded" as const, output: result.finalOutput, failure: null }
+                : {
+                    status: "failed" as const,
+                    output: null,
+                    failure: operationFailure("agent-runtime", "descendant_failed"),
+                  };
+            },
+          };
+        },
+      },
+    });
+    tools = createSemanticToolSelection(
+      operations,
+      "Agent",
+      {
+        kind: "descendant_agent",
+        agent: { id: childAgent.id, revision: childAgent.revision },
+        revision: "descendant-binding-1",
+      },
+    );
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools }),
+    );
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(observations(result)).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        kind: "descendant_run",
+        status: "succeeded",
+        output: { summary: "Child complete" },
+      }),
+    }));
+    expect(observations(result).some(({ payload }) => payload.kind === "operation"))
+      .toBe(false);
+    expect(controller.calls.map(({ runId }) => runId)).toEqual([
+      "run_001",
+      expect.stringContaining("descendant_relation"),
+      "run_001",
+    ]);
+  });
+
   it("maps a workflow Tool Call to a trusted-workflow Operation request", async () => {
     const operation = operationRef("create-file");
     const handler = internalHandler("handler.create-file", "code-workspace", {
@@ -670,8 +816,7 @@ describe("Runner semantic integration", () => {
     );
     const controller = new ScriptedController([
       advance([{
-        kind: "operation_request",
-        origin: "tool_request",
+        kind: "tool_request",
         tool: {
           name: "codeAgent.createFile",
           revision: "1",
@@ -866,6 +1011,7 @@ describe("Runner semantic integration", () => {
         kind: "interaction",
         owner: "test-owner",
         status: "cancelled",
+        toolResult: null,
         value: { code: "interaction_cancelled" },
       },
     }));
@@ -1590,7 +1736,7 @@ function createToolSelection(
         sourceRevision: "1",
         activationEpoch: null,
       },
-      operationBinding: { operation, revision: "binding-1" },
+      binding: { kind: "operation", operation, revision: "binding-1" },
     },
     allowedOrigins: [origin],
     admittedAt: NOW,
@@ -1599,6 +1745,44 @@ function createToolSelection(
   return createFixedLocalToolSelection(registrations, operations.catalog, [{
     tool: registration.descriptor.ref,
     origins: [origin],
+  }]);
+}
+
+function createSemanticToolSelection(
+  operations: OperationFixture,
+  name: string,
+  binding: Exclude<ToolBindingRef, { readonly kind: "operation" }>,
+) {
+  const toolName = name.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
+  const registration: ToolRegistrationInput = {
+    admissionId: `tool-admission-${toolName}`,
+    descriptor: {
+      ref: { tool: { namespace: "code-agent", name: toolName }, revision: "1" },
+      name,
+      description: `Test Tool ${name}.`,
+      inputSchema: { type: "object" },
+      outputSchema: { type: "object" },
+      schemaRevisions: {
+        dialect: "json-schema-2020-12",
+        input: "input-1",
+        output: "output-1",
+        translation: "native-1",
+      },
+      source: {
+        kind: "product",
+        sourceId: "helarc-code-agent",
+        sourceRevision: "1",
+        activationEpoch: null,
+      },
+      binding,
+    },
+    allowedOrigins: ["model"],
+    admittedAt: NOW,
+  };
+  const registrations = createToolRegistrationSnapshot(operations.catalog, [registration]);
+  return createFixedLocalToolSelection(registrations, operations.catalog, [{
+    tool: registration.descriptor.ref,
+    origins: ["model"],
   }]);
 }
 
@@ -2171,6 +2355,24 @@ function operationCandidate(operation: OperationRevisionRef, request: unknown) {
     operation,
     request,
     modelItemId: "model_operation",
+  };
+}
+
+function toolCandidate(
+  name: string,
+  input: unknown,
+  controllerRequestId: string,
+) {
+  return {
+    kind: "tool_request" as const,
+    tool: {
+      name,
+      revision: "1",
+      input,
+      origin: "model" as const,
+      controllerRequestId,
+    },
+    modelItemId: "model_tool_1",
   };
 }
 

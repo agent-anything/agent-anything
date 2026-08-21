@@ -2,6 +2,7 @@ import { ProviderBackedController } from "@agent-anything/agent-runtime/controll
 import { createSystemRetryExecutor, systemRetryClock } from "@agent-anything/agent-runtime/retry";
 import type { Controller } from "@agent-anything/agent-runtime/controller";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
+import type { DescendantRunCompositionPort } from "@agent-anything/agent-runtime/runner";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { ValidationHostProjection } from "@agent-anything/validation/projection";
 import type { Agent } from "@agent-anything/agent-core/agent";
@@ -19,11 +20,8 @@ import {
   type HelarcAgentOutput,
 } from "../controller/HelarcController.js";
 import { createHelarcAgent } from "../agent/HelarcAgent.js";
+import { createHelarcDescendantAgentContribution } from "../agent/HelarcDescendantAgent.js";
 import { HELARC_ACTION_CONTRACT_VERSION } from "../prompt/HelarcPromptAssembly.js";
-import {
-  createHelarcToolCatalogMetadata,
-  HELARC_TOOL_CATALOG_METADATA_KEY,
-} from "../tools/HelarcToolCatalog.js";
 import {
   HelarcTracingController,
   projectHelarcControllerTraceForEvent,
@@ -45,6 +43,7 @@ import {
   createInteractionProtocolRegistrySnapshot,
   type InteractionProtocolRegistrySnapshot,
 } from "@agent-anything/interaction/coordination";
+import { createHelarcClarificationContribution } from "../interaction/index.js";
 import {
   createHelarcActionComposition,
   type HelarcCommandActionContribution,
@@ -89,6 +88,7 @@ export interface HelarcProductComposition {
   readonly controller: Controller<HelarcAgentOutput>;
   readonly actions: Awaited<ReturnType<typeof createHelarcActionComposition>>;
   readonly interactions: InteractionProtocolRegistrySnapshot;
+  readonly descendants: DescendantRunCompositionPort;
   readonly validation: HelarcValidationComposition;
   readonly runMetadata: Readonly<Record<string, unknown>>;
   getProductProjection(): HelarcProductRunProjection;
@@ -109,6 +109,9 @@ export async function createHelarcProductComposition(
 ): Promise<HelarcProductComposition> {
   const now = input.now ?? (() => new Date().toISOString());
   const admittedAt = now();
+  const agent = createHelarcAgent();
+  const clarification = createHelarcClarificationContribution(admittedAt);
+  const descendant = createHelarcDescendantAgentContribution(agent, admittedAt, now);
   const validation = await createHelarcValidationComposition({
     workspace: input.workspace,
     codeSource: input.codeSource,
@@ -122,10 +125,11 @@ export async function createHelarcProductComposition(
     file: input.fileActions,
     command: input.commandActions,
     validation: validation.operation,
+    semanticTools: Object.freeze([clarification.tool, descendant.tool]),
   });
   const interactions = createInteractionProtocolRegistrySnapshot(
-    "helarc.interactions.v2",
-    [],
+    "helarc.interactions.v3",
+    [clarification.protocol],
   );
   const retryClock = createHelarcRetryClock(input.now);
   const controllerTraceByOperationId = new Map<
@@ -183,14 +187,14 @@ export async function createHelarcProductComposition(
   );
   const runMetadata = Object.freeze({
     product: "helarc",
-    [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata(),
   });
 
   return Object.freeze({
-    agent: createHelarcAgent(),
+    agent,
     controller: providerController,
     actions,
     interactions,
+    descendants: descendant.composition,
     validation,
     runMetadata,
     getProductProjection(): HelarcProductRunProjection {

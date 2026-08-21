@@ -30,7 +30,10 @@ describe("createMcpOperationContribution", () => {
     expect(contribution.tools[0]).toMatchObject({
       descriptor: {
         name: "mcp.status",
-        operationBinding: { operation: { operation: { name: "status" } } },
+        binding: {
+          kind: "operation",
+          operation: { operation: { name: "status" } },
+        },
       },
     });
     expect(contribution.actionRegistrations.registrations[0]?.effectFamilies)

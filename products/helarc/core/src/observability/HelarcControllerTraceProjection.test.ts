@@ -29,9 +29,9 @@ describe("Helarc controller trace projection", () => {
         metadata: {
           source: "helarc-controller",
           controllerAction: "completion",
-          promptArchitectureVersion: "helarc-prompt-v3",
+          promptArchitectureVersion: "helarc-prompt-v4",
           actionContractVersion: "helarc-model-decision-v1",
-          toolCatalogVersion: "helarc-tool-catalog-v3",
+          toolExposureVersion: "trusted-tool-exposure-v1",
           exposedToolNames: ["Read"],
           rawPrompt: "secret",
         },
@@ -46,9 +46,9 @@ describe("Helarc controller trace projection", () => {
       iteration: 1,
       source: "helarc-controller",
       controllerAction: "completion",
-      promptArchitectureVersion: "helarc-prompt-v3",
+      promptArchitectureVersion: "helarc-prompt-v4",
       actionContractVersion: "helarc-model-decision-v1",
-      toolCatalogVersion: "helarc-tool-catalog-v3",
+      toolExposureVersion: "trusted-tool-exposure-v1",
       exposedToolNames: ["Read"],
       requestedToolName: null,
     });
@@ -63,7 +63,7 @@ describe("Helarc controller trace projection", () => {
       controllerAction: "tool_call",
       promptArchitectureVersion: null,
       actionContractVersion: null,
-      toolCatalogVersion: null,
+      toolExposureVersion: null,
       exposedToolNames: Object.freeze([]),
       requestedToolName: "Read",
     });

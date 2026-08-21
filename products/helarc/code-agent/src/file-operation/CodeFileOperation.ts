@@ -223,7 +223,7 @@ function toolRegistration(item: CodeFileSpec, admittedAt: string): ToolRegistrat
         sourceRevision: "2",
         activationEpoch: null,
       },
-      operationBinding: { operation: item.operation, revision: BINDING_REVISION },
+      binding: { kind: "operation", operation: item.operation, revision: BINDING_REVISION },
       retirement: null,
       metadata: {
         profile: mutation ? "workspace-write" : "workspace-read",

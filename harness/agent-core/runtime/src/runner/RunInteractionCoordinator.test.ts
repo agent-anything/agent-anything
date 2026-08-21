@@ -166,7 +166,7 @@ function createFixture() {
   let sequence = 0;
   const coordinator = new RunInteractionCoordinator({
     runId: "run-1",
-    registry: createInteractionProtocolRegistrySnapshot("phase27-interactions", [{
+    registry: createInteractionProtocolRegistrySnapshot("runner-interactions", [{
       ref,
       protocol,
     }]),

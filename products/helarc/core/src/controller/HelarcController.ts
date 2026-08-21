@@ -16,9 +16,8 @@ import {
   HELARC_ACTION_CONTRACT_VERSION,
   HELARC_MODEL_OUTPUT_RESERVE_BYTES,
   HELARC_PROMPT_ARCHITECTURE_VERSION,
-  HELARC_TOOL_CATALOG_VERSION,
+  HELARC_TOOL_EXPOSURE_VERSION,
 } from "../prompt/HelarcPromptAssembly.js";
-import { readHelarcToolCatalog } from "../tools/HelarcToolCatalog.js";
 import {
   HelarcModelDecisionError,
   parseHelarcModelDecision,
@@ -122,7 +121,7 @@ export function buildHelarcProviderRequest(
       taskKind: input.task.kind,
       promptArchitectureVersion: promptAssembly.versions.promptArchitectureVersion,
       actionContractVersion: promptAssembly.versions.actionContractVersion,
-      toolCatalogVersion: promptAssembly.versions.toolCatalogVersion,
+      toolExposureVersion: promptAssembly.versions.toolExposureVersion,
       exposedToolNames: promptAssembly.exposedToolNames,
       promptSectionIds: promptAssembly.promptSections.map((section) => section.id),
       modelInputCompositionId: composition.id,
@@ -205,8 +204,7 @@ export function parseHelarcProviderResponse(
       return Object.freeze({
         kind: "advance",
         candidates: oneCandidate(Object.freeze({
-          kind: "operation_request" as const,
-          origin: "tool_request" as const,
+          kind: "tool_request" as const,
           tool: Object.freeze({
             name: output.toolName,
             revision: null,
@@ -292,7 +290,7 @@ function assertToolNameSupported(
   toolName: string,
   input: ControllerInput<HelarcAgentOutput>,
 ): void {
-  if (readHelarcToolCatalog(input).tools.some((tool) => tool.name === toolName)) {
+  if (input.toolExposure.catalog.tools.some((tool) => tool.name === toolName)) {
     return;
   }
 
@@ -303,14 +301,13 @@ function createControllerTraceMetadata(
   output: HelarcProviderStructuredOutput,
   input: ControllerInput<HelarcAgentOutput>,
 ): Readonly<Record<string, unknown>> {
-  const toolCatalog = readHelarcToolCatalog(input);
   const metadata: Record<string, unknown> = {
     source: "helarc-controller",
     controllerAction: output.kind,
     promptArchitectureVersion: HELARC_PROMPT_ARCHITECTURE_VERSION,
     actionContractVersion: HELARC_ACTION_CONTRACT_VERSION,
-    toolCatalogVersion: HELARC_TOOL_CATALOG_VERSION,
-    exposedToolNames: toolCatalog.tools.map((tool) => tool.name),
+    toolExposureVersion: HELARC_TOOL_EXPOSURE_VERSION,
+    exposedToolNames: input.toolExposure.catalog.tools.map((tool) => tool.name),
   };
 
   if (output.kind === "tool_call") {

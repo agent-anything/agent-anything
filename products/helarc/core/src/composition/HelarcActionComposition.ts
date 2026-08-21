@@ -15,38 +15,20 @@ import {
   type OperationCatalogSnapshot,
 } from "@agent-anything/operation-catalog/catalog";
 import {
-  CODE_AGENT_EDIT_TOOL,
-  CODE_AGENT_GLOB_TOOL,
-  CODE_AGENT_GREP_TOOL,
-  CODE_AGENT_READ_TOOL,
-  CODE_AGENT_WRITE_TOOL,
   createCodeFileOperationContribution,
   type CodeFileActionAdapterIds,
 } from "@agent-anything/helarc-code-agent/file-operation";
 import {
   createToolRegistrationSnapshot,
+  type ToolRegistrationInput,
 } from "@agent-anything/tools/registration";
 import {
   createFixedLocalToolSelection,
   type ToolSelectionRevision,
 } from "@agent-anything/tools/selection";
-import {
-  createHelarcCommandOperationContribution,
-  HELARC_TASK_STOP_TOOL,
-} from "../tools/HelarcCommandOperation.js";
+import { createHelarcCommandOperationContribution } from "../tools/HelarcCommandOperation.js";
 import type { HelarcShellToolName } from "../tools/HelarcBaselineToolContracts.js";
-import {
-  HELARC_RUN_VALIDATION_CHECK_TOOL,
-  type HelarcValidationCheckOperationContribution,
-} from "../validation/HelarcValidationCheckOperation.js";
-
-const MODEL_FILE_TOOLS = new Set([
-  CODE_AGENT_READ_TOOL,
-  CODE_AGENT_GLOB_TOOL,
-  CODE_AGENT_GREP_TOOL,
-  CODE_AGENT_EDIT_TOOL,
-  CODE_AGENT_WRITE_TOOL,
-]);
+import type { HelarcValidationCheckOperationContribution } from "../validation/HelarcValidationCheckOperation.js";
 
 export interface HelarcPhysicalActionContribution {
   readonly registrations: ActionRegistrationSnapshot;
@@ -73,6 +55,7 @@ export interface CreateHelarcActionCompositionInput {
   readonly file: HelarcFileActionContribution;
   readonly command: HelarcCommandActionContribution;
   readonly validation: HelarcValidationCheckOperationContribution | null;
+  readonly semanticTools: readonly ToolRegistrationInput[];
 }
 
 export interface HelarcActionComposition {
@@ -115,14 +98,19 @@ export function createHelarcActionComposition(
   );
   const toolRegistrations = createToolRegistrationSnapshot(
     operationCatalog,
-    [...file.tools, ...command.tools, ...(input.validation?.tools ?? [])],
+    [
+      ...file.tools,
+      ...command.tools,
+      ...(input.validation?.tools ?? []),
+      ...input.semanticTools,
+    ],
   );
   const toolSelection = createFixedLocalToolSelection(
     toolRegistrations,
     operationCatalog,
     toolRegistrations.registrations.map((registration) => ({
       tool: registration.descriptor.ref,
-      origins: selectionOrigins(registration.descriptor.name),
+      origins: registration.allowedOrigins,
     })),
   );
   const physical = [input.file, input.command];
@@ -145,14 +133,6 @@ export function createHelarcActionComposition(
 
 export function validateHelarcToolInput(schema: unknown, candidate: unknown): boolean {
   return validateSchemaNode(schema, candidate);
-}
-
-function selectionOrigins(name: string): readonly ("model" | "workflow")[] {
-  if (MODEL_FILE_TOOLS.has(name) || name === "Bash" || name === "PowerShell" || name === HELARC_TASK_STOP_TOOL ||
-      name === HELARC_RUN_VALIDATION_CHECK_TOOL) {
-    return Object.freeze(["model" as const]);
-  }
-  throw new TypeError(`Helarc Tool '${name}' has no Product selection policy.`);
 }
 
 function actionRegistrationInput(
@@ -179,7 +159,14 @@ function assertActionRegistrationsBelongToCatalog(
 
 function validateSchemaNode(schema: unknown, value: unknown): boolean {
   if (!isRecord(schema)) return false;
+  if (Object.hasOwn(schema, "const") && !Object.is(schema.const, value)) return false;
   if (Array.isArray(schema.enum) && !schema.enum.some((candidate) => Object.is(candidate, value))) {
+    return false;
+  }
+  if (Array.isArray(schema.anyOf) && !schema.anyOf.some((candidate) => validateSchemaNode(candidate, value))) {
+    return false;
+  }
+  if (Array.isArray(schema.oneOf) && schema.oneOf.filter((candidate) => validateSchemaNode(candidate, value)).length !== 1) {
     return false;
   }
   switch (schema.type) {
@@ -194,10 +181,14 @@ function validateSchemaNode(schema: unknown, value: unknown): boolean {
       );
     }
     case "array":
-      return Array.isArray(value) && value.every((item) => validateSchemaNode(schema.items, item));
+      return Array.isArray(value) &&
+        (typeof schema.minItems !== "number" || value.length >= schema.minItems) &&
+        (typeof schema.maxItems !== "number" || value.length <= schema.maxItems) &&
+        value.every((item) => validateSchemaNode(schema.items, item));
     case "string":
       return typeof value === "string" &&
-        (typeof schema.minLength !== "number" || value.length >= schema.minLength);
+        (typeof schema.minLength !== "number" || value.length >= schema.minLength) &&
+        (typeof schema.maxLength !== "number" || value.length <= schema.maxLength);
     case "integer":
       return Number.isSafeInteger(value) &&
         (typeof schema.minimum !== "number" || (value as number) >= schema.minimum);

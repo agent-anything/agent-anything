@@ -8,6 +8,7 @@ export type {
   ControllerRetryContext,
   InteractionRequestCandidate,
   OperationRequestCandidate,
+  ToolRequestCandidate,
   ProgressionCandidate,
   SameRunHandoffRequest,
   StateTransitionCandidate,

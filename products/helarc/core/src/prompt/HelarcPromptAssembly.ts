@@ -13,14 +13,12 @@ import {
 } from "../controller/HelarcActionContract.js";
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
 import {
-  buildHelarcToolCatalogText,
-  readHelarcToolCatalog,
-  type HelarcToolCatalog,
-} from "../tools/HelarcToolCatalog.js";
+  buildHelarcToolExposureText,
+} from "../tools/HelarcToolExposurePrompt.js";
 
-export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v3";
+export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v4";
 export const HELARC_ACTION_CONTRACT_VERSION = "helarc-model-decision-v1";
-export const HELARC_TOOL_CATALOG_VERSION = "helarc-tool-catalog-v3";
+export const HELARC_TOOL_EXPOSURE_VERSION = "trusted-tool-exposure-v1";
 export const HELARC_CONTEXT_PROJECTION_FORMAT_VERSION = "helarc-context-projection-v1";
 export const HELARC_CONTEXT_SECTION_HEADER = "Context projection:";
 export const HELARC_MODEL_OUTPUT_RESERVE_BYTES = 256_000;
@@ -52,7 +50,7 @@ export interface HelarcPromptSection {
 export interface HelarcPromptAssemblyVersions {
   promptArchitectureVersion: typeof HELARC_PROMPT_ARCHITECTURE_VERSION;
   actionContractVersion: typeof HELARC_ACTION_CONTRACT_VERSION;
-  toolCatalogVersion: typeof HELARC_TOOL_CATALOG_VERSION;
+  toolExposureVersion: typeof HELARC_TOOL_EXPOSURE_VERSION;
   contextProjectionFormatVersion: typeof HELARC_CONTEXT_PROJECTION_FORMAT_VERSION;
 }
 
@@ -60,7 +58,6 @@ export interface HelarcPromptAssemblyResult {
   readonly sections: readonly ModelInputSectionCandidate[];
   readonly promptSections: readonly HelarcPromptSection[];
   readonly exposedToolNames: readonly string[];
-  readonly toolCatalog: HelarcToolCatalog;
   readonly versions: HelarcPromptAssemblyVersions;
 }
 
@@ -98,10 +95,9 @@ function assemble(
   context: ContextProjection | null,
   correctionMessage: string | null,
 ): HelarcPromptAssemblyResult {
-  const toolCatalog = readHelarcToolCatalog(input);
-  const exposedToolNames = Object.freeze(toolCatalog.tools.map((tool) => tool.name));
+  const exposedToolNames = Object.freeze(input.toolExposure.catalog.tools.map((tool) => tool.name));
   const promptSections = Object.freeze([
-    ...buildSystemPromptSections(toolCatalog),
+    ...buildSystemPromptSections(input.toolExposure),
     promptSection("task", "user", `Task:\n${readHelarcTaskPrompt(input)}`),
     promptSection("run_input_items", "user", `Run input items:\n${JSON.stringify(input.inputItems)}`),
     promptSection("context_projection", "user", contextContent),
@@ -119,25 +115,24 @@ function assemble(
     sections,
     promptSections,
     exposedToolNames,
-    toolCatalog,
     versions: Object.freeze({
       promptArchitectureVersion: HELARC_PROMPT_ARCHITECTURE_VERSION,
       actionContractVersion: HELARC_ACTION_CONTRACT_VERSION,
-      toolCatalogVersion: HELARC_TOOL_CATALOG_VERSION,
+      toolExposureVersion: HELARC_TOOL_EXPOSURE_VERSION,
       contextProjectionFormatVersion: HELARC_CONTEXT_PROJECTION_FORMAT_VERSION,
     }),
   });
 }
 
 function buildSystemPromptSections(
-  toolCatalog: HelarcToolCatalog,
+  toolExposure: ControllerInput["toolExposure"],
 ): readonly HelarcPromptSection[] {
   return Object.freeze([
     promptSection("agent_identity", "system", "You are Helarc, a careful code agent."),
     promptSection("output_format", "system", "Return only JSON. Do not wrap it in markdown."),
     promptSection("action_protocol", "system", buildHelarcActionProtocolText()),
     promptSection("action_decision_rules", "system", buildHelarcActionDecisionRulesText()),
-    promptSection("tool_catalog", "system", buildHelarcToolCatalogText(toolCatalog)),
+    promptSection("tool_catalog", "system", buildHelarcToolExposureText(toolExposure)),
     promptSection(
       "permission_safety",
       "system",

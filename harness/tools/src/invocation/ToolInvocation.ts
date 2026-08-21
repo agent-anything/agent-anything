@@ -1,6 +1,5 @@
 import type { RunActionRef } from "@agent-anything/agent-core/run-action";
-import type { OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
-import { createToolContractIdentity, toolRevisionKey, type ToolRevisionRef } from "../identity/index.js";
+import { createToolContractIdentity, toolRevisionKey, type ToolBindingRef, type ToolRevisionRef } from "../identity/index.js";
 import { findSelectedTool, type ToolExposureProof, type ToolRequestOrigin, type ToolSelectionRevision } from "../selection/index.js";
 
 export interface ToolCallCandidate {
@@ -15,8 +14,7 @@ export interface ToolCall<TInput = unknown> {
   readonly toolCallId: string;
   readonly parentRunAction: RunActionRef;
   readonly toolRevision: ToolRevisionRef;
-  readonly operationRevision: OperationRevisionRef;
-  readonly operationBindingRevision: string;
+  readonly binding: ToolBindingRef;
   readonly selectionRevision: string;
   readonly exposureProofId: string | null;
   readonly origin: ToolRequestOrigin;
@@ -58,8 +56,7 @@ export function materializeToolCall(input: {
       toolCallId: token(input.toolCallId),
       parentRunAction: input.parentRunAction,
       toolRevision: descriptor.ref,
-      operationRevision: descriptor.operationBinding.operation,
-      operationBindingRevision: descriptor.operationBinding.revision,
+      binding: descriptor.binding,
       selectionRevision: input.selection.revision,
       exposureProofId: input.candidate.origin === "model" ? input.exposure!.id : null,
       origin: input.candidate.origin,
@@ -73,8 +70,8 @@ export function materializeToolCall(input: {
 export function validateExactToolCall(call: ToolCall, selection: ToolSelectionRevision): boolean {
   const selected = findSelectedTool(selection, call.toolRevision, call.origin);
   return selected !== undefined && selection.revision === call.selectionRevision &&
-    selected.registration.descriptor.operationBinding.revision === call.operationBindingRevision &&
-    selected.registration.descriptor.operationBinding.operation.revision === call.operationRevision.revision;
+    createToolContractIdentity("agent-anything.tool-binding.v1", selected.registration.descriptor.binding) ===
+      createToolContractIdentity("agent-anything.tool-binding.v1", call.binding);
 }
 
 function rejected(code: string, message: string): ToolCallMaterialization {

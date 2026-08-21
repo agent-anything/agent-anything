@@ -79,7 +79,7 @@ export type HelarcRunActionSettlementStatus =
 export interface HelarcRunActionSummary {
   readonly runActionId: string;
   readonly sequence: number;
-  readonly subjectKind: "state_transition" | "operation" | "interaction";
+  readonly subjectKind: "state_transition" | "operation" | "tool" | "interaction";
   readonly operationInvocationId: string | null;
   readonly interactionRequestId: string | null;
   readonly status: HelarcRunActionSettlementStatus;
@@ -176,7 +176,7 @@ export function projectHelarcProductResult(
   const runActions = collectRunActions(runResult);
   const actions = collectCanonicalActions(effects);
   const composites = collectComposites(runResult);
-  const children = collectChildren(effects);
+  const children = collectChildren(runResult, effects);
   const interactions = collectInteractions(runResult);
   const uncertainty = collectUncertainty(runResult, effects);
   const incompleteWork = collectIncompleteWork(runResult, effects, runActions, composites);
@@ -291,9 +291,9 @@ function controllerTraceMetadata(
     ...(trace.actionContractVersion === null
       ? {}
       : { actionContractVersion: trace.actionContractVersion }),
-    ...(trace.toolCatalogVersion === null
+    ...(trace.toolExposureVersion === null
       ? {}
-      : { toolCatalogVersion: trace.toolCatalogVersion }),
+      : { toolExposureVersion: trace.toolExposureVersion }),
     ...(trace.exposedToolNames.length === 0
       ? {}
       : { exposedToolNames: trace.exposedToolNames }),
@@ -449,14 +449,30 @@ function collectComposites(
   }));
 }
 
-function collectChildren(effects: readonly HelarcEffectSummary[]): readonly HelarcChildWorkSummary[] {
-  return Object.freeze(effects.flatMap((effect) => effect.lowerRefs
+function collectChildren(
+  runResult: RunResult<HelarcAgentOutput>,
+  effects: readonly HelarcEffectSummary[],
+): readonly HelarcChildWorkSummary[] {
+  const direct = runResult.items.flatMap((item) => {
+    if (
+      item.payload.kind !== "observation" ||
+      item.payload.observation.payload.kind !== "descendant_run"
+    ) return [];
+    const payload = item.payload.observation.payload;
+    return [Object.freeze({
+      refId: payload.childRunId ?? item.payload.observation.id,
+      owner: "agent-runtime",
+      status: payload.status,
+    })];
+  });
+  const operationBound = effects.flatMap((effect) => effect.lowerRefs
     .filter((reference) => reference.kind.includes("descendant"))
     .map((reference) => Object.freeze({
       refId: reference.id,
       owner: reference.owner,
       status: effect.status,
-    }))));
+    })));
+  return Object.freeze([...direct, ...operationBound]);
 }
 
 function collectInteractions(runResult: RunResult<HelarcAgentOutput>): readonly HelarcInteractionSummary[] {
@@ -514,7 +530,9 @@ function runActionStatus(
   switch (observation.payload.kind) {
     case "operation": return observation.payload.result.status;
     case "operation_rejected": return "rejected";
+    case "tool_rejected": return "rejected";
     case "interaction": return observation.payload.status;
+    case "descendant_run": return observation.payload.status;
     case "plan_update": return observation.payload.result.status;
     case "handoff": return observation.payload.status;
   }

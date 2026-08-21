@@ -52,6 +52,7 @@ const initialSnapshot: HelarcMainSnapshot = {
 type ActiveRunProjection = NonNullable<HelarcMainSnapshot["run"]>;
 type PendingInteractionView = ActiveRunProjection["host"]["pendingInteractions"][number];
 type PendingApprovalView = Extract<PendingInteractionView, { family: "approval" }>;
+type PendingClarificationView = Extract<PendingInteractionView, { family: "clarification" }>;
 
 type SidePanelMode = "review" | "threads" | "settings";
 
@@ -66,9 +67,10 @@ export function App() {
   const [interactionSubmissionError, setInteractionSubmissionError] = useState<string | null>(null);
   const [runControlError, setRunControlError] = useState<string | null>(null);
   const pendingApproval = getPendingApproval(snapshot.run);
+  const pendingClarification = getPendingClarification(snapshot.run);
   const runActive = isRunActive(snapshot.status);
   const selectedThread = snapshot.threadSummaries.find((thread) => thread.id === selectedThreadId) ?? null;
-  const activePanelMode: SidePanelMode = pendingApproval
+  const activePanelMode: SidePanelMode = pendingApproval || pendingClarification
     ? "review"
     : sidePanelMode;
 
@@ -234,6 +236,42 @@ export function App() {
               ? "Cancelled from Helarc desktop."
               : null,
         },
+      });
+      setSnapshot(response.snapshot);
+      setInteractionSubmissionError(
+        response.receipt.status === "rejected"
+          ? response.receipt.code
+          : response.receipt.kind === "interaction.submit" &&
+              response.receipt.result.status === "rejected"
+            ? response.receipt.result.code
+            : null,
+      );
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function submitClarificationAnswers(
+    answers: readonly {
+      readonly question_id: string;
+      readonly selected_labels: readonly string[];
+      readonly text: string | null;
+    }[],
+  ) {
+    const api = getHelarcApi();
+    const runId = snapshot.run?.harnessRunId;
+    if (!api || !runId || !pendingClarification || pendingClarification.phase !== "pending") {
+      return;
+    }
+    setIsBusy(true);
+    try {
+      const submissionId = `helarc-desktop-${crypto.randomUUID()}`;
+      const response = await api.submitInteraction({
+        commandId: createCommandId("interaction.clarification"),
+        submissionId,
+        runId,
+        request: pendingClarification.request,
+        payload: { answers },
       });
       setSnapshot(response.snapshot);
       setInteractionSubmissionError(
@@ -417,7 +455,7 @@ export function App() {
                 ? <Settings size={19} aria-hidden="true" />
                 : <ShieldCheck size={19} aria-hidden="true" />}
           </div>
-          <div className={activePanelMode !== "review" || pendingApproval || snapshot.run?.display.terminal || snapshot.error
+          <div className={activePanelMode !== "review" || pendingApproval || pendingClarification || snapshot.run?.display.terminal || snapshot.error
             ? "review-content"
             : "review-empty"}
           >
@@ -430,6 +468,13 @@ export function App() {
               />
             ) : activePanelMode === "settings" ? (
               <SettingsPanel snapshot={snapshot} onSaved={setSnapshot} />
+            ) : pendingClarification ? (
+              <ClarificationPromptPanel
+                clarification={pendingClarification}
+                submissionError={interactionSubmissionError}
+                isBusy={isBusy}
+                onSubmit={(answers) => void submitClarificationAnswers(answers)}
+              />
             ) : pendingApproval ? (
               <ApprovalPromptPanel
                 approval={pendingApproval}
@@ -1008,6 +1053,104 @@ function threadMessageRoleLabel(role: NonNullable<HelarcMainSnapshot["activeThre
   return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
+export function ClarificationPromptPanel({
+  clarification,
+  submissionError,
+  isBusy,
+  onSubmit,
+}: {
+  clarification: PendingClarificationView;
+  submissionError: string | null;
+  isBusy: boolean;
+  onSubmit: (answers: readonly {
+    readonly question_id: string;
+    readonly selected_labels: readonly string[];
+    readonly text: string | null;
+  }[]) => void;
+}) {
+  const [answers, setAnswers] = useState<Record<string, { selected: string[]; text: string }>>({});
+  const submitted = clarification.phase === "submitted_for_resolution";
+  const complete = clarification.presentation.questions.every((question) => {
+    const answer = answers[question.id];
+    return Boolean(answer && (answer.selected.length > 0 || answer.text.trim().length > 0));
+  });
+
+  function toggleLabel(questionId: string, label: string, allowMultiple: boolean) {
+    setAnswers((current) => {
+      const existing = current[questionId] ?? { selected: [], text: "" };
+      const selected = existing.selected.includes(label)
+        ? existing.selected.filter((item) => item !== label)
+        : allowMultiple
+          ? [...existing.selected, label]
+          : [label];
+      return { ...current, [questionId]: { ...existing, selected } };
+    });
+  }
+
+  function setText(questionId: string, text: string) {
+    setAnswers((current) => ({
+      ...current,
+      [questionId]: {
+        selected: current[questionId]?.selected ?? [],
+        text,
+      },
+    }));
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!complete || submitted || isBusy) return;
+    onSubmit(clarification.presentation.questions.map((question) => {
+      const answer = answers[question.id]!;
+      const text = answer.text.trim();
+      return {
+        question_id: question.id,
+        selected_labels: answer.selected,
+        text: text.length === 0 ? null : text,
+      };
+    }));
+  }
+
+  return (
+    <form className="clarification-panel" onSubmit={submit}>
+      <MessageSquareText size={24} aria-hidden="true" />
+      <strong>Helarc needs your input</strong>
+      {clarification.presentation.questions.map((question) => {
+        const answer = answers[question.id] ?? { selected: [], text: "" };
+        return (
+          <fieldset className="clarification-question" key={question.id} disabled={isBusy || submitted}>
+            <legend>{question.prompt}</legend>
+            {question.options.map((option) => (
+              <label className="clarification-option" key={option.label} title={option.description}>
+                <input
+                  type={question.allowMultiple ? "checkbox" : "radio"}
+                  name={`clarification-${question.id}`}
+                  checked={answer.selected.includes(option.label)}
+                  onChange={() => toggleLabel(question.id, option.label, question.allowMultiple)}
+                />
+                <span><strong>{option.label}</strong><small>{option.description}</small></span>
+              </label>
+            ))}
+            <textarea
+              aria-label={`Free-text answer for ${question.prompt}`}
+              placeholder="Type an answer"
+              value={answer.text}
+              onChange={(event) => setText(question.id, event.target.value)}
+              rows={3}
+            />
+          </fieldset>
+        );
+      })}
+      {submissionError ? <span className="error-text">{submissionError}</span> : null}
+      <div className="permission-actions">
+        <button className="primary-button compact" type="submit" disabled={!complete || isBusy || submitted}>
+          {submitted ? "Submitted" : "Submit"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function artifactKindLabel(kind: NonNullable<HelarcMainSnapshot["activeThread"]>["artifacts"][number]["kind"]): string {
   return kind.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
 }
@@ -1057,7 +1200,7 @@ function formatTraceMetadata(metadata: Record<string, unknown>): string | null {
   const versions = [
     readMetadataString(metadata, "promptArchitectureVersion"),
     readMetadataString(metadata, "actionContractVersion"),
-    readMetadataString(metadata, "toolCatalogVersion"),
+    readMetadataString(metadata, "toolExposureVersion"),
   ].filter((item): item is string => Boolean(item));
   const exposedToolNames = readMetadataStringArray(metadata, "exposedToolNames");
 
@@ -1206,6 +1349,12 @@ function defaultGrantedPermissions(
 function getPendingApproval(run: HelarcMainSnapshot["run"]): PendingApprovalView | null {
   return run?.host.pendingInteractions.find(
     (interaction): interaction is PendingApprovalView => interaction.family === "approval",
+  ) ?? null;
+}
+
+function getPendingClarification(run: HelarcMainSnapshot["run"]): PendingClarificationView | null {
+  return run?.host.pendingInteractions.find(
+    (interaction): interaction is PendingClarificationView => interaction.family === "clarification",
   ) ?? null;
 }
 

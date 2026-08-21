@@ -49,20 +49,19 @@ export interface SameRunHandoffRequest {
   readonly admissionEvidenceRef: string;
 }
 
-export type OperationRequestCandidate =
-  | {
+export type OperationRequestCandidate = {
   readonly kind: "operation_request";
-      readonly origin: "controller_protocol";
+  readonly origin: "controller_protocol";
   readonly operation: OperationRevisionRef;
   readonly request: unknown;
   readonly modelItemId: string;
-    }
-  | {
-      readonly kind: "operation_request";
-      readonly origin: "tool_request";
-      readonly tool: ToolCallCandidate;
-      readonly modelItemId: string;
-    };
+};
+
+export interface ToolRequestCandidate {
+  readonly kind: "tool_request";
+  readonly tool: ToolCallCandidate;
+  readonly modelItemId: string;
+}
 
 export interface InteractionRequestCandidate {
   readonly kind: "interaction_request";
@@ -79,6 +78,7 @@ export interface InteractionRequestCandidate {
 export type ProgressionCandidate =
   | StateTransitionCandidate
   | OperationRequestCandidate
+  | ToolRequestCandidate
   | InteractionRequestCandidate;
 
 export interface ControllerInput<TOutput = unknown> {

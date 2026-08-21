@@ -192,9 +192,26 @@ interface HelarcPendingInteractionSnapshotBase<TFamily extends string> {
   readonly blockingScope: "none" | "branch" | "run";
 }
 
+export interface HelarcClarificationQuestionSnapshot {
+  readonly id: string;
+  readonly prompt: string;
+  readonly options: readonly {
+    readonly label: string;
+    readonly description: string;
+  }[];
+  readonly allowMultiple: boolean;
+}
+
+export interface HelarcClarificationPresentationSnapshot {
+  readonly questions: readonly HelarcClarificationQuestionSnapshot[];
+}
+
 export type HelarcPendingInteractionSnapshot =
   | (HelarcPendingInteractionSnapshotBase<"approval"> & {
       readonly presentation: HelarcApprovalReviewRequestSnapshot;
+    })
+  | (HelarcPendingInteractionSnapshotBase<"clarification"> & {
+      readonly presentation: HelarcClarificationPresentationSnapshot;
     })
   | (HelarcPendingInteractionSnapshotBase<"unsupported"> & {
       readonly presentation: null;

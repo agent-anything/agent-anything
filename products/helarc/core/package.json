@@ -15,6 +15,7 @@
     "./run": { "types": "./src/run/index.ts", "import": "./dist/run/index.js" },
     "./prompt": { "types": "./src/prompt/index.ts", "import": "./dist/prompt/index.js" },
     "./controller": { "types": "./src/controller/index.ts", "import": "./dist/controller/index.js" },
+    "./interaction": { "types": "./src/interaction/index.ts", "import": "./dist/interaction/index.js" },
     "./tools": { "types": "./src/tools/index.ts", "import": "./dist/tools/index.js" },
     "./result": { "types": "./src/result/index.ts", "import": "./dist/result/index.js" },
     "./artifacts": { "types": "./src/artifacts/index.ts", "import": "./dist/artifacts/index.js" },

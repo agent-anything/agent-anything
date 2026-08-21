@@ -34,7 +34,7 @@ import type { ProviderCallResult } from "@agent-anything/model-interaction";
 
 export const HELARC_EVALUATION_TIME = "2026-08-12T00:00:00.000Z";
 export const HELARC_EVALUATION_CORPUS_REVISION = "helarc-shell-tools-corpus-v1";
-export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION = "helarc-shell-tools-target-v1";
+export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION = "helarc-tool-exposure-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
@@ -312,21 +312,21 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v3-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v4-${process.platform}-${process.arch}-node${nodeMajor}`;
   const unavailableDirtyState = limitation(
     "working_tree_state_not_measured",
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-shell-tools-v1",
-    "agent.revision": "helarc-code-agent-shell-tools-v1",
-    "prompt.revision": "helarc-prompt-v3",
+    "product.revision": "helarc-product-tool-exposure-v1",
+    "agent.revision": "helarc-code-agent-tool-exposure-v1",
+    "prompt.revision": "helarc-prompt-v4",
     "action-contract.revision": "helarc-model-decision-v1",
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-shell-tools-v1",
+    "source.revision": "helarc-tool-exposure-v1",
     "provider.revision": "scripted-provider-v1",
     "model.revision": "scripted-controller-output-v1",
-    "tool-profile.revision": "helarc-tool-catalog-v3",
+    "tool-profile.revision": "trusted-tool-exposure-v1",
     "action-registration.revision": "helarc-shell-action-registration-v1",
     "sandbox.enforcement": "disabled",
     "permission.preset": "case-declared",
@@ -348,7 +348,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
         key: item.key,
         owner: item.owner,
         required: item.required,
-        sourceRevision: "helarc-shell-tools-v1",
+        sourceRevision: "helarc-tool-exposure-v1",
         schemaRef: item.schemaRef,
         status: "unavailable" as const,
         representation: null,

@@ -751,8 +751,10 @@ function blockedRunOutcomeOwner(
     if (item.payload.kind !== "observation") continue;
     const payload = item.payload.observation.payload;
     if (payload.kind === "operation_rejected") return payload.owner;
+    if (payload.kind === "tool_rejected") return "tools";
     if (payload.kind === "operation") return payload.result.failure?.owner ?? null;
     if (payload.kind === "interaction") return payload.owner;
+    if (payload.kind === "descendant_run") return payload.failure?.owner ?? "agent-runtime";
   }
   return null;
 }
@@ -764,9 +766,13 @@ function blockedRunOutcomeCode(
     if (item.payload.kind !== "observation") continue;
     const payload = item.payload.observation.payload;
     if (payload.kind === "operation_rejected") return payload.code;
+    if (payload.kind === "tool_rejected") return payload.code;
     if (payload.kind === "operation") return payload.result.failure?.code ?? null;
     if (payload.kind === "interaction" && payload.status !== "resolved") {
       return `interaction_${payload.status}`;
+    }
+    if (payload.kind === "descendant_run" && payload.status !== "succeeded") {
+      return payload.failure?.code ?? `descendant_run_${payload.status}`;
     }
   }
   return null;
@@ -776,29 +782,36 @@ function collectObservedToolNames(
   result: RunResult<HelarcAgentOutput>,
   selection: ToolSelectionRevision,
 ): readonly string[] {
-  const namesByOperation = new Map(selection.tools.map((selected) => [
-    operationRevisionKey(selected.registration.operation.operation.ref),
+  const namesByTool = new Map(selection.tools.map((selected) => [
+    `${selected.registration.descriptor.ref.tool.namespace}:${selected.registration.descriptor.ref.tool.name}@${selected.registration.descriptor.ref.revision}`,
     selected.registration.descriptor.name,
   ]));
-  return Object.freeze(result.items.flatMap((item) => {
-    if (
-      item.payload.kind !== "observation" ||
-      item.payload.observation.payload.kind !== "operation"
-    ) {
-      return [];
-    }
-    const name = namesByOperation.get(operationRevisionKey(
-      item.payload.observation.payload.result.ref.invocation.operation,
-    ));
-    return name === undefined ? [] : [name];
-  }).sort());
-}
+  const selectedNames = new Set(namesByTool.values());
+  const observedNames = new Set<string>();
 
-function operationRevisionKey(input: {
-  readonly operation: { readonly namespace: string; readonly name: string };
-  readonly revision: string;
-}): string {
-  return `${input.operation.namespace}:${input.operation.name}@${input.revision}`;
+  for (const item of result.items) {
+    if (item.payload.kind === "controller_turn") {
+      for (const modelItem of item.payload.modelItems) {
+        const requestedName = modelItem.metadata.requestedToolName;
+        if (typeof requestedName === "string" && selectedNames.has(requestedName)) {
+          observedNames.add(requestedName);
+        }
+      }
+      continue;
+    }
+    if (item.payload.kind !== "observation") continue;
+    const payload = item.payload.observation.payload;
+    const toolResult = payload.kind === "operation" ||
+        payload.kind === "interaction" || payload.kind === "descendant_run"
+      ? payload.toolResult
+      : null;
+    if (toolResult === null) continue;
+    const ref = toolResult.toolCall.toolRevision;
+    const name = namesByTool.get(`${ref.tool.namespace}:${ref.tool.name}@${ref.revision}`);
+    if (name !== undefined) observedNames.add(name);
+  }
+
+  return Object.freeze([...observedNames].sort());
 }
 
 function createEvaluationActionRecordPort(prefix: string): ActionRecordPort {

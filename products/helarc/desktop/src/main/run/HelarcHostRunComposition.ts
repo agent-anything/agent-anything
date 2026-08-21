@@ -314,6 +314,7 @@ export async function prepareHelarcHostRun(
       ...(product.actions.composite === null ? {} : {
         composite: product.actions.composite,
       }),
+      descendants: product.descendants,
     },
     validation: bindHelarcValidationCompletionGate(
       product.validation,
