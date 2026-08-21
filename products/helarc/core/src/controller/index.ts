@@ -17,6 +17,16 @@ export type {
   HelarcControllerParseErrorCode,
   HelarcProviderStructuredOutput,
 } from "./HelarcController.js";
+export type {
+  HelarcModelDecision,
+  HelarcModelDecisionErrorCode,
+  HelarcModelPlanStep,
+  HelarcModelPlanStepStatus,
+} from "./HelarcModelDecision.js";
+export {
+  HelarcModelDecisionError,
+  parseHelarcModelDecision,
+} from "./HelarcModelDecision.js";
 export {
   buildHelarcProviderRequest,
   HELARC_CONTROLLER_CAPABILITY,

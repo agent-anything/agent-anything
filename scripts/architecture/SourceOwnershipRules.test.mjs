@@ -175,6 +175,26 @@ test("rejects prompt traversal of Active Context internals", () => {
   );
 });
 
+test("protects the Helarc model decision and Tool Contract authority boundary", () => {
+  const removedDecision = evaluateSourceOwnershipRules({
+    sourcePath: "products/helarc/core/src/controller/HelarcModelDecision.ts",
+    text: 'type HelarcControllerAction = { kind: "request_permissions" | "propose" };',
+  });
+  const executableTool = evaluateSourceOwnershipRules({
+    sourcePath: "products/helarc/core/src/tools/HelarcBaselineToolContracts.ts",
+    text: "interface ToolContract { readonly executor: unknown; }",
+  });
+
+  assert.deepEqual(
+    removedDecision.map(({ rule }) => rule),
+    ["helarc_model_decision_protocol"],
+  );
+  assert.deepEqual(
+    executableTool.map(({ rule }) => rule),
+    ["helarc_tool_contract_execution_leakage"],
+  );
+});
+
 test("requires complete Provider composition and Controller verification", () => {
   const request = evaluateSourceOwnershipRules({
     sourcePath: "harness/model-interaction/src/ProviderRequest.ts",

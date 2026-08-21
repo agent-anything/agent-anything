@@ -95,6 +95,26 @@ export function evaluateSourceOwnershipRules({
     }
 
     if (
+      path === "products/helarc/core/src/controller/HelarcModelDecision.ts" &&
+      /(?:HelarcControllerAction|["'](?:propose|request_permissions)["'])/.test(text)
+    ) {
+      reject(
+        "helarc_model_decision_protocol",
+        "The Helarc model decision Contract cannot restore a generic Action, propose, or explicit permission-request decision.",
+      );
+    }
+
+    if (
+      path === "products/helarc/core/src/tools/HelarcBaselineToolContracts.ts" &&
+      /readonly\s+(?:handler|executor|execute)\s*[?:]/.test(text)
+    ) {
+      reject(
+        "helarc_tool_contract_execution_leakage",
+        "Helarc model-visible Tool Contracts describe semantic bindings and cannot carry executable handlers or executors.",
+      );
+    }
+
+    if (
       path === "harness/model-interaction/src/ProviderRequest.ts" &&
       !/readonly\s+composition\s*:\s*ModelInputComposition\s*;/.test(text)
     ) {

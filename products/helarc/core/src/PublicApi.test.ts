@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import * as agentApi from "./agent/index.js";
 import * as compositionApi from "./composition/index.js";
 import * as configurationApi from "./configuration/index.js";
+import * as controllerApi from "./controller/index.js";
 import * as helarcApi from "./index.js";
 import * as runApi from "./run/index.js";
+import * as toolsApi from "./tools/index.js";
 import * as workContextApi from "./work-context/index.js";
 
 describe("Helarc public API", () => {
@@ -55,6 +57,10 @@ describe("Helarc public API", () => {
       "snapshotHelarcPatchReviewPresentation",
       "validateHelarcToolInput",
     ]);
+    expect(controllerApi).toHaveProperty("parseHelarcModelDecision");
+    expect(controllerApi).toHaveProperty("HelarcModelDecisionError");
+    expect(toolsApi).toHaveProperty("createHelarcBaselineToolContracts");
+    expect(toolsApi).toHaveProperty("HELARC_BASELINE_TOOL_CONTRACTS");
   });
 
   it("does not expose Code Agent or Host execution values from the Product root", () => {

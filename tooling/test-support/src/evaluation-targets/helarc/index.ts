@@ -51,3 +51,13 @@ export {
 } from "./baseline/HelarcValidationProfileBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
+export type {
+  HelarcProductEffectivenessTargetInputKey,
+  HelarcProductEffectivenessTargetValues,
+} from "./HelarcProductEffectivenessProtocol.js";
+export {
+  createHelarcProductEffectivenessObjective,
+  createHelarcProductEffectivenessTargetSnapshot,
+  HELARC_PRODUCT_EFFECTIVENESS_PROTOCOL,
+  HELARC_PRODUCT_EFFECTIVENESS_TARGET_INPUTS,
+} from "./HelarcProductEffectivenessProtocol.js";
