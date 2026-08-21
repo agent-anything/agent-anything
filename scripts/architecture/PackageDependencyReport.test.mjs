@@ -37,8 +37,23 @@ test("renders machine-readable, Mermaid, and self-contained HTML reports", () =>
   assert.match(html, /<!doctype html>/);
   assert.match(html, /Package Dependencies/);
   assert.match(html, /@agent-anything\/agent-core/);
+  assert.match(html, /id="reset-layout"/);
+  assert.match(html, /pointerdown/);
+  assert.match(html, /agent-anything-package-dependency-layout-v1/);
+  assert.match(html, /applyEmphasis/);
   assert.doesNotMatch(html, /<script[^>]+src=/);
   assert.doesNotMatch(html, /<link[^>]+href=/);
+  const script = html.slice(html.indexOf("<script>") + "<script>".length, html.lastIndexOf("</script>"));
+  assert.doesNotThrow(() => new Function(script));
+
+  const liveHtml = renderPackageDependencyHtml(graph, {
+    liveReloadPath: "/events",
+    initialServerError: "rebuild failed",
+    serverRevision: 7,
+  });
+  assert.match(liveHtml, /new EventSource\(liveReloadPath\)/);
+  assert.match(liveHtml, /rebuild failed/);
+  assert.match(liveHtml, /dependency-graph-revision" content="7"/);
 });
 
 test("renders terminal dependency inspection", () => {

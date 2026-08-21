@@ -45,13 +45,21 @@ export function renderPackageDependencyMermaid(graph) {
   return `${lines.join("\n")}\n`;
 }
 
-export function renderPackageDependencyHtml(graph) {
+export function renderPackageDependencyHtml(graph, options = {}) {
   const serialized = JSON.stringify(graph).replaceAll("<", "\\u003c");
+  const liveReloadPath = JSON.stringify(options.liveReloadPath ?? null)
+    .replaceAll("<", "\\u003c");
+  const initialServerError = JSON.stringify(options.initialServerError ?? null)
+    .replaceAll("<", "\\u003c");
+  const serverRevision = Number.isInteger(options.serverRevision)
+    ? options.serverRevision
+    : "";
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="dependency-graph-revision" content="${serverRevision}">
   <title>Agent Anything Package Dependencies</title>
   <style>
     :root {
@@ -86,6 +94,19 @@ export function renderPackageDependencyHtml(graph) {
     button { padding: 0 12px; cursor: pointer; }
     button:hover { border-color: #2563eb; background: #eff6ff; }
     .summary { margin-left: auto; color: #475569; font-size: 13px; white-space: nowrap; }
+    .server-status {
+      position: fixed;
+      z-index: 5;
+      top: 64px;
+      left: 0;
+      right: 0;
+      padding: 9px 20px;
+      border-bottom: 1px solid #fca5a5;
+      background: #fef2f2;
+      color: #991b1b;
+      font-size: 13px;
+    }
+    .server-status[hidden] { display: none; }
     main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; height: calc(100vh - 64px); }
     #viewport { overflow: auto; background: #f8fafc; }
     #graph { display: block; min-width: 100%; min-height: 100%; }
@@ -100,13 +121,14 @@ export function renderPackageDependencyHtml(graph) {
     .swatch.dev { border-top: 2px dashed #c2410c; background: none; }
     .swatch.unused { background: #94a3b8; }
     .swatch.issue { background: #dc2626; }
-    .edge { fill: none; stroke: #64748b; stroke-width: 1.35; opacity: 0.52; }
+    .edge { fill: none; stroke: #475569; stroke-width: 1.55; opacity: 0.68; pointer-events: none; transition: opacity 120ms ease, stroke-width 120ms ease; }
     .edge.development { stroke: #c2410c; stroke-dasharray: 7 5; }
     .edge.not-observed { stroke: #94a3b8; stroke-dasharray: 3 4; }
     .edge.undeclared { stroke: #dc2626; stroke-width: 2.2; }
-    .edge.muted { opacity: 0.08; }
-    .edge.active { opacity: 0.95; stroke-width: 2.3; }
-    .node { cursor: pointer; outline: none; }
+    .edge.muted { opacity: 0.06; }
+    .edge.active { opacity: 1; stroke-width: 2.7; }
+    .node { cursor: grab; outline: none; touch-action: none; transition: opacity 120ms ease; }
+    .node.dragging { cursor: grabbing; }
     .node rect { stroke-width: 1.3; rx: 6; }
     .node.harness rect { fill: #dbeafe; stroke: #2563eb; }
     .node.product rect { fill: #dcfce7; stroke: #16a34a; }
@@ -132,9 +154,11 @@ export function renderPackageDependencyHtml(graph) {
         <option value="tooling">Tooling</option>
       </select>
       <button id="reset" type="button">Reset focus</button>
+      <button id="reset-layout" type="button">Reset layout</button>
     </div>
     <div id="summary" class="summary"></div>
   </header>
+  <div id="server-status" class="server-status" role="status" hidden></div>
   <main>
     <div id="viewport"><svg id="graph" role="img" aria-label="Package dependency graph"></svg></div>
     <aside id="details"></aside>
@@ -147,16 +171,50 @@ export function renderPackageDependencyHtml(graph) {
     const search = document.getElementById("search");
     const kind = document.getElementById("kind");
     const reset = document.getElementById("reset");
+    const resetLayout = document.getElementById("reset-layout");
+    const serverStatus = document.getElementById("server-status");
+    const liveReloadPath = ${liveReloadPath};
+    const initialServerError = ${initialServerError};
     const NS = "http://www.w3.org/2000/svg";
     const NODE_WIDTH = 238;
     const NODE_HEIGHT = 58;
+    const LAYOUT_STORAGE_KEY = "agent-anything-package-dependency-layout-v1";
+    const positionOverrides = loadPositionOverrides();
+    const edgeElements = new Map();
+    const nodeElements = new Map();
+    let renderedPositions = new Map();
+    let renderedEdges = [];
     let focused = null;
+    let hovered = null;
+    let dragState = null;
+    let suppressedClick = null;
 
     search.addEventListener("input", render);
     kind.addEventListener("change", render);
     reset.addEventListener("click", () => { focused = null; search.value = ""; kind.value = "all"; render(); });
+    resetLayout.addEventListener("click", () => {
+      positionOverrides.clear();
+      removeStoredLayout();
+      render();
+    });
+
+    if (initialServerError !== null) showServerError(initialServerError);
+    if (liveReloadPath !== null) {
+      const events = new EventSource(liveReloadPath);
+      events.addEventListener("graph-updated", () => window.location.reload());
+      events.addEventListener("graph-error", event => {
+        try {
+          showServerError(JSON.parse(event.data).message);
+        } catch {
+          showServerError("The dependency graph could not be rebuilt.");
+        }
+      });
+      window.addEventListener("beforeunload", () => events.close());
+    }
 
     function render() {
+      hovered = null;
+      dragState = null;
       const query = search.value.trim().toLowerCase();
       const selectedKind = kind.value;
       const matches = new Set(data.nodes.filter(node =>
@@ -164,25 +222,24 @@ export function renderPackageDependencyHtml(graph) {
         (!query || [node.id, node.path, node.component, node.productId || "", node.role || ""]
           .some(value => value.toLowerCase().includes(query)))
       ).map(node => node.id));
-      const connected = focused === null ? null : new Set([
-        focused,
-        ...data.edges.filter(edge => edge.from === focused).map(edge => edge.to),
-        ...data.edges.filter(edge => edge.to === focused).map(edge => edge.from),
-      ]);
       const visibleNodes = data.nodes.filter(node => matches.has(node.id));
       const visibleIds = new Set(visibleNodes.map(node => node.id));
       const visibleEdges = data.edges.filter(edge => visibleIds.has(edge.from) && visibleIds.has(edge.to));
       const positions = layout(visibleNodes, visibleEdges);
-      const width = Math.max(900, ...[...positions.values()].map(item => item.x + NODE_WIDTH + 70));
-      const height = Math.max(620, ...[...positions.values()].map(item => item.y + NODE_HEIGHT + 70));
-      svg.setAttribute("viewBox", "0 0 " + width + " " + height);
-      svg.setAttribute("width", width);
-      svg.setAttribute("height", height);
+      for (const node of visibleNodes) {
+        const override = positionOverrides.get(node.id);
+        if (override) positions.set(node.id, { ...override });
+      }
+      renderedPositions = positions;
+      renderedEdges = visibleEdges;
+      resizeGraph();
       svg.replaceChildren();
+      edgeElements.clear();
+      nodeElements.clear();
       addMarkers();
 
-      for (const edge of visibleEdges) drawEdge(edge, positions, connected);
-      for (const node of visibleNodes) drawNode(node, positions.get(node.id), connected);
+      for (const edge of visibleEdges) drawEdge(edge, positions);
+      for (const node of visibleNodes) drawNode(node, positions.get(node.id));
       if (visibleNodes.length === 0) {
         const label = element("text", { x: 32, y: 48, class: "empty" });
         label.textContent = "No packages match the current filter.";
@@ -190,6 +247,7 @@ export function renderPackageDependencyHtml(graph) {
       }
       summary.textContent = visibleNodes.length + " packages / " + visibleEdges.length + " dependencies";
       showDetails(focused && visibleIds.has(focused) ? focused : null);
+      applyEmphasis();
     }
 
     function layout(nodes, edges) {
@@ -222,36 +280,28 @@ export function renderPackageDependencyHtml(graph) {
       return positions;
     }
 
-    function drawEdge(edge, positions, connected) {
+    function drawEdge(edge, positions) {
       const from = positions.get(edge.from);
       const to = positions.get(edge.to);
       if (!from || !to) return;
-      const sx = from.x;
-      const sy = from.y + NODE_HEIGHT / 2;
-      const tx = to.x + NODE_WIDTH;
-      const ty = to.y + NODE_HEIGHT / 2;
-      const bend = Math.max(46, Math.abs(sx - tx) * 0.48);
-      const active = focused !== null && (edge.from === focused || edge.to === focused);
-      const muted = connected !== null && !active;
       const usageClass = edge.usage === "not-observed" ? "not-observed" : "";
-      const classes = ["edge", edge.declaration, usageClass, active ? "active" : "", muted ? "muted" : ""]
+      const classes = ["edge", edge.declaration, usageClass]
         .filter(Boolean).join(" ");
       const path = element("path", {
-        d: "M " + sx + " " + sy + " C " + (sx - bend) + " " + sy + ", " + (tx + bend) + " " + ty + ", " + tx + " " + ty,
+        d: edgePath(edge, positions),
         class: classes,
         "marker-end": edge.declaration === "undeclared" ? "url(#arrow-issue)" : "url(#arrow)",
       });
       const title = element("title");
       title.textContent = edge.from + " -> " + edge.to + " (" + edge.declaration + ", " + edge.usage + ")";
       path.append(title);
+      edgeElements.set(edgeKey(edge), path);
       svg.append(path);
     }
 
-    function drawNode(node, position, connected) {
-      const active = node.id === focused;
-      const muted = connected !== null && !connected.has(node.id);
+    function drawNode(node, position) {
       const group = element("g", {
-        class: ["node", node.kind, active ? "active" : "", muted ? "muted" : ""].filter(Boolean).join(" "),
+        class: ["node", node.kind].join(" "),
         transform: "translate(" + position.x + " " + position.y + ")",
         tabindex: "0",
       });
@@ -261,15 +311,182 @@ export function renderPackageDependencyHtml(graph) {
       const meta = element("text", { x: 12, y: 43, class: "meta" });
       meta.textContent = [node.component, node.role].filter(Boolean).join(" / ");
       const title = element("title");
-      title.textContent = node.id + "\\n" + node.path;
+      title.textContent = node.id + "\\n" + node.path + "\\nDrag to reposition; click to keep relationships highlighted.";
       group.append(name, meta, title);
-      group.addEventListener("click", () => { focused = focused === node.id ? null : node.id; render(); });
-      group.addEventListener("keydown", event => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault(); focused = focused === node.id ? null : node.id; render();
+      group.addEventListener("pointerdown", event => beginDrag(event, node.id, group));
+      group.addEventListener("pointermove", continueDrag);
+      group.addEventListener("pointerup", finishDrag);
+      group.addEventListener("pointercancel", finishDrag);
+      group.addEventListener("pointerenter", () => { hovered = node.id; applyEmphasis(); });
+      group.addEventListener("pointerleave", () => {
+        if (dragState === null) {
+          hovered = hovered === node.id ? null : hovered;
+          applyEmphasis();
         }
       });
+      group.addEventListener("click", () => {
+        if (suppressedClick?.packageName === node.id && Date.now() - suppressedClick.at < 600) {
+          suppressedClick = null;
+          return;
+        }
+        focused = focused === node.id ? null : node.id;
+        showDetails(focused);
+        applyEmphasis();
+      });
+      group.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          focused = focused === node.id ? null : node.id;
+          showDetails(focused);
+          applyEmphasis();
+        }
+      });
+      group.addEventListener("focus", () => { hovered = node.id; applyEmphasis(); });
+      group.addEventListener("blur", () => {
+        hovered = hovered === node.id ? null : hovered;
+        applyEmphasis();
+      });
+      nodeElements.set(node.id, group);
       svg.append(group);
+    }
+
+    function beginDrag(event, packageName, group) {
+      if (event.button !== 0) return;
+      const position = renderedPositions.get(packageName);
+      if (!position) return;
+      const pointer = graphPoint(event);
+      dragState = {
+        packageName,
+        group,
+        pointerId: event.pointerId,
+        startX: pointer.x,
+        startY: pointer.y,
+        originX: position.x,
+        originY: position.y,
+        moved: false,
+      };
+      group.classList.add("dragging");
+      group.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    }
+
+    function continueDrag(event) {
+      if (dragState === null || dragState.pointerId !== event.pointerId) return;
+      const pointer = graphPoint(event);
+      const dx = pointer.x - dragState.startX;
+      const dy = pointer.y - dragState.startY;
+      const position = {
+        x: Math.max(16, dragState.originX + dx),
+        y: Math.max(16, dragState.originY + dy),
+      };
+      if (Math.hypot(dx, dy) >= 4) dragState.moved = true;
+      renderedPositions.set(dragState.packageName, position);
+      positionOverrides.set(dragState.packageName, position);
+      dragState.group.setAttribute("transform", "translate(" + position.x + " " + position.y + ")");
+      updateConnectedEdges(dragState.packageName);
+      resizeGraph();
+    }
+
+    function finishDrag(event) {
+      if (dragState === null || dragState.pointerId !== event.pointerId) return;
+      const completed = dragState;
+      completed.group.classList.remove("dragging");
+      if (completed.group.hasPointerCapture(event.pointerId)) {
+        completed.group.releasePointerCapture(event.pointerId);
+      }
+      dragState = null;
+      if (completed.moved) {
+        suppressedClick = { packageName: completed.packageName, at: Date.now() };
+        savePositionOverrides();
+      }
+      applyEmphasis();
+    }
+
+    function updateConnectedEdges(packageName) {
+      for (const edge of renderedEdges) {
+        if (edge.from !== packageName && edge.to !== packageName) continue;
+        edgeElements.get(edgeKey(edge))?.setAttribute("d", edgePath(edge, renderedPositions));
+      }
+    }
+
+    function edgePath(edge, positions) {
+      const from = positions.get(edge.from);
+      const to = positions.get(edge.to);
+      if (!from || !to) return "";
+      const sx = from.x;
+      const sy = from.y + NODE_HEIGHT / 2;
+      const tx = to.x + NODE_WIDTH;
+      const ty = to.y + NODE_HEIGHT / 2;
+      const bend = Math.max(46, Math.abs(sx - tx) * 0.48);
+      return "M " + sx + " " + sy + " C " + (sx - bend) + " " + sy + ", " + (tx + bend) + " " + ty + ", " + tx + " " + ty;
+    }
+
+    function edgeKey(edge) {
+      return edge.from + "\\u0000" + edge.to;
+    }
+
+    function resizeGraph() {
+      const positions = [...renderedPositions.values()];
+      const width = Math.max(900, ...positions.map(item => item.x + NODE_WIDTH + 70));
+      const height = Math.max(620, ...positions.map(item => item.y + NODE_HEIGHT + 70));
+      svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+      svg.setAttribute("width", width);
+      svg.setAttribute("height", height);
+    }
+
+    function applyEmphasis() {
+      const candidate = hovered ?? focused;
+      const subject = candidate !== null && nodeElements.has(candidate) ? candidate : null;
+      const connected = subject === null ? null : new Set([
+        subject,
+        ...renderedEdges.filter(edge => edge.from === subject).map(edge => edge.to),
+        ...renderedEdges.filter(edge => edge.to === subject).map(edge => edge.from),
+      ]);
+      for (const edge of renderedEdges) {
+        const active = subject !== null && (edge.from === subject || edge.to === subject);
+        const item = edgeElements.get(edgeKey(edge));
+        item?.classList.toggle("active", active);
+        item?.classList.toggle("muted", subject !== null && !active);
+      }
+      for (const [packageName, item] of nodeElements) {
+        item.classList.toggle("active", packageName === subject);
+        item.classList.toggle("muted", connected !== null && !connected.has(packageName));
+      }
+    }
+
+    function graphPoint(event) {
+      const point = svg.createSVGPoint();
+      point.x = event.clientX;
+      point.y = event.clientY;
+      const matrix = svg.getScreenCTM();
+      return matrix === null ? point : point.matrixTransform(matrix.inverse());
+    }
+
+    function loadPositionOverrides() {
+      try {
+        const stored = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || "{}");
+        return new Map(Object.entries(stored).filter(([, position]) =>
+          position !== null && Number.isFinite(position.x) && Number.isFinite(position.y)
+        ));
+      } catch {
+        return new Map();
+      }
+    }
+
+    function savePositionOverrides() {
+      try {
+        localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(Object.fromEntries(positionOverrides)));
+      } catch {
+        // The explorer remains usable when browser storage is unavailable.
+      }
+    }
+
+    function removeStoredLayout() {
+      try {
+        localStorage.removeItem(LAYOUT_STORAGE_KEY);
+      } catch {
+        // The in-memory layout was already reset.
+      }
     }
 
     function showDetails(packageName) {
@@ -284,7 +501,7 @@ export function renderPackageDependencyHtml(graph) {
           '<span class="swatch unused"></span><p>Declared, no static source use observed</p>' +
           '<span class="swatch issue"></span><p>Undeclared Workspace import</p>' +
           '</div>' +
-          '<p>Click a package to highlight its direct dependencies and consumers.</p>' +
+          '<p>Hover or focus a package to emphasize its direct relationships. Drag packages to adjust the presentation.</p>' +
           issueSummary();
         return;
       }
@@ -327,6 +544,11 @@ export function renderPackageDependencyHtml(graph) {
     function issueSummary() {
       if (data.issues.length === 0) return "";
       return '<div class="issue-box">' + data.issues.length + ' dependency issue(s) are present in this view.</div>';
+    }
+
+    function showServerError(message) {
+      serverStatus.textContent = "Live graph rebuild failed: " + message;
+      serverStatus.hidden = false;
     }
 
     function addMarkers() {
