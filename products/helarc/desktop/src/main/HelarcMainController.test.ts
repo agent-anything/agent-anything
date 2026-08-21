@@ -650,7 +650,6 @@ describe("HelarcMainController", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
-      runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
         commandToolCall(markerPath),
         {
@@ -800,7 +799,6 @@ describe("HelarcMainController", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-allow-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
-      runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
         commandToolCall(markerPath),
         {
@@ -871,7 +869,6 @@ describe("HelarcMainController", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-cancel-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
-      runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
         commandToolCall(markerPath),
       ]),
@@ -955,7 +952,6 @@ describe("HelarcMainController", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-approval-cancel-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
-      runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([commandToolCall(markerPath)]),
     });
     controller.selectWorkspacePath(workspaceRoot);
@@ -1001,62 +997,6 @@ describe("HelarcMainController", () => {
     await expect(access(markerPath)).rejects.toThrow();
   });
 
-  it("keeps desktop runtime tool mode read-only by default", async () => {
-    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-read-only-default-"));
-    const markerPath = join(workspaceRoot, "marker.txt");
-    const unsupportedShellCall = {
-      kind: "tool_call",
-      reason: "Try a shell command.",
-      toolName: "codeAgent.runCommand",
-      input: {
-        command: process.execPath,
-        args: [
-          "-e",
-          `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran')`,
-        ],
-        cwd: ".",
-        timeoutMs: 1_000,
-        reason: "Create a governed marker file.",
-      },
-    };
-    const controller = new HelarcMainController({
-      provider: new ScriptedProvider([
-        unsupportedShellCall,
-        unsupportedShellCall,
-      ]),
-    });
-    controller.selectWorkspacePath(workspaceRoot);
-
-    const failed = waitForSnapshot(
-      controller,
-      (snapshot) => snapshot.status === "failed"
-        && snapshot.threadSummaries[0]?.latestRun?.status === "failed",
-    );
-    controller.startRun({
-      taskText: "Run command",
-      target: { kind: "new_thread" },
-    });
-
-    const snapshot = await failed;
-    expect(snapshot).toMatchObject({
-      status: "failed",
-      run: {
-        display: { status: "failed", statusSource: "host" },
-        host: {
-          status: "failed",
-          pendingInteractions: [],
-          terminal: { status: "failed", code: "controller_failed" },
-        },
-        product: {
-          result: { output: { safeErrors: [{ code: "model_structured_output_retry_exhausted" }] } },
-        },
-      },
-      threadSummaries: [{ latestRun: { runId: "helarc-run-1", status: "failed" } }],
-    });
-    expect(JSON.stringify(snapshot.activeThread)).not.toContain("pendingApproval");
-    await expect(access(markerPath)).rejects.toThrow();
-  });
-
   it("rejects approval submissions and cancellation without an active Run", () => {
     const controller = new HelarcMainController({ provider: new CompleteProvider() });
 
@@ -1094,7 +1034,6 @@ describe("HelarcMainController", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-stale-cancel-"));
     const markerPath = join(workspaceRoot, "marker.txt");
     const controller = new HelarcMainController({
-      runtimeToolMode: "shell-enabled",
       provider: new ScriptedProvider([
         {
           kind: "completion",
@@ -1656,16 +1595,13 @@ function commandToolCall(
   return {
     kind: "tool_call",
     reason,
-    toolName: "codeAgent.runCommand",
+    toolName: process.platform === "win32" ? "PowerShell" : "Bash",
     input: {
-      command: process.execPath,
-      args: [
-        "-e",
-        `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran')`,
-      ],
-      cwd: ".",
-      timeoutMs: 5_000,
-      reason,
+      command: process.platform === "win32"
+        ? `[System.IO.File]::WriteAllText('${markerPath.replaceAll("'", "''")}', 'ran')`
+        : `printf 'ran' > '${markerPath.replaceAll("'", "'\\''")}'`,
+      timeout_ms: 5_000,
+      description: reason,
     },
   };
 }

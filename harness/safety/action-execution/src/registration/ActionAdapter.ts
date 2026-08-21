@@ -23,6 +23,7 @@ import type {
 import {
   canonicalEndpointKey,
   canonicalPathTargetKey,
+  canonicalProcessIdentityKey,
   canonicalRemoteToolTargetKey,
   createActionEffectSet,
   createCanonicalSha256Digest,
@@ -306,7 +307,9 @@ function canonicalTargets(
       case "process":
         values.push({
           kind: "process",
-          identityKey: canonicalPathTargetKey(effect.executable.path),
+          identityKey: effect.operation === "spawn"
+            ? canonicalPathTargetKey(effect.executable.path)
+            : canonicalProcessIdentityKey(effect.target),
         });
         break;
       case "network":

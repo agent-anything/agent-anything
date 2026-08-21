@@ -9,8 +9,8 @@ import type {
   SandboxEnforcement,
   SandboxProvider,
 } from "@agent-anything/action-execution/sandbox";
-import type { ApprovalReviewerBinding, RunResult } from "@agent-anything/agent-runtime/run";
-import { Runner } from "@agent-anything/agent-runtime/runner";
+import { createRunFailureCause, type ApprovalReviewerBinding, type RunFinalizationContext, type RunResult } from "@agent-anything/agent-runtime/run";
+import { Runner, type RunLimits } from "@agent-anything/agent-runtime/runner";
 import { CurrentValidationCompletionGate } from "@agent-anything/validation/completion";
 import type { ContextManifestPersistencePort } from "@agent-anything/context/persistence";
 import {
@@ -42,7 +42,6 @@ import {
   validateHelarcToolInput,
   type HelarcActivityItem,
   type HelarcProductResult,
-  type HelarcToolMode,
 } from "@agent-anything/helarc/composition";
 import {
   createHelarcContextProjectionConfiguration,
@@ -54,8 +53,10 @@ import type {
 } from "@agent-anything/helarc/run";
 import type { HelarcTaskInput } from "@agent-anything/helarc/task";
 import {
-  HELARC_RUN_COMMAND_BINDING,
-  HELARC_RUN_COMMAND_OPERATION,
+  HELARC_SHELL_BINDING,
+  HELARC_SHELL_OPERATION,
+  HELARC_TASK_STOP_BINDING,
+  HELARC_TASK_STOP_OPERATION,
 } from "@agent-anything/helarc/tools";
 import { bindHelarcValidationCompletionGate } from "@agent-anything/helarc/validation";
 import type { CodeAgentCommandLimits } from "@agent-anything/helarc-local-environment/command";
@@ -81,6 +82,30 @@ import { createHelarcHostPermissionComposition } from "./HelarcHostPermissionCom
 import { createHelarcHostActionPolicy } from "./HelarcHostActionPolicy.js";
 
 const HELARC_RUN_MAX_DURATION_MS = 30 * 60_000;
+const DEFAULT_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
+  maxIterations: 64,
+  maxActions: 64,
+  maxConsecutiveActionFailures: 8,
+  maxDurationMs: HELARC_RUN_MAX_DURATION_MS,
+  maxPendingInteractions: 8,
+  maxDescendantRuns: 8,
+  maxDescendantDepth: 4,
+  plan: Object.freeze({ maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2_000 }),
+});
+const HARD_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
+  maxIterations: 256,
+  maxActions: 256,
+  maxConsecutiveActionFailures: 32,
+  maxDurationMs: 2 * 60 * 60_000,
+  maxPendingInteractions: 32,
+  maxDescendantRuns: 32,
+  maxDescendantDepth: 8,
+  plan: Object.freeze({ maxSteps: 64, maxStepLength: 2_000, maxExplanationLength: 8_000 }),
+});
+
+export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan">> & {
+  readonly plan?: Partial<RunLimits["plan"]>;
+};
 
 export interface PrepareHelarcHostRunInput {
   readonly sessionId: string;
@@ -94,7 +119,6 @@ export interface PrepareHelarcHostRunInput {
   readonly provider: Provider;
   readonly modelContinuationStore?: ModelContinuationStore;
   readonly contextManifestPersistence?: ContextManifestPersistencePort;
-  readonly toolMode: HelarcToolMode;
   readonly permissionPreset: HelarcPermissionPreset;
   readonly automaticApprovalReviewer?: ApprovalReviewerBinding & {
     readonly kind: "auto_review";
@@ -104,6 +128,7 @@ export interface PrepareHelarcHostRunInput {
   readonly enforcement?: SandboxEnforcement;
   readonly sandboxProviders?: readonly SandboxProvider[];
   readonly commandLimits?: Partial<CodeAgentCommandLimits>;
+  readonly runLimits?: HelarcHostRunLimitsInput;
   readonly now?: () => string;
 }
 
@@ -153,6 +178,7 @@ export async function prepareHelarcHostRun(
     throw new TypeError("Helarc requires a resolved Run Workspace.");
   }
   const now = input.now ?? (() => new Date().toISOString());
+  const runLimits = resolveHelarcRunLimits(input.runLimits);
   const runWorkspace = runContext.workspace;
   const workspace = runWorkspace.primary;
   const workspaceRoots = resolvePermissionWorkspaceRoots(runWorkspace);
@@ -188,22 +214,22 @@ export async function prepareHelarcHostRun(
     workspace: runWorkspace,
     now,
   });
-  const commandActions = input.toolMode === "shell-enabled"
-    ? await createHelarcLocalCommandActionCapability({
-        workspace: runWorkspace,
-        operation: HELARC_RUN_COMMAND_OPERATION,
-        binding: HELARC_RUN_COMMAND_BINDING,
-        limits: input.commandLimits,
-        now,
-      })
-    : null;
+  const commandActions = await createHelarcLocalCommandActionCapability({
+    workspace: runWorkspace,
+    platform,
+    shellOperation: HELARC_SHELL_OPERATION,
+    shellBinding: HELARC_SHELL_BINDING,
+    taskStopOperation: HELARC_TASK_STOP_OPERATION,
+    taskStopBinding: HELARC_TASK_STOP_BINDING,
+    limits: input.commandLimits,
+    now,
+  });
   const product = await createHelarcProductComposition({
     runId: input.productRunId,
     task: input.task,
     workspace: runWorkspace,
     provider: input.provider,
     modelContinuationStore: input.modelContinuationStore,
-    toolMode: input.toolMode,
     codeSource: createLocalCodeSourcePort(now),
     fileActions,
     commandActions,
@@ -295,6 +321,17 @@ export async function prepareHelarcHostRun(
     ),
     interactions: product.interactions,
     runtimeEventPublisher: productRuntimeEventPublisher,
+    resourceFinalizers: Object.freeze([Object.freeze({
+      async finalize(context: RunFinalizationContext) {
+        const completed = await commandActions.processTasks.finalizeRun(context.runId);
+        return completed ? null : createRunFailureCause("runtime", Object.freeze({
+          code: "runtime_process_cleanup_failed",
+          message: "Run-owned background process cleanup could not be confirmed.",
+          retryable: false,
+          metadata: Object.freeze({ runId: context.runId }),
+        }));
+      },
+    })]),
     now,
   });
   const manager = createHostRunManager({ runner, now });
@@ -321,20 +358,7 @@ export async function prepareHelarcHostRun(
         profile: product.validation.profile,
         completion: createHelarcValidationCompletionConfig(),
       },
-      limits: {
-        maxIterations: 5,
-        maxActions: 8,
-        maxConsecutiveActionFailures: 3,
-        maxDurationMs: HELARC_RUN_MAX_DURATION_MS,
-        maxPendingInteractions: 8,
-        maxDescendantRuns: 4,
-        maxDescendantDepth: 2,
-        plan: {
-          maxSteps: 12,
-          maxStepLength: 300,
-          maxExplanationLength: 1_000,
-        },
-      },
+      limits: runLimits,
       audit: "optional",
       telemetry: "optional",
       cancellationLimits: {
@@ -533,4 +557,28 @@ function assertSelectedSandboxProvider(
       `Helarc '${enforcement}' enforcement requires a matching SandboxProvider.`,
     );
   }
+}
+
+function resolveHelarcRunLimits(input: HelarcHostRunLimitsInput | undefined): RunLimits {
+  const value = {
+    ...DEFAULT_HELARC_RUN_LIMITS,
+    ...input,
+    plan: { ...DEFAULT_HELARC_RUN_LIMITS.plan, ...input?.plan },
+  };
+  const fields: Array<keyof Omit<RunLimits, "plan">> = [
+    "maxIterations", "maxActions", "maxConsecutiveActionFailures", "maxDurationMs",
+    "maxPendingInteractions", "maxDescendantRuns", "maxDescendantDepth",
+  ];
+  for (const field of fields) {
+    const minimum = field === "maxDescendantRuns" || field === "maxDescendantDepth" ? 0 : 1;
+    if (!Number.isSafeInteger(value[field]) || value[field] < minimum || value[field] > HARD_HELARC_RUN_LIMITS[field]) {
+      throw new TypeError(`Helarc Run limit '${field}' is outside the admitted range.`);
+    }
+  }
+  for (const field of ["maxSteps", "maxStepLength", "maxExplanationLength"] as const) {
+    if (!Number.isSafeInteger(value.plan[field]) || value.plan[field] < 1 || value.plan[field] > HARD_HELARC_RUN_LIMITS.plan[field]) {
+      throw new TypeError(`Helarc Plan limit '${field}' is outside the admitted range.`);
+    }
+  }
+  return Object.freeze({ ...value, plan: Object.freeze(value.plan) });
 }

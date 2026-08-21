@@ -14,8 +14,12 @@ export function createHelarcHostActionPolicy(input: {
     async evaluate(check: ActionPolicyCheckInput): Promise<ActionPolicyAssessment> {
       const reviewRequired = input.permissionPreset !== "full_access" &&
         check.subject.effects.some((effect) =>
-          effect.kind === "file_system" && effect.operation === "write"
+          effect.kind === "file_system" && effect.operation === "write" ||
+          effect.kind === "process"
         );
+      const reviewKind = check.subject.effects.some((effect) => effect.kind === "process")
+        ? "process action"
+        : "file write";
       return Object.freeze({
         status: reviewRequired ? "review_required" as const : "allowed" as const,
         owner: "governance" as const,
@@ -23,9 +27,9 @@ export function createHelarcHostActionPolicy(input: {
         checkId: check.checkId,
         recordId: `policy:${check.checkId}`,
         revision: check.context.policySnapshotId,
-        code: reviewRequired ? "helarc_file_write_review_required" : null,
+        code: reviewRequired ? "helarc_action_review_required" : null,
         reason: reviewRequired
-          ? "The active Host policy requires review for this file write."
+          ? `The active Host policy requires review for this ${reviewKind}.`
           : null,
         decidedAt: now(),
       });

@@ -38,6 +38,8 @@ import type {
 import type { ValidationOwnerRef, ValidationRequirementRef } from "@agent-anything/validation/definition";
 import type { ValidationSubjectSnapshotRef } from "@agent-anything/validation/subject";
 import type { RunRef } from "@agent-anything/agent-core/run";
+import type { RunFinalizationContext } from "../run/RunCancellation.js";
+import type { RunFailureCause } from "../run/RunFailure.js";
 
 export type RunnerIdentityKind =
   | "run_cancellation_request"
@@ -225,6 +227,10 @@ export interface RunnerValidationCheckResultProcessorPort {
   }, interruption: InvocationInterruptionContext): Promise<void>;
 }
 
+export interface RunResourceFinalizerPort {
+  finalize(context: RunFinalizationContext): Promise<RunFailureCause | null>;
+}
+
 export interface RunnerDependencies {
   readonly controller: import("../controller/index.js").Controller<unknown>;
   readonly contextProjection: RunnerContextProjection;
@@ -236,6 +242,7 @@ export interface RunnerDependencies {
   readonly auditPort?: AuditPort;
   readonly telemetryPort?: TelemetryPort;
   readonly runTraceObserver?: RunTraceObserver;
+  readonly resourceFinalizers?: readonly RunResourceFinalizerPort[];
   readonly retryExecutor?: RetryExecutor;
   readonly now?: () => string;
   readonly createRunId?: CreateRunIdentity;

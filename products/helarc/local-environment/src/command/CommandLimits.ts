@@ -5,9 +5,12 @@ export const defaultCodeAgentCommandLimits: CodeAgentCommandLimits = {
   maxTimeoutMs: 120_000,
   maxStdoutBytes: 100_000,
   maxStderrBytes: 100_000,
-  maxArgs: 128,
+  maxOutputFileBytes: 2_000_000,
   maxCommandBytes: 65_536,
-  maxReasonChars: 1_000,
+  maxDescriptionChars: 1_000,
+  maxValidationClaimChars: 4_096,
+  maxActiveTasks: 8,
+  maxSettledTasks: 64,
 };
 
 export function resolveCommandLimits(

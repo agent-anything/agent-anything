@@ -32,8 +32,9 @@ import {
 } from "@agent-anything/tools/selection";
 import {
   createHelarcCommandOperationContribution,
-  HELARC_RUN_COMMAND_TOOL,
+  HELARC_TASK_STOP_TOOL,
 } from "../tools/HelarcCommandOperation.js";
+import type { HelarcShellToolName } from "../tools/HelarcBaselineToolContracts.js";
 import {
   HELARC_RUN_VALIDATION_CHECK_TOOL,
   type HelarcValidationCheckOperationContribution,
@@ -58,7 +59,9 @@ export interface HelarcFileActionContribution extends HelarcPhysicalActionContri
 }
 
 export interface HelarcCommandActionContribution extends HelarcPhysicalActionContribution {
-  readonly actionAdapterId: string;
+  readonly shellTool: HelarcShellToolName;
+  readonly shellActionAdapterId: string;
+  readonly taskStopActionAdapterId: string;
   readonly environment: {
     readonly id: string;
     readonly revision: string;
@@ -68,7 +71,7 @@ export interface HelarcCommandActionContribution extends HelarcPhysicalActionCon
 export interface CreateHelarcActionCompositionInput {
   readonly admittedAt: string;
   readonly file: HelarcFileActionContribution;
-  readonly command: HelarcCommandActionContribution | null;
+  readonly command: HelarcCommandActionContribution;
   readonly validation: HelarcValidationCheckOperationContribution | null;
 }
 
@@ -90,15 +93,15 @@ export function createHelarcActionComposition(
     actionAdapterIds: input.file.actionAdapterIds,
     admittedAt: input.admittedAt,
   });
-  const command = input.command === null
-    ? null
-    : createHelarcCommandOperationContribution({
-        actionAdapterId: input.command.actionAdapterId,
-        admittedAt: input.admittedAt,
-      });
+  const command = createHelarcCommandOperationContribution({
+    shellTool: input.command.shellTool,
+    shellActionAdapterId: input.command.shellActionAdapterId,
+    taskStopActionAdapterId: input.command.taskStopActionAdapterId,
+    admittedAt: input.admittedAt,
+  });
   const operationEntries = [
     ...file.operations,
-    ...(command?.operations ?? []),
+    ...command.operations,
     ...(input.validation?.operations ?? []),
   ];
   const operationCatalog = createOperationCatalogSnapshot({
@@ -108,11 +111,11 @@ export function createHelarcActionComposition(
   });
   const operationBindings = createOperationBindingResolverSnapshot(
     "helarc.operation-bindings.v1",
-    [...file.bindings, ...(command?.bindings ?? []), ...(input.validation?.bindings ?? [])],
+    [...file.bindings, ...command.bindings, ...(input.validation?.bindings ?? [])],
   );
   const toolRegistrations = createToolRegistrationSnapshot(
     operationCatalog,
-    [...file.tools, ...(command?.tools ?? []), ...(input.validation?.tools ?? [])],
+    [...file.tools, ...command.tools, ...(input.validation?.tools ?? [])],
   );
   const toolSelection = createFixedLocalToolSelection(
     toolRegistrations,
@@ -122,7 +125,7 @@ export function createHelarcActionComposition(
       origins: selectionOrigins(registration.descriptor.name),
     })),
   );
-  const physical = [input.file, ...(input.command === null ? [] : [input.command])];
+  const physical = [input.file, input.command];
   const registrations = createActionRegistrationSnapshot(
     physical.flatMap((contribution) =>
       contribution.registrations.registrations.map(actionRegistrationInput)
@@ -145,7 +148,7 @@ export function validateHelarcToolInput(schema: unknown, candidate: unknown): bo
 }
 
 function selectionOrigins(name: string): readonly ("model" | "workflow")[] {
-  if (MODEL_FILE_TOOLS.has(name) || name === HELARC_RUN_COMMAND_TOOL ||
+  if (MODEL_FILE_TOOLS.has(name) || name === "Bash" || name === "PowerShell" || name === HELARC_TASK_STOP_TOOL ||
       name === HELARC_RUN_VALIDATION_CHECK_TOOL) {
     return Object.freeze(["model" as const]);
   }

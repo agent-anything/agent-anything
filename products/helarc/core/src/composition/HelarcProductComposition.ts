@@ -71,17 +71,14 @@ type HelarcProductProjectionUpdatePayload =
       : never
     : never;
 
-export type HelarcToolMode = "read-only" | "shell-enabled";
-
 export interface CreateHelarcProductCompositionInput {
   readonly runId: string;
   readonly task: AgentTask<HelarcTaskInput>;
   readonly workspace: WorkspaceSelection;
   readonly provider: Provider;
-  readonly toolMode: HelarcToolMode;
   readonly codeSource: CodeSourcePort;
   readonly fileActions: HelarcFileActionContribution;
-  readonly commandActions: HelarcCommandActionContribution | null;
+  readonly commandActions: HelarcCommandActionContribution;
   readonly validationTargets?: readonly HelarcExactTargetValidationRequirement[];
   readonly modelContinuationStore?: ModelContinuationStore;
   readonly now?: () => string;
@@ -110,16 +107,12 @@ export interface HelarcProductComposition {
 export async function createHelarcProductComposition(
   input: CreateHelarcProductCompositionInput,
 ): Promise<HelarcProductComposition> {
-  if (input.toolMode === "shell-enabled" && input.commandActions === null) {
-    throw new TypeError("Shell-enabled Helarc composition requires a command Action contribution.");
-  }
   const now = input.now ?? (() => new Date().toISOString());
   const admittedAt = now();
   const validation = await createHelarcValidationComposition({
-    toolMode: input.toolMode,
     workspace: input.workspace,
     codeSource: input.codeSource,
-    commandEnvironment: input.commandActions?.environment ?? null,
+    commandEnvironment: input.commandActions.environment,
     exactTargets: input.validationTargets,
     admittedAt,
     now,
@@ -127,7 +120,7 @@ export async function createHelarcProductComposition(
   const actions = createHelarcActionComposition({
     admittedAt,
     file: input.fileActions,
-    command: input.toolMode === "shell-enabled" ? input.commandActions : null,
+    command: input.commandActions,
     validation: validation.operation,
   });
   const interactions = createInteractionProtocolRegistrySnapshot(
@@ -190,10 +183,7 @@ export async function createHelarcProductComposition(
   );
   const runMetadata = Object.freeze({
     product: "helarc",
-    toolMode: input.toolMode,
-    [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({
-      mode: input.toolMode,
-    }),
+    [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata(),
   });
 
   return Object.freeze({

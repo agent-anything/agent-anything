@@ -3,11 +3,10 @@ import type { CodeAgentCommandLimits } from "./ProcessContracts.js";
 
 export interface ParsedCommandInput {
   readonly command: string;
-  readonly args: readonly string[];
-  readonly rootName?: string;
-  readonly cwd: string;
   readonly timeoutMs: number;
-  readonly reason: string;
+  readonly description: string | null;
+  readonly runInBackground: boolean;
+  readonly validationClaim: string | null;
 }
 
 export class CommandInputError extends Error {
@@ -34,53 +33,35 @@ export function parseCommandInput(
     throw invalidInput("Command must not be empty.");
   }
 
-  if (!Array.isArray(value.args) || !value.args.every(
-    (argument) => typeof argument === "string",
-  )) {
-    throw invalidInput("Args must be an array of strings.");
-  }
-  const args = value.args as string[];
-  if (args.length > limits.maxArgs) {
-    throw new CommandInputError(
-      "command_argument_limit_exceeded",
-      "Command exceeds the configured argument count limit.",
-    );
-  }
-
-  const commandBytes = Buffer.byteLength(command, "utf8")
-    + args.reduce(
-      (total, argument) => total + Buffer.byteLength(argument, "utf8"),
-      0,
-    );
+  const commandBytes = Buffer.byteLength(command, "utf8");
   if (commandBytes > limits.maxCommandBytes) {
     throw new CommandInputError(
       "command_size_limit_exceeded",
-      "Command and args exceed the configured byte limit.",
+      "Command exceeds the configured byte limit.",
     );
   }
 
-  const reason = requireString(value.reason, "reason");
-  if (reason.trim().length === 0) {
-    throw invalidInput("Reason must not be empty.");
-  }
-  if (reason.length > limits.maxReasonChars) {
+  const description = optionalString(value.description, "description") ?? null;
+  if (description !== null && (description.trim().length === 0 || description.length > limits.maxDescriptionChars)) {
     throw new CommandInputError(
-      "command_reason_limit_exceeded",
-      "Reason exceeds the configured character limit.",
+      "command_description_limit_exceeded",
+      "Description is empty or exceeds the configured character limit.",
     );
   }
-
-  const rootName = optionalString(value.rootName, "rootName");
-  const cwd = optionalString(value.cwd, "cwd") ?? ".";
-  const timeoutMs = readTimeout(value.timeoutMs, limits);
+  const validationClaim = optionalString(value.validation_claim, "validation_claim") ?? null;
+  if (validationClaim !== null && (validationClaim.trim().length === 0 || validationClaim.length > limits.maxValidationClaimChars)) {
+    throw new CommandInputError("command_validation_claim_limit_exceeded", "Validation claim is empty or exceeds the configured character limit.");
+  }
+  if (value.run_in_background !== undefined && typeof value.run_in_background !== "boolean") {
+    throw invalidInput("run_in_background must be a boolean.");
+  }
 
   return {
     command,
-    args,
-    reason,
-    cwd,
-    timeoutMs,
-    ...(rootName === undefined ? {} : { rootName }),
+    timeoutMs: readTimeout(value.timeout_ms, limits),
+    description,
+    runInBackground: value.run_in_background === true,
+    validationClaim,
   };
 }
 

@@ -7,7 +7,6 @@ import type {
   SandboxEnforcement,
 } from "@agent-anything/action-execution/sandbox";
 import { projectRuntimeEventForHost } from "@agent-anything/host/projection";
-import { HELARC_RUN_COMMAND_TOOL } from "../tools/HelarcCommandOperation.js";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import type { HelarcControllerTraceProjection } from "../observability/index.js";
 import type { ValidationHostProjection, ValidationStateCount } from "@agent-anything/validation/projection";
@@ -625,7 +624,7 @@ function titleForEvent(name: string, payload: Readonly<Record<string, unknown>>)
 function detailForEvent(name: string, payload: Readonly<Record<string, unknown>>): string | null {
   if (
     (name === "tool.started" || name === "tool.finished")
-    && payload.toolName === HELARC_RUN_COMMAND_TOOL
+    && (payload.toolName === "Bash" || payload.toolName === "PowerShell")
     && typeof payload.command === "string"
   ) {
     return payload.command;

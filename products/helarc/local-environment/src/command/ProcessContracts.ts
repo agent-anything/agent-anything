@@ -3,9 +3,12 @@ export interface CodeAgentCommandLimits {
   maxTimeoutMs: number;
   maxStdoutBytes: number;
   maxStderrBytes: number;
-  maxArgs: number;
+  maxOutputFileBytes: number;
   maxCommandBytes: number;
-  maxReasonChars: number;
+  maxDescriptionChars: number;
+  maxValidationClaimChars: number;
+  maxActiveTasks: number;
+  maxSettledTasks: number;
 }
 
 export interface ProcessTerminationLimits {

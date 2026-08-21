@@ -388,7 +388,7 @@ async function aggregateHelarcCampaign(input: {
         criterion,
         grader,
         requestedAt: HELARC_EVALUATION_TIME,
-        metadata: { product: "helarc", evaluation: "validation-profile-v1" },
+        metadata: { product: "helarc", evaluation: "shell-tools-v1" },
       }, grader.kind === "reference" ? outcomeGrader : safetyGrader, {
         signal: input.signal,
         deadlineAt: input.deadlineAt,
@@ -401,7 +401,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.file-tools-baseline-result`,
+      id: `${definition.ref.id}.shell-tools-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -412,7 +412,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.file-tools.report.baseline",
+      id: "helarc.shell-tools.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -458,8 +458,8 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.validation-profile.report.baseline",
-      revision: input.corpus.targetSnapshot.ref.revision,
+      id: "helarc.file-tools.report.baseline",
+      revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     createdAt: HELARC_EVALUATION_TIME,
     metadata: {
@@ -474,26 +474,26 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.file-tools.baseline-acceptance",
+      id: "helarc.shell-tools.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
-    acceptedBy: { id: "agent-anything.architecture-review", revision: "file-tools-v1" },
+    acceptedBy: { id: "agent-anything.architecture-review", revision: "shell-tools-v1" },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
       product: "helarc",
       suiteRef: refKey(input.corpus.suite.ref),
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
-    rationale: "Reviewed as the file Tool operating-surface successor to the Product Validation profile baseline.",
+    rationale: "Reviewed as the native Shell and bounded process-lifecycle successor to the file Tool baseline.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.validation-profile.baseline-acceptance",
-      revision: input.corpus.targetSnapshot.ref.revision,
+      id: "helarc.file-tools.baseline-acceptance",
+      revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     limitations: [BASELINE_LIMITATION],
   }, report);
@@ -514,6 +514,13 @@ async function aggregateHelarcCampaign(input: {
       limitations: Object.freeze([BASELINE_LIMITATION]),
     }),
   });
+}
+
+function predecessorTargetRevision(revision: string): string {
+  if (!revision.startsWith("v3-")) {
+    throw new TypeError(`Unknown Shell Tool Target revision '${revision}'.`);
+  }
+  return revision.replace(/^v3-/, "v2-");
 }
 
 function gradeExpectedOutcome(

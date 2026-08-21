@@ -2,7 +2,6 @@ export type {
   HelarcToolCatalog,
   HelarcToolCatalogItem,
   HelarcToolCatalogMetadata,
-  HelarcToolCatalogMode,
   HelarcToolDescriptorSummary,
 } from "./HelarcToolCatalog.js";
 export {

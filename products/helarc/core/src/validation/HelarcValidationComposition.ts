@@ -59,10 +59,9 @@ export interface HelarcExactTargetValidationRequirement {
 }
 
 export interface CreateHelarcValidationCompositionInput {
-  readonly toolMode: "read-only" | "shell-enabled";
   readonly workspace: WorkspaceSelection;
   readonly codeSource: CodeSourcePort;
-  readonly commandEnvironment: { readonly id: string; readonly revision: string } | null;
+  readonly commandEnvironment: { readonly id: string; readonly revision: string };
   readonly exactTargets?: readonly HelarcExactTargetValidationRequirement[];
   readonly admittedAt: string;
   readonly now: () => string;
@@ -95,9 +94,6 @@ export async function createHelarcValidationComposition(
   input: CreateHelarcValidationCompositionInput,
 ): Promise<HelarcValidationComposition> {
   requireIsoDate(input.admittedAt, "admittedAt");
-  if (input.toolMode === "shell-enabled" && input.commandEnvironment === null) {
-    throw new TypeError("Shell-enabled Validation requires an exact command environment.");
-  }
   const targets = Object.freeze([...(input.exactTargets ?? [])]);
   const exact = targets.map((entry) => Object.freeze({
     requirement: exactRequirementRef(entry.target),
@@ -111,7 +107,6 @@ export async function createHelarcValidationComposition(
   const profileRevision = await createCanonicalSha256Digest(
     "agent-anything.helarc.validation-profile.v1",
     {
-      toolMode: input.toolMode,
       commandEnvironment: input.commandEnvironment,
       targets: targets.map((entry) => ({
         ref: entry.target.ref,
@@ -122,26 +117,22 @@ export async function createHelarcValidationComposition(
     },
   );
   const requirements: ValidationRequirementTemplate[] = [
-    ...(input.toolMode === "shell-enabled" ? [commandRequirement()] : []),
+    commandRequirement(),
     ...exact.map(({ requirement, policy }) => exactRequirement(requirement, policy)),
   ];
   const profile = snapshotValidationProfile({
-    ref: owner(`profile-${input.toolMode}`, "validation_profile", profileRevision),
+    ref: owner("profile-code-agent", "validation_profile", profileRevision),
     specification: { id: "helarc-validation", revision: profileRevision },
     source: PROFILE_SOURCE,
     admittedBy: owner("product-profile-admission", "validation_admission"),
     requirements,
   });
   const registry = createHelarcValidationCheckConfigurationRegistry();
-  const operation = input.toolMode === "shell-enabled"
-    ? createHelarcValidationCheckOperationContribution({
-        admittedAt: input.admittedAt,
-        registry,
-      })
-    : null;
-  const commandSubject = input.toolMode === "shell-enabled"
-    ? createCommandSubjectContribution(input.workspace, input.now)
-    : null;
+  const operation = createHelarcValidationCheckOperationContribution({
+    admittedAt: input.admittedAt,
+    registry,
+  });
+  const commandSubject = createCommandSubjectContribution(input.workspace, input.now);
   const targetByAdapter = new Map(exact.map(({ contribution }) => [
     ownerKey(contribution.adapterRef),
     contribution,

@@ -145,6 +145,51 @@ describe("Runner semantic integration", () => {
     expect(controller.calls).toHaveLength(1);
   });
 
+  it("finalizes required Run-owned resources before terminal settlement", async () => {
+    const operations = createOperationFixture([]);
+    const finalized: string[] = [];
+    const result = await createRunner(
+      new ScriptedController([complete("Done")]),
+      operations,
+      {
+        resourceFinalizers: [Object.freeze({
+          async finalize(context) {
+            finalized.push(context.runId);
+            return null;
+          },
+        })],
+      },
+    ).run(createAgent(), createRunInput(), createRunConfig(operations));
+
+    expect(result.status).toBe("succeeded");
+    expect(finalized).toEqual([result.runId]);
+  });
+
+  it("fails terminal settlement when required Run resource cleanup is unconfirmed", async () => {
+    const operations = createOperationFixture([]);
+    const result = await createRunner(
+      new ScriptedController([complete("Must not remain successful")]),
+      operations,
+      {
+        resourceFinalizers: [Object.freeze({
+          async finalize() {
+            throw new Error("Process cleanup was not confirmed.");
+          },
+        })],
+      },
+    ).run(createAgent(), createRunInput(), createRunConfig(operations));
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "required_finalization_failed",
+      finalOutput: null,
+      failure: {
+        kind: "runtime",
+        failure: { code: "runtime_resource_finalization_failed" },
+      },
+    });
+  });
+
   it("blocks completion when one mandatory Requirement remains unassessed", async () => {
     const operations = createOperationFixture([]);
     const events: RuntimeEvent[] = [];

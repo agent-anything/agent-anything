@@ -30,7 +30,6 @@ type RunHelarcTestInput = Omit<
   PrepareHelarcHostRunInput,
   | "sessionId"
   | "productRunId"
-  | "toolMode"
   | "permissionPreset"
   | "inputItems"
   | "workspaceResolver"
@@ -88,7 +87,6 @@ async function prepareTestHostRun(input: RunHelarcTestInput) {
     productRunId,
     sessionId: input.sessionId ?? productRunId,
     inputItems: inputItems ?? [],
-    toolMode: enableShell ? "shell-enabled" : "read-only",
     permissionPreset,
   });
 }
@@ -237,6 +235,9 @@ describe("Helarc Host Run composition", () => {
         "Grep",
         "Edit",
         "Write",
+        nativeShellTool(),
+        "TaskStop",
+        "codeAgent.runValidationCheck",
       ],
     });
   });
@@ -333,44 +334,6 @@ describe("Helarc Host Run composition", () => {
     ]);
   });
 
-  it("does not register shell execution in the default read-only Run", async () => {
-    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-read-only-shell-blocked-"));
-    const markerPath = join(workspaceRoot, "marker.txt");
-    const provider = new ScriptedProvider([
-      {
-        kind: "tool_call",
-        reason: "Try a shell command.",
-        toolName: "codeAgent.runCommand",
-        input: createShellInput(markerPath),
-      },
-      {
-        kind: "completion",
-        summary: "Shell execution is not available in this Run.",
-      },
-    ]);
-
-    const result = await executeReadOnlyTestHostRun({
-      ...createTask(workspaceRoot),
-      provider,
-    });
-
-    expect(result.product.status).toBe("completed");
-    expect(result.product.output.safeErrors).toEqual([]);
-    expect(provider.requests).toHaveLength(2);
-    expect(provider.requests[1].metadata).toMatchObject({
-      structuredOutputAttemptNumber: 2,
-      structuredOutputCorrectionCategory: "structured_output_semantic",
-      structuredOutputCorrectionCode: "controller_tool_name_unsupported",
-    });
-    expect(provider.requests[1].messages.at(-1)?.content).toContain(
-      "Use only a Tool exposed in the active Tool catalog.",
-    );
-    expect(result.runResult.items.some((item) =>
-      item.payload.kind === "run_action" && item.payload.action.subject.kind === "operation"
-    )).toBe(false);
-    await expect(access(markerPath)).rejects.toThrow();
-  });
-
   it("rejects selected managed enforcement without a matching provider", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-managed-unavailable-"));
     const provider = new ScriptedProvider([{ kind: "completion", summary: "Must not run." }]);
@@ -420,7 +383,7 @@ describe("Helarc Host Run composition", () => {
       {
         kind: "tool_call",
         reason: "Try a shell command.",
-        toolName: "codeAgent.runCommand",
+        toolName: nativeShellTool(),
         input: createShellInput(markerPath),
       },
       {
@@ -453,7 +416,7 @@ describe("Helarc Host Run composition", () => {
       {
         kind: "tool_call",
         reason: "Try a shell command.",
-        toolName: "codeAgent.runCommand",
+        toolName: nativeShellTool(),
         input: createShellInput(markerPath),
       },
       {
@@ -488,7 +451,7 @@ describe("Helarc Host Run composition", () => {
       {
         kind: "tool_call",
         reason: "Create a marker.",
-        toolName: "codeAgent.runCommand",
+        toolName: nativeShellTool(),
         input: createShellInput(markerPath),
       },
       {
@@ -516,7 +479,7 @@ describe("Helarc Host Run composition", () => {
     expect(commandResults).toHaveLength(1);
     expect(commandResults[0]).toMatchObject({
       status: "succeeded",
-      output: { exitCode: 0, signal: null, stderr: "" },
+      output: { mode: "foreground", exit_code: 0, signal: null, stderr: "" },
     });
     await expect(access(markerPath)).resolves.toBeUndefined();
     expect(result.product.output.enforcement).toEqual({
@@ -532,6 +495,57 @@ describe("Helarc Host Run composition", () => {
       kind: "action_settlement",
     }));
     expect(provider.lastControllerInputContexts).toEqual([0, 1]);
+  });
+
+  it("starts and stops one background shell task through its exact TaskStop identity", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-background-shell-"));
+    const provider = new ScriptedProvider([
+      {
+        kind: "tool_call",
+        reason: "Start one bounded background task.",
+        toolName: nativeShellTool(),
+        input: {
+          command: process.platform === "win32"
+            ? "Start-Sleep -Seconds 30"
+            : "sleep 30",
+          timeout_ms: 60_000,
+          description: "Start a test background task.",
+          run_in_background: true,
+        },
+      },
+      (request: ProviderRequest) => ({
+        kind: "tool_call",
+        reason: "Stop the exact background task.",
+        toolName: "TaskStop",
+        input: { task_id: readBackgroundTaskId(request) },
+      }),
+      { kind: "completion", summary: "Background task was stopped." },
+    ]);
+
+    const result = await executeTestHostRun({
+      ...createTask(workspaceRoot),
+      provider,
+      permissionPreset: "full_access",
+    });
+
+    expect(result.product.status, JSON.stringify(result, null, 2)).toBe("completed");
+    expect(
+      operationOutputs(result),
+      JSON.stringify(operationResults(result), null, 2),
+    ).toEqual([
+      expect.objectContaining({
+        mode: "background",
+        status: "running",
+        task_id: expect.any(String),
+        output_file: expect.any(String),
+      }),
+      expect.objectContaining({
+        status: "stopped",
+        effect_certainty: "known_applied",
+        task_id: expect.any(String),
+      }),
+    ]);
+    expect(provider.lastControllerInputContexts).toEqual([0, 1, 2]);
   });
 
   it("updates the Runner-owned plan and exposes it to the next controller turn", async () => {
@@ -767,10 +781,14 @@ describe("Helarc Host Run composition", () => {
 });
 
 function operationOutputs(result: Awaited<ReturnType<typeof executeTestHostRun>>): unknown[] {
+  return operationResults(result).map((operation) => operation.output);
+}
+
+function operationResults(result: Awaited<ReturnType<typeof executeTestHostRun>>) {
   return result.runResult.items.flatMap((item) =>
     item.payload.kind === "observation" &&
       item.payload.observation.payload.kind === "operation"
-      ? [item.payload.observation.payload.result.output]
+      ? [item.payload.observation.payload.result]
       : []
   );
 }
@@ -873,8 +891,8 @@ class ScriptedProvider implements Provider {
     this.lastControllerInputContexts.push(readObservationCount(request));
     this.lastControllerInputPlans.push(readCurrentPlan(request));
     this.beforeResponse();
-    const output = this.outputs.shift();
-    if (!output) {
+    const scriptedOutput = this.outputs.shift();
+    if (scriptedOutput === undefined) {
       return {
         kind: "failed",
         failure: {
@@ -885,6 +903,10 @@ class ScriptedProvider implements Provider {
         },
       };
     }
+
+    const output = typeof scriptedOutput === "function"
+      ? scriptedOutput(request)
+      : scriptedOutput;
 
     return {
       kind: "succeeded",
@@ -1035,15 +1057,26 @@ function readCurrentPlan(request: ProviderRequest): unknown {
   }
 }
 
+function readBackgroundTaskId(request: ProviderRequest): string {
+  const match = /\"task_id\"\s*:\s*\"([^\"]+)\"/.exec(
+    request.messages.map((message) => message.content).join("\n"),
+  );
+  if (match?.[1] === undefined) {
+    throw new Error("The background task observation did not contain task_id.");
+  }
+  return match[1];
+}
+
 function createShellInput(markerPath: string) {
   return {
-    command: process.execPath,
-    args: [
-      "-e",
-      `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran')`,
-    ],
-    cwd: ".",
-    timeoutMs: 5_000,
-    reason: "Create a governed marker file.",
+    command: process.platform === "win32"
+      ? `[System.IO.File]::WriteAllText('${markerPath.replaceAll("'", "''")}', 'ran')`
+      : `printf 'ran' > '${markerPath.replaceAll("'", "'\\''")}'`,
+    timeout_ms: 5_000,
+    description: "Create a governed marker file.",
   };
+}
+
+function nativeShellTool(): "Bash" | "PowerShell" {
+  return process.platform === "win32" ? "PowerShell" : "Bash";
 }

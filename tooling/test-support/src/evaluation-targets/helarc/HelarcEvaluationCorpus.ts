@@ -33,8 +33,8 @@ import {
 import type { ProviderCallResult } from "@agent-anything/model-interaction";
 
 export const HELARC_EVALUATION_TIME = "2026-08-12T00:00:00.000Z";
-export const HELARC_EVALUATION_CORPUS_REVISION = "helarc-file-tools-corpus-v1";
-export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION = "helarc-file-tools-target-v1";
+export const HELARC_EVALUATION_CORPUS_REVISION = "helarc-shell-tools-corpus-v1";
+export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION = "helarc-shell-tools-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
@@ -43,7 +43,6 @@ export type HelarcEvaluationScenario =
   | "denied_command"
   | "malformed_output_retry";
 
-export type HelarcEvaluationToolMode = "read-only" | "shell-enabled";
 export type HelarcEvaluationPermissionPreset =
   | "approve_for_me"
   | "full_access";
@@ -63,7 +62,6 @@ export interface HelarcEvaluationFixture {
 export interface HelarcEvaluationScript {
   readonly ref: EvaluationRecordRef;
   readonly responses: readonly ProviderCallResult[];
-  readonly toolMode: HelarcEvaluationToolMode;
   readonly permissionPreset: HelarcEvaluationPermissionPreset;
 }
 
@@ -314,27 +312,27 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v2-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v3-${process.platform}-${process.arch}-node${nodeMajor}`;
   const unavailableDirtyState = limitation(
     "working_tree_state_not_measured",
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-file-tools-v1",
-    "agent.revision": "helarc-code-agent-file-tools-v1",
+    "product.revision": "helarc-product-shell-tools-v1",
+    "agent.revision": "helarc-code-agent-shell-tools-v1",
     "prompt.revision": "helarc-prompt-v3",
     "action-contract.revision": "helarc-model-decision-v1",
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-file-tools-v1",
+    "source.revision": "helarc-shell-tools-v1",
     "provider.revision": "scripted-provider-v1",
     "model.revision": "scripted-controller-output-v1",
     "tool-profile.revision": "helarc-tool-catalog-v3",
-    "action-registration.revision": "helarc-file-action-registration-v2",
+    "action-registration.revision": "helarc-shell-action-registration-v1",
     "sandbox.enforcement": "disabled",
     "permission.preset": "case-declared",
     "reviewer.profile": "case-declared-deterministic",
     "context-projector.revision": "helarc-context-projector-v1",
-    "run-limits.revision": "phase26-run-limits-v1",
+    "run-limits.revision": "helarc-product-run-limits-v1",
     "retry-policy.revision": "phase26-retry-policy-v1",
     "cancellation-limits.revision": "phase26-cancellation-v1",
     "fixture-manifest.revision": HELARC_EVALUATION_CORPUS_REVISION,
@@ -350,7 +348,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
         key: item.key,
         owner: item.owner,
         required: item.required,
-        sourceRevision: "helarc-file-tools-v1",
+        sourceRevision: "helarc-shell-tools-v1",
         schemaRef: item.schemaRef,
         status: "unavailable" as const,
         representation: null,
@@ -420,7 +418,6 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       expectedAddedFiles: {},
       requiredActionNames: ["Glob", "Read"],
       retryCount: 0,
-      toolMode: "read-only",
       permissionPreset: "full_access",
       approvalDecision: null,
     }),
@@ -447,7 +444,6 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       expectedAddedFiles: {},
       requiredActionNames: ["Grep"],
       retryCount: 0,
-      toolMode: "read-only",
       permissionPreset: "full_access",
       approvalDecision: null,
     }),
@@ -479,7 +475,6 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       expectedAddedFiles: { "src/generated.txt": "phase26\n" },
       requiredActionNames: ["Write"],
       retryCount: 0,
-      toolMode: "read-only",
       permissionPreset: "full_access",
       approvalDecision: null,
     }),
@@ -494,13 +489,13 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
         {
           kind: "tool_call",
           reason: "Attempt the requested command under permission control.",
-          toolName: "codeAgent.runCommand",
+          toolName: process.platform === "win32" ? "PowerShell" : "Bash",
           input: {
-            command: process.execPath,
-            args: ["-e", "require('node:fs').writeFileSync('denied.txt', 'must-not-exist')"],
-            cwd: ".",
-            timeoutMs: 1_000,
-            reason: "Create the requested marker.",
+            command: process.platform === "win32"
+              ? "[System.IO.File]::WriteAllText('denied.txt', 'must-not-exist')"
+              : "printf 'must-not-exist' > 'denied.txt'",
+            timeout_ms: 1_000,
+            description: "Create the requested marker.",
           },
         },
         { kind: "stop", reason: "The requested command was denied." },
@@ -509,9 +504,8 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       runStatus: "blocked",
       agentSummary: null,
       expectedAddedFiles: {},
-      requiredActionNames: ["codeAgent.runCommand"],
+      requiredActionNames: [process.platform === "win32" ? "PowerShell" : "Bash"],
       retryCount: 0,
-      toolMode: "shell-enabled",
       permissionPreset: "approve_for_me",
       approvalDecision: "decline",
     }),
@@ -532,7 +526,6 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       expectedAddedFiles: {},
       requiredActionNames: [],
       retryCount: 1,
-      toolMode: "read-only",
       permissionPreset: "full_access",
       approvalDecision: null,
     }),
@@ -551,7 +544,6 @@ function caseDefinition(input: {
   readonly expectedAddedFiles: Readonly<Record<string, string>>;
   readonly requiredActionNames: readonly string[];
   readonly retryCount: number;
-  readonly toolMode: HelarcEvaluationToolMode;
   readonly permissionPreset: HelarcEvaluationPermissionPreset;
   readonly approvalDecision: "decline" | null;
 }): HelarcEvaluationCaseDefinition {
@@ -598,7 +590,6 @@ function caseDefinition(input: {
     ref: scriptRef,
     responses: Object.freeze(input.outputs.map((output, index) =>
       scriptedSuccess(output, index + 1))),
-    toolMode: input.toolMode,
     permissionPreset: input.permissionPreset,
   });
   const expectedClaim: HelarcEvaluationExpectedClaim = Object.freeze({

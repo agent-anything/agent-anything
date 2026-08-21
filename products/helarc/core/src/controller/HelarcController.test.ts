@@ -324,7 +324,7 @@ function createControllerInput(): ControllerInput<HelarcAgentOutput> {
     },
     identity: { id: "identity-1", kind: "anonymous", displayName: "Test identity", metadata: {} },
     metadata: {
-      [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata({ mode: "read-only" }),
+      [HELARC_TOOL_CATALOG_METADATA_KEY]: createHelarcToolCatalogMetadata(),
     },
   };
 }

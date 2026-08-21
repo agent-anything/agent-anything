@@ -149,7 +149,10 @@ describe("Helarc deterministic Evaluation target", () => {
       status: "succeeded",
       owner: "helarc.product",
     });
-    expect(denied.observation.outcome).toMatchObject({
+    expect(
+      denied.observation.outcome,
+      JSON.stringify(denied.observation, null, 2),
+    ).toMatchObject({
       status: "blocked",
       owner: "permission",
     });
@@ -168,7 +171,7 @@ describe("Helarc deterministic Evaluation target", () => {
       content: {
         kind: "inline",
         value: {
-          status: "not_required",
+          status: "pending",
           gateStatus: "completion_eligible",
         },
       },

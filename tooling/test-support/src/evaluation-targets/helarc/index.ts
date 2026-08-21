@@ -7,7 +7,6 @@ export type {
   HelarcEvaluationPermissionPreset,
   HelarcEvaluationScenario,
   HelarcEvaluationScript,
-  HelarcEvaluationToolMode,
   HelarcExternalBenchmarkCaseManifest,
   HelarcExternalBenchmarkManifest,
 } from "./HelarcEvaluationCorpus.js";
@@ -53,6 +52,10 @@ export {
   HELARC_FILE_TOOLS_ACCEPTED_BASELINE,
   HELARC_FILE_TOOLS_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcFileToolsBaseline.js";
+export {
+  HELARC_SHELL_TOOLS_ACCEPTED_BASELINE,
+  HELARC_SHELL_TOOLS_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcShellToolsBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export type {

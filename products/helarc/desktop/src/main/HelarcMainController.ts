@@ -270,7 +270,6 @@ export interface HelarcMainControllerInput {
   provider?: Provider | null;
   providerConfigError?: (HelarcMainError & { missingKeys?: string[] }) | null;
   providerProfile?: HelarcProviderProfile | null;
-  runtimeToolMode?: HelarcRuntimeToolMode;
   workspaceProfiles?: HelarcWorkspaceProfile[];
   threadSummaries?: HelarcThreadSummary[];
   taskTemplates?: HelarcTaskTemplate[];
@@ -278,8 +277,6 @@ export interface HelarcMainControllerInput {
   modelContinuationStore?: ModelContinuationStore;
   contextManifestPersistence?: ContextManifestPersistencePort;
 }
-
-export type HelarcRuntimeToolMode = "read-only" | "shell-enabled";
 
 type DesktopActiveRunSlot =
   | { readonly kind: "empty" }
@@ -317,7 +314,6 @@ export class HelarcMainController {
     | undefined;
   private provider: HelarcProviderSnapshot;
   private providerInstance: Provider | null;
-  private readonly runtimeToolMode: HelarcRuntimeToolMode;
   private inactiveStatus: "idle" | "workspace_selected" = "idle";
   private nextTaskNumber = 1;
   private activeRunSlot: DesktopActiveRunSlot = { kind: "empty" };
@@ -365,7 +361,6 @@ export class HelarcMainController {
     this.threadStore = input.threadStore ?? new InMemoryHelarcThreadStore();
     this.modelContinuationStore = input.modelContinuationStore;
     this.contextManifestPersistence = input.contextManifestPersistence;
-    this.runtimeToolMode = input.runtimeToolMode ?? "read-only";
     this.provider = input.providerConfigError
       ? {
           configured: false,
@@ -586,7 +581,6 @@ export class HelarcMainController {
         modelContinuationStore: this.modelContinuationStore,
         contextManifestPersistence: this.contextManifestPersistence,
         inputItems,
-        toolMode: this.runtimeToolMode,
         permissionPreset: preparedStart.prepared.run.permissionPreset,
         sessionAuthorityPort: this.sessionAuthorityStore,
         persistentPolicyAmendments: this.policyAmendmentStore,

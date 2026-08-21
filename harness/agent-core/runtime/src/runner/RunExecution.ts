@@ -2928,11 +2928,27 @@ export class RunExecution<TOutput> {
       startedAt: this.now(),
     });
     try {
-      const failures = await this.recordLifecycle(
-        terminal.status,
-        new Set(),
-        finalizationObservabilityContext(finalization.context),
+      const resourceFailures = await Promise.all(
+        (this.dependencies.resourceFinalizers ?? []).map(async (finalizer) => {
+          try {
+            return await finalizer.finalize(finalization.context);
+          } catch {
+            return runtimeFailure(
+              "runtime_resource_finalization_failed",
+              "A required Run resource finalizer failed.",
+              {},
+            );
+          }
+        }),
       );
+      const failures = [
+        ...resourceFailures.filter((failure): failure is RunFailureCause => failure !== null),
+        ...await this.recordLifecycle(
+          terminal.status,
+          new Set(),
+          finalizationObservabilityContext(finalization.context),
+        ),
+      ];
       if (failures.length > 0) {
         terminal = {
           status: "failed",

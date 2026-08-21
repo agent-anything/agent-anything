@@ -2,11 +2,13 @@ import {
   canonicalEndpointKey,
   canonicalPathIdentityKey,
   canonicalPathTargetKey,
+  canonicalProcessIdentityKey,
   canonicalRemoteToolKey,
   canonicalRemoteToolTargetKey,
   createCanonicalExecutableIdentity,
   createCanonicalFileSystemTarget,
   createCanonicalNetworkEndpoint,
+  createCanonicalProcessIdentity,
   createCanonicalRemoteToolIdentity,
   type CanonicalExecutableIdentity,
   type CanonicalExecutableIdentityInput,
@@ -14,6 +16,8 @@ import {
   type CanonicalNetworkEndpoint,
   type CanonicalPathIdentity,
   type CanonicalPathIdentityInput,
+  type CanonicalProcessIdentity,
+  type CanonicalProcessIdentityInput,
   type CanonicalRemoteToolIdentity,
 } from "./CanonicalIdentity.js";
 import {
@@ -37,6 +41,13 @@ export interface ProcessSpawnEffect {
   readonly executable: CanonicalExecutableIdentity;
 }
 
+export interface ProcessSignalEffect {
+  readonly schemaVersion: 1;
+  readonly kind: "process";
+  readonly operation: "signal";
+  readonly target: CanonicalProcessIdentity;
+}
+
 export interface NetworkConnectEffect {
   readonly schemaVersion: 1;
   readonly kind: "network";
@@ -54,6 +65,7 @@ export interface RemoteToolInvokeEffect {
 export type CapabilityEffect =
   | FileSystemEffect
   | ProcessSpawnEffect
+  | ProcessSignalEffect
   | NetworkConnectEffect
   | RemoteToolInvokeEffect;
 
@@ -74,6 +86,11 @@ export type CapabilityEffectInput =
       readonly kind: "process";
       readonly operation: "spawn";
       readonly executable: CanonicalExecutableIdentityInput;
+    }
+  | {
+      readonly kind: "process";
+      readonly operation: "signal";
+      readonly target: CanonicalProcessIdentityInput;
     }
   | {
       readonly kind: "network";
@@ -170,14 +187,20 @@ function capabilityEffectInput(effect: CapabilityEffect): CapabilityEffectInput 
         targets: effect.targets.map((target) => pathInput(target.path)),
       };
     case "process":
-      return {
-        kind: effect.kind,
-        operation: effect.operation,
-        executable: {
-          path: pathInput(effect.executable.path),
-          baseline: effect.executable.baseline,
-        },
-      };
+      return effect.operation === "spawn"
+        ? {
+            kind: effect.kind,
+            operation: effect.operation,
+            executable: {
+              path: pathInput(effect.executable.path),
+              baseline: effect.executable.baseline,
+            },
+          }
+        : {
+            kind: effect.kind,
+            operation: effect.operation,
+            target: effect.target,
+          };
     case "network":
       return {
         kind: effect.kind,
@@ -210,7 +233,9 @@ export function capabilityEffectKey(effect: CapabilityEffect): string {
         .map((target) => canonicalPathIdentityKey(target.path))
         .join("|")}`;
     case "process":
-      return `process:spawn:${canonicalPathIdentityKey(effect.executable.path)}:${effect.executable.baseline.contentDigest}`;
+      return effect.operation === "spawn"
+        ? `process:spawn:${canonicalPathIdentityKey(effect.executable.path)}:${effect.executable.baseline.contentDigest}`
+        : `process:signal:${canonicalProcessIdentityKey(effect.target)}`;
     case "network":
       return `network:connect:${effect.endpoints.map(canonicalEndpointKey).join("|")}`;
     case "remote_tool":
@@ -251,21 +276,35 @@ function createCapabilityEffect(
     });
   }
   if (input?.kind === "process") {
-    assertStrictRecord(
-      input,
-      path,
-      new Set(["kind", "operation", "executable"]),
-      "canonical_effect_invalid",
-    );
-    if (input.operation !== "spawn") {
-      throw contractError("canonical_effect_invalid", "Invalid process effect operation.", `${path}.operation`);
+    if (input.operation === "spawn") {
+      assertStrictRecord(
+        input,
+        path,
+        new Set(["kind", "operation", "executable"]),
+        "canonical_effect_invalid",
+      );
+      return Object.freeze({
+        schemaVersion: 1,
+        kind: "process",
+        operation: "spawn",
+        executable: createCanonicalExecutableIdentity(input.executable),
+      });
     }
-    return Object.freeze({
-      schemaVersion: 1,
-      kind: "process",
-      operation: "spawn",
-      executable: createCanonicalExecutableIdentity(input.executable),
-    });
+    if (input.operation === "signal") {
+      assertStrictRecord(
+        input,
+        path,
+        new Set(["kind", "operation", "target"]),
+        "canonical_effect_invalid",
+      );
+      return Object.freeze({
+        schemaVersion: 1,
+        kind: "process",
+        operation: "signal",
+        target: createCanonicalProcessIdentity(input.target),
+      });
+    }
+    throw contractError("canonical_effect_invalid", "Invalid process effect operation.", `${path}.operation`);
   }
   if (input?.kind === "network") {
     assertStrictRecord(
@@ -343,7 +382,9 @@ function rejectOverlappingEffectTargets(effects: readonly CapabilityEffect[]): v
         }
         break;
       case "process":
-        add(`process:spawn:${canonicalPathTargetKey(effect.executable.path)}`);
+        add(effect.operation === "spawn"
+          ? `process:spawn:${canonicalPathTargetKey(effect.executable.path)}`
+          : `process:signal:${canonicalProcessIdentityKey(effect.target)}`);
         break;
       case "network":
         for (const endpoint of effect.endpoints) {

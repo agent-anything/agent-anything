@@ -1,5 +1,6 @@
 export type {
   RunConfig,
+  RunLimits,
   RunValidationConfig,
 } from "./RunConfig.js";
 export type {

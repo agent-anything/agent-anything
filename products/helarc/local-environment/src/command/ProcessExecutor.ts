@@ -5,6 +5,7 @@ import {
 } from "node:child_process";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { BoundedOutput } from "./BoundedOutput.js";
+import { ProcessOutputFile } from "./ProcessOutputFile.js";
 import type { ProcessTerminationLimits } from "./ProcessContracts.js";
 
 export interface ProcessExecutionInput {
@@ -16,6 +17,11 @@ export interface ProcessExecutionInput {
   readonly timeoutMs: number;
   readonly maxStdoutBytes: number;
   readonly maxStderrBytes: number;
+  readonly outputFile?: {
+    readonly absolutePath: string;
+    readonly relativePath: string;
+    readonly maximumBytes: number;
+  };
   readonly interruption: InvocationInterruptionContext;
   readonly termination: ProcessTerminationLimits;
   readonly startedMs: number;
@@ -28,6 +34,8 @@ export interface CapturedProcessOutput {
   readonly durationMs: number;
   readonly stdoutTruncated: boolean;
   readonly stderrTruncated: boolean;
+  readonly outputFile: string | null;
+  readonly outputFileTruncated: boolean;
 }
 
 export type ProcessExecutionOutcome =
@@ -53,7 +61,7 @@ export type ProcessExecutionOutcome =
     } & CapturedProcessOutput)
   | {
       readonly kind: "failed";
-      readonly effectState: "none" | "unknown";
+      readonly effectState: "none" | "settled" | "unknown";
     };
 
 export interface ProcessExecutionDependencies {
@@ -68,13 +76,17 @@ export interface ProcessExecutionDependencies {
   ) => void;
 }
 
-export function executeProcess(
+export async function executeProcess(
   input: ProcessExecutionInput,
   dependencies: ProcessExecutionDependencies = {},
 ): Promise<ProcessExecutionOutcome> {
   if (input.interruption.signal.aborted) {
-    return Promise.resolve({ kind: "cancelled_before_start" });
+    return { kind: "cancelled_before_start" };
   }
+
+  const outputFile = input.outputFile === undefined
+    ? null
+    : await ProcessOutputFile.create(input.outputFile);
 
   return new Promise((resolve) => {
     const stdout = new BoundedOutput(input.maxStdoutBytes);
@@ -98,7 +110,8 @@ export function executeProcess(
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch {
-      resolve({ kind: "failed", effectState: "none" });
+      const close = outputFile === null ? Promise.resolve() : outputFile.close();
+      void close.then(() => resolve({ kind: "failed", effectState: outputFile === null ? "none" : "settled" }));
       return;
     }
 
@@ -108,8 +121,14 @@ export function executeProcess(
     let graceTimer: ReturnType<typeof setTimeout> | undefined;
     let forceSettlementTimer: ReturnType<typeof setTimeout> | undefined;
 
-    child.stdout?.on("data", (chunk: Buffer) => stdout.append(chunk));
-    child.stderr?.on("data", (chunk: Buffer) => stderr.append(chunk));
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout.append(chunk);
+      outputFile?.append("stdout", chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr.append(chunk);
+      outputFile?.append("stderr", chunk);
+    });
 
     const captured = (): CapturedProcessOutput => ({
       stdout: stdout.toString(),
@@ -117,6 +136,8 @@ export function executeProcess(
       durationMs: Math.max(0, input.nowMs() - input.startedMs),
       stdoutTruncated: stdout.truncated,
       stderrTruncated: stderr.truncated,
+      outputFile: outputFile?.relativePath ?? null,
+      outputFileTruncated: outputFile?.truncated ?? false,
     });
 
     const finish = (outcome: ProcessExecutionOutcome): void => {
@@ -132,7 +153,8 @@ export function executeProcess(
         clearTimeout(forceSettlementTimer);
       }
       input.interruption.signal.removeEventListener("abort", onAbort);
-      resolve(outcome);
+      const close = outputFile === null ? Promise.resolve() : outputFile.close();
+      void close.then(() => resolve(outcome));
     };
 
     const forceTermination = (): void => {
@@ -218,7 +240,7 @@ export function executeProcess(
   });
 }
 
-function requestProcessTreeTermination(
+export function requestProcessTreeTermination(
   child: ChildProcess,
   force: boolean,
 ): void {

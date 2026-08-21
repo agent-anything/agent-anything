@@ -112,6 +112,16 @@ export interface CanonicalExecutableIdentityInput {
   readonly baseline: FileBaseline;
 }
 
+export interface CanonicalProcessIdentity {
+  readonly runId: string;
+  readonly taskId: string;
+  readonly processId: number;
+  readonly environmentId: string;
+  readonly startFingerprint: string;
+}
+
+export type CanonicalProcessIdentityInput = CanonicalProcessIdentity;
+
 export type CanonicalNetworkTransport = "tcp" | "udp";
 
 export interface CanonicalNetworkEndpoint {
@@ -343,6 +353,24 @@ export function createCanonicalExecutableIdentity(input: {
   });
 }
 
+export function createCanonicalProcessIdentity(
+  input: CanonicalProcessIdentityInput,
+): CanonicalProcessIdentity {
+  assertStrictRecord(
+    input,
+    "process",
+    new Set(["runId", "taskId", "processId", "environmentId", "startFingerprint"]),
+    "canonical_contract_invalid",
+  );
+  return Object.freeze({
+    runId: validateToken(input.runId, "process.runId"),
+    taskId: validateToken(input.taskId, "process.taskId"),
+    processId: validatePositiveSafeInteger(input.processId, "process.processId"),
+    environmentId: validateToken(input.environmentId, "process.environmentId"),
+    startFingerprint: validateDigest(input.startFingerprint, "process.startFingerprint"),
+  });
+}
+
 export function createCanonicalNetworkEndpoint(
   input: CanonicalNetworkEndpoint,
 ): CanonicalNetworkEndpoint {
@@ -448,6 +476,10 @@ export function canonicalRemoteToolTargetKey(target: CanonicalRemoteToolIdentity
   return `${target.source.kind}:${target.source.sourceId}:${
     target.source.capabilityId
   }:${target.server.serverId}:${target.toolName}`;
+}
+
+export function canonicalProcessIdentityKey(identity: CanonicalProcessIdentity): string {
+  return `${identity.runId}:${identity.taskId}:${identity.processId}:${identity.environmentId}:${identity.startFingerprint}`;
 }
 
 function canonicalToolSourceKey(source: CanonicalRemoteSourceRef): string {

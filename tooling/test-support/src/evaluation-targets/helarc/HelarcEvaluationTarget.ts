@@ -20,7 +20,7 @@ import type {
 } from "@agent-anything/action-execution/enforcement";
 import { Runner } from "@agent-anything/agent-runtime/runner";
 import { CurrentValidationCompletionGate } from "@agent-anything/validation/completion";
-import type { RunResult } from "@agent-anything/agent-runtime/run";
+import { createRunFailureCause, type RunFinalizationContext, type RunResult } from "@agent-anything/agent-runtime/run";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import {
   assembleEvaluationCapture,
@@ -77,8 +77,10 @@ import {
   type HelarcAgentOutput,
 } from "@agent-anything/helarc/controller";
 import {
-  HELARC_RUN_COMMAND_BINDING,
-  HELARC_RUN_COMMAND_OPERATION,
+  HELARC_SHELL_BINDING,
+  HELARC_SHELL_OPERATION,
+  HELARC_TASK_STOP_BINDING,
+  HELARC_TASK_STOP_OPERATION,
 } from "@agent-anything/helarc/tools";
 import { bindHelarcValidationCompletionGate } from "@agent-anything/helarc/validation";
 import { createHelarcTask } from "@agent-anything/helarc/task";
@@ -425,20 +427,20 @@ async function invokeHelarcTarget(
     workspace: runContext.workspace,
     now: clock.now,
   });
-  const commandActions = caseDefinition.script.toolMode === "shell-enabled"
-    ? await createHelarcLocalCommandActionCapability({
-        workspace: runContext.workspace,
-        operation: HELARC_RUN_COMMAND_OPERATION,
-        binding: HELARC_RUN_COMMAND_BINDING,
-        now: clock.now,
-      })
-    : null;
+  const commandActions = await createHelarcLocalCommandActionCapability({
+    workspace: runContext.workspace,
+    platform: process.platform === "win32" ? "win32" : "posix",
+    shellOperation: HELARC_SHELL_OPERATION,
+    shellBinding: HELARC_SHELL_BINDING,
+    taskStopOperation: HELARC_TASK_STOP_OPERATION,
+    taskStopBinding: HELARC_TASK_STOP_BINDING,
+    now: clock.now,
+  });
   const product = await createHelarcProductComposition({
     runId: productRunId,
     task: taskResult.task,
     workspace: runContext.workspace,
     provider,
-    toolMode: caseDefinition.script.toolMode,
     codeSource: createLocalCodeSourcePort(clock.now),
     fileActions,
     commandActions,
@@ -484,6 +486,18 @@ async function invokeHelarcTarget(
         trace = candidate;
       },
     },
+    resourceFinalizers: Object.freeze([Object.freeze({
+      async finalize(context: RunFinalizationContext) {
+        return await commandActions.processTasks.finalizeRun(context.runId)
+          ? null
+          : createRunFailureCause("runtime", Object.freeze({
+              code: "runtime_process_cleanup_failed",
+              message: "Evaluation Run process cleanup could not be confirmed.",
+              retryable: false,
+              metadata: Object.freeze({ runId: context.runId }),
+            }));
+      },
+    })]),
     now: clock.now,
     createRunId: () => `${trial.ref.id}.harness-run`,
     createId: ({ runId, kind, sequence }) => `${runId}.${kind}.${sequence}`,

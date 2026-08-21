@@ -1,7 +1,6 @@
 export type {
   CreateHelarcProductCompositionInput,
   HelarcProductComposition,
-  HelarcToolMode,
 } from "./HelarcProductComposition.js";
 export { createHelarcProductComposition } from "./HelarcProductComposition.js";
 export type {

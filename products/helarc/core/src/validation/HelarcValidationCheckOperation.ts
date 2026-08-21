@@ -18,7 +18,6 @@ import type { CompositeExecutionDependencies } from "@agent-anything/operation-c
 import type { ToolJsonObject } from "@agent-anything/tools/catalog";
 import type { ToolRegistrationInput } from "@agent-anything/tools/registration";
 import type { ValidationOwnerRef } from "@agent-anything/validation/definition";
-import type { HelarcRunCommandRequest } from "../tools/HelarcCommandOperation.js";
 
 export const HELARC_RUN_VALIDATION_CHECK_TOOL = "codeAgent.runValidationCheck";
 
@@ -39,8 +38,11 @@ export type HelarcValidationClaim =
   | "security_scan"
   | "performance_benchmark";
 
-export interface HelarcRunValidationCheckRequest extends HelarcRunCommandRequest {
+export interface HelarcRunValidationCheckRequest {
   readonly claim: HelarcValidationClaim;
+  readonly command: string;
+  readonly timeout_ms?: number;
+  readonly description?: string;
 }
 
 export interface HelarcValidationCheckConfiguration {
@@ -78,7 +80,7 @@ const COMPOSITE_DEFINITION = snapshotCompositeDefinition({
   nodes: Object.freeze([Object.freeze({
     id: "run-command",
     operation: Object.freeze({
-      operation: Object.freeze({ namespace: "helarc", name: "run-command" }),
+      operation: Object.freeze({ namespace: "helarc", name: "shell-execute" }),
       revision: "1",
     }),
     allowedBindings: Object.freeze(["direct" as const]),
@@ -215,7 +217,7 @@ export function createHelarcValidationCheckOperationContribution(input: {
       },
       operationBinding: HELARC_RUN_VALIDATION_CHECK_BINDING,
       retirement: null,
-      metadata: { profile: "shell-enabled", purpose: "validation" },
+      metadata: { profile: "code-agent", purpose: "validation" },
     },
     allowedOrigins: ["model", "workflow"],
     admittedAt: input.admittedAt,
@@ -234,7 +236,12 @@ export function createHelarcValidationCheckOperationContribution(input: {
               id: "helarc.validation.command-request",
               transform({ compositeInput }: { readonly compositeInput: unknown }) {
                 const configuration = resolveCompositeConfiguration(compositeInput, input.registry);
-                return configuration.request;
+                return Object.freeze({
+                  command: configuration.request.command,
+                  validation_claim: configuration.request.claim,
+                  ...(configuration.request.timeout_ms === undefined ? {} : { timeout_ms: configuration.request.timeout_ms }),
+                  ...(configuration.request.description === undefined ? {} : { description: configuration.request.description }),
+                });
               },
             })]),
             conditions: Object.freeze([]),
@@ -256,7 +263,7 @@ export function createHelarcValidationCheckOperationContribution(input: {
 
 export function parseHelarcRunValidationCheckRequest(value: unknown): HelarcRunValidationCheckRequest {
   if (!isRecord(value)) throw new TypeError("Validation Check request must be an object.");
-  const allowed = new Set(["claim", "command", "args", "rootName", "cwd", "timeoutMs", "reason"]);
+  const allowed = new Set(["claim", "command", "timeout_ms", "description"]);
   if (Object.keys(value).some((key) => !allowed.has(key))) {
     throw new TypeError("Validation Check request contains unsupported fields.");
   }
@@ -264,21 +271,15 @@ export function parseHelarcRunValidationCheckRequest(value: unknown): HelarcRunV
     throw new TypeError("Validation Check claim is unsupported.");
   }
   if (typeof value.command !== "string" || value.command.trim().length === 0 ||
-      !Array.isArray(value.args) || !value.args.every((item) => typeof item === "string") ||
-      typeof value.reason !== "string" || value.reason.trim().length === 0 ||
-      (value.rootName !== undefined && (typeof value.rootName !== "string" || value.rootName.length === 0)) ||
-      (value.cwd !== undefined && (typeof value.cwd !== "string" || value.cwd.length === 0)) ||
-      (value.timeoutMs !== undefined && (!Number.isSafeInteger(value.timeoutMs) || (value.timeoutMs as number) < 1))) {
+      (value.description !== undefined && (typeof value.description !== "string" || value.description.trim().length === 0)) ||
+      (value.timeout_ms !== undefined && (!Number.isSafeInteger(value.timeout_ms) || (value.timeout_ms as number) < 1))) {
     throw new TypeError("Validation Check command input is invalid.");
   }
   return deepFreeze({
     claim: value.claim as HelarcValidationClaim,
     command: value.command,
-    args: [...value.args] as string[],
-    ...(value.rootName === undefined ? {} : { rootName: value.rootName as string }),
-    ...(value.cwd === undefined ? {} : { cwd: value.cwd as string }),
-    ...(value.timeoutMs === undefined ? {} : { timeoutMs: value.timeoutMs as number }),
-    reason: value.reason,
+    ...(value.timeout_ms === undefined ? {} : { timeout_ms: value.timeout_ms as number }),
+    ...(value.description === undefined ? {} : { description: value.description as string }),
   });
 }
 
@@ -302,19 +303,19 @@ function projectValidationCommandResult(
 ) {
   const output = child?.output;
   const command = isRecord(output) &&
-      (typeof output.exitCode === "number" || output.exitCode === null) &&
+      output.mode === "foreground" &&
+      (typeof output.exit_code === "number" || output.exit_code === null) &&
       (typeof output.signal === "string" || output.signal === null) &&
-      typeof output.durationMs === "number" &&
-      typeof output.stdoutTruncated === "boolean" &&
-      typeof output.stderrTruncated === "boolean" &&
-      typeof output.settlementConfirmed === "boolean"
+      typeof output.duration_ms === "number" &&
+      typeof output.stdout_truncated === "boolean" &&
+      typeof output.stderr_truncated === "boolean"
     ? Object.freeze({
-        exitCode: output.exitCode as number | null,
+        exitCode: output.exit_code as number | null,
         signal: output.signal as string | null,
-        durationMs: output.durationMs,
-        stdoutTruncated: output.stdoutTruncated,
-        stderrTruncated: output.stderrTruncated,
-        settlementConfirmed: output.settlementConfirmed,
+        durationMs: output.duration_ms,
+        stdoutTruncated: output.stdout_truncated,
+        stderrTruncated: output.stderr_truncated,
+        settlementConfirmed: true,
       })
     : null;
   return Object.freeze({
@@ -328,15 +329,12 @@ function validationCheckSchema(): ToolJsonObject {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["claim", "command", "args", "reason"],
+    required: ["claim", "command"],
     properties: {
       claim: { type: "string", enum: [...VALIDATION_CLAIMS] },
       command: { type: "string", minLength: 1 },
-      args: { type: "array", items: { type: "string" } },
-      rootName: { type: "string", minLength: 1 },
-      cwd: { type: "string", minLength: 1 },
-      timeoutMs: { type: "integer", minimum: 1 },
-      reason: { type: "string", minLength: 1 },
+      timeout_ms: { type: "integer", minimum: 1 },
+      description: { type: "string", minLength: 1 },
     },
   };
 }

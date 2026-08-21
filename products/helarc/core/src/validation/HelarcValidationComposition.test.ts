@@ -23,44 +23,48 @@ const NOW = "2026-08-18T00:00:00.000Z";
 const RUN: RunRef = Object.freeze({ id: "run-1" });
 
 describe("Helarc Validation composition", () => {
-  it("materializes an explicit empty read-only profile", async () => {
+  it("materializes the single Code Agent profile with command Validation", async () => {
     const source = mutableCodeSource(absentSnapshot());
-    const composition = await createComposition("read-only", source.port);
+    const composition = await createComposition(source.port);
     const execution = await prepare(composition);
 
-    expect(composition.profile.requirements).toEqual([]);
-    expect(composition.operation).toBeNull();
-    expect((await execution.readCurrentSnapshot()).requirementStates).toEqual([]);
+    expect(composition.profile.requirements).toHaveLength(1);
+    expect(composition.operation).not.toBeNull();
+    expect((await execution.readCurrentSnapshot()).requirementStates)
+      .toEqual([expect.objectContaining({ status: "unassessed" })]);
   });
 
   it("assesses exact target state as satisfied without creating effectful work", async () => {
     const source = mutableCodeSource(absentSnapshot());
-    const composition = await createComposition("read-only", source.port, exactTarget());
+    const composition = await createComposition(source.port, exactTarget());
     const execution = await prepare(composition);
 
     expect((await execution.readCurrentSnapshot()).requirementStates)
-      .toEqual([expect.objectContaining({ status: "satisfied" })]);
+      .toEqual(expect.arrayContaining([expect.objectContaining({
+        requirement: expect.objectContaining({ id: "target-empty-marker" }), status: "satisfied",
+      })]));
     expect((await execution.readHistory()).filter(({ kind }) => kind === "check_attempt"))
       .toHaveLength(1);
   });
 
   it("assesses a mismatched exact target as violated and later marks a changed subject stale", async () => {
     const source = mutableCodeSource(presentSnapshot("sha256:current"));
-    const composition = await createComposition("read-only", source.port, exactTarget());
+    const composition = await createComposition(source.port, exactTarget());
     const execution = await prepare(composition);
     const assessed = await execution.readCurrentSnapshot();
 
-    expect(assessed.requirementStates[0]).toMatchObject({ status: "violated" });
+    const targetState = assessed.requirementStates.find(({ requirement }) => requirement.id === "target-empty-marker");
+    expect(targetState).toMatchObject({ status: "violated" });
     source.set(absentSnapshot("2026-08-18T00:00:01.000Z"));
-    const subject = assessed.requirementStates[0]?.subject;
+    const subject = targetState?.subject;
     if (subject === null || subject === undefined) throw new Error("Expected an exact target subject.");
     await execution.checkSubjectFreshness({
-      requirement: assessed.requirementStates[0]!.requirement,
+      requirement: targetState!.requirement,
       snapshot: subject,
       expectedRevision: assessed.ref.revision,
     }, liveInterruption());
 
-    expect((await execution.readCurrentSnapshot()).requirementStates[0])
+    expect((await execution.readCurrentSnapshot()).requirementStates.find(({ requirement }) => requirement.id === "target-empty-marker"))
       .toMatchObject({ status: "stale" });
   });
 
@@ -69,7 +73,7 @@ describe("Helarc Validation composition", () => {
     { exitCode: 1, expected: "violated" },
   ] as const)("assesses command exit $exitCode as $expected", async ({ exitCode, expected }) => {
     const source = mutableCodeSource(absentSnapshot());
-    const composition = await createComposition("shell-enabled", source.port);
+    const composition = await createComposition(source.port);
     const execution = await prepare(composition, commandSettlement(exitCode));
     const resolver = composition.runner.checkRequests;
     const processor = composition.runner.checkResults;
@@ -101,17 +105,13 @@ describe("Helarc Validation composition", () => {
 });
 
 async function createComposition(
-  toolMode: "read-only" | "shell-enabled",
   codeSource: CodeSourcePort,
   target?: ReturnType<typeof exactTarget>,
 ): Promise<HelarcValidationComposition> {
   return createHelarcValidationComposition({
-    toolMode,
     workspace: WORKSPACE,
     codeSource,
-    commandEnvironment: toolMode === "shell-enabled"
-      ? Object.freeze({ id: "command-environment", revision: "sha256:environment" })
-      : null,
+    commandEnvironment: Object.freeze({ id: "command-environment", revision: "sha256:environment" }),
     exactTargets: target === undefined ? [] : [target],
     admittedAt: NOW,
     now: () => NOW,
@@ -186,10 +186,9 @@ function commandSettlement(exitCode: number): ValidationOperationCheckResolverPo
 function validationCommandRequest() {
   return Object.freeze({
     claim: "tests",
-    command: "pnpm",
-    args: Object.freeze(["test"]),
-    timeoutMs: 30_000,
-    reason: "Verify the current workspace.",
+    command: "pnpm test",
+    timeout_ms: 30_000,
+    description: "Verify the current workspace.",
   });
 }
 

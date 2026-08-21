@@ -28,6 +28,26 @@ export interface PreparedCommandExecutable {
   readonly canonicalPath: string;
 }
 
+export interface NativeShellSelection {
+  readonly toolName: "Bash" | "PowerShell";
+  readonly command: string;
+  readonly argumentsBeforeCommand: readonly string[];
+}
+
+export function selectNativeShell(platform: FileSystemPlatform): NativeShellSelection {
+  return platform === "win32"
+    ? Object.freeze({
+        toolName: "PowerShell" as const,
+        command: "powershell.exe",
+        argumentsBeforeCommand: Object.freeze(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]),
+      })
+    : Object.freeze({
+        toolName: "Bash" as const,
+        command: "bash",
+        argumentsBeforeCommand: Object.freeze(["-lc"]),
+      });
+}
+
 export async function createCommandEnvironmentPolicy(input: {
   readonly id: string;
   readonly overrides?: Readonly<Record<string, string>>;

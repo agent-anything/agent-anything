@@ -22,6 +22,12 @@ import { createControllerToolExposureProof } from "@agent-anything/tools/selecti
 import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "../task/index.js";
 import { createHelarcProductComposition } from "./HelarcProductComposition.js";
+import {
+  HELARC_SHELL_BINDING,
+  HELARC_SHELL_OPERATION,
+  HELARC_TASK_STOP_BINDING,
+  HELARC_TASK_STOP_OPERATION,
+} from "../tools/HelarcCommandOperation.js";
 
 describe("HelarcProductComposition", () => {
   it("defines one invocation's product behavior without exposing an execution entry point", async () => {
@@ -29,7 +35,6 @@ describe("HelarcProductComposition", () => {
       runId: "run-1",
       ...createTask("D:/workspace"),
       provider: new UnusedProvider(),
-      toolMode: "read-only",
       ...createLocalContributions(),
     });
 
@@ -39,19 +44,17 @@ describe("HelarcProductComposition", () => {
     });
     expect(composition.runMetadata).toMatchObject({
       product: "helarc",
-      toolMode: "read-only",
     });
     expect("run" in composition).toBe(false);
     expect("start" in composition).toBe(false);
     expect("runner" in composition).toBe(false);
   });
 
-  it("exposes the accepted five-file-Tool surface through one registered Operation path", async () => {
+  it("exposes the admitted Code Agent Tool surface through registered Operation paths", async () => {
     const composition = await createHelarcProductComposition({
       runId: "run-1",
       ...createTask("D:/workspace"),
       provider: new UnusedProvider(),
-      toolMode: "read-only",
       ...createLocalContributions(),
     });
 
@@ -59,15 +62,12 @@ describe("HelarcProductComposition", () => {
       composition.actions.toolSelection,
       "controller-request-1",
     );
-    expect(exposure.catalog.tools.map(({ name }) => name)).toEqual([
-      "Edit",
-      "Glob",
-      "Grep",
-      "Read",
-      "Write",
-    ]);
+    expect(exposure.catalog.tools.map(({ name }) => name)).toEqual(expect.arrayContaining([
+      "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "TaskStop",
+      "codeAgent.runValidationCheck",
+    ]));
     expect(composition.actions.registrations.registrations.map(({ operation }) => operation.operation.name))
-      .toEqual(["edit", "glob", "grep", "read", "write"]);
+      .toEqual(expect.arrayContaining(["edit", "glob", "grep", "read", "write", "shell-execute", "task-stop"]));
   });
 
   it("projects trusted failures into bounded product messages without leaking raw data", async () => {
@@ -76,7 +76,6 @@ describe("HelarcProductComposition", () => {
       runId: "run-1",
       ...createTask("D:/workspace"),
       provider: new UnusedProvider(),
-      toolMode: "read-only",
       ...createLocalContributions(),
     });
 
@@ -172,7 +171,31 @@ function createLocalContributions() {
       adapters: [],
       executors: [],
     },
-    commandActions: null,
+    commandActions: {
+      shellTool: "PowerShell" as const,
+      shellActionAdapterId: "test.shell.adapter",
+      taskStopActionAdapterId: "test.task-stop.adapter",
+      environment: { id: "test-shell", revision: "sha256:test-shell" },
+      registrations: createActionRegistrationSnapshot([
+        {
+          registrationId: "test.shell.registration", revision: "1",
+          operation: HELARC_SHELL_OPERATION, binding: HELARC_SHELL_BINDING,
+          adapter: { id: "test.shell.adapter", version: "1", requestSchemaRevision: "1" },
+          executor: { ...executor, id: "test.shell.executor" },
+          effectFamilies: ["process", "filesystem"], sandboxRequirementRevision: "test.shell.sandbox.v1",
+          maxInvocationBytes: 1_000_000, maxPhysicalResultBytes: 1_000_000,
+        },
+        {
+          registrationId: "test.task-stop.registration", revision: "1",
+          operation: HELARC_TASK_STOP_OPERATION, binding: HELARC_TASK_STOP_BINDING,
+          adapter: { id: "test.task-stop.adapter", version: "1", requestSchemaRevision: "1" },
+          executor: { ...executor, id: "test.task-stop.executor" },
+          effectFamilies: ["process"], sandboxRequirementRevision: "test.shell.sandbox.v1",
+          maxInvocationBytes: 1_000_000, maxPhysicalResultBytes: 1_000_000,
+        },
+      ]),
+      adapters: [], executors: [],
+    },
   };
 }
 

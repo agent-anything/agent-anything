@@ -114,6 +114,30 @@ describe("ActionEffectSet", () => {
     if (effectSet.kind !== "effects") throw new Error("Expected effects.");
     expect(capabilityEffectKey(effectSet.values[0]!)).toContain(DIGEST_B);
   });
+
+  it("binds a process signal to exact Run, task, process, environment, and start identity", () => {
+    const effectSet = createActionEffectSet({
+      kind: "effects",
+      values: [{
+        kind: "process",
+        operation: "signal",
+        target: {
+          runId: "run-1",
+          taskId: "run-1:task:1",
+          processId: 42,
+          environmentId: "local-environment",
+          startFingerprint: DIGEST_A,
+        },
+      }],
+    });
+    if (effectSet.kind !== "effects") throw new Error("Expected effects.");
+    expect(effectSet.values[0]).toMatchObject({
+      kind: "process",
+      operation: "signal",
+      target: { runId: "run-1", taskId: "run-1:task:1", processId: 42 },
+    });
+    expect(capabilityEffectKey(effectSet.values[0]!)).toContain(DIGEST_A);
+  });
 });
 
 function path(value: string) {

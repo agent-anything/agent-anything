@@ -1,42 +1,11 @@
-import type {
-  OperationBindingResolutionInput,
-  OperationBindingResolverRegistration,
-} from "@agent-anything/operation-catalog/binding";
+import type { OperationBindingResolutionInput, OperationBindingResolverRegistration } from "@agent-anything/operation-catalog/binding";
 import { snapshotResolvedOperationBinding } from "@agent-anything/operation-catalog/binding";
 import type { RegisteredOperation } from "@agent-anything/operation-catalog/catalog";
-import type {
-  OperationBindingRevisionRef,
-  OperationRevisionRef,
-} from "@agent-anything/operation-catalog/identity";
-import type { ToolJsonObject } from "@agent-anything/tools/catalog";
+import type { OperationBindingRevisionRef, OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
 import type { ToolRegistrationInput } from "@agent-anything/tools/registration";
+import { findHelarcBaselineToolContract, type HelarcShellToolName } from "./HelarcBaselineToolContracts.js";
 
-export const HELARC_RUN_COMMAND_TOOL = "codeAgent.runCommand";
-
-export interface HelarcRunCommandRequest {
-  readonly command: string;
-  readonly args: readonly string[];
-  readonly rootName?: string;
-  readonly cwd?: string;
-  readonly timeoutMs?: number;
-  readonly reason: string;
-}
-
-export interface HelarcRunCommandOutput {
-  readonly rootName: string;
-  readonly workspaceId: string;
-  readonly command: string;
-  readonly args: readonly string[];
-  readonly cwd: string;
-  readonly exitCode: number | null;
-  readonly signal: string | null;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly durationMs: number;
-  readonly stdoutTruncated: boolean;
-  readonly stderrTruncated: boolean;
-  readonly settlementConfirmed: boolean;
-}
+export const HELARC_TASK_STOP_TOOL = "TaskStop";
 
 export interface HelarcCommandOperationContribution {
   readonly operations: readonly RegisteredOperation[];
@@ -44,134 +13,83 @@ export interface HelarcCommandOperationContribution {
   readonly tools: readonly ToolRegistrationInput[];
 }
 
-export const HELARC_RUN_COMMAND_OPERATION: OperationRevisionRef = Object.freeze({
-  operation: Object.freeze({ namespace: "helarc", name: "run-command" }),
-  revision: "1",
+export const HELARC_SHELL_OPERATION: OperationRevisionRef = Object.freeze({
+  operation: Object.freeze({ namespace: "helarc", name: "shell-execute" }), revision: "1",
 });
-
-export const HELARC_RUN_COMMAND_BINDING: OperationBindingRevisionRef = Object.freeze({
-  operation: HELARC_RUN_COMMAND_OPERATION,
-  revision: "1",
+export const HELARC_SHELL_BINDING: OperationBindingRevisionRef = Object.freeze({ operation: HELARC_SHELL_OPERATION, revision: "1" });
+export const HELARC_TASK_STOP_OPERATION: OperationRevisionRef = Object.freeze({
+  operation: Object.freeze({ namespace: "helarc", name: "task-stop" }), revision: "1",
 });
-
-const RESOLVER_ID = "helarc.run-command.direct";
+export const HELARC_TASK_STOP_BINDING: OperationBindingRevisionRef = Object.freeze({ operation: HELARC_TASK_STOP_OPERATION, revision: "1" });
 
 export function createHelarcCommandOperationContribution(input: {
-  readonly actionAdapterId: string;
+  readonly shellTool: HelarcShellToolName;
+  readonly shellActionAdapterId: string;
+  readonly taskStopActionAdapterId: string;
   readonly admittedAt: string;
 }): HelarcCommandOperationContribution {
-  const operation: RegisteredOperation = {
-    admissionId: "helarc.run-command.admission.v1",
+  return Object.freeze({
+    operations: Object.freeze([
+      operation("helarc.shell.admission.v1", input.admittedAt, HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, "helarc.shell.direct", "code-agent.shell"),
+      operation("helarc.task-stop.admission.v1", input.admittedAt, HELARC_TASK_STOP_OPERATION, HELARC_TASK_STOP_BINDING, "helarc.task-stop.direct", "code-agent.task-stop"),
+    ]),
+    bindings: Object.freeze([
+      binding("helarc.shell.direct", HELARC_SHELL_BINDING, input.shellActionAdapterId),
+      binding("helarc.task-stop.direct", HELARC_TASK_STOP_BINDING, input.taskStopActionAdapterId),
+    ]),
+    tools: Object.freeze([
+      tool("helarc.tool.shell.admission.v1", findHelarcBaselineToolContract(input.shellTool), HELARC_SHELL_BINDING, input.admittedAt),
+      tool("helarc.tool.task-stop.admission.v1", findHelarcBaselineToolContract("TaskStop"), HELARC_TASK_STOP_BINDING, input.admittedAt),
+    ]),
+  });
+}
+
+function operation(admissionId: string, admittedAt: string, ref: OperationRevisionRef, bindingRef: OperationBindingRevisionRef, resolverId: string, domainPurpose: string): RegisteredOperation {
+  return {
+    admissionId,
     operation: {
-      ref: HELARC_RUN_COMMAND_OPERATION,
-      semanticOwner: "helarc",
-      requestSchemaRevision: "1",
-      resultSchemaRevision: "1",
-      roles: {
-        requestOrigins: ["tool_request"],
-        exposure: "eager_tool",
-        runControl: "direct",
-        trust: "canonical_external_effect",
-        participation: "semantic_owner",
-        domainPurpose: "code-agent.run-command",
-      },
+      ref, semanticOwner: "helarc", requestSchemaRevision: "1", resultSchemaRevision: "1",
+      roles: { requestOrigins: ["tool_request"], exposure: "eager_tool", runControl: "direct", trust: "canonical_external_effect", participation: "semantic_owner", domainPurpose },
     },
-    binding: {
-      ref: HELARC_RUN_COMMAND_BINDING,
-      kind: "direct",
-      resolverId: RESOLVER_ID,
-      resolverRevision: "1",
-    },
-    sourceRevision: "1",
-    allowedRequestOrigins: ["tool_request"],
-    admittedAt: input.admittedAt,
-    retirement: null,
+    binding: { ref: bindingRef, kind: "direct", resolverId, resolverRevision: "1" },
+    sourceRevision: "1", allowedRequestOrigins: ["tool_request"], admittedAt, retirement: null,
   };
-  const binding: OperationBindingResolverRegistration = {
+}
+
+function binding(resolverId: string, bindingRef: OperationBindingRevisionRef, actionAdapterId: string): OperationBindingResolverRegistration {
+  return {
     resolver: Object.freeze({
-      id: RESOLVER_ID,
-      revision: "1",
+      id: resolverId, revision: "1",
       async resolve(request: OperationBindingResolutionInput<unknown, unknown>) {
         return Object.freeze({
           status: "resolved" as const,
           binding: snapshotResolvedOperationBinding({
-            kind: "direct",
-            invocation: request.context.invocation,
-            correlation: request.context.correlation,
-            parentInvocation: request.context.parentInvocation,
-            binding: request.registration.binding.ref,
-            request: request.request,
-            resolverRevision: "1",
-            resolutionFingerprint: `${request.context.invocation.id}:direct:${input.actionAdapterId}`,
-            actionAdapterId: input.actionAdapterId,
+            kind: "direct", invocation: request.context.invocation, correlation: request.context.correlation,
+            parentInvocation: request.context.parentInvocation, binding: bindingRef, request: request.request,
+            resolverRevision: "1", resolutionFingerprint: `${request.context.invocation.id}:direct:${actionAdapterId}`, actionAdapterId,
           }, snapshotRequest),
         });
       },
     }),
   };
-  const tool: ToolRegistrationInput = {
-    admissionId: "helarc.tool.run-command.admission.v1",
-    descriptor: {
-      ref: {
-        tool: { namespace: "helarc", name: "run-command" },
-        revision: "1",
-      },
-      name: HELARC_RUN_COMMAND_TOOL,
-      description: "Run one process inside a selected Code Workspace root.",
-      inputSchema: commandSchema(),
-      schemaRevisions: {
-        dialect: "json-schema-2020-12",
-        input: "1",
-        output: "1",
-        translation: "native-1",
-      },
-      annotations: {
-        title: "Run command",
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: false,
-        openWorldHint: true,
-      },
-      source: {
-        kind: "product",
-        sourceId: "helarc",
-        sourceRevision: "1",
-        activationEpoch: null,
-      },
-      operationBinding: HELARC_RUN_COMMAND_BINDING,
-      retirement: null,
-      metadata: { profile: "shell-enabled" },
-    },
-    allowedOrigins: ["model"],
-    admittedAt: input.admittedAt,
-  };
-  return Object.freeze({
-    operations: Object.freeze([operation]),
-    bindings: Object.freeze([binding]),
-    tools: Object.freeze([tool]),
-  });
 }
 
-function commandSchema(): ToolJsonObject {
+function tool(admissionId: string, contract: ReturnType<typeof findHelarcBaselineToolContract>, operationBinding: OperationBindingRevisionRef, admittedAt: string): ToolRegistrationInput {
   return {
-    type: "object",
-    additionalProperties: false,
-    required: ["command", "args", "reason"],
-    properties: {
-      command: { type: "string", minLength: 1 },
-      args: { type: "array", items: { type: "string" } },
-      rootName: { type: "string", minLength: 1 },
-      cwd: { type: "string", minLength: 1 },
-      timeoutMs: { type: "integer", minimum: 1 },
-      reason: { type: "string", minLength: 1 },
+    admissionId,
+    descriptor: {
+      ref: { tool: { namespace: "helarc", name: contract.name.toLowerCase() }, revision: "1" },
+      name: contract.name, description: contract.description, inputSchema: contract.inputSchema,
+      schemaRevisions: { dialect: "json-schema-2020-12", input: "1", output: "1", translation: "native-1" },
+      annotations: contract.annotations,
+      source: { kind: "product", sourceId: "helarc", sourceRevision: "1", activationEpoch: null },
+      operationBinding, retirement: null, metadata: { profile: "code-agent" },
     },
+    allowedOrigins: ["model"], admittedAt,
   };
 }
 
-function snapshotRequest<T>(input: T): T {
-  return deepFreeze(structuredClone(input));
-}
-
+function snapshotRequest<T>(input: T): T { return deepFreeze(structuredClone(input)); }
 function deepFreeze<T>(input: T): T {
   if (input !== null && typeof input === "object" && !Object.isFrozen(input)) {
     for (const value of Object.values(input)) deepFreeze(value);
