@@ -72,3 +72,56 @@ export {
   HELARC_PRODUCT_EFFECTIVENESS_PROTOCOL,
   HELARC_PRODUCT_EFFECTIVENESS_TARGET_INPUTS,
 } from "./HelarcProductEffectivenessProtocol.js";
+export type {
+  HelarcProductEffectivenessCaseId,
+  HelarcProductEffectivenessCaseProfile,
+  HelarcProductEffectivenessExpectedClaim,
+  HelarcProductEffectivenessFixtureFile,
+  HelarcProductEffectivenessSuiteProfile,
+} from "./HelarcProductEffectivenessSuite.js";
+export {
+  createHelarcProductEffectivenessSuite,
+  HELARC_PRODUCT_EFFECTIVENESS_REPETITIONS,
+  HELARC_PRODUCT_EFFECTIVENESS_SUITE_REVISION,
+  HELARC_PRODUCT_EFFECTIVENESS_TIME,
+} from "./HelarcProductEffectivenessSuite.js";
+export type {
+  HelarcProductEffectivenessDiagnostics,
+  HelarcProductEffectivenessEvidenceBundle,
+  HelarcProductEffectivenessEvidenceBundleInput,
+  HelarcProductEffectivenessSafetyGate,
+  HelarcProductEffectivenessTargetName,
+  HelarcProductEffectivenessTrialEvidence,
+  HelarcProductEffectivenessTrialProvenance,
+  HelarcProductEffectivenessTrialStatus,
+} from "./HelarcProductEffectivenessEvidence.js";
+export {
+  importHelarcProductEffectivenessEvidenceBundle,
+  sealHelarcProductEffectivenessEvidenceBundle,
+} from "./HelarcProductEffectivenessEvidence.js";
+export type {
+  HelarcProductEffectivenessComparison,
+  HelarcProductEffectivenessDiagnosticSummary,
+  HelarcProductEffectivenessMean,
+  HelarcProductEffectivenessReleaseStatus,
+} from "./HelarcProductEffectivenessComparison.js";
+export { compareHelarcProductEffectiveness } from "./HelarcProductEffectivenessComparison.js";
+export type {
+  HelarcProductEffectivenessDefinition,
+} from "./HelarcProductEffectivenessDefinition.js";
+export {
+  createHelarcProductEffectivenessDefinition,
+} from "./HelarcProductEffectivenessDefinition.js";
+export type {
+  CaptureHelarcProductEffectivenessInput,
+} from "./HelarcProductEffectivenessCapture.js";
+export {
+  captureHelarcProductEffectiveness,
+} from "./HelarcProductEffectivenessCapture.js";
+export type {
+  HelarcEvaluationExecutableCase,
+  HelarcEvaluationRunMaterial,
+  HelarcEvaluationRunOptions,
+  HelarcEvaluationWorkspaceSnapshot,
+} from "./HelarcEvaluationTarget.js";
+export { executeHelarcEvaluationCase } from "./HelarcEvaluationTarget.js";

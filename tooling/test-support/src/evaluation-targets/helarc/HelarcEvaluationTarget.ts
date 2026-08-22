@@ -93,7 +93,11 @@ import {
   createHelarcLocalCommandActionCapability,
 } from "@agent-anything/helarc-local-environment/command";
 import { createHelarcLocalSandboxGateway } from "@agent-anything/helarc-local-environment/sandbox";
-import type { ProviderRequest } from "@agent-anything/model-interaction";
+import type {
+  Provider,
+  ProviderCallResult,
+  ProviderRequest,
+} from "@agent-anything/model-interaction";
 import type { RuntimeEvent, RuntimeEventPublisher } from "@agent-anything/observability/events";
 import type { RunTrace } from "@agent-anything/observability/tracing";
 import type { ToolSelectionRevision } from "@agent-anything/tools/selection";
@@ -120,7 +124,7 @@ const TARGET_LIMITATION = Object.freeze({
   metadata: Object.freeze({}),
 });
 
-interface WorkspaceSnapshot {
+export interface HelarcEvaluationWorkspaceSnapshot {
   readonly files: readonly HelarcEvaluationFixtureFile[];
 }
 
@@ -132,23 +136,46 @@ interface HelarcEvaluationLeaseMaterial {
   readonly trialRef: EvaluationRecordRef;
   readonly caseDefinition: HelarcEvaluationCaseDefinition;
   readonly root: string;
-  readonly before: WorkspaceSnapshot;
+  readonly before: HelarcEvaluationWorkspaceSnapshot;
 }
 
-interface HelarcEvaluationCaptureMaterial {
+export interface HelarcEvaluationExecutableCase {
+  readonly scenario: string;
+  readonly definition: HelarcEvaluationCaseDefinition["definition"];
+  readonly fixture: HelarcEvaluationCaseDefinition["fixture"];
+  readonly script: HelarcEvaluationCaseDefinition["script"];
+  readonly expectedClaim: HelarcEvaluationCaseDefinition["expectedClaim"];
+  readonly validationTargets: HelarcEvaluationCaseDefinition["validationTargets"];
+}
+
+export interface HelarcEvaluationRunOptions {
+  readonly provider?: Provider;
+  readonly interactionAnswers?: Readonly<Record<string, string>>;
+  readonly now?: () => string;
+  readonly maxDurationMs?: number;
+  readonly maxIterations?: number;
+  readonly maxActions?: number;
+}
+
+export interface HelarcEvaluationRunMaterial<
+  TCase extends HelarcEvaluationExecutableCase = HelarcEvaluationCaseDefinition,
+> {
   readonly trialRef: EvaluationRecordRef;
   readonly observationRef: EvaluationRecordRef;
   readonly environmentRef: EvaluationRecordRef;
-  readonly caseDefinition: HelarcEvaluationCaseDefinition;
+  readonly caseDefinition: TCase;
   readonly product: HelarcProductResult;
   readonly runResult: RunResult<HelarcAgentOutput>;
   readonly trace: RunTrace;
-  readonly before: WorkspaceSnapshot;
-  readonly after: WorkspaceSnapshot;
+  readonly before: HelarcEvaluationWorkspaceSnapshot;
+  readonly after: HelarcEvaluationWorkspaceSnapshot;
   readonly approval: ApprovalDecisionRecord;
   readonly providerRequests: readonly ProviderRequest[];
+  readonly providerResults: readonly ProviderCallResult[];
+  readonly providerWasScripted: boolean;
   readonly actionNames: readonly string[];
   readonly retryCount: number;
+  readonly interactionSubmissionCount: number;
 }
 
 export interface HelarcEvaluationTargetAdapter {
@@ -162,7 +189,7 @@ export function createHelarcEvaluationTargetAdapter(
 ): HelarcEvaluationTargetAdapter {
   const cases = new Map(corpus.cases.map((item) => [refKey(item.definition.ref), item]));
   const leases = new Map<string, HelarcEvaluationLeaseMaterial>();
-  const captures = new Map<string, HelarcEvaluationCaptureMaterial>();
+  const captures = new Map<string, HelarcEvaluationRunMaterial>();
 
   const environment: EvaluationEnvironmentPort = Object.freeze({
     async prepare(input: Parameters<EvaluationEnvironmentPort["prepare"]>[0]) {
@@ -339,12 +366,67 @@ export function createHelarcEvaluationTargetAdapter(
   return Object.freeze({ environment, target, capture });
 }
 
-async function invokeHelarcTarget(
+export async function executeHelarcEvaluationCase<
+  TCase extends HelarcEvaluationExecutableCase,
+>(input: {
+  readonly trial: EvaluationTrial;
+  readonly caseDefinition: TCase;
+  readonly provider: Provider;
+  readonly signal: AbortSignal;
+  readonly interactionAnswers?: Readonly<Record<string, string>>;
+  readonly now?: () => string;
+  readonly maxDurationMs?: number;
+  readonly maxIterations?: number;
+  readonly maxActions?: number;
+}): Promise<HelarcEvaluationRunMaterial<TCase>> {
+  let root: string | null = null;
+  try {
+    root = await mkdtemp(join(tmpdir(), "agent-anything-helarc-product-eval-"));
+    for (const file of input.caseDefinition.fixture.files) {
+      const target = resolveFixturePath(root, file.path);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, file.content, "utf8");
+    }
+    const before = await snapshotWorkspace(root);
+    return await invokeHelarcTarget(
+      input.trial,
+      Object.freeze({
+        trialRef: input.trial.ref,
+        caseDefinition: input.caseDefinition,
+        root,
+        before,
+      }),
+      input.signal,
+      {
+        provider: input.provider,
+        ...(input.interactionAnswers === undefined
+          ? {}
+          : { interactionAnswers: input.interactionAnswers }),
+        ...(input.now === undefined ? {} : { now: input.now }),
+        ...(input.maxDurationMs === undefined
+          ? {}
+          : { maxDurationMs: input.maxDurationMs }),
+        ...(input.maxIterations === undefined
+          ? {}
+          : { maxIterations: input.maxIterations }),
+        ...(input.maxActions === undefined ? {} : { maxActions: input.maxActions }),
+      },
+    );
+  } finally {
+    if (root !== null) await rm(root, { recursive: true, force: true });
+  }
+}
+
+async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
   trial: EvaluationTrial,
-  lease: HelarcEvaluationLeaseMaterial,
+  lease: Omit<HelarcEvaluationLeaseMaterial, "caseDefinition"> & {
+    readonly caseDefinition: TCase;
+  },
   signal: AbortSignal,
-): Promise<HelarcEvaluationCaptureMaterial> {
+  options: HelarcEvaluationRunOptions = {},
+): Promise<HelarcEvaluationRunMaterial<TCase>> {
   const caseDefinition = lease.caseDefinition;
+  const providerWasScripted = options.provider === undefined;
   const taskResult = createHelarcTask({
     taskId: `${trial.ref.id}.task`,
     prompt: readTaskText(caseDefinition),
@@ -356,7 +438,7 @@ async function invokeHelarcTarget(
   const workspace: WorkspaceSelection = Object.freeze({
     primary: Object.freeze({
       id: `${trial.ref.id}.workspace`,
-      name: "Phase26 fixture",
+      name: providerWasScripted ? "Phase26 fixture" : "Helarc Evaluation fixture",
       rootRef: lease.root,
       trustState: "trusted" as const,
       source: "evaluation",
@@ -375,7 +457,7 @@ async function invokeHelarcTarget(
     identityResolver: createStaticHostIdentityResolver({
       id: `${trial.ref.id}.identity`,
       kind: "service",
-      displayName: "Phase26 Evaluation",
+      displayName: providerWasScripted ? "Phase26 Evaluation" : "Helarc Evaluation",
       metadata: {},
     }),
     workspaceSelection: {
@@ -391,7 +473,9 @@ async function invokeHelarcTarget(
   });
   if (runContext.workspace === null) throw new TypeError("Helarc Evaluation requires a Workspace.");
 
-  const clock = createLogicalClock(trial.repetitionOrdinal);
+  const clock = options.now === undefined
+    ? createLogicalClock(trial.repetitionOrdinal)
+    : Object.freeze({ now: options.now });
   const canonicalRoots = await createCodeAgentCanonicalWorkspaceRoots({
     workspace: runContext.workspace,
     platform: process.platform === "win32" ? "win32" : "posix",
@@ -415,13 +499,28 @@ async function invokeHelarcTarget(
     identityId: runContext.identity.id,
     automaticReviewer: approval,
   });
-  const provider = new FakeProvider({
+  const selectedProvider = options.provider ?? new FakeProvider({
     descriptor: {
-      id: "helarc-phase26-scripted-provider",
-      name: "Helarc Phase26 scripted Provider",
+      id: "helarc-deterministic-scripted-provider",
+      name: "Helarc deterministic scripted Provider",
       metadata: { evaluation: true },
     },
     results: [...caseDefinition.script.responses],
+  });
+  const providerRequests: ProviderRequest[] = [];
+  const providerResults: ProviderCallResult[] = [];
+  const provider: Provider = Object.freeze({
+    descriptor: selectedProvider.descriptor,
+    inputAccounting: selectedProvider.inputAccounting,
+    async send(
+      request: ProviderRequest,
+      context: Parameters<Provider["send"]>[1],
+    ) {
+      providerRequests.push(request);
+      const result = await selectedProvider.send(request, context);
+      providerResults.push(result);
+      return result;
+    },
   });
   const fileActions = createHelarcLocalFileActionCapability({
     workspace: runContext.workspace,
@@ -508,7 +607,9 @@ async function invokeHelarcTarget(
   });
   const manager = createHostRunManager({ runner, now: clock.now });
   const configurationFingerprint = await createCanonicalSha256Digest(
-    "agent-anything.helarc.phase26-environment.v1",
+    providerWasScripted
+      ? "agent-anything.helarc.phase26-environment.v1"
+      : "agent-anything.helarc.product-effectiveness-environment.v1",
     {
       platform: process.platform === "win32" ? "win32" : "posix",
       enforcement: "disabled",
@@ -558,10 +659,10 @@ async function invokeHelarcTarget(
         completion: createEvaluationValidationCompletionConfig(),
       }),
       limits: {
-        maxIterations: 5,
-        maxActions: 8,
+        maxIterations: options.maxIterations ?? 5,
+        maxActions: options.maxActions ?? 8,
         maxConsecutiveActionFailures: 1,
-        maxDurationMs: 30_000,
+        maxDurationMs: options.maxDurationMs ?? 30_000,
         maxPendingInteractions: 4,
         maxDescendantRuns: 0,
         maxDescendantDepth: 0,
@@ -624,8 +725,36 @@ async function invokeHelarcTarget(
   };
   signal.addEventListener("abort", onAbort, { once: true });
   if (signal.aborted) onAbort();
-  const hostResult = await active.wait();
-  signal.removeEventListener("abort", onAbort);
+  let interactionSubmissionCount = 0;
+  const submittedInteractions = new Set<string>();
+  const submitConfiguredInteractions = (
+    projection: ReturnType<typeof active.getProjection>,
+  ): void => {
+    if (options.interactionAnswers === undefined) return;
+    for (const pending of projection.pendingInteractions) {
+      if (pending.phase !== "pending" || submittedInteractions.has(pending.request.id)) continue;
+      const payload = createEvaluationInteractionSubmission(
+        pending.presentation,
+        options.interactionAnswers,
+      );
+      if (payload === null) continue;
+      submittedInteractions.add(pending.request.id);
+      const outcome = active.submitInteraction({
+        request: pending.request,
+        submissionId: `${trial.ref.id}.interaction.${pending.request.id}`,
+        payload,
+      });
+      if (outcome.status === "accepted_for_resolution") interactionSubmissionCount += 1;
+    }
+  };
+  const unsubscribeInteractions = options.interactionAnswers === undefined
+    ? () => undefined
+    : active.subscribe(submitConfiguredInteractions);
+  submitConfiguredInteractions(active.getProjection());
+  const hostResult = await active.wait().finally(() => {
+    signal.removeEventListener("abort", onAbort);
+    unsubscribeInteractions();
+  });
   const terminalProjection = active.getProjection();
   const productResult = product.projectResult(
     hostResult.runResult,
@@ -651,13 +780,35 @@ async function invokeHelarcTarget(
     before: lease.before,
     after: await snapshotWorkspace(lease.root),
     approval: approval.record,
-    providerRequests: Object.freeze(provider.requests()),
+    providerRequests: Object.freeze([...providerRequests]),
+    providerResults: Object.freeze([...providerResults]),
+    providerWasScripted,
     actionNames: collectObservedToolNames(
       hostResult.runResult,
       product.actions.toolSelection,
     ),
     retryCount: terminalProjection.retry?.scheduledCount ?? 0,
+    interactionSubmissionCount,
   });
+}
+
+function createEvaluationInteractionSubmission(
+  presentation: unknown,
+  answers: Readonly<Record<string, string>>,
+): unknown | null {
+  if (!isPlainRecord(presentation) || !Array.isArray(presentation.questions)) return null;
+  const normalized = presentation.questions.map((candidate) => {
+    if (!isPlainRecord(candidate) || typeof candidate.id !== "string") return null;
+    const answer = answers[candidate.id];
+    if (typeof answer !== "string" || answer.trim().length === 0) return null;
+    return Object.freeze({
+      question_id: candidate.id,
+      selected_labels: Object.freeze([]),
+      text: answer.trim(),
+    });
+  });
+  if (normalized.some((answer) => answer === null)) return null;
+  return Object.freeze({ answers: Object.freeze(normalized) });
 }
 
 function bindValidationTargets(
@@ -696,7 +847,7 @@ function createEvaluationValidationCompletionConfig() {
 }
 
 function targetObservation(
-  material: HelarcEvaluationCaptureMaterial,
+  material: HelarcEvaluationRunMaterial,
   trial: EvaluationTrial,
 ): EvaluationTargetObservation {
   const status = material.product.status === "completed"
@@ -739,7 +890,7 @@ function targetObservation(
 }
 
 function targetOutcomeCode(
-  material: HelarcEvaluationCaptureMaterial,
+  material: HelarcEvaluationRunMaterial,
 ): string | null {
   if (material.runResult.failure !== null) {
     return material.runResult.failure.failure.code;
@@ -754,7 +905,7 @@ function targetOutcomeCode(
 }
 
 function targetOutcomeOwner(
-  material: HelarcEvaluationCaptureMaterial,
+  material: HelarcEvaluationRunMaterial,
 ): string {
   if (material.runResult.failure !== null) {
     return material.runResult.failure.kind;
@@ -870,13 +1021,12 @@ function createEvaluationActionRetryPort(): ActionRetryDecisionPort {
 function captureHelarcMaterial(
   request: EvaluationCaptureRequest,
   corpus: HelarcEvaluationCorpus,
-  material: HelarcEvaluationCaptureMaterial,
+  material: HelarcEvaluationRunMaterial,
 ) {
   const runItems = material.runResult.items;
   const actionNames = material.actionNames;
   const retryCount = material.retryCount;
-  const totalUsage = material.caseDefinition.script.responses
-    .slice(0, material.providerRequests.length)
+  const totalUsage = material.providerResults
     .reduce((totals, result) => {
       const usage = result.kind === "succeeded" ? result.response.usage : null;
       return {
@@ -945,7 +1095,9 @@ function captureHelarcMaterial(
     measurement("input_tokens", "provider", "provider-usage", "tokens", totalUsage.input),
     measurement("output_tokens", "provider", "provider-usage", "tokens", totalUsage.output),
     measurement("total_tokens", "provider", "provider-usage", "tokens", totalUsage.total),
-    measurement("cost", "provider", "scripted-provider", "currency_units", 0),
+    ...(material.providerWasScripted
+      ? [measurement("cost", "provider", "scripted-provider", "currency_units", 0)]
+      : []),
     measurement("tool_count", "agent-core", "run-items", "count", actionNames.length),
     measurement("action_count", "agent-core", "run-items", "count", actionNames.length),
     measurement(
@@ -1013,7 +1165,7 @@ function measurement(
   });
 }
 
-function workspaceCapture(snapshot: WorkspaceSnapshot) {
+function workspaceCapture(snapshot: HelarcEvaluationWorkspaceSnapshot) {
   return Object.freeze({
     files: Object.freeze(snapshot.files.map((file) => Object.freeze({
       path: file.path,
@@ -1023,7 +1175,7 @@ function workspaceCapture(snapshot: WorkspaceSnapshot) {
   });
 }
 
-async function snapshotWorkspace(root: string): Promise<WorkspaceSnapshot> {
+async function snapshotWorkspace(root: string): Promise<HelarcEvaluationWorkspaceSnapshot> {
   const files: HelarcEvaluationFixtureFile[] = [];
   const visit = async (directory: string): Promise<void> => {
     const entries = await readdir(directory, { withFileTypes: true });
@@ -1068,10 +1220,10 @@ function resolveFixturePath(root: string, candidate: string): string {
   return target;
 }
 
-function readTaskText(caseDefinition: HelarcEvaluationCaseDefinition): string {
+function readTaskText(caseDefinition: HelarcEvaluationExecutableCase): string {
   const targetInput = caseDefinition.definition.targetInput;
   const value = isDataObject(targetInput)
-    ? targetInput.taskText
+    ? targetInput.taskText ?? targetInput.task
     : null;
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError("Helarc Evaluation Case requires taskText.");
@@ -1250,5 +1402,9 @@ function safeAdapterError(error: unknown, physicalRoot: string): string {
 }
 
 function isDataObject(value: EvaluationDataValue): value is Readonly<Record<string, EvaluationDataValue>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
