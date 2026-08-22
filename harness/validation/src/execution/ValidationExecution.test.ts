@@ -253,6 +253,77 @@ describe("Run-scoped ValidationExecution", () => {
     expect(result.actionSettlement).toEqual(settlement.actionSettlement);
   });
 
+  it("interprets an already-settled Operation without requesting another settlement", async () => {
+    let operationCalls = 0;
+    const settlement = lowerSettlement("confirmed");
+    const rig = createRig({
+      requestSettlement: async () => {
+        operationCalls += 1;
+        return settlement;
+      },
+    });
+    await bootstrap(rig, effectfulDefinition());
+
+    const result = await rig.execution.interpretSettledOperationCheck({
+      check: {
+        requirement: rig.requirement.ref,
+        subject: ref("subject"),
+        definition: ref("effectful-definition"),
+        origin: "trusted_automatic",
+        runAction: { run: RUN, id: "run-action-1", sequence: 1 },
+        predecessor: null,
+        environment: null,
+        configuration: null,
+        coverageTarget: 1,
+        expectedRevision: await revision(rig),
+      },
+      settlement,
+    }, liveInterruption());
+
+    expect(operationCalls).toBe(0);
+    expect(result).toMatchObject({
+      status: "completed",
+      operationResult: settlement.operationResult.ref,
+      actionSettlement: settlement.actionSettlement,
+    });
+  });
+
+  it("rejects a settled Operation whose binding does not match the admitted Check Definition", async () => {
+    const settlement = lowerSettlement("confirmed");
+    const rig = createRig();
+    await bootstrap(rig, effectfulDefinition());
+
+    const result = await rig.execution.interpretSettledOperationCheck({
+      check: {
+        requirement: rig.requirement.ref,
+        subject: ref("subject"),
+        definition: ref("effectful-definition"),
+        origin: "trusted_automatic",
+        runAction: { run: RUN, id: "run-action-1", sequence: 1 },
+        predecessor: null,
+        environment: null,
+        configuration: null,
+        coverageTarget: 1,
+        expectedRevision: await revision(rig),
+      },
+      settlement: {
+        ...settlement,
+        operationResult: {
+          ...settlement.operationResult,
+          binding: {
+            ...settlement.operationResult.binding,
+            revision: "foreign-binding",
+          },
+        },
+      },
+    }, liveInterruption());
+
+    expect(result).toMatchObject({
+      status: "failed",
+      failure: { code: "validation_lower_settlement_correlation_invalid" },
+    });
+  });
+
   it("does not let an interpreter rewrite an unsuccessful lower Operation as completed", async () => {
     const lower = lowerSettlement("none", "denied");
     const rig = createRig({

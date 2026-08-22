@@ -28,7 +28,6 @@ import {
 } from "@agent-anything/tools/selection";
 import { createHelarcCommandOperationContribution } from "../tools/HelarcCommandOperation.js";
 import type { HelarcShellToolName } from "../tools/HelarcBaselineToolContracts.js";
-import type { HelarcValidationCheckOperationContribution } from "../validation/HelarcValidationCheckOperation.js";
 
 export interface HelarcPhysicalActionContribution {
   readonly registrations: ActionRegistrationSnapshot;
@@ -54,7 +53,6 @@ export interface CreateHelarcActionCompositionInput {
   readonly admittedAt: string;
   readonly file: HelarcFileActionContribution;
   readonly command: HelarcCommandActionContribution;
-  readonly validation: HelarcValidationCheckOperationContribution | null;
   readonly semanticTools: readonly ToolRegistrationInput[];
 }
 
@@ -65,7 +63,6 @@ export interface HelarcActionComposition {
   readonly registrations: ActionRegistrationSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
   readonly executors: readonly ActionExecutor[];
-  readonly composite: HelarcValidationCheckOperationContribution["composite"] | null;
 }
 
 export function createHelarcActionComposition(
@@ -85,7 +82,6 @@ export function createHelarcActionComposition(
   const operationEntries = [
     ...file.operations,
     ...command.operations,
-    ...(input.validation?.operations ?? []),
   ];
   const operationCatalog = createOperationCatalogSnapshot({
     id: "helarc.operations",
@@ -94,14 +90,13 @@ export function createHelarcActionComposition(
   });
   const operationBindings = createOperationBindingResolverSnapshot(
     "helarc.operation-bindings.v1",
-    [...file.bindings, ...command.bindings, ...(input.validation?.bindings ?? [])],
+    [...file.bindings, ...command.bindings],
   );
   const toolRegistrations = createToolRegistrationSnapshot(
     operationCatalog,
     [
       ...file.tools,
       ...command.tools,
-      ...(input.validation?.tools ?? []),
       ...input.semanticTools,
     ],
   );
@@ -127,7 +122,6 @@ export function createHelarcActionComposition(
     registrations,
     adapters: Object.freeze(physical.flatMap((contribution) => contribution.adapters)),
     executors: Object.freeze(physical.flatMap((contribution) => contribution.executors)),
-    composite: input.validation?.composite ?? null,
   });
 }
 

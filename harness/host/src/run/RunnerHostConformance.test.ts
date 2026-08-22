@@ -242,7 +242,7 @@ function createTestValidationComposition() {
     executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
     completionGate: new CurrentValidationCompletionGate(() => NOW),
     preparation: null,
-    checkRequests: null,
+    settledOperationResults: null,
     checkResults: null,
   });
 }

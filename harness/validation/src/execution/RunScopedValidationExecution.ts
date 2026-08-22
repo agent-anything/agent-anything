@@ -78,6 +78,7 @@ import {
   type ValidationGateRecordRequest,
   type ValidationLedgerSnapshot,
   type ValidationLowerCheckSettlement,
+  type ValidationSettledOperationCheckRequest,
   type ValidationSpecificationAdmission,
   type ValidationSubjectCaptureRequest,
   type ValidationSubjectFreshnessRequest,
@@ -283,57 +284,10 @@ export class ValidationExecution implements ValidationExecutionPort {
     request: ValidationCheckRequest,
     interruption: InvocationInterruptionContext,
   ): Promise<CheckResult> {
-    this.assertInterruption(interruption, "check");
-    this.assertMutation(request.expectedRevision, "check");
-    const requirement = this.requireRequirement(request.requirement);
-    const subject = this.requireSubject(request.subject);
-    const definition = this.requireDefinition(request.definition);
-    const replay = this.resolveReplay(request, requirement, definition);
-    this.assertCheckRequest(request, requirement, subject, definition);
-
-    const startedAt = this.now();
-    const attempt = snapshotCheckAttempt({
-      ref: {
-        id: this.dependencies.identities.nextId("check_attempt"),
-        ordinal: replay.ordinal,
-      },
-      run: this.run,
-      requirement: requirement.ref,
-      subject: subject.ref,
-      definition: definition.ref,
-      origin: request.origin,
-      predecessor: request.predecessor,
-      environment: request.environment,
-      scope: subject.scope,
-      configuration: request.configuration,
-      coverageTarget: request.coverageTarget,
-      costLimitUnits: minimumNullable(
-        definition.maximumCostUnits,
-        requirement.limits.maximumCostUnits,
-      ),
-      replayBasis: replay.basis,
-      requestedAt: startedAt,
-      startedAt,
-      deadlineAt: new Date(Date.parse(startedAt) + Math.min(
-        definition.maximumDurationMs,
-        requirement.limits.maximumDurationMs,
-      )).toISOString(),
-      interruption: interruption.interruption,
-      runAction: request.runAction,
-      operationInvocation: null,
-      actionSettlement: null,
-    });
-    const attemptKey = attemptRefKey(attempt.ref);
-    if (this.attempts.has(attemptKey)) this.fail("validation_check_attempt_duplicate", "check", "Check Attempt identity is duplicate.");
-    this.attempts.set(attemptKey, attempt);
-    if (attempt.predecessor !== null) {
-      this.retrySuccessorByAttempt.set(attemptRefKey(attempt.predecessor), attempt.ref);
-    }
-    const pending = this.createPendingState(requirement.ref, subject.ref, attempt.ref);
-    const attemptRecords: ValidationPersistenceRecord[] = [{ kind: "check_attempt", record: attempt }];
-    const previousRevision = this.current.ref.revision;
-    const startedSnapshot = this.commit(attemptRecords, replaceState(this.current.requirementStates, pending));
-    await this.persist(attemptRecords, startedSnapshot, previousRevision);
+    const { requirement, subject, definition, attempt } = await this.startAttempt(
+      request,
+      interruption,
+    );
 
     let interpretation: ValidationCheckInterpretation;
     let lower: ValidationLowerCheckSettlement | null = null;
@@ -380,6 +334,81 @@ export class ValidationExecution implements ValidationExecutionPort {
       }
     }
     return this.settleAttempt(attempt, interpretation, lower, interruption.signal.aborted);
+  }
+
+  async interpretSettledOperationCheck(
+    request: ValidationSettledOperationCheckRequest,
+    interruption: InvocationInterruptionContext,
+  ): Promise<CheckResult> {
+    const { requirement, subject, definition, attempt } = await this.startAttempt(
+      request.check,
+      interruption,
+    );
+    const lower = request.settlement;
+    let interpretation: ValidationCheckInterpretation;
+    try {
+      if (definition.effect.kind !== "effectful") {
+        this.fail(
+          "validation_settled_operation_check_definition_invalid",
+          "check",
+          "A settled Operation Check requires an effectful Check Definition.",
+        );
+      }
+      this.assertLowerSettlement(definition, lower);
+      const interpreter = this.dependencies.interpreters.resolve(
+        definition.resultInterpreter,
+      );
+      if (!interpreter) {
+        this.fail(
+          "validation_check_interpreter_unavailable",
+          "check",
+          "Check result interpreter is unavailable.",
+          true,
+          definition.resultInterpreter,
+        );
+      }
+      interpretation = await interpreter.interpret(
+        { requirement, subject, definition, attempt, settlement: lower },
+        interruption,
+      );
+      interpretation = this.constrainLowerOperationInterpretation(
+        interpretation,
+        lower,
+      );
+    } catch (error) {
+      interpretation = error instanceof ValidationExecutionError
+        ? {
+            status: "failed",
+            findings: [],
+            coverage: { ratio: 0, basis: "settled Operation interpretation failure" },
+            costUnits: lower.costUnits,
+            limitations: [],
+            failure: error.failure,
+          }
+        : {
+            status: interruption.signal.aborted ? "cancelled" : "failed",
+            findings: [],
+            coverage: { ratio: 0, basis: "settled Operation interpreter did not produce a valid result" },
+            costUnits: lower.costUnits,
+            limitations: [],
+            failure: this.failure(
+              interruption.signal.aborted
+                ? "validation_check_cancelled"
+                : "validation_check_failed",
+              "check",
+              interruption.signal.aborted
+                ? "Check interpretation was cancelled."
+                : "Settled Operation interpretation failed.",
+              !interruption.signal.aborted,
+            ),
+          };
+    }
+    return this.settleAttempt(
+      attempt,
+      interpretation,
+      lower,
+      interruption.signal.aborted,
+    );
   }
 
   async admitEvidence(
@@ -787,6 +816,87 @@ export class ValidationExecution implements ValidationExecutionPort {
     return snapshot;
   }
 
+  private async startAttempt(
+    request: ValidationCheckRequest,
+    interruption: InvocationInterruptionContext,
+  ): Promise<{
+    readonly requirement: ValidationRequirement;
+    readonly subject: ValidationSubjectSnapshot;
+    readonly definition: CheckDefinition;
+    readonly attempt: CheckAttempt;
+  }> {
+    this.assertInterruption(interruption, "check");
+    this.assertMutation(request.expectedRevision, "check");
+    const requirement = this.requireRequirement(request.requirement);
+    const subject = this.requireSubject(request.subject);
+    const definition = this.requireDefinition(request.definition);
+    const replay = this.resolveReplay(request, requirement, definition);
+    this.assertCheckRequest(request, requirement, subject, definition);
+
+    const startedAt = this.now();
+    const attempt = snapshotCheckAttempt({
+      ref: {
+        id: this.dependencies.identities.nextId("check_attempt"),
+        ordinal: replay.ordinal,
+      },
+      run: this.run,
+      requirement: requirement.ref,
+      subject: subject.ref,
+      definition: definition.ref,
+      origin: request.origin,
+      predecessor: request.predecessor,
+      environment: request.environment,
+      scope: subject.scope,
+      configuration: request.configuration,
+      coverageTarget: request.coverageTarget,
+      costLimitUnits: minimumNullable(
+        definition.maximumCostUnits,
+        requirement.limits.maximumCostUnits,
+      ),
+      replayBasis: replay.basis,
+      requestedAt: startedAt,
+      startedAt,
+      deadlineAt: new Date(Date.parse(startedAt) + Math.min(
+        definition.maximumDurationMs,
+        requirement.limits.maximumDurationMs,
+      )).toISOString(),
+      interruption: interruption.interruption,
+      runAction: request.runAction,
+      operationInvocation: null,
+      actionSettlement: null,
+    });
+    const attemptKey = attemptRefKey(attempt.ref);
+    if (this.attempts.has(attemptKey)) {
+      this.fail(
+        "validation_check_attempt_duplicate",
+        "check",
+        "Check Attempt identity is duplicate.",
+      );
+    }
+    this.attempts.set(attemptKey, attempt);
+    if (attempt.predecessor !== null) {
+      this.retrySuccessorByAttempt.set(
+        attemptRefKey(attempt.predecessor),
+        attempt.ref,
+      );
+    }
+    const pending = this.createPendingState(
+      requirement.ref,
+      subject.ref,
+      attempt.ref,
+    );
+    const records: ValidationPersistenceRecord[] = [
+      { kind: "check_attempt", record: attempt },
+    ];
+    const previousRevision = this.current.ref.revision;
+    const snapshot = this.commit(
+      records,
+      replaceState(this.current.requirementStates, pending),
+    );
+    await this.persist(records, snapshot, previousRevision);
+    return { requirement, subject, definition, attempt };
+  }
+
   private async settleAttempt(
     attempt: CheckAttempt,
     input: ValidationCheckInterpretation,
@@ -1015,6 +1125,7 @@ export class ValidationExecution implements ValidationExecutionPort {
   private assertLowerSettlement(definition: CheckDefinition, lower: ValidationLowerCheckSettlement) {
     if (definition.effect.kind !== "effectful") this.fail("validation_lower_settlement_unexpected", "check", "Pure Check cannot have a lower settlement.");
     const expected = definition.effect.operationBinding.operation;
+    const expectedBinding = definition.effect.operationBinding;
     const actual = lower.operationInvocation.operation;
     if (expected.operation.namespace !== actual.operation.namespace ||
         expected.operation.name !== actual.operation.name ||
@@ -1022,7 +1133,11 @@ export class ValidationExecution implements ValidationExecutionPort {
         lower.operationResult.ref.invocation.id !== lower.operationInvocation.id ||
         lower.operationResult.ref.invocation.operation.operation.namespace !== actual.operation.namespace ||
         lower.operationResult.ref.invocation.operation.operation.name !== actual.operation.name ||
-        lower.operationResult.ref.invocation.operation.revision !== actual.revision) {
+        lower.operationResult.ref.invocation.operation.revision !== actual.revision ||
+        lower.operationResult.binding.operation.operation.namespace !== expectedBinding.operation.operation.namespace ||
+        lower.operationResult.binding.operation.operation.name !== expectedBinding.operation.operation.name ||
+        lower.operationResult.binding.operation.revision !== expectedBinding.operation.revision ||
+        lower.operationResult.binding.revision !== expectedBinding.revision) {
       this.fail("validation_lower_settlement_correlation_invalid", "check", "Lower operation settlement correlation is invalid.");
     }
     if (lower.actionSettlement === null) {

@@ -258,6 +258,11 @@ export interface ValidationLowerCheckSettlement {
   readonly costUnits: number | null;
 }
 
+export interface ValidationSettledOperationCheckRequest {
+  readonly check: ValidationCheckRequest;
+  readonly settlement: ValidationLowerCheckSettlement;
+}
+
 export interface CheckFindingInput {
   readonly owner: string;
   readonly claim: string;
@@ -299,6 +304,10 @@ export interface ValidationExecutionPort {
   ): Promise<ValidationCurrentSnapshot>;
   executeCheck(
     request: ValidationCheckRequest,
+    interruption: InvocationInterruptionContext,
+  ): Promise<CheckResult>;
+  interpretSettledOperationCheck(
+    request: ValidationSettledOperationCheckRequest,
     interruption: InvocationInterruptionContext,
   ): Promise<CheckResult>;
   admitEvidence(

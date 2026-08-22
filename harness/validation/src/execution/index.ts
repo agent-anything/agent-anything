@@ -26,6 +26,7 @@ export type {
   ValidationGateRecordRequest,
   ValidationLedgerSnapshot,
   ValidationLowerCheckSettlement,
+  ValidationSettledOperationCheckRequest,
   ValidationSpecificationAdmission,
   ValidationSubjectCaptureRequest,
   ValidationSubjectFreshnessRequest,

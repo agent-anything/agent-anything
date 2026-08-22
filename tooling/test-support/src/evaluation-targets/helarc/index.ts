@@ -56,6 +56,10 @@ export {
   HELARC_TOOL_EXPOSURE_ACCEPTED_BASELINE,
   HELARC_TOOL_EXPOSURE_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcToolExposureBaseline.js";
+export {
+  HELARC_VALIDATION_COMPLETION_ACCEPTED_BASELINE,
+  HELARC_VALIDATION_COMPLETION_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcValidationCompletionBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export type {

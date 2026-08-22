@@ -23,14 +23,19 @@ function candidate(): Promise<HelarcEvaluationBaselineArtifact> {
 }
 
 describe("Helarc deterministic Evaluation target", () => {
-  it("declares five deterministic Cases and adapts external manifests without bundled data", () => {
+  it("declares the operational deterministic Cases and adapts external manifests without bundled data", () => {
     const corpus = createHelarcEvaluationCorpus();
     expect(corpus.cases.map((item) => item.scenario)).toEqual([
       "controlled_file_write",
       "denied_command",
+      "failed_check_recovery",
       "inspect_and_complete",
       "malformed_output_retry",
+      "multi_file_mutation",
+      "ordinary_shell_validation",
+      "premature_completion",
       "search",
+      "stale_evidence",
     ]);
     const external = adaptHelarcExternalBenchmarkManifest({
       benchmarkRef: { id: "benchmark.reference", revision: "r1" },
@@ -69,7 +74,7 @@ describe("Helarc deterministic Evaluation target", () => {
     const denied = baselineCandidate.cases.filter((item) => item.caseRef.id.endsWith("denied-command"));
     const malformed = baselineCandidate.cases.filter((item) => item.caseRef.id.endsWith("malformed-output-retry"));
 
-    expect(baselineCandidate.cases).toHaveLength(10);
+    expect(baselineCandidate.cases).toHaveLength(20);
     expect(baselineCandidate.cases.filter((item) =>
       item.trialStatus !== "completed" ||
       item.captureStatus !== "complete" ||
@@ -83,7 +88,7 @@ describe("Helarc deterministic Evaluation target", () => {
       "passed",
       "passed",
     ]);
-    expect(baselineCandidate.metrics.every((metric) => metric.samples.length === 10)).toBe(true);
+    expect(baselineCandidate.metrics.every((metric) => metric.samples.length === 20)).toBe(true);
 
     const serialized = JSON.stringify(baselineCandidate);
     expect(serialized).not.toContain("agent-anything-helarc-eval-");
@@ -99,6 +104,42 @@ describe("Helarc deterministic Evaluation target", () => {
     expect(comparison).toMatchObject({
       status: "equivalent",
     });
+  }, 120_000);
+
+  it("calibrates ordinary-operation Validation, recovery, freshness, and completion", async () => {
+    const corpus = createHelarcEvaluationCorpus();
+    const expectations = [
+      ["ordinary_shell_validation", "succeeded", "satisfied", "completion_eligible"],
+      ["failed_check_recovery", "succeeded", "satisfied", "completion_eligible"],
+      ["multi_file_mutation", "succeeded", "satisfied", "completion_eligible"],
+      ["stale_evidence", "blocked", "attention_required", "blocked_violated"],
+      ["premature_completion", "blocked", "attention_required", "blocked_violated"],
+    ] as const;
+
+    const outcomes = await Promise.all(expectations.map(async ([scenario]) =>
+      invokeCase(corpus, requireCase(corpus, scenario))));
+
+    for (const [index, [, outcomeStatus, validationStatus, gateStatus]] of expectations.entries()) {
+      const outcome = outcomes[index];
+      if (outcome === undefined) throw new TypeError("Missing Validation Evaluation outcome.");
+      const validationSummary = outcome.capture.capture.slots.find(
+        (slot) => slot.slotId === "validation-summary",
+      );
+      expect(outcome.observation.outcome.status).toBe(outcomeStatus);
+      expect(validationSummary).toMatchObject({
+        owner: "validation",
+        required: true,
+        status: "captured",
+        content: {
+          kind: "inline",
+          value: {
+            status: validationStatus,
+            activeChecks: 0,
+            gateStatus,
+          },
+        },
+      });
+    }
   }, 120_000);
 
   it("rejects non-equivalent targets before interpreting regression", async () => {
@@ -171,7 +212,7 @@ describe("Helarc deterministic Evaluation target", () => {
       content: {
         kind: "inline",
         value: {
-          status: "pending",
+          status: "not_required",
           gateStatus: "completion_eligible",
         },
       },

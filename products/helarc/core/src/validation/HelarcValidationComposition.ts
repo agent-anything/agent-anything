@@ -1,12 +1,13 @@
 import { createCanonicalSha256Digest } from "@agent-anything/canonical-action/subject";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import type {
-  RunnerValidationCheckRequestResolverPort,
   RunnerValidationCheckResultProcessorPort,
   RunnerValidationCheckRequest,
   RunnerValidationComposition,
   RunnerValidationPreparationPort,
+  RunnerValidationSettledOperationResultProcessorPort,
 } from "@agent-anything/agent-runtime/runner";
+import type { OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import {
   createValidationFailure,
@@ -43,13 +44,13 @@ import {
   type ExactCodeSourceValidationTarget,
 } from "@agent-anything/helarc-code-agent/validation";
 import {
-  createHelarcValidationCheckConfigurationRegistry,
-  createHelarcValidationCheckOperationContribution,
-  HELARC_RUN_VALIDATION_CHECK_OPERATION,
-  parseHelarcRunValidationCheckRequest,
-  type HelarcValidationCheckConfigurationRegistry,
-  type HelarcValidationCheckOperationContribution,
-} from "./HelarcValidationCheckOperation.js";
+  operationRefForCodeFileTool,
+  type CodeFileToolName,
+} from "@agent-anything/helarc-code-agent/file-operation";
+import {
+  HELARC_SHELL_BINDING,
+  HELARC_SHELL_OPERATION,
+} from "../tools/HelarcCommandOperation.js";
 
 export interface HelarcExactTargetValidationRequirement {
   readonly target: ExactCodeSourceValidationTarget;
@@ -70,8 +71,13 @@ export interface CreateHelarcValidationCompositionInput {
 export interface HelarcValidationComposition {
   readonly profile: ValidationProfile;
   readonly runner: Omit<RunnerValidationComposition, "completionGate">;
-  readonly operation: HelarcValidationCheckOperationContribution | null;
   readonly profileRevision: string;
+}
+
+interface PreparedExactTarget {
+  readonly requirement: ValidationRequirementRef;
+  readonly policy: HelarcExactTargetValidationRequirement;
+  readonly contribution: ExactCodeSourceValidationContribution;
 }
 
 const COMMAND_REQUIREMENT: ValidationRequirementRef = Object.freeze({
@@ -89,13 +95,21 @@ const PROFILE_SOURCE = Object.freeze({
   ...PROFILE_OWNER,
   sourceKind: "product_configuration" as const,
 });
+const VALIDATION_CLAIMS = Object.freeze([
+  "tests",
+  "static_analysis",
+  "runtime_verification",
+  "security_scan",
+  "performance_benchmark",
+] as const);
+type HelarcValidationClaim = (typeof VALIDATION_CLAIMS)[number];
 
 export async function createHelarcValidationComposition(
   input: CreateHelarcValidationCompositionInput,
 ): Promise<HelarcValidationComposition> {
   requireIsoDate(input.admittedAt, "admittedAt");
   const targets = Object.freeze([...(input.exactTargets ?? [])]);
-  const exact = targets.map((entry) => Object.freeze({
+  const exact: readonly PreparedExactTarget[] = targets.map((entry) => Object.freeze({
     requirement: exactRequirementRef(entry.target),
     policy: entry,
     contribution: createExactCodeSourceValidationContribution({
@@ -127,11 +141,6 @@ export async function createHelarcValidationComposition(
     admittedBy: owner("product-profile-admission", "validation_admission"),
     requirements,
   });
-  const registry = createHelarcValidationCheckConfigurationRegistry();
-  const operation = createHelarcValidationCheckOperationContribution({
-    admittedAt: input.admittedAt,
-    registry,
-  });
   const commandSubject = createCommandSubjectContribution(input.workspace, input.now);
   const targetByAdapter = new Map(exact.map(({ contribution }) => [
     ownerKey(contribution.adapterRef),
@@ -141,7 +150,7 @@ export async function createHelarcValidationComposition(
     ownerKey(contribution.configurationRef),
     contribution,
   ]));
-  const commandInterpreter = createCommandInterpreter(registry);
+  const commandInterpreter = createCommandInterpreter();
   const assessmentMethod = createFindingAssessmentMethod();
   let identitySequence = 0;
   const executionFactory = new DefaultValidationExecutionFactory({
@@ -243,38 +252,60 @@ export async function createHelarcValidationComposition(
         }
       },
     } satisfies RunnerValidationPreparationPort);
-  const checkRequests: RunnerValidationCheckRequestResolverPort | null = operation === null
-    ? null
-    : Object.freeze({
-        async resolve(request) {
-          if (!sameOperationRef(request.operation, HELARC_RUN_VALIDATION_CHECK_OPERATION)) {
-            return null;
-          }
-          const parsed = parseHelarcRunValidationCheckRequest(request.request);
-          const configuration = registry.register(request.runAction, parsed);
-          return Object.freeze({
-            requirement: COMMAND_REQUIREMENT,
-            subject: COMMAND_SUBJECT_REF,
-            definition: COMMAND_DEFINITION_REF,
-            predecessor: null,
-            environment: Object.freeze({
-              owner: "helarc.local-environment",
-              kind: "command_environment",
-              id: input.commandEnvironment!.id,
-              revision: input.commandEnvironment!.revision,
-            }),
-            configuration: configuration.ref,
-            coverageTarget: 1,
-          });
-        },
-      } satisfies RunnerValidationCheckRequestResolverPort);
+  const settledOperationResults: RunnerValidationSettledOperationResultProcessorPort =
+    Object.freeze({
+      async process(settled, interruption) {
+        const exactTargetChanged = await processExactTargetSettlement(
+          exact,
+          settled,
+          interruption,
+        );
+        if (!sameOperationRef(settled.operation, HELARC_SHELL_OPERATION)) {
+          return exactTargetChanged;
+        }
+        const claim = readValidationClaim(settled.request);
+        if (claim === null) return exactTargetChanged;
+        const request: RunnerValidationCheckRequest = Object.freeze({
+          requirement: COMMAND_REQUIREMENT,
+          subject: COMMAND_SUBJECT_REF,
+          definition: COMMAND_DEFINITION_REF,
+          predecessor: null,
+          environment: Object.freeze({
+            owner: "helarc.local-environment",
+            kind: "command_environment",
+            id: input.commandEnvironment.id,
+            revision: input.commandEnvironment.revision,
+          }),
+          configuration: commandConfiguration(claim),
+          coverageTarget: 1,
+        });
+        const result = await settled.execution.interpretSettledOperationCheck({
+          check: Object.freeze({
+            ...request,
+            origin: settled.requestOrigin === "trusted_workflow"
+              ? "trusted_workflow" as const
+              : "controller" as const,
+            runAction: settled.runAction,
+            expectedRevision: await currentRevision(settled.execution),
+          }),
+          settlement: settled.settlement,
+        }, interruption);
+        await processValidationCheckResult(
+          settled.execution,
+          request,
+          result,
+          interruption,
+        );
+        return true;
+      },
+    } satisfies RunnerValidationSettledOperationResultProcessorPort);
   const runner: Omit<RunnerValidationComposition, "completionGate"> = Object.freeze({
     executionFactory,
     preparation,
-    checkRequests,
-    checkResults: checkRequests === null ? null : checkResults,
+    settledOperationResults,
+    checkResults,
   } satisfies Omit<RunnerValidationComposition, "completionGate">);
-  return Object.freeze({ profile, runner, operation, profileRevision });
+  return Object.freeze({ profile, runner, profileRevision });
 }
 
 export function bindHelarcValidationCompletionGate(
@@ -354,10 +385,7 @@ function commandCheckDefinition(): CheckDefinition {
     effect: Object.freeze({
       kind: "effectful" as const,
       evaluator: null,
-      operationBinding: Object.freeze({
-        operation: HELARC_RUN_VALIDATION_CHECK_OPERATION,
-        revision: "1",
-      }),
+      operationBinding: HELARC_SHELL_BINDING,
     }),
     resultInterpreter: COMMAND_INTERPRETER_REF,
     environmentNeeds: Object.freeze(["command_environment"]),
@@ -451,32 +479,32 @@ function createCommandSubjectContribution(
   return Object.freeze({ adapter, freshness });
 }
 
-function createCommandInterpreter(
-  registry: HelarcValidationCheckConfigurationRegistry,
-): ValidationCheckInterpreterPort {
+function createCommandInterpreter(): ValidationCheckInterpreterPort {
   return Object.freeze({
     async interpret(input) {
-      const configuration = input.attempt.configuration === null
-        ? null
-        : registry.resolve(input.attempt.configuration);
+      const claim = claimForConfiguration(input.attempt.configuration);
       const output = input.settlement.operationResult.output;
-      if (configuration === null || !isRecord(output) ||
-          output.claim !== configuration.request.claim || !isRecord(output.command)) {
+      if (claim === null || !isRecord(output) || output.mode !== "foreground") {
         return invalidInterpretation(
           "validation_command_result_invalid",
-          "Validation command result does not match its admitted configuration.",
+          "Command result does not match its admitted Validation configuration.",
         );
       }
-      const command = output.command;
-      if ((typeof command.exitCode !== "number" && command.exitCode !== null) ||
-          (typeof command.signal !== "string" && command.signal !== null) ||
-          typeof command.settlementConfirmed !== "boolean") {
+      if ((typeof output.exit_code !== "number" && output.exit_code !== null) ||
+          (typeof output.signal !== "string" && output.signal !== null) ||
+          typeof output.duration_ms !== "number" ||
+          typeof output.stdout_truncated !== "boolean" ||
+          typeof output.stderr_truncated !== "boolean") {
         return invalidInterpretation(
           "validation_command_result_invalid",
           "Validation command result is structurally invalid.",
         );
       }
-      const passed = command.settlementConfirmed === true && command.exitCode === 0 && command.signal === null;
+      const passed = output.exit_code === 0 && output.signal === null;
+      const limitations = Object.freeze([
+        ...(output.stdout_truncated === true ? ["command_stdout_truncated"] : []),
+        ...(output.stderr_truncated === true ? ["command_stderr_truncated"] : []),
+      ]);
       return Object.freeze({
         status: "completed" as const,
         findings: Object.freeze([Object.freeze({
@@ -484,12 +512,15 @@ function createCommandInterpreter(
           claim: input.requirement.claim,
           polarity: passed ? "supports" as const : "contradicts" as const,
           severity: passed ? "info" as const : "error" as const,
-          sourceRefs: Object.freeze([configuration.ref]),
-          limitations: Object.freeze([]),
+          sourceRefs: Object.freeze([commandConfiguration(claim)]),
+          limitations,
         })]),
-        coverage: Object.freeze({ ratio: 1, basis: `declared ${configuration.request.claim} command exit status` }),
+        coverage: Object.freeze({
+          ratio: 1,
+          basis: `declared ${claim} command exit status and signal`,
+        }),
         costUnits: null,
-        limitations: Object.freeze([]),
+        limitations,
         failure: null,
       });
     },
@@ -577,6 +608,104 @@ async function processValidationCheckResult(
     evidenceRefs: Object.freeze([evidenceRef]),
     expectedRevision: await currentRevision(execution),
   }, interruption);
+}
+
+async function processExactTargetSettlement(
+  targets: readonly PreparedExactTarget[],
+  settled: Parameters<RunnerValidationSettledOperationResultProcessorPort["process"]>[0],
+  interruption: InvocationInterruptionContext,
+): Promise<boolean> {
+  const tool = exactFileToolForOperation(settled.operation);
+  if (tool === null) return false;
+  const output = settled.settlement.operationResult.output;
+  const filePath = isRecord(output) && typeof output.file_path === "string"
+    ? output.file_path
+    : isRecord(settled.request) && typeof settled.request.file_path === "string"
+      ? settled.request.file_path
+      : null;
+  if (filePath === null) return false;
+  const matching = targets.filter(({ policy }) =>
+    policy.target.expected.target.path === filePath);
+  let changed = false;
+  for (const target of matching) {
+    const current = await settled.execution.readCurrentSnapshot();
+    const state = current.requirementStates.find(({ requirement }) =>
+      sameRevisionRef(requirement, target.requirement));
+    if (state?.subject === null || state?.subject === undefined) continue;
+    const freshened = await settled.execution.checkSubjectFreshness({
+      requirement: target.requirement,
+      snapshot: state.subject,
+      expectedRevision: current.ref.revision,
+    }, interruption);
+    const freshenedState = freshened.requirementStates.find(({ requirement }) =>
+      sameRevisionRef(requirement, target.requirement));
+    if (freshenedState?.status !== "stale") continue;
+    changed = true;
+
+    const captured = await settled.execution.captureSubject({
+      requirement: target.requirement,
+      adapter: target.contribution.adapterRef,
+      kind: EXACT_CODE_SOURCE_SUBJECT_KIND,
+      requestedSource: target.policy.target.ref,
+      expectedRevision: freshened.ref.revision,
+    }, interruption);
+    const capturedState = captured.requirementStates.find(({ requirement }) =>
+      sameRevisionRef(requirement, target.requirement));
+    if (capturedState?.subject === null || capturedState?.subject === undefined) {
+      throw new TypeError("Changed exact target-state subject was not captured.");
+    }
+    const request: RunnerValidationCheckRequest = Object.freeze({
+      requirement: target.requirement,
+      subject: capturedState.subject,
+      definition: exactTargetCheckDefinition().ref,
+      predecessor: null,
+      environment: null,
+      configuration: target.contribution.configurationRef,
+      coverageTarget: 1,
+    });
+    const result = await settled.execution.executeCheck({
+      ...request,
+      origin: "trusted_automatic",
+      runAction: null,
+      expectedRevision: await currentRevision(settled.execution),
+    }, interruption);
+    await processValidationCheckResult(
+      settled.execution,
+      request,
+      result,
+      interruption,
+    );
+  }
+  return changed;
+}
+
+function exactFileToolForOperation(
+  operation: OperationRevisionRef,
+): Extract<CodeFileToolName, "Read" | "Edit" | "Write"> | null {
+  for (const tool of ["Read", "Edit", "Write"] as const) {
+    if (sameOperationRef(operation, operationRefForCodeFileTool(tool))) return tool;
+  }
+  return null;
+}
+
+function readValidationClaim(value: unknown): HelarcValidationClaim | null {
+  if (!isRecord(value) || value.validation_claim === undefined) return null;
+  if (!VALIDATION_CLAIMS.includes(value.validation_claim as HelarcValidationClaim)) {
+    throw new TypeError("Shell validation_claim is not supported by the admitted Helarc profile.");
+  }
+  return value.validation_claim as HelarcValidationClaim;
+}
+
+function commandConfiguration(claim: HelarcValidationClaim): ValidationOwnerRef {
+  return owner(`command-${claim}`, "validation_check_configuration");
+}
+
+function claimForConfiguration(
+  configuration: ValidationOwnerRef | null,
+): HelarcValidationClaim | null {
+  if (configuration === null) return null;
+  return VALIDATION_CLAIMS.find((claim) =>
+    sameOwnerRef(configuration, commandConfiguration(claim))) ?? null;
 }
 
 function subjectAdapterResolver(

@@ -434,6 +434,8 @@ const expectedLowerValueExports = {
     "HELARC_SHELL_TOOLS_BASELINE_ACCEPTANCE",
     "HELARC_TOOL_EXPOSURE_ACCEPTED_BASELINE",
     "HELARC_TOOL_EXPOSURE_BASELINE_ACCEPTANCE",
+    "HELARC_VALIDATION_COMPLETION_ACCEPTED_BASELINE",
+    "HELARC_VALIDATION_COMPLETION_BASELINE_ACCEPTANCE",
     "HELARC_VALIDATION_GATE_ACCEPTED_BASELINE",
     "HELARC_VALIDATION_GATE_BASELINE_ACCEPTANCE",
     "HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE",
@@ -807,14 +809,8 @@ const expectedValueExports = {
   ],
   "@agent-anything/helarc/artifacts": ["createHelarcArtifact"],
   "@agent-anything/helarc/validation": [
-    "HELARC_RUN_VALIDATION_CHECK_BINDING",
-    "HELARC_RUN_VALIDATION_CHECK_OPERATION",
-    "HELARC_RUN_VALIDATION_CHECK_TOOL",
     "bindHelarcValidationCompletionGate",
-    "createHelarcValidationCheckConfigurationRegistry",
-    "createHelarcValidationCheckOperationContribution",
     "createHelarcValidationComposition",
-    "parseHelarcRunValidationCheckRequest",
   ],
   "@agent-anything/helarc-local-environment/command": [
     "HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID",

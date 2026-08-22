@@ -124,7 +124,6 @@ export async function createHelarcProductComposition(
     admittedAt,
     file: input.fileActions,
     command: input.commandActions,
-    validation: validation.operation,
     semanticTools: Object.freeze([clarification.tool, descendant.tool]),
   });
   const interactions = createInteractionProtocolRegistrySnapshot(

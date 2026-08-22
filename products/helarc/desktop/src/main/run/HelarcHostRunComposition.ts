@@ -311,9 +311,6 @@ export async function prepareHelarcHostRun(
         retry: createStopActionRetryPort(),
         now,
       },
-      ...(product.actions.composite === null ? {} : {
-        composite: product.actions.composite,
-      }),
       descendants: product.descendants,
     },
     validation: bindHelarcValidationCompletionGate(

@@ -41,14 +41,6 @@ const LATENCY_UNCERTAINTY = Object.freeze({
   upper: 113.439542092186,
 });
 
-const PREDECESSOR_REPORT_REF = Object.freeze({
-  id: "helarc.phase27.report.baseline",
-  revision: HELARC_PHASE26_ACCEPTED_BASELINE.targetSnapshotRef.revision,
-});
-const PREDECESSOR_ACCEPTANCE_REF = Object.freeze({
-  id: "helarc.phase27.baseline-acceptance",
-  revision: HELARC_PHASE26_ACCEPTED_BASELINE.targetSnapshotRef.revision,
-});
 const PUBLICATION_LIMITATIONS = Object.freeze([
   Object.freeze({
     code: "deterministic_system_baseline_only",
@@ -134,9 +126,9 @@ export const HELARC_CONTEXT_CONTINUITY_BASELINE_ACCEPTANCE = deepFreeze({
   schemaVersion: 1,
   kind: "helarc_context_continuity_baseline_successor_acceptance",
   acceptedAt: "2026-08-17T00:00:00.000Z",
-  predecessorAcceptanceRef: PREDECESSOR_ACCEPTANCE_REF,
+  predecessorAcceptanceRef: HELARC_PHASE26_ACCEPTED_BASELINE.acceptanceRef,
   successorAcceptanceRef: ACCEPTANCE_REF,
-  predecessorReportRef: PREDECESSOR_REPORT_REF,
+  predecessorReportRef: HELARC_PHASE26_ACCEPTED_BASELINE.reportRef,
   successorReportRef: REPORT_REF,
   retainedIdentities: Object.freeze([
     "target",

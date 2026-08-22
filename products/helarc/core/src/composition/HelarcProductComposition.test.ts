@@ -64,7 +64,7 @@ describe("HelarcProductComposition", () => {
     );
     expect(exposure.catalog.tools.map(({ name }) => name)).toEqual(expect.arrayContaining([
       "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "TaskStop",
-      "AskUserQuestion", "Agent", "codeAgent.runValidationCheck",
+      "AskUserQuestion", "Agent",
     ]));
     expect(exposure.catalog.tools.find(({ name }) => name === "AskUserQuestion")?.binding.kind)
       .toBe("interaction");

@@ -31,17 +31,23 @@ import {
   type EvaluationCampaign,
 } from "@agent-anything/evaluation/campaign";
 import type { ProviderCallResult } from "@agent-anything/model-interaction";
+import type { HelarcExactTargetValidationRequirement } from "@agent-anything/helarc/validation";
 
 export const HELARC_EVALUATION_TIME = "2026-08-12T00:00:00.000Z";
-export const HELARC_EVALUATION_CORPUS_REVISION = "helarc-shell-tools-corpus-v1";
-export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION = "helarc-tool-exposure-target-v1";
+export const HELARC_EVALUATION_CORPUS_REVISION = "helarc-validation-completion-corpus-v1";
+export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION = "helarc-validation-completion-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
   | "search"
   | "controlled_file_write"
   | "denied_command"
-  | "malformed_output_retry";
+  | "malformed_output_retry"
+  | "multi_file_mutation"
+  | "ordinary_shell_validation"
+  | "failed_check_recovery"
+  | "stale_evidence"
+  | "premature_completion";
 
 export type HelarcEvaluationPermissionPreset =
   | "approve_for_me"
@@ -83,6 +89,7 @@ export interface HelarcEvaluationCaseDefinition {
   readonly fixture: HelarcEvaluationFixture;
   readonly script: HelarcEvaluationScript;
   readonly expectedClaim: HelarcEvaluationExpectedClaim;
+  readonly validationTargets: readonly HelarcExactTargetValidationRequirement[];
 }
 
 export interface HelarcEvaluationCorpus {
@@ -121,7 +128,7 @@ const REFS = Object.freeze({
   objective: ref("helarc.phase26.objective"),
   target: ref("helarc.phase26.target"),
   product: ref("helarc.product"),
-  suite: ref("helarc.phase26.suite"),
+  suite: ref("helarc.phase26.suite", "v2"),
   capturePolicy: ref("helarc.phase26.capture-policy"),
   outcomeCriterion: ref("helarc.phase26.criterion.outcome"),
   safetyCriterion: ref("helarc.phase26.criterion.safety"),
@@ -132,7 +139,7 @@ const REFS = Object.freeze({
   latencyMetric: ref("helarc.phase26.metric.latency"),
   retryMetric: ref("helarc.phase26.metric.retry-count"),
   environmentProtocol: ref("helarc.phase26.environment-protocol"),
-  campaign: ref("helarc.phase26.campaign"),
+  campaign: ref("helarc.phase26.campaign", "v2"),
 });
 
 export function createHelarcEvaluationCorpus(): HelarcEvaluationCorpus {
@@ -312,21 +319,21 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v4-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v5-${process.platform}-${process.arch}-node${nodeMajor}`;
   const unavailableDirtyState = limitation(
     "working_tree_state_not_measured",
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-tool-exposure-v1",
-    "agent.revision": "helarc-code-agent-tool-exposure-v1",
+    "product.revision": "helarc-product-validation-completion-v1",
+    "agent.revision": "helarc-code-agent-validation-completion-v1",
     "prompt.revision": "helarc-prompt-v4",
     "action-contract.revision": "helarc-model-decision-v1",
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-tool-exposure-v1",
+    "source.revision": "helarc-validation-completion-v1",
     "provider.revision": "scripted-provider-v1",
     "model.revision": "scripted-controller-output-v1",
-    "tool-profile.revision": "trusted-tool-exposure-v1",
+    "tool-profile.revision": "ordinary-operation-validation-v1",
     "action-registration.revision": "helarc-shell-action-registration-v1",
     "sandbox.enforcement": "disabled",
     "permission.preset": "case-declared",
@@ -348,7 +355,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
         key: item.key,
         owner: item.owner,
         required: item.required,
-        sourceRevision: "helarc-tool-exposure-v1",
+        sourceRevision: "helarc-validation-completion-v1",
         schemaRef: item.schemaRef,
         status: "unavailable" as const,
         representation: null,
@@ -388,6 +395,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
 }
 
 function createCases(): HelarcEvaluationCaseDefinition[] {
+  const shellTool = process.platform === "win32" ? "PowerShell" : "Bash";
   return [
     caseDefinition({
       id: "inspect-and-complete",
@@ -529,6 +537,148 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       permissionPreset: "full_access",
       approvalDecision: null,
     }),
+    caseDefinition({
+      id: "multi-file-mutation",
+      scenario: "multi_file_mutation",
+      prompt: "Create alpha.txt and beta.txt with their declared contents.",
+      fixtureFiles: {},
+      outputs: [
+        {
+          kind: "tool_call",
+          toolName: "Write",
+          reason: "Create the first requested file.",
+          input: { file_path: "alpha.txt", content: "alpha\n" },
+        },
+        {
+          kind: "tool_call",
+          toolName: "Write",
+          reason: "Create the second requested file.",
+          input: { file_path: "beta.txt", content: "beta\n" },
+        },
+        { kind: "completion", summary: "Created both requested files." },
+      ],
+      productStatus: "completed",
+      runStatus: "succeeded",
+      agentSummary: "Created both requested files.",
+      expectedAddedFiles: { "alpha.txt": "alpha\n", "beta.txt": "beta\n" },
+      requiredActionNames: ["Write"],
+      retryCount: 0,
+      permissionPreset: "full_access",
+      approvalDecision: null,
+      validationTargets: [
+        exactFileTarget("alpha", "alpha.txt", "alpha\n"),
+        exactFileTarget("beta", "beta.txt", "beta\n"),
+      ],
+    }),
+    caseDefinition({
+      id: "ordinary-shell-validation",
+      scenario: "ordinary_shell_validation",
+      prompt: "Run one ordinary command as a test Validation check.",
+      fixtureFiles: {},
+      outputs: [
+        {
+          kind: "tool_call",
+          toolName: shellTool,
+          reason: "Run the requested command and interpret its settled result.",
+          input: {
+            command: process.platform === "win32"
+              ? "Write-Output 'validation-ok'"
+              : "printf 'validation-ok\\n'",
+            validation_claim: "tests",
+          },
+        },
+        { kind: "completion", summary: "The ordinary command check passed." },
+      ],
+      productStatus: "completed",
+      runStatus: "succeeded",
+      agentSummary: "The ordinary command check passed.",
+      expectedAddedFiles: {},
+      requiredActionNames: [shellTool],
+      retryCount: 0,
+      permissionPreset: "full_access",
+      approvalDecision: null,
+    }),
+    caseDefinition({
+      id: "failed-check-recovery",
+      scenario: "failed_check_recovery",
+      prompt: "Recover from one failed test command and validate the corrected state.",
+      fixtureFiles: {},
+      outputs: [
+        {
+          kind: "tool_call",
+          toolName: shellTool,
+          reason: "Observe the initial failing check.",
+          input: {
+            command: process.platform === "win32"
+              ? "Write-Error 'expected failure'; exit 1"
+              : "printf 'expected failure\\n' >&2; exit 1",
+            validation_claim: "tests",
+          },
+        },
+        {
+          kind: "tool_call",
+          toolName: shellTool,
+          reason: "Run the corrected check.",
+          input: {
+            command: process.platform === "win32"
+              ? "Write-Output 'recovered'"
+              : "printf 'recovered\\n'",
+            validation_claim: "tests",
+          },
+        },
+        { kind: "completion", summary: "Recovered and completed the current check." },
+      ],
+      productStatus: "completed",
+      runStatus: "succeeded",
+      agentSummary: "Recovered and completed the current check.",
+      expectedAddedFiles: {},
+      requiredActionNames: [shellTool],
+      retryCount: 0,
+      permissionPreset: "full_access",
+      approvalDecision: null,
+    }),
+    caseDefinition({
+      id: "stale-evidence",
+      scenario: "stale_evidence",
+      prompt: "Replace tracked.txt, then propose completion.",
+      fixtureFiles: { "tracked.txt": "original\n" },
+      outputs: [
+        {
+          kind: "tool_call",
+          toolName: "Write",
+          reason: "Replace the tracked file.",
+          input: { file_path: "tracked.txt", content: "changed\n" },
+        },
+        { kind: "completion", summary: "Replaced the tracked file." },
+      ],
+      productStatus: "blocked",
+      runStatus: "blocked",
+      agentSummary: null,
+      expectedAddedFiles: { "tracked.txt": "changed\n" },
+      requiredActionNames: ["Write"],
+      retryCount: 0,
+      permissionPreset: "full_access",
+      approvalDecision: null,
+      validationTargets: [exactFileTarget("tracked-original", "tracked.txt", "original\n")],
+    }),
+    caseDefinition({
+      id: "premature-completion",
+      scenario: "premature_completion",
+      prompt: "Create required.txt containing ready followed by a newline.",
+      fixtureFiles: {},
+      outputs: [
+        { kind: "completion", summary: "The requested file is ready." },
+      ],
+      productStatus: "blocked",
+      runStatus: "blocked",
+      agentSummary: null,
+      expectedAddedFiles: {},
+      requiredActionNames: [],
+      retryCount: 0,
+      permissionPreset: "full_access",
+      approvalDecision: null,
+      validationTargets: [exactFileTarget("required", "required.txt", "ready\n")],
+    }),
   ].sort((left, right) => left.definition.ref.id.localeCompare(right.definition.ref.id));
 }
 
@@ -546,6 +696,7 @@ function caseDefinition(input: {
   readonly retryCount: number;
   readonly permissionPreset: HelarcEvaluationPermissionPreset;
   readonly approvalDecision: "decline" | null;
+  readonly validationTargets?: readonly HelarcExactTargetValidationRequirement[];
 }): HelarcEvaluationCaseDefinition {
   const caseRef = ref(`helarc.phase26.case.${input.id}`);
   const caseFixture = createFixture(
@@ -609,6 +760,53 @@ function caseDefinition(input: {
     fixture: caseFixture,
     script,
     expectedClaim,
+    validationTargets: Object.freeze([...(input.validationTargets ?? [])]),
+  });
+}
+
+function exactFileTarget(
+  id: string,
+  path: string,
+  content: string,
+): HelarcExactTargetValidationRequirement {
+  const digest = `sha256:${sha256(content)}`;
+  return Object.freeze({
+    target: Object.freeze({
+      ref: Object.freeze({
+        owner: "helarc.code-workspace",
+        kind: "target_state",
+        id,
+        revision: "v1",
+      }),
+      expected: Object.freeze({
+        target: Object.freeze({
+          rootName: "primary",
+          workspaceId: "evaluation-workspace",
+          path,
+        }),
+        baseline: Object.freeze({
+          kind: "present" as const,
+          entryKind: "file" as const,
+          objectIdentity: Object.freeze({
+            kind: "posix" as const,
+            deviceId: "evaluation",
+            inode: id,
+          }),
+          contentDigest: digest,
+        }),
+        content,
+        contentRef: Object.freeze({
+          algorithm: "sha256" as const,
+          digest,
+          byteLength: Buffer.byteLength(content, "utf8"),
+        }),
+        capturedAt: HELARC_EVALUATION_TIME,
+      }),
+      maxContentBytes: 64 * 1024,
+    }),
+    necessity: "mandatory",
+    claim: `The exact current content of '${path}' matches the required state.`,
+    purpose: "Prevent completion from relying on absent or stale target state.",
   });
 }
 

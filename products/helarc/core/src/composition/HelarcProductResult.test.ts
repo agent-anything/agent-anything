@@ -134,7 +134,10 @@ describe("HelarcProductResult", () => {
       "disabled",
       {
         snapshot: { runId: "run-1", revision: 7 },
-        counts: [{ state: "violated", count: 1 }],
+        counts: [
+          { state: "unassessed", count: 1 },
+          { state: "violated", count: 1 },
+        ],
         activeChecks: 0,
         gateStatus: "blocked_violated",
         safeReasons: ["mandatory_validation_violated"],
@@ -147,7 +150,10 @@ describe("HelarcProductResult", () => {
     expect(projected.validation).toEqual({
       status: "attention_required",
       snapshotRevision: 7,
-      counts: [{ state: "violated", count: 1 }],
+      counts: [
+        { state: "unassessed", count: 1 },
+        { state: "violated", count: 1 },
+      ],
       activeChecks: 0,
       gateStatus: "blocked_violated",
       safeReasons: ["mandatory_validation_violated"],

@@ -313,7 +313,16 @@ const SHELL_INPUT = objectSchema(["command"], {
   description: { type: "string", minLength: 1, maxLength: 1_000 },
   timeout_ms: POSITIVE_INTEGER,
   run_in_background: { type: "boolean" },
-  validation_claim: { type: "string", minLength: 1, maxLength: 4_096 },
+  validation_claim: {
+    type: "string",
+    enum: [
+      "tests",
+      "static_analysis",
+      "runtime_verification",
+      "security_scan",
+      "performance_benchmark",
+    ],
+  },
 });
 
 const SHELL_OUTPUT = Object.freeze({

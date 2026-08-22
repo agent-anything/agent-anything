@@ -34,6 +34,7 @@ import type {
   ValidationCheckRequest,
   ValidationExecutionFactory,
   ValidationExecutionPort,
+  ValidationLowerCheckSettlement,
 } from "@agent-anything/validation/execution";
 import type { ValidationOwnerRef, ValidationRequirementRef } from "@agent-anything/validation/definition";
 import type { ValidationSubjectSnapshotRef } from "@agent-anything/validation/subject";
@@ -171,7 +172,7 @@ export interface RunnerValidationComposition {
   readonly executionFactory: ValidationExecutionFactory;
   readonly completionGate: CompletionGatePort;
   readonly preparation: RunnerValidationPreparationPort | null;
-  readonly checkRequests: RunnerValidationCheckRequestResolverPort | null;
+  readonly settledOperationResults: RunnerValidationSettledOperationResultProcessorPort | null;
   readonly checkResults: RunnerValidationCheckResultProcessorPort | null;
 }
 
@@ -208,14 +209,16 @@ export interface RunnerValidationCheckRequest {
   readonly coverageTarget: number;
 }
 
-export interface RunnerValidationCheckRequestResolverPort {
-  resolve(input: {
+export interface RunnerValidationSettledOperationResultProcessorPort {
+  process(input: {
     readonly run: RunRef;
+    readonly execution: ValidationExecutionPort;
     readonly runAction: RunActionRef;
     readonly operation: OperationRevisionRef;
     readonly request: unknown;
     readonly requestOrigin: OperationRequestOrigin;
-  }): Promise<RunnerValidationCheckRequest | null>;
+    readonly settlement: ValidationLowerCheckSettlement;
+  }, interruption: InvocationInterruptionContext): Promise<boolean>;
 }
 
 export interface RunnerValidationCheckResultProcessorPort {

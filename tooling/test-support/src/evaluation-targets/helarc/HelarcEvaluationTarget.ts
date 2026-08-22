@@ -444,6 +444,10 @@ async function invokeHelarcTarget(
     codeSource: createLocalCodeSourcePort(clock.now),
     fileActions,
     commandActions,
+    validationTargets: bindValidationTargets(
+      caseDefinition.validationTargets,
+      workspace.primary.id,
+    ),
     now: clock.now,
   });
   const gateway = createHelarcLocalSandboxGateway({
@@ -654,6 +658,26 @@ async function invokeHelarcTarget(
     ),
     retryCount: terminalProjection.retry?.scheduledCount ?? 0,
   });
+}
+
+function bindValidationTargets(
+  targets: HelarcEvaluationCaseDefinition["validationTargets"],
+  primaryWorkspaceId: string,
+): HelarcEvaluationCaseDefinition["validationTargets"] {
+  return Object.freeze(targets.map((requirement) => Object.freeze({
+    ...requirement,
+    target: Object.freeze({
+      ...requirement.target,
+      expected: Object.freeze({
+        ...requirement.target.expected,
+        target: Object.freeze({
+          ...requirement.target.expected.target,
+          rootName: primaryWorkspaceId,
+          workspaceId: primaryWorkspaceId,
+        }),
+      }),
+    }),
+  })));
 }
 
 function createEvaluationValidationCompletionConfig() {

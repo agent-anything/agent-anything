@@ -238,7 +238,6 @@ describe("Helarc Host Run composition", () => {
         "Agent",
         "AskUserQuestion",
         nativeShellTool(),
-        "codeAgent.runValidationCheck",
         "TaskStop",
       ],
     });

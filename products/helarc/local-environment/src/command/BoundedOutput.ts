@@ -29,7 +29,11 @@ export class BoundedOutput {
     return this.didTruncate;
   }
 
+  toBuffer(): Buffer {
+    return Buffer.concat(this.chunks, this.retainedBytes);
+  }
+
   toString(): string {
-    return Buffer.concat(this.chunks, this.retainedBytes).toString("utf8");
+    return this.toBuffer().toString("utf8");
   }
 }

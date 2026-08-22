@@ -13,10 +13,10 @@ export type {
   RunnerAutomaticEffectfulValidationCheckRequest,
   RunnerDependencies,
   RunnerValidationCheckRequest,
-  RunnerValidationCheckRequestResolverPort,
   RunnerValidationCheckResultProcessorPort,
   RunnerValidationComposition,
   RunnerValidationPreparationPort,
+  RunnerValidationSettledOperationResultProcessorPort,
 } from "./RunnerDependencies.js";
 export type {
   RunHandle,

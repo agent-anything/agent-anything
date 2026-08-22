@@ -1,4 +1,7 @@
 import { EventEmitter } from "node:events";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 import type { InvocationInterruptionContext, InvocationInterruptionRef } from "@agent-anything/agent-core/control";
@@ -120,6 +123,67 @@ describe("executeProcess", () => {
       kind: "failed",
       effectState: "unknown",
     });
+  });
+
+  it("does not materialize a foreground output file when bounded output is complete", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-foreground-output-"));
+    const outputPath = join(directory, "output.log");
+    try {
+      const child = createChildProcess();
+      const cancellation = createInterruptionContext();
+      const pending = executeProcess({
+        ...createInput(cancellation.context),
+        outputFile: {
+          absolutePath: outputPath,
+          relativePath: "output.log",
+          maximumBytes: 1_024,
+        },
+      }, { spawnProcess: () => child });
+
+      child.stdout?.write("done");
+      child.emit("close", 0, null);
+
+      await expect(pending).resolves.toMatchObject({
+        kind: "completed",
+        stdout: "done",
+        stdoutTruncated: false,
+        outputFile: null,
+      });
+      await expect(access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("materializes declared foreground overflow only after direct output truncates", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "helarc-foreground-overflow-"));
+    const outputPath = join(directory, "output.log");
+    try {
+      const child = createChildProcess();
+      const cancellation = createInterruptionContext();
+      const pending = executeProcess({
+        ...createInput(cancellation.context),
+        maxStdoutBytes: 4,
+        outputFile: {
+          absolutePath: outputPath,
+          relativePath: "output.log",
+          maximumBytes: 1_024,
+        },
+      }, { spawnProcess: () => child });
+
+      child.stdout?.write("abcdef");
+      child.emit("close", 0, null);
+
+      await expect(pending).resolves.toMatchObject({
+        kind: "completed",
+        stdout: "abcd",
+        stdoutTruncated: true,
+        outputFile: "output.log",
+      });
+      await expect(readFile(outputPath, "utf8")).resolves.toBe("[stdout] abcdef");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

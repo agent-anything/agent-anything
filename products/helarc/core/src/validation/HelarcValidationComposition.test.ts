@@ -6,6 +6,7 @@ import {
 } from "@agent-anything/validation/definition";
 import type {
   ValidationExecutionPort,
+  ValidationLowerCheckSettlement,
   ValidationOperationCheckResolverPort,
 } from "@agent-anything/validation/execution";
 import type { CodeSourcePort, CodeSourceSnapshot } from "@agent-anything/helarc-code-agent/source";
@@ -16,8 +17,13 @@ import {
   type HelarcValidationComposition,
 } from "./HelarcValidationComposition.js";
 import {
-  HELARC_RUN_VALIDATION_CHECK_OPERATION,
-} from "./HelarcValidationCheckOperation.js";
+  bindingRefForCodeFileTool,
+  operationRefForCodeFileTool,
+} from "@agent-anything/helarc-code-agent/file-operation";
+import {
+  HELARC_SHELL_BINDING,
+  HELARC_SHELL_OPERATION,
+} from "../tools/HelarcCommandOperation.js";
 
 const NOW = "2026-08-18T00:00:00.000Z";
 const RUN: RunRef = Object.freeze({ id: "run-1" });
@@ -29,7 +35,6 @@ describe("Helarc Validation composition", () => {
     const execution = await prepare(composition);
 
     expect(composition.profile.requirements).toHaveLength(1);
-    expect(composition.operation).not.toBeNull();
     expect((await execution.readCurrentSnapshot()).requirementStates)
       .toEqual([expect.objectContaining({ status: "unassessed" })]);
   });
@@ -74,33 +79,76 @@ describe("Helarc Validation composition", () => {
   ] as const)("assesses command exit $exitCode as $expected", async ({ exitCode, expected }) => {
     const source = mutableCodeSource(absentSnapshot());
     const composition = await createComposition(source.port);
-    const execution = await prepare(composition, commandSettlement(exitCode));
-    const resolver = composition.runner.checkRequests;
-    const processor = composition.runner.checkResults;
-    if (resolver === undefined || processor === undefined) {
-      throw new Error("Shell-enabled profile must expose command Check adapters.");
-    }
+    const execution = await prepare(composition);
+    const processor = composition.runner.settledOperationResults;
+    if (processor === null) throw new Error("Shell-enabled profile must interpret settled commands.");
     const runAction = Object.freeze({ run: RUN, id: "run-action-1", sequence: 1 });
-    const request = await resolver.resolve({
+    await processor.process({
       run: RUN,
+      execution,
       runAction,
-      operation: HELARC_RUN_VALIDATION_CHECK_OPERATION,
-      request: validationCommandRequest(),
+      operation: HELARC_SHELL_OPERATION,
+      request: shellCommandRequest(),
       requestOrigin: "tool_request",
-    });
-    if (request === null) throw new Error("Expected a Validation Check request.");
-    const current = await execution.readCurrentSnapshot();
-    const result = await execution.executeCheck({
-      ...request,
-      origin: "controller",
-      runAction,
-      expectedRevision: current.ref.revision,
+      settlement: commandSettlement(exitCode, runAction.id, "1"),
     }, liveInterruption());
-    await processor.process({ run: RUN, execution, request, result }, liveInterruption());
 
-    expect(result.status).toBe("completed");
+    expect((await execution.readHistory()).filter(({ kind }) => kind === "check_result"))
+      .toHaveLength(1);
     expect((await execution.readCurrentSnapshot()).requirementStates[0])
       .toMatchObject({ status: expected });
+  });
+
+  it("replaces failed command feedback with a later current successful Assessment", async () => {
+    const composition = await createComposition(mutableCodeSource(absentSnapshot()).port);
+    const execution = await prepare(composition);
+    const processor = composition.runner.settledOperationResults;
+    if (processor === null) throw new Error("Expected settled command Validation processing.");
+
+    for (const [sequence, exitCode] of [[1, 1], [2, 0]] as const) {
+      const runAction = Object.freeze({
+        run: RUN,
+        id: `run-action-${sequence}`,
+        sequence,
+      });
+      await processor.process({
+        run: RUN,
+        execution,
+        runAction,
+        operation: HELARC_SHELL_OPERATION,
+        request: shellCommandRequest(),
+        requestOrigin: "tool_request",
+        settlement: commandSettlement(exitCode, runAction.id, String(sequence)),
+      }, liveInterruption());
+    }
+
+    expect((await execution.readCurrentSnapshot()).requirementStates[0])
+      .toMatchObject({ status: "satisfied" });
+    expect((await execution.readHistory()).filter(({ kind }) => kind === "check_result"))
+      .toHaveLength(2);
+  });
+
+  it("revalidates an admitted exact target after an ordinary Write settlement", async () => {
+    const source = mutableCodeSource(absentSnapshot());
+    const composition = await createComposition(source.port, exactTarget());
+    const execution = await prepare(composition);
+    const processor = composition.runner.settledOperationResults;
+    if (processor === null) throw new Error("Expected exact target settlement processing.");
+    source.set(presentSnapshot("sha256:changed"));
+
+    await processor.process({
+      run: RUN,
+      execution,
+      runAction: Object.freeze({ run: RUN, id: "run-action-write", sequence: 1 }),
+      operation: operationRefForCodeFileTool("Write"),
+      request: Object.freeze({ file_path: "./empty.txt", content: "current" }),
+      requestOrigin: "tool_request",
+      settlement: fileSettlement("Write"),
+    }, liveInterruption());
+
+    expect((await execution.readCurrentSnapshot()).requirementStates.find(
+      ({ requirement }) => requirement.id === "target-empty-marker",
+    )).toMatchObject({ status: "violated" });
   });
 });
 
@@ -141,52 +189,81 @@ async function prepare(
   return execution;
 }
 
-function commandSettlement(exitCode: number): ValidationOperationCheckResolverPort {
+function commandSettlement(
+  exitCode: number,
+  runActionId: string,
+  suffix: string,
+): ValidationLowerCheckSettlement {
+  const invocation = Object.freeze({
+    id: `command-operation-invocation-${suffix}`,
+    operation: HELARC_SHELL_OPERATION,
+  });
   return Object.freeze({
-    resolve: () => Object.freeze({
-      async requestSettlement(input) {
-        const invocation = Object.freeze({
-          id: "validation-operation-invocation-1",
-          operation: HELARC_RUN_VALIDATION_CHECK_OPERATION,
-        });
-        return Object.freeze({
-          operationInvocation: invocation,
-          operationResult: createOperationResult({
-            ref: { invocation, id: "validation-operation-result-1" },
-            binding: { operation: invocation.operation, revision: "1" },
-            semanticOwner: "helarc",
-            status: "succeeded",
-            output: {
-              claim: "tests",
-              childOperationResultId: "command-operation-result-1",
-              command: {
-                exitCode,
-                signal: null,
-                durationMs: 10,
-                stdoutTruncated: false,
-                stderrTruncated: false,
-                settlementConfirmed: true,
-              },
-            },
-            failure: null,
-            startedAt: NOW,
-            finishedAt: NOW,
-            lowerRefs: [],
-            metadata: {},
-          }),
-          actionSettlement: Object.freeze({ action: { id: input.attempt.runAction!.id }, id: "settlement-1" }),
-          effectCertainty: "confirmed" as const,
-          costUnits: 1,
-        });
+    operationInvocation: invocation,
+    operationResult: createOperationResult({
+      ref: { invocation, id: `command-operation-result-${suffix}` },
+      binding: HELARC_SHELL_BINDING,
+      semanticOwner: "helarc",
+      status: "succeeded",
+      output: {
+        mode: "foreground",
+        exit_code: exitCode,
+        signal: null,
+        duration_ms: 10,
+        stdout: "",
+        stderr: "",
+        stdout_truncated: false,
+        stderr_truncated: false,
+        stdout_overflow_file: null,
+        stderr_overflow_file: null,
       },
+      failure: null,
+      startedAt: NOW,
+      finishedAt: NOW,
+      lowerRefs: [],
+      metadata: {},
     }),
+    actionSettlement: Object.freeze({
+      action: { id: runActionId },
+      id: `settlement-${suffix}`,
+    }),
+    effectCertainty: "confirmed",
+    costUnits: 1,
   });
 }
 
-function validationCommandRequest() {
+function fileSettlement(
+  tool: "Read" | "Edit" | "Write",
+): ValidationLowerCheckSettlement {
+  const operation = operationRefForCodeFileTool(tool);
+  const invocation = Object.freeze({ id: `file-${tool.toLowerCase()}-1`, operation });
   return Object.freeze({
-    claim: "tests",
+    operationInvocation: invocation,
+    operationResult: createOperationResult({
+      ref: { invocation, id: `file-${tool.toLowerCase()}-result-1` },
+      binding: bindingRefForCodeFileTool(tool),
+      semanticOwner: "helarc.code-workspace",
+      status: "succeeded",
+      output: Object.freeze({ file_path: "empty.txt" }),
+      failure: null,
+      startedAt: NOW,
+      finishedAt: NOW,
+      lowerRefs: Object.freeze([]),
+      metadata: Object.freeze({}),
+    }),
+    actionSettlement: Object.freeze({
+      action: Object.freeze({ id: "canonical-file-action-1" }),
+      id: "canonical-file-settlement-1",
+    }),
+    effectCertainty: "confirmed",
+    costUnits: null,
+  });
+}
+
+function shellCommandRequest() {
+  return Object.freeze({
     command: "pnpm test",
+    validation_claim: "tests",
     timeout_ms: 30_000,
     description: "Verify the current workspace.",
   });

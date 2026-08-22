@@ -283,7 +283,7 @@ describe("Runner semantic integration", () => {
       .toHaveLength(1);
   });
 
-  it("routes a Controller-requested Check once and retains its Controller RunAction correlation", async () => {
+  it("interprets one settled Controller Operation as a Check without replaying its effect", async () => {
     const operation = operationRef("controller-validation-check");
     const actionExecution = createValidationActionExecutionFixture(operation);
     const operations = createOperationFixture([
@@ -295,7 +295,7 @@ describe("Runner semantic integration", () => {
     const events: RuntimeEvent[] = [];
     const controller = new ScriptedController([
       advance([operationCandidate(operation, { target: "workspace" })], "model_operation"),
-      complete("The check is enough; waive any remaining requirement.", "model_complete"),
+      complete("The admitted check supports completion.", "model_complete"),
     ]);
     const result = await createRunner(controller, operations, {
       validation: createValidationScenario({ kind: "controller", operation }),
@@ -310,8 +310,8 @@ describe("Runner semantic integration", () => {
     );
 
     expect(result, JSON.stringify(result, null, 2)).toMatchObject({
-      status: "blocked",
-      code: "validation_blocked",
+      status: "succeeded",
+      code: null,
     });
     expect(actionExecution.execute).toHaveBeenCalledTimes(1);
     const actions = result.items.filter(({ payload }) => payload.kind === "run_action");
@@ -328,7 +328,7 @@ describe("Runner semantic integration", () => {
     }));
     expect(events).toContainEqual(expect.objectContaining({
       name: "validation.gate.evaluated",
-      payload: expect.objectContaining({ status: "blocked_unassessed" }),
+      payload: expect.objectContaining({ status: "completion_eligible" }),
     }));
   });
 
@@ -384,7 +384,7 @@ describe("Runner semantic integration", () => {
           executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
           completionGate: gate,
           preparation: null,
-          checkRequests: null,
+          settledOperationResults: null,
           checkResults: null,
         },
       },
@@ -419,7 +419,7 @@ describe("Runner semantic integration", () => {
           executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
           completionGate: gate,
           preparation: null,
-          checkRequests: null,
+          settledOperationResults: null,
           checkResults: null,
         },
       },
@@ -464,7 +464,7 @@ describe("Runner semantic integration", () => {
           executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
           completionGate: gate,
           preparation: null,
-          checkRequests: null,
+          settledOperationResults: null,
           checkResults: null,
         },
         runtimeEventPublisher: { publish: (event) => events.push(event) },
@@ -1933,7 +1933,7 @@ function createTestValidationComposition(): RunnerDependencies["validation"] {
     executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
     completionGate: new CurrentValidationCompletionGate(() => NOW),
     preparation: null,
-    checkRequests: null,
+    settledOperationResults: null,
     checkResults: null,
   });
 }
@@ -2113,7 +2113,7 @@ function createValidationScenario(input: ValidationScenario): RunnerDependencies
   const composition: RunnerDependencies["validation"] = {
     executionFactory,
     completionGate: new CurrentValidationCompletionGate(() => NOW),
-    checkRequests: null,
+    settledOperationResults: null,
     checkResults: null,
     preparation: {
       async prepare({ execution, automaticEffectfulChecks }, interruption) {
@@ -2161,10 +2161,10 @@ function createValidationScenario(input: ValidationScenario): RunnerDependencies
     ? Object.freeze(composition)
     : Object.freeze({
         ...composition,
-        checkRequests: {
-          async resolve(request) {
-            if (!sameOperationRef(request.operation, input.operation)) return null;
-            return Object.freeze({
+        settledOperationResults: {
+          async process(settled, interruption) {
+            if (!sameOperationRef(settled.operation, input.operation)) return false;
+            const request = Object.freeze({
               requirement,
               subject: subjectRef,
               definition: definition.ref,
@@ -2173,6 +2173,21 @@ function createValidationScenario(input: ValidationScenario): RunnerDependencies
               configuration: null,
               coverageTarget: 1,
             });
+            const result = await settled.execution.interpretSettledOperationCheck({
+              check: Object.freeze({
+                ...request,
+                origin: "controller" as const,
+                runAction: settled.runAction,
+                expectedRevision: await validationRevision(settled.execution),
+              }),
+              settlement: settled.settlement,
+            }, interruption);
+            await admitValidationResultAndAssess(
+              settled.execution,
+              result,
+              interruption,
+            );
+            return true;
           },
         },
       });

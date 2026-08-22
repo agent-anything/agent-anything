@@ -1339,6 +1339,13 @@ export class RunExecution<TOutput> {
         );
         if (outcome !== null) {
           this.commitOperationObservation(action, outcome);
+          await this.processSettledOperationValidation(
+            action,
+            candidate.operation,
+            candidate.request,
+            "controller_protocol",
+            outcome.result,
+          );
           if (outcome.result.status === "unknown_effect") {
             await this.settle({
               status: "failed",
@@ -1668,6 +1675,13 @@ export class RunExecution<TOutput> {
             result,
             toolResult: adaptToolResult(call, result),
           });
+          await this.processSettledOperationValidation(
+            action,
+            call.binding.operation,
+            call.input,
+            call.origin === "model" ? "tool_request" : "trusted_workflow",
+            result,
+          );
           if (result.status === "unknown_effect") {
             await this.settle({
               status: "failed",
@@ -1751,14 +1765,6 @@ export class RunExecution<TOutput> {
     const operation = candidate.operation;
     const request = candidate.request;
     const requestOrigin: OperationRequestOrigin = "controller_protocol";
-    if (await this.executeControllerValidationCheck({
-      action,
-      operation: operation!,
-      request,
-      requestOrigin,
-    })) {
-      return null;
-    }
     const executed = await this.executeOperation({
       action,
       operation: operation!,
@@ -1772,52 +1778,75 @@ export class RunExecution<TOutput> {
     return Object.freeze({ result: executed, toolResult: null });
   }
 
-  private async executeControllerValidationCheck(input: {
-    readonly action: RuntimeRunAction;
-    readonly operation: OperationRevisionRef;
-    readonly request: unknown;
-    readonly requestOrigin: OperationRequestOrigin;
-  }): Promise<boolean> {
-    const resolver = this.dependencies.validation.checkRequests;
-    if (resolver === null) return false;
-    let resolved: Awaited<ReturnType<typeof resolver.resolve>>;
+  private async processSettledOperationValidation(
+    action: RuntimeRunAction,
+    operation: OperationRevisionRef,
+    request: unknown,
+    requestOrigin: OperationRequestOrigin,
+    result: OperationResult,
+  ): Promise<void> {
+    const processor = this.dependencies.validation.settledOperationResults;
+    if (processor === null) return;
     try {
-      resolved = await resolver.resolve({
+      const changed = await processor.process({
         run: Object.freeze({ id: this.runId }),
-        runAction: input.action.ref,
-        operation: input.operation,
-        request: input.request,
-        requestOrigin: input.requestOrigin,
-      });
+        execution: this.requireValidationExecution(),
+        runAction: action.ref,
+        operation,
+        request,
+        requestOrigin,
+        settlement: this.validationLowerSettlement(result),
+      }, this.invocationInterruption());
+      if (!changed) return;
     } catch (error) {
+      if (error instanceof ValidationExecutionError) throw error;
       throw new ValidationExecutionError(createValidationFailure({
-        code: "validation_check_request_resolution_failed",
+        code: "validation_settled_operation_processing_failed",
         stage: "check",
         message: error instanceof Error
           ? error.message
-          : "Validation Check request resolution failed.",
+          : "Settled Operation Validation processing failed.",
         retryable: false,
         cause: null,
       }), (await this.requireValidationExecution().readCurrentSnapshot()).ref.revision);
     }
-    if (resolved === null) return false;
-    const execution = this.requireValidationExecution();
-    const current = await execution.readCurrentSnapshot();
-    const result = await execution.executeCheck({
-      ...resolved,
-      origin: input.requestOrigin === "trusted_workflow"
-        ? "trusted_workflow"
-        : "controller",
-      runAction: input.action.ref,
-      expectedRevision: current.ref.revision,
-    }, this.invocationInterruption());
-    await this.processValidationCheckResult(
-      resolved,
-      result,
-      this.invocationInterruption(),
-    );
     await this.commitValidationFeedback(null);
-    return true;
+  }
+
+  private validationLowerSettlement(
+    result: OperationResult,
+  ): ValidationLowerCheckSettlement {
+    const settlementRef = result.lowerRefs.find((reference) =>
+      reference.owner === "canonical-action" &&
+      reference.kind === "action_settlement");
+    const actionId = typeof result.metadata.actionId === "string"
+      ? result.metadata.actionId
+      : null;
+    const effectCertainty = isActionEffectCertainty(result.metadata.effectCertainty)
+      ? result.metadata.effectCertainty
+      : result.status === "succeeded"
+        ? "confirmed"
+        : result.status === "partial"
+          ? "partial"
+          : result.status === "unknown_effect"
+            ? "unknown"
+            : "none";
+    return Object.freeze({
+      operationInvocation: result.ref.invocation,
+      operationResult: result,
+      actionSettlement: settlementRef === undefined || actionId === null
+        ? null
+        : Object.freeze({
+            action: Object.freeze({ id: actionId }),
+            id: settlementRef.id,
+          }),
+      effectCertainty,
+      costUnits: typeof result.metadata.costUnits === "number" &&
+          Number.isFinite(result.metadata.costUnits) &&
+          result.metadata.costUnits >= 0
+        ? result.metadata.costUnits
+        : null,
+    });
   }
 
   private async processValidationCheckResult(

@@ -239,11 +239,15 @@ function projectValidationCommunication(
   const total = validation.counts.reduce((sum, entry) => sum + entry.count, 0);
   const status: HelarcValidationCommunication["status"] = total === 0
     ? "not_required"
-    : validation.activeChecks > 0 || count("pending") > 0 || count("unassessed") > 0
-      ? "pending"
-      : count("violated") > 0 || count("inconclusive") > 0 || count("stale") > 0
-        ? "attention_required"
-        : "satisfied";
+    : count("violated") > 0 || count("inconclusive") > 0 || count("stale") > 0
+      ? "attention_required"
+      : validation.activeChecks > 0 || count("pending") > 0
+        ? "pending"
+        : count("satisfied") > 0
+          ? "satisfied"
+          : validation.gateStatus === "completion_eligible"
+            ? "not_required"
+            : "pending";
   return Object.freeze({
     status,
     snapshotRevision: validation.snapshot.revision,

@@ -3,9 +3,9 @@ import {
   type ChildProcess,
   type SpawnOptions,
 } from "node:child_process";
+import { writeFile } from "node:fs/promises";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { BoundedOutput } from "./BoundedOutput.js";
-import { ProcessOutputFile } from "./ProcessOutputFile.js";
 import type { ProcessTerminationLimits } from "./ProcessContracts.js";
 
 export interface ProcessExecutionInput {
@@ -84,9 +84,9 @@ export async function executeProcess(
     return { kind: "cancelled_before_start" };
   }
 
-  const outputFile = input.outputFile === undefined
+  const retainedOutput = input.outputFile === undefined
     ? null
-    : await ProcessOutputFile.create(input.outputFile);
+    : new BoundedOutput(input.outputFile.maximumBytes);
 
   return new Promise((resolve) => {
     const stdout = new BoundedOutput(input.maxStdoutBytes);
@@ -110,8 +110,7 @@ export async function executeProcess(
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch {
-      const close = outputFile === null ? Promise.resolve() : outputFile.close();
-      void close.then(() => resolve({ kind: "failed", effectState: outputFile === null ? "none" : "settled" }));
+      resolve({ kind: "failed", effectState: "none" });
       return;
     }
 
@@ -123,22 +122,25 @@ export async function executeProcess(
 
     child.stdout?.on("data", (chunk: Buffer) => {
       stdout.append(chunk);
-      outputFile?.append("stdout", chunk);
+      retainedOutput?.append(Buffer.concat([Buffer.from("[stdout] ", "utf8"), chunk]));
     });
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr.append(chunk);
-      outputFile?.append("stderr", chunk);
+      retainedOutput?.append(Buffer.concat([Buffer.from("[stderr] ", "utf8"), chunk]));
     });
 
-    const captured = (): CapturedProcessOutput => ({
-      stdout: stdout.toString(),
-      stderr: stderr.toString(),
-      durationMs: Math.max(0, input.nowMs() - input.startedMs),
-      stdoutTruncated: stdout.truncated,
-      stderrTruncated: stderr.truncated,
-      outputFile: outputFile?.relativePath ?? null,
-      outputFileTruncated: outputFile?.truncated ?? false,
-    });
+    const captured = (): CapturedProcessOutput => {
+      const needsOverflowFile = stdout.truncated || stderr.truncated;
+      return {
+        stdout: stdout.toString(),
+        stderr: stderr.toString(),
+        durationMs: Math.max(0, input.nowMs() - input.startedMs),
+        stdoutTruncated: stdout.truncated,
+        stderrTruncated: stderr.truncated,
+        outputFile: needsOverflowFile ? input.outputFile?.relativePath ?? null : null,
+        outputFileTruncated: needsOverflowFile && retainedOutput?.truncated === true,
+      };
+    };
 
     const finish = (outcome: ProcessExecutionOutcome): void => {
       if (settled) {
@@ -153,8 +155,11 @@ export async function executeProcess(
         clearTimeout(forceSettlementTimer);
       }
       input.interruption.signal.removeEventListener("abort", onAbort);
-      const close = outputFile === null ? Promise.resolve() : outputFile.close();
-      void close.then(() => resolve(outcome));
+      void persistForegroundOverflow(input.outputFile, retainedOutput, stdout, stderr)
+        .then(
+          () => resolve(outcome),
+          () => resolve({ kind: "failed", effectState: "unknown" }),
+        );
     };
 
     const forceTermination = (): void => {
@@ -238,6 +243,19 @@ export async function executeProcess(
       beginTermination("cancellation");
     }
   });
+}
+
+async function persistForegroundOverflow(
+  outputFile: ProcessExecutionInput["outputFile"],
+  retainedOutput: BoundedOutput | null,
+  stdout: BoundedOutput,
+  stderr: BoundedOutput,
+): Promise<void> {
+  if (outputFile === undefined || retainedOutput === null ||
+      (!stdout.truncated && !stderr.truncated)) {
+    return;
+  }
+  await writeFile(outputFile.absolutePath, retainedOutput.toBuffer(), { flag: "wx" });
 }
 
 export function requestProcessTreeTermination(
