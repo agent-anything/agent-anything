@@ -14,7 +14,13 @@ import {
   snapshotResolvedRunPermissionConfig,
   type RuntimeFailure,
 } from "../run/index.js";
-import type { RunConfig, ValidatedRunConfig } from "./RunConfig.js";
+import type {
+  RootRunConfig,
+  RunConfig,
+  RunTreeLimits,
+  ValidatedRootRunConfig,
+  ValidatedRunConfig,
+} from "./RunConfig.js";
 import { snapshotCompletionGateConfiguration } from "@agent-anything/validation/completion";
 import { snapshotValidationProfile } from "@agent-anything/validation/definition";
 
@@ -28,6 +34,11 @@ export interface ConfigValidationFailure {
 export interface ConfigValidationSuccess {
   readonly valid: true;
   readonly config: ValidatedRunConfig;
+}
+
+export interface RootConfigValidationSuccess {
+  readonly valid: true;
+  readonly config: ValidatedRootRunConfig;
 }
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -80,11 +91,6 @@ export function snapshotRunConfig(
       throw new TypeError("Run Action workspace and Run primary workspace must match.");
     }
     const limits = snapshotLimits(config.limits);
-    const descendantDepth = config.descendantDepth ?? 0;
-    assertNonNegativeInteger(descendantDepth, "RunConfig.descendantDepth");
-    if (descendantDepth > limits.maxDescendantDepth) {
-      throw new TypeError("Run descendant depth exceeds the configured ceiling.");
-    }
     assertRequirement(config.audit, "RunConfig.audit");
     assertRequirement(config.telemetry, "RunConfig.telemetry");
     const cancellationLimits = snapshotCancellationLimits(config.cancellationLimits);
@@ -124,7 +130,6 @@ export function snapshotRunConfig(
         cancellationLimits,
         retry,
         metadata: Object.freeze({ ...config.metadata }),
-        descendantDepth,
       }),
     });
   } catch (error) {
@@ -133,6 +138,35 @@ export function snapshotRunConfig(
       failure: Object.freeze({
         code: "runtime_invalid_options" as const,
         message: error instanceof Error ? error.message : "RunConfig is invalid.",
+        retryable: false,
+        metadata: Object.freeze({}),
+      }),
+    });
+  }
+}
+
+export function snapshotRootRunConfig(
+  config: RootRunConfig,
+): RootConfigValidationSuccess | ConfigValidationFailure {
+  const run = snapshotRunConfig(config);
+  if (!run.valid) return run;
+  try {
+    const runTreeLimits = snapshotRunTreeLimits(config.runTreeLimits);
+    return Object.freeze({
+      valid: true as const,
+      config: Object.freeze({
+        ...run.config,
+        runTreeLimits,
+      }),
+    });
+  } catch (error) {
+    return Object.freeze({
+      valid: false as const,
+      failure: Object.freeze({
+        code: "runtime_invalid_options" as const,
+        message: error instanceof Error
+          ? error.message
+          : "RootRunConfig is invalid.",
         retryable: false,
         metadata: Object.freeze({}),
       }),
@@ -193,18 +227,30 @@ function snapshotLimits(input: RunConfig["limits"]): RunConfig["limits"] {
       input.maxPendingInteractions,
       "RunLimits.maxPendingInteractions",
     ),
-    maxDescendantRuns: nonNegativeInteger(
-      input.maxDescendantRuns,
-      "RunLimits.maxDescendantRuns",
-    ),
-    maxDescendantDepth: nonNegativeInteger(
-      input.maxDescendantDepth,
-      "RunLimits.maxDescendantDepth",
-    ),
     plan: Object.freeze({ ...input.plan }),
   });
   assertValidPlanLimits(limits.plan);
   return limits;
+}
+
+function snapshotRunTreeLimits(input: RunTreeLimits): RunTreeLimits {
+  if (!isRecord(input)) {
+    throw new TypeError("RootRunConfig.runTreeLimits must be an object.");
+  }
+  return Object.freeze({
+    maxTotalDescendantRuns: nonNegativeInteger(
+      input.maxTotalDescendantRuns,
+      "RunTreeLimits.maxTotalDescendantRuns",
+    ),
+    maxActiveDescendantRuns: nonNegativeInteger(
+      input.maxActiveDescendantRuns,
+      "RunTreeLimits.maxActiveDescendantRuns",
+    ),
+    maxDescendantDepth: nonNegativeInteger(
+      input.maxDescendantDepth,
+      "RunTreeLimits.maxDescendantDepth",
+    ),
+  });
 }
 
 function snapshotCancellationLimits(
@@ -245,10 +291,6 @@ function nonNegativeInteger(value: unknown, field: string): number {
     throw new TypeError(`${field} must be a non-negative safe integer.`);
   }
   return value as number;
-}
-
-function assertNonNegativeInteger(value: unknown, field: string): void {
-  nonNegativeInteger(value, field);
 }
 
 function assertToken(value: unknown, field: string): asserts value is string {

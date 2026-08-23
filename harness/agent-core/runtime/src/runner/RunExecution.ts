@@ -3,6 +3,7 @@ import { toAgentRevisionRef } from "@agent-anything/agent-core/agent";
 import type { ControllerTurnRef, InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import type { RunActionProvenance, RunActionRef } from "@agent-anything/agent-core/run-action";
+import type { DescendantRunRelation } from "@agent-anything/agent-core/run-tree";
 import {
   applyContextTransition,
   deriveContextRefreshOperation,
@@ -142,7 +143,7 @@ import {
   type RuntimeRunAction,
   snapshotRunSteeringInput,
 } from "../run/index.js";
-import type { RunExecutionUpdate } from "./RunHandle.js";
+import type { RunExecutionUpdate, RunHandle } from "./RunHandle.js";
 import type { ResolvedRunConfig } from "./RunConfig.js";
 import type {
   RunnerAutomaticEffectfulValidationCheckPort,
@@ -194,6 +195,33 @@ import {
   createTaskContextContribution,
   createValidationContextAdmissionProfile,
 } from "../context-contribution/index.js";
+import type { DescendantRunReservationFailureCode } from "./RunTreeExecution.js";
+
+export interface RuntimeDescendantRunStartInput {
+  readonly relationId: string;
+  readonly parentRunAction: RunActionRef;
+  readonly agent: Agent;
+  readonly input: RunInput;
+  readonly config: import("./RunConfig.js").RunConfig;
+}
+
+export type RuntimeDescendantRunStartResult =
+  | {
+      readonly status: "started";
+      readonly relation: DescendantRunRelation;
+      readonly handle: RunHandle;
+    }
+  | {
+      readonly status: "rejected";
+      readonly code:
+        | DescendantRunReservationFailureCode
+        | "descendant_run_start_failed";
+      readonly relation: DescendantRunRelation | null;
+    };
+
+export type RuntimeDescendantRunStarter = (
+  input: RuntimeDescendantRunStartInput,
+) => RuntimeDescendantRunStartResult;
 
 type TerminalCandidate<TOutput> =
   | { readonly status: "succeeded"; readonly output: TOutput }
@@ -218,6 +246,31 @@ interface OperationExecutionOutcome {
   readonly result: OperationResult;
   readonly toolResult: ToolResult | null;
 }
+
+type DescendantExecutionOutcome =
+  | {
+      readonly status: "settled";
+      readonly relationId: string;
+      readonly childRunId: string;
+      readonly prepared: DescendantRunPreparation;
+      readonly result: RunResult;
+    }
+  | {
+      readonly status: "rejected";
+      readonly relationId: string;
+      readonly childRunId: string | null;
+      readonly code:
+        | DescendantRunReservationFailureCode
+        | "descendant_run_preparation_failed"
+        | "descendant_agent_mismatch"
+        | "descendant_run_start_failed";
+      readonly operationStatus: DescendantRejectionOperationStatus;
+    };
+
+type DescendantRejectionOperationStatus = Exclude<
+  import("./RunnerDependencies.js").DescendantOperationOutcome["status"],
+  "succeeded" | "partial"
+>;
 
 interface QueuedInteractionSettlement {
   readonly pending: PendingInteractionRef;
@@ -244,7 +297,6 @@ export class RunExecution<TOutput> {
   private activeAgent: Agent<TOutput>;
   private terminalResult: RunResult<TOutput> | null = null;
   private emittedItemCount = 0;
-  private descendantCount = 0;
   private nextInteractionRequest = 1;
   private readonly identitySequences = new Map<
     Parameters<ResolvedRunnerDependencies["createId"]>[0]["kind"],
@@ -278,9 +330,12 @@ export class RunExecution<TOutput> {
     runtimeEventPublishers: readonly RuntimeEventPublisher[],
     runTraceObservers: readonly RunTraceObserver[],
     actionExecutionObserver: ActionExecutionObserver | undefined,
+    startedAt: string,
+    deadlineAt: string,
+    private readonly startDescendantRun: RuntimeDescendantRunStarter,
     private readonly onUpdate: (update: RunExecutionUpdate<TOutput>) => void,
   ) {
-    this.startedAt = this.now();
+    this.startedAt = startedAt;
     this.startedAtMs = Date.parse(this.startedAt);
     this.activeAgent = agent;
     this.traceAssembler = createRunnerTraceAssembler({
@@ -309,6 +364,7 @@ export class RunExecution<TOutput> {
       input,
       config,
       startedAt: this.startedAt,
+      deadlineAt,
       activeContextId: this.id("active_context"),
     });
     this.writer = new RunStateWriter(
@@ -2216,101 +2272,44 @@ export class RunExecution<TOutput> {
     context: OperationInvocationContext,
     startedAt: string,
   ): Promise<OperationResult> {
-    if (
-      this.dependencies.operations.descendants === undefined ||
-      this.descendantCount >= this.config.limits.maxDescendantRuns ||
-      this.config.descendantDepth >= this.config.limits.maxDescendantDepth
-    ) {
+    const descendant = await this.executeDescendantRun(
+      action,
+      binding.agentRef,
+      binding.request,
+    );
+    if (descendant.status === "rejected") {
       return this.operationFailureResult(
         registration,
         binding.invocation,
-        "unavailable",
+        descendant.operationStatus,
         "agent-runtime",
-        "descendant_run_unavailable",
+        descendant.code,
         startedAt,
         this.now(),
       );
     }
-    const prepared = await this.dependencies.operations.descendants.prepare({
-      parentRunId: this.runId,
-      parentRunAction: action.ref,
-      targetAgent: binding.agentRef,
-      delegatedInput: binding.request,
-      parentConfig: this.config,
-    });
-    if (!sameAgentRef(prepared.agent, binding.agentRef)) {
-      return this.operationFailureResult(
-        registration,
-        binding.invocation,
-        "invalid",
-        "agent-runtime",
-        "descendant_agent_mismatch",
-        startedAt,
-        this.now(),
-      );
-    }
-    this.descendantCount += 1;
-    const relationId = this.id("descendant_relation");
-    const childRunner = new (await import("./Runner.js")).Runner({
-      ...this.dependencies,
-      createRunId: () => `${relationId}:run`,
-    });
-    const child = childRunner.start(prepared.agent, prepared.input, {
-      ...prepared.config,
-      descendantDepth: this.config.descendantDepth + 1,
-    });
-    this.childHandles.add(child);
-    const pending: PendingRunSubject = Object.freeze({
-      kind: "descendant_run",
-      relationId,
-      childRunId: child.runId,
-      branchId: action.ref.id,
-      required: true,
-      openedInRunRevision: this.writer.getSnapshot().revision,
-    });
-    this.addPending(pending);
-    const cancelChild = (): void => {
-      const request = this.config.cancellation.context.request;
-      if (request !== null) {
-        child.cancel({
-          origin: "parent_run",
-          reasonCode: "parent_run_cancelled",
-          parentRunId: this.runId,
-        });
-      }
-    };
-    this.config.cancellation.context.signal.addEventListener("abort", cancelChild, { once: true });
-    const unsubscribe = child.subscribe(() => this.publishCurrentState());
-    try {
-      const childResult = await child.wait();
-      const mapped = prepared.mapResult(childResult);
-      return createOperationResult({
-        ref: Object.freeze({ invocation: binding.invocation, id: this.id("operation_result") }),
-        binding: binding.binding,
-        semanticOwner: registration.operation.semanticOwner,
-        status: mapped.status,
-        output: mapped.output,
-        failure: mapped.failure,
-        startedAt,
-        finishedAt: this.now(),
-        lowerRefs: Object.freeze([{
-          owner: "agent-runtime",
-          kind: "descendant_run_result",
-          id: childResult.runId,
-          revision: String(childResult.items.at(-1)?.committedInRevision ?? 0),
-        }]),
-        metadata: Object.freeze({
-          relationId,
-          contextManifestRef: prepared.contextManifestRef,
-          visibility: prepared.visibility,
-        }),
-      } as OperationResult);
-    } finally {
-      unsubscribe();
-      this.childHandles.delete(child);
-      this.config.cancellation.context.signal.removeEventListener("abort", cancelChild);
-      this.removePending(pending, "resolved", null);
-    }
+    const mapped = descendant.prepared.mapResult(descendant.result);
+    return createOperationResult({
+      ref: Object.freeze({ invocation: binding.invocation, id: this.id("operation_result") }),
+      binding: binding.binding,
+      semanticOwner: registration.operation.semanticOwner,
+      status: mapped.status,
+      output: mapped.output,
+      failure: mapped.failure,
+      startedAt,
+      finishedAt: this.now(),
+      lowerRefs: Object.freeze([{
+        owner: "agent-runtime",
+        kind: "descendant_run_result",
+        id: descendant.result.runId,
+        revision: String(descendant.result.items.at(-1)?.committedInRevision ?? 0),
+      }]),
+      metadata: Object.freeze({
+        relationId: descendant.relationId,
+        contextManifestRef: descendant.prepared.contextManifestRef,
+        visibility: descendant.prepared.visibility,
+      }),
+    } as OperationResult);
   }
 
   private async executeToolDescendant(
@@ -2319,70 +2318,96 @@ export class RunExecution<TOutput> {
   ): Promise<void> {
     if (call.binding.kind !== "descendant_agent") return;
     const startedAt = this.now();
-    const relationId = this.id("descendant_relation");
-    const unavailable =
-      this.dependencies.operations.descendants === undefined ||
-      this.descendantCount >= this.config.limits.maxDescendantRuns ||
-      this.config.descendantDepth >= this.config.limits.maxDescendantDepth;
-    if (unavailable) {
+    const descendant = await this.executeDescendantRun(
+      action,
+      call.binding.agent,
+      call.input,
+    );
+    if (descendant.status === "rejected") {
       this.commitDescendantToolObservation(
         action,
         call,
-        relationId,
+        descendant.relationId,
+        descendant.childRunId,
+        descendant.operationStatus,
         null,
-        "unavailable",
-        null,
-        operationFailure("agent-runtime", "descendant_run_unavailable"),
+        operationFailure("agent-runtime", descendant.code),
         startedAt,
       );
       return;
+    }
+    const mapped = descendant.prepared.mapResult(descendant.result);
+    this.commitDescendantToolObservation(
+      action,
+      call,
+      descendant.relationId,
+      descendant.childRunId,
+      mapped.status,
+      mapped.output,
+      mapped.failure,
+      startedAt,
+    );
+  }
+
+  private async executeDescendantRun(
+    action: RuntimeRunAction,
+    targetAgent: import("@agent-anything/agent-core/agent").AgentRevisionRef,
+    delegatedInput: unknown,
+  ): Promise<DescendantExecutionOutcome> {
+    const relationId = this.id("descendant_relation");
+    const composition = this.dependencies.operations.descendants;
+    if (composition === undefined) {
+      return rejectedDescendant(
+        relationId,
+        "descendant_run_preparation_failed",
+        null,
+        "failed",
+      );
     }
 
     let prepared: DescendantRunPreparation;
     try {
-      prepared = await this.dependencies.operations.descendants.prepare({
+      prepared = await composition.prepare({
         parentRunId: this.runId,
         parentRunAction: action.ref,
-        targetAgent: call.binding.agent,
-        delegatedInput: call.input,
+        targetAgent,
+        delegatedInput,
         parentConfig: this.config,
       });
     } catch {
-      this.commitDescendantToolObservation(
-        action,
-        call,
+      return rejectedDescendant(
         relationId,
+        "descendant_run_preparation_failed",
         null,
         "failed",
-        null,
-        operationFailure("agent-runtime", "descendant_run_preparation_failed"),
-        startedAt,
       );
-      return;
     }
-    if (!sameAgentRef(prepared.agent, call.binding.agent)) {
-      this.commitDescendantToolObservation(
-        action,
-        call,
+    if (!sameAgentRef(prepared.agent, targetAgent)) {
+      return rejectedDescendant(
         relationId,
+        "descendant_agent_mismatch",
         null,
         "invalid",
-        null,
-        operationFailure("agent-runtime", "descendant_agent_mismatch"),
-        startedAt,
       );
-      return;
     }
 
-    this.descendantCount += 1;
-    const childRunner = new (await import("./Runner.js")).Runner({
-      ...this.dependencies,
-      createRunId: () => `${relationId}:run`,
+    const started = this.startDescendantRun({
+      relationId,
+      parentRunAction: action.ref,
+      agent: prepared.agent,
+      input: prepared.input,
+      config: prepared.config,
     });
-    const child = childRunner.start(prepared.agent, prepared.input, {
-      ...prepared.config,
-      descendantDepth: this.config.descendantDepth + 1,
-    });
+    if (started.status === "rejected") {
+      return rejectedDescendant(
+        relationId,
+        started.code,
+        started.relation?.child.id ?? null,
+        descendantRejectionStatus(started.code),
+      );
+    }
+
+    const child = started.handle;
     this.childHandles.add(child);
     const pending: PendingRunSubject = Object.freeze({
       kind: "descendant_run",
@@ -2393,34 +2418,19 @@ export class RunExecution<TOutput> {
       openedInRunRevision: this.writer.getSnapshot().revision,
     });
     this.addPending(pending);
-    const cancelChild = (): void => {
-      if (this.config.cancellation.context.request !== null) {
-        child.cancel({
-          origin: "parent_run",
-          reasonCode: "parent_run_cancelled",
-          parentRunId: this.runId,
-        });
-      }
-    };
-    this.config.cancellation.context.signal.addEventListener("abort", cancelChild, { once: true });
     const unsubscribe = child.subscribe(() => this.publishCurrentState());
     try {
-      const childResult = await child.wait();
-      const mapped = prepared.mapResult(childResult);
-      this.commitDescendantToolObservation(
-        action,
-        call,
+      const result = await child.wait();
+      return Object.freeze({
+        status: "settled" as const,
         relationId,
-        child.runId,
-        mapped.status,
-        mapped.output,
-        mapped.failure,
-        startedAt,
-      );
+        childRunId: child.runId,
+        prepared,
+        result,
+      });
     } finally {
       unsubscribe();
       this.childHandles.delete(child);
-      this.config.cancellation.context.signal.removeEventListener("abort", cancelChild);
       this.removePending(pending, "resolved", null);
     }
   }
@@ -4062,6 +4072,38 @@ function bindingMatchesResolution(
 
 function resolutionBindingKind(registration: RegisteredOperation): ResolvedOperationBinding["kind"] {
   return registration.binding.kind;
+}
+
+function rejectedDescendant(
+  relationId: string,
+  code: Extract<DescendantExecutionOutcome, { readonly status: "rejected" }>["code"],
+  childRunId: string | null,
+  operationStatus: Extract<DescendantExecutionOutcome, { readonly status: "rejected" }>["operationStatus"],
+): Extract<DescendantExecutionOutcome, { readonly status: "rejected" }> {
+  return Object.freeze({
+    status: "rejected" as const,
+    relationId,
+    childRunId,
+    code,
+    operationStatus,
+  });
+}
+
+function descendantRejectionStatus(
+  code: DescendantRunReservationFailureCode | "descendant_run_start_failed",
+): Extract<DescendantExecutionOutcome, { readonly status: "rejected" }>["operationStatus"] {
+  switch (code) {
+    case "descendant_run_start_cancelled":
+      return "cancelled";
+    case "descendant_run_deadline_exceeded":
+      return "timed_out";
+    case "descendant_run_start_failed":
+      return "failed";
+    case "descendant_run_depth_limit_exceeded":
+    case "descendant_run_total_limit_exceeded":
+    case "descendant_run_active_limit_exceeded":
+      return "unavailable";
+  }
 }
 
 function sameAgentRef(

@@ -15,7 +15,9 @@ export {
 export type {
   HelarcHostRunComposition,
   HelarcHostActiveRun,
+  HelarcHostRunLimitsInput,
   HelarcHostRunResult,
+  HelarcHostRunTreeLimitsInput,
   PreparedHelarcHostRun,
   PrepareHelarcHostRunInput,
 } from "./HelarcHostRunComposition.js";

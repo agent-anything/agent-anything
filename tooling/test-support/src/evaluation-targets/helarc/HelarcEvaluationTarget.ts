@@ -664,13 +664,16 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
         maxConsecutiveActionFailures: 1,
         maxDurationMs: options.maxDurationMs ?? 30_000,
         maxPendingInteractions: 4,
-        maxDescendantRuns: 0,
-        maxDescendantDepth: 0,
         plan: {
           maxSteps: 12,
           maxStepLength: 300,
           maxExplanationLength: 1_000,
         },
+      },
+      runTreeLimits: {
+        maxTotalDescendantRuns: 0,
+        maxActiveDescendantRuns: 0,
+        maxDescendantDepth: 0,
       },
       audit: "optional",
       telemetry: "optional",

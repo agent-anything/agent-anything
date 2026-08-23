@@ -1,5 +1,6 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
 import type { RunInput } from "@agent-anything/agent-core/input";
+import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 import type {
   RunTraceObserver,
   RuntimeEventPublisher,
@@ -15,12 +16,18 @@ import {
   ActiveRunHandle,
   type RunHandle,
 } from "./RunHandle.js";
-import { RunExecution } from "./RunExecution.js";
+import {
+  RunExecution,
+  type RuntimeDescendantRunStartInput,
+  type RuntimeDescendantRunStartResult,
+} from "./RunExecution.js";
 import type {
   ResolvedRunConfig,
+  RootRunConfig,
   RunConfig,
   ValidatedRunConfig,
 } from "./RunConfig.js";
+import { RunTreeExecution } from "./RunTreeExecution.js";
 import type {
   CreateRunnerIdentityInput,
   ResolvedRunnerDependencies,
@@ -33,6 +40,7 @@ import {
 import {
   snapshotAgent,
   snapshotRunConfig,
+  snapshotRootRunConfig,
   snapshotRunInput,
 } from "./RunnerValidation.js";
 
@@ -69,7 +77,7 @@ export class Runner {
   start<TOutput>(
     agent: Agent<TOutput>,
     input: RunInput,
-    config: RunConfig,
+    config: RootRunConfig,
     options: RunInvocationOptions = {},
   ): RunHandle<TOutput> {
     const configuredPublishers = runtimeEventPublishers(
@@ -82,7 +90,7 @@ export class Runner {
     );
     const agentSnapshot = snapshotAgent(agent);
     const inputSnapshot = snapshotRunInput(input);
-    const configSnapshot = snapshotRunConfig(config);
+    const configSnapshot = snapshotRootRunConfig(config);
     if (!configSnapshot.valid) {
       throw new TypeError(configSnapshot.failure.message);
     }
@@ -90,6 +98,153 @@ export class Runner {
 
     const runId = this.dependencies.createRunId();
     assertNonEmpty(runId, "Runner-created runId");
+    if (this.activeRunIds.has(runId)) {
+      throw new TypeError(`Runner-created runId '${runId}' is already active.`);
+    }
+    const startedAt = this.dependencies.now();
+    const deadlineAt = localDeadline(startedAt, configSnapshot.config.limits.maxDurationMs);
+    const tree = new RunTreeExecution({
+      rootRunId: runId,
+      startedAt,
+      deadlineAt,
+      limits: configSnapshot.config.runTreeLimits,
+      now: this.dependencies.now,
+    });
+    const ordinaryConfig = snapshotRunConfig(configSnapshot.config);
+    if (!ordinaryConfig.valid) {
+      throw new TypeError(ordinaryConfig.failure.message);
+    }
+    return this.startPreparedRun(
+      runId,
+      agentSnapshot,
+      inputSnapshot,
+      ordinaryConfig.config,
+      tree.rootLineage,
+      tree,
+      startedAt,
+      deadlineAt,
+      configuredPublishers,
+      configuredObservers,
+      options.actionExecutionObserver,
+    );
+  }
+
+  run<TOutput>(
+    agent: Agent<TOutput>,
+    input: RunInput,
+    config: RootRunConfig,
+    options: RunInvocationOptions = {},
+  ): Promise<RunResult<TOutput>> {
+    return this.start(agent, input, config, options).wait();
+  }
+
+  private startDescendant(
+    input: RuntimeDescendantRunStartInput,
+    parentRunId: string,
+    parentLineage: RunLineage,
+    parentDeadlineAt: string,
+    tree: RunTreeExecution,
+    runtimeEventPublishers: readonly RuntimeEventPublisher[],
+    runTraceObservers: readonly RunTraceObserver[],
+    actionExecutionObserver: RunInvocationOptions["actionExecutionObserver"],
+  ): RuntimeDescendantRunStartResult {
+    let agent: Agent;
+    let runInput: RunInput;
+    let config: ValidatedRunConfig;
+    let childRunId: string;
+    let startedAt: string;
+    try {
+      if (Object.prototype.hasOwnProperty.call(input.config, "runTreeLimits")) {
+        throw new TypeError("A descendant Run cannot provide Run Tree limits.");
+      }
+      agent = snapshotAgent(input.agent);
+      runInput = snapshotRunInput(input.input);
+      const configSnapshot = snapshotRunConfig(input.config);
+      if (!configSnapshot.valid) {
+        throw new TypeError(configSnapshot.failure.message);
+      }
+      config = configSnapshot.config;
+      validateActionComposition(this.dependencies, config);
+      childRunId = this.dependencies.createRunId();
+      assertNonEmpty(childRunId, "Runner-created descendant runId");
+      if (this.activeRunIds.has(childRunId)) {
+        throw new TypeError("Runner-created descendant runId is already active.");
+      }
+      startedAt = this.dependencies.now();
+    } catch {
+      return Object.freeze({
+        status: "rejected" as const,
+        code: "descendant_run_start_failed" as const,
+        relation: null,
+      });
+    }
+    let reservation: ReturnType<RunTreeExecution["reserveDescendant"]>;
+    try {
+      reservation = tree.reserveDescendant({
+        relationId: input.relationId,
+        childRunId,
+        parentRunId,
+        parentLineage,
+        parentRunAction: input.parentRunAction,
+        parentDeadlineAt,
+        childLocalDeadlineAt: localDeadline(
+          startedAt,
+          config.limits.maxDurationMs,
+        ),
+      });
+    } catch {
+      return Object.freeze({
+        status: "rejected" as const,
+        code: "descendant_run_start_failed" as const,
+        relation: null,
+      });
+    }
+    if (reservation.status === "rejected") {
+      return Object.freeze({ ...reservation, relation: null });
+    }
+
+    try {
+      const handle = this.startPreparedRun(
+        childRunId,
+        agent,
+        runInput,
+        config,
+        reservation.lineage,
+        tree,
+        startedAt,
+        reservation.deadlineAt,
+        runtimeEventPublishers,
+        runTraceObservers,
+        actionExecutionObserver,
+      );
+      return Object.freeze({
+        status: "started" as const,
+        relation: reservation.relation,
+        handle,
+      });
+    } catch {
+      tree.failStart(childRunId, this.dependencies.now());
+      return Object.freeze({
+        status: "rejected" as const,
+        code: "descendant_run_start_failed" as const,
+        relation: reservation.relation,
+      });
+    }
+  }
+
+  private startPreparedRun<TOutput>(
+    runId: string,
+    agent: Agent<TOutput>,
+    input: RunInput,
+    config: RunConfig,
+    lineage: RunLineage,
+    tree: RunTreeExecution,
+    startedAt: string,
+    deadlineAt: string,
+    runtimeEventPublishers: readonly RuntimeEventPublisher[],
+    runTraceObservers: readonly RunTraceObserver[],
+    actionExecutionObserver: RunInvocationOptions["actionExecutionObserver"],
+  ): RunHandle<TOutput> {
     if (this.activeRunIds.has(runId)) {
       throw new TypeError(`Runner-created runId '${runId}' is already active.`);
     }
@@ -103,51 +258,57 @@ export class Runner {
       }),
     });
     const resolvedConfig: ResolvedRunConfig = Object.freeze({
-      ...configSnapshot.config,
+      ...config,
       cancellation,
     });
-    const emergencyResult = createEmergencyRunResult<TOutput>(
-      runId,
-      inputSnapshot.task.id,
-    );
+    const emergencyResult = createEmergencyRunResult<TOutput>(runId, input.task.id);
     const handle = new ActiveRunHandle<TOutput>(
       runId,
       cancellation,
       emergencyResult,
+      (result) => {
+        try {
+          tree.settleRun(runId, result.status, result.code, result.completedAt);
+        } finally {
+          this.activeRunIds.delete(runId);
+        }
+      },
     );
     const execution = new RunExecution<TOutput>(
       runId,
       this.dependencies,
-      agentSnapshot,
-      inputSnapshot,
+      agent,
+      input,
       resolvedConfig,
-      configuredPublishers,
-      configuredObservers,
-      options.actionExecutionObserver,
-      (update) => handle.publish(update),
+      runtimeEventPublishers,
+      runTraceObservers,
+      actionExecutionObserver,
+      startedAt,
+      deadlineAt,
+      (descendant) => this.startDescendant(
+        descendant,
+        runId,
+        lineage,
+        deadlineAt,
+        tree,
+        runtimeEventPublishers,
+        runTraceObservers,
+        actionExecutionObserver,
+      ),
+      (update) => {
+        tree.updateLifecycle(runId, update.status);
+        handle.publish(update);
+      },
     );
     handle.bindInteractionSubmission((submission) =>
       execution.submitInteraction(submission)
     );
     handle.bindSteering((steering) => execution.submitSteering(steering));
     this.activeRunIds.add(runId);
-    handle.start(async () => {
-      try {
-        return await execution.run();
-      } finally {
-        this.activeRunIds.delete(runId);
-      }
-    });
+    tree.registerCancellation(runId, cancellation);
+    tree.markStarted(runId, startedAt);
+    handle.start(() => execution.run());
     return handle;
-  }
-
-  run<TOutput>(
-    agent: Agent<TOutput>,
-    input: RunInput,
-    config: RunConfig,
-    options: RunInvocationOptions = {},
-  ): Promise<RunResult<TOutput>> {
-    return this.start(agent, input, config, options).wait();
   }
 }
 
@@ -316,4 +477,12 @@ function assertNonEmpty(value: unknown, field: string): asserts value is string 
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError(`${field} must be a non-empty string.`);
   }
+}
+
+function localDeadline(startedAt: string, maxDurationMs: number): string {
+  const startedAtMs = Date.parse(startedAt);
+  if (!Number.isFinite(startedAtMs)) {
+    throw new TypeError("Runner time source returned an invalid date-time.");
+  }
+  return new Date(startedAtMs + maxDurationMs).toISOString();
 }

@@ -16,6 +16,10 @@
       "types": "./src/run/index.ts",
       "import": "./dist/run/index.js"
     },
+    "./run-tree": {
+      "types": "./src/run-tree/index.ts",
+      "import": "./dist/run-tree/index.js"
+    },
     "./run-action": {
       "types": "./src/run-action/index.ts",
       "import": "./dist/run-action/index.js"

@@ -22,9 +22,13 @@ export interface RunLimits {
   readonly maxConsecutiveActionFailures: number;
   readonly maxDurationMs: number;
   readonly maxPendingInteractions: number;
-  readonly maxDescendantRuns: number;
-  readonly maxDescendantDepth: number;
   readonly plan: PlanLimits;
+}
+
+export interface RunTreeLimits {
+  readonly maxTotalDescendantRuns: number;
+  readonly maxActiveDescendantRuns: number;
+  readonly maxDescendantDepth: number;
 }
 
 export interface ResolvedRunRetryConfiguration {
@@ -64,13 +68,15 @@ export interface RunConfig {
   readonly cancellationLimits: CancellationLimits;
   readonly retry: ResolvedRunRetryConfiguration;
   readonly metadata: Readonly<Record<string, unknown>>;
-  readonly descendantDepth?: number;
 }
 
-export interface ValidatedRunConfig extends RunConfig {
-  readonly descendantDepth: number;
+export interface RootRunConfig extends RunConfig {
+  readonly runTreeLimits: RunTreeLimits;
 }
 
-export interface ResolvedRunConfig extends ValidatedRunConfig {
+export type ValidatedRunConfig = RunConfig;
+export type ValidatedRootRunConfig = RootRunConfig;
+
+export interface ResolvedRunConfig extends RunConfig {
   readonly cancellation: RunCancellationController;
 }

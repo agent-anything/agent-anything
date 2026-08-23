@@ -142,6 +142,16 @@ all production edges must match the exact reviewed dependency graph.
 
 ## Common Commands
 
+The repository requires the exact Node and pnpm versions declared by
+`.node-version` and `packageManager`. In an interactive shell, run `fnm use`
+from the repository root before pnpm commands. Automation and non-interactive
+PowerShell sessions can use the repository-owned entry point, which initializes
+fnm, verifies both versions, and refuses fallback runtimes:
+
+```powershell
+.\scripts\run-repository-pnpm.ps1 typecheck
+```
+
 Install dependencies:
 
 ```powershell

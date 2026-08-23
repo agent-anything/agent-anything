@@ -10,7 +10,11 @@ import type {
   SandboxProvider,
 } from "@agent-anything/action-execution/sandbox";
 import { createRunFailureCause, type ApprovalReviewerBinding, type RunFinalizationContext, type RunResult } from "@agent-anything/agent-runtime/run";
-import { Runner, type RunLimits } from "@agent-anything/agent-runtime/runner";
+import {
+  Runner,
+  type RunLimits,
+  type RunTreeLimits,
+} from "@agent-anything/agent-runtime/runner";
 import { CurrentValidationCompletionGate } from "@agent-anything/validation/completion";
 import type { ContextManifestPersistencePort } from "@agent-anything/context/persistence";
 import {
@@ -88,8 +92,6 @@ const DEFAULT_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
   maxConsecutiveActionFailures: 8,
   maxDurationMs: HELARC_RUN_MAX_DURATION_MS,
   maxPendingInteractions: 8,
-  maxDescendantRuns: 8,
-  maxDescendantDepth: 4,
   plan: Object.freeze({ maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2_000 }),
 });
 const HARD_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
@@ -98,14 +100,23 @@ const HARD_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
   maxConsecutiveActionFailures: 32,
   maxDurationMs: 2 * 60 * 60_000,
   maxPendingInteractions: 32,
-  maxDescendantRuns: 32,
-  maxDescendantDepth: 8,
   plan: Object.freeze({ maxSteps: 64, maxStepLength: 2_000, maxExplanationLength: 8_000 }),
+});
+const DEFAULT_HELARC_RUN_TREE_LIMITS: RunTreeLimits = Object.freeze({
+  maxTotalDescendantRuns: 8,
+  maxActiveDescendantRuns: 4,
+  maxDescendantDepth: 4,
+});
+const HARD_HELARC_RUN_TREE_LIMITS: RunTreeLimits = Object.freeze({
+  maxTotalDescendantRuns: 32,
+  maxActiveDescendantRuns: 8,
+  maxDescendantDepth: 8,
 });
 
 export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan">> & {
   readonly plan?: Partial<RunLimits["plan"]>;
 };
+export type HelarcHostRunTreeLimitsInput = Partial<RunTreeLimits>;
 
 export interface PrepareHelarcHostRunInput {
   readonly sessionId: string;
@@ -129,6 +140,7 @@ export interface PrepareHelarcHostRunInput {
   readonly sandboxProviders?: readonly SandboxProvider[];
   readonly commandLimits?: Partial<CodeAgentCommandLimits>;
   readonly runLimits?: HelarcHostRunLimitsInput;
+  readonly runTreeLimits?: HelarcHostRunTreeLimitsInput;
   readonly now?: () => string;
 }
 
@@ -179,6 +191,7 @@ export async function prepareHelarcHostRun(
   }
   const now = input.now ?? (() => new Date().toISOString());
   const runLimits = resolveHelarcRunLimits(input.runLimits);
+  const runTreeLimits = resolveHelarcRunTreeLimits(input.runTreeLimits);
   const runWorkspace = runContext.workspace;
   const workspace = runWorkspace.primary;
   const workspaceRoots = resolvePermissionWorkspaceRoots(runWorkspace);
@@ -357,6 +370,7 @@ export async function prepareHelarcHostRun(
         completion: createHelarcValidationCompletionConfig(),
       },
       limits: runLimits,
+      runTreeLimits,
       audit: "optional",
       telemetry: "optional",
       cancellationLimits: {
@@ -565,11 +579,10 @@ function resolveHelarcRunLimits(input: HelarcHostRunLimitsInput | undefined): Ru
   };
   const fields: Array<keyof Omit<RunLimits, "plan">> = [
     "maxIterations", "maxActions", "maxConsecutiveActionFailures", "maxDurationMs",
-    "maxPendingInteractions", "maxDescendantRuns", "maxDescendantDepth",
+    "maxPendingInteractions",
   ];
   for (const field of fields) {
-    const minimum = field === "maxDescendantRuns" || field === "maxDescendantDepth" ? 0 : 1;
-    if (!Number.isSafeInteger(value[field]) || value[field] < minimum || value[field] > HARD_HELARC_RUN_LIMITS[field]) {
+    if (!Number.isSafeInteger(value[field]) || value[field] < 1 || value[field] > HARD_HELARC_RUN_LIMITS[field]) {
       throw new TypeError(`Helarc Run limit '${field}' is outside the admitted range.`);
     }
   }
@@ -579,4 +592,26 @@ function resolveHelarcRunLimits(input: HelarcHostRunLimitsInput | undefined): Ru
     }
   }
   return Object.freeze({ ...value, plan: Object.freeze(value.plan) });
+}
+
+function resolveHelarcRunTreeLimits(
+  input: HelarcHostRunTreeLimitsInput | undefined,
+): RunTreeLimits {
+  const value = { ...DEFAULT_HELARC_RUN_TREE_LIMITS, ...input };
+  for (const field of [
+    "maxTotalDescendantRuns",
+    "maxActiveDescendantRuns",
+    "maxDescendantDepth",
+  ] as const) {
+    if (
+      !Number.isSafeInteger(value[field]) ||
+      value[field] < 0 ||
+      value[field] > HARD_HELARC_RUN_TREE_LIMITS[field]
+    ) {
+      throw new TypeError(
+        `Helarc Run Tree limit '${field}' is outside the admitted range.`,
+      );
+    }
+  }
+  return Object.freeze(value);
 }

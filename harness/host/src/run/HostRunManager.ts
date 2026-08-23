@@ -16,7 +16,7 @@ import {
   type RunResult,
 } from "@agent-anything/agent-runtime/run";
 import type {
-  RunConfig,
+  RootRunConfig,
   RunHandle,
   Runner,
 } from "@agent-anything/agent-runtime/runner";
@@ -41,7 +41,7 @@ export interface HostRunStartInput<TOutput = unknown> {
   readonly sessionId: HostSessionId;
   readonly agent: Agent<TOutput>;
   readonly runInput: RunInput;
-  readonly runConfig: RunConfig;
+  readonly runConfig: RootRunConfig;
 }
 
 export interface HostRunResult<TOutput = unknown> {

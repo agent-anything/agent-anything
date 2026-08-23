@@ -82,7 +82,7 @@ import type {
   ControllerDecision,
   ControllerInput,
 } from "../controller/index.js";
-import type { RunConfig } from "./RunConfig.js";
+import type { RootRunConfig, RunConfig } from "./RunConfig.js";
 import type {
   InternalOperationHandler,
   RunnerDependencies,
@@ -748,7 +748,7 @@ describe("Runner semantic integration", () => {
           return {
             agent: childAgent,
             input: createRunInput("task_child", delegatedInput),
-            config: createRunConfig(operations, { tools }),
+            config: createDescendantRunConfig(operations, { tools }),
             contextManifestRef: "context-manifest-1",
             visibility: "parent_and_host" as const,
             mapResult(result) {
@@ -792,7 +792,151 @@ describe("Runner semantic integration", () => {
       .toBe(false);
     expect(controller.calls.map(({ runId }) => runId)).toEqual([
       "run_001",
-      expect.stringContaining("descendant_relation"),
+      "run_002",
+      "run_001",
+    ]);
+  });
+
+  it("executes recursive descendants through one Runner and one inherited tree", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    const grandchildAgent = createAgent("agent_grandchild", "1", "Grandchild Agent");
+    let operations!: OperationFixture;
+    let childTools!: RunConfig["tools"];
+    let grandchildTools!: RunConfig["tools"];
+    const controller = new ScriptedController([
+      (input) => advance([toolCandidate(
+        "Agent",
+        { prompt: "Delegate once." },
+        input.toolExposure.controllerRequestId,
+      )], "model_tool_1"),
+      (input) => advance([toolCandidate(
+        "Agent",
+        { prompt: "Delegate again." },
+        input.toolExposure.controllerRequestId,
+      )], "model_tool_1"),
+      complete("Grandchild complete", "model_grandchild_complete"),
+      complete("Child complete", "model_child_complete"),
+      complete("Root complete", "model_root_complete"),
+    ]);
+    operations = createOperationFixture([], [], {
+      descendants: {
+        async prepare({ targetAgent, delegatedInput }) {
+          const isChild = targetAgent.id === childAgent.id;
+          const agent = isChild ? childAgent : grandchildAgent;
+          return {
+            agent,
+            input: createRunInput(`task_${agent.id}`, delegatedInput),
+            config: createDescendantRunConfig(operations, {
+              tools: isChild ? childTools : grandchildTools,
+            }),
+            contextManifestRef: `context-${agent.id}`,
+            visibility: "parent_and_host" as const,
+            mapResult(result) {
+              return result.status === "succeeded"
+                ? { status: "succeeded" as const, output: result.finalOutput, failure: null }
+                : {
+                    status: "failed" as const,
+                    output: null,
+                    failure: operationFailure("agent-runtime", "descendant_failed"),
+                  };
+            },
+          };
+        },
+      },
+    });
+    childTools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent",
+      agent: { id: grandchildAgent.id, revision: grandchildAgent.revision },
+      revision: "grandchild-binding-1",
+    });
+    grandchildTools = emptyToolSelection(operations);
+    const rootTools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent",
+      agent: { id: childAgent.id, revision: childAgent.revision },
+      revision: "child-binding-1",
+    });
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        tools: rootTools,
+        runTreeLimits: {
+          maxTotalDescendantRuns: 2,
+          maxActiveDescendantRuns: 2,
+          maxDescendantDepth: 2,
+        },
+      }),
+    );
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(controller.calls.map(({ runId }) => runId)).toEqual([
+      "run_001",
+      "run_002",
+      "run_003",
+      "run_002",
+      "run_001",
+    ]);
+  });
+
+  it("settles invalid descendant startup with an exact operation failure", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    let operations!: OperationFixture;
+    let tools!: RunConfig["tools"];
+    const controller = new ScriptedController([
+      (input) => advance([toolCandidate(
+        "Agent",
+        { prompt: "Start an invalid child." },
+        input.toolExposure.controllerRequestId,
+      )], "model_tool_1"),
+      (input) => {
+        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+          kind: "descendant_run",
+          status: "failed",
+          failure: { code: "descendant_run_start_failed" },
+          toolResult: {
+            status: "failed",
+            error: { code: "descendant_run_start_failed" },
+          },
+        });
+        return complete("Parent recovered", "model_parent_complete");
+      },
+    ]);
+    operations = createOperationFixture([], [], {
+      descendants: {
+        async prepare({ delegatedInput }) {
+          const config = createDescendantRunConfig(operations, { tools });
+          return {
+            agent: childAgent,
+            input: createRunInput("task_invalid_child", delegatedInput),
+            config: {
+              ...config,
+              limits: { ...config.limits, maxDurationMs: 0 },
+            },
+            contextManifestRef: "context-invalid-child",
+            visibility: "parent_and_host" as const,
+            mapResult() {
+              throw new Error("An invalid descendant must not start.");
+            },
+          };
+        },
+      },
+    });
+    tools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent",
+      agent: { id: childAgent.id, revision: childAgent.revision },
+      revision: "invalid-child-binding-1",
+    });
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools }),
+    );
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(controller.calls.map(({ runId }) => runId)).toEqual([
+      "run_001",
       "run_001",
     ]);
   });
@@ -1201,7 +1345,7 @@ describe("Runner semantic integration", () => {
           return {
             agent: descendantAgent,
             input: createRunInput("task_child", delegatedInput),
-            config: createRunConfig(operations),
+            config: createDescendantRunConfig(operations),
             contextManifestRef: "context-manifest-1",
             visibility: "parent_and_host" as const,
             mapResult(result) {
@@ -1241,7 +1385,7 @@ describe("Runner semantic integration", () => {
     });
     expect(controller.calls.map(({ runId }) => runId)).toEqual([
       "run_001",
-      expect.stringContaining("descendant_relation"),
+      "run_002",
       "run_001",
     ]);
   });
@@ -1867,9 +2011,9 @@ function createRunConfig(
     readonly actionExecution?: RunConfig["actionExecution"];
     readonly validation?: RunConfig["validation"];
     readonly limits?: Partial<Omit<RunConfig["limits"], "plan">>;
-    readonly descendantDepth?: number;
+    readonly runTreeLimits?: Partial<RootRunConfig["runTreeLimits"]>;
   } = {},
-): RunConfig {
+): RootRunConfig {
   return {
     workspace: {
       primary: {
@@ -1899,14 +2043,18 @@ function createRunConfig(
       maxConsecutiveActionFailures: 4,
       maxDurationMs: 10_000,
       maxPendingInteractions: 4,
-      maxDescendantRuns: 4,
-      maxDescendantDepth: 2,
       plan: {
         maxSteps: 8,
         maxStepLength: 200,
         maxExplanationLength: 500,
       },
       ...overrides.limits,
+    },
+    runTreeLimits: {
+      maxTotalDescendantRuns: 4,
+      maxActiveDescendantRuns: 4,
+      maxDescendantDepth: 2,
+      ...overrides.runTreeLimits,
     },
     audit: "optional",
     telemetry: "optional",
@@ -1922,10 +2070,16 @@ function createRunConfig(
       action: { maxAttempts: 1 },
     },
     metadata: {},
-    ...(overrides.descendantDepth === undefined
-      ? {}
-      : { descendantDepth: overrides.descendantDepth }),
   };
+}
+
+function createDescendantRunConfig(
+  operations: OperationFixture,
+  overrides: Parameters<typeof createRunConfig>[1] = {},
+): RunConfig {
+  const rootConfig = createRunConfig(operations, overrides);
+  const { runTreeLimits: _runTreeLimits, ...config } = rootConfig;
+  return config;
 }
 
 function createTestValidationComposition(): RunnerDependencies["validation"] {

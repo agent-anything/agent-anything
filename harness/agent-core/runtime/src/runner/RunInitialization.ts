@@ -14,6 +14,7 @@ export function createInitialRunState<TOutput>(input: {
   readonly input: RunInput;
   readonly config: ResolvedRunConfig;
   readonly startedAt: string;
+  readonly deadlineAt: string;
   readonly activeContextId: string;
 }): RunState<TOutput> {
   const permissionState = createInitialRunPermissionState(input.config.permissions);
@@ -32,7 +33,7 @@ export function createInitialRunState<TOutput>(input: {
     workspace: input.config.workspace,
     identity: input.config.identity,
     startedAt: input.startedAt,
-    deadlineAt: new Date(Date.parse(input.startedAt) + input.config.limits.maxDurationMs).toISOString(),
+    deadlineAt: input.deadlineAt,
     status: "initializing" as const,
     code: null,
     finalOutput: null,

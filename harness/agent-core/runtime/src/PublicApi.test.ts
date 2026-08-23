@@ -1,5 +1,10 @@
 import type { ProviderRequestBuildContext } from "./controller/index.js";
-import type { RunConfig, RunnerDependencies } from "./runner/index.js";
+import type {
+  RootRunConfig,
+  RunConfig,
+  RunnerDependencies,
+  RunTreeLimits,
+} from "./runner/index.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as controllerApi from "./controller/index.js";
 import * as planApi from "./plan/index.js";
@@ -11,6 +16,8 @@ describe("Agent Core Runtime public API", () => {
   it("keeps every public value on its focused subpath", () => {
     expectTypeOf<ProviderRequestBuildContext>().toBeObject();
     expectTypeOf<RunConfig>().toBeObject();
+    expectTypeOf<RootRunConfig>().toBeObject();
+    expectTypeOf<RunTreeLimits>().toBeObject();
     expectTypeOf<RunnerDependencies>().toBeObject();
     expect(Object.keys(controllerApi).sort()).toEqual([
       "ControllerError",

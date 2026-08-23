@@ -1,6 +1,8 @@
 export type {
+  RootRunConfig,
   RunConfig,
   RunLimits,
+  RunTreeLimits,
   RunValidationConfig,
 } from "./RunConfig.js";
 export type {

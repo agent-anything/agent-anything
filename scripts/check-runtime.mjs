@@ -5,7 +5,8 @@ const version = readFileSync(new URL("../.node-version", import.meta.url), "utf8
   .replace(/^v/, "");
 const EXPECTED_NODE_VERSION = `v${version}`;
 const normalizedExecPath = process.execPath.replaceAll("\\", "/").toLowerCase();
-const isFnmRuntime = normalizedExecPath.includes("/fnm/node-versions/");
+const isFnmRuntime = normalizedExecPath.includes("/fnm/node-versions/") ||
+  normalizedExecPath.includes("/fnm_multishells/");
 
 if (process.version !== EXPECTED_NODE_VERSION || !isFnmRuntime) {
   console.error(

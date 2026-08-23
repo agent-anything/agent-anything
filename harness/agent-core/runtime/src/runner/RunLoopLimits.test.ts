@@ -8,8 +8,6 @@ const limits: RunLimits = {
   maxConsecutiveActionFailures: 1,
   maxDurationMs: 1_000,
   maxPendingInteractions: 2,
-  maxDescendantRuns: 2,
-  maxDescendantDepth: 1,
   plan: {
     maxSteps: 5,
     maxStepLength: 100,

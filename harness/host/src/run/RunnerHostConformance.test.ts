@@ -212,13 +212,16 @@ function createRunConfig(tools: RunConfig["tools"]): RunConfig {
       maxConsecutiveActionFailures: 2,
       maxDurationMs: 5_000,
       maxPendingInteractions: 2,
-      maxDescendantRuns: 1,
-      maxDescendantDepth: 1,
       plan: {
         maxSteps: 4,
         maxStepLength: 100,
         maxExplanationLength: 200,
       },
+    },
+    runTreeLimits: {
+      maxTotalDescendantRuns: 1,
+      maxActiveDescendantRuns: 1,
+      maxDescendantDepth: 1,
     },
     audit: "optional",
     telemetry: "optional",

@@ -980,6 +980,7 @@ function checkExecutionSourceTopology() {
         "run",
         "run-action",
         "run-item",
+        "run-tree",
         "task",
         "validation.ts",
       ],

@@ -85,6 +85,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     runId: string,
     private readonly cancellation: RunCancellationController,
     private readonly emergencyResult: RunResult<TOutput>,
+    private readonly onSettled: (result: RunResult<TOutput>) => void,
   ) {
     this.runId = runId;
     this.snapshot = freezeSnapshot({
@@ -211,6 +212,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
 
   private settle(result: RunResult<TOutput>): void {
     if (this.snapshot.result === null) {
+      this.onSettled(result);
       this.publish({
         runRevision: this.snapshot.runRevision,
         status: terminalStatus(result),
