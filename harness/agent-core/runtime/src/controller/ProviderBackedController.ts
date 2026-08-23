@@ -5,7 +5,10 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/model-interaction";
-import { snapshotModelInputComposition } from "@agent-anything/model-interaction/input";
+import {
+  snapshotModelInputComposition,
+  snapshotModelOutputFormat,
+} from "@agent-anything/model-interaction/input";
 import { snapshotModelContinuationRef } from "@agent-anything/model-interaction/continuation";
 import {
   ModelContinuationLifecycle,
@@ -376,6 +379,7 @@ export class ProviderBackedController<TOutput = unknown>
         providerId: this.input.provider.descriptor.id,
         model: request.composition.model,
         messages: request.messages,
+        outputFormat: request.outputFormat,
         composition: request.composition,
       });
       return request;
@@ -1628,6 +1632,7 @@ function snapshotProviderRequest(request: ProviderRequest): ProviderRequest {
   if (!isRecord(request.metadata)) {
     throw new TypeError("Provider request metadata must be an object.");
   }
+  const outputFormat = snapshotModelOutputFormat(request.outputFormat);
   const composition = snapshotModelInputComposition(request.composition);
   const continuation = request.continuation === null
     ? null
@@ -1654,6 +1659,7 @@ function snapshotProviderRequest(request: ProviderRequest): ProviderRequest {
   return Object.freeze({
     messages: Object.freeze(messages) as unknown as ProviderRequest["messages"],
     capability: request.capability,
+    outputFormat,
     composition,
     continuation,
     metadata: Object.freeze({ ...request.metadata }),
@@ -1668,6 +1674,7 @@ function recreateProviderRequest(request: ProviderRequest): ProviderRequest {
       metadata: { ...message.metadata },
     })),
     capability: request.capability,
+    outputFormat: request.outputFormat,
     composition: request.composition,
     continuation: request.continuation,
     metadata: { ...request.metadata },

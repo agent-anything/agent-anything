@@ -10,6 +10,7 @@ import type { ModelInputSectionCandidate } from "@agent-anything/model-interacti
 import {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,
+  HELARC_ACTION_CONTRACT_VERSION,
 } from "../controller/HelarcActionContract.js";
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
 import {
@@ -17,7 +18,7 @@ import {
 } from "../tools/HelarcToolExposurePrompt.js";
 
 export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v4";
-export const HELARC_ACTION_CONTRACT_VERSION = "helarc-model-decision-v1";
+export { HELARC_ACTION_CONTRACT_VERSION } from "../controller/HelarcActionContract.js";
 export const HELARC_TOOL_EXPOSURE_VERSION = "trusted-tool-exposure-v1";
 export const HELARC_CONTEXT_PROJECTION_FORMAT_VERSION = "helarc-context-projection-v1";
 export const HELARC_CONTEXT_SECTION_HEADER = "Context projection:";

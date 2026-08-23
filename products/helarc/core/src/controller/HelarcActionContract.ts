@@ -1,3 +1,9 @@
+import {
+  snapshotModelOutputFormat,
+  type ModelOutputFormat,
+} from "@agent-anything/model-interaction/input";
+import type { ToolExposureProof } from "@agent-anything/tools/selection";
+
 export type HelarcControllerDecisionKind =
   | "tool_call"
   | "plan_update"
@@ -28,6 +34,82 @@ export const HELARC_CONTROLLER_DECISIONS = [
   "completion",
   "stop",
 ] as const satisfies readonly HelarcControllerDecisionKind[];
+
+export const HELARC_ACTION_CONTRACT_VERSION = "helarc-model-decision-v1";
+
+export function createHelarcControllerOutputFormat(
+  exposure: Pick<ToolExposureProof, "selectionRevision" | "catalog">,
+): ModelOutputFormat {
+  const toolNames = exposure.catalog.tools.map(({ name }) => name);
+  if (new Set(toolNames).size !== toolNames.length) {
+    throw new TypeError("Helarc Controller output format requires unique exposed Tool names.");
+  }
+  return snapshotModelOutputFormat({
+    kind: "json_schema",
+    name: "helarc_model_decision",
+    schemaId: "helarc.model-decision",
+    schemaRevision: `${HELARC_ACTION_CONTRACT_VERSION}:${exposure.selectionRevision}`,
+    schema: {
+      oneOf: [
+        ...exposure.catalog.tools.map((tool) => ({
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["tool_call"] },
+            toolName: { type: "string", enum: [tool.name] },
+            input: tool.inputSchema,
+            reason: { type: "string", minLength: 1, maxLength: 4_096 },
+          },
+          required: ["kind", "toolName", "input"],
+          additionalProperties: false,
+        })),
+        {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["plan_update"] },
+            plan: {
+              type: "array",
+              minItems: 1,
+              maxItems: 64,
+              items: {
+                type: "object",
+                properties: {
+                  step: { type: "string", minLength: 1, maxLength: 4_096 },
+                  status: {
+                    type: "string",
+                    enum: ["pending", "in_progress", "completed"],
+                  },
+                },
+                required: ["step", "status"],
+                additionalProperties: false,
+              },
+            },
+            explanation: { type: "string", minLength: 1, maxLength: 4_096 },
+          },
+          required: ["kind", "plan"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["completion"] },
+            summary: { type: "string", minLength: 1, maxLength: 64_000 },
+          },
+          required: ["kind", "summary"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["stop"] },
+            reason: { type: "string", minLength: 1, maxLength: 4_096 },
+          },
+          required: ["kind", "reason"],
+          additionalProperties: false,
+        },
+      ],
+    },
+  });
+}
 
 const HELARC_DECISION_DESCRIPTIONS: HelarcControllerDecisionDescription[] = [
   {

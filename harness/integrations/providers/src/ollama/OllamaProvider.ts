@@ -15,6 +15,7 @@ import {
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import type { FetchLike } from "../http/ProviderHttpTransport.js";
 import { readProviderHttpFailureMetadata } from "../http/ProviderHttpFailureMetadata.js";
+import { projectOllamaOutputFormat } from "./OllamaJsonSchemaDialect.js";
 
 export interface OllamaProviderConfig {
   readonly baseUrl: string;
@@ -41,13 +42,14 @@ export class OllamaProvider implements Provider {
       maximumInputBytes: this.config.inputLimit.maximumBytes,
       limitSource: this.config.inputLimit.source,
       estimator: { id: "ollama.generate.utf8-content", revision: "1" },
-      framing: { id: "ollama.generate-framing", revision: "1" },
-      renderFraming: (sections) => JSON.stringify({
+      framing: { id: "ollama.generate-framing", revision: "2" },
+      renderFraming: (sections, outputFormat) => JSON.stringify({
         protocol: "ollama-generate",
         model: this.config.model,
         roles: sections.map((section) => section.role),
         separators: Math.max(0, sections.length - 1),
         stream: false,
+        ...ollamaFormatField(outputFormat),
       }),
     });
     this.descriptor = Object.freeze({
@@ -78,6 +80,10 @@ export class OllamaProvider implements Provider {
         "The selected Ollama Generate endpoint does not support this continuation Contract.",
       );
     }
+    const verificationFailure = verifyProviderRequest(this.inputAccounting, request);
+    if (verificationFailure !== null) {
+      return verificationFailure;
+    }
     const attempt = createProviderAttemptInterruption(context, this.config.timeoutMs);
 
     try {
@@ -93,6 +99,7 @@ export class OllamaProvider implements Provider {
           model: this.config.model,
           prompt: renderPrompt(request),
           stream: false,
+          ...ollamaFormatField(request.outputFormat),
         }),
         signal: attempt.signal,
       });
@@ -132,10 +139,39 @@ export class OllamaProvider implements Provider {
   }
 }
 
+function verifyProviderRequest(
+  accounting: ProviderModelInputAccounting,
+  request: ProviderRequest,
+): ProviderCallResult | null {
+  try {
+    accounting.verify({
+      providerId: accounting.providerId,
+      model: accounting.model,
+      messages: request.messages,
+      outputFormat: request.outputFormat,
+      composition: request.composition,
+    });
+    return null;
+  } catch {
+    return failed(
+      "invalid_request",
+      "provider_input_accounting_invalid",
+      "Provider request does not match its verified model-input composition.",
+    );
+  }
+}
+
 function renderPrompt(request: ProviderRequest): string {
   return request.messages
     .map((message) => `${message.role}: ${message.content}`)
     .join("\n\n");
+}
+
+function ollamaFormatField(
+  outputFormat: ProviderRequest["outputFormat"],
+): { readonly format?: ReturnType<typeof projectOllamaOutputFormat> } {
+  const format = projectOllamaOutputFormat(outputFormat);
+  return format === null ? {} : { format };
 }
 
 function mapOllamaGenerateResponse(value: unknown): ProviderCallResult {

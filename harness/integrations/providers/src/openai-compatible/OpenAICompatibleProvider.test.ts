@@ -1,6 +1,10 @@
 import type {
   ProviderRequest,
 } from "@agent-anything/model-interaction";
+import {
+  composeModelInput,
+  providerMessagesFromComposition,
+} from "@agent-anything/model-interaction/input";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FetchLike } from "../http/ProviderHttpTransport.js";
@@ -30,7 +34,7 @@ describe("OpenAICompatibleProvider", () => {
       });
     });
 
-    const result = await provider.send(request(), context());
+    const result = await provider.send(request(provider), context());
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
@@ -43,6 +47,14 @@ describe("OpenAICompatibleProvider", () => {
         model: "model-a",
         messages: [{ role: "user", content: "hello" }],
         stream: false,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: TEST_OUTPUT_FORMAT.name,
+            schema: TEST_OUTPUT_FORMAT.schema,
+            strict: false,
+          },
+        },
       },
     });
     expect(result).toMatchObject({
@@ -71,7 +83,7 @@ describe("OpenAICompatibleProvider", () => {
       },
     }));
 
-    const result = await provider.send(request(), context());
+    const result = await provider.send(request(provider), context());
 
     expect(result).toMatchObject({
       kind: "failed",
@@ -90,7 +102,7 @@ describe("OpenAICompatibleProvider", () => {
 
     expect(provider.descriptor.capabilities.continuation).toEqual({ supported: false });
     await expect(provider.send({
-      ...request(),
+      ...request(provider),
       continuation: continuationRef(),
     }, context())).resolves.toMatchObject({
       kind: "failed",
@@ -115,7 +127,7 @@ describe("OpenAICompatibleProvider", () => {
       },
     }));
 
-    await expect(provider.send(request(), context())).resolves.toMatchObject({
+    await expect(provider.send(request(provider), context())).resolves.toMatchObject({
       kind: "failed",
       failure: {
         statusCode: 429,
@@ -129,7 +141,7 @@ describe("OpenAICompatibleProvider", () => {
   it("maps malformed provider responses", async () => {
     const provider = new OpenAICompatibleProvider(config(), async () => okResponse({ choices: [] }));
 
-    await expect(provider.send(request(), context())).resolves.toMatchObject({
+    await expect(provider.send(request(provider), context())).resolves.toMatchObject({
       kind: "failed",
       failure: { code: "provider_response_malformed" },
     });
@@ -142,7 +154,7 @@ describe("OpenAICompatibleProvider", () => {
       throw new Error("unreachable");
     };
     const provider = new OpenAICompatibleProvider(config(), abortingFetch);
-    const result = provider.send(request(), context());
+    const result = provider.send(request(provider), context());
 
     await vi.advanceTimersByTimeAsync(1000);
 
@@ -157,7 +169,7 @@ describe("OpenAICompatibleProvider", () => {
       throw Object.assign(new Error("unrelated abort"), { name: "AbortError" });
     });
 
-    await expect(provider.send(request(), context())).resolves.toMatchObject({
+    await expect(provider.send(request(provider), context())).resolves.toMatchObject({
       kind: "failed",
       failure: {
         category: "transport",
@@ -173,7 +185,7 @@ describe("OpenAICompatibleProvider", () => {
       await rejectWhenAborted(init.signal);
       throw new Error("unreachable");
     });
-    const result = provider.send(request(), interruption.context);
+    const result = provider.send(request(provider), interruption.context);
 
     interruption.cancel();
 
@@ -189,7 +201,7 @@ describe("OpenAICompatibleProvider", () => {
     const fetchImpl = vi.fn(async () => okResponse({ choices: [] }));
     const provider = new OpenAICompatibleProvider(config(), fetchImpl);
 
-    await expect(provider.send(request(), interruption.context)).resolves.toEqual({
+    await expect(provider.send(request(provider), interruption.context)).resolves.toEqual({
       kind: "cancelled",
       cancellation: { runId: "run_001", requestId: "cancel_001" },
     });
@@ -246,14 +258,64 @@ function rejectWhenAborted(signal: AbortSignal): Promise<never> {
   });
 }
 
-function request(): ProviderRequest {
+function request(provider: OpenAICompatibleProvider): ProviderRequest {
+  const composition = composeModelInput({
+    id: "openai-test-composition",
+    providerId: provider.inputAccounting.providerId,
+    model: provider.inputAccounting.model,
+    accounting: provider.inputAccounting,
+    outputFormat: TEST_OUTPUT_FORMAT,
+    outputReserve: { unit: "bytes", amount: 0 },
+    contextBudget: { unit: "bytes", amount: 0 },
+    contextProjectedAmount: 0,
+    sections: [section("user", "user", "hello")],
+    lineage: testLineage(),
+    composedAt: "2026-08-17T00:00:00.000Z",
+  });
   return {
     capability: "helarc.code-agent.plan",
-    messages: [{ role: "user", content: "hello", metadata: {} }],
+    outputFormat: TEST_OUTPUT_FORMAT,
+    messages: providerMessagesFromComposition(composition.sections),
+    composition,
     continuation: null,
     metadata: {},
   };
 }
+
+function section(id: string, role: "user", text: string) {
+  return {
+    id,
+    source: { owner: "provider-test", kind: "message", id, revision: "1" },
+    kind: "message",
+    role,
+    necessity: "mandatory" as const,
+    content: { kind: "text" as const, text },
+  };
+}
+
+function testLineage() {
+  return {
+    activeContext: null,
+    contextProjection: null,
+    projectionManifest: null,
+    toolExposure: null,
+    protocol: { owner: "provider-test", kind: "protocol", id: "test", revision: "1" },
+    policy: { owner: "provider-test", kind: "policy", id: "test", revision: "1" },
+  };
+}
+
+const TEST_OUTPUT_FORMAT = {
+  kind: "json_schema" as const,
+  name: "test_decision",
+  schemaId: "test.decision",
+  schemaRevision: "1",
+  schema: {
+    type: "object",
+    properties: { kind: { type: "string", enum: ["completion"] } },
+    required: ["kind"],
+    additionalProperties: false,
+  },
+};
 
 function continuationRef(): ProviderRequest["continuation"] & object {
   return {

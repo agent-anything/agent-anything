@@ -56,6 +56,54 @@ describe("Helarc controller", () => {
       toolExposureVersion: "trusted-tool-exposure-v1",
       exposedToolNames: ["Edit", "Glob", "Grep", "Read", "Write"],
     });
+    expect(request.outputFormat).toMatchObject({
+      kind: "json_schema",
+      name: "helarc_model_decision",
+      schemaId: "helarc.model-decision",
+      schemaRevision: "helarc-model-decision-v1:tool-selection-1",
+      schema: {
+        oneOf: [
+          {
+            properties: {
+              toolName: { enum: ["Edit"] },
+              input: {},
+            },
+            required: ["kind", "toolName", "input"],
+          },
+          { properties: { toolName: { enum: ["Glob"] }, input: {} } },
+          { properties: { toolName: { enum: ["Grep"] }, input: {} } },
+          {
+            properties: {
+              toolName: { enum: ["Read"] },
+              input: {
+                type: "object",
+                additionalProperties: false,
+                required: ["file_path"],
+                properties: { file_path: { type: "string" } },
+              },
+            },
+          },
+          {
+            properties: {
+              toolName: { enum: ["Write"] },
+              input: {
+                type: "object",
+                additionalProperties: false,
+                required: ["file_path", "content"],
+                properties: {
+                  file_path: { type: "string" },
+                  content: { type: "string" },
+                },
+              },
+            },
+          },
+          { required: ["kind", "plan"] },
+          { required: ["kind", "summary"] },
+          { required: ["kind", "reason"] },
+        ],
+      },
+    });
+    expect(request.composition.outputFormat).toEqual(request.outputFormat);
     const prompt = request.messages.map(({ content }) => content).join("\n");
     expect(prompt).toContain("tool_call, plan_update, completion, stop");
     expect(prompt).toContain("A successful Edit or Write is an Observation");
@@ -330,7 +378,14 @@ function tool(name: string, readOnly: boolean): ToolDescriptorInput {
     description: `${name} a Workspace file.`,
     inputSchema: name === "Read"
       ? { type: "object", additionalProperties: false, required: ["file_path"], properties: { file_path: { type: "string" } } }
-      : {},
+      : name === "Write"
+        ? {
+            type: "object",
+            additionalProperties: false,
+            required: ["file_path", "content"],
+            properties: { file_path: { type: "string" }, content: { type: "string" } },
+          }
+        : {},
     schemaRevisions: { dialect: "json-schema-2020-12", input: "2", output: "2", translation: "native-2" },
     annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly },
     source: { kind: "product", sourceId: "helarc.code-agent", sourceRevision: "2", activationEpoch: null },

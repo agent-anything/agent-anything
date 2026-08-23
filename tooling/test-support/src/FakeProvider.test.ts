@@ -45,6 +45,7 @@ describe("FakeProvider", () => {
           },
         ],
         capability: "tool-planning",
+        outputFormat: { kind: "text" },
         continuation: null,
         metadata: {
           requestId: "request_001",
@@ -107,6 +108,7 @@ function createRequest(requestId: string): ProviderRequest {
       },
     ],
     capability: "tool-planning",
+    outputFormat: { kind: "text" },
     continuation: null,
     metadata: {
       requestId,

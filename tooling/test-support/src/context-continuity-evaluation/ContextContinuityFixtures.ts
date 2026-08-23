@@ -520,6 +520,7 @@ function composeCompleteInput(contextFragments: readonly string[]): ContextConti
     providerId: "provider-neutral",
     model: "deterministic-model",
     accounting,
+    outputFormat: { kind: "text" },
     outputReserve: { unit: "bytes", amount: 32 },
     contextBudget: { unit: "bytes", amount: 512 },
     contextProjectedAmount: contextFragments.reduce((sum, value) =>
@@ -549,6 +550,7 @@ function composeForReconstruction() {
     providerId: "provider-neutral",
     model: "deterministic-model",
     accounting: modelInputAccounting(),
+    outputFormat: { kind: "text" },
     outputReserve: { unit: "bytes", amount: 32 },
     contextBudget: { unit: "bytes", amount: 128 },
     contextProjectedAmount: 12,

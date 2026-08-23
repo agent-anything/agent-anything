@@ -1,6 +1,11 @@
 import type {
   ProviderRequest,
 } from "@agent-anything/model-interaction";
+import {
+  composeModelInput,
+  providerMessagesFromComposition,
+  type ModelOutputFormat,
+} from "@agent-anything/model-interaction/input";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FetchLike } from "../http/ProviderHttpTransport.js";
@@ -24,7 +29,7 @@ describe("OllamaProvider", () => {
       });
     });
 
-    const result = await provider.send(request(), context());
+    const result = await provider.send(request(provider), context());
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
@@ -36,6 +41,7 @@ describe("OllamaProvider", () => {
         model: "gemma3:4b",
         prompt: "system: You are concise.\n\nuser: hello",
         stream: false,
+        format: TEST_OUTPUT_FORMAT.schema,
       },
     });
     expect(result).toMatchObject({
@@ -49,6 +55,114 @@ describe("OllamaProvider", () => {
     });
   });
 
+  it("projects a canonical discriminated union into the Ollama schema dialect", async () => {
+    const bodies: unknown[] = [];
+    const provider = new OllamaProvider(config(), async (_url, init) => {
+      bodies.push(JSON.parse(init.body) as unknown);
+      return okResponse({ response: "{\"kind\":\"completion\",\"summary\":\"done\"}" });
+    });
+
+    await expect(provider.send(
+      request(provider, DISCRIMINATED_OUTPUT_FORMAT),
+      context(),
+    )).resolves.toMatchObject({ kind: "succeeded" });
+
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({
+      format: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["tool_call"] },
+              toolName: { type: "string", enum: ["Read"] },
+              input: {
+                type: "object",
+                properties: { file_path: { type: "string" } },
+                required: ["file_path"],
+                additionalProperties: false,
+              },
+              reason: { type: "string" },
+            },
+            required: ["kind", "toolName", "input"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["tool_call"] },
+              toolName: { type: "string", enum: ["Write"] },
+              input: {
+                type: "object",
+                properties: {
+                  file_path: { type: "string" },
+                  content: { type: "string" },
+                },
+                required: ["file_path", "content"],
+                additionalProperties: false,
+              },
+              reason: { type: "string" },
+            },
+            required: ["kind", "toolName", "input"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["completion"] },
+              summary: { type: "string" },
+              reason: { type: "string" },
+            },
+            required: ["kind", "summary"],
+            additionalProperties: false,
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(bodies[0])).not.toContain("oneOf");
+    expect(JSON.stringify(bodies[0])).toContain("anyOf");
+    expect(JSON.stringify(bodies[0])).not.toContain("minLength");
+  });
+
+  it("rejects request composition when oneOf branches are not provably exclusive", () => {
+    const fetchImpl = vi.fn(async () => okResponse({ response: "{}" }));
+    const provider = new OllamaProvider(config(), fetchImpl);
+    const overlapping = {
+      kind: "json_schema" as const,
+      name: "overlapping_decision",
+      schemaId: "test.overlapping-decision",
+      schemaRevision: "1",
+      schema: {
+        oneOf: [
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["tool_call"] },
+              input: { type: "object" },
+            },
+            required: ["kind", "input"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["tool_call"] },
+              input: { type: "object" },
+              reason: { type: "string" },
+            },
+            required: ["kind", "input"],
+            additionalProperties: false,
+          },
+        ],
+      },
+    } satisfies ModelOutputFormat;
+
+    expect(() => request(provider, overlapping)).toThrow(
+      "Ollama cannot project the requested JSON Schema into its native schema dialect.",
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("maps HTTP failure without reading response body", async () => {
     const provider = new OllamaProvider(config(), async () => ({
       ok: false,
@@ -58,7 +172,7 @@ describe("OllamaProvider", () => {
       },
     }));
 
-    const result = await provider.send(request(), context());
+    const result = await provider.send(request(provider), context());
 
     expect(result).toMatchObject({
       kind: "failed",
@@ -92,7 +206,7 @@ describe("OllamaProvider", () => {
       },
     }));
 
-    await expect(provider.send(request(), context())).resolves.toMatchObject({
+    await expect(provider.send(request(provider), context())).resolves.toMatchObject({
       kind: "failed",
       failure: {
         statusCode: 503,
@@ -106,7 +220,7 @@ describe("OllamaProvider", () => {
   it("maps malformed provider responses", async () => {
     const provider = new OllamaProvider(config(), async () => okResponse({ done: true }));
 
-    await expect(provider.send(request(), context())).resolves.toMatchObject({
+    await expect(provider.send(request(provider), context())).resolves.toMatchObject({
       kind: "failed",
       failure: { code: "provider_response_malformed" },
     });
@@ -119,7 +233,7 @@ describe("OllamaProvider", () => {
       throw new Error("unreachable");
     };
     const provider = new OllamaProvider(config(), abortingFetch);
-    const result = provider.send(request(), context());
+    const result = provider.send(request(provider), context());
 
     await vi.advanceTimersByTimeAsync(1000);
 
@@ -135,7 +249,7 @@ describe("OllamaProvider", () => {
       await rejectWhenAborted(init.signal);
       throw new Error("unreachable");
     });
-    const result = provider.send(request(), interruption.context);
+    const result = provider.send(request(provider), interruption.context);
 
     interruption.cancel();
 
@@ -143,6 +257,20 @@ describe("OllamaProvider", () => {
       kind: "cancelled",
       cancellation: { runId: "run_001", requestId: "cancel_001" },
     });
+  });
+
+  it("rejects output-format drift before transport", async () => {
+    const fetchImpl = vi.fn(async () => okResponse({ response: "{}" }));
+    const provider = new OllamaProvider(config(), fetchImpl);
+
+    await expect(provider.send({
+      ...request(provider),
+      outputFormat: { kind: "text" },
+    }, context())).resolves.toMatchObject({
+      kind: "failed",
+      failure: { code: "provider_input_accounting_invalid" },
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 
@@ -190,17 +318,126 @@ function rejectWhenAborted(signal: AbortSignal): Promise<never> {
   });
 }
 
-function request(): ProviderRequest {
+function request(
+  provider: OllamaProvider,
+  outputFormat: ModelOutputFormat = TEST_OUTPUT_FORMAT,
+): ProviderRequest {
+  const composition = composeModelInput({
+    id: "ollama-test-composition",
+    providerId: provider.inputAccounting.providerId,
+    model: provider.inputAccounting.model,
+    accounting: provider.inputAccounting,
+    outputFormat,
+    outputReserve: { unit: "bytes", amount: 0 },
+    contextBudget: { unit: "bytes", amount: 0 },
+    contextProjectedAmount: 0,
+    sections: [
+      section("system", "system", "You are concise."),
+      section("user", "user", "hello"),
+    ],
+    lineage: testLineage(),
+    composedAt: "2026-08-17T00:00:00.000Z",
+  });
   return {
     capability: "helarc.code-agent.plan",
+    outputFormat,
     continuation: null,
-    messages: [
-      { role: "system", content: "You are concise.", metadata: {} },
-      { role: "user", content: "hello", metadata: {} },
-    ],
+    messages: providerMessagesFromComposition(composition.sections),
+    composition,
     metadata: {},
   };
 }
+
+function section(id: string, role: "system" | "user", text: string) {
+  return {
+    id,
+    source: { owner: "provider-test", kind: "message", id, revision: "1" },
+    kind: "message",
+    role,
+    necessity: "mandatory" as const,
+    content: { kind: "text" as const, text },
+  };
+}
+
+function testLineage() {
+  return {
+    activeContext: null,
+    contextProjection: null,
+    projectionManifest: null,
+    toolExposure: null,
+    protocol: { owner: "provider-test", kind: "protocol", id: "test", revision: "1" },
+    policy: { owner: "provider-test", kind: "policy", id: "test", revision: "1" },
+  };
+}
+
+const TEST_OUTPUT_FORMAT = {
+  kind: "json_schema" as const,
+  name: "test_decision",
+  schemaId: "test.decision",
+  schemaRevision: "1",
+  schema: {
+    type: "object",
+    properties: { kind: { type: "string", enum: ["completion"] } },
+    required: ["kind"],
+    additionalProperties: false,
+  },
+};
+
+const DISCRIMINATED_OUTPUT_FORMAT = {
+  kind: "json_schema" as const,
+  name: "test_union_decision",
+  schemaId: "test.union-decision",
+  schemaRevision: "1",
+  schema: {
+    oneOf: [
+      {
+        type: "object",
+        properties: {
+          kind: { type: "string", enum: ["tool_call"] },
+          toolName: { type: "string", enum: ["Read"], minLength: 1 },
+          input: {
+            type: "object",
+            properties: { file_path: { type: "string", minLength: 1 } },
+            required: ["file_path"],
+            additionalProperties: false,
+          },
+          reason: { type: "string", minLength: 1, maxLength: 128 },
+        },
+        required: ["kind", "toolName", "input"],
+        additionalProperties: false,
+      },
+      {
+        type: "object",
+        properties: {
+          kind: { type: "string", enum: ["tool_call"] },
+          toolName: { type: "string", enum: ["Write"], minLength: 1 },
+          input: {
+            type: "object",
+            properties: {
+              file_path: { type: "string", minLength: 1 },
+              content: { type: "string" },
+            },
+            required: ["file_path", "content"],
+            additionalProperties: false,
+          },
+          reason: { type: "string", minLength: 1, maxLength: 128 },
+        },
+        required: ["kind", "toolName", "input"],
+        additionalProperties: false,
+      },
+      {
+        type: "object",
+        properties: {
+          kind: { type: "string", enum: ["completion"] },
+          summary: { type: "string", minLength: 1 },
+          reason: { type: "string", minLength: 1, maxLength: 128 },
+        },
+        required: ["kind", "summary"],
+        additionalProperties: false,
+      },
+    ],
+  },
+} satisfies ModelOutputFormat;
 
 function okResponse(value: unknown) {
   return {

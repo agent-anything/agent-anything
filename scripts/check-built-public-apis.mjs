@@ -474,6 +474,7 @@ const expectedLowerValueExports = {
     "providerMessagesFromComposition",
     "snapshotModelInputCapability",
     "snapshotModelInputComposition",
+    "snapshotModelOutputFormat",
   ],
   "@agent-anything/model-interaction/continuation": [
     "ModelContinuationLifecycle",
@@ -726,6 +727,7 @@ const expectedValueExports = {
     "selectHelarcTaskTemplate",
   ],
   "@agent-anything/helarc/controller": [
+    "HELARC_ACTION_CONTRACT_VERSION",
     "HELARC_CONTROLLER_CAPABILITY",
     "HELARC_CONTROLLER_DECISIONS",
     "HELARC_CONTROLLER_OUTPUT_MAX_LENGTH",
@@ -736,6 +738,7 @@ const expectedValueExports = {
     "buildHelarcProviderRequest",
     "createHelarcActionContract",
     "createHelarcContextProjectionConfiguration",
+    "createHelarcControllerOutputFormat",
     "parseHelarcModelDecision",
     "parseHelarcProviderResponse",
     "parseStructuredOutput",

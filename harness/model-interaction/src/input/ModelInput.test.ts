@@ -77,6 +77,7 @@ function validComposition(): ModelInputComposition {
     },
     limit: { unit: "tokens", maximum: 1000, source: "provider_reported" },
     outputReserve: { unit: "tokens", amount: 100 },
+    outputFormat: { kind: "text" },
     framing: {
       ref: { id: "chat-framing", revision: "1" },
       unit: "tokens",

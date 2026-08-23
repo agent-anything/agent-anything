@@ -24,6 +24,7 @@ import {
   type HelarcModelDecision,
   type HelarcModelDecisionErrorCode,
 } from "./HelarcModelDecision.js";
+import { createHelarcControllerOutputFormat } from "./HelarcActionContract.js";
 
 export const HELARC_CONTROLLER_CAPABILITY = "helarc.code-agent.turn";
 export const HELARC_CONTROLLER_OUTPUT_MAX_LENGTH = 64_000;
@@ -49,6 +50,7 @@ export function buildHelarcProviderRequest(
   input: ControllerInput<HelarcAgentOutput>,
   context: ProviderRequestBuildContext,
 ): ProviderRequest {
+  const outputFormat = createHelarcControllerOutputFormat(input.toolExposure);
   const correctionMessage = context.correction === null
     ? null
     : buildHelarcCorrectionMessage(context.correction.failure);
@@ -61,6 +63,7 @@ export function buildHelarcProviderRequest(
     providerId: context.inputAccounting.providerId,
     model: context.inputAccounting.model,
     accounting: context.inputAccounting,
+    outputFormat,
     outputReserve: Object.freeze({
       unit: input.contextManifest.budget.unit,
       amount: HELARC_MODEL_OUTPUT_RESERVE_BYTES,
@@ -114,6 +117,7 @@ export function buildHelarcProviderRequest(
 
   return {
     capability: HELARC_CONTROLLER_CAPABILITY,
+    outputFormat,
     metadata: {
       runId: input.runId,
       controllerIteration: input.iteration,

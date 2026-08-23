@@ -18,6 +18,7 @@ describe("Model Interaction public API", () => {
       "providerMessagesFromComposition",
       "snapshotModelInputCapability",
       "snapshotModelInputComposition",
+      "snapshotModelOutputFormat",
     ]);
     expect(Object.keys(continuationApi).sort()).toEqual([
       "ModelContinuationLifecycle",

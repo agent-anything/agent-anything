@@ -14,10 +14,12 @@ export type {
   ModelInputTextContent,
   ModelInputUnit,
   ModelOutputReserve,
+  ModelOutputFormat,
 } from "./ModelInput.js";
 export {
   snapshotModelInputCapability,
   snapshotModelInputComposition,
+  snapshotModelOutputFormat,
 } from "./ModelInput.js";
 export type {
   ModelInputCompositionFailure,

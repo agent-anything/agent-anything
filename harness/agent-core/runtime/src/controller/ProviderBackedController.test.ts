@@ -43,6 +43,8 @@ interface TestOutput {
 
 type TestProviderRequest = Omit<ProviderRequest, "composition">;
 
+const TEST_OUTPUT_FORMAT = Object.freeze({ kind: "text" as const });
+
 describe("ProviderBackedController", () => {
   afterEach(() => vi.useRealTimers());
 
@@ -1366,6 +1368,7 @@ function request(content: string): TestProviderRequest {
   return {
     messages: [{ role: "user", content, metadata: {} }],
     capability: "agent-control",
+    outputFormat: TEST_OUTPUT_FORMAT,
     continuation: null,
     metadata: {},
   };
@@ -1423,6 +1426,7 @@ function accountTestRequest(
     providerId: provider.inputAccounting.providerId,
     model: provider.inputAccounting.model,
     accounting: provider.inputAccounting,
+    outputFormat: request.outputFormat,
     outputReserve: Object.freeze({ unit: "bytes", amount: 0 }),
     contextBudget: Object.freeze({ unit: "bytes", amount: 0 }),
     contextProjectedAmount: 0,

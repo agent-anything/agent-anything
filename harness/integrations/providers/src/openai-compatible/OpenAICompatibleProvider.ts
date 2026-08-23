@@ -45,11 +45,14 @@ export class OpenAICompatibleProvider implements Provider {
       limitSource: this.config.inputLimit.source,
       estimator: { id: "openai-compatible.utf8-content", revision: "1" },
       framing: { id: "openai-compatible.chat-completions-framing", revision: "1" },
-      renderFraming: (sections) => JSON.stringify({
+      renderFraming: (sections, outputFormat) => JSON.stringify({
         protocol: "chat-completions",
         model: this.config.model,
         roles: sections.map((section) => section.role),
         stream: false,
+        ...(outputFormat.kind === "json_schema"
+          ? { response_format: openAIResponseFormat(outputFormat) }
+          : {}),
       }),
     });
     this.descriptor = Object.freeze({
@@ -80,6 +83,10 @@ export class OpenAICompatibleProvider implements Provider {
         "OpenAI-compatible Chat Completions does not support this continuation Contract.",
       );
     }
+    const verificationFailure = verifyProviderRequest(this.inputAccounting, request);
+    if (verificationFailure !== null) {
+      return verificationFailure;
+    }
     const attempt = createProviderAttemptInterruption(context, this.config.timeoutMs);
 
     try {
@@ -98,6 +105,9 @@ export class OpenAICompatibleProvider implements Provider {
             content: message.content,
           })),
           stream: false,
+          ...(request.outputFormat.kind === "json_schema"
+            ? { response_format: openAIResponseFormat(request.outputFormat) }
+            : {}),
         }),
         signal: attempt.signal,
       });
@@ -147,6 +157,41 @@ export class OpenAICompatibleProvider implements Provider {
 
     return headers;
   }
+}
+
+function verifyProviderRequest(
+  accounting: ProviderModelInputAccounting,
+  request: ProviderRequest,
+): ProviderCallResult | null {
+  try {
+    accounting.verify({
+      providerId: accounting.providerId,
+      model: accounting.model,
+      messages: request.messages,
+      outputFormat: request.outputFormat,
+      composition: request.composition,
+    });
+    return null;
+  } catch {
+    return failed(
+      "invalid_request",
+      "provider_input_accounting_invalid",
+      "Provider request does not match its verified model-input composition.",
+    );
+  }
+}
+
+function openAIResponseFormat(
+  outputFormat: Extract<ProviderRequest["outputFormat"], { readonly kind: "json_schema" }>,
+) {
+  return {
+    type: "json_schema",
+    json_schema: {
+      name: outputFormat.name,
+      schema: outputFormat.schema,
+      strict: false,
+    },
+  };
 }
 
 function mapChatCompletionResponse(value: unknown): ProviderCallResult {

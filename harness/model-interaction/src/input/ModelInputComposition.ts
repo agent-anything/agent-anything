@@ -7,9 +7,14 @@ import type {
   ModelInputSection,
   ModelInputSectionRole,
   ModelInputSourceRef,
+  ModelOutputFormat,
   ModelOutputReserve,
 } from "./ModelInput.js";
-import { snapshotModelInputCapability, snapshotModelInputComposition } from "./ModelInput.js";
+import {
+  snapshotModelInputCapability,
+  snapshotModelInputComposition,
+  snapshotModelOutputFormat,
+} from "./ModelInput.js";
 
 export interface ModelInputSectionCandidate {
   readonly id: string;
@@ -27,6 +32,7 @@ export interface ProviderModelInputVerificationInput {
     readonly role: ModelInputSectionRole;
     readonly content: string;
   }[];
+  readonly outputFormat: ModelOutputFormat;
   readonly composition: ModelInputComposition;
 }
 
@@ -35,7 +41,10 @@ export interface ProviderModelInputAccounting {
   readonly model: string;
   readonly capability: ModelInputCapability;
   estimateSection(candidate: ModelInputSectionCandidate): ModelInputSection;
-  estimateFraming(sections: readonly ModelInputSection[]): ModelInputFraming;
+  estimateFraming(
+    sections: readonly ModelInputSection[],
+    outputFormat: ModelOutputFormat,
+  ): ModelInputFraming;
   verify(input: ProviderModelInputVerificationInput): void;
 }
 
@@ -68,11 +77,13 @@ export class ModelInputCompositionError extends Error {
 export function allocateModelInputContext(input: {
   readonly accounting: ProviderModelInputAccounting;
   readonly outputReserve: ModelOutputReserve;
+  readonly outputFormat: ModelOutputFormat;
   readonly baseSections: readonly ModelInputSectionCandidate[];
   readonly maximumContextAmount: number;
 }): ModelInputContextAllocation {
   const capability = requireCapability(input.accounting);
   assertReserve(input.outputReserve, capability.estimator.unit);
+  const outputFormat = snapshotModelOutputFormat(input.outputFormat);
   if (!Number.isSafeInteger(input.maximumContextAmount) || input.maximumContextAmount < 0) {
     compositionFailure(
       "model_input_accounting_invalid",
@@ -80,7 +91,7 @@ export function allocateModelInputContext(input: {
     );
   }
   const baseSections = estimateSections(input.accounting, input.baseSections);
-  const framing = input.accounting.estimateFraming(baseSections);
+  const framing = input.accounting.estimateFraming(baseSections, outputFormat);
   assertFraming(framing, capability.estimator.unit);
   const sectionAmount = sumSections(baseSections);
   const remainingAmount = capability.limit.maximum -
@@ -106,6 +117,7 @@ export function composeModelInput(input: {
   readonly model: string;
   readonly accounting: ProviderModelInputAccounting;
   readonly outputReserve: ModelOutputReserve;
+  readonly outputFormat: ModelOutputFormat;
   readonly contextBudget: { readonly unit: ModelInputSection["accounting"]["unit"]; readonly amount: number };
   readonly contextProjectedAmount: number;
   readonly sections: readonly ModelInputSectionCandidate[];
@@ -114,6 +126,7 @@ export function composeModelInput(input: {
 }): ModelInputComposition {
   const capability = requireCapability(input.accounting);
   assertReserve(input.outputReserve, capability.estimator.unit);
+  const outputFormat = snapshotModelOutputFormat(input.outputFormat);
   if (
     input.contextBudget.unit !== capability.estimator.unit ||
     !Number.isSafeInteger(input.contextBudget.amount) ||
@@ -133,7 +146,7 @@ export function composeModelInput(input: {
     );
   }
   const sections = estimateSections(input.accounting, input.sections);
-  const framing = input.accounting.estimateFraming(sections);
+  const framing = input.accounting.estimateFraming(sections, outputFormat);
   assertFraming(framing, capability.estimator.unit);
   const sectionAmount = sumSections(sections);
   const inputAmount = sectionAmount + framing.amount;
@@ -152,6 +165,7 @@ export function composeModelInput(input: {
     estimator: capability.estimator,
     limit: capability.limit,
     outputReserve: input.outputReserve,
+    outputFormat,
     framing,
     contextBudget: input.contextBudget,
     sections,

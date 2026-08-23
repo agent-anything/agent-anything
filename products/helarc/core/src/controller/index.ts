@@ -7,7 +7,9 @@ export type {
 export {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,
+  createHelarcControllerOutputFormat,
   createHelarcActionContract,
+  HELARC_ACTION_CONTRACT_VERSION,
   HELARC_CONTROLLER_DECISIONS,
 } from "./HelarcActionContract.js";
 export type {

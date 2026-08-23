@@ -42,6 +42,16 @@ export interface ModelOutputReserve {
   readonly amount: number;
 }
 
+export type ModelOutputFormat =
+  | { readonly kind: "text" }
+  | {
+      readonly kind: "json_schema";
+      readonly name: string;
+      readonly schemaId: string;
+      readonly schemaRevision: string;
+      readonly schema: { readonly [key: string]: ModelJsonValue };
+    };
+
 export interface ModelInputFraming {
   readonly ref: {
     readonly id: string;
@@ -112,6 +122,7 @@ export interface ModelInputComposition {
   readonly estimator: ModelInputEstimatorRef;
   readonly limit: ModelInputLimit;
   readonly outputReserve: ModelOutputReserve;
+  readonly outputFormat: ModelOutputFormat;
   readonly framing: ModelInputFraming;
   readonly contextBudget: {
     readonly unit: ModelInputUnit;
@@ -157,7 +168,7 @@ export function snapshotModelInputComposition(
   input: ModelInputComposition,
 ): ModelInputComposition {
   strictRecord(input, "ModelInputComposition", [
-    "id", "providerId", "model", "estimator", "limit", "outputReserve",
+    "id", "providerId", "model", "estimator", "limit", "outputReserve", "outputFormat",
     "framing", "contextBudget", "sections", "lineage", "accounting",
     "composedAt",
   ]);
@@ -171,6 +182,7 @@ export function snapshotModelInputComposition(
     "ModelInputComposition.outputReserve",
     "amount",
   );
+  const outputFormat = snapshotModelOutputFormat(input.outputFormat);
   const framing = snapshotFraming(input.framing);
   const contextBudget = snapshotAmount(
     input.contextBudget,
@@ -226,6 +238,7 @@ export function snapshotModelInputComposition(
     estimator,
     limit,
     outputReserve,
+    outputFormat,
     framing,
     contextBudget,
     sections: Object.freeze(sections),
@@ -239,6 +252,33 @@ export function snapshotModelInputComposition(
       remainingAmount,
     }),
     composedAt: isoDateTime(input.composedAt, "ModelInputComposition.composedAt"),
+  });
+}
+
+export function snapshotModelOutputFormat(input: ModelOutputFormat): ModelOutputFormat {
+  strictRecord(input, "ModelOutputFormat", [
+    "kind", "name", "schemaId", "schemaRevision", "schema",
+  ]);
+  if (input.kind === "text") {
+    strictRecord(input, "ModelOutputFormat", ["kind"]);
+    return Object.freeze({ kind: "text" });
+  }
+  if (input.kind !== "json_schema") {
+    throw new TypeError("ModelOutputFormat.kind is unsupported.");
+  }
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(input.name)) {
+    throw new TypeError("ModelOutputFormat.name must be a portable schema name.");
+  }
+  const schema = snapshotJsonValue(input.schema, "ModelOutputFormat.schema");
+  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
+    throw new TypeError("ModelOutputFormat.schema must be a JSON object.");
+  }
+  return Object.freeze({
+    kind: "json_schema",
+    name: input.name,
+    schemaId: token(input.schemaId, "ModelOutputFormat.schemaId"),
+    schemaRevision: token(input.schemaRevision, "ModelOutputFormat.schemaRevision"),
+    schema: schema as { readonly [key: string]: ModelJsonValue },
   });
 }
 

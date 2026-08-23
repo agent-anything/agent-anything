@@ -15,6 +15,7 @@ import {
   HELARC_MODEL_OUTPUT_RESERVE_BYTES,
   renderHelarcContextProjectionFragment,
 } from "../prompt/HelarcPromptAssembly.js";
+import { createHelarcControllerOutputFormat } from "./HelarcActionContract.js";
 
 const HELARC_MAXIMUM_CONTEXT_INPUT_AMOUNT = 256 * 1_024;
 
@@ -67,6 +68,7 @@ export function createHelarcContextProjectionConfiguration(
     allocate(input: ControllerPreProjectionInput) {
       const allocation = allocateModelInputContext({
         accounting,
+        outputFormat: createHelarcControllerOutputFormat(input.toolExposure),
         outputReserve: Object.freeze({
           unit: capability.estimator.unit,
           amount: HELARC_MODEL_OUTPUT_RESERVE_BYTES,

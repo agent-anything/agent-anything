@@ -2,9 +2,14 @@ import type { ProviderMessage } from "../ProviderMessage.js";
 import type {
   ModelInputCapability,
   ModelInputContent,
+  ModelOutputFormat,
   ModelInputSection,
 } from "./ModelInput.js";
-import { snapshotModelInputCapability, snapshotModelInputComposition } from "./ModelInput.js";
+import {
+  snapshotModelInputCapability,
+  snapshotModelInputComposition,
+  snapshotModelOutputFormat,
+} from "./ModelInput.js";
 import type {
   ModelInputSectionCandidate,
   ProviderModelInputAccounting,
@@ -18,7 +23,10 @@ export interface CreateUtf8ModelInputAccountingInput {
   readonly limitSource: "provider_reported" | "host_configured";
   readonly estimator: { readonly id: string; readonly revision: string };
   readonly framing: { readonly id: string; readonly revision: string };
-  renderFraming(sections: readonly ModelInputSection[]): string;
+  renderFraming(
+    sections: readonly ModelInputSection[],
+    outputFormat: ModelOutputFormat,
+  ): string;
 }
 
 export function createUtf8ModelInputAccounting(
@@ -56,11 +64,16 @@ export function createUtf8ModelInputAccounting(
         amount: utf8Length(renderContent(candidate.content)),
       }),
     });
-  const estimateFraming = (sections: readonly ModelInputSection[]) =>
-    Object.freeze({
+  const estimateFraming = (
+    sections: readonly ModelInputSection[],
+    outputFormat: ModelOutputFormat,
+  ) => Object.freeze({
       ref: Object.freeze({ ...input.framing }),
       unit: "bytes" as const,
-      amount: utf8Length(input.renderFraming(sections)),
+      amount: utf8Length(input.renderFraming(
+        sections,
+        snapshotModelOutputFormat(outputFormat),
+      )),
     });
 
   return Object.freeze({
@@ -74,9 +87,11 @@ export function createUtf8ModelInputAccounting(
         throw new TypeError("Provider request identity does not match Model Input Accounting.");
       }
       const composition = snapshotModelInputComposition(value.composition);
+      const outputFormat = snapshotModelOutputFormat(value.outputFormat);
       if (
         composition.providerId !== input.providerId ||
         composition.model !== input.model ||
+        JSON.stringify(composition.outputFormat) !== JSON.stringify(outputFormat) ||
         !sameCapability(composition, capability)
       ) {
         throw new TypeError("Provider request composition does not match its accounting capability.");
@@ -95,7 +110,7 @@ export function createUtf8ModelInputAccounting(
         }
         return estimateSection(section);
       });
-      const framing = estimateFraming(measured);
+      const framing = estimateFraming(measured, outputFormat);
       if (
         framing.ref.id !== composition.framing.ref.id ||
         framing.ref.revision !== composition.framing.ref.revision ||

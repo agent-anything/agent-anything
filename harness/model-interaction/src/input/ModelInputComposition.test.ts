@@ -11,6 +11,7 @@ describe("complete Model Input Composition", () => {
     const accounting = testAccounting(100);
     const allocation = allocateModelInputContext({
       accounting,
+      outputFormat: { kind: "text" },
       outputReserve: { unit: "bytes", amount: 10 },
       baseSections: [section("system", "system", "12345")],
       maximumContextAmount: 80,
@@ -31,6 +32,7 @@ describe("complete Model Input Composition", () => {
       providerId: "provider-1",
       model: "model-1",
       accounting,
+      outputFormat: { kind: "text" },
       outputReserve: { unit: "bytes", amount: 10 },
       contextBudget: { unit: "bytes", amount: 40 },
       contextProjectedAmount: 12,
@@ -59,6 +61,7 @@ describe("complete Model Input Composition", () => {
           ? section.content.text
           : JSON.stringify(section.content.value),
       })),
+      outputFormat: composition.outputFormat,
       composition,
     })).not.toThrow();
   });
@@ -71,6 +74,7 @@ describe("complete Model Input Composition", () => {
         estimateFraming() { throw new Error("not called"); },
         verify() { throw new Error("not called"); },
       },
+      outputFormat: { kind: "text" },
       outputReserve: { unit: "bytes", amount: 1 },
       baseSections: [section("system", "system", "rules")],
       maximumContextAmount: 1,
@@ -81,6 +85,7 @@ describe("complete Model Input Composition", () => {
       providerId: "provider-1",
       model: "model-1",
       accounting: testAccounting(20),
+      outputFormat: { kind: "text" },
       outputReserve: { unit: "bytes", amount: 10 },
       contextBudget: { unit: "bytes", amount: 0 },
       contextProjectedAmount: 0,
@@ -97,6 +102,7 @@ describe("complete Model Input Composition", () => {
       providerId: "provider-1",
       model: "model-1",
       accounting,
+      outputFormat: { kind: "text" },
       outputReserve: { unit: "bytes", amount: 10 },
       contextBudget: { unit: "bytes", amount: 0 },
       contextProjectedAmount: 0,
@@ -109,8 +115,51 @@ describe("complete Model Input Composition", () => {
       providerId: "provider-1",
       model: "model-1",
       messages: [{ role: "system", content: "changed" }],
+      outputFormat: composition.outputFormat,
       composition,
     })).toThrow("diverge");
+  });
+
+  it("accounts and verifies the exact Provider-native output format", () => {
+    const accounting = createUtf8ModelInputAccounting({
+      providerId: "provider-1",
+      model: "model-1",
+      maximumInputBytes: 1_024,
+      limitSource: "host_configured",
+      estimator: { id: "test-utf8", revision: "1" },
+      framing: { id: "format-aware-framing", revision: "1" },
+      renderFraming: (_sections, outputFormat) => JSON.stringify(outputFormat),
+    });
+    const outputFormat = {
+      kind: "json_schema" as const,
+      name: "test_decision",
+      schemaId: "test.decision",
+      schemaRevision: "1",
+      schema: { type: "object", required: ["kind"] },
+    };
+    const composition = composeModelInput({
+      id: "composition-format",
+      providerId: "provider-1",
+      model: "model-1",
+      accounting,
+      outputFormat,
+      outputReserve: { unit: "bytes", amount: 10 },
+      contextBudget: { unit: "bytes", amount: 0 },
+      contextProjectedAmount: 0,
+      sections: [section("system", "system", "rules")],
+      lineage: lineage(),
+      composedAt: "2026-08-16T00:00:00.000Z",
+    });
+
+    expect(composition.outputFormat).toEqual(outputFormat);
+    expect(composition.framing.amount).toBeGreaterThan(0);
+    expect(() => accounting.verify({
+      providerId: "provider-1",
+      model: "model-1",
+      messages: [{ role: "system", content: "rules" }],
+      outputFormat: { kind: "text" },
+      composition,
+    })).toThrow("does not match");
   });
 });
 
