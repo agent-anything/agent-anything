@@ -2,6 +2,7 @@ import type {
   RuntimeEventName,
   RuntimeEventPayloadMap,
   RuntimeContextTransitionOperationKind,
+  RuntimeDescendantRunFailureCode,
   RuntimeOperationBindingKind,
   RuntimeOperationCorrelationKind,
   RuntimeOperationStatus,
@@ -19,6 +20,29 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
       return freeze({ status: exact(payload.status, "running", "run.started.status"), activeAgentId: token(payload.activeAgentId, "run.started.activeAgentId") }) as RuntimeEventPayloadMap[TName];
     case "run.item.appended":
       return freeze({ itemId: token(payload.itemId, "run.item.appended.itemId"), itemKind: oneOf(payload.itemKind, runItemKinds, "run.item.appended.itemKind"), itemSequence: positive(payload.itemSequence, "run.item.appended.itemSequence") }) as RuntimeEventPayloadMap[TName];
+    case "run.descendant.reserved":
+    case "run.descendant.started":
+      return descendant(name, payload) as unknown as RuntimeEventPayloadMap[TName];
+    case "run.descendant.rejected":
+      return freeze({
+        relationId: nullableToken(payload.relationId, "run.descendant.rejected.relationId"),
+        parentRunActionId: token(payload.parentRunActionId, "run.descendant.rejected.parentRunActionId"),
+        childRunId: nullableToken(payload.childRunId, "run.descendant.rejected.childRunId"),
+        depth: nullablePositive(payload.depth, "run.descendant.rejected.depth"),
+        code: oneOf(payload.code, descendantFailureCodes, "run.descendant.rejected.code"),
+        treeRevision: nonNegativeInteger(payload.treeRevision, "run.descendant.rejected.treeRevision"),
+      }) as RuntimeEventPayloadMap[TName];
+    case "run.descendant.settled": {
+      const base = descendant(name, payload);
+      const status = oneOf(payload.status, terminalStatuses, "run.descendant.settled.status");
+      return freeze({
+        ...base,
+        status,
+        code: status === "succeeded"
+          ? exact(payload.code, null, "run.descendant.settled.code")
+          : token(payload.code, "run.descendant.settled.code"),
+      }) as unknown as RuntimeEventPayloadMap[TName];
+    }
     case "context.transition.committed":
       return freeze({
         transitionId: token(payload.transitionId, "context.transition.committed.transitionId"),
@@ -131,6 +155,29 @@ const bindingKinds: readonly RuntimeOperationBindingKind[] = ["internal", "direc
 const correlationKinds: readonly RuntimeOperationCorrelationKind[] = ["run_action", "run_request", "owner_operation", "evaluation_trial"];
 const operationStatuses: readonly RuntimeOperationStatus[] = ["succeeded", "partial", "failed", "unavailable", "denied", "cancelled", "timed_out", "invalid", "unknown_effect"];
 const contextTransitionOperationKinds: readonly RuntimeContextTransitionOperationKind[] = ["add", "replace", "invalidate", "remove"];
+const descendantFailureCodes: readonly RuntimeDescendantRunFailureCode[] = [
+  "descendant_run_start_cancelled",
+  "descendant_run_deadline_exceeded",
+  "descendant_run_depth_limit_exceeded",
+  "descendant_run_total_limit_exceeded",
+  "descendant_run_active_limit_exceeded",
+  "descendant_run_preparation_failed",
+  "descendant_agent_mismatch",
+  "descendant_run_start_failed",
+];
+
+function descendant(
+  name: "run.descendant.reserved" | "run.descendant.started" | "run.descendant.settled",
+  input: Record<string, unknown>,
+): Readonly<Record<string, unknown>> {
+  return freeze({
+    relationId: token(input.relationId, `${name}.relationId`),
+    parentRunActionId: token(input.parentRunActionId, `${name}.parentRunActionId`),
+    childRunId: token(input.childRunId, `${name}.childRunId`),
+    depth: positive(input.depth, `${name}.depth`),
+    treeRevision: nonNegativeInteger(input.treeRevision, `${name}.treeRevision`),
+  });
+}
 
 function terminal(name: RuntimeEventName, input: Record<string, unknown>): Readonly<Record<string, unknown>> {
   const expected = name === "run.completed" ? "succeeded" : name.slice(4) as RuntimeTerminalStatus;
@@ -206,6 +253,7 @@ function contextProjectionCompleted(input: Record<string, unknown>): Readonly<Re
 function record(value: unknown, field: string): asserts value is Record<string, unknown> { if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${field} must be an object.`); }
 function token(value: unknown, field: string): string { if (typeof value !== "string" || value.length === 0 || value !== value.trim()) throw new TypeError(`${field} must be a canonical token.`); return value; }
 function nullableToken(value: unknown, field: string): string | null { return value === null ? null : token(value, field); }
+function nullablePositive(value: unknown, field: string): number | null { return value === null ? null : positive(value, field); }
 function positive(value: unknown, field: string): number { if (!Number.isSafeInteger(value) || (value as number) < 1) throw new TypeError(`${field} must be a positive integer.`); return value as number; }
 function nonNegative(value: unknown, field: string): number { if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new TypeError(`${field} must be non-negative.`); return value; }
 function nonNegativeInteger(value: unknown, field: string): number { if (!Number.isSafeInteger(value) || (value as number) < 0) throw new TypeError(`${field} must be a non-negative integer.`); return value as number; }

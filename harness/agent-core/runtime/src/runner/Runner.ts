@@ -176,6 +176,8 @@ export class Runner {
         status: "rejected" as const,
         code: "descendant_run_start_failed" as const,
         relation: null,
+        reservedTreeRevision: null,
+        treeRevision: tree.getSnapshot().revision,
       });
     }
     let reservation: ReturnType<RunTreeExecution["reserveDescendant"]>;
@@ -197,10 +199,16 @@ export class Runner {
         status: "rejected" as const,
         code: "descendant_run_start_failed" as const,
         relation: null,
+        reservedTreeRevision: null,
+        treeRevision: tree.getSnapshot().revision,
       });
     }
     if (reservation.status === "rejected") {
-      return Object.freeze({ ...reservation, relation: null });
+      return Object.freeze({
+        ...reservation,
+        relation: null,
+        reservedTreeRevision: null,
+      });
     }
 
     try {
@@ -221,6 +229,8 @@ export class Runner {
         status: "started" as const,
         relation: reservation.relation,
         handle,
+        reservedTreeRevision: reservation.treeRevision,
+        treeRevision: tree.getSnapshot().revision,
       });
     } catch {
       tree.failStart(childRunId, this.dependencies.now());
@@ -228,6 +238,8 @@ export class Runner {
         status: "rejected" as const,
         code: "descendant_run_start_failed" as const,
         relation: reservation.relation,
+        reservedTreeRevision: reservation.treeRevision,
+        treeRevision: tree.getSnapshot().revision,
       });
     }
   }
@@ -262,15 +274,18 @@ export class Runner {
       cancellation,
     });
     const emergencyResult = createEmergencyRunResult<TOutput>(runId, input.task.id);
+    let unsubscribeTree = (): void => undefined;
     const handle = new ActiveRunHandle<TOutput>(
       runId,
       cancellation,
       emergencyResult,
+      tree.getSnapshot(),
       (result) => {
         try {
           tree.settleRun(runId, result.status, result.code, result.completedAt);
         } finally {
           this.activeRunIds.delete(runId);
+          unsubscribeTree();
         }
       },
     );
@@ -280,6 +295,7 @@ export class Runner {
       agent,
       input,
       resolvedConfig,
+      lineage,
       runtimeEventPublishers,
       runTraceObservers,
       actionExecutionObserver,
@@ -295,8 +311,10 @@ export class Runner {
         runTraceObservers,
         actionExecutionObserver,
       ),
+      () => tree.getSnapshot(),
       (update) => {
         tree.updateLifecycle(runId, update.status);
+        handle.publishRunTree(tree.getSnapshot());
         handle.publish(update);
       },
     );
@@ -307,6 +325,9 @@ export class Runner {
     this.activeRunIds.add(runId);
     tree.registerCancellation(runId, cancellation);
     tree.markStarted(runId, startedAt);
+    if (lineage.kind === "root") {
+      unsubscribeTree = tree.subscribe((snapshot) => handle.publishRunTree(snapshot));
+    }
     handle.start(() => execution.run());
     return handle;
   }

@@ -172,6 +172,8 @@ function createFakeHandle(runId: string) {
     plan: null,
     retry: null,
     pendingInteractions: [],
+    validation: null,
+    runTree: rootTree(runId),
     result: null,
   };
   const listeners = new Set<(value: RunOperationSnapshot) => void>();
@@ -280,14 +282,45 @@ function startInput() {
 
 function runStartedEvent(): RuntimeEvent {
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "event-1",
     runId: "run-1",
     taskId: "task-1",
+    lineage: Object.freeze({
+      kind: "root" as const,
+      root: Object.freeze({ id: "run-1" }),
+      depth: 0 as const,
+    }),
     sequence: 1,
     name: "run.started",
     occurredAt: NOW,
     payload: Object.freeze({ status: "running", activeAgentId: "agent-1" }),
+  });
+}
+
+function rootTree(runId: string): RunOperationSnapshot["runTree"] {
+  return Object.freeze({
+    rootRunId: runId,
+    revision: 0,
+    deadlineAt: "2026-08-13T00:01:00.000Z",
+    limits: Object.freeze({
+      maxDescendantDepth: 2,
+      maxTotalDescendantRuns: 4,
+      maxActiveDescendantRuns: 2,
+    }),
+    totalDescendantRuns: 0,
+    activeDescendantRuns: 0,
+    nodes: Object.freeze([Object.freeze({
+      runId,
+      parentRunId: null,
+      relationId: null,
+      parentRunActionId: null,
+      depth: 0,
+      status: "initializing" as const,
+      resultCode: null,
+      startedAt: NOW,
+      completedAt: null,
+    })]),
   });
 }
 

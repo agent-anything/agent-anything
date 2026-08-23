@@ -43,6 +43,7 @@ import {
 } from "@agent-anything/permission";
 import type { ManagedPermissionConstraints } from "@agent-anything/governance";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
+import type { RunTrace } from "@agent-anything/observability/tracing";
 import { createCanonicalWorkspaceIdentity } from "@agent-anything/canonical-action/subject";
 import {
   createActionRegistrationSnapshot,
@@ -54,6 +55,7 @@ import {
   type OperationActionAdapter,
 } from "@agent-anything/action-execution/registration";
 import { createSandboxExecutionGateway } from "@agent-anything/action-execution/sandbox";
+import type { ActionExecutionNotification } from "@agent-anything/action-execution/enforcement";
 import { createAllowAllActionPolicyPort } from "@agent-anything/governance/policy";
 import {
   createTestContextProjection,
@@ -856,7 +858,10 @@ describe("Runner semantic integration", () => {
       revision: "child-binding-1",
     });
 
-    const result = await createRunner(controller, operations).run(
+    const events: RuntimeEvent[] = [];
+    const traces: RunTrace[] = [];
+    const rootSnapshots: import("./RunHandle.js").RunOperationSnapshot[] = [];
+    const handle = createRunner(controller, operations).start(
       createAgent(),
       createRunInput(),
       createRunConfig(operations, {
@@ -867,7 +872,27 @@ describe("Runner semantic integration", () => {
           maxDescendantDepth: 2,
         },
       }),
+      {
+        runtimeEventPublisher: {
+          publish(event) {
+            events.push(event);
+            if (event.runId === "run_003" && event.name === "run.started") {
+              throw new Error("A listener cannot interrupt descendant execution.");
+            }
+          },
+        },
+        runTraceObserver: {
+          observe(trace) {
+            traces.push(trace);
+            if (trace.runId === "run_003" && trace.status === "active") {
+              throw new Error("A Trace observer cannot interrupt descendant execution.");
+            }
+          },
+        },
+      },
     );
+    handle.subscribe((snapshot) => rootSnapshots.push(snapshot));
+    const result = await handle.wait();
 
     expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
     expect(controller.calls.map(({ runId }) => runId)).toEqual([
@@ -877,6 +902,146 @@ describe("Runner semantic integration", () => {
       "run_002",
       "run_001",
     ]);
+    const firstEventByRun = new Map<string, RuntimeEvent>();
+    for (const event of events) {
+      if (!firstEventByRun.has(event.runId)) firstEventByRun.set(event.runId, event);
+    }
+    expect(firstEventByRun.get("run_001")?.lineage).toEqual({
+      kind: "root",
+      root: { id: "run_001" },
+      depth: 0,
+    });
+    expect(firstEventByRun.get("run_002")?.lineage).toMatchObject({
+      kind: "descendant",
+      root: { id: "run_001" },
+      parent: { id: "run_001" },
+      depth: 1,
+    });
+    expect(firstEventByRun.get("run_003")?.lineage).toMatchObject({
+      kind: "descendant",
+      root: { id: "run_001" },
+      parent: { id: "run_002" },
+      depth: 2,
+    });
+    for (const runId of ["run_001", "run_002", "run_003"]) {
+      expect(events.filter((event) => event.runId === runId).map((event) => event.sequence))
+        .toEqual(events.filter((event) => event.runId === runId).map((_, index) => index + 1));
+    }
+    expect(events.filter((event) => event.runId === "run_001" &&
+      event.name.startsWith("run.descendant.")).map((event) => event.name)).toEqual([
+      "run.descendant.reserved",
+      "run.descendant.started",
+      "run.descendant.settled",
+    ]);
+    expect(events.filter((event) => event.runId === "run_002" &&
+      event.name.startsWith("run.descendant.")).map((event) => event.name)).toEqual([
+      "run.descendant.reserved",
+      "run.descendant.started",
+      "run.descendant.settled",
+    ]);
+    const terminalTraces = traces.filter((trace) => trace.status !== "active");
+    expect(terminalTraces.map((trace) => [trace.runId, trace.lineage.kind, trace.lineage.depth]))
+      .toEqual(expect.arrayContaining([
+        ["run_001", "root", 0],
+        ["run_002", "descendant", 1],
+        ["run_003", "descendant", 2],
+      ]));
+    expect(rootSnapshots.at(-1)?.runTree).toMatchObject({
+      rootRunId: "run_001",
+      totalDescendantRuns: 2,
+      activeDescendantRuns: 0,
+      nodes: [
+        { runId: "run_001", status: "succeeded", depth: 0 },
+        { runId: "run_002", status: "succeeded", depth: 1 },
+        { runId: "run_003", status: "succeeded", depth: 2 },
+      ],
+    });
+  });
+
+  it("inherits the root invocation Action observer into descendant execution", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    const validationOperation = operationRef("validation-check");
+    const actionExecution = createValidationActionExecutionFixture(validationOperation);
+    let operations!: OperationFixture;
+    let rootTools!: RunConfig["tools"];
+    const controller = new ScriptedController([
+      (input) => advance([toolCandidate(
+        "Agent",
+        { prompt: "Delegate validation." },
+        input.toolExposure.controllerRequestId,
+      )], "model_tool_1"),
+      complete("Child complete", "model_child_complete"),
+      complete("Root complete", "model_root_complete"),
+    ]);
+    operations = createOperationFixture([
+      operationSpec(validationOperation, "direct", {
+        requestOrigins: ["automatic_stage"],
+        actionAdapterId: actionExecution.adapterId,
+      }),
+    ], [], {
+      actionExecution: actionExecution.dependencies,
+      descendants: {
+        async prepare({ delegatedInput }) {
+          return {
+            agent: childAgent,
+            input: createRunInput("task_child", delegatedInput),
+            config: createDescendantRunConfig(operations, {
+              tools: emptyToolSelection(operations),
+              actionExecution: createValidationActionExecutionConfig(),
+              validation: createMandatoryValidationConfig("block"),
+            }),
+            contextManifestRef: "context-child",
+            visibility: "parent_and_host" as const,
+            mapResult(result) {
+              return result.status === "succeeded"
+                ? { status: "succeeded" as const, output: result.finalOutput, failure: null }
+                : {
+                    status: "failed" as const,
+                    output: null,
+                    failure: operationFailure("agent-runtime", "descendant_failed"),
+                  };
+            },
+          };
+        },
+      },
+    });
+    rootTools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent",
+      agent: { id: childAgent.id, revision: childAgent.revision },
+      revision: "child-binding-1",
+    });
+    const notifications: ActionExecutionNotification[] = [];
+
+    const result = await createRunner(controller, operations, {
+      validation: createValidationScenario({
+        kind: "effectful_automatic",
+        operation: validationOperation,
+      }),
+    }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        tools: rootTools,
+        actionExecution: createValidationActionExecutionConfig(),
+        validation: createMandatoryValidationConfig("block"),
+      }),
+      {
+        actionExecutionObserver: {
+          observe(notification) {
+            notifications.push(notification);
+            if (notification.runId === "run_002") {
+              throw new Error("A descendant Action observer cannot interrupt execution.");
+            }
+          },
+        },
+      },
+    );
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(notifications.some((notification) => notification.runId === "run_002"))
+      .toBe(true);
+    expect(notifications.some((notification) => notification.runId === "run_001"))
+      .toBe(true);
   });
 
   it("settles invalid descendant startup with an exact operation failure", async () => {
@@ -928,10 +1093,12 @@ describe("Runner semantic integration", () => {
       revision: "invalid-child-binding-1",
     });
 
+    const events: RuntimeEvent[] = [];
     const result = await createRunner(controller, operations).run(
       createAgent(),
       createRunInput(),
       createRunConfig(operations, { tools }),
+      { runtimeEventPublisher: { publish: (event) => events.push(event) } },
     );
 
     expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
@@ -939,6 +1106,19 @@ describe("Runner semantic integration", () => {
       "run_001",
       "run_001",
     ]);
+    expect(events.filter((event) => event.name.startsWith("run.descendant.")).map((event) => ({
+      name: event.name,
+      payload: event.payload,
+    }))).toEqual([{
+      name: "run.descendant.rejected",
+      payload: expect.objectContaining({
+        relationId: null,
+        childRunId: null,
+        depth: 1,
+        code: "descendant_run_start_failed",
+        treeRevision: 1,
+      }),
+    }]);
   });
 
   it("maps a workflow Tool Call to a trusted-workflow Operation request", async () => {

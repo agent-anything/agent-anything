@@ -38,10 +38,12 @@ export type DescendantRunReservation =
       readonly relation: DescendantRunRelation;
       readonly lineage: DescendantRunLineage;
       readonly deadlineAt: string;
+      readonly treeRevision: number;
     }
   | {
       readonly status: "rejected";
       readonly code: DescendantRunReservationFailureCode;
+      readonly treeRevision: number;
     };
 
 export interface RunTreeNodeProjection {
@@ -133,7 +135,7 @@ export class RunTreeExecution {
     const parent = this.requireParent(input.parentRunId, input.parentLineage);
     if (this.isCancellationRequested(parent.lineage.root.id) ||
         this.isCancellationRequested(input.parentRunId)) {
-      return rejected("descendant_run_start_cancelled");
+      return rejected("descendant_run_start_cancelled", this.revision);
     }
     const nowMs = Date.parse(this.input.now());
     const effectiveDeadlineMs = Math.min(
@@ -142,17 +144,17 @@ export class RunTreeExecution {
       Date.parse(input.childLocalDeadlineAt),
     );
     if (!Number.isFinite(effectiveDeadlineMs) || nowMs >= effectiveDeadlineMs) {
-      return rejected("descendant_run_deadline_exceeded");
+      return rejected("descendant_run_deadline_exceeded", this.revision);
     }
     const depth = input.parentLineage.depth + 1;
     if (depth > this.input.limits.maxDescendantDepth) {
-      return rejected("descendant_run_depth_limit_exceeded");
+      return rejected("descendant_run_depth_limit_exceeded", this.revision);
     }
     if (this.totalDescendantRuns >= this.input.limits.maxTotalDescendantRuns) {
-      return rejected("descendant_run_total_limit_exceeded");
+      return rejected("descendant_run_total_limit_exceeded", this.revision);
     }
     if (this.activeDescendantRuns >= this.input.limits.maxActiveDescendantRuns) {
-      return rejected("descendant_run_active_limit_exceeded");
+      return rejected("descendant_run_active_limit_exceeded", this.revision);
     }
     if (this.nodes.has(input.childRunId)) {
       throw new TypeError("The descendant Run identity already exists in this tree.");
@@ -183,6 +185,7 @@ export class RunTreeExecution {
       relation,
       lineage,
       deadlineAt: new Date(effectiveDeadlineMs).toISOString(),
+      treeRevision: this.revision,
     });
   }
 
@@ -373,8 +376,9 @@ export class RunTreeExecution {
 
 function rejected(
   code: DescendantRunReservationFailureCode,
+  treeRevision: number,
 ): DescendantRunReservation {
-  return Object.freeze({ status: "rejected" as const, code });
+  return Object.freeze({ status: "rejected" as const, code, treeRevision });
 }
 
 function sameLineage(left: RunLineage, right: RunLineage): boolean {

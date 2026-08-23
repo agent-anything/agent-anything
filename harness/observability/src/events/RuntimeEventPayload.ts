@@ -21,6 +21,44 @@ export interface RunItemAppendedRuntimeEventPayload {
   readonly itemSequence: number;
 }
 
+export interface RunDescendantRuntimeEventPayload {
+  readonly relationId: string;
+  readonly parentRunActionId: string;
+  readonly childRunId: string;
+  readonly depth: number;
+  readonly treeRevision: number;
+}
+
+export type RunDescendantReservedRuntimeEventPayload =
+  RunDescendantRuntimeEventPayload;
+export type RunDescendantStartedRuntimeEventPayload =
+  RunDescendantRuntimeEventPayload;
+
+export type RuntimeDescendantRunFailureCode =
+  | "descendant_run_start_cancelled"
+  | "descendant_run_deadline_exceeded"
+  | "descendant_run_depth_limit_exceeded"
+  | "descendant_run_total_limit_exceeded"
+  | "descendant_run_active_limit_exceeded"
+  | "descendant_run_preparation_failed"
+  | "descendant_agent_mismatch"
+  | "descendant_run_start_failed";
+
+export interface RunDescendantRejectedRuntimeEventPayload {
+  readonly relationId: string | null;
+  readonly parentRunActionId: string;
+  readonly childRunId: string | null;
+  readonly depth: number | null;
+  readonly code: RuntimeDescendantRunFailureCode;
+  readonly treeRevision: number;
+}
+
+export interface RunDescendantSettledRuntimeEventPayload
+  extends RunDescendantRuntimeEventPayload {
+  readonly status: RuntimeTerminalStatus;
+  readonly code: string | null;
+}
+
 export type RuntimeContextTransitionOperationKind =
   | "add"
   | "replace"
@@ -176,6 +214,10 @@ export interface ValidationGateEvaluatedRuntimeEventPayload {
 export interface RuntimeEventPayloadMap {
   readonly "run.started": RunStartedRuntimeEventPayload;
   readonly "run.item.appended": RunItemAppendedRuntimeEventPayload;
+  readonly "run.descendant.reserved": RunDescendantReservedRuntimeEventPayload;
+  readonly "run.descendant.started": RunDescendantStartedRuntimeEventPayload;
+  readonly "run.descendant.rejected": RunDescendantRejectedRuntimeEventPayload;
+  readonly "run.descendant.settled": RunDescendantSettledRuntimeEventPayload;
   readonly "context.transition.committed": ContextTransitionCommittedRuntimeEventPayload;
   readonly "context.projection.completed": ContextProjectionCompletedRuntimeEventPayload;
   readonly "run.completed": RunCompletedRuntimeEventPayload;

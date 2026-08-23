@@ -18,7 +18,7 @@ describe("RunTreeExecution", () => {
     expect(first.status).toBe("accepted");
 
     expect(reserve(tree, tree.rootLineage, "run-root", "run-child-active", 2))
-      .toEqual({ status: "rejected", code: "descendant_run_active_limit_exceeded" });
+      .toEqual({ status: "rejected", code: "descendant_run_active_limit_exceeded", treeRevision: 1 });
     tree.settleRun("run-child-1", "succeeded", null, "2026-08-23T00:00:10.000Z");
 
     const second = reserve(tree, tree.rootLineage, "run-root", "run-child-2", 3);
@@ -26,7 +26,7 @@ describe("RunTreeExecution", () => {
     tree.settleRun("run-child-2", "failed", "runtime_execution_failed", "2026-08-23T00:00:20.000Z");
 
     expect(reserve(tree, tree.rootLineage, "run-root", "run-child-total", 4))
-      .toEqual({ status: "rejected", code: "descendant_run_total_limit_exceeded" });
+      .toEqual({ status: "rejected", code: "descendant_run_total_limit_exceeded", treeRevision: 4 });
     expect(tree.getSnapshot()).toMatchObject({
       totalDescendantRuns: 2,
       activeDescendantRuns: 0,
@@ -44,7 +44,7 @@ describe("RunTreeExecution", () => {
     if (child.status !== "accepted") return;
 
     expect(reserve(tree, child.lineage, "run-child", "run-grandchild", 1))
-      .toEqual({ status: "rejected", code: "descendant_run_depth_limit_exceeded" });
+      .toEqual({ status: "rejected", code: "descendant_run_depth_limit_exceeded", treeRevision: 1 });
   });
 
   it("inherits the earliest tree, parent, and local deadline", () => {
@@ -89,6 +89,7 @@ describe("RunTreeExecution", () => {
     )).toEqual({
       status: "rejected",
       code: "descendant_run_start_cancelled",
+      treeRevision: 0,
     });
 
     const expiredTree = createTree({
@@ -105,6 +106,7 @@ describe("RunTreeExecution", () => {
     )).toEqual({
       status: "rejected",
       code: "descendant_run_deadline_exceeded",
+      treeRevision: 0,
     });
   });
 
@@ -123,7 +125,7 @@ describe("RunTreeExecution", () => {
       activeDescendantRuns: 0,
     });
     expect(reserve(tree, tree.rootLineage, "run-root", "run-other", 2))
-      .toEqual({ status: "rejected", code: "descendant_run_total_limit_exceeded" });
+      .toEqual({ status: "rejected", code: "descendant_run_total_limit_exceeded", treeRevision: 2 });
   });
 
   it("commits terminal lifecycle only from settled RunResult facts", () => {

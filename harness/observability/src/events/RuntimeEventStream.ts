@@ -9,6 +9,8 @@ import type {
   RuntimeEventPayloadMap,
 } from "./RuntimeEventPayload.js";
 import { snapshotRuntimeEventPayload } from "./snapshotRuntimeEventPayload.js";
+import { snapshotRunLineage } from "./snapshotRunLineage.js";
+import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 
 export interface RuntimeEventIdentityInput {
   readonly runId: string;
@@ -22,6 +24,7 @@ export type RuntimeEventIdentityFactory = (
 export interface CreateRuntimeEventStreamInput {
   readonly runId: string;
   readonly taskId: string;
+  readonly lineage: RunLineage;
   readonly now: () => string;
   readonly createEventId: RuntimeEventIdentityFactory;
   readonly publishers?: readonly RuntimeEventPublisher[];
@@ -30,6 +33,7 @@ export interface CreateRuntimeEventStreamInput {
 export class RuntimeEventStream {
   private readonly runId: string;
   private readonly taskId: string;
+  private readonly lineage: RunLineage;
   private readonly now: () => string;
   private readonly createEventId: RuntimeEventIdentityFactory;
   private readonly publishers: readonly RuntimeEventPublisher[];
@@ -38,6 +42,7 @@ export class RuntimeEventStream {
   constructor(input: CreateRuntimeEventStreamInput) {
     this.runId = text(input.runId, "RuntimeEventStream.runId");
     this.taskId = text(input.taskId, "RuntimeEventStream.taskId");
+    this.lineage = snapshotRunLineage(input.lineage, this.runId);
     if (typeof input.now !== "function") {
       throw new TypeError("RuntimeEventStream.now must be a function.");
     }
@@ -66,6 +71,7 @@ export class RuntimeEventStream {
       id: eventId,
       runId: this.runId,
       taskId: this.taskId,
+      lineage: this.lineage,
       sequence: nextSequence,
       name,
       occurredAt: dateTime(occurredAt),

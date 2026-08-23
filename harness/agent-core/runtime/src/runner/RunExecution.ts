@@ -195,7 +195,11 @@ import {
   createTaskContextContribution,
   createValidationContextAdmissionProfile,
 } from "../context-contribution/index.js";
-import type { DescendantRunReservationFailureCode } from "./RunTreeExecution.js";
+import type {
+  DescendantRunReservationFailureCode,
+  RunTreeExecutionSnapshot,
+} from "./RunTreeExecution.js";
+import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 
 export interface RuntimeDescendantRunStartInput {
   readonly relationId: string;
@@ -210,6 +214,8 @@ export type RuntimeDescendantRunStartResult =
       readonly status: "started";
       readonly relation: DescendantRunRelation;
       readonly handle: RunHandle;
+      readonly reservedTreeRevision: number;
+      readonly treeRevision: number;
     }
   | {
       readonly status: "rejected";
@@ -217,6 +223,8 @@ export type RuntimeDescendantRunStartResult =
         | DescendantRunReservationFailureCode
         | "descendant_run_start_failed";
       readonly relation: DescendantRunRelation | null;
+      readonly reservedTreeRevision: number | null;
+      readonly treeRevision: number;
     };
 
 export type RuntimeDescendantRunStarter = (
@@ -327,12 +335,14 @@ export class RunExecution<TOutput> {
     agent: Agent<TOutput>,
     private readonly input: RunInput,
     private readonly config: ResolvedRunConfig,
+    private readonly lineage: RunLineage,
     runtimeEventPublishers: readonly RuntimeEventPublisher[],
     runTraceObservers: readonly RunTraceObserver[],
     actionExecutionObserver: ActionExecutionObserver | undefined,
     startedAt: string,
     deadlineAt: string,
     private readonly startDescendantRun: RuntimeDescendantRunStarter,
+    private readonly getRunTreeSnapshot: () => RunTreeExecutionSnapshot,
     private readonly onUpdate: (update: RunExecutionUpdate<TOutput>) => void,
   ) {
     this.startedAt = startedAt;
@@ -341,12 +351,14 @@ export class RunExecution<TOutput> {
     this.traceAssembler = createRunnerTraceAssembler({
       runId,
       taskId: input.task.id,
+      lineage,
       observers: runTraceObservers,
       createId: dependencies.createId,
     });
     this.eventStream = new RuntimeEventStream({
       runId,
       taskId: input.task.id,
+      lineage,
       now: dependencies.now,
       createEventId: ({ sequence }) => dependencies.createId({
         kind: "runtime_event",
@@ -2357,6 +2369,13 @@ export class RunExecution<TOutput> {
     const relationId = this.id("descendant_relation");
     const composition = this.dependencies.operations.descendants;
     if (composition === undefined) {
+      this.emitDescendantRejected(
+        null,
+        action.ref,
+        null,
+        this.lineage.depth + 1,
+        "descendant_run_preparation_failed",
+      );
       return rejectedDescendant(
         relationId,
         "descendant_run_preparation_failed",
@@ -2375,6 +2394,13 @@ export class RunExecution<TOutput> {
         parentConfig: this.config,
       });
     } catch {
+      this.emitDescendantRejected(
+        null,
+        action.ref,
+        null,
+        this.lineage.depth + 1,
+        "descendant_run_preparation_failed",
+      );
       return rejectedDescendant(
         relationId,
         "descendant_run_preparation_failed",
@@ -2383,6 +2409,13 @@ export class RunExecution<TOutput> {
       );
     }
     if (!sameAgentRef(prepared.agent, targetAgent)) {
+      this.emitDescendantRejected(
+        null,
+        action.ref,
+        null,
+        this.lineage.depth + 1,
+        "descendant_agent_mismatch",
+      );
       return rejectedDescendant(
         relationId,
         "descendant_agent_mismatch",
@@ -2399,6 +2432,21 @@ export class RunExecution<TOutput> {
       config: prepared.config,
     });
     if (started.status === "rejected") {
+      if (started.relation !== null && started.reservedTreeRevision !== null) {
+        this.emitDescendantLifecycle(
+          "run.descendant.reserved",
+          started.relation,
+          started.reservedTreeRevision,
+        );
+      }
+      this.emitDescendantRejected(
+        started.relation?.ref.id ?? null,
+        action.ref,
+        started.relation?.child.id ?? null,
+        started.relation?.depth ?? this.lineage.depth + 1,
+        started.code,
+        started.treeRevision,
+      );
       return rejectedDescendant(
         relationId,
         started.code,
@@ -2406,6 +2454,17 @@ export class RunExecution<TOutput> {
         descendantRejectionStatus(started.code),
       );
     }
+
+    this.emitDescendantLifecycle(
+      "run.descendant.reserved",
+      started.relation,
+      started.reservedTreeRevision,
+    );
+    this.emitDescendantLifecycle(
+      "run.descendant.started",
+      started.relation,
+      started.treeRevision,
+    );
 
     const child = started.handle;
     this.childHandles.add(child);
@@ -2421,6 +2480,15 @@ export class RunExecution<TOutput> {
     const unsubscribe = child.subscribe(() => this.publishCurrentState());
     try {
       const result = await child.wait();
+      this.eventStream.emit("run.descendant.settled", {
+        relationId: started.relation.ref.id,
+        parentRunActionId: started.relation.parentRunAction.id,
+        childRunId: started.relation.child.id,
+        depth: started.relation.depth,
+        status: result.status,
+        code: result.code,
+        treeRevision: this.getRunTreeSnapshot().revision,
+      });
       return Object.freeze({
         status: "settled" as const,
         relationId,
@@ -2433,6 +2501,38 @@ export class RunExecution<TOutput> {
       this.childHandles.delete(child);
       this.removePending(pending, "resolved", null);
     }
+  }
+
+  private emitDescendantLifecycle(
+    name: "run.descendant.reserved" | "run.descendant.started",
+    relation: DescendantRunRelation,
+    treeRevision: number,
+  ): void {
+    this.eventStream.emit(name, {
+      relationId: relation.ref.id,
+      parentRunActionId: relation.parentRunAction.id,
+      childRunId: relation.child.id,
+      depth: relation.depth,
+      treeRevision,
+    });
+  }
+
+  private emitDescendantRejected(
+    relationId: string | null,
+    parentRunAction: RunActionRef,
+    childRunId: string | null,
+    depth: number | null,
+    code: import("@agent-anything/observability/events").RuntimeDescendantRunFailureCode,
+    treeRevision: number = this.getRunTreeSnapshot().revision,
+  ): void {
+    this.eventStream.emit("run.descendant.rejected", {
+      relationId,
+      parentRunActionId: parentRunAction.id,
+      childRunId,
+      depth,
+      code,
+      treeRevision,
+    });
   }
 
   private commitDescendantToolObservation(

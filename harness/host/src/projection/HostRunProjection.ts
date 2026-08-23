@@ -11,10 +11,12 @@ import type {
 import type {
   RunOperationSnapshot,
   RunRetryProjection,
+  RunTreeExecutionSnapshot,
 } from "@agent-anything/agent-runtime/runner";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { InteractionRequestRef } from "@agent-anything/interaction/protocol";
 import type { InteractionTransportReceipt } from "@agent-anything/interaction/records";
+import type { RunLifecycleStatus } from "@agent-anything/agent-core/run";
 import type { ValidationHostProjection } from "@agent-anything/validation/projection";
 
 export type HostRunProjectionStatus =
@@ -74,6 +76,34 @@ export interface HostRetryProjection {
 }
 
 export type HostCancellationProjection = RunCancellationSummary;
+
+export interface HostRunTreeLimitsProjection {
+  readonly maxDescendantDepth: number;
+  readonly maxTotalDescendantRuns: number;
+  readonly maxActiveDescendantRuns: number;
+}
+
+export interface HostRunTreeNodeProjection {
+  readonly runId: string;
+  readonly parentRunId: string | null;
+  readonly relationId: string | null;
+  readonly parentRunActionId: string | null;
+  readonly depth: number;
+  readonly status: RunLifecycleStatus;
+  readonly resultCode: RunResultCode | null;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
+}
+
+export interface HostRunTreeProjection {
+  readonly rootRunId: string;
+  readonly revision: number;
+  readonly deadlineAt: string;
+  readonly limits: HostRunTreeLimitsProjection;
+  readonly totalDescendantRuns: number;
+  readonly activeDescendantRuns: number;
+  readonly nodes: readonly HostRunTreeNodeProjection[];
+}
 
 export type HostEnforcementStatus =
   | "not_exercised"
@@ -142,6 +172,7 @@ export interface HostRunProjection {
   readonly runRevision: number;
   readonly status: HostRunProjectionStatus;
   readonly startedAt: string;
+  readonly runTree: HostRunTreeProjection;
   readonly plan: HostPlanProjection | null;
   readonly pendingInteractions: readonly HostPendingInteractionProjection[];
   readonly retry: HostRetryProjection | null;
@@ -157,6 +188,7 @@ export interface CreateHostRunProjectionInput {
   readonly runId: string;
   readonly startedAt: string;
   readonly enforcement: SandboxEnforcement;
+  readonly runTree: RunTreeExecutionSnapshot;
 }
 
 export interface CreateHostTerminalRunProjectionInput<TOutput = unknown> {
@@ -212,6 +244,8 @@ export type HostRunProjectionUpdate =
 export type HostRunProjectionRejectionCode =
   | "stale_sequence"
   | "run_identity_mismatch"
+  | "run_tree_root_mismatch"
+  | "run_tree_revision_regression"
   | "invalid_transition"
   | "invalid_update"
   | "interaction_correlation_mismatch"
@@ -265,6 +299,7 @@ export function createHostRunProjection(
     runRevision: 0,
     status: "starting" as const,
     startedAt: input.startedAt,
+    runTree: projectRunTree(input.runTree),
     plan: null,
     pendingInteractions: Object.freeze([]),
     retry: null,
@@ -277,6 +312,43 @@ export function createHostRunProjection(
       latestAttempt: null,
     }),
     terminal: null,
+  });
+}
+
+export function projectHostRunTree(
+  input: RunTreeExecutionSnapshot,
+): HostRunTreeProjection {
+  return projectRunTree(input);
+}
+
+function projectRunTree(input: RunTreeExecutionSnapshot): HostRunTreeProjection {
+  assertIdentity(input.rootRunId, "runTree.rootRunId");
+  assertDateTime(input.deadlineAt, "runTree.deadlineAt");
+  if (!Number.isSafeInteger(input.revision) || input.revision < 0 ||
+      !Number.isSafeInteger(input.totalDescendantRuns) || input.totalDescendantRuns < 0 ||
+      !Number.isSafeInteger(input.activeDescendantRuns) || input.activeDescendantRuns < 0 ||
+      input.activeDescendantRuns > input.totalDescendantRuns) {
+    throw new TypeError("Run Tree counters and revision must be valid.");
+  }
+  const nodes = input.nodes.map((node) => Object.freeze({
+    runId: node.runId,
+    parentRunId: node.parentRunId,
+    relationId: node.relationId,
+    parentRunActionId: node.parentRunActionId,
+    depth: node.depth,
+    status: node.status,
+    resultCode: node.resultCode,
+    startedAt: node.startedAt,
+    completedAt: node.completedAt,
+  }));
+  return Object.freeze({
+    rootRunId: input.rootRunId,
+    revision: input.revision,
+    deadlineAt: input.deadlineAt,
+    limits: Object.freeze({ ...input.limits }),
+    totalDescendantRuns: input.totalDescendantRuns,
+    activeDescendantRuns: input.activeDescendantRuns,
+    nodes: Object.freeze(nodes),
   });
 }
 

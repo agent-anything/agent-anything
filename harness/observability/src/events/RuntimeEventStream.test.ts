@@ -30,6 +30,11 @@ describe("RuntimeEventStream", () => {
       id: "run-1:runtime-event:1",
       runId: "run-1",
       taskId: "task-1",
+      lineage: {
+        kind: "root",
+        root: { id: "run-1" },
+        depth: 0,
+      },
       sequence: 1,
       name: "controller.finished",
       occurredAt: NOW,
@@ -136,6 +141,74 @@ describe("RuntimeEventStream", () => {
     expect(events[0]?.payload).toEqual(contextProjectionPayload());
     expect(events[0]?.payload).not.toHaveProperty("manifestRecords");
   });
+
+  it("snapshots descendant lineage and bounded relation lifecycle payloads", () => {
+    const events: RuntimeEvent[] = [];
+    const lineage = {
+      kind: "descendant" as const,
+      root: { id: "run-root" },
+      parent: { id: "run-parent" },
+      parentRunAction: { run: { id: "run-parent" }, id: "action-1", sequence: 1 },
+      relation: { id: "relation-1" },
+      depth: 2,
+    };
+    const stream = new RuntimeEventStream({
+      runId: "run-child",
+      taskId: "task-child",
+      lineage,
+      now: () => NOW,
+      createEventId: ({ sequence }) => `child-event-${sequence}`,
+      publishers: [{ publish: (event) => events.push(event) }],
+    });
+
+    stream.emit("run.descendant.settled", {
+      relationId: "relation-next",
+      parentRunActionId: "action-next",
+      childRunId: "run-grandchild",
+      depth: 3,
+      status: "failed",
+      code: "controller_failed",
+      treeRevision: 9,
+      delegatedPrompt: "must-not-escape",
+    } as never);
+    stream.emit("run.descendant.rejected", {
+      relationId: null,
+      parentRunActionId: "action-rejected",
+      childRunId: null,
+      depth: 3,
+      code: "descendant_run_active_limit_exceeded",
+      treeRevision: 9,
+    });
+    lineage.root.id = "mutated";
+
+    expect(events[0]?.lineage).toEqual({
+      kind: "descendant",
+      root: { id: "run-root" },
+      parent: { id: "run-parent" },
+      parentRunAction: { run: { id: "run-parent" }, id: "action-1", sequence: 1 },
+      relation: { id: "relation-1" },
+      depth: 2,
+    });
+    expect(events[0]?.payload).toEqual({
+      relationId: "relation-next",
+      parentRunActionId: "action-next",
+      childRunId: "run-grandchild",
+      depth: 3,
+      status: "failed",
+      code: "controller_failed",
+      treeRevision: 9,
+    });
+    expect(events[0]?.payload).not.toHaveProperty("delegatedPrompt");
+    expect(Object.isFrozen(events[0]?.lineage)).toBe(true);
+    expect(events[1]?.payload).toEqual({
+      relationId: null,
+      parentRunActionId: "action-rejected",
+      childRunId: null,
+      depth: 3,
+      code: "descendant_run_active_limit_exceeded",
+      treeRevision: 9,
+    });
+  });
 });
 
 function contextProjectionPayload(): ContextProjectionCompletedRuntimeEventPayload {
@@ -173,6 +246,7 @@ function createStream(
   return new RuntimeEventStream({
     runId: "run-1",
     taskId: "task-1",
+    lineage: { kind: "root", root: { id: "run-1" }, depth: 0 },
     now: () => NOW,
     createEventId: ({ runId, sequence }) => `${runId}:runtime-event:${sequence}`,
     publishers,

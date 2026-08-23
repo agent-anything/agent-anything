@@ -1,4 +1,6 @@
 import type { RuntimeEvent, RuntimeEventPublisher } from "../events/index.js";
+import { snapshotRunLineage } from "../events/snapshotRunLineage.js";
+import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 import { RUN_TRACE_SCHEMA_VERSION, createControllerTurnTraceOperationId, type CommittedRunItemTraceProjection, type CompleteRunTraceInput, type ContextProjectionTraceRecord, type ContextTransitionTraceRecord, type CreateRunTraceAssemblerInput, type RunTrace, type TraceIssue, type TraceIssueCode, type TraceLink, type TraceSpan, type TraceSpanStatus } from "./RunTrace.js";
 
 interface MutableSpan {
@@ -22,6 +24,7 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
   private readonly issues: TraceIssue[] = [];
   private readonly itemEvents = new Map<string, RuntimeEvent<"run.item.appended">>();
   private readonly observers;
+  private readonly lineage: RunLineage;
   private nextSpanSequence = 1;
   private lastEventSequence = 0;
   private terminalEvent: RuntimeEvent<"run.completed" | "run.blocked" | "run.failed" | "run.cancelled"> | null = null;
@@ -32,6 +35,7 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
     token(input.runId, "runId");
     token(input.taskId, "taskId");
     if (typeof input.createSpanId !== "function") throw new TypeError("RunTraceAssembler.createSpanId must be a function.");
+    this.lineage = snapshotRunLineage(input.lineage, input.runId);
     this.observers = Object.freeze([...(input.observers ?? [])]);
     this.openSpan(input.runId, "runtime", "run", null, null, {
       activeAgentId: null,
@@ -50,6 +54,7 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
     if (this.completed) return;
     if (event.runId !== this.input.runId) return this.issue("run_identity_mismatch", event.id, null);
     if (event.taskId !== this.input.taskId) return this.issue("task_identity_mismatch", event.id, null);
+    if (!sameLineage(event.lineage, this.lineage)) return this.issue("run_lineage_mismatch", event.id, null);
     if (event.sequence <= this.lastEventSequence) return this.issue("event_sequence_regression", event.id, null);
     else if (event.sequence > this.lastEventSequence + 1) this.issue("event_sequence_gap", event.id, null);
     this.lastEventSequence = Math.max(this.lastEventSequence, event.sequence);
@@ -68,6 +73,12 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
       case "run.item.appended":
         if (this.itemEvents.has(event.payload.itemId)) this.issue("run_item_mismatch", event.id, null);
         else this.itemEvents.set(event.payload.itemId, event);
+        break;
+      case "run.descendant.reserved":
+      case "run.descendant.started":
+      case "run.descendant.rejected":
+      case "run.descendant.settled":
+        this.spans.get(this.input.runId)!.links.push(link("runtime_event", event.id));
         break;
       case "context.transition.committed": {
         const root = this.spans.get(this.input.runId)!;
@@ -350,6 +361,7 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
       traceId: this.input.traceId,
       runId: this.input.runId,
       taskId: this.input.taskId,
+      lineage: this.lineage,
       status,
       rootSpanId: root.spanId,
       startedAt: root.startedAt,
@@ -365,4 +377,12 @@ function operationStatus(status: string): TraceSpanStatus { return status === "s
 function interactionStatus(status: string): TraceSpanStatus { return status === "resolved" ? "succeeded" : status === "cancelled" ? "cancelled" : "failed"; }
 function rootStatus(status: string): TraceSpanStatus { return status === "succeeded" ? "succeeded" : status === "blocked" ? "blocked" : status === "cancelled" ? "cancelled" : "failed"; }
 function token(value: unknown, field: string): string { if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(`${field} must be non-empty.`); return value; }
+function sameLineage(left: RunLineage, right: RunLineage): boolean {
+  if (left.kind !== right.kind || left.root.id !== right.root.id || left.depth !== right.depth) return false;
+  if (left.kind === "root" || right.kind === "root") return true;
+  return left.parent.id === right.parent.id &&
+    left.relation.id === right.relation.id &&
+    left.parentRunAction.id === right.parentRunAction.id &&
+    left.parentRunAction.sequence === right.parentRunAction.sequence;
+}
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T { if (value === null || typeof value !== "object" || seen.has(value)) return value; seen.add(value); for (const child of Object.values(value)) deepFreeze(child, seen); return Object.freeze(value); }

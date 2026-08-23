@@ -27,4 +27,8 @@ export type {
   RunPendingInteractionProjection,
   RunRetryProjection,
 } from "./RunHandle.js";
+export type {
+  RunTreeExecutionSnapshot,
+  RunTreeNodeProjection,
+} from "./RunTreeExecution.js";
 export { Runner } from "./Runner.js";

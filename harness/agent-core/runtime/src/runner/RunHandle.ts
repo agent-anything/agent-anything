@@ -16,6 +16,7 @@ import type {
 import type { PlanProjection } from "../plan/index.js";
 import type { RetryEvent } from "../retry/index.js";
 import type { ValidationHostProjection } from "@agent-anything/validation/projection";
+import type { RunTreeExecutionSnapshot } from "./RunTreeExecution.js";
 
 export interface RunPendingInteractionProjection {
   readonly envelope: SafeInteractionEnvelope<unknown>;
@@ -42,6 +43,7 @@ export interface RunOperationSnapshot<TOutput = unknown> {
   readonly retry: RunRetryProjection | null;
   readonly validation: ValidationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
+  readonly runTree: RunTreeExecutionSnapshot;
   readonly result: RunResult<TOutput> | null;
 }
 
@@ -78,6 +80,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
   private readonly completion: Promise<RunResult<TOutput>>;
   private resolveCompletion!: (result: RunResult<TOutput>) => void;
   private snapshot: RunOperationSnapshot<TOutput>;
+  private settlementApplied = false;
   private submitInteractionImpl: ((input: InteractionSubmissionInput) => InteractionSubmissionOutcome) | null = null;
   private steerImpl: ((input: RunSteeringInput) => RunSteeringSubmissionReceipt) | null = null;
 
@@ -85,6 +88,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     runId: string,
     private readonly cancellation: RunCancellationController,
     private readonly emergencyResult: RunResult<TOutput>,
+    initialRunTree: RunTreeExecutionSnapshot,
     private readonly onSettled: (result: RunResult<TOutput>) => void,
   ) {
     this.runId = runId;
@@ -98,6 +102,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       retry: null,
       validation: null,
       pendingInteractions: Object.freeze([]),
+      runTree: initialRunTree,
       result: null,
     });
     this.completion = new Promise((resolve) => {
@@ -130,11 +135,28 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       retry: update.retry,
       validation: update.validation,
       pendingInteractions: update.pendingInteractions,
+      runTree: this.snapshot.runTree,
       result: update.result,
     });
     for (const listener of [...this.listeners]) {
       notify(listener, this.snapshot);
     }
+  }
+
+  publishRunTree(runTree: RunTreeExecutionSnapshot): void {
+    if (runTree.rootRunId !== this.snapshot.runTree.rootRunId) {
+      throw new TypeError("RunHandle received a Run Tree for another root.");
+    }
+    if (runTree.revision < this.snapshot.runTree.revision) {
+      throw new TypeError("RunHandle received a stale Run Tree revision.");
+    }
+    if (runTree.revision === this.snapshot.runTree.revision) return;
+    this.snapshot = freezeSnapshot({
+      ...this.snapshot,
+      sequence: this.snapshot.sequence + 1,
+      runTree,
+    });
+    for (const listener of [...this.listeners]) notify(listener, this.snapshot);
   }
 
   getSnapshot(): RunOperationSnapshot<TOutput> {
@@ -211,8 +233,11 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
   }
 
   private settle(result: RunResult<TOutput>): void {
-    if (this.snapshot.result === null) {
+    if (!this.settlementApplied) {
+      this.settlementApplied = true;
       this.onSettled(result);
+    }
+    if (this.snapshot.result === null) {
       this.publish({
         runRevision: this.snapshot.runRevision,
         status: terminalStatus(result),
@@ -272,5 +297,6 @@ function freezeSnapshot<TOutput>(
           recentEvents: Object.freeze([...snapshot.retry.recentEvents]),
         }),
     pendingInteractions: Object.freeze([...snapshot.pendingInteractions]),
+    runTree: snapshot.runTree,
   });
 }

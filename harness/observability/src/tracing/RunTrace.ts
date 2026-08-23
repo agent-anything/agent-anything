@@ -6,8 +6,9 @@ import type {
   RuntimeRunItemKind,
   RuntimeTerminalStatus,
 } from "../events/RuntimeEventPayload.js";
+import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 
-export const RUN_TRACE_SCHEMA_VERSION = 1 as const;
+export const RUN_TRACE_SCHEMA_VERSION = 2 as const;
 
 export type RunTraceStatus = "active" | "complete" | "incomplete";
 export type TraceOwner = "runtime" | "controller" | "operation" | "interaction";
@@ -31,6 +32,7 @@ export type TraceIssueCode =
   | "event_sequence_gap"
   | "event_sequence_regression"
   | "run_identity_mismatch"
+  | "run_lineage_mismatch"
   | "task_identity_mismatch"
   | "duplicate_operation_start"
   | "duplicate_operation_settlement"
@@ -145,10 +147,11 @@ export type TraceSpan =
   | TraceSpanEnvelope<"interaction", "interaction">;
 
 export interface RunTrace {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly traceId: string;
   readonly runId: string;
   readonly taskId: string;
+  readonly lineage: RunLineage;
   readonly status: RunTraceStatus;
   readonly rootSpanId: string;
   readonly startedAt: string | null;
@@ -197,6 +200,7 @@ export interface CreateRunTraceAssemblerInput {
   readonly traceId: string;
   readonly runId: string;
   readonly taskId: string;
+  readonly lineage: RunLineage;
   readonly createSpanId: RunTraceSpanIdentityFactory;
   readonly observers?: readonly RunTraceObserver[];
 }

@@ -200,7 +200,7 @@ describe("HostRunProjectionReducer", () => {
     expect(reduceHostRunProjection(
       started,
       runtimeUpdate(2, "controller.started", { turnId: "turn-1", iteration: 1 }, "run-2"),
-    )).toMatchObject({ status: "rejected", code: "run_identity_mismatch" });
+    )).toMatchObject({ status: "rejected", code: "run_tree_root_mismatch" });
     expect(reduceHostRunProjection(
       started,
       runOperationUpdate(2, { sequence: 0, status: "running" }),
@@ -259,6 +259,55 @@ describe("HostRunProjectionReducer", () => {
     });
     expect(delivered).toHaveBeenCalledWith(store.getProjection());
   });
+
+  it("accepts same-root descendant activity without changing root lifecycle and rejects wrong or stale trees", () => {
+    const childLineage: RuntimeEvent["lineage"] = {
+      kind: "descendant",
+      root: { id: "run-1" },
+      parent: { id: "run-1" },
+      parentRunAction: { run: { id: "run-1" }, id: "action-1", sequence: 1 },
+      relation: { id: "relation-1" },
+      depth: 1,
+    };
+    let projection = apply(initialProjection(), runtimeUpdate(
+      1,
+      "run.started",
+      { status: "running", activeAgentId: "agent-child" },
+      "run-child",
+      childLineage,
+    ));
+    expect(projection.status).toBe("starting");
+    expect(reduceHostRunProjection(
+      projection,
+      runtimeUpdate(2, "run.started", {
+        status: "running",
+        activeAgentId: "foreign-agent",
+      }, "run-foreign"),
+    )).toMatchObject({ status: "rejected", code: "run_tree_root_mismatch" });
+
+    projection = apply(projection, runOperationUpdate(2, {
+      sequence: 1,
+      runTree: treeWithChild(2),
+    }));
+    expect(projection.runTree).toMatchObject({
+      revision: 2,
+      totalDescendantRuns: 1,
+      activeDescendantRuns: 1,
+      nodes: [
+        { runId: "run-1", depth: 0 },
+        { runId: "run-child", depth: 1, status: "running" },
+      ],
+    });
+    expect(JSON.stringify(projection.runTree)).not.toContain("delegated prompt");
+
+    expect(reduceHostRunProjection(projection, runOperationUpdate(3, {
+      sequence: 2,
+      runTree: treeWithChild(1),
+    }))).toMatchObject({
+      status: "rejected",
+      code: "run_tree_revision_regression",
+    });
+  });
 });
 
 function initialProjection(): HostRunProjection {
@@ -268,6 +317,7 @@ function initialProjection(): HostRunProjection {
     runId: "run-1",
     startedAt: NOW,
     enforcement: "disabled",
+    runTree: rootTree(),
   });
 }
 
@@ -285,10 +335,15 @@ function runtimeUpdate<TName extends RuntimeEventName>(
   name: TName,
   payload: RuntimeEventPayloadMap[TName],
   eventRunId = "run-1",
+  lineage: RuntimeEvent["lineage"] = {
+    kind: "root",
+    root: { id: eventRunId },
+    depth: 0,
+  },
 ): HostRunProjectionUpdate {
   return {
     kind: "runtime_event",
-    runId: eventRunId,
+    runId: "run-1",
     sequence,
     occurredAt: NOW,
     event: {
@@ -296,6 +351,7 @@ function runtimeUpdate<TName extends RuntimeEventName>(
       id: `event-${sequence}`,
       runId: eventRunId,
       taskId: "task-1",
+      lineage,
       sequence,
       name,
       occurredAt: NOW,
@@ -323,10 +379,59 @@ function runOperationUpdate(
       retry: null,
       validation: null,
       pendingInteractions: [],
+      runTree: rootTree(),
       result: null,
       ...overrides,
     },
   };
+}
+
+function rootTree(revision = 0): RunOperationSnapshot["runTree"] {
+  return Object.freeze({
+    rootRunId: "run-1",
+    revision,
+    deadlineAt: "2026-08-13T00:01:00.000Z",
+    limits: Object.freeze({
+      maxDescendantDepth: 2,
+      maxTotalDescendantRuns: 4,
+      maxActiveDescendantRuns: 2,
+    }),
+    totalDescendantRuns: 0,
+    activeDescendantRuns: 0,
+    nodes: Object.freeze([Object.freeze({
+      runId: "run-1",
+      parentRunId: null,
+      relationId: null,
+      parentRunActionId: null,
+      depth: 0,
+      status: "initializing" as const,
+      resultCode: null,
+      startedAt: NOW,
+      completedAt: null,
+    })]),
+  });
+}
+
+function treeWithChild(revision: number): RunOperationSnapshot["runTree"] {
+  return Object.freeze({
+    ...rootTree(revision),
+    totalDescendantRuns: 1,
+    activeDescendantRuns: 1,
+    nodes: Object.freeze([
+      rootTree(revision).nodes[0]!,
+      Object.freeze({
+        runId: "run-child",
+        parentRunId: "run-1",
+        relationId: "relation-1",
+        parentRunActionId: "action-1",
+        depth: 1,
+        status: "running" as const,
+        resultCode: null,
+        startedAt: NOW,
+        completedAt: null,
+      }),
+    ]),
+  });
 }
 
 function succeededResult() {

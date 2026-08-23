@@ -7,6 +7,14 @@ import type {
 const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
   "run.started": ["status", "activeAgentId"],
   "run.item.appended": ["itemId", "itemKind", "itemSequence"],
+  "run.descendant.reserved": descendantFields(),
+  "run.descendant.started": descendantFields(),
+  "run.descendant.rejected": [
+    "relationId", "parentRunActionId", "childRunId", "depth", "code", "treeRevision",
+  ],
+  "run.descendant.settled": [
+    ...descendantFields(), "status", "code",
+  ],
   "context.transition.committed": [
     "transitionId",
     "activeContextId",
@@ -128,10 +136,37 @@ export function projectRuntimeEventForHost(event: RuntimeEvent): RuntimeEvent {
     runId: event.runId,
     name: event.name,
     taskId: event.taskId,
+    lineage: projectLineage(event),
     sequence: event.sequence,
     occurredAt: event.occurredAt,
     payload: Object.freeze(payload),
   }) as unknown as RuntimeEvent;
+}
+
+function descendantFields(): readonly string[] {
+  return ["relationId", "parentRunActionId", "childRunId", "depth", "treeRevision"];
+}
+
+function projectLineage(event: RuntimeEvent): RuntimeEvent["lineage"] {
+  if (event.lineage.kind === "root") {
+    return Object.freeze({
+      kind: "root" as const,
+      root: Object.freeze({ id: event.lineage.root.id }),
+      depth: 0 as const,
+    });
+  }
+  return Object.freeze({
+    kind: "descendant" as const,
+    root: Object.freeze({ id: event.lineage.root.id }),
+    parent: Object.freeze({ id: event.lineage.parent.id }),
+    parentRunAction: Object.freeze({
+      run: Object.freeze({ id: event.lineage.parentRunAction.run.id }),
+      id: event.lineage.parentRunAction.id,
+      sequence: event.lineage.parentRunAction.sequence,
+    }),
+    relation: Object.freeze({ id: event.lineage.relation.id }),
+    depth: event.lineage.depth,
+  });
 }
 
 function terminalFields(): readonly string[] {

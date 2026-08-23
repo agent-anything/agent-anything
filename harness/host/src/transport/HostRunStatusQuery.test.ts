@@ -39,6 +39,29 @@ describe("Host Run status query transport", () => {
       runId: "run-1",
       startedAt: NOW,
       enforcement: "disabled",
+      runTree: {
+        rootRunId: "run-1",
+        revision: 0,
+        deadlineAt: "2026-08-13T00:01:00.000Z",
+        limits: {
+          maxDescendantDepth: 2,
+          maxTotalDescendantRuns: 4,
+          maxActiveDescendantRuns: 2,
+        },
+        totalDescendantRuns: 0,
+        activeDescendantRuns: 0,
+        nodes: [{
+          runId: "run-1",
+          parentRunId: null,
+          relationId: null,
+          parentRunActionId: null,
+          depth: 0,
+          status: "initializing",
+          resultCode: null,
+          startedAt: NOW,
+          completedAt: null,
+        }],
+      },
     });
     const getStatus = vi.fn(() => projection);
     const active = { runId: "run-1", getStatus } as unknown as HostActiveRun;

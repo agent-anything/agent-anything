@@ -12,6 +12,7 @@ describe("Host RuntimeEvent projection", () => {
       id: "event-1",
       runId: "run-1",
       taskId: "task-1",
+      lineage: Object.freeze({ kind: "root", root: Object.freeze({ id: "run-1" }), depth: 0 }),
       sequence: 1,
       name: "controller.finished",
       occurredAt: "2026-08-03T00:00:00.000Z",
@@ -59,6 +60,7 @@ describe("Host RuntimeEvent projection", () => {
       id: "event-2",
       runId: "run-1",
       taskId: "task-1",
+      lineage: Object.freeze({ kind: "root", root: Object.freeze({ id: "run-1" }), depth: 0 }),
       sequence: 2,
       name: "context.transition.committed",
       occurredAt: "2026-08-03T00:00:00.000Z",
@@ -99,6 +101,7 @@ describe("Host RuntimeEvent projection", () => {
       id: "event-3",
       runId: "run-1",
       taskId: "task-1",
+      lineage: Object.freeze({ kind: "root", root: Object.freeze({ id: "run-1" }), depth: 0 }),
       sequence: 3,
       name: "context.projection.completed",
       occurredAt: "2026-08-03T00:00:00.000Z",
@@ -150,6 +153,7 @@ describe("Host RuntimeEvent projection", () => {
       id: "event-4",
       runId: "run-1",
       taskId: "task-1",
+      lineage: Object.freeze({ kind: "root", root: Object.freeze({ id: "run-1" }), depth: 0 }),
       sequence: 4,
       name: "validation.check.finished",
       occurredAt: "2026-08-03T00:00:00.000Z",
@@ -177,5 +181,54 @@ describe("Host RuntimeEvent projection", () => {
     });
     expect(projected.payload).not.toHaveProperty("rawEvidence");
     expect(projected.payload).not.toHaveProperty("findings");
+  });
+
+  it("copies descendant lineage and only the bounded relation lifecycle fields", () => {
+    const event = Object.freeze({
+      schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
+      id: "event-descendant-1",
+      runId: "run-child",
+      taskId: "task-child",
+      lineage: Object.freeze({
+        kind: "descendant" as const,
+        root: Object.freeze({ id: "run-1" }),
+        parent: Object.freeze({ id: "run-1" }),
+        parentRunAction: Object.freeze({
+          run: Object.freeze({ id: "run-1" }),
+          id: "action-1",
+          sequence: 1,
+        }),
+        relation: Object.freeze({ id: "relation-1" }),
+        depth: 1,
+      }),
+      sequence: 5,
+      name: "run.descendant.settled",
+      occurredAt: "2026-08-03T00:00:00.000Z",
+      payload: Object.freeze({
+        relationId: "relation-2",
+        parentRunActionId: "action-2",
+        childRunId: "run-grandchild",
+        depth: 2,
+        status: "succeeded",
+        code: null,
+        treeRevision: 8,
+        delegatedPrompt: "must-not-escape",
+      }),
+    }) as unknown as RuntimeEvent;
+
+    const projected = projectRuntimeEventForHost(event);
+
+    expect(projected.lineage).toEqual(event.lineage);
+    expect(projected.payload).toEqual({
+      relationId: "relation-2",
+      parentRunActionId: "action-2",
+      childRunId: "run-grandchild",
+      depth: 2,
+      status: "succeeded",
+      code: null,
+      treeRevision: 8,
+    });
+    expect(projected.payload).not.toHaveProperty("delegatedPrompt");
+    expect(projected.lineage).not.toBe(event.lineage);
   });
 });

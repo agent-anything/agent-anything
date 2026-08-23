@@ -5,6 +5,7 @@ import type { InteractionTransportReceipt } from "@agent-anything/interaction/re
 import { projectRuntimeEventForHost } from "./RuntimeEventHostProjection.js";
 import {
   snapshotHostCancellation,
+  projectHostRunTree,
   type CreateHostRunProjectionStoreInput,
   type HostActionAttemptProjection,
   type HostEnforcementProjection,
@@ -39,10 +40,16 @@ export function reduceHostRunProjection(
     switch (update.kind) {
       case "runtime_event": {
         const event = projectRuntimeEventForHost(update.event);
-        if (event.runId !== current.runId || event.taskId !== current.taskId) {
+        if (event.lineage.root.id !== current.runId) {
+          return rejected(current, "run_tree_root_mismatch");
+        }
+        const isRootEvent = event.runId === current.runId &&
+          event.lineage.kind === "root";
+        if (isRootEvent && event.taskId !== current.taskId) {
           return rejected(current, "run_identity_mismatch");
         }
-        return applied(current, update.sequence, event.name === "run.started" &&
+        return applied(current, update.sequence, isRootEvent &&
+            event.name === "run.started" &&
             current.status === "starting"
           ? { status: "running" }
           : {});
@@ -134,6 +141,12 @@ function applyRunOperation(
   if (snapshot.sequence < current.runOperationSequence) {
     return rejected(current, "run_operation_sequence_regression");
   }
+  if (snapshot.runTree.rootRunId !== current.runId) {
+    return rejected(current, "run_tree_root_mismatch");
+  }
+  if (snapshot.runTree.revision < current.runTree.revision) {
+    return rejected(current, "run_tree_revision_regression");
+  }
   const pendingInteractions = snapshot.pendingInteractions.map((pending) => {
     const prior = current.pendingInteractions.find((candidate) =>
       sameRequest(candidate.request, pending.envelope.request)
@@ -151,6 +164,7 @@ function applyRunOperation(
   return applied(current, sequence, {
     runOperationSequence: snapshot.sequence,
     runRevision: snapshot.runRevision,
+    runTree: projectHostRunTree(snapshot.runTree),
     status,
     plan: snapshot.plan,
     pendingInteractions: Object.freeze(pendingInteractions),

@@ -416,6 +416,48 @@ describe("RunTraceAssembler", () => {
     expect(span?.attributes).not.toHaveProperty("rawPrompt");
     expect(Object.isFrozen(span?.attributes)).toBe(true);
   });
+
+  it("retains one immutable descendant lineage and reports conflicting lineage", () => {
+    const lineage = {
+      kind: "descendant" as const,
+      root: { id: "run-root" },
+      parent: { id: "run-parent" },
+      parentRunAction: { run: { id: "run-parent" }, id: "action-1", sequence: 1 },
+      relation: { id: "relation-1" },
+      depth: 2,
+    };
+    const assembler = new RunTraceAssembler({
+      traceId: "trace-child",
+      runId: "run-child",
+      taskId: "task-1",
+      lineage,
+      createSpanId: ({ sequence }) => `child-span-${sequence}`,
+    });
+    createStream(assembler, "run-child", lineage).emit("run.started", {
+      status: "running",
+      activeAgentId: "agent-child",
+    });
+    lineage.root.id = "mutated";
+
+    expect(assembler.getSnapshot().lineage).toEqual({
+      kind: "descendant",
+      root: { id: "run-root" },
+      parent: { id: "run-parent" },
+      parentRunAction: { run: { id: "run-parent" }, id: "action-1", sequence: 1 },
+      relation: { id: "relation-1" },
+      depth: 2,
+    });
+    createStream(assembler, "run-child", {
+      ...lineage,
+      root: { id: "run-root" },
+      relation: { id: "relation-conflict" },
+    }).emit("controller.started", { turnId: "turn-1", iteration: 1 });
+    expect(assembler.getSnapshot().issues).toContainEqual({
+      code: "run_lineage_mismatch",
+      sourceId: "event-1",
+      operationId: null,
+    });
+  });
 });
 
 function createAssembler(
@@ -425,6 +467,7 @@ function createAssembler(
     traceId: "trace-1",
     runId: "run-1",
     taskId: "task-1",
+    lineage: { kind: "root", root: { id: "run-1" }, depth: 0 },
     createSpanId: ({ sequence }) => `span-${sequence}`,
     observers,
   });
@@ -433,10 +476,16 @@ function createAssembler(
 function createStream(
   publisher: RunTraceAssembler | undefined,
   runId = "run-1",
+  lineage: import("@agent-anything/agent-core/run-tree").RunLineage = {
+    kind: "root",
+    root: { id: runId },
+    depth: 0,
+  },
 ): RuntimeEventStream {
   return new RuntimeEventStream({
     runId,
     taskId: "task-1",
+    lineage,
     now: () => STARTED_AT,
     createEventId: ({ sequence }) => `event-${sequence}`,
     publishers: publisher === undefined ? [] : [publisher],

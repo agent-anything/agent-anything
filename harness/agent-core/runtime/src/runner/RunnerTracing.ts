@@ -3,11 +3,13 @@ import {
   type RunTraceObserver,
 } from "@agent-anything/observability";
 import type { RunResult } from "../run/index.js";
+import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 import type { CreateRunnerIdentity } from "./RunnerDependencies.js";
 
 export function createRunnerTraceAssembler(input: {
   readonly runId: string;
   readonly taskId: string;
+  readonly lineage: RunLineage;
   readonly observers: readonly RunTraceObserver[];
   readonly createId: CreateRunnerIdentity;
 }): RunTraceAssembler | null {
@@ -24,6 +26,7 @@ export function createRunnerTraceAssembler(input: {
       traceId,
       runId: input.runId,
       taskId: input.taskId,
+      lineage: input.lineage,
       createSpanId: ({ sequence }) => input.createId({
         kind: "trace_span",
         runId: input.runId,

@@ -15,6 +15,7 @@ const packageExportKeys = {
     "./run",
     "./run-action",
     "./run-item",
+    "./run-tree",
     "./task",
   ],
   "harness/operation-catalog": ["./binding", "./catalog", "./identity", "./result"],

@@ -206,6 +206,7 @@ function startHostRun<TOutput>(
       runId,
       startedAt,
       enforcement: input.runConfig.permissions.permissionProfile.enforcement,
+      runTree: handle.getSnapshot().runTree,
     }),
     ...(onListenerFailure === undefined ? {} : { onListenerFailure }),
   });
