@@ -6,6 +6,8 @@ import type {
   RuntimeOperationBindingKind,
   RuntimeOperationCorrelationKind,
   RuntimeOperationStatus,
+  RuntimeRunProgressFactKind,
+  RuntimeRunProgressReasonCode,
   RuntimeRunItemKind,
   RuntimeTerminalStatus,
 } from "./RuntimeEventPayload.js";
@@ -20,6 +22,23 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
       return freeze({ status: exact(payload.status, "running", "run.started.status"), activeAgentId: token(payload.activeAgentId, "run.started.activeAgentId") }) as RuntimeEventPayloadMap[TName];
     case "run.item.appended":
       return freeze({ itemId: token(payload.itemId, "run.item.appended.itemId"), itemKind: oneOf(payload.itemKind, runItemKinds, "run.item.appended.itemKind"), itemSequence: positive(payload.itemSequence, "run.item.appended.itemSequence") }) as RuntimeEventPayloadMap[TName];
+    case "run.progress.assessed":
+      return freeze({
+        checkpointSequence: positive(payload.checkpointSequence, "run.progress.assessed.checkpointSequence"),
+        disposition: oneOf(payload.disposition, ["advanced", "unchanged", "repeated", "deferred"] as const, "run.progress.assessed.disposition"),
+        reasonCode: oneOf(payload.reasonCode, progressReasonCodes, "run.progress.assessed.reasonCode"),
+        factRefs: progressFactRefs(payload.factRefs, "run.progress.assessed.factRefs"),
+        consecutiveNonAdvancingCheckpoints: nonNegativeInteger(payload.consecutiveNonAdvancingCheckpoints, "run.progress.assessed.consecutiveNonAdvancingCheckpoints"),
+        correctionRounds: nonNegativeInteger(payload.correctionRounds, "run.progress.assessed.correctionRounds"),
+        activeCorrectionRound: nullablePositive(payload.activeCorrectionRound, "run.progress.assessed.activeCorrectionRound"),
+      }) as RuntimeEventPayloadMap[TName];
+    case "run.progress.correction_requested":
+      return freeze({
+        checkpointSequence: positive(payload.checkpointSequence, "run.progress.correction_requested.checkpointSequence"),
+        correctionRound: positive(payload.correctionRound, "run.progress.correction_requested.correctionRound"),
+        reasonCode: oneOf(payload.reasonCode, progressReasonCodes, "run.progress.correction_requested.reasonCode"),
+        factRefs: progressFactRefs(payload.factRefs, "run.progress.correction_requested.factRefs"),
+      }) as RuntimeEventPayloadMap[TName];
     case "run.descendant.reserved":
     case "run.descendant.started":
       return descendant(name, payload) as unknown as RuntimeEventPayloadMap[TName];
@@ -154,6 +173,8 @@ const terminalStatuses: readonly RuntimeTerminalStatus[] = ["succeeded", "blocke
 const bindingKinds: readonly RuntimeOperationBindingKind[] = ["internal", "direct", "hosted", "composite", "descendant_agent"];
 const correlationKinds: readonly RuntimeOperationCorrelationKind[] = ["run_action", "run_request", "owner_operation", "evaluation_trial"];
 const operationStatuses: readonly RuntimeOperationStatus[] = ["succeeded", "partial", "failed", "unavailable", "denied", "cancelled", "timed_out", "invalid", "unknown_effect"];
+const progressReasonCodes: readonly RuntimeRunProgressReasonCode[] = ["new_trusted_fact", "equivalent_fact_repeated", "activity_without_structural_change", "plan_declaration_only", "progression_basis_changed", "required_work_pending", "no_committed_facts"];
+const progressFactKinds: readonly RuntimeRunProgressFactKind[] = ["controller_turn", "run_action", "plan_update", "active_agent", "steering", "operation_result", "operation_rejected", "tool_rejected", "interaction_settlement", "descendant_settlement", "validation_feedback", "completion_gate", "evidence_ref", "artifact_ref", "required_pending", "unsupported_committed_fact"];
 const contextTransitionOperationKinds: readonly RuntimeContextTransitionOperationKind[] = ["add", "replace", "invalidate", "remove"];
 const descendantFailureCodes: readonly RuntimeDescendantRunFailureCode[] = [
   "descendant_run_start_cancelled",
@@ -260,6 +281,18 @@ function nonNegativeInteger(value: unknown, field: string): number { if (!Number
 function exact<T>(value: unknown, expected: T, field: string): T { if (value !== expected) throw new TypeError(`${field} has an invalid value.`); return expected; }
 function oneOf<T extends string>(value: unknown, values: readonly T[], field: string): T { if (typeof value !== "string" || !values.includes(value as T)) throw new TypeError(`${field} has an unsupported value.`); return value as T; }
 function tokenArray(value: unknown, field: string): readonly string[] { if (!Array.isArray(value)) throw new TypeError(`${field} must be an array.`); return Object.freeze(value.map((entry, index) => token(entry, `${field}[${index}]`))); }
+function progressFactRefs(value: unknown, field: string): readonly Readonly<{ kind: RuntimeRunProgressFactKind; owner: string; subjectId: string | null; revision: string | null }>[] {
+  if (!Array.isArray(value)) throw new TypeError(`${field} must be an array.`);
+  return Object.freeze(value.map((entry, index) => {
+    record(entry, `${field}[${index}]`);
+    return freeze({
+      kind: oneOf(entry.kind, progressFactKinds, `${field}[${index}].kind`),
+      owner: token(entry.owner, `${field}[${index}].owner`),
+      subjectId: nullableToken(entry.subjectId, `${field}[${index}].subjectId`),
+      revision: nullableToken(entry.revision, `${field}[${index}].revision`),
+    });
+  }));
+}
 function operationKindArray(value: unknown, field: string): readonly RuntimeContextTransitionOperationKind[] { if (!Array.isArray(value) || value.length === 0) throw new TypeError(`${field} must be a non-empty array.`); return Object.freeze(value.map((entry, index) => oneOf(entry, contextTransitionOperationKinds, `${field}[${index}]`))); }
 function ratio(value: unknown, field: string): number { if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) throw new TypeError(`${field} must be between 0 and 1.`); return value; }
 function freeze<T extends Record<string, unknown>>(value: T): Readonly<T> { return Object.freeze(value); }

@@ -6,7 +6,7 @@ import {
   normalizeHelarcThreadRecord,
   type HelarcMessage,
   type HelarcPersistedRun,
-  type HelarcRunProgressRecord,
+  type HelarcRunProjectionRecord,
   type HelarcRunTerminalRecord,
   type HelarcThread,
   type HelarcThreadRecord,
@@ -15,7 +15,7 @@ import type { HelarcArtifact } from "../artifacts/HelarcArtifact.js";
 
 const COMMIT_FINGERPRINT_DOMAIN = "helarc.work-context.commit.v2";
 
-export type HelarcCommitKind = "run_start" | "run_progress" | "run_terminal";
+export type HelarcCommitKind = "run_start" | "run_projection" | "run_terminal";
 
 export interface HelarcCommitLedgerEntry {
   readonly commitId: string;
@@ -24,7 +24,7 @@ export interface HelarcCommitLedgerEntry {
   readonly runId: string;
   readonly fingerprint: string;
   readonly committedAt: string;
-  readonly progressSequence: number;
+  readonly projectionSequence: number;
   readonly expectedThreadRevision: number;
   readonly committedThreadRevision: number;
 }
@@ -67,10 +67,10 @@ export interface HelarcRunStartCommit extends HelarcCommitBase {
   readonly run: HelarcPersistedRun;
 }
 
-export interface HelarcRunProgressCommit extends HelarcCommitBase {
-  readonly kind: "run_progress";
-  readonly progressSequence: number;
-  readonly progress: HelarcRunProgressRecord;
+export interface HelarcRunProjectionCommit extends HelarcCommitBase {
+  readonly kind: "run_projection";
+  readonly projectionSequence: number;
+  readonly projection: HelarcRunProjectionRecord;
 }
 
 export interface HelarcRunTerminalCommit extends HelarcCommitBase {
@@ -87,7 +87,7 @@ export interface HelarcCommitReceipt {
   readonly threadId: string;
   readonly runId: string;
   readonly committedAt: string;
-  readonly progressSequence: number;
+  readonly projectionSequence: number;
   readonly committedThreadRevision: number;
 }
 
@@ -100,7 +100,7 @@ export type HelarcCommitRejectionCode =
   | "run_not_found"
   | "run_already_exists"
   | "stale_thread_revision"
-  | "stale_progress"
+  | "stale_projection"
   | "run_terminal";
 
 export type HelarcCommitResult =
@@ -118,7 +118,7 @@ export type HelarcCommitResult =
 
 export interface HelarcWorkContextCommitStore {
   commitRunStart(input: HelarcRunStartCommit): Promise<HelarcCommitResult>;
-  commitRunProgress(input: HelarcRunProgressCommit): Promise<HelarcCommitResult>;
+  commitRunProjection(input: HelarcRunProjectionCommit): Promise<HelarcCommitResult>;
   commitRunTerminal(input: HelarcRunTerminalCommit): Promise<HelarcCommitResult>;
 }
 
@@ -168,8 +168,8 @@ export async function applyHelarcRunStartCommit(
     commit.triggeringMessage.correlation.runId !== commit.runId ||
     commit.triggeringMessage.relatedRunIds.length !== 1 ||
     commit.triggeringMessage.relatedRunIds[0] !== commit.runId ||
-    commit.committedAt < commit.run.startedAt || commit.run.progressSequence !== 0 ||
-    commit.run.lastProgress !== null || commit.run.terminal !== null ||
+    commit.committedAt < commit.run.startedAt || commit.run.projectionSequence !== 0 ||
+    commit.run.lastProjection !== null || commit.run.terminal !== null ||
     commit.run.artifactIds.length !== 0) {
     return reject(aggregate, "commit_invalid", "Run start aggregate identities are invalid.");
   }
@@ -243,41 +243,41 @@ export async function applyHelarcRunStartCommit(
   return applyRecord(aggregate, record, commit, prepared.fingerprint, 0);
 }
 
-export async function applyHelarcRunProgressCommit(
+export async function applyHelarcRunProjectionCommit(
   aggregate: HelarcThreadAggregate | null,
-  commit: HelarcRunProgressCommit,
+  commit: HelarcRunProjectionCommit,
 ): Promise<HelarcCommitResult> {
-  if (commit?.kind !== "run_progress") {
-    return reject(aggregate, "commit_invalid", "Progress commit kind is invalid.");
+  if (commit?.kind !== "run_projection") {
+    return reject(aggregate, "commit_invalid", "Run projection commit kind is invalid.");
   }
   const prepared = await prepareCommit(aggregate, commit);
   if (prepared.status !== "ready") return prepared.result;
-  if (aggregate === null) return reject(null, "thread_not_found", "Progress Thread was not found.");
+  if (aggregate === null) return reject(null, "thread_not_found", "Run projection Thread was not found.");
   const run = aggregate.record.runs.find((candidate) => candidate.id === commit.runId);
-  if (run === undefined) return reject(aggregate, "run_not_found", "Progress Run was not found.");
-  if (run.terminal !== null) return reject(aggregate, "run_terminal", "Terminal Run rejects progress.");
+  if (run === undefined) return reject(aggregate, "run_not_found", "Run projection Run was not found.");
+  if (run.terminal !== null) return reject(aggregate, "run_terminal", "Terminal Run rejects projection commits.");
   if (
-    !Number.isSafeInteger(commit.progressSequence) || commit.progressSequence < 1 ||
-    commit.progressSequence <= run.progressSequence
+    !Number.isSafeInteger(commit.projectionSequence) || commit.projectionSequence < 1 ||
+    commit.projectionSequence <= run.projectionSequence
   ) {
-    return reject(aggregate, "stale_progress", "Progress sequence is stale.");
+    return reject(aggregate, "stale_projection", "Run projection sequence is stale.");
   }
   if (
-    (run.harnessRunId !== null && commit.progress.host.runId !== run.harnessRunId) ||
-    commit.progress.host.taskId !== run.taskId ||
-    commit.progress.host.sessionId !== run.sessionId || commit.progress.product.runId !== run.id ||
-    commit.progress.host.terminal !== null || commit.progress.product.result !== null ||
-    commit.committedAt < commit.progress.recordedAt || commit.committedAt < run.updatedAt ||
-    (run.lastProgress !== null && commit.progress.recordedAt < run.lastProgress.recordedAt)
+    (run.harnessRunId !== null && commit.projection.host.runId !== run.harnessRunId) ||
+    commit.projection.host.taskId !== run.taskId ||
+    commit.projection.host.sessionId !== run.sessionId || commit.projection.product.runId !== run.id ||
+    commit.projection.host.terminal !== null || commit.projection.product.result !== null ||
+    commit.committedAt < commit.projection.recordedAt || commit.committedAt < run.updatedAt ||
+    (run.lastProjection !== null && commit.projection.recordedAt < run.lastProjection.recordedAt)
   ) {
-    return reject(aggregate, "commit_invalid", "Progress source projection is invalid.");
+    return reject(aggregate, "commit_invalid", "Run source projection is invalid.");
   }
   const updatedRun: HelarcPersistedRun = {
     ...run,
-    harnessRunId: run.harnessRunId ?? commit.progress.host.runId,
+    harnessRunId: run.harnessRunId ?? commit.projection.host.runId,
     updatedAt: commit.committedAt,
-    progressSequence: commit.progressSequence,
-    lastProgress: commit.progress,
+    projectionSequence: commit.projectionSequence,
+    lastProjection: commit.projection,
   };
   const record: HelarcThreadRecord = {
     ...aggregate.record,
@@ -293,7 +293,7 @@ export async function applyHelarcRunProgressCommit(
     record,
     commit,
     prepared.fingerprint,
-    commit.progressSequence,
+    commit.projectionSequence,
   );
 }
 
@@ -364,13 +364,13 @@ export async function applyHelarcRunTerminalCommit(
     record,
     commit,
     prepared.fingerprint,
-    run.progressSequence,
+    run.projectionSequence,
   );
 }
 
 async function prepareCommit(
   aggregate: HelarcThreadAggregate | null,
-  commit: HelarcRunStartCommit | HelarcRunProgressCommit | HelarcRunTerminalCommit,
+  commit: HelarcRunStartCommit | HelarcRunProjectionCommit | HelarcRunTerminalCommit,
 ): Promise<
   | { readonly status: "ready"; readonly fingerprint: string }
   | { readonly status: "settled"; readonly result: HelarcCommitResult }
@@ -428,9 +428,9 @@ async function prepareCommit(
 function applyRecord(
   aggregate: HelarcThreadAggregate | null,
   record: HelarcThreadRecord,
-  commit: HelarcRunStartCommit | HelarcRunProgressCommit | HelarcRunTerminalCommit,
+  commit: HelarcRunStartCommit | HelarcRunProjectionCommit | HelarcRunTerminalCommit,
   fingerprint: string,
-  progressSequence: number,
+  projectionSequence: number,
 ): HelarcCommitResult {
   const normalized = normalizeHelarcThreadRecord(record);
   if (!normalized.ok) {
@@ -443,7 +443,7 @@ function applyRecord(
     runId: commit.runId,
     fingerprint,
     committedAt: commit.committedAt,
-    progressSequence,
+    projectionSequence,
     expectedThreadRevision: commit.expectedThreadRevision,
     committedThreadRevision: commit.expectedThreadRevision + 1,
   });
@@ -502,7 +502,7 @@ function isValidLedger(
       !hasIdentity(entry.commitId) || entry.threadId !== threadId || !hasIdentity(entry.runId) ||
       !isCommitKind(entry.kind) || !/^sha256:[0-9a-f]{64}$/.test(entry.fingerprint) ||
       !isDateTime(entry.committedAt) ||
-      !Number.isSafeInteger(entry.progressSequence) || entry.progressSequence < 0 ||
+      !Number.isSafeInteger(entry.projectionSequence) || entry.projectionSequence < 0 ||
       !Number.isSafeInteger(entry.expectedThreadRevision) || entry.expectedThreadRevision < 0 ||
       entry.committedThreadRevision !== entry.expectedThreadRevision + 1 ||
       ids.has(entry.commitId)
@@ -543,24 +543,24 @@ function isLedgerConsistentWithRecord(
   for (const run of record.runs) {
     const entries = entriesByRun.get(run.id) ?? [];
     if (entries.length === 0 || entries[0]?.kind !== "run_start" ||
-      entries[0].progressSequence !== 0 ||
+      entries[0].projectionSequence !== 0 ||
       entries[0].expectedThreadRevision !== run.triggeringThreadRevision ||
       entries.filter((entry) => entry.kind === "run_start").length !== 1) {
       return false;
     }
-    let progressSequence = 0;
+    let projectionSequence = 0;
     let terminalCount = 0;
     for (const entry of entries.slice(1)) {
       if (entry.kind === "run_start") return false;
-      if (entry.kind === "run_progress") {
-        if (terminalCount > 0 || entry.progressSequence <= progressSequence) return false;
-        progressSequence = entry.progressSequence;
+      if (entry.kind === "run_projection") {
+        if (terminalCount > 0 || entry.projectionSequence <= projectionSequence) return false;
+        projectionSequence = entry.projectionSequence;
       } else {
         terminalCount += 1;
-        if (terminalCount > 1 || entry.progressSequence !== progressSequence) return false;
+        if (terminalCount > 1 || entry.projectionSequence !== projectionSequence) return false;
       }
     }
-    if (run.progressSequence !== progressSequence ||
+    if (run.projectionSequence !== projectionSequence ||
       (run.terminal === null) !== (terminalCount === 0) ||
       (terminalCount === 1 && entries.at(-1)?.kind !== "run_terminal")) {
       return false;
@@ -570,7 +570,7 @@ function isLedgerConsistentWithRecord(
 }
 
 function isCommitKind(value: unknown): value is HelarcCommitKind {
-  return value === "run_start" || value === "run_progress" || value === "run_terminal";
+  return value === "run_start" || value === "run_projection" || value === "run_terminal";
 }
 
 function receipt(
@@ -584,7 +584,7 @@ function receipt(
     threadId: entry.threadId,
     runId: entry.runId,
     committedAt: entry.committedAt,
-    progressSequence: entry.progressSequence,
+    projectionSequence: entry.projectionSequence,
     committedThreadRevision: entry.committedThreadRevision,
   });
 }

@@ -5,6 +5,7 @@ import type { InteractionTransportReceipt } from "@agent-anything/interaction/re
 import { projectRuntimeEventForHost } from "./RuntimeEventHostProjection.js";
 import {
   snapshotHostCancellation,
+  projectHostRunProgress,
   projectHostRunTree,
   type CreateHostRunProjectionStoreInput,
   type HostActionAttemptProjection,
@@ -147,6 +148,9 @@ function applyRunOperation(
   if (snapshot.runTree.revision < current.runTree.revision) {
     return rejected(current, "run_tree_revision_regression");
   }
+  if (snapshot.progress.checkpointSequence < current.progress.checkpointSequence) {
+    return rejected(current, "run_progress_checkpoint_regression");
+  }
   const pendingInteractions = snapshot.pendingInteractions.map((pending) => {
     const prior = current.pendingInteractions.find((candidate) =>
       sameRequest(candidate.request, pending.envelope.request)
@@ -167,6 +171,7 @@ function applyRunOperation(
     runTree: projectHostRunTree(snapshot.runTree),
     status,
     plan: snapshot.plan,
+    progress: projectHostRunProgress(snapshot.progress),
     pendingInteractions: Object.freeze(pendingInteractions),
     retry: projectRetry(snapshot.retry),
     validation: snapshot.validation,

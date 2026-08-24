@@ -14,6 +14,11 @@ import type {
   RunSteeringSubmissionReceipt,
 } from "../run/index.js";
 import type { PlanProjection } from "../plan/index.js";
+import {
+  createInitialRunProgressState,
+  projectRunProgress,
+  type RunProgressProjection,
+} from "../progress/index.js";
 import type { RetryEvent } from "../retry/index.js";
 import type { ValidationHostProjection } from "@agent-anything/validation/projection";
 import type { RunTreeExecutionSnapshot } from "./RunTreeExecution.js";
@@ -40,6 +45,7 @@ export interface RunOperationSnapshot<TOutput = unknown> {
   readonly status: RunLifecycleStatus;
   readonly lastRunItemSequence: number;
   readonly plan: PlanProjection | null;
+  readonly progress: RunProgressProjection;
   readonly retry: RunRetryProjection | null;
   readonly validation: ValidationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
@@ -67,6 +73,7 @@ export interface RunExecutionUpdate<TOutput> {
   readonly status: RunLifecycleStatus;
   readonly lastRunItemSequence: number;
   readonly plan: PlanProjection | null;
+  readonly progress: RunProgressProjection;
   readonly retry: RunRetryProjection | null;
   readonly validation: ValidationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
@@ -99,6 +106,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       status: "initializing",
       lastRunItemSequence: 0,
       plan: null,
+      progress: projectRunProgress(createInitialRunProgressState(), null),
       retry: null,
       validation: null,
       pendingInteractions: Object.freeze([]),
@@ -132,6 +140,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       status: update.status,
       lastRunItemSequence: update.lastRunItemSequence,
       plan: update.plan,
+      progress: update.progress,
       retry: update.retry,
       validation: update.validation,
       pendingInteractions: update.pendingInteractions,
@@ -243,6 +252,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
         status: terminalStatus(result),
         lastRunItemSequence: result.items.at(-1)?.ref.sequence ?? 0,
         plan: this.snapshot.plan,
+        progress: this.snapshot.progress,
         retry: this.snapshot.retry,
         validation: this.snapshot.validation,
         pendingInteractions: Object.freeze([]),
@@ -290,6 +300,16 @@ function freezeSnapshot<TOutput>(
 ): RunOperationSnapshot<TOutput> {
   return Object.freeze({
     ...snapshot,
+    progress: Object.freeze({
+      ...snapshot.progress,
+      latestAssessment: snapshot.progress.latestAssessment === null
+        ? null
+        : Object.freeze({ ...snapshot.progress.latestAssessment }),
+      latestAdvancement: snapshot.progress.latestAdvancement === null
+        ? null
+        : Object.freeze({ ...snapshot.progress.latestAdvancement }),
+      factRefs: Object.freeze(snapshot.progress.factRefs.map((ref) => Object.freeze({ ...ref }))),
+    }),
     retry: snapshot.retry === null
       ? null
       : Object.freeze({

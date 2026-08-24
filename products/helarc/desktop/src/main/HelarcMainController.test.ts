@@ -393,7 +393,7 @@ describe("HelarcMainController", () => {
   it("awaits every queued progress commit before the terminal aggregate commit", async () => {
     const threadStore = new InMemoryHelarcThreadStore();
     const order: string[] = [];
-    const originalProgress = threadStore.commitRunProgress.bind(threadStore);
+    const originalProgress = threadStore.commitRunProjection.bind(threadStore);
     const originalTerminal = threadStore.commitRunTerminal.bind(threadStore);
     let releaseFirstProgress!: () => void;
     let reportFirstProgress!: () => void;
@@ -405,15 +405,15 @@ describe("HelarcMainController", () => {
     });
     let shouldBlock = true;
 
-    vi.spyOn(threadStore, "commitRunProgress").mockImplementation(async (commit) => {
-      order.push(`progress:${commit.progressSequence}:started`);
+    vi.spyOn(threadStore, "commitRunProjection").mockImplementation(async (commit) => {
+      order.push(`projection:${commit.projectionSequence}:started`);
       if (shouldBlock) {
         shouldBlock = false;
         reportFirstProgress();
         await firstProgressGate;
       }
       const result = await originalProgress(commit);
-      order.push(`progress:${commit.progressSequence}:settled`);
+      order.push(`projection:${commit.projectionSequence}:settled`);
       return result;
     });
     vi.spyOn(threadStore, "commitRunTerminal").mockImplementation(async (commit) => {
@@ -446,7 +446,7 @@ describe("HelarcMainController", () => {
 
     const terminalIndex = order.indexOf("terminal:started");
     const settledProgressIndexes = order
-      .map((entry, index) => entry.startsWith("progress:") && entry.endsWith(":settled") ? index : -1)
+      .map((entry, index) => entry.startsWith("projection:") && entry.endsWith(":settled") ? index : -1)
       .filter((index) => index >= 0);
     expect(terminalIndex).toBeGreaterThan(-1);
     expect(settledProgressIndexes.length).toBeGreaterThan(0);
@@ -643,7 +643,7 @@ describe("HelarcMainController", () => {
     expect(commitKinds[0]).toBe("run_start");
     expect(commitKinds.at(-1)).toBe("run_terminal");
     expect(commitKinds.slice(1, -1).length).toBeGreaterThan(0);
-    expect(commitKinds.slice(1, -1).every((kind) => kind === "run_progress")).toBe(true);
+    expect(commitKinds.slice(1, -1).every((kind) => kind === "run_projection")).toBe(true);
   });
 
   it("correlates versioned approval submissions and preserves a decline", async () => {

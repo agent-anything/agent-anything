@@ -13,7 +13,7 @@ export type {
   HelarcMessageSourceKind,
   HelarcPersistedRun,
   HelarcPersistedRunStatus,
-  HelarcRunProgressRecord,
+  HelarcRunProjectionRecord,
   HelarcRunProviderContext,
   HelarcWorkspaceSelectionIdentity,
   HelarcWorkspaceSelectionRef,
@@ -76,7 +76,7 @@ export type {
   HelarcCommitReceipt,
   HelarcCommitRejectionCode,
   HelarcCommitResult,
-  HelarcRunProgressCommit,
+  HelarcRunProjectionCommit,
   HelarcRunStartCommit,
   HelarcRunStartTarget,
   HelarcRunTerminalCommit,
@@ -86,7 +86,7 @@ export type {
   NormalizeHelarcThreadAggregateResult,
 } from "./HelarcWorkContextCommit.js";
 export {
-  applyHelarcRunProgressCommit,
+  applyHelarcRunProjectionCommit,
   applyHelarcRunStartCommit,
   applyHelarcRunTerminalCommit,
   normalizeHelarcThreadAggregate,

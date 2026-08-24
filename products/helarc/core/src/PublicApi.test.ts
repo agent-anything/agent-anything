@@ -26,7 +26,7 @@ describe("Helarc public API", () => {
       "selectHelarcWorkspaceProfile",
     ]);
     expect(Object.keys(workContextApi).sort()).toEqual([
-      "applyHelarcRunProgressCommit",
+      "applyHelarcRunProjectionCommit",
       "applyHelarcRunStartCommit",
       "applyHelarcRunTerminalCommit",
       "createHelarcArtifact",

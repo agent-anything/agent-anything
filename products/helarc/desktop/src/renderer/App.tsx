@@ -683,6 +683,12 @@ export function RunTerminalPanel({
             <dd>{validationLabel(validation)}</dd>
           </div>
         ) : null}
+        {run.host.progress.disposition ? (
+          <div>
+            <dt>Progress</dt>
+            <dd>{runProgressLabel(run.host.progress)}</dd>
+          </div>
+        ) : null}
         {terminal.code ? (
           <div>
             <dt>Code</dt>
@@ -708,6 +714,11 @@ export function RunTerminalPanel({
           <dd>{formatTimestamp(terminal.completedAt)}</dd>
         </div>
       </dl>
+      {terminal.code === "runtime_no_progress" ? (
+        <span>
+          The Run stopped after bounded correction produced no new structural progress.
+        </span>
+      ) : null}
       {safeOutput !== null && safeOutput.safeErrors.length > 0 ? (
         <ul className="error-list">
           {safeOutput.safeErrors.map((error) => (
@@ -1293,6 +1304,14 @@ function enforcementLabel(
     case "interrupted": return "Interrupted";
     case "failed": return "Failed";
   }
+}
+
+function runProgressLabel(progress: ActiveRunProjection["host"]["progress"]): string {
+  const status = progress.disposition ?? "not assessed";
+  const correction = progress.activeCorrectionRound === null
+    ? progress.correctionRounds === 0 ? "" : `, ${progress.correctionRounds} corrections used`
+    : `, correction ${progress.activeCorrectionRound} active`;
+  return `${status}, checkpoint ${progress.checkpointSequence}${correction}`;
 }
 
 function validationLabel(

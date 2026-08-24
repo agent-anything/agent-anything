@@ -121,6 +121,8 @@ import {
 } from "../plan/index.js";
 import { snapshotRetryEvent, type RetryEventSink } from "../retry/index.js";
 import {
+  projectRunProgress,
+  type RunProgressAssessment,
   type RunProgressCorrectionFeedback,
   type RunProgressState,
 } from "../progress/index.js";
@@ -3822,6 +3824,27 @@ export class RunExecution<TOutput> {
         itemKind: item.payload.kind,
         itemSequence: item.ref.sequence,
       }, item.createdAt);
+      if (item.payload.kind === "progress_assessment") {
+        const assessment = item.payload.assessment;
+        this.emit("run.progress.assessed", {
+          checkpointSequence: assessment.ref.checkpointSequence,
+          disposition: assessment.disposition,
+          reasonCode: assessment.reasonCode,
+          factRefs: assessment.factRefs,
+          consecutiveNonAdvancingCheckpoints:
+            assessment.consecutiveNonAdvancingCheckpoints,
+          correctionRounds: assessment.correctionRounds,
+          activeCorrectionRound: assessment.activeCorrectionRound,
+        }, item.createdAt);
+      } else if (item.payload.kind === "progress_correction") {
+        const feedback = item.payload.feedback;
+        this.emit("run.progress.correction_requested", {
+          checkpointSequence: feedback.assessment.checkpointSequence,
+          correctionRound: feedback.correctionRound,
+          reasonCode: feedback.reasonCode,
+          factRefs: feedback.factRefs,
+        }, item.createdAt);
+      }
     }
   }
 
@@ -3858,6 +3881,10 @@ export class RunExecution<TOutput> {
       status: state.status,
       lastRunItemSequence: state.items.at(-1)?.ref.sequence ?? 0,
       plan: state.plan === null ? null : projectPlan(state.plan),
+      progress: projectRunProgress(
+        state.progress,
+        this.latestProgressAssessment(state),
+      ),
       retry: this.retryProjection,
       validation: this.validationHostProjection,
       pendingInteractions: Object.freeze([
@@ -3866,6 +3893,23 @@ export class RunExecution<TOutput> {
       ]),
       result: this.terminalResult,
     });
+  }
+
+  private latestProgressAssessment(
+    state: RunState<TOutput>,
+  ): RunProgressAssessment | null {
+    if (state.progress.latestAssessment === null) return null;
+    for (let index = state.items.length - 1; index >= 0; index -= 1) {
+      const payload = state.items[index]!.payload;
+      if (
+        payload.kind === "progress_assessment" &&
+        payload.assessment.ref.checkpointSequence ===
+          state.progress.latestAssessment.checkpointSequence
+      ) {
+        return payload.assessment;
+      }
+    }
+    throw new TypeError("Run Progress state references a missing assessment RunItem.");
   }
 
   private emit<TName extends RuntimeEventName>(

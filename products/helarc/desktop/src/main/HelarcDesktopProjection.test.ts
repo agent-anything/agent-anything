@@ -10,6 +10,7 @@ describe("Helarc Desktop IPC projection", () => {
 
     expect(Object.keys(projected.run?.host ?? {}).sort()).toEqual([
       "pendingInteractions",
+      "progress",
       "runRevision",
       "runTree",
       "startedAt",
@@ -37,6 +38,14 @@ describe("Helarc Desktop IPC projection", () => {
       gateStatus: null,
       safeReasons: ["validation_pending"],
       updatedAt: "2026-07-19T00:00:00.000Z",
+    });
+    expect(projected.run?.host.progress).toEqual({
+      checkpointSequence: 3,
+      disposition: "repeated",
+      reasonCode: "equivalent_fact_repeated",
+      consecutiveNonAdvancingCheckpoints: 2,
+      correctionRounds: 1,
+      activeCorrectionRound: 1,
     });
     expect(projected.provider.configured && projected.provider.activeProfile)
       .not.toHaveProperty("storedCredential");
@@ -204,6 +213,23 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
           startedAt: "2026-07-19T00:00:00.000Z",
           completedAt: null,
         }],
+      },
+      progress: {
+        checkpointSequence: 3,
+        disposition: "repeated",
+        reasonCode: "equivalent_fact_repeated",
+        consecutiveNonAdvancingCheckpoints: 2,
+        correctionRounds: 1,
+        activeCorrectionRound: 1,
+        factRefs: [{
+          kind: "tool_observation",
+          owner: "tool",
+          subjectId: "tool-call-1",
+          revision: "observation-1",
+          privateFactState: SECRET,
+        }],
+        latestAssessment: SECRET,
+        latestAdvancement: SECRET,
       },
       plan: { privatePlanState: SECRET },
       pendingInteractions,

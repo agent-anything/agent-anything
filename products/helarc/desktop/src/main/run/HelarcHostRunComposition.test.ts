@@ -202,6 +202,8 @@ describe("Helarc Host Run composition", () => {
       "operation.finished",
       "context.transition.committed",
       "run.item.appended",
+      "run.item.appended",
+      "run.progress.assessed",
       "context.transition.committed",
       "context.projection.completed",
       "controller.started",
@@ -213,6 +215,16 @@ describe("Helarc Host Run composition", () => {
       "run.item.appended",
       "run.completed",
     ]);
+    expect(result.activity.find((item) => item.kind === "run.progress.assessed"))
+      .toMatchObject({
+        title: "Run progress advanced",
+        detail: "new_trusted_fact",
+        metadata: {
+          checkpointSequence: 1,
+          disposition: "advanced",
+          reasonCode: "new_trusted_fact",
+        },
+      });
     const contextProjection = result.activity.find(
       (item) => item.kind === "context.projection.completed",
     );

@@ -648,6 +648,10 @@ function titleForEvent(name: string, payload: Readonly<Record<string, unknown>>)
       return `Controller iteration ${payload.iteration ?? ""} started`.trim();
     case "controller.finished": return `Controller ${payload.status ?? "finished"}`;
     case "run.item.appended": return `Run item appended: ${payload.itemKind ?? "unknown"}`;
+    case "run.progress.assessed":
+      return `Run progress ${payload.disposition ?? "assessed"}`;
+    case "run.progress.correction_requested":
+      return `Run progress correction ${payload.correctionRound ?? "requested"}`;
     case "run.descendant.reserved": return "Descendant Run reserved";
     case "run.descendant.started": return "Descendant Run started";
     case "run.descendant.rejected": return "Descendant Run rejected";
@@ -707,6 +711,9 @@ function detailForEvent(name: string, payload: Readonly<Record<string, unknown>>
   }
   if (name === "context.projection.completed") {
     return typeof payload.manifestId === "string" ? payload.manifestId : null;
+  }
+  if (name === "run.progress.assessed" || name === "run.progress.correction_requested") {
+    return typeof payload.reasonCode === "string" ? payload.reasonCode : null;
   }
   if (name === "approval.requested" || name === "approval.resolved") {
     return typeof payload.requestId === "string" ? payload.requestId : null;

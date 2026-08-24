@@ -26,7 +26,7 @@ import {
   createHelarcThread,
   deriveHelarcPersistedRunStatus,
   projectHelarcWorkspaceSelectionIdentity,
-  type HelarcRunProgressCommit,
+  type HelarcRunProjectionCommit,
   type HelarcRunStartCommit,
   type HelarcRunTerminalCommit,
   type HelarcArtifact,
@@ -292,7 +292,7 @@ type DesktopActiveRunSlot =
       readonly threadId: string;
       readonly productRunId: string;
       readonly handle: HelarcHostActiveRun;
-      progressSequence: number;
+      projectionSequence: number;
       threadRevision: number;
       progressTail: Promise<void>;
       persistenceFailure: Error | null;
@@ -910,7 +910,7 @@ export class HelarcMainController {
       threadId,
       productRunId,
       handle: activeRun,
-      progressSequence: 0,
+      projectionSequence: 0,
       threadRevision: this.currentThreadRecord?.thread.revision ?? 0,
       progressTail: Promise.resolve(),
       persistenceFailure: null,
@@ -939,17 +939,17 @@ export class HelarcMainController {
     const slot = this.activeRunSlot;
     if (slot.kind === "active" && reduction.projection.host.terminal === null &&
       reduction.projection.product.result === null) {
-      this.enqueueRunProgress(slot, reduction.projection);
+      this.enqueueRunProjection(slot, reduction.projection);
     }
     this.publishSnapshot();
   }
 
-  private enqueueRunProgress(
+  private enqueueRunProjection(
     slot: Extract<DesktopActiveRunSlot, { kind: "active" }>,
     projection: HelarcRunProjection,
   ): void {
-    slot.progressSequence += 1;
-    const progressSequence = slot.progressSequence;
+    slot.projectionSequence += 1;
+    const projectionSequence = slot.projectionSequence;
     const expectedThreadRevision = slot.threadRevision;
     slot.threadRevision += 1;
     const currentRun = this.currentThreadRecord?.runs.find(
@@ -959,32 +959,32 @@ export class HelarcMainController {
       currentRun?.updatedAt ?? new Date().toISOString(),
       new Date().toISOString(),
     );
-    const commit: HelarcRunProgressCommit = {
-      kind: "run_progress",
-      commitId: `helarc-progress-${slot.productRunId}-${progressSequence}`,
+    const commit: HelarcRunProjectionCommit = {
+      kind: "run_projection",
+      commitId: `helarc-projection-${slot.productRunId}-${projectionSequence}`,
       threadId: slot.threadId,
       runId: slot.productRunId,
       committedAt: recordedAt,
       expectedThreadRevision,
-      progressSequence,
-      progress: {
+      projectionSequence,
+      projection: {
         recordedAt,
         host: projection.host,
         product: projection.product,
       },
     };
     slot.progressTail = slot.progressTail.then(async () => {
-      const result = await this.threadStore.commitRunProgress(commit);
+      const result = await this.threadStore.commitRunProjection(commit);
       if (result.status === "rejected") {
         throw new HelarcDesktopPersistenceError(result.code, result.message);
       }
       this.currentThreadRecord = result.aggregate.record;
     }).catch((cause) => {
-      const failure = cause instanceof Error ? cause : new Error("Run progress persistence failed.");
+      const failure = cause instanceof Error ? cause : new Error("Run projection persistence failed.");
       slot.persistenceFailure ??= failure;
       this.lastError = {
         code: "run_persistence_failed",
-        message: "Helarc could not persist Run progress.",
+        message: "Helarc could not persist the Run projection.",
       };
       this.publishSnapshot();
     });
@@ -1377,6 +1377,9 @@ function createAssistantTerminalMessageContent(
   }
 
   if (terminal.status === "blocked") {
+    if (terminal.code === "runtime_no_progress") {
+      return "Run blocked because the current trajectory made no new structural progress after bounded correction.";
+    }
     return "Run blocked.";
   }
 

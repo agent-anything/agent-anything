@@ -1,10 +1,10 @@
 import {
-  applyHelarcRunProgressCommit,
+  applyHelarcRunProjectionCommit,
   applyHelarcRunStartCommit,
   applyHelarcRunTerminalCommit,
   normalizeHelarcThreadAggregate,
   type HelarcCommitResult,
-  type HelarcRunProgressCommit,
+  type HelarcRunProjectionCommit,
   type HelarcRunStartCommit,
   type HelarcRunTerminalCommit,
   type HelarcThreadAggregate,
@@ -21,8 +21,8 @@ import {
   type HelarcThreadSummary,
 } from "./HelarcThreadSummary.js";
 
-export interface HelarcThreadStoreDocumentV2 {
-  readonly formatVersion: 2;
+export interface HelarcThreadStoreDocumentV3 {
+  readonly formatVersion: 3;
   readonly aggregates: readonly HelarcThreadAggregate[];
 }
 
@@ -86,9 +86,9 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
     );
   }
 
-  commitRunProgress(input: HelarcRunProgressCommit): Promise<HelarcCommitResult> {
+  commitRunProjection(input: HelarcRunProjectionCommit): Promise<HelarcCommitResult> {
     return this.commit(input.threadId, (aggregate) =>
-      applyHelarcRunProgressCommit(aggregate, input)
+      applyHelarcRunProjectionCommit(aggregate, input)
     );
   }
 
@@ -123,17 +123,17 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
         result.aggregate.record.thread.id,
         this.maxThreads,
       );
-      await this.writeDocument(file, { formatVersion: 2, aggregates: retained });
+      await this.writeDocument(file, { formatVersion: 3, aggregates: retained });
       return result;
     });
   }
 
   private async readDocument(
     file: AtomicFileTransaction,
-  ): Promise<HelarcThreadStoreDocumentV2> {
+  ): Promise<HelarcThreadStoreDocumentV3> {
     const contents = await file.readText();
     if (contents === null) {
-      return Object.freeze({ formatVersion: 2, aggregates: Object.freeze([]) });
+      return Object.freeze({ formatVersion: 3, aggregates: Object.freeze([]) });
     }
 
     let parsed: unknown;
@@ -167,14 +167,14 @@ export class FileHelarcThreadStore implements HelarcThreadStore {
       aggregates.push(normalized.aggregate);
     }
     return Object.freeze({
-      formatVersion: 2,
+      formatVersion: 3,
       aggregates: Object.freeze(aggregates),
     });
   }
 
   private async writeDocument(
     file: AtomicFileTransaction,
-    document: HelarcThreadStoreDocumentV2,
+    document: HelarcThreadStoreDocumentV3,
   ): Promise<void> {
     const contents = `${JSON.stringify(document, null, 2)}\n`;
     await file.replaceText(contents);
@@ -209,11 +209,11 @@ function sortAggregates(
 }
 
 function isStoreDocument(value: unknown): value is {
-  readonly formatVersion: 2;
+  readonly formatVersion: 3;
   readonly aggregates: readonly unknown[];
 } {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return Object.keys(record).length === 2 && record.formatVersion === 2 &&
+  return Object.keys(record).length === 2 && record.formatVersion === 3 &&
     Array.isArray(record.aggregates);
 }

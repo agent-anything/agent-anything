@@ -5,6 +5,10 @@ import {
   createFailedRunResult,
   createSucceededRunResult,
 } from "../run/index.js";
+import {
+  createInitialRunProgressState,
+  projectRunProgress,
+} from "../progress/index.js";
 import { ActiveRunHandle, type RunExecutionUpdate } from "./RunHandle.js";
 import type { RunTreeExecutionSnapshot } from "./RunTreeExecution.js";
 
@@ -54,6 +58,54 @@ describe("ActiveRunHandle", () => {
     );
   });
 
+  it("copies and freezes the authoritative Run Progress projection", () => {
+    const result = succeededResult();
+    const handle = new ActiveRunHandle(
+      "run-1",
+      cancellation(),
+      result,
+      runTree(0),
+      () => undefined,
+    );
+    const sourceFactRefs = [{
+      kind: "operation_result" as const,
+      owner: "workspace",
+      subjectId: "file-1",
+      revision: "2",
+    }];
+
+    handle.publish({
+      runRevision: 2,
+      status: "running",
+      lastRunItemSequence: 4,
+      plan: null,
+      progress: {
+        checkpointSequence: 2,
+        disposition: "repeated",
+        reasonCode: "equivalent_fact_repeated",
+        consecutiveNonAdvancingCheckpoints: 2,
+        correctionRounds: 1,
+        activeCorrectionRound: 1,
+        latestAssessment: { runId: "run-1", checkpointSequence: 2 },
+        latestAdvancement: { runId: "run-1", checkpointSequence: 1 },
+        factRefs: sourceFactRefs,
+      },
+      retry: null,
+      validation: null,
+      pendingInteractions: [],
+      result: null,
+    });
+
+    sourceFactRefs[0]!.revision = "changed-after-publish";
+    const progress = handle.getSnapshot().progress;
+    expect(progress.factRefs[0]?.revision).toBe("2");
+    expect(Object.isFrozen(progress)).toBe(true);
+    expect(Object.isFrozen(progress.factRefs)).toBe(true);
+    expect(Object.isFrozen(progress.factRefs[0])).toBe(true);
+    expect(Object.isFrozen(progress.latestAssessment)).toBe(true);
+    expect(Object.isFrozen(progress.latestAdvancement)).toBe(true);
+  });
+
   it("settles an execution rejection through the emergency result exactly once", async () => {
     const emergencyResult = failedResult();
     const onSettled = vi.fn();
@@ -84,6 +136,7 @@ function terminalUpdate(
     status: "succeeded",
     lastRunItemSequence: 0,
     plan: null,
+    progress: projectRunProgress(createInitialRunProgressState(), null),
     retry: null,
     validation: null,
     pendingInteractions: [],

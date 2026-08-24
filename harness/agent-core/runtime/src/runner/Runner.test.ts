@@ -1343,6 +1343,7 @@ describe("Runner semantic integration", () => {
 
   it("feeds back bounded correction and blocks repeated Plan churn before generic limits", async () => {
     const operations = createOperationFixture([]);
+    const events: RuntimeEvent[] = [];
     const planCandidate = (modelItemId: string) => ({
       kind: "state_transition" as const,
       transition: "plan_update" as const,
@@ -1370,7 +1371,9 @@ describe("Runner semantic integration", () => {
       },
     ]);
 
-    const result = await createRunner(controller, operations).run(
+    const result = await createRunner(controller, operations, {
+      runtimeEventPublisher: { publish: (event) => events.push(event) },
+    }).run(
       createAgent(),
       createRunInput(),
       createRunConfig(operations, {
@@ -1399,6 +1402,13 @@ describe("Runner semantic integration", () => {
       "progress_correction",
     ]);
     expect(correctionItems[0]?.committedInRevision).toBe(correctionItems[1]?.committedInRevision);
+    expect(events.filter((event) => event.name.startsWith("run.progress.")).map(
+      (event) => event.name,
+    )).toEqual([
+      "run.progress.assessed",
+      "run.progress.correction_requested",
+      "run.progress.assessed",
+    ]);
     expect(result.items.at(-1)?.payload).toMatchObject({
       kind: "terminal_transition",
       status: "blocked",

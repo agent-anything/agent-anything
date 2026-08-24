@@ -1,5 +1,5 @@
 import type {
-  HelarcRunProgressCommit,
+  HelarcRunProjectionCommit,
   HelarcRunStartCommit,
   HelarcRunTerminalCommit,
 } from "@agent-anything/helarc/work-context";
@@ -39,7 +39,7 @@ describe("FileHelarcThreadStore", () => {
       latestRun: { runId: "run-1", status: "inactive" },
     }]);
     expect(JSON.parse(await readFile(filePath, "utf8"))).toMatchObject({
-      formatVersion: 2,
+      formatVersion: 3,
       aggregates: [{ commitLedger: [{ commitId: "commit-start-1" }] }],
     });
   });
@@ -61,7 +61,7 @@ describe("FileHelarcThreadStore", () => {
     await expect(firstStore.loadThread("thread-2")).resolves.not.toBeNull();
   });
 
-  it("serializes progress commits and rejects stale progress without rewriting", async () => {
+  it("serializes projection commits and rejects stale projections without rewriting", async () => {
     const filePath = await threadFilePath();
     let replacementCount = 0;
     const store = new FileHelarcThreadStore(filePath, {
@@ -75,19 +75,19 @@ describe("FileHelarcThreadStore", () => {
     await store.commitRunStart(startCommit("1"));
 
     const [first, second] = await Promise.all([
-      store.commitRunProgress(progressCommit(1, "commit-progress-1")),
-      store.commitRunProgress(progressCommit(2, "commit-progress-2", "2026-07-18T00:00:11.000Z")),
+      store.commitRunProjection(projectionCommit(1, "commit-projection-1")),
+      store.commitRunProjection(projectionCommit(2, "commit-projection-2", "2026-07-18T00:00:11.000Z")),
     ]);
-    const stale = await store.commitRunProgress(
-      progressCommit(1, "commit-progress-stale", "2026-07-18T00:00:12.000Z", 3),
+    const stale = await store.commitRunProjection(
+      projectionCommit(1, "commit-projection-stale", "2026-07-18T00:00:12.000Z", 3),
     );
 
     expect(first.status).toBe("applied");
     expect(second.status).toBe("applied");
-    expect(stale).toMatchObject({ status: "rejected", code: "stale_progress" });
+    expect(stale).toMatchObject({ status: "rejected", code: "stale_projection" });
     expect(replacementCount).toBe(3);
     await expect(store.loadThread("thread-1")).resolves.toMatchObject({
-      runs: [{ progressSequence: 2 }],
+      runs: [{ projectionSequence: 2 }],
     });
   });
 
@@ -150,10 +150,10 @@ describe("FileHelarcThreadStore", () => {
       commitId: "commit-terminal-conflict",
       expectedThreadRevision: 2,
     })).resolves.toMatchObject({ status: "rejected", code: "run_terminal" });
-    await expect(store.commitRunProgress(
-      progressCommit(
+    await expect(store.commitRunProjection(
+      projectionCommit(
         1,
-        "commit-progress-after-terminal",
+        "commit-projection-after-terminal",
         "2026-07-18T00:00:30.000Z",
         2,
       ),
@@ -175,14 +175,14 @@ describe("FileHelarcThreadStore", () => {
       },
     });
 
-    await expect(failingStore.commitRunProgress(
-      progressCommit(1, "commit-progress-failed"),
+    await expect(failingStore.commitRunProjection(
+      projectionCommit(1, "commit-projection-failed"),
     )).rejects.toThrow("injected rename failure");
 
     expect(await readFile(filePath, "utf8")).toBe(before);
     expect(await readdir(dirname(filePath))).toEqual(["threads.json"]);
     await expect(workingStore.loadThread("thread-1")).resolves.toMatchObject({
-      runs: [{ progressSequence: 0 }],
+      runs: [{ projectionSequence: 0 }],
     });
   });
 
@@ -197,14 +197,14 @@ describe("FileHelarcThreadStore", () => {
       .toBeInstanceOf(HelarcThreadStoreCorruptionError);
 
     await writeFile(filePath, JSON.stringify({
-      formatVersion: 1,
+      formatVersion: 2,
       aggregates: [{ commitLedger: [] }],
     }), "utf8");
     await expect(new FileHelarcThreadStore(filePath).listThreadSummaries()).rejects
       .toBeInstanceOf(HelarcThreadStoreCorruptionError);
 
     const store = new FileHelarcThreadStore(filePath);
-    await writeFile(filePath, JSON.stringify({ formatVersion: 2, aggregates: [] }), "utf8");
+    await writeFile(filePath, JSON.stringify({ formatVersion: 3, aggregates: [] }), "utf8");
     await store.commitRunStart(startCommit("1"));
     const valid = JSON.parse(await readFile(filePath, "utf8"));
     const malformed = structuredClone(valid);
@@ -214,7 +214,7 @@ describe("FileHelarcThreadStore", () => {
       .toBeInstanceOf(HelarcThreadStoreCorruptionError);
 
     await writeFile(filePath, JSON.stringify({
-      formatVersion: 2,
+      formatVersion: 3,
       aggregates: [valid.aggregates[0], valid.aggregates[0]],
     }), "utf8");
     await expect(store.listThreadSummaries()).rejects
@@ -304,8 +304,8 @@ function startCommit(id: string, timestamp = STARTED_AT): HelarcRunStartCommit {
       permissionPreset: "ask_for_approval",
       startedAt: timestamp,
       updatedAt: timestamp,
-      progressSequence: 0,
-      lastProgress: null,
+      projectionSequence: 0,
+      lastProjection: null,
       terminal: null,
       artifactIds: [],
       metadata: {},
@@ -313,21 +313,21 @@ function startCommit(id: string, timestamp = STARTED_AT): HelarcRunStartCommit {
   };
 }
 
-function progressCommit(
+function projectionCommit(
   sequence: number,
   commitId: string,
   timestamp = PROGRESS_AT,
   expectedThreadRevision = sequence,
-): HelarcRunProgressCommit {
+): HelarcRunProjectionCommit {
   return {
-    kind: "run_progress",
+    kind: "run_projection",
     commitId,
     threadId: "thread-1",
     runId: "run-1",
     committedAt: timestamp,
     expectedThreadRevision,
-    progressSequence: sequence,
-    progress: {
+    projectionSequence: sequence,
+    projection: {
       recordedAt: timestamp,
       host: {
         sessionId: "session-1",
@@ -362,10 +362,19 @@ function progressCommit(
           }],
         },
         plan: null,
+        progress: {
+          checkpointSequence: 0,
+          disposition: null,
+          reasonCode: null,
+          consecutiveNonAdvancingCheckpoints: 0,
+          correctionRounds: 0,
+          activeCorrectionRound: null,
+          factRefs: [],
+        },
         pendingInteractions: [],
-      retry: null,
-      validation: null,
-      cancellation: null,
+        retry: null,
+        validation: null,
+        cancellation: null,
         enforcement: {
           selected: "disabled",
           status: "not_exercised",

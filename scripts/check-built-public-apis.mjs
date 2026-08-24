@@ -686,6 +686,7 @@ const expectedValueExports = {
     "createHostRunProjection",
     "createHostRunProjectionStore",
     "createHostTerminalRunProjection",
+    "projectHostRunProgress",
     "projectRuntimeEventForHost",
     "reduceHostRunProjection",
     "snapshotHostCancellation",
@@ -787,7 +788,7 @@ const expectedValueExports = {
     "selectHelarcWorkspaceProfile",
   ],
   "@agent-anything/helarc/work-context": [
-    "applyHelarcRunProgressCommit",
+    "applyHelarcRunProjectionCommit",
     "applyHelarcRunStartCommit",
     "applyHelarcRunTerminalCommit",
     "createHelarcArtifact",

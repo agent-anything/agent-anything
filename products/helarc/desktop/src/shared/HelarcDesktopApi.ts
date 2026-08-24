@@ -348,6 +348,23 @@ export interface HelarcProductValidationSnapshot {
   readonly updatedAt: string | null;
 }
 
+export interface HelarcRunProgressSnapshot {
+  readonly checkpointSequence: number;
+  readonly disposition: "advanced" | "unchanged" | "repeated" | "deferred" | null;
+  readonly reasonCode:
+    | "new_trusted_fact"
+    | "equivalent_fact_repeated"
+    | "activity_without_structural_change"
+    | "plan_declaration_only"
+    | "progression_basis_changed"
+    | "required_work_pending"
+    | "no_committed_facts"
+    | null;
+  readonly consecutiveNonAdvancingCheckpoints: number;
+  readonly correctionRounds: number;
+  readonly activeCorrectionRound: number | null;
+}
+
 export interface HelarcRunProductResultSnapshot {
   readonly status: "completed" | "rejected" | "failed" | "blocked" | "cancelled";
   readonly validation: HelarcProductValidationSnapshot;
@@ -393,6 +410,7 @@ export interface HelarcRunSnapshot {
     readonly startedAt: string;
     readonly runRevision: number;
     readonly runTree: HelarcRunTreeSnapshot;
+    readonly progress: HelarcRunProgressSnapshot;
     readonly validation: HelarcHostValidationSnapshot | null;
     readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
     readonly terminal: {
@@ -767,13 +785,14 @@ export interface HelarcHostRunStatusSnapshot {
     | "cancelled";
   readonly startedAt: string;
   readonly runTree: HelarcRunTreeSnapshot;
+  readonly progress: HelarcRunProgressSnapshot;
   readonly validation: HelarcHostValidationSnapshot | null;
   readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
   readonly terminal: HelarcRunSnapshot["host"]["terminal"];
 }
 
 export interface HelarcDesktopApi {
-  readonly bridgeVersion: 7;
+  readonly bridgeVersion: 8;
   readonly productId: "helarc";
   chooseWorkspace(
     input: HelarcChooseWorkspaceInput,

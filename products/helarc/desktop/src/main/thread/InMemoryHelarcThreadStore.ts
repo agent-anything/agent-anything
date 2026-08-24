@@ -1,9 +1,9 @@
 import {
-  applyHelarcRunProgressCommit,
+  applyHelarcRunProjectionCommit,
   applyHelarcRunStartCommit,
   applyHelarcRunTerminalCommit,
   type HelarcCommitResult,
-  type HelarcRunProgressCommit,
+  type HelarcRunProjectionCommit,
   type HelarcRunStartCommit,
   type HelarcRunTerminalCommit,
   type HelarcThreadAggregate,
@@ -38,9 +38,9 @@ export class InMemoryHelarcThreadStore implements HelarcThreadStore {
     );
   }
 
-  commitRunProgress(input: HelarcRunProgressCommit): Promise<HelarcCommitResult> {
+  commitRunProjection(input: HelarcRunProjectionCommit): Promise<HelarcCommitResult> {
     return this.commit(input.threadId, (aggregate) =>
-      applyHelarcRunProgressCommit(aggregate, input)
+      applyHelarcRunProjectionCommit(aggregate, input)
     );
   }
 

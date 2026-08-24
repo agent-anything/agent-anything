@@ -2,6 +2,12 @@ import type { ActionExecutionNotification } from "@agent-anything/action-executi
 import type { SandboxEnforcement } from "@agent-anything/action-execution/sandbox";
 import type { PlanProjection } from "@agent-anything/agent-runtime/plan";
 import type {
+  RunProgressDisposition,
+  RunProgressFactKind,
+  RunProgressProjection,
+  RunProgressReasonCode,
+} from "@agent-anything/agent-runtime/progress";
+import type {
   RunCancellationSummary,
   RunFailureCause,
   RunFailureKind,
@@ -30,6 +36,23 @@ export type HostRunProjectionStatus =
   | "cancelled";
 
 export type HostPlanProjection = PlanProjection;
+
+export interface HostRunProgressFactProjection {
+  readonly kind: RunProgressFactKind;
+  readonly owner: string;
+  readonly subjectId: string | null;
+  readonly revision: string | null;
+}
+
+export interface HostRunProgressProjection {
+  readonly checkpointSequence: number;
+  readonly disposition: RunProgressDisposition | null;
+  readonly reasonCode: RunProgressReasonCode | null;
+  readonly consecutiveNonAdvancingCheckpoints: number;
+  readonly correctionRounds: number;
+  readonly activeCorrectionRound: number | null;
+  readonly factRefs: readonly HostRunProgressFactProjection[];
+}
 
 export interface HostPendingInteractionProjection {
   readonly request: InteractionRequestRef;
@@ -174,6 +197,7 @@ export interface HostRunProjection {
   readonly startedAt: string;
   readonly runTree: HostRunTreeProjection;
   readonly plan: HostPlanProjection | null;
+  readonly progress: HostRunProgressProjection;
   readonly pendingInteractions: readonly HostPendingInteractionProjection[];
   readonly retry: HostRetryProjection | null;
   readonly validation: ValidationHostProjection | null;
@@ -250,6 +274,7 @@ export type HostRunProjectionRejectionCode =
   | "invalid_update"
   | "interaction_correlation_mismatch"
   | "run_operation_sequence_regression"
+  | "run_progress_checkpoint_regression"
   | "terminal_projection_mismatch";
 
 export type HostRunProjectionReduction =
@@ -301,6 +326,7 @@ export function createHostRunProjection(
     startedAt: input.startedAt,
     runTree: projectRunTree(input.runTree),
     plan: null,
+    progress: createInitialHostRunProgressProjection(),
     pendingInteractions: Object.freeze([]),
     retry: null,
     validation: null,
@@ -319,6 +345,63 @@ export function projectHostRunTree(
   input: RunTreeExecutionSnapshot,
 ): HostRunTreeProjection {
   return projectRunTree(input);
+}
+
+export function projectHostRunProgress(
+  input: RunProgressProjection,
+): HostRunProgressProjection {
+  const counters = [
+    input.checkpointSequence,
+    input.consecutiveNonAdvancingCheckpoints,
+    input.correctionRounds,
+  ];
+  if (counters.some((value) => !Number.isSafeInteger(value) || value < 0)) {
+    throw new TypeError("Run Progress counters must be non-negative safe integers.");
+  }
+  if (
+    input.activeCorrectionRound !== null &&
+    (
+      !Number.isSafeInteger(input.activeCorrectionRound) ||
+      input.activeCorrectionRound < 1 ||
+      input.activeCorrectionRound > input.correctionRounds
+    )
+  ) {
+    throw new TypeError("Run Progress active correction round is invalid.");
+  }
+  if (
+    input.checkpointSequence === 0
+      ? input.disposition !== null || input.reasonCode !== null || input.factRefs.length !== 0
+      : input.disposition === null || input.reasonCode === null
+  ) {
+    throw new TypeError("Run Progress assessment does not match its checkpoint sequence.");
+  }
+  return Object.freeze({
+    checkpointSequence: input.checkpointSequence,
+    disposition: input.disposition,
+    reasonCode: input.reasonCode,
+    consecutiveNonAdvancingCheckpoints: input.consecutiveNonAdvancingCheckpoints,
+    correctionRounds: input.correctionRounds,
+    activeCorrectionRound: input.activeCorrectionRound,
+    factRefs: Object.freeze(input.factRefs.map((ref) => {
+      assertIdentity(ref.kind, "progress.fact.kind");
+      assertIdentity(ref.owner, "progress.fact.owner");
+      if (ref.subjectId !== null) assertIdentity(ref.subjectId, "progress.fact.subjectId");
+      if (ref.revision !== null) assertIdentity(ref.revision, "progress.fact.revision");
+      return Object.freeze({ ...ref });
+    })),
+  });
+}
+
+function createInitialHostRunProgressProjection(): HostRunProgressProjection {
+  return Object.freeze({
+    checkpointSequence: 0,
+    disposition: null,
+    reasonCode: null,
+    consecutiveNonAdvancingCheckpoints: 0,
+    correctionRounds: 0,
+    activeCorrectionRound: null,
+    factRefs: Object.freeze([]),
+  });
 }
 
 function projectRunTree(input: RunTreeExecutionSnapshot): HostRunTreeProjection {

@@ -111,6 +111,52 @@ describe("HostRunProjectionReducer", () => {
     expect(projection).toMatchObject({ status: "running", pendingInteractions: [] });
   });
 
+  it("copies bounded Run Progress only from RunHandle snapshots and rejects regression", () => {
+    const source = progressSnapshot(2, "repeated");
+    let projection = apply(initialProjection(), runOperationUpdate(1, {
+      sequence: 1,
+      progress: source,
+    }));
+
+    expect(projection.progress).toEqual({
+      checkpointSequence: 2,
+      disposition: "repeated",
+      reasonCode: "equivalent_fact_repeated",
+      consecutiveNonAdvancingCheckpoints: 2,
+      correctionRounds: 1,
+      activeCorrectionRound: 1,
+      factRefs: [{
+        kind: "operation_result",
+        owner: "workspace",
+        subjectId: "file-1",
+        revision: "2",
+      }],
+    });
+    expect(Object.isFrozen(projection.progress)).toBe(true);
+    expect(Object.isFrozen(projection.progress.factRefs)).toBe(true);
+    expect(Object.isFrozen(projection.progress.factRefs[0])).toBe(true);
+    expect("latestAssessment" in projection.progress).toBe(false);
+
+    projection = apply(projection, runtimeUpdate(2, "run.progress.assessed", {
+      checkpointSequence: 99,
+      disposition: "advanced",
+      reasonCode: "new_trusted_fact",
+      factRefs: [],
+      consecutiveNonAdvancingCheckpoints: 0,
+      correctionRounds: 0,
+      activeCorrectionRound: null,
+    }));
+    expect(projection.progress.checkpointSequence).toBe(2);
+
+    expect(reduceHostRunProjection(projection, runOperationUpdate(3, {
+      sequence: 2,
+      progress: initialProgress(),
+    }))).toMatchObject({
+      status: "rejected",
+      code: "run_progress_checkpoint_regression",
+    });
+  });
+
   it("projects only the bounded Host Validation view from a RunHandle snapshot", () => {
     const validation = Object.freeze({
       snapshot: Object.freeze({ runId: "run-1", revision: 7 }),
@@ -376,6 +422,7 @@ function runOperationUpdate(
       status: "running",
       lastRunItemSequence: 0,
       plan: null,
+      progress: initialProgress(),
       retry: null,
       validation: null,
       pendingInteractions: [],
@@ -384,6 +431,45 @@ function runOperationUpdate(
       ...overrides,
     },
   };
+}
+
+function initialProgress(): RunOperationSnapshot["progress"] {
+  return Object.freeze({
+    checkpointSequence: 0,
+    disposition: null,
+    reasonCode: null,
+    consecutiveNonAdvancingCheckpoints: 0,
+    correctionRounds: 0,
+    activeCorrectionRound: null,
+    latestAssessment: null,
+    latestAdvancement: null,
+    factRefs: Object.freeze([]),
+  });
+}
+
+function progressSnapshot(
+  checkpointSequence: number,
+  disposition: "advanced" | "repeated",
+): RunOperationSnapshot["progress"] {
+  const assessment = Object.freeze({ runId: "run-1", checkpointSequence });
+  return Object.freeze({
+    checkpointSequence,
+    disposition,
+    reasonCode: disposition === "advanced"
+      ? "new_trusted_fact" as const
+      : "equivalent_fact_repeated" as const,
+    consecutiveNonAdvancingCheckpoints: disposition === "advanced" ? 0 : 2,
+    correctionRounds: 1,
+    activeCorrectionRound: disposition === "advanced" ? null : 1,
+    latestAssessment: assessment,
+    latestAdvancement: disposition === "advanced" ? assessment : null,
+    factRefs: Object.freeze([Object.freeze({
+      kind: "operation_result" as const,
+      owner: "workspace",
+      subjectId: "file-1",
+      revision: "2",
+    })]),
+  });
 }
 
 function rootTree(revision = 0): RunOperationSnapshot["runTree"] {

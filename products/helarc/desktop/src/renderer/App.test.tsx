@@ -340,6 +340,33 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Not required");
     expect(html).toContain("Event summary");
   });
+
+  it("explains bounded no-progress termination with the safe progress summary", () => {
+    const html = renderToStaticMarkup(
+      <RunTerminalPanel
+        title="Run blocked"
+        run={runProjection({
+          status: "blocked",
+          runtimeStatus: "blocked",
+          terminalCode: "runtime_no_progress",
+          progress: {
+            checkpointSequence: 3,
+            disposition: "repeated",
+            reasonCode: "equivalent_fact_repeated",
+            consecutiveNonAdvancingCheckpoints: 2,
+            correctionRounds: 2,
+            activeCorrectionRound: null,
+          },
+        })}
+      />,
+    );
+
+    expect(html).toContain("Progress");
+    expect(html).toContain("repeated, checkpoint 3, 2 corrections used");
+    expect(html).toContain(
+      "The Run stopped after bounded correction produced no new structural progress.",
+    );
+  });
 });
 
 function pendingApproval(
@@ -399,18 +426,22 @@ function runProjection(input: {
   runtimeStatus?: "succeeded" | "blocked" | "failed" | "cancelled";
   activity?: ReturnType<typeof event>[];
   runTree?: NonNullable<HelarcMainSnapshot["run"]>["host"]["runTree"];
+  progress?: NonNullable<HelarcMainSnapshot["run"]>["host"]["progress"];
+  terminalCode?: NonNullable<
+    NonNullable<HelarcMainSnapshot["run"]>["host"]["terminal"]
+  >["code"];
 } = {}): NonNullable<HelarcMainSnapshot["run"]> {
   const status = input.status ?? "running";
   const runtimeStatus = input.runtimeStatus ?? "succeeded";
   const activity = input.activity ?? [];
   const terminal = status !== "running";
-  const code = status === "completed"
+  const code = input.terminalCode ?? (status === "completed"
     ? null
     : status === "blocked"
       ? "runtime_no_safe_path" as const
       : status === "cancelled"
         ? "runtime_cancelled" as const
-        : "runtime_limit_exceeded" as const;
+        : "runtime_limit_exceeded" as const);
   return {
     productRunId: "product-run-1",
     harnessRunId: "harness-run-1",
@@ -420,6 +451,14 @@ function runProjection(input: {
       startedAt: "2026-07-05T01:00:00.000Z",
       runRevision: 0,
       runTree: input.runTree ?? rootRunTree(),
+      progress: input.progress ?? {
+        checkpointSequence: 0,
+        disposition: null,
+        reasonCode: null,
+        consecutiveNonAdvancingCheckpoints: 0,
+        correctionRounds: 0,
+        activeCorrectionRound: null,
+      },
       validation: null,
       pendingInteractions: [],
       terminal: terminal

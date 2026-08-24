@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyHelarcRunProgressCommit,
+  applyHelarcRunProjectionCommit,
   applyHelarcRunStartCommit,
   applyHelarcRunTerminalCommit,
   normalizeHelarcThreadAggregate,
-  type HelarcRunProgressCommit,
+  type HelarcRunProjectionCommit,
   type HelarcRunStartCommit,
   type HelarcRunTerminalCommit,
   type HelarcThreadAggregate,
@@ -42,8 +42,8 @@ describe("Helarc work context commit transitions", () => {
 
   it("rejects stale Thread revision and conflicting commit identity", async () => {
     const aggregate = await startedAggregate();
-    const stale = progressCommit(1, 0, "commit-progress-stale");
-    expect(await applyHelarcRunProgressCommit(aggregate, stale)).toMatchObject({
+    const stale = projectionCommit(1, 0, "commit-projection-stale");
+    expect(await applyHelarcRunProjectionCommit(aggregate, stale)).toMatchObject({
       status: "rejected",
       code: "stale_thread_revision",
     });
@@ -97,25 +97,25 @@ describe("Helarc work context commit transitions", () => {
     });
   });
 
-  it("persists monotonic progress with one Thread revision per commit", async () => {
+  it("persists monotonic projections with one Thread revision per commit", async () => {
     const aggregate = await startedAggregate();
-    const first = await applyHelarcRunProgressCommit(
+    const first = await applyHelarcRunProjectionCommit(
       aggregate,
-      progressCommit(1, 1, "commit-progress-1"),
+      projectionCommit(1, 1, "commit-projection-1"),
     );
     expect(first).toMatchObject({
       status: "applied",
-      receipt: { progressSequence: 1, committedThreadRevision: 2 },
+      receipt: { projectionSequence: 1, committedThreadRevision: 2 },
       aggregate: {
-        record: { thread: { revision: 2 }, runs: [{ progressSequence: 1 }] },
+        record: { thread: { revision: 2 }, runs: [{ projectionSequence: 1 }] },
       },
     });
     if (first.status === "rejected") throw new Error(first.message);
 
-    expect(await applyHelarcRunProgressCommit(
+    expect(await applyHelarcRunProjectionCommit(
       first.aggregate,
-      progressCommit(1, 2, "commit-progress-duplicate-sequence"),
-    )).toMatchObject({ status: "rejected", code: "stale_progress" });
+      projectionCommit(1, 2, "commit-projection-duplicate-sequence"),
+    )).toMatchObject({ status: "rejected", code: "stale_projection" });
   });
 
   it("atomically settles terminal state, Message, and Artifact", async () => {
@@ -234,8 +234,8 @@ function startCommit(): HelarcRunStartCommit {
       permissionPreset: "ask_for_approval",
       startedAt: STARTED_AT,
       updatedAt: STARTED_AT,
-      progressSequence: 0,
-      lastProgress: null,
+      projectionSequence: 0,
+      lastProjection: null,
       terminal: null,
       artifactIds: [],
       metadata: {},
@@ -243,27 +243,27 @@ function startCommit(): HelarcRunStartCommit {
   };
 }
 
-function progressCommit(
-  progressSequence: number,
+function projectionCommit(
+  projectionSequence: number,
   expectedThreadRevision: number,
   commitId: string,
-): HelarcRunProgressCommit {
+): HelarcRunProjectionCommit {
   return {
-    kind: "run_progress",
+    kind: "run_projection",
     commitId,
     threadId: "thread-1",
     runId: "run-1",
     committedAt: PROGRESS_AT,
     expectedThreadRevision,
-    progressSequence,
-    progress: {
+    projectionSequence,
+    projection: {
       recordedAt: PROGRESS_AT,
       host: {
         sessionId: "session-1",
         taskId: "task-1",
         runId: "harness-run-1",
-        sequence: progressSequence,
-        runOperationSequence: progressSequence,
+        sequence: projectionSequence,
+        runOperationSequence: projectionSequence,
         status: "running",
         startedAt: STARTED_AT,
         plan: null,
@@ -280,7 +280,7 @@ function progressCommit(
       },
       product: {
         runId: "run-1",
-        sequence: progressSequence,
+        sequence: projectionSequence,
         phase: { kind: "none" },
         activity: [],
         result: null,

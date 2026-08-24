@@ -257,6 +257,7 @@ export function projectHelarcRunStatusQueryReceipt(
       status: receipt.projection.status,
       startedAt: receipt.projection.startedAt,
       runTree: projectRunTree(receipt.projection.runTree),
+      progress: projectRunProgress(receipt.projection.progress),
       validation: projectHostValidation(receipt.projection.validation),
       pendingInteractions: receipt.projection.pendingInteractions.map(projectPendingInteraction),
       terminal: receipt.projection.terminal === null
@@ -321,6 +322,7 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
       startedAt: run.host.startedAt,
       runRevision: run.host.runRevision,
       runTree: projectRunTree(run.host.runTree),
+      progress: projectRunProgress(run.host.progress),
       validation: projectHostValidation(run.host.validation),
       pendingInteractions: run.host.pendingInteractions.map(projectPendingInteraction),
       terminal: run.host.terminal === null
@@ -385,6 +387,20 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
             },
           },
     },
+  };
+}
+
+function projectRunProgress(
+  progress: NonNullable<MainSnapshot["run"]>["host"]["progress"],
+): HelarcRunSnapshot["host"]["progress"] {
+  return {
+    checkpointSequence: progress.checkpointSequence,
+    disposition: progress.disposition,
+    reasonCode: progress.reasonCode,
+    consecutiveNonAdvancingCheckpoints:
+      progress.consecutiveNonAdvancingCheckpoints,
+    correctionRounds: progress.correctionRounds,
+    activeCorrectionRound: progress.activeCorrectionRound,
   };
 }
 

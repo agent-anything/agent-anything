@@ -170,6 +170,7 @@ function createFakeHandle(runId: string) {
     status: "initializing",
     lastRunItemSequence: 0,
     plan: null,
+    progress: initialProgress(),
     retry: null,
     pendingInteractions: [],
     validation: null,
@@ -295,6 +296,20 @@ function runStartedEvent(): RuntimeEvent {
     name: "run.started",
     occurredAt: NOW,
     payload: Object.freeze({ status: "running", activeAgentId: "agent-1" }),
+  });
+}
+
+function initialProgress(): RunOperationSnapshot["progress"] {
+  return Object.freeze({
+    checkpointSequence: 0,
+    disposition: null,
+    reasonCode: null,
+    consecutiveNonAdvancingCheckpoints: 0,
+    correctionRounds: 0,
+    activeCorrectionRound: null,
+    latestAssessment: null,
+    latestAdvancement: null,
+    factRefs: Object.freeze([]),
   });
 }
 

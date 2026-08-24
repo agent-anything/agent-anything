@@ -169,7 +169,7 @@ export interface CreateHelarcPersistedRunInput {
   metadata?: Readonly<Record<string, unknown>>;
 }
 
-export interface HelarcRunProgressRecord {
+export interface HelarcRunProjectionRecord {
   readonly recordedAt: string;
   readonly host: HostRunProjection;
   readonly product: HelarcProductRunProjection;
@@ -194,8 +194,8 @@ export interface HelarcPersistedRun {
   permissionPreset: HelarcRunPermissionPreset;
   startedAt: string;
   updatedAt: string;
-  progressSequence: number;
-  lastProgress: HelarcRunProgressRecord | null;
+  projectionSequence: number;
+  lastProjection: HelarcRunProjectionRecord | null;
   terminal: HelarcRunTerminalRecord | null;
   artifactIds: string[];
   metadata: Readonly<Record<string, unknown>>;
@@ -239,7 +239,7 @@ export type HelarcWorkContextErrorCode =
   | "run_provider_invalid"
   | "run_permission_preset_invalid"
   | "run_timestamp_invalid"
-  | "run_progress_invalid"
+  | "run_projection_invalid"
   | "run_terminal_invalid"
   | "run_metadata_invalid"
   | "run_artifact_ids_invalid"
@@ -463,8 +463,8 @@ export function createHelarcPersistedRun(
       permissionPreset,
       startedAt: input.startedAt,
       updatedAt: input.startedAt,
-      progressSequence: 0,
-      lastProgress: null,
+      projectionSequence: 0,
+      lastProjection: null,
       terminal: null,
       artifactIds: [],
       metadata: input.metadata ?? {},
@@ -616,16 +616,16 @@ function normalizeHelarcRunRecord(input: HelarcPersistedRun): CreateHelarcPersis
   if (!isIsoDateTime(input.updatedAt) || input.updatedAt < input.startedAt) {
     return reject("run_timestamp_invalid", "Run update timestamp is invalid.");
   }
-  if (!Number.isSafeInteger(input.progressSequence) || input.progressSequence < 0) {
-    return reject("run_progress_invalid", "Run progress sequence is invalid.");
+  if (!Number.isSafeInteger(input.projectionSequence) || input.projectionSequence < 0) {
+    return reject("run_projection_invalid", "Run projection sequence is invalid.");
   }
-  const progress = normalizeProgressRecord(
+  const projection = normalizeProjectionRecord(
     normalizedBase,
     input.updatedAt,
-    input.progressSequence,
-    input.lastProgress,
+    input.projectionSequence,
+    input.lastProjection,
   );
-  if (!progress.ok) return progress;
+  if (!projection.ok) return projection;
   const terminal = normalizeTerminalRecord(normalizedBase, input.updatedAt, input.terminal);
   if (!terminal.ok) return terminal;
   const artifactIds = normalizeIdList(input.artifactIds);
@@ -641,8 +641,8 @@ function normalizeHelarcRunRecord(input: HelarcPersistedRun): CreateHelarcPersis
     run: {
       ...normalizedBase,
       updatedAt: input.updatedAt,
-      progressSequence: input.progressSequence,
-      lastProgress: progress.progress,
+      projectionSequence: input.projectionSequence,
+      lastProjection: projection.projection,
       terminal: terminal.terminal,
       artifactIds: artifactIds.ids,
       metadata: metadata.value,
@@ -650,33 +650,33 @@ function normalizeHelarcRunRecord(input: HelarcPersistedRun): CreateHelarcPersis
   };
 }
 
-function normalizeProgressRecord(
+function normalizeProjectionRecord(
   run: HelarcPersistedRun,
   updatedAt: string,
   sequence: number,
-  progress: HelarcRunProgressRecord | null,
-): { ok: true; progress: HelarcRunProgressRecord | null } |
+  projection: HelarcRunProjectionRecord | null,
+): { ok: true; projection: HelarcRunProjectionRecord | null } |
   { ok: false; error: HelarcWorkContextError } {
-  if ((sequence === 0) !== (progress === null)) {
-    return reject("run_progress_invalid", "Run progress sequence and snapshot are inconsistent.");
+  if ((sequence === 0) !== (projection === null)) {
+    return reject("run_projection_invalid", "Run projection sequence and snapshot are inconsistent.");
   }
-  if (progress === null) return { ok: true, progress: null };
+  if (projection === null) return { ok: true, projection: null };
   if (
-    !isIsoDateTime(progress.recordedAt) || progress.recordedAt < run.startedAt ||
-    progress.recordedAt > updatedAt ||
-    !isHostProgressProjection(progress.host) ||
-    !isProductProgressProjection(progress.product) ||
-    run.harnessRunId === null || progress.host.runId !== run.harnessRunId ||
-    progress.host.taskId !== run.taskId ||
-    progress.host.sessionId !== run.sessionId || progress.product.runId !== run.id
+    !isIsoDateTime(projection.recordedAt) || projection.recordedAt < run.startedAt ||
+    projection.recordedAt > updatedAt ||
+    !isHostRunProjection(projection.host) ||
+    !isProductRunProjection(projection.product) ||
+    run.harnessRunId === null || projection.host.runId !== run.harnessRunId ||
+    projection.host.taskId !== run.taskId ||
+    projection.host.sessionId !== run.sessionId || projection.product.runId !== run.id
   ) {
-    return reject("run_progress_invalid", "Run progress projection is invalid.");
+    return reject("run_projection_invalid", "Run projection is invalid.");
   }
-  const safe = normalizeSafeValue(progress);
+  const safe = normalizeSafeValue(projection);
   if (!safe.ok) {
-    return reject("run_progress_invalid", "Run progress must contain canonical safe data.");
+    return reject("run_projection_invalid", "Run projection must contain canonical safe data.");
   }
-  return { ok: true, progress };
+  return { ok: true, projection };
 }
 
 function normalizeTerminalRecord(
@@ -1110,7 +1110,7 @@ function hasExactKeys(value: unknown, keys: readonly string[]): value is Record<
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
-function isHostProgressProjection(value: unknown): value is HostRunProjection {
+function isHostRunProjection(value: unknown): value is HostRunProjection {
   if (value === null || typeof value !== "object") return false;
   const projection = value as Partial<HostRunProjection>;
   return typeof projection.runId === "string" &&
@@ -1125,7 +1125,7 @@ function isHostProgressProjection(value: unknown): value is HostRunProjection {
     projection.status !== "cancelled";
 }
 
-function isProductProgressProjection(value: unknown): value is HelarcProductRunProjection {
+function isProductRunProjection(value: unknown): value is HelarcProductRunProjection {
   if (value === null || typeof value !== "object") return false;
   const projection = value as Partial<HelarcProductRunProjection>;
   return typeof projection.runId === "string" &&
