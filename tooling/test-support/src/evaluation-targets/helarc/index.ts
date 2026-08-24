@@ -64,6 +64,10 @@ export {
   HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE,
   HELARC_RUN_TREE_CONTROL_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcRunTreeControlBaseline.js";
+export {
+  HELARC_RUN_PROGRESS_ACCEPTED_BASELINE,
+  HELARC_RUN_PROGRESS_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcRunProgressBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export type {

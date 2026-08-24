@@ -1,6 +1,6 @@
 import {
+  HELARC_RUN_PROGRESS_ACCEPTED_BASELINE,
   HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE,
-  HELARC_VALIDATION_COMPLETION_ACCEPTED_BASELINE,
   compareHelarcEvaluationBaseline,
   projectHelarcEvaluationBaselineSignature,
   runHelarcEvaluationBaselineCandidate,
@@ -8,16 +8,20 @@ import {
 import {
   runContextContinuityEvaluationCandidate,
 } from "../dist/context-continuity-evaluation/index.js";
+import {
+  runRunProgressDeterministicEvaluation,
+} from "../dist/run-progress-evaluation/index.js";
 
 const systemCandidate = await runHelarcEvaluationBaselineCandidate();
 const signature = projectHelarcEvaluationBaselineSignature(systemCandidate);
 const contextContinuity = await runContextContinuityEvaluationCandidate();
+const runProgress = await runRunProgressDeterministicEvaluation();
 const comparison = compareHelarcEvaluationBaseline(
-  HELARC_VALIDATION_COMPLETION_ACCEPTED_BASELINE,
+  HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE,
   systemCandidate,
 );
 const acceptedComparison = compareHelarcEvaluationBaseline(
-  HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE,
+  HELARC_RUN_PROGRESS_ACCEPTED_BASELINE,
   systemCandidate,
 );
 
@@ -25,17 +29,18 @@ process.stdout.write(`${JSON.stringify({
   schemaVersion: 1,
   kind: "context_continuity_and_helarc_evaluation_candidate",
   predecessor: {
-    reportRef: HELARC_VALIDATION_COMPLETION_ACCEPTED_BASELINE.reportRef,
-    acceptanceRef: HELARC_VALIDATION_COMPLETION_ACCEPTED_BASELINE.acceptanceRef,
-  },
-  acceptedSuccessor: {
     reportRef: HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE.reportRef,
     acceptanceRef: HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE.acceptanceRef,
+  },
+  acceptedSuccessor: {
+    reportRef: HELARC_RUN_PROGRESS_ACCEPTED_BASELINE.reportRef,
+    acceptanceRef: HELARC_RUN_PROGRESS_ACCEPTED_BASELINE.acceptanceRef,
   },
   systemCandidate: projectSystemCandidate(signature),
   predecessorComparison: projectPredecessorComparison(comparison),
   acceptedSuccessorComparison: projectPredecessorComparison(acceptedComparison),
   contextContinuity: projectContextContinuityCandidate(contextContinuity),
+  runProgress,
   limitations: [
     "The deterministic candidate does not claim general model intelligence.",
     "Context-specific metrics have no fabricated predecessor samples.",

@@ -80,7 +80,12 @@ const packageExportKeys = {
     "./subject",
   ],
   "harness/model-interaction": [".", "./continuation", "./input"],
-  "tooling/test-support": [".", "./context-continuity-evaluation", "./evaluation-targets/helarc"],
+  "tooling/test-support": [
+    ".",
+    "./context-continuity-evaluation",
+    "./evaluation-targets/helarc",
+    "./run-progress-evaluation",
+  ],
   "harness/safety/action-execution": [
     "./coordination",
     "./enforcement",
@@ -435,6 +440,8 @@ const expectedLowerValueExports = {
     "HELARC_PRODUCT_EFFECTIVENESS_SUITE_REVISION",
     "HELARC_PRODUCT_EFFECTIVENESS_TARGET_INPUTS",
     "HELARC_PRODUCT_EFFECTIVENESS_TIME",
+    "HELARC_RUN_PROGRESS_ACCEPTED_BASELINE",
+    "HELARC_RUN_PROGRESS_BASELINE_ACCEPTANCE",
     "HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE",
     "HELARC_RUN_TREE_CONTROL_BASELINE_ACCEPTANCE",
     "HELARC_SHELL_TOOLS_ACCEPTED_BASELINE",
@@ -469,6 +476,9 @@ const expectedLowerValueExports = {
     "createContextContinuityEvaluationFixtures",
     "observeContextContinuityFixtures",
     "runContextContinuityEvaluationCandidate",
+  ],
+  "@agent-anything/test-support/run-progress-evaluation": [
+    "runRunProgressDeterministicEvaluation",
   ],
   "@agent-anything/model-interaction/input": [
     "ModelInputCompositionError",

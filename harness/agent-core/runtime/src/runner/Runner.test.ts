@@ -54,6 +54,7 @@ import {
   createPreparedAction,
   type OperationActionAdapter,
 } from "@agent-anything/action-execution/registration";
+import type { PhysicalAttemptOutcome } from "@agent-anything/action-execution/execution";
 import { createSandboxExecutionGateway } from "@agent-anything/action-execution/sandbox";
 import type { ActionExecutionNotification } from "@agent-anything/action-execution/enforcement";
 import { createAllowAllActionPolicyPort } from "@agent-anything/governance/policy";
@@ -1486,6 +1487,182 @@ describe("Runner semantic integration", () => {
     )).toBe(false);
   });
 
+  it("lets cancellation outrank no-progress termination while correction is active", async () => {
+    const operations = createOperationFixture([]);
+    const correctionTurnStarted = deferred<void>();
+    const controller = new ScriptedController([
+      advance([{
+        kind: "state_transition",
+        transition: "plan_update",
+        input: {
+          explanation: "Start with a declaration.",
+          plan: [{ step: "Inspect", status: "in_progress" }],
+        },
+        modelItemId: "model_plan_1",
+      }], "model_plan_1"),
+      (input, context) => new Promise<ControllerDecision<TestOutput>>((resolve) => {
+        expect(input.context.blocks.some((block) =>
+          block.payload.kind === "structured" &&
+          isRecord(block.payload.value) &&
+          block.payload.value.kind === "run_progress_correction"
+        )).toBe(true);
+        correctionTurnStarted.resolve();
+        context.cancellation.signal.addEventListener("abort", () => {
+          resolve(complete("Too late", "model_late"));
+        }, { once: true });
+      }),
+    ]);
+    const handle = createRunner(controller, operations).start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        limits: {
+          progress: {
+            checkpointWindowSize: 3,
+            nonAdvancingCheckpointThreshold: 1,
+            maxCorrectionRounds: 1,
+          },
+        },
+      }),
+    );
+    await correctionTurnStarted.promise;
+
+    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status)
+      .toBe("accepted");
+    const result = await handle.wait();
+
+    expect(result).toMatchObject({
+      status: "cancelled",
+      code: "runtime_cancelled",
+    });
+    expect(result.items.some(({ payload }) =>
+      payload.kind === "progress_correction"
+    )).toBe(true);
+    expect(result.items.some(({ payload }) =>
+      payload.kind === "terminal_transition" && payload.code === "runtime_no_progress"
+    )).toBe(false);
+  });
+
+  it("lets the Run deadline outrank no-progress termination while correction is active", async () => {
+    const operations = createOperationFixture([]);
+    let currentNow = NOW;
+    const expiredNow = new Date(Date.parse(NOW) + 20_000).toISOString();
+    const planCandidate = (modelItemId: string) => ({
+      kind: "state_transition" as const,
+      transition: "plan_update" as const,
+      input: {
+        explanation: "Keep declaring the same work.",
+        plan: [{ step: "Inspect", status: "in_progress" as const }],
+      },
+      modelItemId,
+    });
+    const controller = new ScriptedController([
+      advance([planCandidate("model_plan_1")], "model_plan_1"),
+      (input) => {
+        expect(input.context.blocks.some((block) =>
+          block.payload.kind === "structured" &&
+          isRecord(block.payload.value) &&
+          block.payload.value.kind === "run_progress_correction"
+        )).toBe(true);
+        currentNow = expiredNow;
+        return advance([planCandidate("model_plan_2")], "model_plan_2");
+      },
+    ]);
+
+    const result = await createRunner(controller, operations, {
+      now: () => currentNow,
+    }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        limits: {
+          progress: {
+            checkpointWindowSize: 3,
+            nonAdvancingCheckpointThreshold: 1,
+            maxCorrectionRounds: 1,
+          },
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_deadline_exceeded",
+    });
+    expect(result.items.some(({ payload }) =>
+      payload.kind === "progress_correction"
+    )).toBe(true);
+    expect(result.items.some(({ payload }) =>
+      payload.kind === "terminal_transition" && payload.code === "runtime_no_progress"
+    )).toBe(false);
+  });
+
+  it("lets unknown operation effect outrank no-progress termination while correction is active", async () => {
+    const operation = operationRef("unknown-effect-after-correction");
+    const actionExecution = createValidationActionExecutionFixture(operation, {
+      status: "failed",
+      effectState: "unknown",
+      failure: {
+        code: "executor_connection_lost",
+        message: "The executor connection ended before settlement was confirmed.",
+        metadata: {},
+        retryable: false,
+      },
+    });
+    const operations = createOperationFixture([
+      operationSpec(operation, "direct", {
+        requestOrigins: ["controller_protocol"],
+        actionAdapterId: actionExecution.adapterId,
+      }),
+    ], [], { actionExecution: actionExecution.dependencies });
+    const controller = new ScriptedController([
+      advance([{
+        kind: "state_transition",
+        transition: "plan_update",
+        input: {
+          explanation: "Start with a declaration.",
+          plan: [{ step: "Inspect", status: "in_progress" }],
+        },
+        modelItemId: "model_plan_1",
+      }], "model_plan_1"),
+      (input) => {
+        expect(input.context.blocks.some((block) =>
+          block.payload.kind === "structured" &&
+          isRecord(block.payload.value) &&
+          block.payload.value.kind === "run_progress_correction"
+        )).toBe(true);
+        return advance([operationCandidate(operation, { target: "workspace" })], "model_operation");
+      },
+    ]);
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        actionExecution: createValidationActionExecutionConfig(),
+        limits: {
+          progress: {
+            checkpointWindowSize: 3,
+            nonAdvancingCheckpointThreshold: 1,
+            maxCorrectionRounds: 1,
+          },
+        },
+      }),
+    );
+
+    expect(result, JSON.stringify(result, null, 2)).toMatchObject({
+      status: "failed",
+      code: "unknown_effect",
+    });
+    expect(actionExecution.execute).toHaveBeenCalledTimes(1);
+    expect(result.items.some(({ payload }) =>
+      payload.kind === "progress_correction"
+    )).toBe(true);
+    expect(result.items.some(({ payload }) =>
+      payload.kind === "terminal_transition" && payload.code === "runtime_no_progress"
+    )).toBe(false);
+  });
+
   it("waits on a blocking generic Interaction and resumes the same Run", async () => {
     const operations = createOperationFixture([]);
     const interaction = testInteractionProtocol();
@@ -2053,7 +2230,14 @@ function createOperationFixture(
   });
 }
 
-function createValidationActionExecutionFixture(operation: OperationRevisionRef) {
+function createValidationActionExecutionFixture(
+  operation: OperationRevisionRef,
+  physicalOutcome: PhysicalAttemptOutcome<{ passed: boolean }> = {
+    status: "completed",
+    effectState: "settled",
+    payload: { passed: true },
+  },
+) {
   const adapterDescriptor: ActionAdapterDescriptor = {
     id: `adapter.${operation.operation.name}`,
     version: "1",
@@ -2146,11 +2330,7 @@ function createValidationActionExecutionFixture(operation: OperationRevisionRef)
       };
     },
   };
-  const execute = vi.fn(async () => ({
-    status: "completed" as const,
-    effectState: "settled" as const,
-    payload: { passed: true },
-  }));
+  const execute = vi.fn(async () => physicalOutcome);
   const dependencies: NonNullable<RunnerOperationComposition["actionExecution"]> = {
     registrations,
     adapters: [{ adapter }],
