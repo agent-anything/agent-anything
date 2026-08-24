@@ -103,7 +103,7 @@ import {
   type ToolSettlementRef,
 } from "@agent-anything/tools/result";
 import { materializeToolCall, type ToolCall } from "@agent-anything/tools/invocation";
-import { createControllerToolExposureProof } from "@agent-anything/tools/selection";
+import { createFixedControllerToolExposureProof } from "@agent-anything/tools/selection";
 import {
   ControllerError,
   validateControllerDecision,
@@ -256,7 +256,7 @@ interface CandidateBasis<TOutput> {
   readonly runRevision: number;
   readonly activeAgent: Agent<TOutput>;
   readonly projection: ContextProjection;
-  readonly exposure: ReturnType<typeof createControllerToolExposureProof>;
+  readonly exposure: ReturnType<typeof createFixedControllerToolExposureProof>;
 }
 
 interface OperationExecutionOutcome {
@@ -1229,7 +1229,7 @@ export class RunExecution<TOutput> {
       id: this.id("controller_turn", iteration),
       sequence: iteration,
     });
-    const exposure = createControllerToolExposureProof(
+    const exposure = createFixedControllerToolExposureProof(
       this.config.tools,
       turn.id,
     );
@@ -1832,7 +1832,7 @@ export class RunExecution<TOutput> {
     action: RuntimeRunAction,
     candidate: ToolRequestCandidate,
     toolCallId: string,
-    exposure: ReturnType<typeof createControllerToolExposureProof>,
+    exposure: ReturnType<typeof createFixedControllerToolExposureProof>,
   ): Promise<boolean> {
     const materialized = materializeToolCall({
       candidate: candidate.tool,

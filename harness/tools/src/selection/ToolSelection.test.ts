@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { createOperationCatalogSnapshot } from "@agent-anything/operation-catalog/catalog";
 import type { OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
 import { createToolRegistrationSnapshot, type ToolRegistrationInput } from "../registration/index.js";
+import { createFixedControllerToolExposureProof } from "./ToolExposure.js";
 import {
-  createControllerToolExposureProof,
   createFixedLocalToolSelection,
   findSelectedTool,
   snapshotToolSelectionRevision,
@@ -22,7 +22,7 @@ describe("ToolSelection", () => {
       { tool: toolRevision("read-file"), origins: ["model"] },
       { tool: toolRevision("create-file"), origins: ["workflow"] },
     ]);
-    const exposure = createControllerToolExposureProof(selection, "controller-request-1");
+    const exposure = createFixedControllerToolExposureProof(selection, "controller-request-1");
 
     expect(exposure.catalog.tools.map((tool) => tool.name)).toEqual([
       "codeAgent.readFile",
@@ -56,8 +56,8 @@ describe("ToolSelection", () => {
     expect(snapshotToolSelectionRevision(left)).toEqual(left);
     expect(Object.isFrozen(left.tools)).toBe(true);
     expect(Object.isFrozen(left.tools[0]?.origins)).toBe(true);
-    expect(createControllerToolExposureProof(left, "controller-request-1").id)
-      .toBe(createControllerToolExposureProof(right, "controller-request-1").id);
+    expect(createFixedControllerToolExposureProof(left, "controller-request-1").id)
+      .toBe(createFixedControllerToolExposureProof(right, "controller-request-1").id);
   });
 
   it("rejects unknown Tools, duplicate revisions, empty origins, and catalog mismatch", () => {

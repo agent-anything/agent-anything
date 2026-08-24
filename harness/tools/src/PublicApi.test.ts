@@ -19,10 +19,18 @@ const REGISTRATION_VALUES = [
   "findToolRegistration",
 ];
 const SELECTION_VALUES = [
+  "ToolExposureValidationError",
   "ToolSelectionValidationError",
-  "createControllerToolExposureProof",
+  "createFixedControllerToolExposureProof",
   "createFixedLocalToolSelection",
+  "createStaticAvailableToolBindingAssessment",
+  "createToolBindingAvailabilityAssessment",
+  "createToolExposureProof",
   "findSelectedTool",
+  "resolveCurrentTurnToolExposure",
+  "snapshotCurrentTurnToolExposure",
+  "snapshotToolBindingAvailabilityAssessment",
+  "snapshotToolExposureProof",
   "snapshotToolSelectionRevision",
 ];
 const INVOCATION_VALUES = ["materializeToolCall", "validateExactToolCall"];

@@ -401,8 +401,11 @@ function tool(name: string, readOnly: boolean): ToolDescriptorInput {
 function createToolExposure(tools: readonly ToolDescriptorInput[]): ToolExposureProof {
   const catalog = createToolCatalogSnapshot(tools);
   return Object.freeze({
+    schemaVersion: 1 as const,
     id: "tool-exposure-1",
     selectionRevision: "tool-selection-1",
+    contentRevision: "tool-exposure-content-1",
+    basisRevision: "tool-exposure-basis-1",
     consumer: "controller" as const,
     controllerRequestId: "controller-request-1",
     exposedTools: Object.freeze(catalog.tools.map(({ ref }) => ref)),

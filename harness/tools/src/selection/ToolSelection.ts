@@ -1,6 +1,6 @@
 import type { OperationCatalogSnapshot } from "@agent-anything/operation-catalog/catalog";
 import { operationRevisionKey } from "@agent-anything/operation-catalog/identity";
-import type { ToolCatalogSnapshot, ToolDescriptor } from "../catalog/index.js";
+import type { ToolDescriptor } from "../catalog/index.js";
 import { createToolCatalogSnapshot } from "../catalog/index.js";
 import { createToolContractIdentity, toolRevisionKey, type ToolRevisionRef } from "../identity/index.js";
 import type { RegisteredTool, ToolRegistrationSnapshot } from "../registration/index.js";
@@ -25,15 +25,6 @@ export interface ToolSelectionRevision {
   readonly operationCatalogId: string;
   readonly operationCatalogRevision: string;
   readonly tools: readonly SelectedTool[];
-}
-
-export interface ToolExposureProof {
-  readonly id: string;
-  readonly selectionRevision: string;
-  readonly consumer: "controller";
-  readonly controllerRequestId: string;
-  readonly exposedTools: readonly ToolRevisionRef[];
-  readonly catalog: ToolCatalogSnapshot;
 }
 
 export class ToolSelectionValidationError extends TypeError {
@@ -82,28 +73,6 @@ export function createFixedLocalToolSelection(
     operationCatalogId: operationCatalog.id,
     operationCatalogRevision: operationCatalog.revision,
     tools: frozen,
-  });
-}
-
-export function createControllerToolExposureProof(
-  selection: ToolSelectionRevision,
-  controllerRequestId: string,
-): ToolExposureProof {
-  const modelTools = selection.tools.filter((selected) => selected.origins.includes("model"));
-  const exposedTools = Object.freeze(modelTools.map((selected) => selected.registration.descriptor.ref));
-  const catalog = createToolCatalogSnapshot(modelTools.map((selected) => descriptorInput(selected.registration.descriptor)));
-  const id = createToolContractIdentity("agent-anything.controller-tool-exposure.v1", {
-    selectionRevision: selection.revision,
-    controllerRequestId,
-    exposedTools,
-  });
-  return Object.freeze({
-    id,
-    selectionRevision: selection.revision,
-    consumer: "controller" as const,
-    controllerRequestId: token(controllerRequestId),
-    exposedTools,
-    catalog,
   });
 }
 

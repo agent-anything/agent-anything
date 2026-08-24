@@ -18,7 +18,7 @@ import {
   type CodeFileToolName,
 } from "@agent-anything/helarc-code-agent/file-operation";
 import type { CodeSourcePort } from "@agent-anything/helarc-code-agent/source";
-import { createControllerToolExposureProof } from "@agent-anything/tools/selection";
+import { createFixedControllerToolExposureProof } from "@agent-anything/tools/selection";
 import {
   RUNTIME_EVENT_SCHEMA_VERSION,
   type RuntimeEvent,
@@ -62,7 +62,7 @@ describe("HelarcProductComposition", () => {
       ...createLocalContributions(),
     });
 
-    const exposure = createControllerToolExposureProof(
+    const exposure = createFixedControllerToolExposureProof(
       composition.actions.toolSelection,
       "controller-request-1",
     );
