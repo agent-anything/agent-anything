@@ -56,6 +56,7 @@ export type RunProgressCommittedFactInput =
       readonly kind: "interaction_settlement";
       readonly owner: string;
       readonly status: "resolved" | "expired" | "cancelled" | "invalidated" | "failed";
+      readonly contentDigest: string | null;
       readonly lowerRefs: readonly RunProgressFactRef[];
       readonly toolResult: ToolResult | null;
     }
@@ -173,6 +174,7 @@ export async function createRunProgressSemanticFacts(
     case "interaction_settlement":
       return one(input.kind, input.owner, null, null, "strong", {
         status: input.status,
+        contentDigest: input.contentDigest,
         lowerRefs: normalizeFactRefs(input.lowerRefs),
         tool: normalizeToolResult(input.toolResult),
       });
@@ -190,10 +192,9 @@ export async function createRunProgressSemanticFacts(
         input.kind,
         "validation",
         validation.snapshot.runId,
-        String(validation.snapshot.revision),
+        null,
         "strong",
         {
-          snapshotRevision: validation.snapshot.revision,
           feedback: validation.feedback.map((item) => ({
             requirement: item.requirement,
             state: item.state,
@@ -209,10 +210,10 @@ export async function createRunProgressSemanticFacts(
         ...(await one(
           "completion_gate",
           "validation",
-          validation.gate.id,
-          validation.gate.revision,
+          validation.snapshot.runId,
+          null,
           "strong",
-          { gate: validation.gate },
+          { gateRecorded: true },
         )),
       ]);
     }

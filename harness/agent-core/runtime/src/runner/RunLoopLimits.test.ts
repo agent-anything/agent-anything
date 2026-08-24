@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RunLimits } from "./RunConfig.js";
-import { evaluateRunLoopLimits } from "./RunLoopLimits.js";
+import { evaluateRunDeadline, evaluateRunNumericLimits } from "./RunLoopLimits.js";
 
 const limits: RunLimits = {
   maxIterations: 3,
@@ -22,24 +22,16 @@ const limits: RunLimits = {
 
 describe("RunLoopLimits", () => {
   it("reports duration, iteration, and consecutive failure violations", () => {
-    expect(evaluateRunLoopLimits({
-      counters: {
-        controllerTurns: 0,
-        runActions: 0,
-        observations: 0,
-        consecutiveActionFailures: 0,
-      },
-      limits,
+    expect(evaluateRunDeadline({
       deadlineAt: "2026-07-13T00:00:01.000Z",
       now: "2026-07-13T00:00:01.000Z",
-      cancellationRequested: false,
     })).toEqual({
       code: "runtime_deadline_exceeded",
       message: "Run deadline elapsed.",
       metadata: { deadlineAt: "2026-07-13T00:00:01.000Z" },
     });
 
-    expect(evaluateRunLoopLimits({
+    expect(evaluateRunNumericLimits({
       counters: {
         controllerTurns: 3,
         runActions: 0,
@@ -47,16 +39,13 @@ describe("RunLoopLimits", () => {
         consecutiveActionFailures: 0,
       },
       limits,
-      deadlineAt: "2026-07-13T00:01:00.000Z",
-      now: "2026-07-13T00:00:00.500Z",
-      cancellationRequested: false,
     })).toEqual({
       code: "runtime_limit_exceeded",
       message: "Run exceeded maxIterations.",
       metadata: { maxIterations: 3 },
     });
 
-    expect(evaluateRunLoopLimits({
+    expect(evaluateRunNumericLimits({
       counters: {
         controllerTurns: 1,
         runActions: 2,
@@ -64,9 +53,6 @@ describe("RunLoopLimits", () => {
         consecutiveActionFailures: 2,
       },
       limits,
-      deadlineAt: "2026-07-13T00:01:00.000Z",
-      now: "2026-07-13T00:00:00.500Z",
-      cancellationRequested: false,
     })).toEqual({
       code: "runtime_limit_exceeded",
       message: "Run exceeded maxConsecutiveActionFailures.",
@@ -74,18 +60,19 @@ describe("RunLoopLimits", () => {
     });
   });
 
-  it("leaves cancellation to the lifecycle owner", () => {
-    expect(evaluateRunLoopLimits({
+  it("keeps deadline and numeric envelopes independently selectable", () => {
+    expect(evaluateRunDeadline({
+      deadlineAt: "2026-07-13T00:01:00.000Z",
+      now: "2026-07-13T00:00:00.500Z",
+    })).toBeNull();
+    expect(evaluateRunNumericLimits({
       counters: {
-        controllerTurns: 99,
-        runActions: 99,
-        observations: 99,
-        consecutiveActionFailures: 99,
+        controllerTurns: 0,
+        runActions: 0,
+        observations: 0,
+        consecutiveActionFailures: 0,
       },
       limits,
-      deadlineAt: "2026-07-13T00:00:01.000Z",
-      now: "2026-07-13T00:10:00.000Z",
-      cancellationRequested: true,
     })).toBeNull();
   });
 });

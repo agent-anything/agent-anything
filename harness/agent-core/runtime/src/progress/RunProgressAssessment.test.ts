@@ -103,8 +103,8 @@ describe("Run Progress assessment", () => {
     const changed = await createBasis({ steeringFingerprint: digest("2") });
     const next = assess(first.state, changed, [fact("run_action", "activity", "same")]);
     expect(next.assessment).toMatchObject({
-      disposition: "unchanged",
-      reasonCode: "progression_basis_changed",
+      disposition: "repeated",
+      reasonCode: "equivalent_fact_repeated",
       basisChanged: true,
     });
   });
@@ -161,7 +161,7 @@ describe("Run Progress semantic fingerprints", () => {
       { kind: "operation_result", result: operationResult(), toolResult: null, ownerOutcome: null },
       { kind: "operation_rejected", owner: "operation-catalog", code: "invalid" },
       { kind: "tool_rejected", code: "tool_not_found" },
-      { kind: "interaction_settlement", owner: "interaction", status: "resolved", lowerRefs: [], toolResult: null },
+      { kind: "interaction_settlement", owner: "interaction", status: "resolved", contentDigest: "sha256:answer", lowerRefs: [], toolResult: null },
       { kind: "descendant_settlement", status: "succeeded", failureOwner: null, failureCode: null, lowerRefs: [], toolResult: toolResult() },
       { kind: "validation_feedback", validation: validationProjection() },
       { kind: "evidence_ref", ref: "evidence-1" },
@@ -234,6 +234,28 @@ describe("Run Progress semantic fingerprints", () => {
       strength: "strong",
       ref: { owner: "workspace", subjectId: "file:hello.txt", revision: "2" },
     });
+  });
+
+  it("distinguishes owner-supplied Interaction content digests without retaining payload", async () => {
+    const first = await createRunProgressSemanticFacts({
+      kind: "interaction_settlement",
+      owner: "interaction",
+      status: "resolved",
+      contentDigest: "sha256:first-answer",
+      lowerRefs: [],
+      toolResult: null,
+    });
+    const second = await createRunProgressSemanticFacts({
+      kind: "interaction_settlement",
+      owner: "interaction",
+      status: "resolved",
+      contentDigest: "sha256:second-answer",
+      lowerRefs: [],
+      toolResult: null,
+    });
+
+    expect(first[0]?.fingerprint).not.toBe(second[0]?.fingerprint);
+    expect(first[0]).not.toHaveProperty("contentDigest");
   });
 
   it("fails closed for an unknown future committed-fact family", async () => {

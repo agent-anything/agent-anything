@@ -23,6 +23,7 @@ export type RuntimeInteractionSettlement =
   | {
       readonly status: "resolved";
       readonly outcome: InteractionAppliedOutcome;
+      readonly contentDigest: string;
       readonly resolutionValue: unknown;
       readonly applicationValue: unknown;
     }
@@ -339,6 +340,7 @@ export class RunInteractionCoordinator {
       const settlement: RuntimeInteractionSettlement = Object.freeze({
         status: "resolved" as const,
         outcome,
+        contentDigest: input.contentDigest,
         resolutionValue,
         applicationValue,
       });

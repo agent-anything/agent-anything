@@ -121,6 +121,10 @@ import {
 } from "../plan/index.js";
 import { snapshotRetryEvent, type RetryEventSink } from "../retry/index.js";
 import {
+  type RunProgressCorrectionFeedback,
+  type RunProgressState,
+} from "../progress/index.js";
+import {
   createBlockedRunResult,
   createCancelledRunResult,
   createFailedRunResult,
@@ -180,7 +184,8 @@ import {
   RunInterruptionCoordinator,
 } from "./RunInterruptionCoordinator.js";
 import { RunInteractionCoordinator, type RuntimeInteractionSettlement } from "./RunInteractionCoordinator.js";
-import { evaluateRunLoopLimits } from "./RunLoopLimits.js";
+import { evaluateRunDeadline, evaluateRunNumericLimits, type RunLimitViolation } from "./RunLoopLimits.js";
+import { assessCommittedRunProgress } from "./RunProgressCheckpoint.js";
 import { recordRunnerLifecycle } from "./RunnerObservability.js";
 import { completeRunnerTrace, createRunnerTraceAssembler } from "./RunnerTracing.js";
 import { RunStateWriter } from "./RunStateWriter.js";
@@ -189,6 +194,8 @@ import {
   createCurrentRunContextContributions,
   createObservationContextAdmissionProfile,
   createObservationContextContribution,
+  createProgressCorrectionContextAdmissionProfile,
+  createProgressCorrectionContextContribution,
   createSteeringContextAdmissionProfile,
   createSteeringContextContribution,
   createTaskContextAdmissionProfile,
@@ -533,29 +540,33 @@ export class RunExecution<TOutput> {
         });
       }
 
+      let controllerTurnCompleted = false;
       while (this.terminalResult === null) {
         this.drainInteractionSettlements();
         if (this.config.cancellation.context.request !== null) {
           return await this.settle({ status: "cancelled" });
         }
         this.drainSteering("apply");
-        const state = this.writer.getSnapshot();
-        const violation = evaluateRunLoopLimits({
-          counters: state.counters,
-          limits: this.config.limits,
-          deadlineAt: state.deadlineAt,
+        const deadline = evaluateRunDeadline({
+          deadlineAt: this.writer.getSnapshot().deadlineAt,
           now: this.now(),
-          cancellationRequested: false,
         });
-        if (violation !== null) {
-          return await this.settle({
-            status: "failed",
-            code: violation.code,
-            failure: runtimeFailure(violation.code, violation.message, violation.metadata),
-          });
+        if (deadline !== null) return await this.settleLimitViolation(deadline);
+
+        if (controllerTurnCompleted) {
+          const progressTerminal = await this.commitProgressCheckpoint();
+          controllerTurnCompleted = false;
+          if (progressTerminal !== null) return progressTerminal;
         }
 
+        const numericLimit = evaluateRunNumericLimits({
+          counters: this.writer.getSnapshot().counters,
+          limits: this.config.limits,
+        });
+        if (numericLimit !== null) return await this.settleLimitViolation(numericLimit);
+
         const decision = await this.nextDecision();
+        controllerTurnCompleted = true;
         const settlementsAfterDecision = this.drainInteractionSettlements();
         if (this.config.cancellation.context.request !== null) {
           return await this.settle({ status: "cancelled" });
@@ -1316,6 +1327,104 @@ export class RunExecution<TOutput> {
     }
   }
 
+  private async commitProgressCheckpoint(): Promise<RunResult<TOutput> | null> {
+    const before = this.writer.getSnapshot();
+    const proposed = await assessCommittedRunProgress({
+      state: before,
+      config: this.config,
+    });
+    if (this.config.cancellation.context.request !== null) {
+      return this.settle({ status: "cancelled" });
+    }
+    const deadline = evaluateRunDeadline({
+      deadlineAt: before.deadlineAt,
+      now: this.now(),
+    });
+    if (deadline !== null) return this.settleLimitViolation(deadline);
+
+    const nonAdvancing = proposed.assessment.disposition === "unchanged" ||
+      proposed.assessment.disposition === "repeated";
+    const thresholdReached = nonAdvancing && (
+      proposed.state.activeCorrectionRound !== null ||
+      proposed.state.consecutiveNonAdvancingCheckpoints >=
+        this.config.limits.progress.nonAdvancingCheckpointThreshold
+    );
+    if (!thresholdReached) {
+      this.writer.commit({
+        kind: "progress_assessment",
+        assessment: proposed.assessment,
+      }, (current) => Object.freeze({
+        progress: proposed.state,
+        context: before.progress.activeCorrectionRound !== null &&
+            proposed.state.activeCorrectionRound === null
+          ? this.clearProgressCorrectionContext(current.context)
+          : current.context,
+      }));
+      return null;
+    }
+
+    if (proposed.state.correctionRounds >= this.config.limits.progress.maxCorrectionRounds) {
+      this.writer.commit({
+        kind: "progress_assessment",
+        assessment: proposed.assessment,
+      }, () => Object.freeze({ progress: proposed.state }));
+      return this.settle({ status: "blocked", code: "runtime_no_progress" });
+    }
+
+    const correctionRound = proposed.state.correctionRounds + 1;
+    const feedback: RunProgressCorrectionFeedback = Object.freeze({
+      assessment: proposed.assessment.ref,
+      correctionRound,
+      reasonCode: proposed.assessment.reasonCode,
+      factRefs: proposed.assessment.factRefs,
+    });
+    const progress: RunProgressState = Object.freeze({
+      ...proposed.state,
+      correctionRounds: correctionRound,
+      activeCorrectionRound: correctionRound,
+    });
+    const assessment = Object.freeze({
+      ...proposed.assessment,
+      correctionRounds: correctionRound,
+      activeCorrectionRound: correctionRound,
+    });
+    const contribution = createProgressCorrectionContextContribution({
+      id: this.currentContextContributionId(
+        before.context,
+        "agent-runtime",
+        "run_progress_correction",
+      ) ?? this.id("context_contribution"),
+      revision: String(correctionRound),
+      runId: this.runId,
+      feedback,
+      createdAt: this.now(),
+    });
+    this.writer.commitItems(Object.freeze([
+      { kind: "progress_assessment", assessment },
+      { kind: "progress_correction", feedback },
+    ]), (current) => Object.freeze({
+      progress,
+      context: this.applyContextContributions(
+        current.context,
+        Object.freeze([contribution]),
+        createProgressCorrectionContextAdmissionProfile(),
+        "run_progress_correction",
+        `${this.runId}:${correctionRound}`,
+      ),
+    }));
+    return null;
+  }
+
+  private async settleLimitViolation(
+    violation: RunLimitViolation,
+  ): Promise<RunResult<TOutput>> {
+    return this.settle({
+      status: "failed",
+      code: violation.code,
+      failure: runtimeFailure(violation.code, violation.message, violation.metadata),
+    });
+  }
+
   private synchronizeCurrentContext(): void {
     const state = this.writer.getSnapshot();
     const runStateId = this.currentContextContributionId(state.context, "agent-runtime", "run_state")
@@ -1358,6 +1467,28 @@ export class RunExecution<TOutput> {
       : null;
   }
 
+  private clearProgressCorrectionContext(context: ActiveContext): ActiveContext {
+    const current = context.items.find((item) =>
+      "contribution" in item &&
+      item.lifecycle.kind === "active" &&
+      item.contribution.source.owner === "agent-runtime" &&
+      item.contribution.handling.replacementKey === "run_progress_correction"
+    );
+    if (current === undefined || !("contribution" in current)) return context;
+    return this.applyContextOperations(
+      context,
+      Object.freeze([Object.freeze({
+        kind: "invalidate" as const,
+        item: current.ref,
+        expectedContribution: current.contribution.ref,
+        reason: "run_progress_recovered",
+      })]),
+      createProgressCorrectionContextAdmissionProfile(),
+      "run_progress_recovered",
+      this.runId,
+    );
+  }
+
   private async processCandidate(
     candidate: ProgressionCandidate,
     index: number,
@@ -1365,15 +1496,6 @@ export class RunExecution<TOutput> {
   ): Promise<boolean> {
     const state = this.writer.getSnapshot();
     if (state.counters.runActions >= this.config.limits.maxActions) {
-      await this.settle({
-        status: "failed",
-        code: "runtime_limit_exceeded",
-        failure: runtimeFailure(
-          "runtime_limit_exceeded",
-          "Run exceeded maxActions.",
-          { maxActions: this.config.limits.maxActions },
-        ),
-      });
       return true;
     }
     const reservedId = candidate.kind === "operation_request"
@@ -1685,6 +1807,7 @@ export class RunExecution<TOutput> {
         kind: "interaction",
         owner: opened.owner,
         status: "failed",
+        contentDigest: null,
         value: Object.freeze({ code: opened.code }),
         toolResult: null,
       }, [], opened.owner);
@@ -1807,6 +1930,7 @@ export class RunExecution<TOutput> {
         kind: "interaction",
         owner: opened.owner,
         status: "failed",
+        contentDigest: null,
         value: Object.freeze({ code: opened.code }),
         toolResult: result,
       }, [toolResultLowerRef(result)], opened.owner);
@@ -2655,6 +2779,7 @@ export class RunExecution<TOutput> {
         kind: "interaction",
         owner: settlement.outcome.request.protocol.owner,
         status: "resolved",
+        contentDigest: settlement.contentDigest,
         value: settlement.applicationValue,
         toolResult,
       }, [
@@ -2687,6 +2812,7 @@ export class RunExecution<TOutput> {
       kind: "interaction",
       owner: settlement.owner,
       status: settlement.status,
+      contentDigest: null,
       value: Object.freeze({ code: settlement.code }),
       toolResult,
     }, toolResult === null ? [] : [toolResultLowerRef(toolResult)], settlement.owner);

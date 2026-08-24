@@ -16,7 +16,7 @@ export type RunObservationPayload =
   | { readonly kind: "operation"; readonly result: OperationResult; readonly toolResult: ToolResult | null }
   | { readonly kind: "operation_rejected"; readonly owner: string; readonly code: string; readonly message: string }
   | { readonly kind: "tool_rejected"; readonly code: string; readonly message: string }
-  | { readonly kind: "interaction"; readonly owner: string; readonly status: "resolved" | "expired" | "cancelled" | "invalidated" | "failed"; readonly value: unknown; readonly toolResult: ToolResult | null }
+  | { readonly kind: "interaction"; readonly owner: string; readonly status: "resolved" | "expired" | "cancelled" | "invalidated" | "failed"; readonly contentDigest: string | null; readonly value: unknown; readonly toolResult: ToolResult | null }
   | { readonly kind: "descendant_run"; readonly childRunId: string | null; readonly status: "succeeded" | "partial" | "failed" | "unavailable" | "denied" | "cancelled" | "timed_out" | "invalid" | "unknown_effect"; readonly output: unknown; readonly failure: OperationFailure | null; readonly toolResult: ToolResult };
 
 export interface RunObservation {

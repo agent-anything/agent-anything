@@ -4,6 +4,7 @@ import type { ContextContribution, ContextInstructionRole } from "@agent-anythin
 import { measureContextPayload } from "@agent-anything/context/contribution";
 import type { ContextAdmissionProfile } from "@agent-anything/context/active-context";
 import type { PlanProjection } from "../plan/index.js";
+import type { RunProgressCorrectionFeedback } from "../progress/index.js";
 import type { RunObservation, RunState } from "../run/index.js";
 
 const SENSITIVE_KEY = /(?:authorization|credential|password|secret|token|api[-_]?key)/i;
@@ -95,6 +96,45 @@ export function createSteeringContextContribution(input: { readonly id: string; 
   });
 }
 
+export function createProgressCorrectionContextContribution(input: {
+  readonly id: string;
+  readonly revision: string;
+  readonly runId: string;
+  readonly feedback: RunProgressCorrectionFeedback;
+  readonly createdAt: string;
+}): ContextContribution {
+  return createRunContextContribution({
+    id: input.id,
+    revision: input.revision,
+    runId: input.runId,
+    owner: "agent-runtime",
+    sourceKind: "run_progress_correction",
+    sourceId: input.runId,
+    sourceRevision: input.revision,
+    observedAt: input.createdAt,
+    payload: toContextJsonValue({
+      kind: "run_progress_correction",
+      correctionRound: input.feedback.correctionRound,
+      reasonCode: input.feedback.reasonCode,
+      factRefs: input.feedback.factRefs,
+      guidance: [
+        "Reassess the objective and current committed facts.",
+        "Choose a materially different path, request clarification, propose completion, or stop when no safe path remains.",
+      ],
+    }),
+    payloadKind: "structured",
+    retention: "current",
+    replacementKey: "run_progress_correction",
+    instructionRole: "data",
+    necessity: "mandatory",
+    precedence: 92,
+    audiences: Object.freeze(["model"]),
+    provenanceKind: "run_progress_assessment",
+    provenanceId: `${input.runId}:${input.feedback.assessment.checkpointSequence}`,
+    provenanceRevision: input.revision,
+  });
+}
+
 export function createCurrentRunContextContributions(input: {
   readonly runStateId: string;
   readonly planId: string;
@@ -174,6 +214,18 @@ export function createSteeringContextAdmissionProfile(): ContextAdmissionProfile
     instructionRoles: ["user"],
     necessities: ["mandatory"],
     maximumPrecedence: 90,
+  });
+}
+
+export function createProgressCorrectionContextAdmissionProfile(): ContextAdmissionProfile {
+  return admissionProfile({
+    owner: "agent-runtime",
+    sourceKinds: ["run_progress_correction"],
+    audiences: ["model"],
+    retention: ["current"],
+    instructionRoles: ["data"],
+    necessities: ["mandatory"],
+    maximumPrecedence: 92,
   });
 }
 

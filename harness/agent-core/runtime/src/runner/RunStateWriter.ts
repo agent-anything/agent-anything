@@ -26,24 +26,36 @@ export class RunStateWriter<TOutput> {
     payload: RunItemPayload<TOutput>,
     transition: RunStateTransition<TOutput> = () => Object.freeze({}),
   ): RunState<TOutput> {
+    return this.commitItems(Object.freeze([payload]), transition);
+  }
+
+  commitItems(
+    payloads: readonly RunItemPayload<TOutput>[],
+    transition: RunStateTransition<TOutput> = () => Object.freeze({}),
+  ): RunState<TOutput> {
+    if (payloads.length === 0) {
+      throw new TypeError("RunStateWriter.commitItems requires at least one RunItem payload.");
+    }
     const current = this.state;
-    const sequence = current.items.length + 1;
     const revision = current.revision + 1;
-    const item = deepFreeze({
-      ref: {
-        run: current.run,
-        id: this.createId({ kind: "run_item", runId: current.run.id, sequence }),
-        sequence,
-      },
-      committedInRevision: revision,
-      createdAt: this.now(),
-      payload,
+    const items = payloads.map((payload, index) => {
+      const sequence = current.items.length + index + 1;
+      return deepFreeze({
+        ref: {
+          run: current.run,
+          id: this.createId({ kind: "run_item", runId: current.run.id, sequence }),
+          sequence,
+        },
+        committedInRevision: revision,
+        createdAt: this.now(),
+        payload,
+      });
     });
     this.state = deepFreeze({
       ...current,
       ...transition(current),
       revision,
-      items: [...current.items, item],
+      items: [...current.items, ...items],
     }) as RunState<TOutput>;
     this.onCommit(this.state);
     return this.state;

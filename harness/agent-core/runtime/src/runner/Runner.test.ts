@@ -357,6 +357,72 @@ describe("Runner semantic integration", () => {
     }));
   });
 
+  it("bounds repeated non-eligible completion proposals without bypassing the Completion Gate", async () => {
+    const operations = createOperationFixture([]);
+    const gate: CompletionGatePort = {
+      async evaluate(input) {
+        return {
+          invocation: input.invocation,
+          validationSnapshot: input.validationSnapshot,
+          status: "blocked_unassessed",
+          disposition: "continue",
+          reasons: [{
+            owner: "validation",
+            code: "completion_not_yet_established",
+            message: "Completion is not yet established.",
+            requirement: null,
+          }],
+          failure: null,
+          decidedAt: NOW,
+        };
+      },
+    };
+    const controller = new ScriptedController([
+      complete("Not ready", "model_complete_1"),
+      complete("Not ready", "model_complete_2"),
+      (input) => {
+        expect(input.context.blocks.some((block) =>
+          block.payload.kind === "structured" &&
+          isRecord(block.payload.value) &&
+          block.payload.value.kind === "run_progress_correction"
+        )).toBe(true);
+        return complete("Not ready", "model_complete_3");
+      },
+    ]);
+    const result = await createRunner(controller, operations, {
+      validation: {
+        executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
+        completionGate: gate,
+        preparation: null,
+        settledOperationResults: null,
+        checkResults: null,
+      },
+    }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        limits: {
+          maxIterations: 3,
+          progress: {
+            checkpointWindowSize: 4,
+            nonAdvancingCheckpointThreshold: 1,
+            maxCorrectionRounds: 1,
+          },
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({ status: "blocked", code: "runtime_no_progress" });
+    expect(controller.calls).toHaveLength(3);
+    expect(result.items.filter(({ payload }) => payload.kind === "validation_feedback"))
+      .toHaveLength(4);
+    expect(result.items.at(-1)?.payload).toMatchObject({
+      kind: "terminal_transition",
+      status: "blocked",
+      code: "runtime_no_progress",
+    });
+  });
+
   it("preserves a nested Validation Failure when Completion Gate execution fails", async () => {
     const operations = createOperationFixture([]);
     const gate: CompletionGatePort = {
@@ -1275,6 +1341,141 @@ describe("Runner semantic integration", () => {
     }));
   });
 
+  it("feeds back bounded correction and blocks repeated Plan churn before generic limits", async () => {
+    const operations = createOperationFixture([]);
+    const planCandidate = (modelItemId: string) => ({
+      kind: "state_transition" as const,
+      transition: "plan_update" as const,
+      input: {
+        explanation: "Inspect before completing.",
+        plan: [{ step: "Inspect state", status: "in_progress" }],
+      },
+      modelItemId,
+    });
+    const controller = new ScriptedController([
+      advance([planCandidate("model_plan_1")], "model_plan_1"),
+      (input) => {
+        expect(input.context.blocks, JSON.stringify(input.context.blocks, null, 2)).toContainEqual(expect.objectContaining({
+          instructionRole: "data",
+          payload: expect.objectContaining({
+            kind: "structured",
+            value: expect.objectContaining({
+              kind: "run_progress_correction",
+              correctionRound: 1,
+              reasonCode: "plan_declaration_only",
+            }),
+          }),
+        }));
+        return advance([planCandidate("model_plan_2")], "model_plan_2");
+      },
+    ]);
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        limits: {
+          maxIterations: 2,
+          maxActions: 2,
+          progress: {
+            checkpointWindowSize: 3,
+            nonAdvancingCheckpointThreshold: 1,
+            maxCorrectionRounds: 1,
+          },
+        },
+      }),
+    );
+
+    expect(result, JSON.stringify(result, null, 2)).toMatchObject({
+      status: "blocked",
+      code: "runtime_no_progress",
+    });
+    expect(controller.calls).toHaveLength(2);
+    const correctionItems = result.items.filter(({ payload }) =>
+      payload.kind === "progress_assessment" || payload.kind === "progress_correction"
+    );
+    expect(correctionItems.slice(0, 2).map(({ payload }) => payload.kind)).toEqual([
+      "progress_assessment",
+      "progress_correction",
+    ]);
+    expect(correctionItems[0]?.committedInRevision).toBe(correctionItems[1]?.committedInRevision);
+    expect(result.items.at(-1)?.payload).toMatchObject({
+      kind: "terminal_transition",
+      status: "blocked",
+      code: "runtime_no_progress",
+      failure: null,
+    });
+  });
+
+  it("recovers in the ordinary Loop when a correction is followed by a new owner-confirmed result", async () => {
+    const operation = operationRef("inspect-new-snapshot");
+    const handler = internalHandler(
+      "handler.inspect-new-snapshot",
+      "code-workspace",
+      { inspected: true },
+      [{
+        owner: "code-workspace",
+        kind: "workspace_snapshot",
+        id: "workspace-snapshot-2",
+        revision: "2",
+      }],
+    );
+    const operations = createOperationFixture([
+      operationSpec(operation, "internal", {
+        requestOrigins: ["controller_protocol"],
+        handlerId: handler.id,
+      }),
+    ], [handler]);
+    const controller = new ScriptedController([
+      advance([{
+        kind: "state_transition",
+        transition: "plan_update",
+        input: {
+          explanation: "Start with a declaration.",
+          plan: [{ step: "Inspect", status: "in_progress" }],
+        },
+        modelItemId: "model_plan_1",
+      }], "model_plan_1"),
+      advance([operationCandidate(operation, {})], "model_operation"),
+      (input) => {
+        expect(input.context.blocks.some((block) =>
+          block.payload.kind === "structured" &&
+          isRecord(block.payload.value) &&
+          block.payload.value.kind === "run_progress_correction"
+        )).toBe(false);
+        return complete("Recovered", "model_complete");
+      },
+    ]);
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        limits: {
+          progress: {
+            checkpointWindowSize: 4,
+            nonAdvancingCheckpointThreshold: 1,
+            maxCorrectionRounds: 1,
+          },
+        },
+      }),
+    );
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(result.items).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        kind: "progress_assessment",
+        assessment: expect.objectContaining({
+          disposition: "advanced",
+          activeCorrectionRound: null,
+        }),
+      }),
+    }));
+    expect(result.items.some(({ payload }) =>
+      payload.kind === "terminal_transition" && payload.code === "runtime_no_progress"
+    )).toBe(false);
+  });
+
   it("waits on a blocking generic Interaction and resumes the same Run", async () => {
     const operations = createOperationFixture([]);
     const interaction = testInteractionProtocol();
@@ -1335,6 +1536,7 @@ describe("Runner semantic integration", () => {
         kind: "interaction",
         owner: "test-owner",
         status: "cancelled",
+        contentDigest: null,
         toolResult: null,
         value: { code: "interaction_cancelled" },
       },
@@ -2027,6 +2229,7 @@ function internalHandler(
   id: string,
   semanticOwner: string,
   output: unknown,
+  lowerRefs: OperationResult["lowerRefs"] = [],
 ): InternalOperationHandler & { readonly execute: ReturnType<typeof vi.fn> } {
   return {
     id,
@@ -2042,7 +2245,7 @@ function internalHandler(
       failure: null,
       startedAt: NOW,
       finishedAt: NOW,
-      lowerRefs: [],
+      lowerRefs,
       metadata: {},
     })),
   };

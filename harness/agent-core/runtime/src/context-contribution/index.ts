@@ -3,6 +3,8 @@ export {
   createCurrentRunContextAdmissionProfile,
   createObservationContextContribution,
   createObservationContextAdmissionProfile,
+  createProgressCorrectionContextAdmissionProfile,
+  createProgressCorrectionContextContribution,
   createRunContextContribution,
   createSteeringContextContribution,
   createSteeringContextAdmissionProfile,

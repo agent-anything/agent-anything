@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { admitContextContribution } from "@agent-anything/context/active-context";
 import { ContextContractError } from "@agent-anything/context/contract";
 import {
+  createProgressCorrectionContextAdmissionProfile,
+  createProgressCorrectionContextContribution,
   createTaskContextAdmissionProfile,
   createTaskContextContribution,
 } from "./RunContextContribution.js";
@@ -30,6 +32,42 @@ describe("Run Context Contribution admission", () => {
       elevated,
       createTaskContextAdmissionProfile(),
     )).toThrowError(ContextContractError);
+  });
+
+  it("admits bounded Runner-owned correction feedback as replaceable model Context", () => {
+    const contribution = createProgressCorrectionContextContribution({
+      id: "progress-correction-1",
+      revision: "1",
+      runId: "run-1",
+      feedback: {
+        assessment: { runId: "run-1", checkpointSequence: 3 },
+        correctionRound: 1,
+        reasonCode: "equivalent_fact_repeated",
+        factRefs: [{
+          kind: "operation_result",
+          owner: "workspace",
+          subjectId: "read",
+          revision: "1",
+        }],
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    expect(() => admitContextContribution(
+      contribution,
+      createProgressCorrectionContextAdmissionProfile(),
+    )).not.toThrow();
+    expect(contribution).toMatchObject({
+      source: { owner: "agent-runtime", kind: "run_progress_correction" },
+      disclosure: { sensitivity: "internal", audiences: ["model"] },
+      handling: {
+        retention: "current",
+        replacementKey: "run_progress_correction",
+        instructionRole: "data",
+        necessity: "mandatory",
+      },
+    });
+    expect(JSON.stringify(contribution)).not.toContain("credential");
   });
 });
 

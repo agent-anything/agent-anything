@@ -7,17 +7,20 @@ export interface RunLimitViolation {
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
-export function evaluateRunLoopLimits(input: {
-  readonly counters: RunCounters;
-  readonly limits: RunLimits;
+export function evaluateRunDeadline(input: {
   readonly deadlineAt: string;
   readonly now: string;
-  readonly cancellationRequested: boolean;
 }): RunLimitViolation | null {
-  if (input.cancellationRequested) return null;
   if (Date.parse(input.now) >= Date.parse(input.deadlineAt)) {
     return violation("runtime_deadline_exceeded", "Run deadline elapsed.", { deadlineAt: input.deadlineAt });
   }
+  return null;
+}
+
+export function evaluateRunNumericLimits(input: {
+  readonly counters: RunCounters;
+  readonly limits: RunLimits;
+}): RunLimitViolation | null {
   if (input.counters.controllerTurns >= input.limits.maxIterations) {
     return violation("runtime_limit_exceeded", "Run exceeded maxIterations.", { maxIterations: input.limits.maxIterations });
   }

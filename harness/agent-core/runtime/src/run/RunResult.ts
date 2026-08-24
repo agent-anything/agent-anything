@@ -160,9 +160,10 @@ function snapshotItems<TOutput>(
     const committedInRevision = raw.committedInRevision;
     if (
       !Number.isSafeInteger(committedInRevision) ||
-      (committedInRevision as number) <= priorRevision
+      (committedInRevision as number) < 1 ||
+      (committedInRevision as number) < priorRevision
     ) {
-      throw new TypeError("RunItem committed revisions must be positive and increasing.");
+      throw new TypeError("RunItem committed revisions must be positive and non-decreasing.");
     }
     dateTime(raw.createdAt as string, `items[${index}].createdAt`);
     priorRevision = committedInRevision as number;

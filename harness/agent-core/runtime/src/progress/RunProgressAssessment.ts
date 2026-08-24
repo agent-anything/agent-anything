@@ -41,18 +41,20 @@ export function assessRunProgress(input: AssessRunProgressInput): AssessRunProgr
   const checkpointSequence = input.previousState.checkpointSequence + 1;
   const basisChanged = input.previousState.basisFingerprint !== null &&
     input.previousState.basisFingerprint !== input.basis.fingerprint;
-  const comparable = basisChanged
-    ? []
-    : input.previousState.recentCheckpoints.filter(
-      (checkpoint) => checkpoint.basisFingerprint === input.basis.fingerprint,
-    );
+  // Keep prior semantic outcomes comparable across basis episodes so cycling a
+  // basis cannot manufacture novelty. The exact basis remains on each record.
+  const comparable = input.previousState.recentCheckpoints;
   const observed = new Set(comparable.flatMap((checkpoint) => checkpoint.factFingerprints));
   const strong = input.committedFacts.filter((fact) => fact.strength === "strong");
   const novelStrong = strong.filter((fact) => !observed.has(fact.fingerprint));
   const allRepeated = input.committedFacts.length > 0 &&
     input.committedFacts.every((fact) => observed.has(fact.fingerprint));
-  const hasPlanOnly = input.committedFacts.length > 0 &&
-    input.committedFacts.every((fact) => fact.strength === "declaration");
+  const hasPlanOnly = input.committedFacts.some((fact) => fact.ref.kind === "plan_update") &&
+    input.committedFacts.every((fact) =>
+      fact.strength === "declaration" ||
+      fact.ref.kind === "controller_turn" ||
+      fact.ref.kind === "run_action"
+    );
 
   let disposition: RunProgressAssessment["disposition"];
   let reasonCode: RunProgressReasonCode;
@@ -76,8 +78,13 @@ export function assessRunProgress(input: AssessRunProgressInput): AssessRunProgr
           : "activity_without_structural_change";
   }
 
+  const steeringReset = basisChanged && input.committedFacts.some(
+    (fact) => fact.ref.kind === "steering",
+  );
   const nonAdvancing = disposition === "unchanged" || disposition === "repeated"
-    ? input.previousState.consecutiveNonAdvancingCheckpoints + 1
+    ? steeringReset
+      ? 0
+      : input.previousState.consecutiveNonAdvancingCheckpoints + 1
     : disposition === "advanced"
       ? 0
       : input.previousState.consecutiveNonAdvancingCheckpoints;
@@ -94,7 +101,7 @@ export function assessRunProgress(input: AssessRunProgressInput): AssessRunProgr
     factRefs: representativeFacts,
     consecutiveNonAdvancingCheckpoints: nonAdvancing,
     correctionRounds: input.previousState.correctionRounds,
-    activeCorrectionRound: disposition === "advanced"
+    activeCorrectionRound: disposition === "advanced" || steeringReset
       ? null
       : input.previousState.activeCorrectionRound,
   });
