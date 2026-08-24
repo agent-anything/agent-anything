@@ -71,7 +71,11 @@ export function createSucceededRunResult<TOutput>(input: CreateRunResultBaseInpu
   return deepFreeze({ ...base(input), status: "succeeded", code: null, finalOutput, cancellation: null, failure: null, relatedFailures: [] });
 }
 export function createBlockedRunResult<TOutput = never>(input: CreateRunResultBaseInput<TOutput>, code: RunBlockedCode): BlockedRunResult<TOutput> {
-  if (code !== "runtime_no_safe_path" && code !== "validation_blocked") {
+  if (
+    code !== "runtime_no_safe_path" &&
+    code !== "runtime_no_progress" &&
+    code !== "validation_blocked"
+  ) {
     throw new TypeError("Blocked RunResult code is invalid.");
   }
   return deepFreeze({ ...base(input), status: "blocked", code, finalOutput: null, cancellation: null, failure: null, relatedFailures: [] });

@@ -1054,6 +1054,7 @@ function checkExecutionSourceTopology() {
         "context-contribution",
         "controller",
         "plan",
+        "progress",
         "retry",
         "run",
         "runner",

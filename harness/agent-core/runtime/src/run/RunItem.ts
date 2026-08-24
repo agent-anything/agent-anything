@@ -12,6 +12,10 @@ import type { RunFailureCause } from "./RunFailure.js";
 import type { RunObservation } from "./RunObservation.js";
 import type { RunBlockedCode, RunFailureCode, RunResultStatus } from "./RunStatus.js";
 import type { ValidationRunnerProjection } from "@agent-anything/validation/projection";
+import type {
+  RunProgressAssessment,
+  RunProgressCorrectionFeedback,
+} from "../progress/index.js";
 
 export type RuntimeRunActionSubject =
   | { readonly kind: "state_transition"; readonly transition: "plan_update" | "handoff" }
@@ -60,6 +64,14 @@ export type RunItemPayload<TOutput = unknown> =
   | {
       readonly kind: "validation_feedback";
       readonly validation: ValidationRunnerProjection;
+    }
+  | {
+      readonly kind: "progress_assessment";
+      readonly assessment: RunProgressAssessment;
+    }
+  | {
+      readonly kind: "progress_correction";
+      readonly feedback: RunProgressCorrectionFeedback;
     }
   | {
       readonly kind: "terminal_transition";

@@ -1719,6 +1719,20 @@ describe("Runner semantic integration", () => {
       createAgent(),
       createRunInput(),
       createRunConfig(operations, {
+        limits: {
+          progress: {
+            checkpointWindowSize: 2,
+            nonAdvancingCheckpointThreshold: 3,
+            maxCorrectionRounds: 1,
+          },
+        },
+      }),
+    )).toThrow("cannot exceed checkpointWindowSize");
+
+    expect(() => runner.start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
         actionExecution: {
           policySnapshotId: "policy-1",
           securityContext: {
@@ -2227,6 +2241,11 @@ function createRunConfig(
         maxSteps: 8,
         maxStepLength: 200,
         maxExplanationLength: 500,
+      },
+      progress: {
+        checkpointWindowSize: 6,
+        nonAdvancingCheckpointThreshold: 3,
+        maxCorrectionRounds: 2,
       },
       ...overrides.limits,
     },

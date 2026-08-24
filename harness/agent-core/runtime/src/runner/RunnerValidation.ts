@@ -23,6 +23,7 @@ import type {
 } from "./RunConfig.js";
 import { snapshotCompletionGateConfiguration } from "@agent-anything/validation/completion";
 import { snapshotValidationProfile } from "@agent-anything/validation/definition";
+import { assertRunProgressLimits } from "../progress/index.js";
 
 export { snapshotAgent, snapshotRunInput };
 
@@ -228,8 +229,10 @@ function snapshotLimits(input: RunConfig["limits"]): RunConfig["limits"] {
       "RunLimits.maxPendingInteractions",
     ),
     plan: Object.freeze({ ...input.plan }),
+    progress: Object.freeze({ ...input.progress }),
   });
   assertValidPlanLimits(limits.plan);
+  assertRunProgressLimits(limits.progress);
   return limits;
 }
 

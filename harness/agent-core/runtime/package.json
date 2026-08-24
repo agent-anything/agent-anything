@@ -1,7 +1,7 @@
 {
   "name": "@agent-anything/agent-runtime",
   "version": "0.0.0",
-  "description": "Authoritative Run lifecycle, Agent Loop, Controller, planning, cancellation, retry, and termination for Agent Harness.",
+  "description": "Authoritative Run lifecycle, Agent Loop, Controller, planning, progress, cancellation, retry, and termination for Agent Harness.",
   "type": "module",
   "exports": {
     "./controller": {
@@ -11,6 +11,10 @@
     "./plan": {
       "types": "./src/plan/index.ts",
       "import": "./dist/plan/index.js"
+    },
+    "./progress": {
+      "types": "./src/progress/index.ts",
+      "import": "./dist/progress/index.js"
     },
     "./retry": {
       "types": "./src/retry/index.ts",

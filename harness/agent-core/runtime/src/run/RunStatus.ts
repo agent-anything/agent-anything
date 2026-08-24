@@ -1,5 +1,8 @@
 export type RunResultStatus = "succeeded" | "blocked" | "failed" | "cancelled";
-export type RunBlockedCode = "runtime_no_safe_path" | "validation_blocked";
+export type RunBlockedCode =
+  | "runtime_no_safe_path"
+  | "runtime_no_progress"
+  | "validation_blocked";
 export type RunFailureCode =
   | "runtime_execution_failed"
   | "runtime_limit_exceeded"

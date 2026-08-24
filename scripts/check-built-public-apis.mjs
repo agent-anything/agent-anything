@@ -92,6 +92,7 @@ const packageExportKeys = {
   "harness/agent-core/runtime": [
     "./controller",
     "./plan",
+    "./progress",
     "./retry",
     "./run",
     "./runner",
@@ -560,6 +561,14 @@ const expectedValueExports = {
     "applyPlanUpdate",
     "assertValidPlanLimits",
     "projectPlan",
+  ],
+  "@agent-anything/agent-runtime/progress": [
+    "assertRunProgressLimits",
+    "assessRunProgress",
+    "createInitialRunProgressState",
+    "createRunProgressBasis",
+    "createRunProgressSemanticFacts",
+    "projectRunProgress",
   ],
   "@agent-anything/agent-runtime/retry": [
     "RetryExecutor",

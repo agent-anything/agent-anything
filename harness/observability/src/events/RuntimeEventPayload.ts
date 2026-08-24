@@ -6,6 +6,8 @@ export type RuntimeRunItemKind =
   | "pending_transition"
   | "cancellation_transition"
   | "validation_feedback"
+  | "progress_assessment"
+  | "progress_correction"
   | "terminal_transition";
 
 export type RuntimeTerminalStatus = "succeeded" | "blocked" | "failed" | "cancelled";

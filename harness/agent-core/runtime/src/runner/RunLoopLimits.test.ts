@@ -13,6 +13,11 @@ const limits: RunLimits = {
     maxStepLength: 100,
     maxExplanationLength: 200,
   },
+  progress: {
+    checkpointWindowSize: 6,
+    nonAdvancingCheckpointThreshold: 3,
+    maxCorrectionRounds: 2,
+  },
 };
 
 describe("RunLoopLimits", () => {

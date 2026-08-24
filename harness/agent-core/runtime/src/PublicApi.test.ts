@@ -8,6 +8,7 @@ import type {
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as controllerApi from "./controller/index.js";
 import * as planApi from "./plan/index.js";
+import * as progressApi from "./progress/index.js";
 import * as retryApi from "./retry/index.js";
 import * as runApi from "./run/index.js";
 import * as runnerApi from "./runner/index.js";
@@ -30,6 +31,14 @@ describe("Agent Core Runtime public API", () => {
       "applyPlanUpdate",
       "assertValidPlanLimits",
       "projectPlan",
+    ]);
+    expect(Object.keys(progressApi).sort()).toEqual([
+      "assertRunProgressLimits",
+      "assessRunProgress",
+      "createInitialRunProgressState",
+      "createRunProgressBasis",
+      "createRunProgressSemanticFacts",
+      "projectRunProgress",
     ]);
     expect(Object.keys(retryApi).sort()).toEqual([
       "RetryExecutor",
@@ -68,5 +77,6 @@ describe("Agent Core Runtime public API", () => {
     expect(runnerApi).not.toHaveProperty("ActionEnforcementPipeline");
     expect(runnerApi).not.toHaveProperty("RunState");
     expect(runnerApi).not.toHaveProperty("RuntimeEventEmitter");
+    expect(progressApi).not.toHaveProperty("Runner");
   });
 });
