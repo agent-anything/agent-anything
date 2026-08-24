@@ -1,4 +1,5 @@
 import type { RuntimeEvent } from "@agent-anything/observability/events";
+import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 import type { RunResult, RunResultStatus } from "@agent-anything/agent-runtime/run";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
@@ -21,11 +22,18 @@ export type HelarcProductStatus =
 export interface HelarcActivityItem {
   readonly id: string;
   readonly sequence: number;
+  readonly source: HelarcActivitySource;
   readonly timestamp: string;
   readonly kind: string;
   readonly title: string;
   readonly detail: string | null;
   readonly metadata: Readonly<Record<string, unknown>>;
+}
+
+export interface HelarcActivitySource {
+  readonly runId: string;
+  readonly eventSequence: number;
+  readonly lineage: RunLineage;
 }
 
 export interface HelarcProductOutput {
@@ -261,8 +269,12 @@ function projectValidationCommunication(
 
 export function mapRuntimeEventToHelarcActivity(
   event: RuntimeEvent,
+  activitySequence: number,
   controllerTrace: HelarcControllerTraceProjection | null = null,
 ): HelarcActivityItem {
+  if (!Number.isSafeInteger(activitySequence) || activitySequence < 1) {
+    throw new TypeError("Helarc activity sequence must be a positive integer.");
+  }
   const projectedEvent = projectRuntimeEventForHost(event);
   const payload = isRecord(projectedEvent.payload) ? projectedEvent.payload : {};
   const metadata = Object.freeze({
@@ -271,12 +283,39 @@ export function mapRuntimeEventToHelarcActivity(
   });
   return Object.freeze({
     id: projectedEvent.id,
-    sequence: projectedEvent.sequence,
+    sequence: activitySequence,
+    source: Object.freeze({
+      runId: projectedEvent.runId,
+      eventSequence: projectedEvent.sequence,
+      lineage: snapshotActivityLineage(projectedEvent.lineage),
+    }),
     timestamp: projectedEvent.occurredAt,
     kind: projectedEvent.name,
     title: titleForEvent(projectedEvent.name, metadata),
     detail: detailForEvent(projectedEvent.name, metadata),
     metadata,
+  });
+}
+
+function snapshotActivityLineage(lineage: RunLineage): RunLineage {
+  if (lineage.kind === "root") {
+    return Object.freeze({
+      kind: "root" as const,
+      root: Object.freeze({ id: lineage.root.id }),
+      depth: 0 as const,
+    });
+  }
+  return Object.freeze({
+    kind: "descendant" as const,
+    root: Object.freeze({ id: lineage.root.id }),
+    parent: Object.freeze({ id: lineage.parent.id }),
+    parentRunAction: Object.freeze({
+      run: Object.freeze({ id: lineage.parentRunAction.run.id }),
+      id: lineage.parentRunAction.id,
+      sequence: lineage.parentRunAction.sequence,
+    }),
+    relation: Object.freeze({ id: lineage.relation.id }),
+    depth: lineage.depth,
   });
 }
 
@@ -609,6 +648,10 @@ function titleForEvent(name: string, payload: Readonly<Record<string, unknown>>)
       return `Controller iteration ${payload.iteration ?? ""} started`.trim();
     case "controller.finished": return `Controller ${payload.status ?? "finished"}`;
     case "run.item.appended": return `Run item appended: ${payload.itemKind ?? "unknown"}`;
+    case "run.descendant.reserved": return "Descendant Run reserved";
+    case "run.descendant.started": return "Descendant Run started";
+    case "run.descendant.rejected": return "Descendant Run rejected";
+    case "run.descendant.settled": return `Descendant Run ${payload.status ?? "settled"}`;
     case "context.projection.completed":
       return payload.outcome === "blocked"
         ? "Context projection blocked"
@@ -670,6 +713,11 @@ function detailForEvent(name: string, payload: Readonly<Record<string, unknown>>
   }
   if (name.startsWith("retry.")) {
     return typeof payload.operationId === "string" ? payload.operationId : null;
+  }
+  if (name.startsWith("run.descendant.")) {
+    return typeof payload.childRunId === "string"
+      ? payload.childRunId
+      : typeof payload.code === "string" ? payload.code : null;
   }
   return null;
 }

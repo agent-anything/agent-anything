@@ -137,6 +137,8 @@ export async function createHelarcProductComposition(
   >();
   let productProjection = createHelarcProductRunProjection(input.runId);
   let productSequence = 0;
+  let activitySequence = 0;
+  let activityRootRunId: string | null = null;
   const productListeners = new Set<HelarcProductRunProjectionListener>();
   const publishProductUpdate = (
     update: HelarcProductProjectionUpdatePayload,
@@ -209,12 +211,26 @@ export async function createHelarcProductComposition(
       };
     },
     recordRuntimeEvent(event: RuntimeEvent) {
+      const eventRootRunId = event.lineage.root.id;
+      if (activityRootRunId === null && event.lineage.kind !== "root") {
+        throw new TypeError("The first Helarc activity Event must establish root Run lineage.");
+      }
+      if (activityRootRunId !== null && eventRootRunId !== activityRootRunId) {
+        throw new TypeError("Helarc activity cannot combine different Run Tree roots.");
+      }
       const controllerTrace = projectHelarcControllerTraceForEvent(
         event,
         controllerTraceByOperationId,
       );
-      const activity = mapRuntimeEventToHelarcActivity(event, controllerTrace);
+      const nextActivitySequence = activitySequence + 1;
+      const activity = mapRuntimeEventToHelarcActivity(
+        event,
+        nextActivitySequence,
+        controllerTrace,
+      );
       publishProductUpdate({ kind: "activity_appended", activity });
+      activityRootRunId ??= eventRootRunId;
+      activitySequence = nextActivitySequence;
       return Object.freeze({ event, activity });
     },
     projectResult(

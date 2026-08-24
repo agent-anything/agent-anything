@@ -19,6 +19,10 @@ import {
 } from "@agent-anything/helarc-code-agent/file-operation";
 import type { CodeSourcePort } from "@agent-anything/helarc-code-agent/source";
 import { createControllerToolExposureProof } from "@agent-anything/tools/selection";
+import {
+  RUNTIME_EVENT_SCHEMA_VERSION,
+  type RuntimeEvent,
+} from "@agent-anything/observability/events";
 import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "../task/index.js";
 import { createHelarcProductComposition } from "./HelarcProductComposition.js";
@@ -114,7 +118,89 @@ describe("HelarcProductComposition", () => {
     expect(JSON.stringify(result)).not.toContain("rawProvider");
     expect(JSON.stringify(result)).not.toContain("apiKey");
   });
+
+  it("orders root and descendant activity independently from Run-local Event sequence", async () => {
+    const composition = await createHelarcProductComposition({
+      runId: "run-1",
+      ...createTask("D:/workspace"),
+      provider: new UnusedProvider(),
+      ...createLocalContributions(),
+    });
+
+    composition.recordRuntimeEvent(runtimeEvent("root-event-1", "run-1", {
+      kind: "root",
+      root: { id: "run-1" },
+      depth: 0,
+    }));
+    composition.recordRuntimeEvent(runtimeEvent("child-event-1", "run-2", {
+      kind: "descendant",
+      root: { id: "run-1" },
+      parent: { id: "run-1" },
+      parentRunAction: { run: { id: "run-1" }, id: "action-1", sequence: 1 },
+      relation: { id: "relation-1" },
+      depth: 1,
+    }));
+
+    const activity = composition.getProductProjection().activity;
+    expect(activity.map((item) => item.sequence)).toEqual([1, 2]);
+    expect(activity.map((item) => item.source.eventSequence)).toEqual([1, 1]);
+    expect(activity[1]?.source).toMatchObject({
+      runId: "run-2",
+      lineage: {
+        kind: "descendant",
+        root: { id: "run-1" },
+        parent: { id: "run-1" },
+        relation: { id: "relation-1" },
+        depth: 1,
+      },
+    });
+    expect(Object.isFrozen(activity[1]?.source.lineage)).toBe(true);
+
+    expect(() => composition.recordRuntimeEvent(runtimeEvent("other-root-event", "run-other", {
+      kind: "root",
+      root: { id: "run-other" },
+      depth: 0,
+    }))).toThrow("cannot combine different Run Tree roots");
+    expect(composition.getProductProjection().activity).toHaveLength(2);
+  });
+
+  it("requires the first Product activity Event to establish root lineage", async () => {
+    const composition = await createHelarcProductComposition({
+      runId: "run-1",
+      ...createTask("D:/workspace"),
+      provider: new UnusedProvider(),
+      ...createLocalContributions(),
+    });
+
+    expect(() => composition.recordRuntimeEvent(runtimeEvent("child-event-1", "run-2", {
+      kind: "descendant",
+      root: { id: "run-1" },
+      parent: { id: "run-1" },
+      parentRunAction: { run: { id: "run-1" }, id: "action-1", sequence: 1 },
+      relation: { id: "relation-1" },
+      depth: 1,
+    }))).toThrow("must establish root Run lineage");
+    expect(composition.getProductProjection().activity).toEqual([]);
+  });
 });
+
+function runtimeEvent(
+  id: string,
+  runId: string,
+  lineage: RuntimeEvent["lineage"],
+): RuntimeEvent<"run.started"> {
+  return {
+    schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
+    id,
+    runId,
+    taskId: `${runId}-task`,
+    lineage,
+    sequence: 1,
+    name: "run.started",
+    occurredAt: "2026-07-17T00:00:00.000Z",
+    payload: { status: "running", activeAgentId: "helarc-code-agent" },
+  };
+}
 
 function createTask(workspaceRoot: string) {
   const result = createHelarcTask({

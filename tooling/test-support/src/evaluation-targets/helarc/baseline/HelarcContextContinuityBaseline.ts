@@ -2,7 +2,7 @@ import type {
   HelarcEvaluationBaselineMetricSignature,
   HelarcEvaluationBaselineSignature,
 } from "../HelarcEvaluationExecution.js";
-import { HELARC_PHASE26_ACCEPTED_BASELINE } from "./HelarcPhase26Baseline.js";
+import { HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE } from "./HelarcDeterministicSystemBaseline.js";
 
 const CASE_SEMANTIC_DIGESTS = Object.freeze({
   "controlled-patch": "b01fcbe43c7a782c6b87192a3761e2c316cfd7b287bb9ca331c2599b816699ba",
@@ -56,14 +56,14 @@ const PUBLICATION_LIMITATIONS = Object.freeze([
 
 const REPORT_REF = Object.freeze({
   id: "helarc.context-continuity.report.baseline",
-  revision: HELARC_PHASE26_ACCEPTED_BASELINE.targetSnapshotRef.revision,
+  revision: HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE.targetSnapshotRef.revision,
 });
 const ACCEPTANCE_REF = Object.freeze({
   id: "helarc.context-continuity.baseline-acceptance",
-  revision: HELARC_PHASE26_ACCEPTED_BASELINE.targetSnapshotRef.revision,
+  revision: HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE.targetSnapshotRef.revision,
 });
 
-const metrics = HELARC_PHASE26_ACCEPTED_BASELINE.metrics.map((metric) =>
+const metrics = HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE.metrics.map((metric) =>
   Object.freeze({
     ...metric,
     ref: contextContinuityMetricResultRef(metric.ref),
@@ -81,14 +81,14 @@ const metrics = HELARC_PHASE26_ACCEPTED_BASELINE.metrics.map((metric) =>
 );
 
 export const HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE = deepFreeze({
-  ...HELARC_PHASE26_ACCEPTED_BASELINE,
+  ...HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE,
   targetManifestDigest: "de0b62d128f7350f5c4e3a578454b03da807b337a6f254cb6e0c7df6e246d120",
   reportRef: REPORT_REF,
   acceptanceRef: ACCEPTANCE_REF,
   publication: {
-    ...HELARC_PHASE26_ACCEPTED_BASELINE.publication,
+    ...HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE.publication,
     reportRef: REPORT_REF,
-    metricSummaries: HELARC_PHASE26_ACCEPTED_BASELINE.publication.metricSummaries.map((summary) =>
+    metricSummaries: HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE.publication.metricSummaries.map((summary) =>
       Object.freeze({
         ...summary,
         metricRef: contextContinuityMetricResultRef(summary.metricRef),
@@ -100,13 +100,13 @@ export const HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE = deepFreeze({
           : {}),
       })
     ),
-    dimensionSummaries: HELARC_PHASE26_ACCEPTED_BASELINE.publication.dimensionSummaries.map(
+    dimensionSummaries: HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE.publication.dimensionSummaries.map(
       (summary) => Object.freeze({
         ...summary,
         metricRefs: Object.freeze(summary.metricRefs.map(contextContinuityMetricResultRef)),
       }),
     ),
-    gateOutcomes: HELARC_PHASE26_ACCEPTED_BASELINE.publication.gateOutcomes.map(
+    gateOutcomes: HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE.publication.gateOutcomes.map(
       (outcome) => Object.freeze({
         ...outcome,
         metricRef: contextContinuityMetricResultRef(outcome.metricRef),
@@ -115,7 +115,7 @@ export const HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE = deepFreeze({
     limitations: PUBLICATION_LIMITATIONS,
   },
   metrics,
-  cases: HELARC_PHASE26_ACCEPTED_BASELINE.cases.map((caseResult) => Object.freeze({
+  cases: HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE.cases.map((caseResult) => Object.freeze({
     ...caseResult,
     traceIssueCodes: Object.freeze([]),
     semanticDigest: CASE_SEMANTIC_DIGESTS[caseSlug(caseResult.caseRef.id)],
@@ -126,9 +126,9 @@ export const HELARC_CONTEXT_CONTINUITY_BASELINE_ACCEPTANCE = deepFreeze({
   schemaVersion: 1,
   kind: "helarc_context_continuity_baseline_successor_acceptance",
   acceptedAt: "2026-08-17T00:00:00.000Z",
-  predecessorAcceptanceRef: HELARC_PHASE26_ACCEPTED_BASELINE.acceptanceRef,
+  predecessorAcceptanceRef: HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE.acceptanceRef,
   successorAcceptanceRef: ACCEPTANCE_REF,
-  predecessorReportRef: HELARC_PHASE26_ACCEPTED_BASELINE.reportRef,
+  predecessorReportRef: HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE.reportRef,
   successorReportRef: REPORT_REF,
   retainedIdentities: Object.freeze([
     "target",

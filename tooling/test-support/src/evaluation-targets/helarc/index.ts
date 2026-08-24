@@ -31,7 +31,7 @@ export {
   projectHelarcEvaluationBaselineSignature,
   runHelarcEvaluationBaselineCandidate,
 } from "./HelarcEvaluationExecution.js";
-export { HELARC_PHASE26_ACCEPTED_BASELINE } from "./baseline/HelarcPhase26Baseline.js";
+export { HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE } from "./baseline/HelarcDeterministicSystemBaseline.js";
 export {
   HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
   HELARC_CONTEXT_CONTINUITY_BASELINE_ACCEPTANCE,
@@ -60,6 +60,10 @@ export {
   HELARC_VALIDATION_COMPLETION_ACCEPTED_BASELINE,
   HELARC_VALIDATION_COMPLETION_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcValidationCompletionBaseline.js";
+export {
+  HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE,
+  HELARC_RUN_TREE_CONTROL_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcRunTreeControlBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export type {

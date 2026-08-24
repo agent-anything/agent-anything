@@ -121,6 +121,55 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Planning started");
     expect(html).toContain("Retry cancelled");
     expect(html).toContain("severity-warning");
+    expect(html).toContain("Root run | event 1");
+  });
+
+  it("renders the bounded descendant hierarchy from the Host Run Tree projection", () => {
+    const root = rootRunTree();
+    const html = renderToStaticMarkup(
+      <RunTimelinePanel
+        run={runProjection({
+          runTree: {
+            ...root,
+            revision: 4,
+            totalDescendantRuns: 2,
+            activeDescendantRuns: 1,
+            nodes: [...root.nodes, {
+              runId: "harness-run-2",
+              parentRunId: "harness-run-1",
+              relationId: "relation-1",
+              parentRunActionId: "action-1",
+              depth: 1,
+              status: "cancelling",
+              resultCode: null,
+              startedAt: "2026-07-05T01:00:01.000Z",
+              completedAt: null,
+            }, {
+              runId: "harness-run-3",
+              parentRunId: "harness-run-2",
+              relationId: "relation-2",
+              parentRunActionId: "action-2",
+              depth: 2,
+              status: "failed",
+              resultCode: "controller_failed",
+              startedAt: "2026-07-05T01:00:01.000Z",
+              completedAt: "2026-07-05T01:00:02.000Z",
+            }],
+          },
+          activity: [event("event-1", "run.completed", "Run completed", "info")],
+        })}
+        acceptedTask={{ id: "task-1", prompt: "Inspect code" }}
+      />,
+    );
+
+    expect(html).toContain("Run hierarchy");
+    expect(html).toContain("1 active / 2 descendants");
+    expect(html).toContain("Descendant depth 1");
+    expect(html).toContain("Descendant depth 2");
+    expect(html).toContain("Created by action-1");
+    expect(html).toContain("cancelling");
+    expect(html).toContain("controller_failed");
+    expect(html).not.toContain("delegatedPrompt");
   });
 
   it("renders compact planner trace details in the run timeline", () => {
@@ -349,6 +398,7 @@ function runProjection(input: {
   status?: "running" | "completed" | "blocked" | "failed" | "cancelled";
   runtimeStatus?: "succeeded" | "blocked" | "failed" | "cancelled";
   activity?: ReturnType<typeof event>[];
+  runTree?: NonNullable<HelarcMainSnapshot["run"]>["host"]["runTree"];
 } = {}): NonNullable<HelarcMainSnapshot["run"]> {
   const status = input.status ?? "running";
   const runtimeStatus = input.runtimeStatus ?? "succeeded";
@@ -369,6 +419,7 @@ function runProjection(input: {
       taskId: "task-1",
       startedAt: "2026-07-05T01:00:00.000Z",
       runRevision: 0,
+      runTree: input.runTree ?? rootRunTree(),
       validation: null,
       pendingInteractions: [],
       terminal: terminal
@@ -428,11 +479,42 @@ function event(
   return {
     id,
     sequence: Number(id.replace("event-", "")),
+    source: {
+      runId: "harness-run-1",
+      eventSequence: Number(id.replace("event-", "")),
+      lineage: { kind: "root" as const, rootRunId: "harness-run-1", depth: 0 as const },
+    },
     timestamp: "2026-07-05T01:00:00.000Z",
     kind,
     title,
     detail: null,
     severity,
     metadata,
+  };
+}
+
+function rootRunTree(): NonNullable<HelarcMainSnapshot["run"]>["host"]["runTree"] {
+  return {
+    rootRunId: "harness-run-1",
+    revision: 1,
+    deadlineAt: "2026-07-05T01:01:00.000Z",
+    limits: {
+      maxDescendantDepth: 2,
+      maxTotalDescendantRuns: 4,
+      maxActiveDescendantRuns: 2,
+    },
+    totalDescendantRuns: 0,
+    activeDescendantRuns: 0,
+    nodes: [{
+      runId: "harness-run-1",
+      parentRunId: null,
+      relationId: null,
+      parentRunActionId: null,
+      depth: 0,
+      status: "running",
+      resultCode: null,
+      startedAt: "2026-07-05T01:00:00.000Z",
+      completedAt: null,
+    }],
   };
 }

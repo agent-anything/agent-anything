@@ -11,6 +11,7 @@ describe("Helarc Desktop IPC projection", () => {
     expect(Object.keys(projected.run?.host ?? {}).sort()).toEqual([
       "pendingInteractions",
       "runRevision",
+      "runTree",
       "startedAt",
       "taskId",
       "terminal",
@@ -181,6 +182,29 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
       runRevision: 0,
       status: "running",
       startedAt: "2026-07-19T00:00:00.000Z",
+      runTree: {
+        rootRunId: "harness-run-1",
+        revision: 1,
+        deadlineAt: "2026-07-19T00:01:00.000Z",
+        limits: {
+          maxDescendantDepth: 2,
+          maxTotalDescendantRuns: 4,
+          maxActiveDescendantRuns: 2,
+        },
+        totalDescendantRuns: 0,
+        activeDescendantRuns: 0,
+        nodes: [{
+          runId: "harness-run-1",
+          parentRunId: null,
+          relationId: null,
+          parentRunActionId: null,
+          depth: 0,
+          status: "running",
+          resultCode: null,
+          startedAt: "2026-07-19T00:00:00.000Z",
+          completedAt: null,
+        }],
+      },
       plan: { privatePlanState: SECRET },
       pendingInteractions,
       retry: { privateRetryState: SECRET },
@@ -205,6 +229,15 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
       activity: [{
         id: "activity-1",
         sequence: 1,
+        source: {
+          runId: "harness-run-1",
+          eventSequence: 1,
+          lineage: {
+            kind: "root",
+            root: { id: "harness-run-1" },
+            depth: 0,
+          },
+        },
         timestamp: "2026-07-19T00:00:00.000Z",
         kind: "trace",
         title: "Controller action",

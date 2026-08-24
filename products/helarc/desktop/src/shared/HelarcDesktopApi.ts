@@ -219,14 +219,72 @@ export type HelarcPendingInteractionSnapshot =
 
 export type HelarcProductPhaseSnapshot = { readonly kind: "none" };
 
+export type HelarcRunLineageSnapshot =
+  | {
+      readonly kind: "root";
+      readonly rootRunId: string;
+      readonly depth: 0;
+    }
+  | {
+      readonly kind: "descendant";
+      readonly rootRunId: string;
+      readonly parentRunId: string;
+      readonly parentRunActionId: string;
+      readonly relationId: string;
+      readonly depth: number;
+    };
+
+export interface HelarcRunActivitySourceSnapshot {
+  readonly runId: string;
+  readonly eventSequence: number;
+  readonly lineage: HelarcRunLineageSnapshot;
+}
+
 export interface HelarcRunActivitySnapshot {
   readonly id: string;
   readonly sequence: number;
+  readonly source: HelarcRunActivitySourceSnapshot;
   readonly timestamp: string;
   readonly kind: string;
   readonly title: string;
   readonly detail: string | null;
   readonly metadata: Readonly<Record<string, unknown>>;
+}
+
+export type HelarcRunTreeNodeStatusSnapshot =
+  | "initializing"
+  | "running"
+  | "waiting"
+  | "cancelling"
+  | "succeeded"
+  | "blocked"
+  | "failed"
+  | "cancelled";
+
+export interface HelarcRunTreeNodeSnapshot {
+  readonly runId: string;
+  readonly parentRunId: string | null;
+  readonly relationId: string | null;
+  readonly parentRunActionId: string | null;
+  readonly depth: number;
+  readonly status: HelarcRunTreeNodeStatusSnapshot;
+  readonly resultCode: string | null;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
+}
+
+export interface HelarcRunTreeSnapshot {
+  readonly rootRunId: string;
+  readonly revision: number;
+  readonly deadlineAt: string;
+  readonly limits: {
+    readonly maxDescendantDepth: number;
+    readonly maxTotalDescendantRuns: number;
+    readonly maxActiveDescendantRuns: number;
+  };
+  readonly totalDescendantRuns: number;
+  readonly activeDescendantRuns: number;
+  readonly nodes: readonly HelarcRunTreeNodeSnapshot[];
 }
 
 export interface HelarcModelContinuationSnapshot {
@@ -334,6 +392,7 @@ export interface HelarcRunSnapshot {
     readonly taskId: string;
     readonly startedAt: string;
     readonly runRevision: number;
+    readonly runTree: HelarcRunTreeSnapshot;
     readonly validation: HelarcHostValidationSnapshot | null;
     readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
     readonly terminal: {
@@ -707,6 +766,7 @@ export interface HelarcHostRunStatusSnapshot {
     | "failed"
     | "cancelled";
   readonly startedAt: string;
+  readonly runTree: HelarcRunTreeSnapshot;
   readonly validation: HelarcHostValidationSnapshot | null;
   readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
   readonly terminal: HelarcRunSnapshot["host"]["terminal"];

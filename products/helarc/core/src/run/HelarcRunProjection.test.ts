@@ -244,6 +244,15 @@ function activity(sequence: number): HelarcActivityItem {
   return {
     id: `event-${sequence}`,
     sequence,
+    source: {
+      runId: "harness-run-1",
+      eventSequence: sequence,
+      lineage: {
+        kind: "root",
+        root: { id: "harness-run-1" },
+        depth: 0,
+      },
+    },
     timestamp: "2026-07-17T00:00:00.000Z",
     kind: "controller.started",
     title: "Controller started",

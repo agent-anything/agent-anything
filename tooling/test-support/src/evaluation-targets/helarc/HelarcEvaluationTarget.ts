@@ -18,7 +18,7 @@ import type {
   ActionRecordPort,
   ActionRetryDecisionPort,
 } from "@agent-anything/action-execution/enforcement";
-import { Runner } from "@agent-anything/agent-runtime/runner";
+import { Runner, type RunTreeLimits } from "@agent-anything/agent-runtime/runner";
 import { CurrentValidationCompletionGate } from "@agent-anything/validation/completion";
 import { createRunFailureCause, type RunFinalizationContext, type RunResult } from "@agent-anything/agent-runtime/run";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
@@ -62,12 +62,14 @@ import {
 } from "@agent-anything/host/context";
 import {
   createHostRunManager,
+  type HostRunStatusProjection,
 } from "@agent-anything/host/run";
 import {
   createHelarcProductComposition,
   type HelarcProductResult,
   validateHelarcToolInput,
 } from "@agent-anything/helarc/composition";
+import type { HelarcProductRunProjection } from "@agent-anything/helarc/run";
 import {
   resolveHelarcPermissionPreset,
   type HelarcPermissionPreset,
@@ -155,6 +157,7 @@ export interface HelarcEvaluationRunOptions {
   readonly maxDurationMs?: number;
   readonly maxIterations?: number;
   readonly maxActions?: number;
+  readonly runTreeLimits?: RunTreeLimits;
 }
 
 export interface HelarcEvaluationRunMaterial<
@@ -165,7 +168,10 @@ export interface HelarcEvaluationRunMaterial<
   readonly environmentRef: EvaluationRecordRef;
   readonly caseDefinition: TCase;
   readonly product: HelarcProductResult;
+  readonly productProjection: HelarcProductRunProjection;
   readonly runResult: RunResult<HelarcAgentOutput>;
+  readonly hostProjection: HostRunStatusProjection;
+  readonly runtimeEvents: readonly RuntimeEvent[];
   readonly trace: RunTrace;
   readonly before: HelarcEvaluationWorkspaceSnapshot;
   readonly after: HelarcEvaluationWorkspaceSnapshot;
@@ -378,6 +384,7 @@ export async function executeHelarcEvaluationCase<
   readonly maxDurationMs?: number;
   readonly maxIterations?: number;
   readonly maxActions?: number;
+  readonly runTreeLimits?: RunTreeLimits;
 }): Promise<HelarcEvaluationRunMaterial<TCase>> {
   let root: string | null = null;
   try {
@@ -410,6 +417,9 @@ export async function executeHelarcEvaluationCase<
           ? {}
           : { maxIterations: input.maxIterations }),
         ...(input.maxActions === undefined ? {} : { maxActions: input.maxActions }),
+        ...(input.runTreeLimits === undefined
+          ? {}
+          : { runTreeLimits: input.runTreeLimits }),
       },
     );
   } finally {
@@ -554,11 +564,14 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     providers: [],
   });
   let trace: RunTrace | null = null;
+  const runtimeEvents: RuntimeEvent[] = [];
   const runtimePublisher: RuntimeEventPublisher = Object.freeze({
     publish(event: RuntimeEvent) {
+      runtimeEvents.push(event);
       product.recordRuntimeEvent(event);
     },
   });
+  let allocatedRunCount = 0;
   const runner = new Runner({
     controller: product.controller,
     contextProjection: createHelarcContextProjectionConfiguration(
@@ -568,6 +581,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
       catalog: product.actions.operationCatalog,
       bindings: product.actions.operationBindings,
       validateToolInput: validateHelarcToolInput,
+      descendants: product.descendants,
       internalHandlers: [],
       actionExecution: {
         registrations: product.actions.registrations,
@@ -602,7 +616,12 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
       },
     })]),
     now: clock.now,
-    createRunId: () => `${trial.ref.id}.harness-run`,
+    createRunId: () => {
+      allocatedRunCount += 1;
+      return allocatedRunCount === 1
+        ? `${trial.ref.id}.harness-run`
+        : `${trial.ref.id}.harness-run.${allocatedRunCount}`;
+    },
     createId: ({ runId, kind, sequence }) => `${runId}.${kind}.${sequence}`,
   });
   const manager = createHostRunManager({ runner, now: clock.now });
@@ -670,7 +689,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
           maxExplanationLength: 1_000,
         },
       },
-      runTreeLimits: {
+      runTreeLimits: options.runTreeLimits ?? {
         maxTotalDescendantRuns: 0,
         maxActiveDescendantRuns: 0,
         maxDescendantDepth: 0,
@@ -778,7 +797,10 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     }),
     caseDefinition,
     product: productResult,
+    productProjection: product.getProductProjection(),
     runResult: hostResult.runResult,
+    hostProjection: terminalProjection,
+    runtimeEvents: Object.freeze([...runtimeEvents]),
     trace,
     before: lease.before,
     after: await snapshotWorkspace(lease.root),

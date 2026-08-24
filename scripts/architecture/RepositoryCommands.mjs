@@ -41,7 +41,7 @@ export function evaluateRepositoryCommands(manifest) {
   const evaluationCommand = scripts["test:evaluation"];
   if (
     typeof evaluationCommand === "string" &&
-    /baseline:candidate|baseline\/HelarcPhase26Baseline/.test(evaluationCommand)
+    /baseline:candidate|baseline\/HelarcDeterministicSystemBaseline/.test(evaluationCommand)
   ) {
     violations.push(violation(
       "evaluation_test_writes_baseline",

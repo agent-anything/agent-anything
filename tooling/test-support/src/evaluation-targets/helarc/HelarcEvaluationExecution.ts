@@ -388,7 +388,7 @@ async function aggregateHelarcCampaign(input: {
         criterion,
         grader,
         requestedAt: HELARC_EVALUATION_TIME,
-        metadata: { product: "helarc", evaluation: "validation-completion-v1" },
+        metadata: { product: "helarc", evaluation: "run-tree-control-v1" },
       }, grader.kind === "reference" ? outcomeGrader : safetyGrader, {
         signal: input.signal,
         deadlineAt: input.deadlineAt,
@@ -401,7 +401,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.validation-completion-baseline-result`,
+      id: `${definition.ref.id}.run-tree-control-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -412,7 +412,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.validation-completion.report.baseline",
+      id: "helarc.run-tree-control.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -458,7 +458,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.tool-exposure.report.baseline",
+      id: "helarc.validation-completion.report.baseline",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -474,25 +474,25 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.validation-completion.baseline-acceptance",
+      id: "helarc.run-tree-control.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
-    acceptedBy: { id: "agent-anything.architecture-review", revision: "validation-completion-v1" },
+    acceptedBy: { id: "agent-anything.architecture-review", revision: "run-tree-control-v1" },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
       product: "helarc",
       suiteRef: refKey(input.corpus.suite.ref),
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
-    rationale: "Reviewed as the ordinary-operation Validation and completion-calibration successor to the Tool Exposure baseline.",
+    rationale: "Reviewed as the Run Tree control and lineage-observability successor to the Validation Completion baseline.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.tool-exposure.baseline-acceptance",
+      id: "helarc.validation-completion.baseline-acceptance",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     limitations: [BASELINE_LIMITATION],
@@ -517,10 +517,10 @@ async function aggregateHelarcCampaign(input: {
 }
 
 function predecessorTargetRevision(revision: string): string {
-  if (!revision.startsWith("v5-")) {
-    throw new TypeError(`Unknown Validation completion Target revision '${revision}'.`);
+  if (!revision.startsWith("v6-")) {
+    throw new TypeError(`Unknown Run Tree Control Target revision '${revision}'.`);
   }
-  return revision.replace(/^v5-/, "v4-");
+  return revision.replace(/^v6-/, "v5-");
 }
 
 function gradeExpectedOutcome(

@@ -13,6 +13,7 @@ export {
 } from "./HelarcActionComposition.js";
 export type {
   HelarcActivityItem,
+  HelarcActivitySource,
   HelarcCanonicalActionSummary,
   HelarcChildWorkSummary,
   HelarcCompositeWorkSummary,

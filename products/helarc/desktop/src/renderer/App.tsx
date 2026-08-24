@@ -6,6 +6,7 @@ import {
   Boxes,
   FileCode2,
   FolderOpen,
+  GitBranch,
   History,
   MessageSquareText,
   Play,
@@ -592,7 +593,7 @@ export function RunTimelinePanel({
   acceptedTask: HelarcMainSnapshot["acceptedTask"];
 }) {
   const activity = run?.product.activity ?? [];
-  if (activity.length === 0) {
+  if (run === null && activity.length === 0) {
     const title = acceptedTask?.prompt || "No active run";
     return (
       <div className="empty-state">
@@ -612,6 +613,13 @@ export function RunTimelinePanel({
           <span>{`Model continuity: ${run.product.continuation.kind}`}</span>
         ) : null}
       </div>
+      {run !== null ? <RunTreePanel tree={run.host.runTree} /> : null}
+      {activity.length === 0 ? (
+        <div className="run-waiting-state">
+          <Activity size={16} aria-hidden="true" />
+          <span>Waiting for run activity</span>
+        </div>
+      ) : null}
       {activity.map((event) => {
         const trace = formatTraceMetadata(event.metadata);
         return (
@@ -621,6 +629,7 @@ export function RunTimelinePanel({
               <strong>{event.title}</strong>
               {event.detail ? <span>{event.detail}</span> : null}
               {trace ? <small>{trace}</small> : null}
+              <small>{activitySourceLabel(event.source)}</small>
               <small>{formatTimestamp(event.timestamp)}</small>
             </div>
           </div>
@@ -1151,6 +1160,47 @@ export function ClarificationPromptPanel({
   );
 }
 
+export function RunTreePanel({
+  tree,
+}: {
+  tree: ActiveRunProjection["host"]["runTree"];
+}) {
+  return (
+    <section className="run-tree" aria-label="Run hierarchy">
+      <div className="run-tree-header">
+        <GitBranch size={16} aria-hidden="true" />
+        <strong>Run hierarchy</strong>
+        <span>{tree.activeDescendantRuns} active / {tree.totalDescendantRuns} descendants</span>
+      </div>
+      <div className="run-tree-list">
+        {tree.nodes.map((node) => (
+          <div
+            className="run-tree-node"
+            key={node.runId}
+            style={{ "--run-indent": `${8 + Math.min(node.depth, 8) * 16}px` } as React.CSSProperties}
+          >
+            <span className={`run-tree-status ${runTreeStatusTone(node.status)}`} aria-hidden="true" />
+            <div>
+              <strong>{node.depth === 0 ? "Root run" : `Descendant depth ${node.depth}`}</strong>
+              <span title={node.runId}>{node.runId}</span>
+              {node.parentRunActionId !== null ? (
+                <small title={node.parentRunActionId}>Created by {node.parentRunActionId}</small>
+              ) : null}
+              {node.resultCode !== null ? <small>{node.resultCode}</small> : null}
+            </div>
+            <span className="run-tree-node-status">{node.status}</span>
+          </div>
+        ))}
+      </div>
+      <div className="run-tree-limits">
+        <span>Depth {tree.limits.maxDescendantDepth}</span>
+        <span>Total {tree.limits.maxTotalDescendantRuns}</span>
+        <span>Active {tree.limits.maxActiveDescendantRuns}</span>
+      </div>
+    </section>
+  );
+}
+
 function artifactKindLabel(kind: NonNullable<HelarcMainSnapshot["activeThread"]>["artifacts"][number]["kind"]): string {
   return kind.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
 }
@@ -1375,6 +1425,24 @@ function activitySeverity(
     return "warning";
   }
   return "info";
+}
+
+function activitySourceLabel(
+  source: ActiveRunProjection["product"]["activity"][number]["source"],
+): string {
+  return source.lineage.kind === "root"
+    ? `Root run | event ${source.eventSequence}`
+    : `Descendant depth ${source.lineage.depth} | event ${source.eventSequence}`;
+}
+
+function runTreeStatusTone(
+  status: ActiveRunProjection["host"]["runTree"]["nodes"][number]["status"],
+): "active" | "warning" | "success" | "danger" | "neutral" {
+  if (status === "running" || status === "waiting") return "active";
+  if (status === "cancelling") return "warning";
+  if (status === "succeeded") return "success";
+  if (status === "blocked" || status === "failed" || status === "cancelled") return "danger";
+  return "neutral";
 }
 
 function renderTaskTemplatePrompt(promptText: string, constraints: string[]): string {

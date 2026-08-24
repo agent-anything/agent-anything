@@ -149,7 +149,7 @@ const RETRY_METRIC = metric(
   }),
 );
 
-export const HELARC_PHASE26_ACCEPTED_BASELINE = deepFreeze({
+export const HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE = deepFreeze({
   schemaVersion: 1,
   kind: "helarc_deterministic_system_baseline_signature",
   corpusRevision: "phase26-corpus-v1",

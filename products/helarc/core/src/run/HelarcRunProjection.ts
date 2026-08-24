@@ -263,12 +263,65 @@ function snapshotActivity(activity: HelarcActivityItem): HelarcActivityItem {
     !Number.isFinite(Date.parse(activity.timestamp)) || !hasIdentity(activity.kind) ||
     !hasIdentity(activity.title) ||
     (activity.detail !== null && typeof activity.detail !== "string") ||
+    !isActivitySource(activity.source) ||
     activity.metadata === null || typeof activity.metadata !== "object" ||
     Array.isArray(activity.metadata)
   ) {
     throw new TypeError("Product activity is invalid.");
   }
-  return Object.freeze({ ...activity, metadata: Object.freeze({ ...activity.metadata }) });
+  return Object.freeze({
+    ...activity,
+    source: snapshotActivitySource(activity.source),
+    metadata: Object.freeze({ ...activity.metadata }),
+  });
+}
+
+function isActivitySource(value: unknown): value is HelarcActivityItem["source"] {
+  if (value === null || typeof value !== "object") return false;
+  const source = value as HelarcActivityItem["source"];
+  if (!hasIdentity(source.runId) || !Number.isSafeInteger(source.eventSequence) ||
+      source.eventSequence < 1 || source.lineage === null ||
+      typeof source.lineage !== "object") return false;
+  if (source.lineage.kind === "root") {
+    return source.lineage.root.id === source.runId && source.lineage.depth === 0;
+  }
+  return source.lineage.kind === "descendant" &&
+    source.lineage.root.id !== source.runId &&
+    hasIdentity(source.lineage.parent.id) &&
+    hasIdentity(source.lineage.parentRunAction.id) &&
+    source.lineage.parentRunAction.run.id === source.lineage.parent.id &&
+    Number.isSafeInteger(source.lineage.parentRunAction.sequence) &&
+    source.lineage.parentRunAction.sequence > 0 &&
+    hasIdentity(source.lineage.relation.id) &&
+    Number.isSafeInteger(source.lineage.depth) && source.lineage.depth > 0;
+}
+
+function snapshotActivitySource(
+  source: HelarcActivityItem["source"],
+): HelarcActivityItem["source"] {
+  const lineage = source.lineage.kind === "root"
+    ? Object.freeze({
+        kind: "root" as const,
+        root: Object.freeze({ id: source.lineage.root.id }),
+        depth: 0 as const,
+      })
+    : Object.freeze({
+        kind: "descendant" as const,
+        root: Object.freeze({ id: source.lineage.root.id }),
+        parent: Object.freeze({ id: source.lineage.parent.id }),
+        parentRunAction: Object.freeze({
+          run: Object.freeze({ id: source.lineage.parentRunAction.run.id }),
+          id: source.lineage.parentRunAction.id,
+          sequence: source.lineage.parentRunAction.sequence,
+        }),
+        relation: Object.freeze({ id: source.lineage.relation.id }),
+        depth: source.lineage.depth,
+      });
+  return Object.freeze({
+    runId: source.runId,
+    eventSequence: source.eventSequence,
+    lineage,
+  });
 }
 
 function snapshotContinuationProjection(

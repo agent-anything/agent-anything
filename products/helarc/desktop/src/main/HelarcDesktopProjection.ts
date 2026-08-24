@@ -256,6 +256,7 @@ export function projectHelarcRunStatusQueryReceipt(
       runRevision: receipt.projection.runRevision,
       status: receipt.projection.status,
       startedAt: receipt.projection.startedAt,
+      runTree: projectRunTree(receipt.projection.runTree),
       validation: projectHostValidation(receipt.projection.validation),
       pendingInteractions: receipt.projection.pendingInteractions.map(projectPendingInteraction),
       terminal: receipt.projection.terminal === null
@@ -319,6 +320,7 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
       taskId: run.host.taskId,
       startedAt: run.host.startedAt,
       runRevision: run.host.runRevision,
+      runTree: projectRunTree(run.host.runTree),
       validation: projectHostValidation(run.host.validation),
       pendingInteractions: run.host.pendingInteractions.map(projectPendingInteraction),
       terminal: run.host.terminal === null
@@ -343,6 +345,7 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
       activity: run.product.activity.map((activity) => ({
         id: activity.id,
         sequence: activity.sequence,
+        source: projectActivitySource(activity.source),
         timestamp: activity.timestamp,
         kind: activity.kind,
         title: activity.title,
@@ -381,6 +384,58 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
               })),
             },
           },
+    },
+  };
+}
+
+function projectRunTree(
+  tree: NonNullable<MainSnapshot["run"]>["host"]["runTree"],
+): HelarcRunSnapshot["host"]["runTree"] {
+  return {
+    rootRunId: tree.rootRunId,
+    revision: tree.revision,
+    deadlineAt: tree.deadlineAt,
+    limits: { ...tree.limits },
+    totalDescendantRuns: tree.totalDescendantRuns,
+    activeDescendantRuns: tree.activeDescendantRuns,
+    nodes: tree.nodes.map((node) => ({
+      runId: node.runId,
+      parentRunId: node.parentRunId,
+      relationId: node.relationId,
+      parentRunActionId: node.parentRunActionId,
+      depth: node.depth,
+      status: node.status,
+      resultCode: node.resultCode,
+      startedAt: node.startedAt,
+      completedAt: node.completedAt,
+    })),
+  };
+}
+
+function projectActivitySource(
+  source: NonNullable<MainSnapshot["run"]>["product"]["activity"][number]["source"],
+): HelarcRunSnapshot["product"]["activity"][number]["source"] {
+  if (source.lineage.kind === "root") {
+    return {
+      runId: source.runId,
+      eventSequence: source.eventSequence,
+      lineage: {
+        kind: "root",
+        rootRunId: source.lineage.root.id,
+        depth: 0,
+      },
+    };
+  }
+  return {
+    runId: source.runId,
+    eventSequence: source.eventSequence,
+    lineage: {
+      kind: "descendant",
+      rootRunId: source.lineage.root.id,
+      parentRunId: source.lineage.parent.id,
+      parentRunActionId: source.lineage.parentRunAction.id,
+      relationId: source.lineage.relation.id,
+      depth: source.lineage.depth,
     },
   };
 }

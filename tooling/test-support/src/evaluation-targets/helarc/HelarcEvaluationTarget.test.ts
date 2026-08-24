@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createEvaluationTrial } from "@agent-anything/evaluation/trial";
+import type { ProviderCallResult } from "@agent-anything/model-interaction";
+import { FakeProvider } from "../../FakeProvider.js";
 import {
   HELARC_EVALUATION_TIME,
   adaptHelarcExternalBenchmarkManifest,
@@ -13,7 +15,10 @@ import {
   runHelarcEvaluationBaselineCandidate,
   type HelarcEvaluationBaselineArtifact,
 } from "./HelarcEvaluationExecution.js";
-import { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
+import {
+  createHelarcEvaluationTargetAdapter,
+  executeHelarcEvaluationCase,
+} from "./HelarcEvaluationTarget.js";
 
 let sharedCandidate: Promise<HelarcEvaluationBaselineArtifact> | null = null;
 
@@ -140,6 +145,90 @@ describe("Helarc deterministic Evaluation target", () => {
         },
       });
     }
+  }, 120_000);
+
+  it("proves a recursive Helarc Agent chain through Runtime, Host, and Product projections", async () => {
+    const corpus = createHelarcEvaluationCorpus();
+    const source = requireCase(corpus, "inspect_and_complete");
+    const recursiveCase: HelarcEvaluationCaseDefinition = Object.freeze({
+      ...source,
+      expectedClaim: Object.freeze({
+        ...source.expectedClaim,
+        agentSummary: "Root complete.",
+      }),
+    });
+    const trial = createTrial(corpus, recursiveCase, "recursive-run-tree");
+    const material = await executeHelarcEvaluationCase({
+      trial,
+      caseDefinition: recursiveCase,
+      provider: new FakeProvider({
+        descriptor: { id: "run-tree-conformance-provider" },
+        results: [
+          scriptedSuccess({
+            kind: "tool_call",
+            toolName: "Agent",
+            reason: "Delegate bounded child work.",
+            input: { prompt: "child-private-instruction", description: "Child work" },
+          }, 1),
+          scriptedSuccess({
+            kind: "tool_call",
+            toolName: "Agent",
+            reason: "Delegate bounded grandchild work.",
+            input: { prompt: "grandchild-private-instruction", description: "Grandchild work" },
+          }, 2),
+          scriptedSuccess({ kind: "completion", summary: "Grandchild complete." }, 3),
+          scriptedSuccess({ kind: "completion", summary: "Child complete." }, 4),
+          scriptedSuccess({ kind: "completion", summary: "Root complete." }, 5),
+        ],
+      }),
+      signal: new AbortController().signal,
+      runTreeLimits: {
+        maxTotalDescendantRuns: 2,
+        maxActiveDescendantRuns: 2,
+        maxDescendantDepth: 2,
+      },
+    });
+
+    expect(material.runResult.status, JSON.stringify(material.runResult, null, 2))
+      .toBe("succeeded");
+    expect(material.hostProjection.runTree).toMatchObject({
+      totalDescendantRuns: 2,
+      activeDescendantRuns: 0,
+      nodes: [
+        { depth: 0, status: "succeeded" },
+        { depth: 1, status: "succeeded" },
+        { depth: 2, status: "succeeded" },
+      ],
+    });
+
+    const started = material.runtimeEvents.filter((event) => event.name === "run.started");
+    expect(started.map((event) => [event.runId, event.lineage.kind, event.lineage.depth]))
+      .toEqual([
+        [`${trial.ref.id}.harness-run`, "root", 0],
+        [`${trial.ref.id}.harness-run.2`, "descendant", 1],
+        [`${trial.ref.id}.harness-run.3`, "descendant", 2],
+      ]);
+    for (const runId of new Set(material.runtimeEvents.map((event) => event.runId))) {
+      const events = material.runtimeEvents.filter((event) => event.runId === runId);
+      expect(events.map((event) => event.sequence))
+        .toEqual(events.map((_, index) => index + 1));
+    }
+
+    const activity = material.productProjection.activity;
+    expect(activity.map((item) => item.sequence))
+      .toEqual(activity.map((_, index) => index + 1));
+    expect(new Set(activity.map((item) => item.source.runId))).toEqual(new Set([
+      `${trial.ref.id}.harness-run`,
+      `${trial.ref.id}.harness-run.2`,
+      `${trial.ref.id}.harness-run.3`,
+    ]));
+    const safeProjection = JSON.stringify({
+      host: material.hostProjection,
+      product: material.productProjection,
+    });
+    expect(safeProjection).not.toContain("child-private-instruction");
+    expect(safeProjection).not.toContain("grandchild-private-instruction");
+    expect(safeProjection).not.toContain("agent-anything-helarc-product-eval-");
   }, 120_000);
 
   it("rejects non-equivalent targets before interpreting regression", async () => {
@@ -354,4 +443,22 @@ async function invokeCase(
   } finally {
     await adapter.environment.cleanup({ trial, lease: preparation.lease, signal });
   }
+}
+
+function scriptedSuccess(output: unknown, sequence: number): ProviderCallResult {
+  return Object.freeze({
+    kind: "succeeded" as const,
+    response: Object.freeze({
+      output,
+      responseId: null,
+      continuation: null,
+      usage: Object.freeze({
+        inputTokens: 10 + sequence,
+        outputTokens: 4 + sequence,
+        totalTokens: 14 + (sequence * 2),
+        metadata: Object.freeze({ source: "run-tree-conformance" }),
+      }),
+      metadata: Object.freeze({ scriptSequence: sequence }),
+    }),
+  });
 }
