@@ -89,7 +89,11 @@ export interface ControllerTurnTraceAttributes {
   readonly iteration: number;
   readonly decisionKind: "advance" | "propose_completion" | "propose_stop" | null;
   readonly code: string | null;
+  readonly toolExposure: ControllerToolExposureTraceRecord | null;
 }
+
+export type ControllerToolExposureTraceRecord =
+  import("../events/RuntimeEventPayload.js").ControllerToolExposureResolvedRuntimeEventPayload;
 
 export interface OperationTraceAttributes {
   readonly namespace: string;

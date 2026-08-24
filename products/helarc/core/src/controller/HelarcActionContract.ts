@@ -38,7 +38,7 @@ export const HELARC_CONTROLLER_DECISIONS = [
 export const HELARC_ACTION_CONTRACT_VERSION = "helarc-model-decision-v1";
 
 export function createHelarcControllerOutputFormat(
-  exposure: Pick<ToolExposureProof, "selectionRevision" | "catalog">,
+  exposure: Pick<ToolExposureProof, "contentRevision" | "catalog">,
 ): ModelOutputFormat {
   const toolNames = exposure.catalog.tools.map(({ name }) => name);
   if (new Set(toolNames).size !== toolNames.length) {
@@ -48,7 +48,7 @@ export function createHelarcControllerOutputFormat(
     kind: "json_schema",
     name: "helarc_model_decision",
     schemaId: "helarc.model-decision",
-    schemaRevision: `${HELARC_ACTION_CONTRACT_VERSION}:${exposure.selectionRevision}`,
+    schemaRevision: `${HELARC_ACTION_CONTRACT_VERSION}:${exposure.contentRevision}`,
     schema: {
       oneOf: [
         ...exposure.catalog.tools.map((tool) => ({
@@ -150,28 +150,8 @@ const HELARC_DECISION_DESCRIPTIONS: HelarcControllerDecisionDescription[] = [
 
 const HELARC_ACTION_DECISION_RULES: HelarcActionDecisionRule[] = [
   {
-    id: "active_tool_catalog_only",
-    text: "Use tool_call only for Tools listed in the active Tool catalog.",
-  },
-  {
     id: "plan_when_useful",
     text: "Use plan_update only when an explicit plan improves the current work; simple tasks may proceed without a plan.",
-  },
-  {
-    id: "inspect_before_effect",
-    text: "Use Read, Glob, and Grep to establish the current Workspace state needed for an exact change.",
-  },
-  {
-    id: "edit_exact_text",
-    text: "Use Edit for exact old-to-new text replacement in an existing file.",
-  },
-  {
-    id: "write_complete_content",
-    text: "Use Write to create a file or replace its complete content.",
-  },
-  {
-    id: "continue_after_file_change",
-    text: "A successful Edit or Write is an Observation, not task completion; continue until the requested task is complete.",
   },
   {
     id: "complete_when_established",
@@ -183,20 +163,51 @@ const HELARC_ACTION_DECISION_RULES: HelarcActionDecisionRule[] = [
   },
 ];
 
-export function createHelarcActionContract(): HelarcActionContract {
+export function createHelarcActionContract(
+  exposedToolNames: readonly string[],
+): HelarcActionContract {
+  const toolNames = snapshotToolNames(exposedToolNames);
+  const inspectionNames = ["Read", "Glob", "Grep"].filter((name) => toolNames.has(name));
+  const fileChangeNames = ["Edit", "Write"].filter((name) => toolNames.has(name));
+  const toolRules: HelarcActionDecisionRule[] = toolNames.size === 0
+    ? []
+    : [
+        {
+          id: "active_tool_catalog_only",
+          text: "Use tool_call only for Tools listed in the active Tool catalog.",
+        },
+        ...(inspectionNames.length === 0 ? [] : [{
+          id: "inspect_before_effect",
+          text: `Use ${inspectionNames.join(", ")} to establish the current Workspace state needed for an exact change.`,
+        }]),
+        ...(toolNames.has("Edit") ? [{
+          id: "edit_exact_text",
+          text: "Use Edit for exact old-to-new text replacement in an existing file.",
+        }] : []),
+        ...(toolNames.has("Write") ? [{
+          id: "write_complete_content",
+          text: "Use Write to create a file or replace its complete content.",
+        }] : []),
+        ...(fileChangeNames.length === 0 ? [] : [{
+          id: "continue_after_file_change",
+          text: `A successful ${fileChangeNames.join(" or ")} is an Observation, not task completion; continue until the requested task is complete.`,
+        }]),
+      ];
   return {
-    decisions: HELARC_DECISION_DESCRIPTIONS.map((decision) => ({
+    decisions: HELARC_DECISION_DESCRIPTIONS
+      .filter((decision) => decision.kind !== "tool_call" || toolNames.size > 0)
+      .map((decision) => ({
       ...decision,
       requiredFields: [...decision.requiredFields],
       optionalFields: [...decision.optionalFields],
       constraints: [...decision.constraints],
     })),
-    decisionRules: HELARC_ACTION_DECISION_RULES.map((rule) => ({ ...rule })),
+    decisionRules: [...toolRules, ...HELARC_ACTION_DECISION_RULES].map((rule) => ({ ...rule })),
   };
 }
 
 export function buildHelarcActionProtocolText(
-  contract: HelarcActionContract = createHelarcActionContract(),
+  contract: HelarcActionContract,
 ): string {
   return [
     `Return exactly one decision with kind: ${contract.decisions.map((item) => item.kind).join(", ")}.`,
@@ -205,9 +216,23 @@ export function buildHelarcActionProtocolText(
 }
 
 export function buildHelarcActionDecisionRulesText(
-  contract: HelarcActionContract = createHelarcActionContract(),
+  contract: HelarcActionContract,
 ): string {
   return contract.decisionRules.map((rule) => rule.text).join("\n");
+}
+
+function snapshotToolNames(input: readonly string[]): ReadonlySet<string> {
+  if (!Array.isArray(input)) throw new TypeError("Exposed Tool names must be an array.");
+  const names = input.map((name) => {
+    if (typeof name !== "string" || name.length === 0 || name !== name.trim()) {
+      throw new TypeError("Exposed Tool name is invalid.");
+    }
+    return name;
+  });
+  if (new Set(names).size !== names.length) {
+    throw new TypeError("Exposed Tool names must be unique.");
+  }
+  return new Set(names);
 }
 
 function formatDecisionDescription(decision: HelarcControllerDecisionDescription): string {

@@ -583,6 +583,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
       validateToolInput: validateHelarcToolInput,
       descendants: product.descendants,
       internalHandlers: [],
+      availability: product.actions.operationAvailability,
       actionExecution: {
         registrations: product.actions.registrations,
         adapters: product.actions.adapters,
@@ -1068,6 +1069,24 @@ function captureHelarcMaterial(
   const traceDuration = material.trace.startedAt !== null && material.trace.completedAt !== null
     ? Math.max(0, Date.parse(material.trace.completedAt) - Date.parse(material.trace.startedAt))
     : 0;
+  const exposureTurns = runItems.flatMap(({ payload }) => payload.kind === "controller_turn"
+    ? [Object.freeze({
+        status: payload.status,
+        decisionKind: payload.decisionKind,
+        selectionRevision: payload.toolExposure.selectionRevision,
+        contentRevision: payload.toolExposure.contentRevision,
+        basisRevision: payload.toolExposure.basisRevision,
+        proofId: payload.toolExposure.proofId,
+        manifestId: payload.toolExposure.manifestId,
+        catalogRevision: payload.toolExposure.catalogRevision,
+        exposedTools: payload.toolExposure.exposedTools.map((ref) =>
+          `${ref.tool.namespace}.${ref.tool.name}@${ref.revision}`
+        ),
+        exposedToolCount: payload.toolExposure.exposedToolCount,
+        omittedToolCount: payload.toolExposure.omittedToolCount,
+        omissionReasons: payload.toolExposure.omissionReasons,
+      })]
+    : []);
   const contributions: EvaluationCaptureContribution[] = [
     captured("product-outcome", "helarc.product", {
       status: material.product.status,
@@ -1119,6 +1138,20 @@ function captureHelarcMaterial(
       gateStatus: material.product.validation.gateStatus,
       safeReasons: material.product.validation.safeReasons,
     }),
+    captured("tool-exposure-summary", "agent-core", {
+      turns: exposureTurns,
+      turnCount: exposureTurns.length,
+      minimumExposedToolCount: exposureTurns.length === 0
+        ? 0
+        : Math.min(...exposureTurns.map(({ exposedToolCount }) => exposedToolCount)),
+      maximumExposedToolCount: exposureTurns.length === 0
+        ? 0
+        : Math.max(...exposureTurns.map(({ exposedToolCount }) => exposedToolCount)),
+      omittedToolCount: exposureTurns.reduce(
+        (count, { omittedToolCount }) => count + omittedToolCount,
+        0,
+      ),
+    }),
   ];
   const measurements: EvaluationMeasurement[] = [
     measurement("latency_ms", "runtime", "run-trace", "ms", traceDuration),
@@ -1140,6 +1173,21 @@ function captureHelarcMaterial(
     measurement("retry_count", "agent-core", "run-items", "count", retryCount),
     measurement("artifact_count", "agent-core", "run-result", "count", material.runResult.artifactRefs.length),
     measurement("trace_issue_count", "observability", "run-trace", "count", material.trace.issues.length),
+    measurement("controller_turn_count", "agent-core", "controller-turns", "count", exposureTurns.length),
+    measurement(
+      "exposed_tool_count",
+      "agent-core",
+      "controller-turns",
+      "count",
+      exposureTurns.reduce((count, { exposedToolCount }) => count + exposedToolCount, 0),
+    ),
+    measurement(
+      "omitted_tool_count",
+      "agent-core",
+      "controller-turns",
+      "count",
+      exposureTurns.reduce((count, { omittedToolCount }) => count + omittedToolCount, 0),
+    ),
   ];
   return assembleEvaluationCapture({
     ref: request.captureRef,

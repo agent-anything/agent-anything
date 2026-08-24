@@ -92,6 +92,7 @@ import type {
   RunnerOperationComposition,
 } from "./RunnerDependencies.js";
 import { Runner } from "./Runner.js";
+import { createStaticOperationToolAvailabilityParticipant } from "./RunToolExposureCoordinator.js";
 
 interface TestOutput {
   readonly summary: string;
@@ -124,8 +125,11 @@ describe("Runner semantic integration", () => {
   it("completes one Run through the single Controller loop", async () => {
     const operations = createOperationFixture([]);
     const controller = new ScriptedController([complete("Done")]);
+    const events: RuntimeEvent[] = [];
 
-    const result = await createRunner(controller, operations).run(
+    const result = await createRunner(controller, operations, {
+      runtimeEventPublisher: { publish: (event) => events.push(event) },
+    }).run(
       createAgent(),
       createRunInput(),
       createRunConfig(operations),
@@ -147,6 +151,25 @@ describe("Runner semantic integration", () => {
     ]);
     expect(result.items.map(({ ref }) => ref.sequence)).toEqual([1, 2, 3, 4]);
     expect(controller.calls).toHaveLength(1);
+    const turn = result.items.find(({ payload }) => payload.kind === "controller_turn");
+    expect(turn?.payload).toMatchObject({
+      kind: "controller_turn",
+      toolExposure: {
+        controllerRequestId: "run_001:controller_turn:1",
+        manifestId: "run_001:context-projection:1:manifest",
+        exposedToolCount: 0,
+        omittedToolCount: 0,
+      },
+    });
+    expect(events.map(({ name }) => name)).toEqual(expect.arrayContaining([
+      "context.projection.completed",
+      "controller.started",
+      "run.item.appended",
+      "controller.tool_exposure.resolved",
+      "controller.finished",
+    ]));
+    expect(events.findIndex(({ name }) => name === "controller.tool_exposure.resolved"))
+      .toBeGreaterThan(events.findIndex(({ name }) => name === "run.item.appended"));
   });
 
   it("finalizes required Run-owned resources before terminal settlement", async () => {
@@ -165,7 +188,7 @@ describe("Runner semantic integration", () => {
       },
     ).run(createAgent(), createRunInput(), createRunConfig(operations));
 
-    expect(result.status).toBe("succeeded");
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
     expect(finalized).toEqual([result.runId]);
   });
 
@@ -183,7 +206,7 @@ describe("Runner semantic integration", () => {
       },
     ).run(createAgent(), createRunInput(), createRunConfig(operations));
 
-    expect(result).toMatchObject({
+    expect(result, JSON.stringify(result, null, 2)).toMatchObject({
       status: "failed",
       code: "required_finalization_failed",
       finalOutput: null,
@@ -720,6 +743,254 @@ describe("Runner semantic integration", () => {
       .toHaveLength(1);
   });
 
+  it("omits an owner-proven unavailable Operation Tool before the model request", async () => {
+    const operation = operationRef("controlled-operation");
+    const operations = createOperationFixture([
+      operationSpec(operation, "internal", {
+        requestOrigins: ["tool_request"],
+        handlerId: "handler.controlled-operation",
+      }),
+    ], [], {
+      availability: [Object.freeze({
+        binding: { operation, revision: "binding-1" },
+        assess: () => Object.freeze({
+          basisRefs: Object.freeze([Object.freeze({
+            owner: "test-resource-owner",
+            kind: "eligible_subjects",
+            id: "run-subjects",
+            revision: "0",
+          })]),
+          disposition: "unavailable" as const,
+          reason: "no_eligible_subject" as const,
+        }),
+      })],
+    });
+    const tools = createToolSelection(operations, operation, "ControlledOperation");
+    const controller = new ScriptedController([
+      (input) => {
+        expect(input.toolExposure.catalog.tools).toEqual([]);
+        return complete("No current controlled subject");
+      },
+    ]);
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools }),
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(controller.calls).toHaveLength(1);
+  });
+
+  it("keeps an available Tool exposed under ask and deny approval policies", async () => {
+    const operation = operationRef("effectful-operation");
+    const operations = createOperationFixture([
+      operationSpec(operation, "direct", {
+        requestOrigins: ["tool_request"],
+        actionAdapterId: "adapter.effectful-operation",
+      }),
+    ]);
+    const tools = createToolSelection(operations, operation, "EffectfulOperation");
+
+    for (const approvalPolicy of ["on-request", "never"] as const) {
+      const controller = new ScriptedController([
+        (input) => {
+          expect(input.toolExposure.catalog.tools.map(({ name }) => name))
+            .toEqual(["EffectfulOperation"]);
+          return complete(`Exposure preserved for ${approvalPolicy}`);
+        },
+      ]);
+      const config = createRunConfig(operations, { tools });
+      const result = await createRunner(controller, operations).run(
+        createAgent(),
+        createRunInput(`task_${approvalPolicy}`),
+        {
+          ...config,
+          permissions: Object.freeze({
+            ...config.permissions,
+            approvalPolicy,
+            reviewer: approvalPolicy === "on-request"
+              ? Object.freeze({
+                  bindingId: "test-user-reviewer",
+                  kind: "user" as const,
+                  descriptor: Object.freeze({
+                    id: "test-user-reviewer",
+                    kind: "user" as const,
+                    displayName: "Test User",
+                    source: "test",
+                    metadata: Object.freeze({}),
+                  }),
+                })
+              : null,
+          }),
+        },
+      );
+      expect(result.status).toBe("succeeded");
+    }
+  });
+
+  it("discards a Controller response when its owner exposure basis becomes stale", async () => {
+    const operation = operationRef("read-file");
+    let ownerRevision = 1;
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const operations = createOperationFixture([
+      operationSpec(operation, "internal", {
+        requestOrigins: ["tool_request"],
+        handlerId: "handler.read-file",
+      }),
+    ], [], {
+      availability: [Object.freeze({
+        binding: { operation, revision: "binding-1" },
+        assess: () => Object.freeze({
+          basisRefs: Object.freeze([Object.freeze({
+            owner: "test-resource-owner",
+            kind: "read-path",
+            id: "workspace",
+            revision: String(ownerRevision),
+          })]),
+          disposition: "available" as const,
+          reason: null,
+        }),
+      })],
+    });
+    const tools = createToolSelection(operations, operation, "codeAgent.readFile");
+    const controller = new ScriptedController([
+      async (input) => {
+        entered.resolve();
+        await release.promise;
+        return advance([toolCandidate(
+          "codeAgent.readFile",
+          { path: "README.md" },
+          input.toolExposure.controllerRequestId,
+        )], "stale-model-item");
+      },
+      complete("Fresh response accepted", "fresh-model-item"),
+    ]);
+    const pending = createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools }),
+    );
+    await entered.promise;
+    ownerRevision += 1;
+    release.resolve();
+
+    const result = await pending;
+
+    expect(result.status).toBe("succeeded");
+    expect(controller.calls).toHaveLength(2);
+    expect(result.items).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        kind: "controller_turn",
+        status: "interrupted",
+        modelItems: [],
+      }),
+    }));
+    expect(JSON.stringify(result.items)).not.toContain("stale-model-item");
+  });
+
+  it("invalidates later candidates after an earlier candidate changes owner availability basis", async () => {
+    const operation = operationRef("read-file");
+    let ownerRevision = 1;
+    const handler = internalHandler("handler.read-file", "code-workspace", { content: "hello" });
+    handler.execute.mockImplementation(async (context) => {
+      ownerRevision += 1;
+      return createOperationResult({
+        ref: { invocation: context.binding.invocation, id: `${context.binding.invocation.id}:result` },
+        binding: context.binding.binding,
+        semanticOwner: "code-workspace",
+        status: "succeeded",
+        output: { content: "hello" },
+        failure: null,
+        startedAt: NOW,
+        finishedAt: NOW,
+        lowerRefs: [],
+        metadata: {},
+      });
+    });
+    const operations = createOperationFixture([
+      operationSpec(operation, "internal", {
+        requestOrigins: ["tool_request"],
+        handlerId: handler.id,
+      }),
+    ], [handler], {
+      availability: [Object.freeze({
+        binding: { operation, revision: "binding-1" },
+        assess: () => Object.freeze({
+          basisRefs: Object.freeze([Object.freeze({
+            owner: "test-resource-owner",
+            kind: "read-path",
+            id: "workspace",
+            revision: String(ownerRevision),
+          })]),
+          disposition: "available" as const,
+          reason: null,
+        }),
+      })],
+    });
+    const tools = createToolSelection(operations, operation, "codeAgent.readFile");
+    const controller = new ScriptedController([
+      (input) => ({
+        kind: "advance" as const,
+        candidates: [
+          toolCandidate("codeAgent.readFile", { path: "one.txt" }, input.toolExposure.controllerRequestId),
+          {
+            ...toolCandidate("codeAgent.readFile", { path: "two.txt" }, input.toolExposure.controllerRequestId),
+            modelItemId: "model_tool_2",
+          },
+        ],
+        modelItems: [modelItem("model_tool_1"), modelItem("model_tool_2")],
+      }),
+      complete("Only the first candidate executed"),
+    ]);
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools }),
+    );
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("attributes availability participant failure without requesting the Controller", async () => {
+    const operation = operationRef("read-file");
+    const operations = createOperationFixture([
+      operationSpec(operation, "internal", {
+        requestOrigins: ["tool_request"],
+        handlerId: "handler.read-file",
+      }),
+    ], [], {
+      availability: [Object.freeze({
+        binding: { operation, revision: "binding-1" },
+        assess() {
+          throw new Error("availability source unavailable");
+        },
+      })],
+    });
+    const tools = createToolSelection(operations, operation, "codeAgent.readFile");
+    const controller = new ScriptedController([complete("Must not be requested")]);
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools }),
+    );
+
+    expect(result, JSON.stringify(result, null, 2)).toMatchObject({
+      status: "failed",
+      code: "tool_exposure_failed",
+      failure: {
+        kind: "tool",
+        failure: { code: "tool_availability_participant_failed" },
+      },
+    });
+    expect(controller.calls).toHaveLength(0);
+  });
+
   it("routes an exposed interaction Tool directly through its Interaction protocol", async () => {
     const operations = createOperationFixture([]);
     const interaction = testInteractionProtocol();
@@ -864,6 +1135,39 @@ describe("Runner semantic integration", () => {
       "run_002",
       "run_001",
     ]);
+  });
+
+  it("omits the descendant Agent Tool when Run Tree depth capacity is exhausted", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    const operations = createOperationFixture([], [], {
+      descendants: {
+        async prepare() {
+          throw new Error("An unavailable descendant path must not prepare a child Run.");
+        },
+      },
+    });
+    const tools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent",
+      agent: { id: childAgent.id, revision: childAgent.revision },
+      revision: "descendant-binding-1",
+    });
+    const controller = new ScriptedController([
+      (input) => {
+        expect(input.toolExposure.catalog.tools).toEqual([]);
+        return complete("Depth capacity is exhausted");
+      },
+    ]);
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        tools,
+        runTreeLimits: { maxDescendantDepth: 0 },
+      }),
+    );
+
+    expect(result.status).toBe("succeeded");
   });
 
   it("executes recursive descendants through one Runner and one inherited tree", async () => {
@@ -2163,7 +2467,7 @@ function operationSpec(
 function createOperationFixture(
   specs: readonly OperationSpec[],
   internalHandlers: readonly InternalOperationHandler[] = [],
-  extensions: Partial<Pick<RunnerOperationComposition, "composite" | "descendants" | "actionExecution">> = {},
+  extensions: Partial<Pick<RunnerOperationComposition, "composite" | "descendants" | "actionExecution" | "availability">> = {},
 ): OperationFixture {
   const catalog = createOperationCatalogSnapshot({
     id: "operation-catalog-1",
@@ -2220,13 +2524,37 @@ function createOperationFixture(
       },
     })),
   );
+  const descendants = extensions.descendants === undefined
+    ? undefined
+    : Object.freeze({
+        assessAvailability: typeof extensions.descendants.assessAvailability === "function"
+          ? extensions.descendants.assessAvailability.bind(extensions.descendants)
+          : ({ targetAgent }: { readonly targetAgent: AgentRevisionRef }) => Object.freeze({
+              basisRefs: Object.freeze([Object.freeze({
+                owner: "test",
+                kind: "descendant_agent_admission",
+                id: `${targetAgent.id}@${targetAgent.revision}`,
+                revision: "admitted",
+              })]),
+              disposition: "available" as const,
+              reason: null,
+            }),
+        prepare: extensions.descendants.prepare.bind(extensions.descendants),
+      });
   return Object.freeze({
     specs: Object.freeze([...specs]),
     catalog,
     bindings,
     validateToolInput: () => true,
     internalHandlers: Object.freeze([...internalHandlers]),
-    ...extensions,
+    availability: extensions.availability ?? Object.freeze(
+      catalog.entries.map((entry) =>
+        createStaticOperationToolAvailabilityParticipant(entry.binding.ref, "test")
+      ),
+    ),
+    ...(extensions.composite === undefined ? {} : { composite: extensions.composite }),
+    ...(extensions.actionExecution === undefined ? {} : { actionExecution: extensions.actionExecution }),
+    ...(descendants === undefined ? {} : { descendants }),
   });
 }
 

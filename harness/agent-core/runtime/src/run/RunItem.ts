@@ -12,10 +12,26 @@ import type { RunFailureCause } from "./RunFailure.js";
 import type { RunObservation } from "./RunObservation.js";
 import type { RunBlockedCode, RunFailureCode, RunResultStatus } from "./RunStatus.js";
 import type { ValidationRunnerProjection } from "@agent-anything/validation/projection";
+import type { ToolRevisionRef } from "@agent-anything/tools/identity";
+import type { ToolBindingUnavailableReason } from "@agent-anything/tools/selection";
 import type {
   RunProgressAssessment,
   RunProgressCorrectionFeedback,
 } from "../progress/index.js";
+
+export interface ControllerToolExposureRecord {
+  readonly proofId: string;
+  readonly controllerRequestId: string;
+  readonly manifestId: string;
+  readonly selectionRevision: string;
+  readonly contentRevision: string;
+  readonly basisRevision: string;
+  readonly catalogRevision: string;
+  readonly exposedTools: readonly ToolRevisionRef[];
+  readonly exposedToolCount: number;
+  readonly omittedToolCount: number;
+  readonly omissionReasons: readonly ToolBindingUnavailableReason[];
+}
 
 export type RuntimeRunActionSubject =
   | { readonly kind: "state_transition"; readonly transition: "plan_update" | "handoff" }
@@ -31,6 +47,7 @@ export type RunItemPayload<TOutput = unknown> =
       readonly turn: ControllerTurnRef;
       readonly status: "decided" | "failed" | "interrupted";
       readonly decisionKind: "advance" | "propose_completion" | "propose_stop" | null;
+      readonly toolExposure: ControllerToolExposureRecord;
       readonly modelItems: readonly ControllerModelItem[];
       readonly failure: RunFailureCause | null;
     }

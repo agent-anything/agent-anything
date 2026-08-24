@@ -62,9 +62,11 @@ export class Runner {
     const contextProjection = snapshotRunnerContextProjection(
       dependencies.contextProjection,
     );
+    const operations = snapshotRunnerOperationComposition(dependencies.operations);
     this.dependencies = Object.freeze({
       ...dependencies,
       contextProjection,
+      operations,
       now,
       createRunId: dependencies.createRunId ?? createDefaultRunIdentity,
       createId: dependencies.createId ?? createDefaultIdentity,
@@ -407,6 +409,32 @@ function snapshotRunnerContextProjection(
               ),
           }),
         }),
+  });
+}
+
+function snapshotRunnerOperationComposition(
+  input: RunnerDependencies["operations"],
+): RunnerDependencies["operations"] {
+  if (input === null || typeof input !== "object" || !Array.isArray(input.availability)) {
+    throw new TypeError("Runner requires explicit Operation Tool availability participants.");
+  }
+  const availability = input.availability.map((participant) => {
+    if (
+      participant === null ||
+      typeof participant !== "object" ||
+      typeof participant.assess !== "function"
+    ) {
+      throw new TypeError("Runner Operation Tool availability participant is invalid.");
+    }
+    return Object.freeze({
+      binding: participant.binding,
+      assess: participant.assess.bind(participant),
+    });
+  });
+  return Object.freeze({
+    ...input,
+    internalHandlers: Object.freeze([...input.internalHandlers]),
+    availability: Object.freeze(availability),
   });
 }
 

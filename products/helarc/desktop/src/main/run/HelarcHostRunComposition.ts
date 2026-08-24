@@ -323,6 +323,7 @@ export async function prepareHelarcHostRun(
       bindings: product.actions.operationBindings,
       validateToolInput: validateHelarcToolInput,
       internalHandlers: Object.freeze([]),
+      availability: product.actions.operationAvailability,
       actionExecution: {
         registrations: product.actions.registrations,
         adapters: product.actions.adapters,

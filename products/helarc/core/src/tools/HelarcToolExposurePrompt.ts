@@ -5,6 +5,9 @@ export function buildHelarcToolExposureText(
 ): string {
   return [
     "Active Tool exposure:",
+    ...(exposure.catalog.tools.length === 0
+      ? ["No Tools are available for this Controller turn."]
+      : []),
     ...exposure.catalog.tools.map((tool) => [
       `- ${tool.name}: ${tool.description ?? "Use the exact registered Tool contract."}`,
       `  Revision: ${tool.ref.revision}.`,

@@ -31,7 +31,6 @@ export type {
   ToolExposureProof,
 } from "./ToolExposure.js";
 export {
-  createFixedControllerToolExposureProof,
   createToolExposureProof,
   resolveCurrentTurnToolExposure,
   snapshotCurrentTurnToolExposure,

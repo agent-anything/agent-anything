@@ -130,12 +130,10 @@ function validComposition(): ModelInputComposition {
         id: "manifest-1",
         revision: "1",
       },
-      toolExposure: {
-        owner: "helarc",
-        kind: "tool_exposure",
-        id: "tools-1",
-        revision: "2",
-      },
+      toolSelection: { owner: "tools", kind: "tool_selection", id: "selection-1", revision: "1" },
+      toolExposureContent: { owner: "tools", kind: "tool_exposure_content", id: "content-1", revision: "1" },
+      toolExposureBasis: { owner: "tools", kind: "tool_exposure_basis", id: "basis-1", revision: "1" },
+      toolExposureProof: { owner: "tools", kind: "tool_exposure_proof", id: "proof-1", revision: "proof-1" },
       protocol: {
         owner: "helarc",
         kind: "protocol",

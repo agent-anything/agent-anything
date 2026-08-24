@@ -126,6 +126,7 @@ function emptyOperations(): RunnerOperationComposition {
     bindings: createOperationBindingResolverSnapshot("operation-bindings-1", []),
     validateToolInput: () => true,
     internalHandlers: Object.freeze([]),
+    availability: Object.freeze([]),
   });
 }
 

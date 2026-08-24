@@ -38,9 +38,16 @@ export interface RunProcessTaskRegistryDependencies {
   readonly terminateProcessTree?: (child: ChildProcess, force: boolean) => void;
 }
 
+export interface RunProcessTaskAvailabilitySnapshot {
+  readonly runId: string;
+  readonly revision: number;
+  readonly activeTaskCount: number;
+}
+
 export class RunProcessTaskRegistry {
   private readonly tasks = new Map<string, ActiveTask>();
   private readonly settled = new Map<string, ProcessTaskSnapshot>();
+  private revision = 0;
 
   constructor(
     private readonly maximumActiveTasks: number,
@@ -129,11 +136,13 @@ export class RunProcessTaskRegistry {
       requestedTerminalStatus: null,
     };
     this.tasks.set(taskId, active);
+    this.revision += 1;
     child.stdout?.on("data", (chunk: Buffer) => output.append("stdout", chunk));
     child.stderr?.on("data", (chunk: Buffer) => output.append("stderr", chunk));
     const finish = (status: ProcessTaskStatus, exitCode: number | null, signal: string | null): void => {
       if (!this.tasks.has(taskId)) return;
       this.tasks.delete(taskId);
+      this.revision += 1;
       if (active.timeout !== null) clearTimeout(active.timeout);
       if (active.abortListener !== null) input.interruption.signal.removeEventListener("abort", active.abortListener);
       void output.close().then(() => {
@@ -166,6 +175,19 @@ export class RunProcessTaskRegistry {
   isExactActive(identity: CanonicalProcessIdentity): boolean {
     const active = this.tasks.get(identity.taskId);
     return active !== undefined && sameProcess(active.snapshot.process, identity);
+  }
+
+  getRunAvailability(runId: string): RunProcessTaskAvailabilitySnapshot {
+    if (typeof runId !== "string" || runId.length === 0 || runId !== runId.trim()) {
+      throw new TypeError("Process task availability requires a canonical Run identity.");
+    }
+    return Object.freeze({
+      runId,
+      revision: this.revision,
+      activeTaskCount: [...this.tasks.values()].filter(
+        (task) => task.snapshot.runId === runId,
+      ).length,
+    });
   }
 
   async stop(identity: CanonicalProcessIdentity): Promise<ProcessTaskSnapshot> {
@@ -201,6 +223,7 @@ export class RunProcessTaskRegistry {
       setTimeout(() => {
         if (!this.tasks.has(active.snapshot.taskId)) return;
         this.tasks.delete(active.snapshot.taskId);
+        this.revision += 1;
         if (active.timeout !== null) clearTimeout(active.timeout);
         if (active.abortListener !== null) {
           active.interruptionSignal.removeEventListener("abort", active.abortListener);

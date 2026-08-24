@@ -18,7 +18,11 @@ import {
   type CodeFileToolName,
 } from "@agent-anything/helarc-code-agent/file-operation";
 import type { CodeSourcePort } from "@agent-anything/helarc-code-agent/source";
-import { createFixedControllerToolExposureProof } from "@agent-anything/tools/selection";
+import {
+  createStaticAvailableToolBindingAssessment,
+  createToolExposureProof,
+  resolveCurrentTurnToolExposure,
+} from "@agent-anything/tools/selection";
 import {
   RUNTIME_EVENT_SCHEMA_VERSION,
   type RuntimeEvent,
@@ -62,10 +66,19 @@ describe("HelarcProductComposition", () => {
       ...createLocalContributions(),
     });
 
-    const exposure = createFixedControllerToolExposureProof(
+    const assessments = composition.actions.toolSelection.tools
+      .filter((selected) => selected.origins.includes("model"))
+      .map((selected) => createStaticAvailableToolBindingAssessment(
+        composition.actions.toolSelection,
+        selected.registration.descriptor.ref,
+      ));
+    const exposure = createToolExposureProof(resolveCurrentTurnToolExposure(
       composition.actions.toolSelection,
-      "controller-request-1",
-    );
+      {
+        basisRefs: assessments.flatMap((assessment) => assessment.basisRefs),
+        assessments,
+      },
+    ), "controller-request-1");
     expect(exposure.catalog.tools.map(({ name }) => name)).toEqual(expect.arrayContaining([
       "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "TaskStop",
       "AskUserQuestion", "Agent",
@@ -270,6 +283,12 @@ function createLocalContributions() {
       shellTool: "PowerShell" as const,
       shellActionAdapterId: "test.shell.adapter",
       taskStopActionAdapterId: "test.task-stop.adapter",
+      taskStopBinding: HELARC_TASK_STOP_BINDING,
+      taskAvailability: {
+        getRunAvailability() {
+          return { revision: 0, activeTaskCount: 0 };
+        },
+      },
       environment: { id: "test-shell", revision: "sha256:test-shell" },
       registrations: createActionRegistrationSnapshot([
         {

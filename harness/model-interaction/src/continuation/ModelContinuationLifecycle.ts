@@ -22,7 +22,7 @@ export interface ModelContinuationRequestLineage {
   readonly requestId: string;
   readonly activeContext: ModelContinuationActiveContextRef;
   readonly protocol: ModelContinuationRevisionRef;
-  readonly toolExposure: ModelContinuationRevisionRef;
+  readonly toolExposureContent: ModelContinuationRevisionRef;
   readonly policy: ModelContinuationRevisionRef;
 }
 
@@ -202,7 +202,7 @@ export class ModelContinuationLifecycle {
       responseId,
       activeContext: lineage.activeContext,
       protocol: lineage.protocol,
-      toolExposure: lineage.toolExposure,
+      toolExposureContent: lineage.toolExposureContent,
       policy: lineage.policy,
       state: input.state,
       createdAt: this.timestamp(),
@@ -471,8 +471,8 @@ export function checkModelContinuationCompatibility(
       : !sameActiveContext(current.activeContext, lineage.activeContext)
       ? "active_context_changed"
       : !sameRevision(current.protocol, lineage.protocol) ? "protocol_changed"
-      : !sameRevision(current.toolExposure, lineage.toolExposure)
-      ? "tool_exposure_changed"
+      : !sameRevision(current.toolExposureContent, lineage.toolExposureContent)
+      ? "tool_exposure_content_changed"
       : !sameRevision(current.policy, lineage.policy) ? "policy_changed"
       : null;
   return reason === null
@@ -528,7 +528,7 @@ function snapshotLineage(
     requestId: requiredToken(input.requestId, "requestId"),
     activeContext,
     protocol: revision(input.protocol, "protocol"),
-    toolExposure: revision(input.toolExposure, "toolExposure"),
+    toolExposureContent: revision(input.toolExposureContent, "toolExposureContent"),
     policy: revision(input.policy, "policy"),
   });
 }

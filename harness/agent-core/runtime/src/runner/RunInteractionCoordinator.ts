@@ -103,6 +103,16 @@ export interface RunInteractionCoordinatorDependencies {
   ) => void;
 }
 
+export interface RunInteractionAvailabilitySnapshot {
+  readonly registrySnapshotId: string;
+  readonly revision: number;
+  readonly activeCount: number;
+  readonly maximumPending: number;
+  readonly protocolAvailable: boolean;
+  readonly hasCapacity: boolean;
+  readonly settled: boolean;
+}
+
 /** Coordinates common Interaction lifecycle without owning semantic meaning or RunState. */
 export class RunInteractionCoordinator {
   private readonly active = new Map<string, ActiveInteraction>();
@@ -110,6 +120,7 @@ export class RunInteractionCoordinator {
   private nextResolution = 1;
   private nextApplication = 1;
   private settled = false;
+  private revision = 0;
 
   constructor(private readonly dependencies: RunInteractionCoordinatorDependencies) {
     const seen = new Set<string>();
@@ -172,6 +183,7 @@ export class RunInteractionCoordinator {
         expiryTimer: null,
       };
       this.active.set(key, active);
+      this.revision += 1;
       if (input.expiresAt !== null) {
         const delay = Math.max(0, Date.parse(input.expiresAt) - Date.parse(this.dependencies.now()));
         active.expiryTimer = setTimeout(() => {
@@ -287,6 +299,25 @@ export class RunInteractionCoordinator {
     })));
   }
 
+  getAvailabilitySnapshot(
+    protocol: InteractionProtocolRef,
+    maximumPending: number,
+  ): RunInteractionAvailabilitySnapshot {
+    if (!Number.isSafeInteger(maximumPending) || maximumPending < 0) {
+      throw new TypeError("Interaction pending capacity must be a non-negative integer.");
+    }
+    const protocolAvailable = this.resolveProtocol(protocol) !== undefined;
+    return Object.freeze({
+      registrySnapshotId: this.dependencies.registry.snapshotId,
+      revision: this.revision,
+      activeCount: this.active.size,
+      maximumPending,
+      protocolAvailable,
+      hasCapacity: this.active.size < maximumPending,
+      settled: this.settled,
+    });
+  }
+
   close(reasonCode = "run_settled"): void {
     if (this.settled) return;
     for (const active of [...this.active.values()]) {
@@ -397,6 +428,7 @@ export class RunInteractionCoordinator {
     if (commit.status === "rejected") return;
     const key = requestKey(active.pending.request);
     this.active.delete(key);
+    this.revision += 1;
     if (active.expiryTimer !== null) clearTimeout(active.expiryTimer);
     this.dependencies.onSettled(active.pending, terminal, settlement);
     active.resolveCompletion(settlement);

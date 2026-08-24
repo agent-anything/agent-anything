@@ -184,6 +184,21 @@ export interface ControllerStartedRuntimeEventPayload {
   readonly iteration: number;
 }
 
+export interface ControllerToolExposureResolvedRuntimeEventPayload {
+  readonly turnId: string;
+  readonly iteration: number;
+  readonly controllerRequestId: string;
+  readonly manifestId: string;
+  readonly selectionRevision: string;
+  readonly contentRevision: string;
+  readonly basisRevision: string;
+  readonly proofId: string;
+  readonly catalogRevision: string;
+  readonly exposedToolCount: number;
+  readonly omittedToolCount: number;
+  readonly omissionReasons: readonly string[];
+}
+
 export interface ControllerFinishedRuntimeEventPayload {
   readonly turnId: string;
   readonly iteration: number;
@@ -286,6 +301,7 @@ export interface RuntimeEventPayloadMap {
   readonly "run.failed": RunFailedRuntimeEventPayload;
   readonly "run.cancelled": RunCancelledRuntimeEventPayload;
   readonly "controller.started": ControllerStartedRuntimeEventPayload;
+  readonly "controller.tool_exposure.resolved": ControllerToolExposureResolvedRuntimeEventPayload;
   readonly "controller.finished": ControllerFinishedRuntimeEventPayload;
   readonly "operation.started": OperationStartedRuntimeEventPayload;
   readonly "operation.finished": OperationFinishedRuntimeEventPayload;

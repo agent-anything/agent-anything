@@ -68,6 +68,37 @@ export interface RunTreeExecutionSnapshot {
   readonly nodes: readonly RunTreeNodeProjection[];
 }
 
+export interface RunTreeDescendantCapacityAssessment {
+  readonly treeRevision: number;
+  readonly disposition: "available" | "unavailable";
+  readonly reason:
+    | "depth_limit_exhausted"
+    | "total_limit_exhausted"
+    | "active_limit_exhausted"
+    | null;
+}
+
+export function assessRunTreeDescendantCapacity(
+  snapshot: RunTreeExecutionSnapshot,
+  parentLineage: RunLineage,
+): RunTreeDescendantCapacityAssessment {
+  if (parentLineage.root.id !== snapshot.rootRunId) {
+    throw new TypeError("Descendant capacity lineage belongs to another Run Tree.");
+  }
+  const reason = parentLineage.depth + 1 > snapshot.limits.maxDescendantDepth
+    ? "depth_limit_exhausted" as const
+    : snapshot.totalDescendantRuns >= snapshot.limits.maxTotalDescendantRuns
+      ? "total_limit_exhausted" as const
+      : snapshot.activeDescendantRuns >= snapshot.limits.maxActiveDescendantRuns
+        ? "active_limit_exhausted" as const
+        : null;
+  return Object.freeze({
+    treeRevision: snapshot.revision,
+    disposition: reason === null ? "available" : "unavailable",
+    reason,
+  });
+}
+
 export type RunTreeExecutionListener = (
   snapshot: RunTreeExecutionSnapshot,
 ) => void;

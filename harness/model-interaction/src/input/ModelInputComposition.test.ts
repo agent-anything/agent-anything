@@ -191,7 +191,10 @@ function lineage() {
     activeContext: null,
     contextProjection: null,
     projectionManifest: null,
-    toolExposure: null,
+    toolSelection: null,
+    toolExposureContent: null,
+    toolExposureBasis: null,
+    toolExposureProof: null,
     protocol: { owner: "test", kind: "protocol", id: "protocol", revision: "1" },
     policy: { owner: "test", kind: "policy", id: "policy", revision: "1" },
   };

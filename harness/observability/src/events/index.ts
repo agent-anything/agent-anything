@@ -4,6 +4,7 @@ export type {
   ContextProjectionCompletedRuntimeEventPayload,
   ControllerFinishedRuntimeEventPayload,
   ControllerStartedRuntimeEventPayload,
+  ControllerToolExposureResolvedRuntimeEventPayload,
   InteractionOpenedRuntimeEventPayload,
   InteractionSettledRuntimeEventPayload,
   OperationFinishedRuntimeEventPayload,

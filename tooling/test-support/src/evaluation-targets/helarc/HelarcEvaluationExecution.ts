@@ -388,7 +388,7 @@ async function aggregateHelarcCampaign(input: {
         criterion,
         grader,
         requestedAt: HELARC_EVALUATION_TIME,
-        metadata: { product: "helarc", evaluation: "run-progress-v1" },
+        metadata: { product: "helarc", evaluation: "current-turn-tool-exposure-v1" },
       }, grader.kind === "reference" ? outcomeGrader : safetyGrader, {
         signal: input.signal,
         deadlineAt: input.deadlineAt,
@@ -401,7 +401,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.run-progress-baseline-result`,
+      id: `${definition.ref.id}.current-turn-tool-exposure-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -412,7 +412,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.run-progress.report.baseline",
+      id: "helarc.current-turn-tool-exposure.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -458,7 +458,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.run-tree-control.report.baseline",
+      id: "helarc.run-progress.report.baseline",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -474,25 +474,25 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.run-progress.baseline-acceptance",
+      id: "helarc.current-turn-tool-exposure.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
-    acceptedBy: { id: "agent-anything.architecture-review", revision: "run-progress-v1" },
+    acceptedBy: { id: "agent-anything.architecture-review", revision: "current-turn-tool-exposure-v1" },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
       product: "helarc",
       suiteRef: refKey(input.corpus.suite.ref),
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
-    rationale: "Reviewed as the Run Progress semantic detection and bounded-correction successor to the Run Tree Control baseline.",
+    rationale: "Reviewed as the exact current-turn Tool Exposure successor to the Run Progress baseline.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.run-tree-control.baseline-acceptance",
+      id: "helarc.run-progress.baseline-acceptance",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     limitations: [BASELINE_LIMITATION],
@@ -517,10 +517,10 @@ async function aggregateHelarcCampaign(input: {
 }
 
 function predecessorTargetRevision(revision: string): string {
-  if (!revision.startsWith("v7-")) {
-    throw new TypeError(`Unknown Run Progress Target revision '${revision}'.`);
+  if (!revision.startsWith("v8-")) {
+    throw new TypeError(`Unknown Current-Turn Tool Exposure Target revision '${revision}'.`);
   }
-  return revision.replace(/^v7-/, "v6-");
+  return revision.replace(/^v8-/, "v7-");
 }
 
 function gradeExpectedOutcome(

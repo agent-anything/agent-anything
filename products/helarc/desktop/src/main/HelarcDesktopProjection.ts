@@ -481,6 +481,11 @@ function projectActivityMetadata(
     "promptArchitectureVersion",
     "actionContractVersion",
     "toolExposureVersion",
+    "toolSelectionRevision",
+    "toolExposureContentRevision",
+    "toolExposureBasisRevision",
+    "toolExposureProofId",
+    "catalogRevision",
     "manifestId",
     "projectionId",
     "requestId",
@@ -508,6 +513,8 @@ function projectActivityMetadata(
     "omittedCount",
     "rejectedCount",
     "blockedCount",
+    "exposedToolCount",
+    "omittedToolCount",
   ] as const;
 
   for (const key of stringKeys) {
@@ -522,11 +529,14 @@ function projectActivityMetadata(
     }
   }
 
-  if (
-    Array.isArray(metadata.exposedToolNames)
-    && metadata.exposedToolNames.every((item) => typeof item === "string")
-  ) {
-    projected.exposedToolNames = [...metadata.exposedToolNames];
+  for (const key of [
+    "exposedToolNames",
+    "omissionReasons",
+    "toolExposureOmissionReasons",
+  ] as const) {
+    if (Array.isArray(metadata[key]) && metadata[key].every((item) => typeof item === "string")) {
+      projected[key] = [...metadata[key]];
+    }
   }
 
   return projected;

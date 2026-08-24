@@ -14,12 +14,18 @@ import type { AuditPort, RunTraceObserver, RuntimeEventPublisher, TelemetryPort 
 import type { ActionExecutionCoordinatorDependencies } from "@agent-anything/action-execution/enforcement";
 import type { ActionExecutionObserver } from "@agent-anything/action-execution/enforcement";
 import type { InteractionProtocolRegistrySnapshot } from "@agent-anything/interaction/coordination";
-import type { OperationBindingResolverSnapshot, ResolvedOperationBinding } from "@agent-anything/operation-catalog/binding";
+import type {
+  OperationBindingResolverSnapshot,
+  ResolvedOperationBinding,
+} from "@agent-anything/operation-catalog/binding";
 import type {
   OperationCatalogSnapshot,
   OperationRequestOrigin,
 } from "@agent-anything/operation-catalog/catalog";
-import type { OperationRevisionRef } from "@agent-anything/operation-catalog/identity";
+import type {
+  OperationBindingRevisionRef,
+  OperationRevisionRef,
+} from "@agent-anything/operation-catalog/identity";
 import type { OperationResult } from "@agent-anything/operation-catalog/result";
 import type { CompositeDefinitionRevision } from "@agent-anything/operation-composition/definition";
 import type { CompositeExecutionDependencies } from "@agent-anything/operation-composition/execution";
@@ -41,6 +47,10 @@ import type { ValidationSubjectSnapshotRef } from "@agent-anything/validation/su
 import type { RunRef } from "@agent-anything/agent-core/run";
 import type { RunFinalizationContext } from "../run/RunCancellation.js";
 import type { RunFailureCause } from "../run/RunFailure.js";
+import type {
+  ToolBindingUnavailableReason,
+  ToolExposureBasisRef,
+} from "@agent-anything/tools/selection";
 
 export type RunnerIdentityKind =
   | "run_cancellation_request"
@@ -137,6 +147,10 @@ export type DescendantOperationOutcome =
     };
 
 export interface DescendantRunCompositionPort {
+  assessAvailability(input: {
+    readonly parentRunId: string;
+    readonly targetAgent: AgentRevisionRef;
+  }): Promise<ToolPathAvailability> | ToolPathAvailability;
   prepare(input: {
     readonly parentRunId: string;
     readonly parentRunAction: RunActionRef;
@@ -144,6 +158,19 @@ export interface DescendantRunCompositionPort {
     readonly delegatedInput: unknown;
     readonly parentConfig: RunConfig;
   }): Promise<DescendantRunPreparation>;
+}
+
+export interface ToolPathAvailability {
+  readonly basisRefs: readonly ToolExposureBasisRef[];
+  readonly disposition: "available" | "unavailable";
+  readonly reason: ToolBindingUnavailableReason | null;
+}
+
+export interface OperationToolAvailabilityParticipant {
+  readonly binding: OperationBindingRevisionRef;
+  assess(input: {
+    readonly run: RunRef;
+  }): Promise<ToolPathAvailability> | ToolPathAvailability;
 }
 
 export interface CompositeOperationResolution {
@@ -160,6 +187,7 @@ export interface RunnerOperationComposition {
   readonly bindings: OperationBindingResolverSnapshot;
   readonly validateToolInput: (schema: unknown, candidate: unknown) => boolean;
   readonly internalHandlers: readonly InternalOperationHandler[];
+  readonly availability: readonly OperationToolAvailabilityParticipant[];
   readonly actionExecution?: Omit<
     ActionExecutionCoordinatorDependencies,
     "approval" | "permission"

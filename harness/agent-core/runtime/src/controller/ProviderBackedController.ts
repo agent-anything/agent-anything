@@ -1696,7 +1696,7 @@ function continuationLineage<TOutput>(
   input: ControllerInput<TOutput>,
 ): ModelContinuationRequestLineage {
   const lineage = request.composition.lineage;
-  if (lineage.toolExposure === null) {
+  if (lineage.toolExposureContent === null || lineage.toolExposureProof === null) {
     throw new TypeError("Provider continuation requires exact Tool exposure lineage.");
   }
   return Object.freeze({
@@ -1710,7 +1710,10 @@ function continuationLineage<TOutput>(
       version: input.context.activeContext.version,
     }),
     protocol: continuationRevision(lineage.protocol, "protocol"),
-    toolExposure: continuationRevision(lineage.toolExposure, "toolExposure"),
+    toolExposureContent: continuationRevision(
+      lineage.toolExposureContent,
+      "toolExposureContent",
+    ),
     policy: continuationRevision(lineage.policy, "policy"),
   });
 }

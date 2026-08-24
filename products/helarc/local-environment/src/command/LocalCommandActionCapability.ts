@@ -90,6 +90,8 @@ export interface HelarcLocalCommandActionCapability {
   readonly adapters: readonly ActionAdapterImplementation[];
   readonly executors: readonly ActionExecutor[];
   readonly processTasks: RunProcessTaskRegistry;
+  readonly taskStopBinding: OperationBindingRevisionRef;
+  readonly taskAvailability: Pick<RunProcessTaskRegistry, "getRunAvailability">;
 }
 
 interface ShellPayload {
@@ -153,6 +155,8 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
       createTaskStopExecutor(processTasks, now),
     ]),
     processTasks,
+    taskStopBinding: input.taskStopBinding,
+    taskAvailability: processTasks,
   });
 }
 

@@ -98,6 +98,43 @@ describe("RuntimeEventStream", () => {
     ]);
   });
 
+  it("publishes only bounded Controller Tool exposure lineage and counts", () => {
+    const events: RuntimeEvent[] = [];
+    const stream = createStream([{ publish: (event) => events.push(event) }]);
+
+    stream.emit("controller.tool_exposure.resolved", {
+      turnId: "turn-1",
+      iteration: 1,
+      controllerRequestId: "request-1",
+      manifestId: "manifest-1",
+      selectionRevision: "selection-1",
+      contentRevision: "content-1",
+      basisRevision: "basis-1",
+      proofId: "proof-1",
+      catalogRevision: "catalog-1",
+      exposedToolCount: 3,
+      omittedToolCount: 1,
+      omissionReasons: ["resource_exhausted"],
+      omittedDescriptors: [{ description: "must-not-escape" }],
+    } as never);
+
+    expect(events[0]?.payload).toEqual({
+      turnId: "turn-1",
+      iteration: 1,
+      controllerRequestId: "request-1",
+      manifestId: "manifest-1",
+      selectionRevision: "selection-1",
+      contentRevision: "content-1",
+      basisRevision: "basis-1",
+      proofId: "proof-1",
+      catalogRevision: "catalog-1",
+      exposedToolCount: 3,
+      omittedToolCount: 1,
+      omissionReasons: ["resource_exhausted"],
+    });
+    expect(events[0]?.payload).not.toHaveProperty("omittedDescriptors");
+  });
+
   it("allowlists bounded Run Progress facts without semantic fingerprints", () => {
     const events: RuntimeEvent[] = [];
     const stream = createStream([{ publish: (event) => events.push(event) }]);

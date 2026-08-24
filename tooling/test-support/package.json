@@ -21,6 +21,10 @@
     "./run-progress-evaluation": {
       "types": "./src/run-progress-evaluation/index.ts",
       "import": "./dist/run-progress-evaluation/index.js"
+    },
+    "./current-turn-tool-exposure-evaluation": {
+      "types": "./src/current-turn-tool-exposure-evaluation/index.ts",
+      "import": "./dist/current-turn-tool-exposure-evaluation/index.js"
     }
   },
   "files": [
@@ -35,7 +39,8 @@
     "test:context-continuity": "vitest run src/context-continuity-evaluation/ContextContinuityEvaluation.test.ts src/context-continuity-evaluation/ContextContinuityAdverseConformance.test.ts src/context-continuity-evaluation/ContextContinuityPublicApi.test.ts",
     "test:validation-behavior": "vitest run src/validation-behavior/ValidationBehaviorConformance.test.ts src/validation-behavior/ValidationBehaviorEvaluation.test.ts",
     "test:run-progress": "vitest run src/run-progress-evaluation/RunProgressEvaluation.test.ts src/run-progress-evaluation/RunProgressEvaluationPublicApi.test.ts",
-    "test:evaluation": "vitest run src/evaluation-targets/helarc/HelarcEvaluationRegression.test.ts src/context-continuity-evaluation/ContextContinuityEvaluation.test.ts src/context-continuity-evaluation/ContextContinuityAdverseConformance.test.ts src/validation-behavior/ValidationBehaviorEvaluation.test.ts src/run-progress-evaluation/RunProgressEvaluation.test.ts src/run-progress-evaluation/RunProgressEvaluationPublicApi.test.ts",
+    "test:tool-exposure": "vitest run src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluation.test.ts src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluationPublicApi.test.ts",
+    "test:evaluation": "vitest run src/evaluation-targets/helarc/HelarcEvaluationRegression.test.ts src/context-continuity-evaluation/ContextContinuityEvaluation.test.ts src/context-continuity-evaluation/ContextContinuityAdverseConformance.test.ts src/validation-behavior/ValidationBehaviorEvaluation.test.ts src/run-progress-evaluation/RunProgressEvaluation.test.ts src/run-progress-evaluation/RunProgressEvaluationPublicApi.test.ts src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluation.test.ts src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluationPublicApi.test.ts",
     "evaluation:baseline:candidate": "node scripts/emit-helarc-evaluation-baseline.mjs",
     "evaluation:product-effectiveness:compare": "node scripts/compare-helarc-product-effectiveness.mjs"
   },

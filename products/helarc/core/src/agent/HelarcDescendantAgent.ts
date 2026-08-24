@@ -56,6 +56,20 @@ export function createHelarcDescendantAgentContribution(
       admittedAt,
     }),
     composition: Object.freeze({
+      assessAvailability(input: Parameters<DescendantRunCompositionPort["assessAvailability"]>[0]) {
+        const admitted = input.targetAgent.id === agent.id &&
+          input.targetAgent.revision === agent.revision;
+        return Object.freeze({
+          basisRefs: Object.freeze([Object.freeze({
+            owner: "helarc",
+            kind: "descendant_agent_admission",
+            id: `${agent.id}@${agent.revision}`,
+            revision: admitted ? "admitted" : "not_admitted",
+          })]),
+          disposition: admitted ? "available" as const : "unavailable" as const,
+          reason: admitted ? null : "no_eligible_subject" as const,
+        });
+      },
       async prepare(input: Parameters<DescendantRunCompositionPort["prepare"]>[0]) {
         if (input.targetAgent.id !== agent.id || input.targetAgent.revision !== agent.revision) {
           throw new TypeError("The requested descendant Agent revision is not admitted.");

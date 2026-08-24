@@ -84,6 +84,21 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
       return terminal(name, payload) as unknown as RuntimeEventPayloadMap[TName];
     case "controller.started":
       return freeze({ turnId: token(payload.turnId, "controller.started.turnId"), iteration: positive(payload.iteration, "controller.started.iteration") }) as RuntimeEventPayloadMap[TName];
+    case "controller.tool_exposure.resolved":
+      return freeze({
+        turnId: token(payload.turnId, "controller.tool_exposure.resolved.turnId"),
+        iteration: positive(payload.iteration, "controller.tool_exposure.resolved.iteration"),
+        controllerRequestId: token(payload.controllerRequestId, "controller.tool_exposure.resolved.controllerRequestId"),
+        manifestId: token(payload.manifestId, "controller.tool_exposure.resolved.manifestId"),
+        selectionRevision: token(payload.selectionRevision, "controller.tool_exposure.resolved.selectionRevision"),
+        contentRevision: token(payload.contentRevision, "controller.tool_exposure.resolved.contentRevision"),
+        basisRevision: token(payload.basisRevision, "controller.tool_exposure.resolved.basisRevision"),
+        proofId: token(payload.proofId, "controller.tool_exposure.resolved.proofId"),
+        catalogRevision: token(payload.catalogRevision, "controller.tool_exposure.resolved.catalogRevision"),
+        exposedToolCount: nonNegativeInteger(payload.exposedToolCount, "controller.tool_exposure.resolved.exposedToolCount"),
+        omittedToolCount: nonNegativeInteger(payload.omittedToolCount, "controller.tool_exposure.resolved.omittedToolCount"),
+        omissionReasons: tokenArray(payload.omissionReasons, "controller.tool_exposure.resolved.omissionReasons"),
+      }) as RuntimeEventPayloadMap[TName];
     case "controller.finished":
       return freeze({
         turnId: token(payload.turnId, "controller.finished.turnId"),

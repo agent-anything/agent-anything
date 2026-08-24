@@ -12,6 +12,7 @@ export {
   ProcessTaskRegistryError,
 } from "./RunProcessTaskRegistry.js";
 export type {
+  RunProcessTaskAvailabilitySnapshot,
   ProcessTaskSnapshot,
   ProcessTaskStatus,
 } from "./RunProcessTaskRegistry.js";

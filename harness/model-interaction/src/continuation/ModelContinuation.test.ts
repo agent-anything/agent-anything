@@ -16,7 +16,7 @@ describe("Model continuation contracts", () => {
       runId: "run-1",
       version: 4,
     });
-    expect(continuation.toolExposure.revision).toBe("2");
+    expect(continuation.toolExposureContent.revision).toBe("2");
     expect(continuation.policy.revision).toBe("7");
     expect(Object.isFrozen(continuation.activeContext)).toBe(true);
   });
@@ -67,7 +67,7 @@ function validContinuation(): ModelContinuationRef {
     responseId: "response-2",
     activeContext: { id: "context-1", runId: "run-1", version: 4 },
     protocol: { id: "helarc-controller", revision: "5" },
-    toolExposure: { id: "tools-1", revision: "2" },
+    toolExposureContent: { id: "tools-1", revision: "2" },
     policy: { id: "model-input-policy", revision: "7" },
     state: {
       kind: "opaque_provider_state",

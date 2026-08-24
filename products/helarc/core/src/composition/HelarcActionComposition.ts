@@ -28,6 +28,8 @@ import {
 } from "@agent-anything/tools/selection";
 import { createHelarcCommandOperationContribution } from "../tools/HelarcCommandOperation.js";
 import type { HelarcShellToolName } from "../tools/HelarcBaselineToolContracts.js";
+import type { OperationBindingRevisionRef } from "@agent-anything/operation-catalog/identity";
+import type { OperationToolAvailabilityParticipant } from "@agent-anything/agent-runtime/runner";
 
 export interface HelarcPhysicalActionContribution {
   readonly registrations: ActionRegistrationSnapshot;
@@ -47,6 +49,13 @@ export interface HelarcCommandActionContribution extends HelarcPhysicalActionCon
     readonly id: string;
     readonly revision: string;
   };
+  readonly taskStopBinding: OperationBindingRevisionRef;
+  readonly taskAvailability: {
+    getRunAvailability(runId: string): {
+      readonly revision: number;
+      readonly activeTaskCount: number;
+    };
+  };
 }
 
 export interface CreateHelarcActionCompositionInput {
@@ -63,6 +72,7 @@ export interface HelarcActionComposition {
   readonly registrations: ActionRegistrationSnapshot;
   readonly adapters: readonly ActionAdapterImplementation[];
   readonly executors: readonly ActionExecutor[];
+  readonly operationAvailability: readonly OperationToolAvailabilityParticipant[];
 }
 
 export function createHelarcActionComposition(
@@ -115,6 +125,47 @@ export function createHelarcActionComposition(
     ),
   );
   assertActionRegistrationsBelongToCatalog(registrations, operationCatalog);
+  const operationAvailability = Object.freeze(operationCatalog.entries.map(
+    (entry): OperationToolAvailabilityParticipant => {
+      if (sameOperationBinding(entry.binding.ref, input.command.taskStopBinding)) {
+        return Object.freeze({
+          binding: entry.binding.ref,
+          assess({ run }: { readonly run: import("@agent-anything/agent-core/run").RunRef }) {
+            const current = input.command.taskAvailability.getRunAvailability(run.id);
+            return Object.freeze({
+              basisRefs: Object.freeze([Object.freeze({
+                owner: "helarc-command",
+                kind: "run_process_tasks",
+                id: run.id,
+                revision: String(current.revision),
+              })]),
+              disposition: current.activeTaskCount > 0
+                ? "available" as const
+                : "unavailable" as const,
+              reason: current.activeTaskCount > 0
+                ? null
+                : "no_eligible_subject" as const,
+            });
+          },
+        });
+      }
+      return Object.freeze({
+        binding: entry.binding.ref,
+        assess() {
+          return Object.freeze({
+            basisRefs: Object.freeze([Object.freeze({
+              owner: entry.operation.semanticOwner,
+              kind: "static_operation_path",
+              id: `${entry.operation.ref.operation.namespace}.${entry.operation.ref.operation.name}@${entry.operation.ref.revision}`,
+              revision: entry.binding.ref.revision,
+            })]),
+            disposition: "available" as const,
+            reason: null,
+          });
+        },
+      });
+    },
+  ));
   return Object.freeze({
     operationCatalog,
     operationBindings,
@@ -122,7 +173,18 @@ export function createHelarcActionComposition(
     registrations,
     adapters: Object.freeze(physical.flatMap((contribution) => contribution.adapters)),
     executors: Object.freeze(physical.flatMap((contribution) => contribution.executors)),
+    operationAvailability,
   });
+}
+
+function sameOperationBinding(
+  left: OperationBindingRevisionRef,
+  right: OperationBindingRevisionRef,
+): boolean {
+  return left.operation.operation.namespace === right.operation.operation.namespace &&
+    left.operation.operation.name === right.operation.operation.name &&
+    left.operation.revision === right.operation.revision &&
+    left.revision === right.revision;
 }
 
 export function validateHelarcToolInput(schema: unknown, candidate: unknown): boolean {

@@ -34,8 +34,8 @@ describe("ModelContinuationLifecycle", () => {
         activeContext: { id: "context-1", runId: "run-1", version: 5 },
       }, "response_chaining"],
       ["protocol_changed", { protocol: { id: "protocol-1", revision: "2" } }, "response_chaining"],
-      ["tool_exposure_changed", {
-        toolExposure: { id: "tools-1", revision: "2" },
+      ["tool_exposure_content_changed", {
+        toolExposureContent: { id: "tools-1", revision: "2" },
       }, "response_chaining"],
       ["policy_changed", { policy: { id: "policy-1", revision: "2" } }, "response_chaining"],
     ] as const;
@@ -206,7 +206,7 @@ function lineage(requestId: string): ModelContinuationRequestLineage {
     requestId,
     activeContext: { id: "context-1", runId: "run-1", version: 4 },
     protocol: { id: "protocol-1", revision: "1" },
-    toolExposure: { id: "tools-1", revision: "1" },
+    toolExposureContent: { id: "tools-1", revision: "1" },
     policy: { id: "policy-1", revision: "1" },
   };
 }
@@ -223,7 +223,7 @@ function continuation(): ModelContinuationRef {
     responseId: "response-1",
     activeContext: { id: "context-1", runId: "run-1", version: 4 },
     protocol: { id: "protocol-1", revision: "1" },
-    toolExposure: { id: "tools-1", revision: "1" },
+    toolExposureContent: { id: "tools-1", revision: "1" },
     policy: { id: "policy-1", revision: "1" },
     state: opaque("state-1"),
     createdAt: "2026-08-17T00:00:01.000Z",

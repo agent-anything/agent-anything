@@ -21,6 +21,11 @@ describe("RunProcessTaskRegistry", () => {
     const interruption = Object.freeze({ signal: new AbortController().signal, interruption: null });
 
     try {
+      expect(registry.getRunAvailability("run-1")).toEqual({
+        runId: "run-1",
+        revision: 0,
+        activeTaskCount: 0,
+      });
       const started = await registry.start({
         runId: "run-1", actionId: "action-1", environmentId: "environment-1",
         executable: "shell", args: ["command"], cwd: directory, environment: {}, timeoutMs: 5_000,
@@ -30,10 +35,18 @@ describe("RunProcessTaskRegistry", () => {
       child.stdout!.write("ready\n");
       expect(started).toMatchObject({ status: "running", process: { runId: "run-1", processId: 4242 } });
       expect(registry.isExactActive(started.process)).toBe(true);
+      expect(registry.getRunAvailability("run-1")).toMatchObject({
+        revision: 1,
+        activeTaskCount: 1,
+      });
 
       const stopped = await registry.stop(started.process);
       expect(stopped).toMatchObject({ status: "cancelled", signal: "SIGTERM" });
       expect(registry.isExactActive(started.process)).toBe(false);
+      expect(registry.getRunAvailability("run-1")).toMatchObject({
+        revision: 2,
+        activeTaskCount: 0,
+      });
       expect(await readFile(outputPath, "utf8")).toContain("ready");
     } finally {
       await rm(directory, { recursive: true, force: true });

@@ -21,7 +21,6 @@ const REGISTRATION_VALUES = [
 const SELECTION_VALUES = [
   "ToolExposureValidationError",
   "ToolSelectionValidationError",
-  "createFixedControllerToolExposureProof",
   "createFixedLocalToolSelection",
   "createStaticAvailableToolBindingAssessment",
   "createToolBindingAvailabilityAssessment",

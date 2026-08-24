@@ -1220,11 +1220,16 @@ function createControllerInput(): ControllerInput<TestOutput> {
     task,
     inputItems: [],
     toolExposure: {
+      schemaVersion: 1,
       id: "test-tool-exposure-1",
       selectionRevision: "test-tool-selection-1",
+      contentRevision: "test-tool-exposure-content-1",
+      basisRevision: "test-tool-exposure-basis-1",
       consumer: "controller",
       controllerRequestId: "run_001:controller:1",
       exposedTools: [],
+      omittedToolCount: 0,
+      omissionReasons: [],
       catalog: toolCatalog,
     },
     context: snapshotContextProjection({
@@ -1435,11 +1440,29 @@ function accountTestRequest(
       activeContext: null,
       contextProjection: null,
       projectionManifest: null,
-      toolExposure: Object.freeze({
+      toolSelection: Object.freeze({
         owner: "agent-core",
-        kind: "tool_exposure",
-        id: input.toolExposure.id,
+        kind: "tool_selection",
+        id: input.toolExposure.selectionRevision,
         revision: input.toolExposure.selectionRevision,
+      }),
+      toolExposureContent: Object.freeze({
+        owner: "agent-core",
+        kind: "tool_exposure_content",
+        id: input.toolExposure.contentRevision,
+        revision: input.toolExposure.contentRevision,
+      }),
+      toolExposureBasis: Object.freeze({
+        owner: "agent-core",
+        kind: "tool_exposure_basis",
+        id: input.toolExposure.basisRevision,
+        revision: input.toolExposure.basisRevision,
+      }),
+      toolExposureProof: Object.freeze({
+        owner: "agent-core",
+        kind: "tool_exposure_proof",
+        id: input.toolExposure.id,
+        revision: input.toolExposure.id,
       }),
       protocol: Object.freeze({
         owner: "agent-runtime-test",

@@ -9,6 +9,7 @@ export type {
   DescendantOperationOutcome,
   DescendantRunCompositionPort,
   DescendantRunPreparation,
+  OperationToolAvailabilityParticipant,
   RunnerContextProjection,
   RunInvocationOptions,
   RunnerAutomaticEffectfulValidationCheckPort,
@@ -19,6 +20,7 @@ export type {
   RunnerValidationComposition,
   RunnerValidationPreparationPort,
   RunnerValidationSettledOperationResultProcessorPort,
+  ToolPathAvailability,
 } from "./RunnerDependencies.js";
 export type {
   RunHandle,

@@ -17,7 +17,7 @@
     "evaluation:run-progress:diagnose": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/evaluation build && node scripts/run-pnpm.mjs --filter @agent-anything/provider-integrations build && node scripts/run-pnpm.mjs --filter @agent-anything/test-support build && node scripts/diagnose-helarc-run-progress.mjs",
     "evaluation:product-effectiveness:compare": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/test-support build && node scripts/run-pnpm.mjs --filter @agent-anything/test-support evaluation:product-effectiveness:compare",
     "test": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs run architecture:check && node scripts/run-pnpm.mjs build && node scripts/run-pnpm.mjs -r run test",
-    "test:evaluation": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/test-support test:evaluation",
+    "test:evaluation": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/agent-runtime test && node scripts/run-pnpm.mjs --filter @agent-anything/test-support test:evaluation",
     "typecheck": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs -r run typecheck"
   },
   "keywords": [],

@@ -64,6 +64,20 @@ describe("RunTraceAssembler", () => {
       turnId: "turn-1",
       iteration: 1,
     }, STARTED_AT);
+    stream.emit("controller.tool_exposure.resolved", {
+      turnId: "turn-1",
+      iteration: 1,
+      controllerRequestId: "request-1",
+      manifestId: "manifest-1",
+      selectionRevision: "selection-1",
+      contentRevision: "content-1",
+      basisRevision: "basis-1",
+      proofId: "proof-1",
+      catalogRevision: "catalog-1",
+      exposedToolCount: 2,
+      omittedToolCount: 1,
+      omissionReasons: ["resource_exhausted"],
+    }, STARTED_AT);
     stream.emit("controller.finished", {
       turnId: "turn-1",
       iteration: 1,
@@ -176,6 +190,13 @@ describe("RunTraceAssembler", () => {
         ["operation", "operation", "succeeded"],
         ["interaction", "interaction", "succeeded"],
       ]);
+    expect(trace.spans[1]?.attributes.toolExposure).toEqual(expect.objectContaining({
+      proofId: "proof-1",
+      manifestId: "manifest-1",
+      exposedToolCount: 2,
+      omittedToolCount: 1,
+      omissionReasons: ["resource_exhausted"],
+    }));
     expect(trace.spans[0]?.attributes.contextTransitions).toEqual([{
       transitionId: "transition-1",
       activeContextId: "context-1",
@@ -412,6 +433,7 @@ describe("RunTraceAssembler", () => {
       iteration: 1,
       decisionKind: "propose_completion",
       code: null,
+      toolExposure: null,
     });
     expect(span?.attributes).not.toHaveProperty("rawPrompt");
     expect(Object.isFrozen(span?.attributes)).toBe(true);

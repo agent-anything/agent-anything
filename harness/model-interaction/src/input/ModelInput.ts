@@ -101,7 +101,10 @@ export interface ModelInputLineage {
   readonly activeContext: ModelInputSourceRef | null;
   readonly contextProjection: ModelInputSourceRef | null;
   readonly projectionManifest: ModelInputSourceRef | null;
-  readonly toolExposure: ModelInputSourceRef | null;
+  readonly toolSelection: ModelInputSourceRef | null;
+  readonly toolExposureContent: ModelInputSourceRef | null;
+  readonly toolExposureBasis: ModelInputSourceRef | null;
+  readonly toolExposureProof: ModelInputSourceRef | null;
   readonly protocol: ModelInputSourceRef;
   readonly policy: ModelInputSourceRef;
 }
@@ -389,14 +392,17 @@ function snapshotContent(input: ModelInputContent, path: string): ModelInputCont
 
 function snapshotLineage(input: ModelInputLineage): ModelInputLineage {
   strictRecord(input, "ModelInputComposition.lineage", [
-    "activeContext", "contextProjection", "projectionManifest", "toolExposure",
-    "protocol", "policy",
+    "activeContext", "contextProjection", "projectionManifest", "toolSelection",
+    "toolExposureContent", "toolExposureBasis", "toolExposureProof", "protocol", "policy",
   ]);
   return Object.freeze({
     activeContext: snapshotNullableSource(input.activeContext, "ModelInputComposition.lineage.activeContext"),
     contextProjection: snapshotNullableSource(input.contextProjection, "ModelInputComposition.lineage.contextProjection"),
     projectionManifest: snapshotNullableSource(input.projectionManifest, "ModelInputComposition.lineage.projectionManifest"),
-    toolExposure: snapshotNullableSource(input.toolExposure, "ModelInputComposition.lineage.toolExposure"),
+    toolSelection: snapshotNullableSource(input.toolSelection, "ModelInputComposition.lineage.toolSelection"),
+    toolExposureContent: snapshotNullableSource(input.toolExposureContent, "ModelInputComposition.lineage.toolExposureContent"),
+    toolExposureBasis: snapshotNullableSource(input.toolExposureBasis, "ModelInputComposition.lineage.toolExposureBasis"),
+    toolExposureProof: snapshotNullableSource(input.toolExposureProof, "ModelInputComposition.lineage.toolExposureProof"),
     protocol: snapshotSource(input.protocol, "ModelInputComposition.lineage.protocol"),
     policy: snapshotSource(input.policy, "ModelInputComposition.lineage.policy"),
   });

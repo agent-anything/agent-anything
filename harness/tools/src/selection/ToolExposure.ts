@@ -3,7 +3,6 @@ import { createToolCatalogSnapshot } from "../catalog/index.js";
 import type { ToolBindingRef, ToolRevisionRef } from "../identity/index.js";
 import { createToolContractIdentity, toolRevisionKey } from "../identity/index.js";
 import {
-  createStaticAvailableToolBindingAssessment,
   snapshotToolBindingAvailabilityAssessment,
   snapshotToolBindingRef,
   snapshotToolExposureBasisRefs,
@@ -58,6 +57,8 @@ export interface ToolExposureProof {
   readonly consumer: "controller";
   readonly controllerRequestId: string;
   readonly exposedTools: readonly ToolRevisionRef[];
+  readonly omittedToolCount: number;
+  readonly omissionReasons: readonly ToolBindingUnavailableReason[];
   readonly catalog: ToolCatalogSnapshot;
 }
 
@@ -196,6 +197,8 @@ export function createToolExposureProof(
     consumer: "controller" as const,
     controllerRequestId: token(controllerRequestId, "controllerRequestId"),
     exposedTools: exposure.exposedTools,
+    omittedToolCount: exposure.omissions.length,
+    omissionReasons: Object.freeze(exposure.omissions.map(({ reason }) => reason).sort()),
     catalog: exposure.catalog,
   };
   return Object.freeze({
@@ -203,31 +206,6 @@ export function createToolExposureProof(
     id: proofIdentity(base),
     ...base,
   });
-}
-
-/** Fixed-exposure predecessor retained until Runner supplies owner availability. */
-export function createFixedControllerToolExposureProof(
-  selection: ToolSelectionRevision,
-  controllerRequestId: string,
-): ToolExposureProof {
-  const snapshot = snapshotToolSelectionRevision(selection);
-  const modelTools = snapshot.tools.filter((selected) => selected.origins.includes("model"));
-  const assessments = modelTools.map((selected) =>
-    createStaticAvailableToolBindingAssessment(snapshot, selected.registration.descriptor.ref)
-  );
-  const basisRefs = snapshotToolExposureBasisRefs([
-    {
-      owner: "tools",
-      kind: "fixed_selection",
-      id: snapshot.selectionId,
-      revision: snapshot.revision,
-    },
-    ...assessments.flatMap((assessment) => assessment.basisRefs),
-  ]);
-  return createToolExposureProof(
-    resolveCurrentTurnToolExposure(snapshot, { basisRefs, assessments }),
-    controllerRequestId,
-  );
 }
 
 export function snapshotCurrentTurnToolExposure(
@@ -303,6 +281,8 @@ export function snapshotToolExposureProof(input: ToolExposureProof): ToolExposur
     "consumer",
     "controllerRequestId",
     "exposedTools",
+    "omittedToolCount",
+    "omissionReasons",
     "catalog",
   ], "Tool Exposure proof");
   const base = {
@@ -312,6 +292,8 @@ export function snapshotToolExposureProof(input: ToolExposureProof): ToolExposur
     consumer: consumer(input.consumer),
     controllerRequestId: token(input.controllerRequestId, "controllerRequestId"),
     exposedTools: snapshotToolRefs(input.exposedTools),
+    omittedToolCount: nonNegativeInteger(input.omittedToolCount, "omittedToolCount"),
+    omissionReasons: snapshotUnavailableReasons(input.omissionReasons),
     catalog: snapshotCatalog(input.catalog),
   };
   if (
@@ -319,6 +301,9 @@ export function snapshotToolExposureProof(input: ToolExposureProof): ToolExposur
     base.exposedTools.some((ref, index) => toolRevisionKey(ref) !== toolRevisionKey(base.catalog.tools[index]!.ref))
   ) {
     throw exposureInvalid("tool_exposure_proof_invalid", "Tool Exposure proof does not match its exact Catalog.");
+  }
+  if (base.omittedToolCount !== base.omissionReasons.length) {
+    throw exposureInvalid("tool_exposure_proof_invalid", "Tool Exposure proof omission accounting is inconsistent.");
   }
   const expectedId = proofIdentity(base);
   if (token(input.id, "id") !== expectedId) {
@@ -471,6 +456,8 @@ function proofIdentity(input: {
   readonly consumer: "controller";
   readonly controllerRequestId: string;
   readonly exposedTools: readonly ToolRevisionRef[];
+  readonly omittedToolCount: number;
+  readonly omissionReasons: readonly ToolBindingUnavailableReason[];
   readonly catalog: ToolCatalogSnapshot;
 }): string {
   return createToolContractIdentity("agent-anything.controller-tool-exposure-proof.v2", {
@@ -480,8 +467,33 @@ function proofIdentity(input: {
     consumer: input.consumer,
     controllerRequestId: input.controllerRequestId,
     exposedTools: input.exposedTools,
+    omittedToolCount: input.omittedToolCount,
+    omissionReasons: input.omissionReasons,
     catalogRevision: input.catalog.revision,
   });
+}
+
+function snapshotUnavailableReasons(
+  input: readonly ToolBindingUnavailableReason[],
+): readonly ToolBindingUnavailableReason[] {
+  if (!Array.isArray(input)) {
+    throw exposureInvalid("tool_exposure_proof_invalid", "Tool Exposure omission reasons must be an array.");
+  }
+  assertDenseArray(input, "Tool Exposure omission reasons");
+  const reasons = input.map((reason) => {
+    if (!UNAVAILABLE_REASONS.includes(reason)) {
+      throw exposureInvalid("tool_exposure_proof_invalid", "Tool Exposure omission reason is invalid.");
+    }
+    return reason;
+  }).sort();
+  return Object.freeze(reasons);
+}
+
+function nonNegativeInteger(input: unknown, field: string): number {
+  if (!Number.isSafeInteger(input) || (input as number) < 0) {
+    throw exposureInvalid("tool_exposure_proof_invalid", `${field} must be a non-negative safe integer.`);
+  }
+  return input as number;
 }
 
 function descriptorInput(descriptor: ToolDescriptor) {

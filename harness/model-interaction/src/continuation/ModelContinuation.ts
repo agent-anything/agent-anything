@@ -49,7 +49,7 @@ export interface ModelContinuationRef {
   readonly responseId: string;
   readonly activeContext: ModelContinuationActiveContextRef;
   readonly protocol: ModelContinuationRevisionRef;
-  readonly toolExposure: ModelContinuationRevisionRef;
+  readonly toolExposureContent: ModelContinuationRevisionRef;
   readonly policy: ModelContinuationRevisionRef;
   readonly state: ModelOpaqueContinuationState;
   readonly createdAt: string;
@@ -62,7 +62,7 @@ export type ModelContinuationIncompatibilityReason =
   | "branch_changed"
   | "active_context_changed"
   | "protocol_changed"
-  | "tool_exposure_changed"
+  | "tool_exposure_content_changed"
   | "policy_changed";
 
 export type ModelContinuationCompatibility =
@@ -152,7 +152,7 @@ export function snapshotModelContinuationRef(
 ): ModelContinuationRef {
   strictRecord(input, "ModelContinuationRef", [
     "id", "providerId", "model", "mechanism", "predecessor", "branchId",
-    "requestId", "responseId", "activeContext", "protocol", "toolExposure",
+    "requestId", "responseId", "activeContext", "protocol", "toolExposureContent",
     "policy", "state", "createdAt",
   ]);
   if (!isMechanism(input.mechanism)) {
@@ -171,9 +171,9 @@ export function snapshotModelContinuationRef(
     responseId: token(input.responseId, "ModelContinuationRef.responseId"),
     activeContext: snapshotActiveContext(input.activeContext),
     protocol: snapshotRevisionRef(input.protocol, "ModelContinuationRef.protocol"),
-    toolExposure: snapshotRevisionRef(
-      input.toolExposure,
-      "ModelContinuationRef.toolExposure",
+    toolExposureContent: snapshotRevisionRef(
+      input.toolExposureContent,
+      "ModelContinuationRef.toolExposureContent",
     ),
     policy: snapshotRevisionRef(input.policy, "ModelContinuationRef.policy"),
     state: snapshotOpaqueState(input.state, "ModelContinuationRef.state"),
@@ -370,5 +370,5 @@ function isIncompatibilityReason(
     value === "mechanism_changed" ||
     value === "branch_changed" ||
     value === "active_context_changed" || value === "protocol_changed" ||
-    value === "tool_exposure_changed" || value === "policy_changed";
+    value === "tool_exposure_content_changed" || value === "policy_changed";
 }

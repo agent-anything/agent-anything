@@ -15,9 +15,26 @@ const NOW = "2026-08-14T00:00:00.000Z";
 describe("RunInteractionCoordinator adverse conformance", () => {
   it("rejects stale, wrong-subject, duplicate-conflicting, and late submissions", async () => {
     const fixture = createFixture();
+    expect(fixture.coordinator.getAvailabilitySnapshot(
+      { owner: "test-owner", kind: "question", revision: "1" },
+      1,
+    )).toMatchObject({
+      revision: 0,
+      activeCount: 0,
+      protocolAvailable: true,
+      hasCapacity: true,
+    });
     const opened = fixture.coordinator.open(openInput());
     expect(opened.status).toBe("opened");
     if (opened.status !== "opened") return;
+    expect(fixture.coordinator.getAvailabilitySnapshot(
+      opened.pending.request.protocol,
+      1,
+    )).toMatchObject({
+      revision: 1,
+      activeCount: 1,
+      hasCapacity: false,
+    });
 
     expect(fixture.coordinator.submit(submission({
       request: { ...opened.pending.request, requestVersion: 2 },
@@ -51,6 +68,14 @@ describe("RunInteractionCoordinator adverse conformance", () => {
       code: "interaction_submission_conflict",
     });
     expect((await opened.completion).status).toBe("resolved");
+    expect(fixture.coordinator.getAvailabilitySnapshot(
+      opened.pending.request.protocol,
+      1,
+    )).toMatchObject({
+      revision: 2,
+      activeCount: 0,
+      hasCapacity: true,
+    });
     expect(fixture.coordinator.submit(submission({
       request: opened.pending.request,
       submissionId: "late-submission",

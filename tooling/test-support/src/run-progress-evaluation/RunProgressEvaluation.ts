@@ -316,6 +316,7 @@ function emptyOperations(): RunnerOperationComposition {
     ),
     validateToolInput: () => true,
     internalHandlers: Object.freeze([]),
+    availability: Object.freeze([]),
   });
 }
 

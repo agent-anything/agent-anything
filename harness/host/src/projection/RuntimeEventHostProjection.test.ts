@@ -54,6 +54,45 @@ describe("Host RuntimeEvent projection", () => {
     expect(Object.isFrozen(projected.payload)).toBe(true);
   });
 
+  it("projects bounded exposure lineage without omitted Tool definitions", () => {
+    const event = Object.freeze({
+      schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
+      id: "event-exposure",
+      runId: "run-1",
+      taskId: "task-1",
+      lineage: Object.freeze({ kind: "root", root: Object.freeze({ id: "run-1" }), depth: 0 }),
+      sequence: 2,
+      name: "controller.tool_exposure.resolved",
+      occurredAt: "2026-08-03T00:00:00.000Z",
+      payload: Object.freeze({
+        turnId: "turn-1",
+        iteration: 1,
+        controllerRequestId: "request-1",
+        manifestId: "manifest-1",
+        selectionRevision: "selection-1",
+        contentRevision: "content-1",
+        basisRevision: "basis-1",
+        proofId: "proof-1",
+        catalogRevision: "catalog-1",
+        exposedToolCount: 2,
+        omittedToolCount: 1,
+        omissionReasons: ["resource_exhausted"],
+        omittedTools: [{ name: "secret-tool" }],
+      }),
+    }) as unknown as RuntimeEvent;
+
+    const projected = projectRuntimeEventForHost(event);
+
+    expect(projected.payload).toMatchObject({
+      proofId: "proof-1",
+      manifestId: "manifest-1",
+      exposedToolCount: 2,
+      omittedToolCount: 1,
+      omissionReasons: ["resource_exhausted"],
+    });
+    expect(projected.payload).not.toHaveProperty("omittedTools");
+  });
+
   it("keeps the safe Context transition summary without Contribution payloads", () => {
     const event = Object.freeze({
       schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,

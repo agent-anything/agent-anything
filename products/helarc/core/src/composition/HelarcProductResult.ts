@@ -337,6 +337,27 @@ function controllerTraceMetadata(
     ...(trace.toolExposureVersion === null
       ? {}
       : { toolExposureVersion: trace.toolExposureVersion }),
+    ...(trace.toolSelectionRevision === null
+      ? {}
+      : { toolSelectionRevision: trace.toolSelectionRevision }),
+    ...(trace.toolExposureContentRevision === null
+      ? {}
+      : { toolExposureContentRevision: trace.toolExposureContentRevision }),
+    ...(trace.toolExposureBasisRevision === null
+      ? {}
+      : { toolExposureBasisRevision: trace.toolExposureBasisRevision }),
+    ...(trace.toolExposureProofId === null
+      ? {}
+      : { toolExposureProofId: trace.toolExposureProofId }),
+    ...(trace.exposedToolCount === null
+      ? {}
+      : { exposedToolCount: trace.exposedToolCount }),
+    ...(trace.omittedToolCount === null
+      ? {}
+      : { omittedToolCount: trace.omittedToolCount }),
+    ...(trace.toolExposureOmissionReasons.length === 0
+      ? {}
+      : { toolExposureOmissionReasons: trace.toolExposureOmissionReasons }),
     ...(trace.exposedToolNames.length === 0
       ? {}
       : { exposedToolNames: trace.exposedToolNames }),

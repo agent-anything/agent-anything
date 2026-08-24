@@ -118,7 +118,19 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
           iteration: event.payload.iteration,
           decisionKind: null,
           code: null,
+          toolExposure: null,
         });
+        break;
+      }
+      case "controller.tool_exposure.resolved": {
+        const operationId = createControllerTurnTraceOperationId(event.payload.iteration);
+        const span = this.spans.get(operationId);
+        if (span === undefined) {
+          this.issue("operation_start_missing", event.id, operationId);
+        } else {
+          span.attributes.toolExposure = Object.freeze({ ...event.payload });
+          span.links.push(link("runtime_event", event.id));
+        }
         break;
       }
       case "controller.finished": {
@@ -128,6 +140,7 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
           iteration: event.payload.iteration,
           decisionKind: event.payload.decisionKind,
           code: event.payload.code,
+          toolExposure: this.spans.get(operationId)?.attributes.toolExposure ?? null,
         };
         if (!this.spans.has(operationId)) {
           this.issue("operation_start_missing", event.id, operationId);

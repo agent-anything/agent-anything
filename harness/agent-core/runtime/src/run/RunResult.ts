@@ -223,6 +223,7 @@ function assertFailureCode(code: RunFailureCode): void {
     "runtime_execution_failed", "runtime_limit_exceeded", "runtime_deadline_exceeded",
     "context_projection_failed", "controller_failed", "operation_failed",
     "interaction_failed", "required_finalization_failed", "validation_failed",
+    "tool_exposure_failed",
     "unknown_effect",
   ].includes(code)) {
     throw new TypeError("Failed RunResult code is invalid.");

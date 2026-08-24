@@ -68,6 +68,10 @@ export {
   HELARC_RUN_PROGRESS_ACCEPTED_BASELINE,
   HELARC_RUN_PROGRESS_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcRunProgressBaseline.js";
+export {
+  HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE,
+  HELARC_CURRENT_TURN_TOOL_EXPOSURE_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcCurrentTurnToolExposureBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export type {

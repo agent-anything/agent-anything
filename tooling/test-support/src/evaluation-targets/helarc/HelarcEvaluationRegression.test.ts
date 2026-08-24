@@ -36,6 +36,10 @@ import {
   HELARC_RUN_PROGRESS_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcRunProgressBaseline.js";
 import {
+  HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE,
+  HELARC_CURRENT_TURN_TOOL_EXPOSURE_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcCurrentTurnToolExposureBaseline.js";
+import {
   compareHelarcEvaluationBaseline,
   projectHelarcEvaluationBaselineSignature,
   runHelarcEvaluationBaselineCandidate,
@@ -43,7 +47,7 @@ import {
 } from "./HelarcEvaluationExecution.js";
 
 describe("Helarc accepted Evaluation baseline succession", () => {
-  it("preserves accepted history and proves the Run Progress baseline successor", async () => {
+  it("preserves accepted history and proves the Current-Turn Tool Exposure baseline successor", async () => {
     const baselines = [
       HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE,
       HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
@@ -55,21 +59,22 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       HELARC_VALIDATION_COMPLETION_ACCEPTED_BASELINE,
       HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE,
       HELARC_RUN_PROGRESS_ACCEPTED_BASELINE,
+      HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE,
     ];
     const historyBefore = baselines.map((baseline) => JSON.stringify(baseline));
     const candidate = await runHelarcEvaluationBaselineCandidate();
     const predecessorComparison = compareHelarcEvaluationBaseline(
-      HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE,
+      HELARC_RUN_PROGRESS_ACCEPTED_BASELINE,
       candidate,
     );
     const acceptedComparison = compareHelarcEvaluationBaseline(
-      HELARC_RUN_PROGRESS_ACCEPTED_BASELINE,
+      HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE,
       candidate,
     );
 
     expect(predecessorComparison).toMatchObject({
       status: "incomparable",
-      differences: ["target_snapshot_ref", "target_manifest"],
+      differences: ["target_snapshot_ref", "target_manifest", "corpus_revision"],
     });
     expect(acceptedComparison.status).toBe("equivalent");
     expect(acceptedComparison.pairedComparisons).toHaveLength(4);
@@ -81,14 +86,14 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     ]);
     expect(candidate.cases.every(({ traceIssueCodes }) => traceIssueCodes.length === 0)).toBe(true);
     expect(baselines.map((baseline) => JSON.stringify(baseline))).toEqual(historyBefore);
-    expect(candidate.report.ref).toEqual(HELARC_RUN_PROGRESS_ACCEPTED_BASELINE.reportRef);
-    expect(candidate.acceptance.ref).toEqual(HELARC_RUN_PROGRESS_ACCEPTED_BASELINE.acceptanceRef);
+    expect(candidate.report.ref).toEqual(HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE.reportRef);
+    expect(candidate.acceptance.ref).toEqual(HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.report.supersedes)
-      .toEqual(HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE.reportRef);
+      .toEqual(HELARC_RUN_PROGRESS_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.supersedes)
-      .toEqual(HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_RUN_PROGRESS_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.metrics.map(({ ref }) => ref)).toEqual(
-      HELARC_RUN_PROGRESS_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
+      HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
     );
     expect(HELARC_VALIDATION_GATE_BASELINE_ACCEPTANCE.predecessorReportRef)
       .toEqual(HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE.reportRef);
@@ -106,22 +111,25 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       .toEqual(HELARC_VALIDATION_COMPLETION_ACCEPTED_BASELINE.reportRef);
     expect(HELARC_RUN_PROGRESS_BASELINE_ACCEPTANCE.predecessorReportRef)
       .toEqual(HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE.reportRef);
+    expect(HELARC_CURRENT_TURN_TOOL_EXPOSURE_BASELINE_ACCEPTANCE.predecessorReportRef)
+      .toEqual(HELARC_RUN_PROGRESS_ACCEPTED_BASELINE.reportRef);
     expect(Object.isFrozen(HELARC_VALIDATION_COMPLETION_ACCEPTED_BASELINE)).toBe(true);
     expect(Object.isFrozen(HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE)).toBe(true);
     expect(Object.isFrozen(HELARC_RUN_PROGRESS_ACCEPTED_BASELINE)).toBe(true);
+    expect(Object.isFrozen(HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE)).toBe(true);
   }, 120_000);
 
   it("reports a safety regression even when paired latency improves", () => {
     const improvedLatencyAndUnsafe = changeAcceptedBaselineForRegression();
     const comparison = compareHelarcEvaluationBaseline(
-      HELARC_RUN_PROGRESS_ACCEPTED_BASELINE,
+      HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE,
       improvedLatencyAndUnsafe,
     );
 
     expect(comparison.status).toBe("regressed");
     if (comparison.status !== "regressed") return;
     expect(comparison.differences).toContain("gate:safety:failed");
-    const latencyIndex = HELARC_RUN_PROGRESS_ACCEPTED_BASELINE.metrics.findIndex(
+    const latencyIndex = HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE.metrics.findIndex(
       (metric) => metric.definitionRef.id.endsWith(".latency"),
     );
     const latency = comparison.pairedComparisons[latencyIndex];
@@ -131,7 +139,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
 
 function changeAcceptedBaselineForRegression(): HelarcEvaluationBaselineSignature {
   const baseline = projectHelarcEvaluationBaselineSignature(
-    HELARC_RUN_PROGRESS_ACCEPTED_BASELINE,
+    HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE,
   );
   return Object.freeze({
     ...baseline,

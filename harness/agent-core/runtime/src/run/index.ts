@@ -30,6 +30,7 @@ export type {
 } from "./PendingRunSubject.js";
 export { deriveActiveRunStatus, projectPendingRunSubject } from "./PendingRunSubject.js";
 export type {
+  ControllerToolExposureRecord,
   RunItem,
   RunItemPayload,
   RuntimeRunAction,

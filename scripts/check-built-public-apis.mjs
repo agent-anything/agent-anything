@@ -83,6 +83,7 @@ const packageExportKeys = {
   "tooling/test-support": [
     ".",
     "./context-continuity-evaluation",
+    "./current-turn-tool-exposure-evaluation",
     "./evaluation-targets/helarc",
     "./run-progress-evaluation",
   ],
@@ -277,7 +278,6 @@ const expectedLowerValueExports = {
   "@agent-anything/tools/selection": [
     "ToolExposureValidationError",
     "ToolSelectionValidationError",
-    "createFixedControllerToolExposureProof",
     "createFixedLocalToolSelection",
     "createStaticAvailableToolBindingAssessment",
     "createToolBindingAvailabilityAssessment",
@@ -437,6 +437,8 @@ const expectedLowerValueExports = {
   "@agent-anything/test-support/evaluation-targets/helarc": [
     "HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE",
     "HELARC_CONTEXT_CONTINUITY_BASELINE_ACCEPTANCE",
+    "HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE",
+    "HELARC_CURRENT_TURN_TOOL_EXPOSURE_BASELINE_ACCEPTANCE",
     "HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE",
     "HELARC_EVALUATION_CORPUS_REVISION",
     "HELARC_EVALUATION_TARGET_ADAPTER_REVISION",

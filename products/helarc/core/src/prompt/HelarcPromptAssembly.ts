@@ -10,6 +10,7 @@ import type { ModelInputSectionCandidate } from "@agent-anything/model-interacti
 import {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,
+  createHelarcActionContract,
   HELARC_ACTION_CONTRACT_VERSION,
 } from "../controller/HelarcActionContract.js";
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
@@ -128,11 +129,14 @@ function assemble(
 function buildSystemPromptSections(
   toolExposure: ControllerInput["toolExposure"],
 ): readonly HelarcPromptSection[] {
+  const actionContract = createHelarcActionContract(
+    toolExposure.catalog.tools.map(({ name }) => name),
+  );
   return Object.freeze([
     promptSection("agent_identity", "system", "You are Helarc, a careful code agent."),
     promptSection("output_format", "system", "Return only JSON. Do not wrap it in markdown."),
-    promptSection("action_protocol", "system", buildHelarcActionProtocolText()),
-    promptSection("action_decision_rules", "system", buildHelarcActionDecisionRulesText()),
+    promptSection("action_protocol", "system", buildHelarcActionProtocolText(actionContract)),
+    promptSection("action_decision_rules", "system", buildHelarcActionDecisionRulesText(actionContract)),
     promptSection("tool_catalog", "system", buildHelarcToolExposureText(toolExposure)),
     promptSection(
       "permission_safety",

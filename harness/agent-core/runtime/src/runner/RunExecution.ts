@@ -103,7 +103,10 @@ import {
   type ToolSettlementRef,
 } from "@agent-anything/tools/result";
 import { materializeToolCall, type ToolCall } from "@agent-anything/tools/invocation";
-import { createFixedControllerToolExposureProof } from "@agent-anything/tools/selection";
+import {
+  ToolExposureValidationError,
+  type ToolExposureProof,
+} from "@agent-anything/tools/selection";
 import {
   ControllerError,
   validateControllerDecision,
@@ -136,6 +139,7 @@ import {
   deriveActiveRunStatus,
   toRunCancellationSummary,
   type PendingRunSubject,
+  type ControllerToolExposureRecord,
   type RunFailureCause,
   type RunFailureCode,
   type RunItemPayload,
@@ -158,6 +162,11 @@ import type {
   RunnerValidationCheckRequest,
   ResolvedRunnerDependencies,
 } from "./RunnerDependencies.js";
+import {
+  RunToolExposureCoordinator,
+  ToolExposureBasisChangedError,
+  ToolExposureCoordinationError,
+} from "./RunToolExposureCoordinator.js";
 import {
   ContextProjectionPreparationError,
   executeControllerOperation,
@@ -256,7 +265,8 @@ interface CandidateBasis<TOutput> {
   readonly runRevision: number;
   readonly activeAgent: Agent<TOutput>;
   readonly projection: ContextProjection;
-  readonly exposure: ReturnType<typeof createFixedControllerToolExposureProof>;
+  readonly exposure: ToolExposureProof;
+  readonly exposureOwnerBasisRevision: string;
 }
 
 interface OperationExecutionOutcome {
@@ -337,6 +347,7 @@ export class RunExecution<TOutput> {
   private validationClosed = false;
   private validationHostProjection: ValidationHostProjection | null = null;
   private readonly emittedValidationRecordKeys = new Set<string>();
+  private readonly toolExposure: RunToolExposureCoordinator;
 
   constructor(
     private readonly runId: string,
@@ -410,6 +421,17 @@ export class RunExecution<TOutput> {
       onOpened: (pending) => this.openPendingInteraction(pending),
       onSettled: (pending, terminal, settlement) =>
         this.queueInteractionSettlement(pending, terminal, settlement),
+    });
+    this.toolExposure = new RunToolExposureCoordinator({
+      run: initial.run,
+      lineage,
+      selection: config.tools,
+      operationParticipants: dependencies.operations.availability,
+      interactions: this.interactions,
+      maxPendingInteractions: config.limits.maxPendingInteractions,
+      descendants: dependencies.operations.descendants,
+      getRunRevision: () => this.writer.getSnapshot().revision,
+      getRunTreeSnapshot,
     });
 
     this.interruptionCoordinator = new RunInterruptionCoordinator({
@@ -568,6 +590,7 @@ export class RunExecution<TOutput> {
         if (numericLimit !== null) return await this.settleLimitViolation(numericLimit);
 
         const decision = await this.nextDecision();
+        if (decision === null) continue;
         controllerTurnCompleted = true;
         const settlementsAfterDecision = this.drainInteractionSettlements();
         if (this.config.cancellation.context.request !== null) {
@@ -615,11 +638,18 @@ export class RunExecution<TOutput> {
           activeAgent: decision.agent,
           projection: decision.prepared.context,
           exposure: decision.prepared.input.toolExposure,
+          exposureOwnerBasisRevision: decision.exposureOwnerBasisRevision,
         };
         for (let index = 0; index < decision.decision.candidates.length; index += 1) {
           if (this.config.cancellation.context.request !== null) break;
           if (this.drainInteractionSettlements() > 0) break;
           if (this.drainSteering("apply") > 0) break;
+          if (index > 0) {
+            const currentExposure = await this.toolExposure.resolve(decision.turn.id);
+            if (currentExposure.ownerBasisRevision !== basis.exposureOwnerBasisRevision) {
+              break;
+            }
+          }
           const invalidatesRemainder = await this.processCandidate(
             decision.decision.candidates[index]!,
             index,
@@ -1220,7 +1250,8 @@ export class RunExecution<TOutput> {
     readonly basisRevision: number;
     readonly agent: Agent<TOutput>;
     readonly prepared: PreparedControllerOperation<TOutput>;
-  }> {
+    readonly exposureOwnerBasisRevision: string;
+  } | null> {
     this.synchronizeCurrentContext();
     const state = this.writer.getSnapshot();
     const iteration = state.counters.controllerTurns + 1;
@@ -1229,10 +1260,15 @@ export class RunExecution<TOutput> {
       id: this.id("controller_turn", iteration),
       sequence: iteration,
     });
-    const exposure = createFixedControllerToolExposureProof(
-      this.config.tools,
-      turn.id,
-    );
+    let resolvedExposure;
+    try {
+      resolvedExposure = await this.toolExposure.resolve(turn.id);
+    } catch (error) {
+      if (error instanceof ToolExposureBasisChangedError) return null;
+      throw error;
+    }
+    if (resolvedExposure.runRevision !== state.revision) return null;
+    const exposure = resolvedExposure.proof;
     let prepared: PreparedControllerOperation<TOutput>;
     try {
       prepared = prepareControllerOperation({
@@ -1274,12 +1310,50 @@ export class RunExecution<TOutput> {
         }),
         state.deadlineAt,
       );
+      let currentExposure;
+      try {
+        currentExposure = await this.toolExposure.resolve(turn.id);
+      } catch (error) {
+        if (!(error instanceof ToolExposureBasisChangedError)) throw error;
+        currentExposure = null;
+      }
+      const stale = currentExposure === null ||
+        this.writer.getSnapshot().revision !== state.revision ||
+        currentExposure.exposure.basis.revision !== resolvedExposure.exposure.basis.revision ||
+        this.interactionSettlements.length > 0 ||
+        this.steeringQueue.length > 0 ||
+        this.config.cancellation.context.request !== null;
+      if (stale) {
+        this.writer.commit({
+          kind: "controller_turn",
+          turn,
+          status: "interrupted",
+          decisionKind: null,
+          toolExposure: controllerToolExposureRecord(exposure, prepared.manifest.id),
+          modelItems: Object.freeze([]),
+          failure: null,
+        }, (current) => Object.freeze({
+          counters: Object.freeze({
+            ...current.counters,
+            controllerTurns: iteration,
+          }),
+        }));
+        this.emit("controller.finished", {
+          turnId: turn.id,
+          iteration,
+          status: "interrupted",
+          code: "tool_exposure_basis_stale",
+          decisionKind: null,
+        });
+        return null;
+      }
       const decision = validateControllerDecision(candidate, prepared.input);
       this.writer.commit({
         kind: "controller_turn",
         turn,
         status: "decided",
         decisionKind: decision.kind,
+        toolExposure: controllerToolExposureRecord(exposure, prepared.manifest.id),
         modelItems: decision.modelItems,
         failure: null,
       }, (current) => Object.freeze({
@@ -1301,6 +1375,7 @@ export class RunExecution<TOutput> {
         basisRevision: state.revision,
         agent: this.activeAgent,
         prepared,
+        exposureOwnerBasisRevision: resolvedExposure.ownerBasisRevision,
       });
     } catch (error) {
       if (this.config.cancellation.context.request !== null) throw error;
@@ -1310,6 +1385,7 @@ export class RunExecution<TOutput> {
         turn,
         status: "failed",
         decisionKind: null,
+        toolExposure: controllerToolExposureRecord(exposure, prepared.manifest.id),
         modelItems: Object.freeze([]),
         failure: terminal.failure,
       }, (current) => Object.freeze({
@@ -1832,7 +1908,7 @@ export class RunExecution<TOutput> {
     action: RuntimeRunAction,
     candidate: ToolRequestCandidate,
     toolCallId: string,
-    exposure: ReturnType<typeof createFixedControllerToolExposureProof>,
+    exposure: ToolExposureProof,
   ): Promise<boolean> {
     const materialized = materializeToolCall({
       candidate: candidate.tool,
@@ -3649,6 +3725,21 @@ export class RunExecution<TOutput> {
         failure: createRunFailureCause(error.failure.kind, error.failure.failure),
       } as Extract<TerminalCandidate<TOutput>, { readonly status: "failed" }>;
     }
+    if (
+      error instanceof ToolExposureCoordinationError ||
+      error instanceof ToolExposureValidationError
+    ) {
+      return {
+        status: "failed",
+        code: "tool_exposure_failed",
+        failure: createRunFailureCause("tool", Object.freeze({
+          code: error.code,
+          message: error.message,
+          retryable: false,
+          metadata: Object.freeze({ source: error.name }),
+        })),
+      };
+    }
     if (error instanceof OperationSettlementTimeoutError) {
       return {
         status: "failed",
@@ -3843,6 +3934,22 @@ export class RunExecution<TOutput> {
           correctionRound: feedback.correctionRound,
           reasonCode: feedback.reasonCode,
           factRefs: feedback.factRefs,
+        }, item.createdAt);
+      } else if (item.payload.kind === "controller_turn") {
+        const exposure = item.payload.toolExposure;
+        this.emit("controller.tool_exposure.resolved", {
+          turnId: item.payload.turn.id,
+          iteration: item.payload.turn.sequence,
+          controllerRequestId: exposure.controllerRequestId,
+          manifestId: exposure.manifestId,
+          selectionRevision: exposure.selectionRevision,
+          contentRevision: exposure.contentRevision,
+          basisRevision: exposure.basisRevision,
+          proofId: exposure.proofId,
+          catalogRevision: exposure.catalogRevision,
+          exposedToolCount: exposure.exposedToolCount,
+          omittedToolCount: exposure.omittedToolCount,
+          omissionReasons: exposure.omissionReasons,
         }, item.createdAt);
       }
     }
@@ -4471,6 +4578,25 @@ function finalizationObservabilityContext(
     purpose: "finalization",
     signal: context.signal,
     deadlineAt: context.deadlineAt,
+  });
+}
+
+function controllerToolExposureRecord(
+  proof: ToolExposureProof,
+  manifestId: string,
+): ControllerToolExposureRecord {
+  return Object.freeze({
+    proofId: proof.id,
+    controllerRequestId: proof.controllerRequestId,
+    manifestId,
+    selectionRevision: proof.selectionRevision,
+    contentRevision: proof.contentRevision,
+    basisRevision: proof.basisRevision,
+    catalogRevision: proof.catalog.revision,
+    exposedTools: proof.exposedTools,
+    exposedToolCount: proof.exposedTools.length,
+    omittedToolCount: proof.omittedToolCount,
+    omissionReasons: proof.omissionReasons,
   });
 }
 

@@ -364,7 +364,10 @@ function testLineage() {
     activeContext: null,
     contextProjection: null,
     projectionManifest: null,
-    toolExposure: null,
+    toolSelection: null,
+    toolExposureContent: null,
+    toolExposureBasis: null,
+    toolExposureProof: null,
     protocol: { owner: "provider-test", kind: "protocol", id: "test", revision: "1" },
     policy: { owner: "provider-test", kind: "policy", id: "test", revision: "1" },
   };

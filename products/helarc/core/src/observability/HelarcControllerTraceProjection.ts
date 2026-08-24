@@ -12,6 +12,13 @@ export interface HelarcControllerTraceProjection {
   readonly promptArchitectureVersion: string | null;
   readonly actionContractVersion: string | null;
   readonly toolExposureVersion: string | null;
+  readonly toolSelectionRevision: string | null;
+  readonly toolExposureContentRevision: string | null;
+  readonly toolExposureBasisRevision: string | null;
+  readonly toolExposureProofId: string | null;
+  readonly exposedToolCount: number | null;
+  readonly omittedToolCount: number | null;
+  readonly toolExposureOmissionReasons: readonly string[];
   readonly exposedToolNames: readonly string[];
   readonly requestedToolName: string | null;
 }
@@ -76,6 +83,15 @@ function createHelarcControllerTraceProjection(
     promptArchitectureVersion: readTraceString(source.promptArchitectureVersion),
     actionContractVersion: readTraceString(source.actionContractVersion),
     toolExposureVersion: readTraceString(source.toolExposureVersion),
+    toolSelectionRevision: readTraceString(source.toolSelectionRevision),
+    toolExposureContentRevision: readTraceString(source.toolExposureContentRevision),
+    toolExposureBasisRevision: readTraceString(source.toolExposureBasisRevision),
+    toolExposureProofId: readTraceString(source.toolExposureProofId),
+    exposedToolCount: readTraceNonNegativeInteger(source.exposedToolCount),
+    omittedToolCount: readTraceNonNegativeInteger(source.omittedToolCount),
+    toolExposureOmissionReasons: Object.freeze(
+      readTraceStringArray(source.toolExposureOmissionReasons),
+    ),
     exposedToolNames: Object.freeze(readTraceStringArray(source.exposedToolNames)),
     requestedToolName: readTraceString(source.requestedToolName),
   });
@@ -89,4 +105,10 @@ function readTraceStringArray(value: unknown): string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string")
     ? [...value]
     : [];
+}
+
+function readTraceNonNegativeInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) && (value as number) >= 0
+    ? value as number
+    : null;
 }

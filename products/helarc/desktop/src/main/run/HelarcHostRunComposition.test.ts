@@ -196,6 +196,7 @@ describe("Helarc Host Run composition", () => {
       "context.projection.completed",
       "controller.started",
       "run.item.appended",
+      "controller.tool_exposure.resolved",
       "controller.finished",
       "run.item.appended",
       "operation.started",
@@ -208,6 +209,7 @@ describe("Helarc Host Run composition", () => {
       "context.projection.completed",
       "controller.started",
       "run.item.appended",
+      "controller.tool_exposure.resolved",
       "controller.finished",
       "validation.gate.evaluated",
       "context.transition.committed",
@@ -250,7 +252,6 @@ describe("Helarc Host Run composition", () => {
         "Agent",
         "AskUserQuestion",
         nativeShellTool(),
-        "TaskStop",
       ],
     });
   });

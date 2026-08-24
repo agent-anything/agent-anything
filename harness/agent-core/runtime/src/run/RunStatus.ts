@@ -9,6 +9,7 @@ export type RunFailureCode =
   | "runtime_deadline_exceeded"
   | "context_projection_failed"
   | "controller_failed"
+  | "tool_exposure_failed"
   | "operation_failed"
   | "interaction_failed"
   | "required_finalization_failed"

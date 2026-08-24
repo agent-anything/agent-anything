@@ -54,13 +54,19 @@ describe("Helarc controller", () => {
       promptArchitectureVersion: "helarc-prompt-v4",
       actionContractVersion: "helarc-model-decision-v1",
       toolExposureVersion: "trusted-tool-exposure-v1",
+      toolSelectionRevision: "tool-selection-1",
+      toolExposureContentRevision: "tool-exposure-content-1",
+      toolExposureBasisRevision: "tool-exposure-basis-1",
+      toolExposureProofId: "tool-exposure-1",
+      exposedToolCount: 5,
+      omittedToolCount: 0,
       exposedToolNames: ["Edit", "Glob", "Grep", "Read", "Write"],
     });
     expect(request.outputFormat).toMatchObject({
       kind: "json_schema",
       name: "helarc_model_decision",
       schemaId: "helarc.model-decision",
-      schemaRevision: "helarc-model-decision-v1:tool-selection-1",
+      schemaRevision: "helarc-model-decision-v1:tool-exposure-content-1",
       schema: {
         oneOf: [
           {
@@ -113,8 +119,49 @@ describe("Helarc controller", () => {
     expect(request.composition.lineage).toMatchObject({
       contextProjection: { id: "projection-1" },
       projectionManifest: { id: "manifest-1" },
-      toolExposure: { id: "tool-exposure-1" },
+      toolSelection: { id: "tool-selection-1", revision: "tool-selection-1" },
+      toolExposureContent: { id: "tool-exposure-content-1", revision: "tool-exposure-content-1" },
+      toolExposureBasis: { id: "tool-exposure-basis-1", revision: "tool-exposure-basis-1" },
+      toolExposureProof: { id: "tool-exposure-1", revision: "tool-exposure-1" },
     });
+  });
+
+  it("keeps non-Tool decisions valid when the exact exposure is empty", () => {
+    const input = Object.freeze({
+      ...createControllerInput(),
+      toolExposure: createToolExposure([]),
+    });
+    const request = buildHelarcProviderRequest(input, {
+      attemptNumber: 1,
+      correction: null,
+      inputAccounting: TEST_INPUT_ACCOUNTING,
+    });
+    const alternatives = request.outputFormat.kind === "json_schema"
+      ? (request.outputFormat.schema as { oneOf: readonly unknown[] }).oneOf
+      : [];
+
+    expect(alternatives).toHaveLength(3);
+    expect(JSON.stringify(alternatives)).not.toContain("tool_call");
+    expect(request.messages.map(({ content }) => content).join("\n"))
+      .toContain("No Tools are available for this Controller turn.");
+  });
+
+  it("fails the complete mandatory input instead of silently omitting exposed Tools", () => {
+    const accounting = createUtf8ModelInputAccounting({
+      providerId: "tiny-provider",
+      model: "tiny-model",
+      maximumInputBytes: 256_100,
+      limitSource: "host_configured",
+      estimator: { id: "tiny-provider.utf8-content", revision: "1" },
+      framing: { id: "tiny-provider.framing", revision: "1" },
+      renderFraming: (_sections, outputFormat) => JSON.stringify(outputFormat),
+    });
+
+    expect(() => buildHelarcProviderRequest(createControllerInput(), {
+      attemptNumber: 1,
+      correction: null,
+      inputAccounting: accounting,
+    })).toThrow("Complete mandatory model input exceeds the effective input limit.");
   });
 
   it("assembles the four-decision model Contract without a proposal workflow", () => {
@@ -122,7 +169,7 @@ describe("Helarc controller", () => {
       controllerInput: createControllerInput(),
       correctionMessage: null,
     });
-    const contract = createHelarcActionContract();
+    const contract = createHelarcActionContract(FILE_TOOLS.map(({ name }) => name));
 
     expect(assembly.promptSections.filter(({ role }) => role === "system").map(({ id }) => id))
       .toEqual([
@@ -409,6 +456,8 @@ function createToolExposure(tools: readonly ToolDescriptorInput[]): ToolExposure
     consumer: "controller" as const,
     controllerRequestId: "controller-request-1",
     exposedTools: Object.freeze(catalog.tools.map(({ ref }) => ref)),
+    omittedToolCount: 0,
+    omissionReasons: Object.freeze([]),
     catalog,
   });
 }
