@@ -99,8 +99,11 @@ export type RuntimeDescendantRunFailureCode =
   | "descendant_run_depth_limit_exceeded"
   | "descendant_run_total_limit_exceeded"
   | "descendant_run_active_limit_exceeded"
-  | "descendant_run_preparation_failed"
-  | "descendant_agent_mismatch"
+  | "delegation_preparation_failed"
+  | "delegation_request_invalid"
+  | "delegation_authority_invalid"
+  | "delegation_context_invalid"
+  | "delegation_resource_limit_exceeded"
   | "descendant_run_start_failed";
 
 export interface RunDescendantRejectedRuntimeEventPayload {

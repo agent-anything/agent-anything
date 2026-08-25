@@ -24,7 +24,7 @@ export type DescendantRunReservationFailureCode =
 
 export interface DescendantRunReservationInput {
   readonly relationId: string;
-  readonly childRunId: string;
+  readonly createChildRunId: () => string;
   readonly parentRunId: string;
   readonly parentLineage: RunLineage;
   readonly parentRunAction: RunActionRef;
@@ -187,7 +187,9 @@ export class RunTreeExecution {
     if (this.activeDescendantRuns >= this.input.limits.maxActiveDescendantRuns) {
       return rejected("descendant_run_active_limit_exceeded", this.revision);
     }
-    if (this.nodes.has(input.childRunId)) {
+    const childRunId = input.createChildRunId();
+    assertToken(childRunId, "childRunId");
+    if (this.nodes.has(childRunId)) {
       throw new TypeError("The descendant Run identity already exists in this tree.");
     }
 
@@ -195,14 +197,14 @@ export class RunTreeExecution {
       relationId: input.relationId,
       root: this.rootLineage.root,
       parent: { id: input.parentRunId },
-      child: { id: input.childRunId },
+      child: { id: childRunId },
       parentRunAction: input.parentRunAction,
       depth,
     });
     const lineage = createDescendantRunLineage(relation);
     this.totalDescendantRuns += 1;
     this.activeDescendantRuns += 1;
-    this.nodes.set(input.childRunId, {
+    this.nodes.set(childRunId, {
       lineage,
       acceptedOrder: this.totalDescendantRuns,
       status: "initializing",

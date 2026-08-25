@@ -30,6 +30,7 @@ describe("Agent Core Runtime public API", () => {
     expect(Object.keys(delegationApi).sort()).toEqual([
       "DelegationRequestValidationError",
       "DelegationResultValidationError",
+      "createDelegationContextMaterial",
       "createDelegationContextPlan",
       "createDelegationLimits",
       "createDelegationResult",
@@ -39,6 +40,7 @@ describe("Agent Core Runtime public API", () => {
       "materializeDelegationRequest",
       "snapshotDelegationAuthorityDerivation",
       "snapshotDelegationAuthorityDimensions",
+      "snapshotDelegationContextMaterial",
       "snapshotDelegationContextPlan",
       "snapshotDelegationLimitDerivation",
       "snapshotDelegationLimits",

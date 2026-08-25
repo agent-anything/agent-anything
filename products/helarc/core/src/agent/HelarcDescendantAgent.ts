@@ -1,22 +1,25 @@
-import type { RunInput } from "@agent-anything/agent-core/input";
 import type { Agent } from "@agent-anything/agent-core/agent";
-import type { DescendantRunCompositionPort } from "@agent-anything/agent-runtime/runner";
+import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/runner";
+import {
+  createDelegationContextPlan,
+  createDelegationContextMaterial,
+  createDelegationLimits,
+  createDelegationResultExpectation,
+} from "@agent-anything/agent-runtime/delegation";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { OperationFailure } from "@agent-anything/operation-catalog/result";
 import type { ToolRegistrationInput } from "@agent-anything/tools/registration";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import { findHelarcBaselineToolContract } from "../tools/HelarcBaselineToolContracts.js";
-import { createHelarcAgent } from "./HelarcAgent.js";
 
 export interface HelarcDescendantAgentContribution {
   readonly tool: ToolRegistrationInput;
-  readonly composition: DescendantRunCompositionPort;
+  readonly delegation: RunnerDelegationComposition;
 }
 
 export function createHelarcDescendantAgentContribution(
   agent: Agent<HelarcAgentOutput>,
   admittedAt: string,
-  now: () => string,
 ): HelarcDescendantAgentContribution {
   const contract = findHelarcBaselineToolContract("Agent");
   return Object.freeze({
@@ -55,77 +58,99 @@ export function createHelarcDescendantAgentContribution(
       allowedOrigins: Object.freeze(["model" as const]),
       admittedAt,
     }),
-    composition: Object.freeze({
-      assessAvailability(input: Parameters<DescendantRunCompositionPort["assessAvailability"]>[0]) {
-        const admitted = input.targetAgent.id === agent.id &&
-          input.targetAgent.revision === agent.revision;
-        return Object.freeze({
-          basisRefs: Object.freeze([Object.freeze({
+    delegation: Object.freeze({
+      preparation: Object.freeze({
+        assessAvailability(
+          input: Parameters<RunnerDelegationComposition["preparation"]["assessAvailability"]>[0],
+        ) {
+          const admitted = input.targetAgent.id === agent.id &&
+            input.targetAgent.revision === agent.revision;
+          return Object.freeze({
+            basisRefs: Object.freeze([Object.freeze({
+              owner: "helarc",
+              kind: "descendant_agent_admission",
+              id: `${agent.id}@${agent.revision}`,
+              revision: admitted ? "admitted" : "not_admitted",
+            })]),
+            disposition: admitted ? "available" as const : "unavailable" as const,
+            reason: admitted ? null : "no_eligible_subject" as const,
+          });
+        },
+        async prepare(
+          input: Parameters<RunnerDelegationComposition["preparation"]["prepare"]>[0],
+        ) {
+          if (input.targetAgent.id !== agent.id || input.targetAgent.revision !== agent.revision) {
+            throw new TypeError("The requested descendant Agent revision is not admitted.");
+          }
+          const delegated = snapshotDelegatedInput(input.toolCall.input);
+          const rootPurpose = createDelegationContextMaterial({
             owner: "helarc",
-            kind: "descendant_agent_admission",
-            id: `${agent.id}@${agent.revision}`,
-            revision: admitted ? "admitted" : "not_admitted",
-          })]),
-          disposition: admitted ? "available" as const : "unavailable" as const,
-          reason: admitted ? null : "no_eligible_subject" as const,
-        });
-      },
-      async prepare(input: Parameters<DescendantRunCompositionPort["prepare"]>[0]) {
-        if (input.targetAgent.id !== agent.id || input.targetAgent.revision !== agent.revision) {
-          throw new TypeError("The requested descendant Agent revision is not admitted.");
-        }
-        const delegated = snapshotDelegatedInput(input.delegatedInput);
-        const createdAt = now();
-        const childInput: RunInput = Object.freeze({
-          task: Object.freeze({
-            id: `${input.parentRunAction.id}:task`,
-            kind: "helarc.delegated-code-task",
-            input: Object.freeze({ prompt: delegated.prompt }),
-            createdAt,
-            metadata: Object.freeze({
-              parentRunId: input.parentRunId,
-              description: delegated.description,
+            kind: "root_task_purpose",
+            id: input.root.task.id,
+            payload: Object.freeze({
+              kind: "helarc_root_task_purpose",
+              taskKind: input.root.task.kind,
+              taskInput: input.root.task.input,
             }),
-          }),
-          items: Object.freeze([Object.freeze({
-            id: `${input.parentRunAction.id}:input`,
-            kind: "message" as const,
-            role: "user" as const,
-            content: delegated.prompt,
-            createdAt,
-            metadata: Object.freeze({ source: "parent_run_delegation" }),
-          })]),
-          metadata: Object.freeze({
-            product: "helarc",
-            parentRunId: input.parentRunId,
-          }),
-        });
-        const parent = input.parentConfig;
-        return Object.freeze({
-          agent: createHelarcAgent(),
-          input: childInput,
-          config: Object.freeze({
-            workspace: parent.workspace,
-            identity: parent.identity,
-            permissions: parent.permissions,
-            tools: parent.tools,
-            actionExecution: parent.actionExecution,
-            validation: parent.validation,
-            limits: parent.limits,
-            audit: parent.audit,
-            telemetry: parent.telemetry,
-            cancellationLimits: parent.cancellationLimits,
-            retry: parent.retry,
-            metadata: Object.freeze({
-              ...parent.metadata,
-              parentRunId: input.parentRunId,
+          });
+          const limits = createDelegationLimits({
+            maxControllerTurns: input.limitCeiling.maxControllerTurns,
+            maxActions: input.limitCeiling.maxActions,
+            maxDurationMs: input.limitCeiling.maxDurationMs,
+            maxContextBytes: input.limitCeiling.maxContextBytes,
+            maxResultBytes: input.limitCeiling.maxResultBytes,
+          });
+          return Object.freeze({
+            agent,
+            rootPurpose,
+            preparation: Object.freeze({
+              schemaVersion: 1 as const,
+              childAgent: Object.freeze({ id: agent.id, revision: agent.revision }),
+              task: Object.freeze({
+                kind: "helarc.delegated-code-task",
+                input: Object.freeze({ prompt: delegated.prompt }),
+                metadata: Object.freeze({
+                  product: "helarc",
+                  description: delegated.description,
+                }),
+              }),
+              objective: Object.freeze({
+                text: delegated.prompt,
+                constraints: Object.freeze([]),
+              }),
+              expectedResult: createDelegationResultExpectation({
+                requirements: Object.freeze([
+                  Object.freeze({ form: "narrative" as const, required: true, maxItems: 1 }),
+                  Object.freeze({ form: "evidence" as const, required: false, maxItems: 64 }),
+                  Object.freeze({ form: "artifacts" as const, required: false, maxItems: 64 }),
+                  Object.freeze({ form: "validation" as const, required: false, maxItems: 1 }),
+                  Object.freeze({ form: "effects" as const, required: false, maxItems: 64 }),
+                ]),
+                maxNarrativeCharacters: 16_000,
+              }),
+              contextPlan: createDelegationContextPlan({
+                entries: Object.freeze([Object.freeze({
+                  role: "root_purpose" as const,
+                  material: rootPurpose.ref,
+                  necessity: "mandatory" as const,
+                })]),
+                maxContextBytes: limits.maxContextBytes,
+              }),
+              requestedAuthority: Object.freeze(input.authorityCeiling.map((dimension) =>
+                Object.freeze({
+                  kind: dimension.kind,
+                  allowed: Object.freeze([...dimension.allowed]),
+                  required: Object.freeze([...dimension.required]),
+                }))),
+              limits,
+              predecessor: null,
             }),
-          }),
-          contextManifestRef: `${input.parentRunId}:${input.parentRunAction.id}:fresh-context`,
-          visibility: "parent_and_host" as const,
-          mapResult: projectDescendantResult,
-        });
-      },
+          });
+        },
+      }),
+      resultProjection: Object.freeze({
+        project: projectDescendantResult,
+      }),
     }),
   });
 }

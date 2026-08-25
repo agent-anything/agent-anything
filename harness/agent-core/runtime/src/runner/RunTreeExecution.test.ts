@@ -55,7 +55,7 @@ describe("RunTreeExecution", () => {
     });
     const child = tree.reserveDescendant({
       relationId: "relation-1",
-      childRunId: "run-child",
+      createChildRunId: () => "run-child",
       parentRunId: "run-root",
       parentLineage: tree.rootLineage,
       parentRunAction: action("run-root", 1),
@@ -233,7 +233,7 @@ function reserve(
 ) {
   return tree.reserveDescendant({
     relationId: `relation-${childRunId}`,
-    childRunId,
+    createChildRunId: () => childRunId,
     parentRunId,
     parentLineage,
     parentRunAction: action(parentRunId, actionSequence),

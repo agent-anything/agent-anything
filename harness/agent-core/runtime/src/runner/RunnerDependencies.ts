@@ -1,7 +1,8 @@
 import type { Agent, AgentRevisionRef } from "@agent-anything/agent-core/agent";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
-import type { RunInput } from "@agent-anything/agent-core/input";
 import type { RunActionRef } from "@agent-anything/agent-core/run-action";
+import type { RunLineage } from "@agent-anything/agent-core/run-tree";
+import type { AgentTask, TaskRef } from "@agent-anything/agent-core/task";
 import type {
   ContextBudgetGrant,
   ContextProjectionEstimator,
@@ -31,7 +32,6 @@ import type { CompositeDefinitionRevision } from "@agent-anything/operation-comp
 import type { CompositeExecutionDependencies } from "@agent-anything/operation-composition/execution";
 import type { RetryExecutor } from "../retry/RetryExecutor.js";
 import type { RunResult } from "../run/RunResult.js";
-import type { RunConfig } from "./RunConfig.js";
 import type { CompletionGatePort } from "@agent-anything/validation/completion";
 import type {
   CheckAttemptRef,
@@ -51,6 +51,13 @@ import type {
   ToolBindingUnavailableReason,
   ToolExposureBasisRef,
 } from "@agent-anything/tools/selection";
+import type { ToolCall } from "@agent-anything/tools/invocation";
+import type {
+  DelegationAuthorityDimensionInput,
+  DelegationContextMaterial,
+  DelegationLimits,
+  DelegationPreparation,
+} from "../delegation/index.js";
 
 export type RunnerIdentityKind =
   | "run_cancellation_request"
@@ -68,6 +75,9 @@ export type RunnerIdentityKind =
   | "interaction_application"
   | "action"
   | "descendant_relation"
+  | "delegation_request"
+  | "delegation_authority"
+  | "delegation_limits"
   | "composite"
   | "runtime_event"
   | "run_trace"
@@ -128,13 +138,10 @@ export interface AgentResolverPort {
   resolve(ref: AgentRevisionRef): Promise<AgentResolution>;
 }
 
-export interface DescendantRunPreparation {
+export interface DelegationPreparationResult {
   readonly agent: Agent;
-  readonly input: RunInput;
-  readonly config: RunConfig;
-  readonly contextManifestRef: string;
-  readonly visibility: "parent_and_host" | "parent_only";
-  mapResult(result: RunResult): DescendantOperationOutcome;
+  readonly preparation: DelegationPreparation;
+  readonly rootPurpose: DelegationContextMaterial;
 }
 
 export type DescendantOperationOutcome =
@@ -146,18 +153,36 @@ export type DescendantOperationOutcome =
       readonly failure: import("@agent-anything/operation-catalog/result").OperationFailure;
     };
 
-export interface DescendantRunCompositionPort {
+export interface DelegationPreparationPort {
   assessAvailability(input: {
     readonly parentRunId: string;
     readonly targetAgent: AgentRevisionRef;
   }): Promise<ToolPathAvailability> | ToolPathAvailability;
   prepare(input: {
-    readonly parentRunId: string;
-    readonly parentRunAction: RunActionRef;
+    readonly root: {
+      readonly run: RunRef;
+      readonly task: AgentTask;
+    };
+    readonly parent: {
+      readonly run: RunRef;
+      readonly task: TaskRef;
+      readonly action: RunActionRef;
+      readonly lineage: RunLineage;
+    };
     readonly targetAgent: AgentRevisionRef;
-    readonly delegatedInput: unknown;
-    readonly parentConfig: RunConfig;
-  }): Promise<DescendantRunPreparation>;
+    readonly toolCall: ToolCall;
+    readonly authorityCeiling: readonly DelegationAuthorityDimensionInput[];
+    readonly limitCeiling: DelegationLimits;
+  }): Promise<DelegationPreparationResult>;
+}
+
+export interface DelegationResultProjectionPort {
+  project(result: RunResult): DescendantOperationOutcome;
+}
+
+export interface RunnerDelegationComposition {
+  readonly preparation: DelegationPreparationPort;
+  readonly resultProjection: DelegationResultProjectionPort;
 }
 
 export interface ToolPathAvailability {
@@ -193,7 +218,7 @@ export interface RunnerOperationComposition {
     "approval" | "permission"
   >;
   readonly composite?: CompositeOperationResolverPort;
-  readonly descendants?: DescendantRunCompositionPort;
+  readonly delegation?: RunnerDelegationComposition;
 }
 
 export interface RunnerValidationComposition {

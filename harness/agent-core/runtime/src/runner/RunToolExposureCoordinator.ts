@@ -18,7 +18,7 @@ import {
   type RunTreeExecutionSnapshot,
 } from "./RunTreeExecution.js";
 import type {
-  DescendantRunCompositionPort,
+  DelegationPreparationPort,
   OperationToolAvailabilityParticipant,
   ToolPathAvailability,
 } from "./RunnerDependencies.js";
@@ -37,7 +37,7 @@ export interface RunToolExposureCoordinatorDependencies {
   readonly operationParticipants: readonly OperationToolAvailabilityParticipant[];
   readonly interactions: RunInteractionCoordinator;
   readonly maxPendingInteractions: number;
-  readonly descendants: DescendantRunCompositionPort | undefined;
+  readonly delegation: DelegationPreparationPort | undefined;
   readonly getRunRevision: () => number;
   readonly getRunTreeSnapshot: () => RunTreeExecutionSnapshot;
 }
@@ -133,7 +133,7 @@ export class RunToolExposureCoordinator {
             this.dependencies.lineage,
           );
           let owner: ToolPathAvailability;
-          if (this.dependencies.descendants === undefined) {
+          if (this.dependencies.delegation === undefined) {
             owner = unavailablePath(
               Object.freeze({
                 owner: "agent-runtime",
@@ -145,7 +145,7 @@ export class RunToolExposureCoordinator {
             );
           } else {
             try {
-              owner = snapshotPath(await this.dependencies.descendants.assessAvailability({
+              owner = snapshotPath(await this.dependencies.delegation.assessAvailability({
                 parentRunId: this.dependencies.run.id,
                 targetAgent: binding.agent,
               }));

@@ -88,9 +88,16 @@ import type {
 import type { RootRunConfig, RunConfig } from "./RunConfig.js";
 import type {
   InternalOperationHandler,
+  RunnerDelegationComposition,
   RunnerDependencies,
   RunnerOperationComposition,
 } from "./RunnerDependencies.js";
+import {
+  createDelegationContextPlan,
+  createDelegationContextMaterial,
+  createDelegationLimits,
+  createDelegationResultExpectation,
+} from "../delegation/index.js";
 import { Runner } from "./Runner.js";
 import { createStaticOperationToolAvailabilityParticipant } from "./RunToolExposureCoordinator.js";
 
@@ -454,7 +461,7 @@ describe("Runner semantic integration", () => {
         return {
           invocation: input.invocation,
           validationSnapshot: input.validationSnapshot,
-          status: "failed",
+          status: "invalid",
           disposition: "fail",
           reasons: [],
           failure: createValidationFailure({
@@ -1083,26 +1090,7 @@ describe("Runner semantic integration", () => {
       },
     ]);
     operations = createOperationFixture([], [], {
-      descendants: {
-        async prepare({ delegatedInput }) {
-          return {
-            agent: childAgent,
-            input: createRunInput("task_child", delegatedInput),
-            config: createDescendantRunConfig(operations, { tools }),
-            contextManifestRef: "context-manifest-1",
-            visibility: "parent_and_host" as const,
-            mapResult(result) {
-              return result.status === "succeeded"
-                ? { status: "succeeded" as const, output: result.finalOutput, failure: null }
-                : {
-                    status: "failed" as const,
-                    output: null,
-                    failure: operationFailure("agent-runtime", "descendant_failed"),
-                  };
-            },
-          };
-        },
-      },
+      delegation: createTestDelegation(childAgent),
     });
     tools = createSemanticToolSelection(
       operations,
@@ -1140,11 +1128,7 @@ describe("Runner semantic integration", () => {
   it("omits the descendant Agent Tool when Run Tree depth capacity is exhausted", async () => {
     const childAgent = createAgent("agent_child", "1", "Child Agent");
     const operations = createOperationFixture([], [], {
-      descendants: {
-        async prepare() {
-          throw new Error("An unavailable descendant path must not prepare a child Run.");
-        },
-      },
+      delegation: createTestDelegation(childAgent),
     });
     const tools = createSemanticToolSelection(operations, "Agent", {
       kind: "descendant_agent",
@@ -1172,10 +1156,8 @@ describe("Runner semantic integration", () => {
 
   it("executes recursive descendants through one Runner and one inherited tree", async () => {
     const childAgent = createAgent("agent_child", "1", "Child Agent");
-    const grandchildAgent = createAgent("agent_grandchild", "1", "Grandchild Agent");
     let operations!: OperationFixture;
     let childTools!: RunConfig["tools"];
-    let grandchildTools!: RunConfig["tools"];
     const controller = new ScriptedController([
       (input) => advance([toolCandidate(
         "Agent",
@@ -1192,42 +1174,14 @@ describe("Runner semantic integration", () => {
       complete("Root complete", "model_root_complete"),
     ]);
     operations = createOperationFixture([], [], {
-      descendants: {
-        async prepare({ targetAgent, delegatedInput }) {
-          const isChild = targetAgent.id === childAgent.id;
-          const agent = isChild ? childAgent : grandchildAgent;
-          return {
-            agent,
-            input: createRunInput(`task_${agent.id}`, delegatedInput),
-            config: createDescendantRunConfig(operations, {
-              tools: isChild ? childTools : grandchildTools,
-            }),
-            contextManifestRef: `context-${agent.id}`,
-            visibility: "parent_and_host" as const,
-            mapResult(result) {
-              return result.status === "succeeded"
-                ? { status: "succeeded" as const, output: result.finalOutput, failure: null }
-                : {
-                    status: "failed" as const,
-                    output: null,
-                    failure: operationFailure("agent-runtime", "descendant_failed"),
-                  };
-            },
-          };
-        },
-      },
+      delegation: createTestDelegation(childAgent),
     });
     childTools = createSemanticToolSelection(operations, "Agent", {
       kind: "descendant_agent",
-      agent: { id: grandchildAgent.id, revision: grandchildAgent.revision },
+      agent: { id: childAgent.id, revision: childAgent.revision },
       revision: "grandchild-binding-1",
     });
-    grandchildTools = emptyToolSelection(operations);
-    const rootTools = createSemanticToolSelection(operations, "Agent", {
-      kind: "descendant_agent",
-      agent: { id: childAgent.id, revision: childAgent.revision },
-      revision: "child-binding-1",
-    });
+    const rootTools = childTools;
 
     const events: RuntimeEvent[] = [];
     const traces: RunTrace[] = [];
@@ -1351,30 +1305,7 @@ describe("Runner semantic integration", () => {
       }),
     ], [], {
       actionExecution: actionExecution.dependencies,
-      descendants: {
-        async prepare({ delegatedInput }) {
-          return {
-            agent: childAgent,
-            input: createRunInput("task_child", delegatedInput),
-            config: createDescendantRunConfig(operations, {
-              tools: emptyToolSelection(operations),
-              actionExecution: createValidationActionExecutionConfig(),
-              validation: createMandatoryValidationConfig("block"),
-            }),
-            contextManifestRef: "context-child",
-            visibility: "parent_and_host" as const,
-            mapResult(result) {
-              return result.status === "succeeded"
-                ? { status: "succeeded" as const, output: result.finalOutput, failure: null }
-                : {
-                    status: "failed" as const,
-                    output: null,
-                    failure: operationFailure("agent-runtime", "descendant_failed"),
-                  };
-            },
-          };
-        },
-      },
+      delegation: createTestDelegation(childAgent),
     });
     rootTools = createSemanticToolSelection(operations, "Agent", {
       kind: "descendant_agent",
@@ -1428,35 +1359,20 @@ describe("Runner semantic integration", () => {
       (input) => {
         expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
           kind: "descendant_run",
-          status: "failed",
-          failure: { code: "descendant_run_start_failed" },
+          status: "invalid",
+          failure: { code: "delegation_context_invalid" },
           toolResult: {
             status: "failed",
-            error: { code: "descendant_run_start_failed" },
+            error: { code: "delegation_context_invalid" },
           },
         });
         return complete("Parent recovered", "model_parent_complete");
       },
     ]);
     operations = createOperationFixture([], [], {
-      descendants: {
-        async prepare({ delegatedInput }) {
-          const config = createDescendantRunConfig(operations, { tools });
-          return {
-            agent: childAgent,
-            input: createRunInput("task_invalid_child", delegatedInput),
-            config: {
-              ...config,
-              limits: { ...config.limits, maxDurationMs: 0 },
-            },
-            contextManifestRef: "context-invalid-child",
-            visibility: "parent_and_host" as const,
-            mapResult() {
-              throw new Error("An invalid descendant must not start.");
-            },
-          };
-        },
-      },
+      delegation: createTestDelegation(childAgent, {
+        mandatoryUnsupportedContext: true,
+      }),
     });
     tools = createSemanticToolSelection(operations, "Agent", {
       kind: "descendant_agent",
@@ -1486,7 +1402,7 @@ describe("Runner semantic integration", () => {
         relationId: null,
         childRunId: null,
         depth: 1,
-        code: "descendant_run_start_failed",
+        code: "delegation_context_invalid",
         treeRevision: 1,
       }),
     }]);
@@ -2198,12 +2114,11 @@ describe("Runner semantic integration", () => {
     }));
   });
 
-  it("executes a descendant Agent as a child Run with explicit result mapping", async () => {
+  it("rejects descendant startup outside the model Agent Tool path", async () => {
     const delegate = operationRef("delegate-review");
     let operations!: OperationFixture;
     const controller = new ScriptedController([
       advance([operationCandidate(delegate, { topic: "contracts" })], "model_operation"),
-      complete("Child complete", "model_child_complete"),
       complete("Parent complete", "model_parent_complete"),
     ]);
     const descendantAgent = createAgent("agent_child", "1", "Child Agent");
@@ -2212,28 +2127,7 @@ describe("Runner semantic integration", () => {
         requestOrigins: ["controller_protocol"],
         agentRef: { id: descendantAgent.id, revision: descendantAgent.revision },
       }),
-    ], [], {
-      descendants: {
-        async prepare({ delegatedInput }) {
-          return {
-            agent: descendantAgent,
-            input: createRunInput("task_child", delegatedInput),
-            config: createDescendantRunConfig(operations),
-            contextManifestRef: "context-manifest-1",
-            visibility: "parent_and_host" as const,
-            mapResult(result) {
-              return result.status === "succeeded"
-                ? { status: "succeeded" as const, output: result.finalOutput, failure: null }
-                : {
-                    status: "failed" as const,
-                    output: null,
-                    failure: operationFailure("agent-runtime", "descendant_failed"),
-                  };
-            },
-          };
-        },
-      },
-    });
+    ], [], { delegation: createTestDelegation(descendantAgent) });
 
     const result = await createRunner(controller, operations).run(
       createAgent(),
@@ -2248,17 +2142,13 @@ describe("Runner semantic integration", () => {
     expect(descendant?.payload).toMatchObject({
       kind: "operation",
       result: {
-        status: "succeeded",
-        output: { summary: "Child complete" },
-        metadata: {
-          contextManifestRef: "context-manifest-1",
-          visibility: "parent_and_host",
-        },
+        status: "invalid",
+        output: null,
+        failure: { code: "delegation_requires_agent_tool" },
       },
     });
     expect(controller.calls.map(({ runId }) => runId)).toEqual([
       "run_001",
-      "run_002",
       "run_001",
     ]);
   });
@@ -2467,7 +2357,7 @@ function operationSpec(
 function createOperationFixture(
   specs: readonly OperationSpec[],
   internalHandlers: readonly InternalOperationHandler[] = [],
-  extensions: Partial<Pick<RunnerOperationComposition, "composite" | "descendants" | "actionExecution" | "availability">> = {},
+  extensions: Partial<Pick<RunnerOperationComposition, "composite" | "delegation" | "actionExecution" | "availability">> = {},
 ): OperationFixture {
   const catalog = createOperationCatalogSnapshot({
     id: "operation-catalog-1",
@@ -2524,23 +2414,6 @@ function createOperationFixture(
       },
     })),
   );
-  const descendants = extensions.descendants === undefined
-    ? undefined
-    : Object.freeze({
-        assessAvailability: typeof extensions.descendants.assessAvailability === "function"
-          ? extensions.descendants.assessAvailability.bind(extensions.descendants)
-          : ({ targetAgent }: { readonly targetAgent: AgentRevisionRef }) => Object.freeze({
-              basisRefs: Object.freeze([Object.freeze({
-                owner: "test",
-                kind: "descendant_agent_admission",
-                id: `${targetAgent.id}@${targetAgent.revision}`,
-                revision: "admitted",
-              })]),
-              disposition: "available" as const,
-              reason: null,
-            }),
-        prepare: extensions.descendants.prepare.bind(extensions.descendants),
-      });
   return Object.freeze({
     specs: Object.freeze([...specs]),
     catalog,
@@ -2554,7 +2427,128 @@ function createOperationFixture(
     ),
     ...(extensions.composite === undefined ? {} : { composite: extensions.composite }),
     ...(extensions.actionExecution === undefined ? {} : { actionExecution: extensions.actionExecution }),
-    ...(descendants === undefined ? {} : { descendants }),
+    ...(extensions.delegation === undefined ? {} : { delegation: extensions.delegation }),
+  });
+}
+
+function createTestDelegation(
+  agent: Agent<TestOutput>,
+  options: { readonly mandatoryUnsupportedContext?: boolean } = {},
+): RunnerDelegationComposition {
+  return Object.freeze({
+    preparation: Object.freeze({
+      assessAvailability(input) {
+        const admitted = input.targetAgent.id === agent.id &&
+          input.targetAgent.revision === agent.revision;
+        return Object.freeze({
+          basisRefs: Object.freeze([Object.freeze({
+            owner: "test",
+            kind: "descendant_agent_admission",
+            id: `${agent.id}@${agent.revision}`,
+            revision: admitted ? "admitted" : "not_admitted",
+          })]),
+          disposition: admitted ? "available" as const : "unavailable" as const,
+          reason: admitted ? null : "no_eligible_subject" as const,
+        });
+      },
+      async prepare(input) {
+        if (input.targetAgent.id !== agent.id ||
+            input.targetAgent.revision !== agent.revision) {
+          throw new TypeError("Test descendant Agent is not admitted.");
+        }
+        const candidate = input.toolCall.input as { readonly prompt?: unknown };
+        if (typeof candidate.prompt !== "string" || candidate.prompt.length === 0) {
+          throw new TypeError("Test delegation requires a prompt.");
+        }
+        const limits = createDelegationLimits({
+          maxControllerTurns: input.limitCeiling.maxControllerTurns,
+          maxActions: input.limitCeiling.maxActions,
+          maxDurationMs: input.limitCeiling.maxDurationMs,
+          maxContextBytes: input.limitCeiling.maxContextBytes,
+          maxResultBytes: input.limitCeiling.maxResultBytes,
+        });
+        const rootPurpose = createDelegationContextMaterial({
+          owner: "test-product",
+          kind: "root_task_purpose",
+          id: input.root.task.id,
+          payload: Object.freeze({
+            kind: "test_root_purpose",
+            taskKind: input.root.task.kind,
+            taskInput: input.root.task.input,
+          }),
+        });
+        return Object.freeze({
+          agent,
+          rootPurpose,
+          preparation: Object.freeze({
+            schemaVersion: 1 as const,
+            childAgent: Object.freeze({ id: agent.id, revision: agent.revision }),
+            task: Object.freeze({
+              kind: "test.delegated",
+              input: Object.freeze({ prompt: candidate.prompt }),
+              metadata: Object.freeze({ product: "test" }),
+            }),
+            objective: Object.freeze({
+              text: candidate.prompt,
+              constraints: Object.freeze([]),
+            }),
+            expectedResult: createDelegationResultExpectation({
+              requirements: Object.freeze([Object.freeze({
+                form: "narrative" as const,
+                required: true,
+                maxItems: 1,
+              })]),
+              maxNarrativeCharacters: 4_096,
+            }),
+            contextPlan: createDelegationContextPlan({
+              entries: Object.freeze([
+                Object.freeze({
+                  role: "root_purpose" as const,
+                  material: rootPurpose.ref,
+                  necessity: "mandatory" as const,
+                }),
+                ...(options.mandatoryUnsupportedContext
+                  ? [Object.freeze({
+                      role: "parent_fact" as const,
+                      material: Object.freeze({
+                        owner: "test",
+                        kind: "parent_fact",
+                        id: "unavailable-parent-fact",
+                        revision: "1",
+                      }),
+                      necessity: "mandatory" as const,
+                    })]
+                  : []),
+              ]),
+              maxContextBytes: limits.maxContextBytes,
+            }),
+            requestedAuthority: Object.freeze(input.authorityCeiling.map((dimension) =>
+              Object.freeze({
+                kind: dimension.kind,
+                allowed: Object.freeze([...dimension.allowed]),
+                required: Object.freeze([...dimension.required]),
+              }))),
+            limits,
+            predecessor: null,
+          }),
+        });
+      },
+    }),
+    resultProjection: Object.freeze({
+      project(result) {
+        return result.status === "succeeded"
+          ? Object.freeze({
+              status: "succeeded" as const,
+              output: result.finalOutput,
+              failure: null,
+            })
+          : Object.freeze({
+              status: "failed" as const,
+              output: null,
+              failure: operationFailure("agent-runtime", "descendant_failed"),
+            });
+      },
+    }),
   });
 }
 
@@ -2991,15 +2985,6 @@ function createRunConfig(
     },
     metadata: {},
   };
-}
-
-function createDescendantRunConfig(
-  operations: OperationFixture,
-  overrides: Parameters<typeof createRunConfig>[1] = {},
-): RunConfig {
-  const rootConfig = createRunConfig(operations, overrides);
-  const { runTreeLimits: _runTreeLimits, ...config } = rootConfig;
-  return config;
 }
 
 function createTestValidationComposition(): RunnerDependencies["validation"] {

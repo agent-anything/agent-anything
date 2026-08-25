@@ -581,7 +581,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
       catalog: product.actions.operationCatalog,
       bindings: product.actions.operationBindings,
       validateToolInput: validateHelarcToolInput,
-      descendants: product.descendants,
+      delegation: product.delegation,
       internalHandlers: [],
       availability: product.actions.operationAvailability,
       actionExecution: {

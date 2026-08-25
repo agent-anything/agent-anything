@@ -6,6 +6,10 @@ import type { ContextAdmissionProfile } from "@agent-anything/context/active-con
 import type { PlanProjection } from "../plan/index.js";
 import type { RunProgressCorrectionFeedback } from "../progress/index.js";
 import type { RunObservation, RunState } from "../run/index.js";
+import type {
+  DelegationContextMaterial,
+  DelegationTaskPreparation,
+} from "../delegation/DelegationRequest.js";
 
 const SENSITIVE_KEY = /(?:authorization|credential|password|secret|token|api[-_]?key)/i;
 const MAX_DEPTH = 8;
@@ -72,6 +76,35 @@ export function createTaskContextContribution(input: { readonly id: string; read
     retention: "current", replacementKey: "task", instructionRole: "user", necessity: "mandatory",
     precedence: 100, audiences: Object.freeze(["runtime"]), provenanceKind: "task",
     provenanceId: input.task.id, provenanceRevision: "1",
+  });
+}
+
+export function createDelegationRootPurposeContextContribution(input: {
+  readonly id: string;
+  readonly runId: string;
+  readonly material: DelegationContextMaterial;
+  readonly createdAt: string;
+}): ContextContribution {
+  return createRunContextContribution({
+    id: input.id,
+    revision: input.material.ref.revision,
+    runId: input.runId,
+    owner: input.material.ref.owner,
+    sourceKind: input.material.ref.kind,
+    sourceId: input.material.ref.id,
+    sourceRevision: input.material.ref.revision,
+    observedAt: input.createdAt,
+    payload: input.material.payload,
+    payloadKind: "structured",
+    retention: "current",
+    replacementKey: "delegation_root_purpose",
+    instructionRole: "user",
+    necessity: "mandatory",
+    precedence: 99,
+    audiences: Object.freeze(["model", "runtime"]),
+    provenanceKind: "root_task",
+    provenanceId: input.material.ref.id,
+    provenanceRevision: input.material.ref.revision,
   });
 }
 
@@ -177,6 +210,39 @@ export function createTaskContextAdmissionProfile(): ContextAdmissionProfile {
     necessities: ["mandatory"],
     maximumPrecedence: 100,
   });
+}
+
+export function createDelegationRootPurposeContextAdmissionProfile(
+  material: DelegationContextMaterial,
+): ContextAdmissionProfile {
+  return admissionProfile({
+    owner: material.ref.owner,
+    sourceKinds: ["root_task_purpose"],
+    audiences: ["model", "runtime"],
+    retention: ["current"],
+    instructionRoles: ["user"],
+    necessities: ["mandatory"],
+    maximumPrecedence: 99,
+  });
+}
+
+export function measureDelegationInitialContextBytes(input: {
+  readonly rootPurpose: DelegationContextMaterial;
+  readonly childTask: DelegationTaskPreparation;
+}): number {
+  const rootPurpose = Object.freeze({
+    kind: "structured" as const,
+    value: input.rootPurpose.payload,
+  });
+  const childTask = Object.freeze({
+    kind: "structured" as const,
+    value: toContextJsonValue({
+      kind: input.childTask.kind,
+      input: input.childTask.input,
+    }),
+  });
+  return measureContextPayload(rootPurpose).payloadBytes +
+    measureContextPayload(childTask).payloadBytes;
 }
 
 export function createCurrentRunContextAdmissionProfile(): ContextAdmissionProfile {

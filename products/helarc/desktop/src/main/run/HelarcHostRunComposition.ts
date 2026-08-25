@@ -336,7 +336,7 @@ export async function prepareHelarcHostRun(
         retry: createStopActionRetryPort(),
         now,
       },
-      descendants: product.descendants,
+      delegation: product.delegation,
     },
     validation: bindHelarcValidationCompletionGate(
       product.validation,

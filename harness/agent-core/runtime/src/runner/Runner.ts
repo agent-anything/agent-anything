@@ -1,4 +1,5 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
+import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 import type {
@@ -37,6 +38,28 @@ import type {
 import {
   snapshotContextProjectionRequest,
 } from "@agent-anything/context/projection";
+import {
+  assessDelegationContextConstruction,
+} from "../delegation/DelegationContextConstruction.js";
+import {
+  deriveDelegatedRunConfig,
+  projectDelegationRunAuthority,
+  projectDelegationRunLimits,
+} from "../delegation/DelegationRunConfiguration.js";
+import {
+  createDelegationResourceCapacity,
+  DelegationResourceLedger,
+  type DelegationResourceSettlement,
+  type DelegationResourceUsage,
+} from "../delegation/DelegationResourceLedger.js";
+import {
+  snapshotDelegationAuthorityDerivation,
+  snapshotDelegationLimitDerivation,
+  snapshotDelegationRequest,
+  type DelegationContextMaterial,
+  type DelegationRequest,
+} from "../delegation/index.js";
+import { measureDelegationInitialContextBytes } from "../context-contribution/index.js";
 import {
   snapshotAgent,
   snapshotRunConfig,
@@ -116,13 +139,36 @@ export class Runner {
     if (!ordinaryConfig.valid) {
       throw new TypeError(ordinaryConfig.failure.message);
     }
+    const rootDelegationLimits = projectDelegationRunLimits({
+      config: ordinaryConfig.config,
+      maxContextBytes: delegationPayloadCeiling(
+        this.dependencies.contextProjection.maxContributionPayloadBytes,
+        4,
+      ),
+      maxResultBytes: delegationPayloadCeiling(
+        this.dependencies.contextProjection.maxContributionPayloadBytes,
+        1,
+      ),
+    });
+    const delegationResources = new DelegationResourceLedger(
+      createDelegationResourceCapacity({
+        perDescendant: rootDelegationLimits,
+        maxTotalDescendants:
+          configSnapshot.config.runTreeLimits.maxTotalDescendantRuns,
+      }),
+    );
     return this.startPreparedRun(
       runId,
       agentSnapshot,
       inputSnapshot,
       ordinaryConfig.config,
+      inputSnapshot.task,
+      ordinaryConfig.config,
+      null,
+      null,
       tree.rootLineage,
       tree,
+      delegationResources,
       startedAt,
       deadlineAt,
       configuredPublishers,
@@ -145,48 +191,125 @@ export class Runner {
     parentRunId: string,
     parentLineage: RunLineage,
     parentDeadlineAt: string,
+    parentTask: AgentTask,
+    parentConfig: RunConfig,
+    rootTask: AgentTask,
+    rootConfig: RunConfig,
     tree: RunTreeExecution,
+    delegationResources: DelegationResourceLedger,
     runtimeEventPublishers: readonly RuntimeEventPublisher[],
     runTraceObservers: readonly RunTraceObserver[],
     actionExecutionObserver: RunInvocationOptions["actionExecutionObserver"],
   ): RuntimeDescendantRunStartResult {
+    let request: DelegationRequest;
     let agent: Agent;
-    let runInput: RunInput;
     let config: ValidatedRunConfig;
-    let childRunId: string;
-    let startedAt: string;
+    let rootPurpose: DelegationContextMaterial;
+    let contextBytes: number;
+    let rejectionCode:
+      | "delegation_request_invalid"
+      | "delegation_authority_invalid"
+      | "delegation_context_invalid" = "delegation_request_invalid";
     try {
-      if (Object.prototype.hasOwnProperty.call(input.config, "runTreeLimits")) {
-        throw new TypeError("A descendant Run cannot provide Run Tree limits.");
-      }
+      request = snapshotDelegationRequest(input.request);
       agent = snapshotAgent(input.agent);
-      runInput = snapshotRunInput(input.input);
-      const configSnapshot = snapshotRunConfig(input.config);
+      if (!sameAgentRevision(agent, request.childAgent)) {
+        throw new TypeError("Delegation child Agent does not match the trusted request.");
+      }
+      if (
+        request.origin.root.run.id !== tree.rootLineage.root.id ||
+        request.origin.root.task.id !== rootTask.id ||
+        request.origin.parent.run.id !== parentRunId ||
+        request.origin.parent.task.id !== parentTask.id ||
+        request.origin.parent.action.id !== input.parentRunAction.id ||
+        request.origin.parent.action.sequence !== input.parentRunAction.sequence ||
+        request.origin.parent.lineage.root.id !== parentLineage.root.id ||
+        request.origin.parent.lineage.depth !== parentLineage.depth
+      ) {
+        throw new TypeError("Delegation origin does not match the authoritative Run Tree edge.");
+      }
+      rejectionCode = "delegation_authority_invalid";
+      const authority = snapshotDelegationAuthorityDerivation(input.authority);
+      const limits = snapshotDelegationLimitDerivation(input.limits);
+      if (
+        request.authorityDerivation.id !== authority.ref.id ||
+        request.authorityDerivation.revision !== authority.ref.revision ||
+        request.limitDerivation.id !== limits.ref.id ||
+        request.limitDerivation.revision !== limits.ref.revision ||
+        request.limits.revision !== limits.effective.revision
+      ) {
+        throw new TypeError("Delegation request does not match its trusted derivations.");
+      }
+      const derivedConfig = deriveDelegatedRunConfig({
+        parent: parentConfig,
+        request,
+        authority,
+      });
+      rejectionCode = "delegation_context_invalid";
+      const contextAssessment = assessDelegationContextConstruction({
+        request,
+        rootTask,
+        rootPurpose: input.rootPurpose,
+      });
+      rootPurpose = contextAssessment.rootPurpose;
+      contextBytes = measureDelegationInitialContextBytes({
+        rootPurpose: contextAssessment.rootPurpose,
+        childTask: request.task,
+      });
+      if (contextBytes > request.limits.maxContextBytes) {
+        throw new TypeError("Delegation initial Context exceeds its effective limit.");
+      }
+      rejectionCode = "delegation_authority_invalid";
+      const configSnapshot = snapshotRunConfig(Object.freeze({
+        ...derivedConfig,
+        metadata: Object.freeze({
+          ...derivedConfig.metadata,
+          omittedContextMaterials: contextAssessment.omitted.map((material) =>
+            Object.freeze({ ...material })),
+        }),
+      }));
       if (!configSnapshot.valid) {
         throw new TypeError(configSnapshot.failure.message);
       }
       config = configSnapshot.config;
       validateActionComposition(this.dependencies, config);
-      childRunId = this.dependencies.createRunId();
-      assertNonEmpty(childRunId, "Runner-created descendant runId");
-      if (this.activeRunIds.has(childRunId)) {
-        throw new TypeError("Runner-created descendant runId is already active.");
-      }
-      startedAt = this.dependencies.now();
     } catch {
       return Object.freeze({
         status: "rejected" as const,
-        code: "descendant_run_start_failed" as const,
+        code: rejectionCode,
         relation: null,
         reservedTreeRevision: null,
         treeRevision: tree.getSnapshot().revision,
       });
     }
+
+    const resourceReservation = delegationResources.reserve(
+      request.ref.id,
+      request.limits,
+    );
+    if (resourceReservation.status === "rejected") {
+      return Object.freeze({
+        status: "rejected" as const,
+        code: resourceReservation.code,
+        relation: null,
+        reservedTreeRevision: null,
+        treeRevision: tree.getSnapshot().revision,
+      });
+    }
+
+    const startedAt = this.dependencies.now();
     let reservation: ReturnType<RunTreeExecution["reserveDescendant"]>;
     try {
       reservation = tree.reserveDescendant({
         relationId: input.relationId,
-        childRunId,
+        createChildRunId: () => {
+          const childRunId = this.dependencies.createRunId();
+          assertNonEmpty(childRunId, "Runner-created descendant runId");
+          if (this.activeRunIds.has(childRunId)) {
+            throw new TypeError("Runner-created descendant runId is already active.");
+          }
+          return childRunId;
+        },
         parentRunId,
         parentLineage,
         parentRunAction: input.parentRunAction,
@@ -197,6 +320,7 @@ export class Runner {
         ),
       });
     } catch {
+      delegationResources.release(request.ref.id);
       return Object.freeze({
         status: "rejected" as const,
         code: "descendant_run_start_failed" as const,
@@ -206,6 +330,7 @@ export class Runner {
       });
     }
     if (reservation.status === "rejected") {
+      delegationResources.release(request.ref.id);
       return Object.freeze({
         ...reservation,
         relation: null,
@@ -214,28 +339,50 @@ export class Runner {
     }
 
     try {
+      const childRunId = reservation.relation.child.id;
+      const runInput = snapshotRunInput(createDelegatedRunInput({
+        request,
+        childRunId,
+        startedAt,
+      }));
       const handle = this.startPreparedRun(
         childRunId,
         agent,
         runInput,
         config,
+        rootTask,
+        rootConfig,
+        request,
+        rootPurpose,
         reservation.lineage,
         tree,
+        delegationResources,
         startedAt,
         reservation.deadlineAt,
         runtimeEventPublishers,
         runTraceObservers,
         actionExecutionObserver,
       );
+      const resourceSettlement = handle.wait().then((result) =>
+        delegationResources.settle(
+          request.ref.id,
+          measureDelegationResourceUsage(
+            result,
+            contextBytes,
+            request.limits.maxResultBytes,
+          ),
+        ));
       return Object.freeze({
         status: "started" as const,
         relation: reservation.relation,
         handle,
+        resourceSettlement,
         reservedTreeRevision: reservation.treeRevision,
         treeRevision: tree.getSnapshot().revision,
       });
     } catch {
-      tree.failStart(childRunId, this.dependencies.now());
+      delegationResources.release(request.ref.id);
+      tree.failStart(reservation.relation.child.id, this.dependencies.now());
       return Object.freeze({
         status: "rejected" as const,
         code: "descendant_run_start_failed" as const,
@@ -251,8 +398,13 @@ export class Runner {
     agent: Agent<TOutput>,
     input: RunInput,
     config: RunConfig,
+    rootTask: AgentTask,
+    rootConfig: RunConfig,
+    delegationRequest: DelegationRequest | null,
+    delegationRootPurpose: DelegationContextMaterial | null,
     lineage: RunLineage,
     tree: RunTreeExecution,
+    delegationResources: DelegationResourceLedger,
     startedAt: string,
     deadlineAt: string,
     runtimeEventPublishers: readonly RuntimeEventPublisher[],
@@ -297,6 +449,10 @@ export class Runner {
       agent,
       input,
       resolvedConfig,
+      rootTask,
+      rootConfig,
+      delegationRequest,
+      delegationRootPurpose,
       lineage,
       runtimeEventPublishers,
       runTraceObservers,
@@ -308,7 +464,12 @@ export class Runner {
         runId,
         lineage,
         deadlineAt,
+        input.task,
+        config,
+        rootTask,
+        rootConfig,
         tree,
+        delegationResources,
         runtimeEventPublishers,
         runTraceObservers,
         actionExecutionObserver,
@@ -431,10 +592,42 @@ function snapshotRunnerOperationComposition(
       assess: participant.assess.bind(participant),
     });
   });
+  const delegation = input.delegation === undefined
+    ? undefined
+    : snapshotRunnerDelegationComposition(input.delegation);
   return Object.freeze({
     ...input,
     internalHandlers: Object.freeze([...input.internalHandlers]),
     availability: Object.freeze(availability),
+    ...(delegation === undefined ? {} : { delegation }),
+  });
+}
+
+function snapshotRunnerDelegationComposition(
+  input: NonNullable<RunnerDependencies["operations"]["delegation"]>,
+): NonNullable<RunnerDependencies["operations"]["delegation"]> {
+  if (
+    input === null ||
+    typeof input !== "object" ||
+    input.preparation === null ||
+    typeof input.preparation !== "object" ||
+    typeof input.preparation.assessAvailability !== "function" ||
+    typeof input.preparation.prepare !== "function" ||
+    input.resultProjection === null ||
+    typeof input.resultProjection !== "object" ||
+    typeof input.resultProjection.project !== "function"
+  ) {
+    throw new TypeError("Runner delegation composition is invalid.");
+  }
+  return Object.freeze({
+    preparation: Object.freeze({
+      assessAvailability:
+        input.preparation.assessAvailability.bind(input.preparation),
+      prepare: input.preparation.prepare.bind(input.preparation),
+    }),
+    resultProjection: Object.freeze({
+      project: input.resultProjection.project.bind(input.resultProjection),
+    }),
   });
 }
 
@@ -464,6 +657,91 @@ function createEmergencyRunResult<TOutput>(
     "runtime_execution_failed",
     failure,
   );
+}
+
+function createDelegatedRunInput(input: {
+  readonly request: DelegationRequest;
+  readonly childRunId: string;
+  readonly startedAt: string;
+}): RunInput {
+  const taskId = `${input.request.ref.id}:task`;
+  return Object.freeze({
+    task: Object.freeze({
+      id: taskId,
+      kind: input.request.task.kind,
+      input: input.request.task.input,
+      createdAt: input.startedAt,
+      metadata: Object.freeze({
+        ...input.request.task.metadata,
+        delegationRequestId: input.request.ref.id,
+        delegationRequestRevision: input.request.ref.revision,
+        rootTaskId: input.request.origin.root.task.id,
+        parentTaskId: input.request.origin.parent.task.id,
+      }),
+    }),
+    items: Object.freeze([Object.freeze({
+      id: `${input.request.ref.id}:objective`,
+      kind: "message" as const,
+      role: "user" as const,
+      content: input.request.objective.text,
+      createdAt: input.startedAt,
+      metadata: Object.freeze({
+        source: "delegation_objective",
+        delegationRequestId: input.request.ref.id,
+      }),
+    })]),
+    metadata: Object.freeze({
+      delegationRequestId: input.request.ref.id,
+      delegationRequestRevision: input.request.ref.revision,
+      childRunId: input.childRunId,
+    }),
+  });
+}
+
+function measureDelegationResourceUsage(
+  result: RunResult,
+  contextBytes: number,
+  maxResultBytes: number,
+): DelegationResourceUsage {
+  let controllerTurns = 0;
+  let actions = 0;
+  for (const item of result.items) {
+    if (item.payload.kind === "controller_turn") controllerTurns += 1;
+    if (item.payload.kind === "run_action") actions += 1;
+  }
+  let resultBytes: number;
+  try {
+    resultBytes = new TextEncoder().encode(JSON.stringify({
+      status: result.status,
+      code: result.code,
+      finalOutput: result.finalOutput,
+      evidenceRefs: result.evidenceRefs,
+      artifactRefs: result.artifactRefs,
+    })).byteLength;
+  } catch {
+    resultBytes = maxResultBytes + 1;
+  }
+  return Object.freeze({
+    controllerTurns,
+    actions,
+    contextBytes,
+    resultBytes,
+  });
+}
+
+function sameAgentRevision(
+  left: Pick<Agent, "id" | "revision">,
+  right: Pick<Agent, "id" | "revision">,
+): boolean {
+  return left.id === right.id && left.revision === right.revision;
+}
+
+function delegationPayloadCeiling(value: number, multiplier: number): number {
+  const ceiling = value * multiplier;
+  if (!Number.isSafeInteger(ceiling) || ceiling < 1) {
+    throw new TypeError("Delegation payload ceiling must be a positive safe integer.");
+  }
+  return ceiling;
 }
 
 function validateActionComposition(

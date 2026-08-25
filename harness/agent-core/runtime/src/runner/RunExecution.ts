@@ -1,6 +1,7 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
 import { toAgentRevisionRef } from "@agent-anything/agent-core/agent";
 import type { ControllerTurnRef, InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import type { RunActionProvenance, RunActionRef } from "@agent-anything/agent-core/run-action";
 import type { DescendantRunRelation } from "@agent-anything/agent-core/run-tree";
@@ -154,14 +155,36 @@ import {
   snapshotRunSteeringInput,
 } from "../run/index.js";
 import type { RunExecutionUpdate, RunHandle } from "./RunHandle.js";
-import type { ResolvedRunConfig } from "./RunConfig.js";
+import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
 import type {
   RunnerAutomaticEffectfulValidationCheckPort,
   RunnerAutomaticEffectfulValidationCheckRequest,
-  DescendantRunPreparation,
   RunnerValidationCheckRequest,
   ResolvedRunnerDependencies,
 } from "./RunnerDependencies.js";
+import {
+  assertDelegationAuthorityRequestWithinCeiling,
+  projectDelegationRunAuthority,
+  projectDelegationRunLimits,
+} from "../delegation/DelegationRunConfiguration.js";
+import {
+  deriveDelegationAuthority,
+  deriveDelegationLimits,
+  materializeDelegationRequest,
+  snapshotDelegationPreparation,
+  snapshotDelegationContextMaterial,
+  type DelegationAuthorityDerivation,
+  type DelegationAuthorityDimensionInput,
+  type DelegationAuthoritySourceInput,
+  type DelegationLimitDerivation,
+  type DelegationLimitSourceInput,
+  type DelegationLimits,
+  type DelegationContextMaterial,
+  type DelegationPreparation,
+  type DelegationRequest,
+} from "../delegation/index.js";
+import { createDelegationContractIdentity } from "../delegation/DelegationContract.js";
+import type { DelegationResourceSettlement } from "../delegation/DelegationResourceLedger.js";
 import {
   RunToolExposureCoordinator,
   ToolExposureBasisChangedError,
@@ -203,6 +226,8 @@ import { RunStateWriter } from "./RunStateWriter.js";
 import {
   createCurrentRunContextAdmissionProfile,
   createCurrentRunContextContributions,
+  createDelegationRootPurposeContextAdmissionProfile,
+  createDelegationRootPurposeContextContribution,
   createObservationContextAdmissionProfile,
   createObservationContextContribution,
   createProgressCorrectionContextAdmissionProfile,
@@ -223,8 +248,10 @@ export interface RuntimeDescendantRunStartInput {
   readonly relationId: string;
   readonly parentRunAction: RunActionRef;
   readonly agent: Agent;
-  readonly input: RunInput;
-  readonly config: import("./RunConfig.js").RunConfig;
+  readonly request: DelegationRequest;
+  readonly rootPurpose: DelegationContextMaterial;
+  readonly authority: DelegationAuthorityDerivation;
+  readonly limits: DelegationLimitDerivation;
 }
 
 export type RuntimeDescendantRunStartResult =
@@ -232,6 +259,7 @@ export type RuntimeDescendantRunStartResult =
       readonly status: "started";
       readonly relation: DescendantRunRelation;
       readonly handle: RunHandle;
+      readonly resourceSettlement: Promise<DelegationResourceSettlement>;
       readonly reservedTreeRevision: number;
       readonly treeRevision: number;
     }
@@ -239,7 +267,11 @@ export type RuntimeDescendantRunStartResult =
       readonly status: "rejected";
       readonly code:
         | DescendantRunReservationFailureCode
-        | "descendant_run_start_failed";
+        | "descendant_run_start_failed"
+        | "delegation_request_invalid"
+        | "delegation_authority_invalid"
+        | "delegation_context_invalid"
+        | "delegation_resource_limit_exceeded";
       readonly relation: DescendantRunRelation | null;
       readonly reservedTreeRevision: number | null;
       readonly treeRevision: number;
@@ -279,17 +311,20 @@ type DescendantExecutionOutcome =
       readonly status: "settled";
       readonly relationId: string;
       readonly childRunId: string;
-      readonly prepared: DescendantRunPreparation;
       readonly result: RunResult;
+      readonly resourceSettlement: DelegationResourceSettlement;
     }
   | {
       readonly status: "rejected";
-      readonly relationId: string;
+      readonly relationId: string | null;
       readonly childRunId: string | null;
       readonly code:
         | DescendantRunReservationFailureCode
-        | "descendant_run_preparation_failed"
-        | "descendant_agent_mismatch"
+        | "delegation_preparation_failed"
+        | "delegation_request_invalid"
+        | "delegation_authority_invalid"
+        | "delegation_context_invalid"
+        | "delegation_resource_limit_exceeded"
         | "descendant_run_start_failed";
       readonly operationStatus: DescendantRejectionOperationStatus;
     };
@@ -355,6 +390,10 @@ export class RunExecution<TOutput> {
     agent: Agent<TOutput>,
     private readonly input: RunInput,
     private readonly config: ResolvedRunConfig,
+    private readonly rootTask: AgentTask,
+    private readonly rootConfig: RunConfig,
+    private readonly delegationRequest: DelegationRequest | null,
+    private readonly delegationRootPurpose: DelegationContextMaterial | null,
     private readonly lineage: RunLineage,
     runtimeEventPublishers: readonly RuntimeEventPublisher[],
     runTraceObservers: readonly RunTraceObserver[],
@@ -429,7 +468,7 @@ export class RunExecution<TOutput> {
       operationParticipants: dependencies.operations.availability,
       interactions: this.interactions,
       maxPendingInteractions: config.limits.maxPendingInteractions,
-      descendants: dependencies.operations.descendants,
+      delegation: dependencies.operations.delegation?.preparation,
       getRunRevision: () => this.writer.getSnapshot().revision,
       getRunTreeSnapshot,
     });
@@ -531,6 +570,22 @@ export class RunExecution<TOutput> {
   async run(): Promise<RunResult<TOutput>> {
     this.interruptionCoordinator.start();
     try {
+      const initialContext = this.delegationRequest === null
+        ? this.writer.getSnapshot().context
+        : this.applyContextContributions(
+            this.writer.getSnapshot().context,
+            Object.freeze([createDelegationRootPurposeContextContribution({
+              id: this.id("context_contribution"),
+              runId: this.runId,
+              material: this.delegationRootPurpose!,
+              createdAt: this.startedAt,
+            })]),
+            createDelegationRootPurposeContextAdmissionProfile(
+              this.delegationRootPurpose!,
+            ),
+            "delegation_initialization",
+            this.delegationRequest.ref.id,
+          );
       const taskContribution = createTaskContextContribution({
         id: this.id("context_contribution"),
         runId: this.runId,
@@ -539,7 +594,7 @@ export class RunExecution<TOutput> {
       this.writer.commitState((current) => Object.freeze({
         status: "running" as const,
         context: this.applyContextContributions(
-          current.context,
+          initialContext,
           Object.freeze([taskContribution]),
           createTaskContextAdmissionProfile(),
           "run_initialization",
@@ -2486,44 +2541,15 @@ export class RunExecution<TOutput> {
     context: OperationInvocationContext,
     startedAt: string,
   ): Promise<OperationResult> {
-    const descendant = await this.executeDescendantRun(
-      action,
-      binding.agentRef,
-      binding.request,
-    );
-    if (descendant.status === "rejected") {
-      return this.operationFailureResult(
-        registration,
-        binding.invocation,
-        descendant.operationStatus,
-        "agent-runtime",
-        descendant.code,
-        startedAt,
-        this.now(),
-      );
-    }
-    const mapped = descendant.prepared.mapResult(descendant.result);
-    return createOperationResult({
-      ref: Object.freeze({ invocation: binding.invocation, id: this.id("operation_result") }),
-      binding: binding.binding,
-      semanticOwner: registration.operation.semanticOwner,
-      status: mapped.status,
-      output: mapped.output,
-      failure: mapped.failure,
+    return this.operationFailureResult(
+      registration,
+      binding.invocation,
+      "invalid",
+      "agent-runtime",
+      "delegation_requires_agent_tool",
       startedAt,
-      finishedAt: this.now(),
-      lowerRefs: Object.freeze([{
-        owner: "agent-runtime",
-        kind: "descendant_run_result",
-        id: descendant.result.runId,
-        revision: String(descendant.result.items.at(-1)?.committedInRevision ?? 0),
-      }]),
-      metadata: Object.freeze({
-        relationId: descendant.relationId,
-        contextManifestRef: descendant.prepared.contextManifestRef,
-        visibility: descendant.prepared.visibility,
-      }),
-    } as OperationResult);
+      this.now(),
+    );
   }
 
   private async executeToolDescendant(
@@ -2534,8 +2560,7 @@ export class RunExecution<TOutput> {
     const startedAt = this.now();
     const descendant = await this.executeDescendantRun(
       action,
-      call.binding.agent,
-      call.input,
+      call,
     );
     if (descendant.status === "rejected") {
       this.commitDescendantToolObservation(
@@ -2550,7 +2575,9 @@ export class RunExecution<TOutput> {
       );
       return;
     }
-    const mapped = descendant.prepared.mapResult(descendant.result);
+    const mapped = this.dependencies.operations.delegation!.resultProjection.project(
+      descendant.result,
+    );
     this.commitDescendantToolObservation(
       action,
       call,
@@ -2565,35 +2592,62 @@ export class RunExecution<TOutput> {
 
   private async executeDescendantRun(
     action: RuntimeRunAction,
-    targetAgent: import("@agent-anything/agent-core/agent").AgentRevisionRef,
-    delegatedInput: unknown,
+    call: ToolCall,
   ): Promise<DescendantExecutionOutcome> {
-    const relationId = this.id("descendant_relation");
-    const composition = this.dependencies.operations.descendants;
+    if (call.binding.kind !== "descendant_agent") {
+      throw new TypeError("Delegation requires a descendant-Agent Tool binding.");
+    }
+    const composition = this.dependencies.operations.delegation;
     if (composition === undefined) {
       this.emitDescendantRejected(
         null,
         action.ref,
         null,
         this.lineage.depth + 1,
-        "descendant_run_preparation_failed",
+        "delegation_preparation_failed",
       );
       return rejectedDescendant(
-        relationId,
-        "descendant_run_preparation_failed",
+        null,
+        "delegation_preparation_failed",
         null,
         "failed",
       );
     }
 
-    let prepared: DescendantRunPreparation;
+    const authorityCeiling = projectDelegationRunAuthority(this.config);
+    const limitCeiling = projectDelegationRunLimits({
+      config: this.config,
+      maxContextBytes: delegationPayloadCeiling(
+        this.dependencies.contextProjection.maxContributionPayloadBytes,
+        4,
+      ),
+      maxResultBytes: delegationPayloadCeiling(
+        this.dependencies.contextProjection.maxContributionPayloadBytes,
+        1,
+      ),
+    });
+    let prepared: Awaited<ReturnType<typeof composition.preparation.prepare>>;
     try {
-      prepared = await composition.prepare({
-        parentRunId: this.runId,
-        parentRunAction: action.ref,
-        targetAgent,
-        delegatedInput,
-        parentConfig: this.config,
+      prepared = await composition.preparation.prepare({
+        root: Object.freeze({
+          run: this.lineage.root,
+          task: this.rootTask,
+        }),
+        parent: Object.freeze({
+          run: Object.freeze({ id: this.runId }),
+          task: Object.freeze({ id: this.input.task.id }),
+          action: action.ref,
+          lineage: this.lineage,
+        }),
+        targetAgent: call.binding.agent,
+        toolCall: call,
+        authorityCeiling,
+        limitCeiling,
+      });
+      prepared = Object.freeze({
+        agent: prepared.agent,
+        preparation: snapshotDelegationPreparation(prepared.preparation),
+        rootPurpose: snapshotDelegationContextMaterial(prepared.rootPurpose),
       });
     } catch {
       this.emitDescendantRejected(
@@ -2601,37 +2655,130 @@ export class RunExecution<TOutput> {
         action.ref,
         null,
         this.lineage.depth + 1,
-        "descendant_run_preparation_failed",
+        "delegation_preparation_failed",
       );
       return rejectedDescendant(
-        relationId,
-        "descendant_run_preparation_failed",
+        null,
+        "delegation_preparation_failed",
         null,
         "failed",
       );
     }
-    if (!sameAgentRef(prepared.agent, targetAgent)) {
+    if (!sameAgentRef(prepared.agent, call.binding.agent) ||
+        !sameAgentRef(prepared.preparation.childAgent, call.binding.agent)) {
       this.emitDescendantRejected(
         null,
         action.ref,
         null,
         this.lineage.depth + 1,
-        "descendant_agent_mismatch",
+        "delegation_request_invalid",
       );
       return rejectedDescendant(
-        relationId,
-        "descendant_agent_mismatch",
+        null,
+        "delegation_request_invalid",
         null,
         "invalid",
       );
     }
 
+    let request: DelegationRequest;
+    let authority: DelegationAuthorityDerivation;
+    let limits: DelegationLimitDerivation;
+    try {
+      assertDelegationAuthorityRequestWithinCeiling({
+        requested: prepared.preparation.requestedAuthority,
+        ceiling: authorityCeiling,
+      });
+      const createdAt = this.now();
+      const rootAuthority = projectDelegationRunAuthority(this.rootConfig);
+      const parentAuthority = projectDelegationRunAuthority(this.config);
+      const requestDeadlineAt = minimumDeadline(
+        this.writer.getSnapshot().deadlineAt,
+        localDelegationDeadline(createdAt, prepared.preparation.limits.maxDurationMs),
+      );
+      authority = deriveDelegationAuthority({
+        derivationId: this.id("delegation_authority"),
+        sources: delegationAuthoritySources({
+          rootRunId: this.lineage.root.id,
+          parentRunId: this.runId,
+          root: rootAuthority,
+          parent: parentAuthority,
+          childAgent: authorityCeiling,
+          request: prepared.preparation.requestedAuthority,
+          currentPolicy: parentAuthority,
+          agent: prepared.agent,
+          preparation: prepared.preparation,
+          rootDeadlineAt: this.getRunTreeSnapshot().deadlineAt,
+          parentDeadlineAt: this.writer.getSnapshot().deadlineAt,
+          requestDeadlineAt,
+        }),
+      });
+      const rootLimits = projectDelegationRunLimits({
+        config: this.rootConfig,
+        maxContextBytes: limitCeiling.maxContextBytes,
+        maxResultBytes: limitCeiling.maxResultBytes,
+      });
+      const parentLimits = projectDelegationRunLimits({
+        config: this.config,
+        maxContextBytes: limitCeiling.maxContextBytes,
+        maxResultBytes: limitCeiling.maxResultBytes,
+      });
+      limits = deriveDelegationLimits({
+        derivationId: this.id("delegation_limits"),
+        sources: delegationLimitSources({
+          rootRunId: this.lineage.root.id,
+          parentRunId: this.runId,
+          root: rootLimits,
+          parent: parentLimits,
+          childAgent: parentLimits,
+          request: prepared.preparation.limits,
+          currentPolicy: parentLimits,
+          agent: prepared.agent,
+          preparation: prepared.preparation,
+        }),
+      });
+      request = materializeDelegationRequest({
+        requestId: this.id("delegation_request"),
+        origin: Object.freeze({
+          root: Object.freeze({
+            run: this.lineage.root,
+            task: Object.freeze({ id: this.rootTask.id }),
+          }),
+          parent: Object.freeze({
+            run: Object.freeze({ id: this.runId }),
+            task: Object.freeze({ id: this.input.task.id }),
+            action: action.ref,
+            lineage: this.lineage,
+          }),
+        }),
+        toolCall: call,
+        preparation: prepared.preparation,
+        authorityDerivation: authority,
+        limitDerivation: limits,
+        createdAt,
+      });
+    } catch (error) {
+      const code = delegationMaterializationFailureCode(error);
+      this.emitDescendantRejected(
+        null,
+        action.ref,
+        null,
+        this.lineage.depth + 1,
+        code,
+      );
+      return rejectedDescendant(null, code, null, "invalid");
+    }
+
+    const relationId = this.id("descendant_relation");
+
     const started = this.startDescendantRun({
       relationId,
       parentRunAction: action.ref,
       agent: prepared.agent,
-      input: prepared.input,
-      config: prepared.config,
+      request,
+      rootPurpose: prepared.rootPurpose,
+      authority,
+      limits,
     });
     if (started.status === "rejected") {
       if (started.relation !== null && started.reservedTreeRevision !== null) {
@@ -2682,6 +2829,7 @@ export class RunExecution<TOutput> {
     const unsubscribe = child.subscribe(() => this.publishCurrentState());
     try {
       const result = await child.wait();
+      const resourceSettlement = await started.resourceSettlement;
       this.eventStream.emit("run.descendant.settled", {
         relationId: started.relation.ref.id,
         parentRunActionId: started.relation.parentRunAction.id,
@@ -2691,12 +2839,20 @@ export class RunExecution<TOutput> {
         code: result.code,
         treeRevision: this.getRunTreeSnapshot().revision,
       });
+      if (resourceSettlement.status === "limit_exceeded") {
+        return rejectedDescendant(
+          relationId,
+          "delegation_resource_limit_exceeded",
+          child.runId,
+          "failed",
+        );
+      }
       return Object.freeze({
         status: "settled" as const,
         relationId,
         childRunId: child.runId,
-        prepared,
         result,
+        resourceSettlement,
       });
     } finally {
       unsubscribe();
@@ -2740,7 +2896,7 @@ export class RunExecution<TOutput> {
   private commitDescendantToolObservation(
     action: RuntimeRunAction,
     call: ToolCall,
-    relationId: string,
+    relationId: string | null,
     childRunId: string | null,
     status: import("./RunnerDependencies.js").DescendantOperationOutcome["status"],
     output: unknown,
@@ -2751,7 +2907,7 @@ export class RunExecution<TOutput> {
     const settlement = Object.freeze({
       owner: "agent-runtime",
       kind: "descendant_run",
-      id: childRunId ?? relationId,
+      id: childRunId ?? relationId ?? call.toolCallId,
       revision: childRunId === null ? null : "terminal",
     });
     const toolResult = status === "succeeded"
@@ -2785,7 +2941,7 @@ export class RunExecution<TOutput> {
       {
         owner: "agent-runtime",
         kind: "descendant_run_result",
-        id: childRunId ?? relationId,
+        id: childRunId ?? relationId ?? call.toolCallId,
         revision: settlement.revision,
       },
       toolResultLowerRef(toolResult),
@@ -4452,7 +4608,7 @@ function resolutionBindingKind(registration: RegisteredOperation): ResolvedOpera
 }
 
 function rejectedDescendant(
-  relationId: string,
+  relationId: string | null,
   code: Extract<DescendantExecutionOutcome, { readonly status: "rejected" }>["code"],
   childRunId: string | null,
   operationStatus: Extract<DescendantExecutionOutcome, { readonly status: "rejected" }>["operationStatus"],
@@ -4466,8 +4622,163 @@ function rejectedDescendant(
   });
 }
 
+function delegationAuthoritySources(input: {
+  readonly rootRunId: string;
+  readonly parentRunId: string;
+  readonly root: readonly DelegationAuthorityDimensionInput[];
+  readonly parent: readonly DelegationAuthorityDimensionInput[];
+  readonly childAgent: readonly DelegationAuthorityDimensionInput[];
+  readonly request: readonly DelegationAuthorityDimensionInput[];
+  readonly currentPolicy: readonly DelegationAuthorityDimensionInput[];
+  readonly agent: Agent;
+  readonly preparation: DelegationPreparation;
+  readonly rootDeadlineAt: string;
+  readonly parentDeadlineAt: string;
+  readonly requestDeadlineAt: string;
+}): readonly DelegationAuthoritySourceInput[] {
+  const preparationRevision = createDelegationContractIdentity(
+    "agent-anything.delegation-preparation.v1",
+    input.preparation,
+  );
+  return Object.freeze([
+    authoritySource("root", "agent-runtime", "root_run_configuration", input.rootRunId, input.root, input.rootDeadlineAt),
+    authoritySource("parent", "agent-runtime", "parent_run_configuration", input.parentRunId, input.parent, input.parentDeadlineAt),
+    Object.freeze({
+      role: "child_agent" as const,
+      ref: Object.freeze({
+        owner: "agent",
+        kind: "agent_revision",
+        id: input.agent.id,
+        revision: input.agent.revision,
+      }),
+      dimensions: input.childAgent,
+      deadlineAt: input.parentDeadlineAt,
+    }),
+    Object.freeze({
+      role: "request" as const,
+      ref: Object.freeze({
+        owner: "product",
+        kind: "delegation_preparation",
+        id: input.parentRunId,
+        revision: preparationRevision,
+      }),
+      dimensions: input.request,
+      deadlineAt: input.requestDeadlineAt,
+    }),
+    authoritySource("current_policy", "agent-runtime", "current_run_policy", input.parentRunId, input.currentPolicy, input.parentDeadlineAt),
+  ]);
+}
+
+function authoritySource(
+  role: "root" | "parent" | "current_policy",
+  owner: string,
+  kind: string,
+  id: string,
+  dimensions: readonly DelegationAuthorityDimensionInput[],
+  deadlineAt: string,
+): DelegationAuthoritySourceInput {
+  return Object.freeze({
+    role,
+    ref: Object.freeze({
+      owner,
+      kind,
+      id,
+      revision: createDelegationContractIdentity(
+        "agent-anything.delegation-authority-source-input.v1",
+        dimensions,
+      ),
+    }),
+    dimensions,
+    deadlineAt,
+  });
+}
+
+function delegationLimitSources(input: {
+  readonly rootRunId: string;
+  readonly parentRunId: string;
+  readonly root: DelegationLimits;
+  readonly parent: DelegationLimits;
+  readonly childAgent: DelegationLimits;
+  readonly request: DelegationLimits;
+  readonly currentPolicy: DelegationLimits;
+  readonly agent: Agent;
+  readonly preparation: DelegationPreparation;
+}): readonly DelegationLimitSourceInput[] {
+  const preparationRevision = createDelegationContractIdentity(
+    "agent-anything.delegation-preparation.v1",
+    input.preparation,
+  );
+  return Object.freeze([
+    limitSource("root", "agent-runtime", "root_run_configuration", input.rootRunId, input.root),
+    limitSource("parent", "agent-runtime", "parent_run_configuration", input.parentRunId, input.parent),
+    Object.freeze({
+      role: "child_agent" as const,
+      ref: Object.freeze({
+        owner: "agent",
+        kind: "agent_revision",
+        id: input.agent.id,
+        revision: input.agent.revision,
+      }),
+      ceiling: input.childAgent,
+    }),
+    Object.freeze({
+      role: "request" as const,
+      ref: Object.freeze({
+        owner: "product",
+        kind: "delegation_preparation",
+        id: input.parentRunId,
+        revision: preparationRevision,
+      }),
+      ceiling: input.request,
+    }),
+    limitSource("current_policy", "agent-runtime", "current_run_policy", input.parentRunId, input.currentPolicy),
+  ]);
+}
+
+function limitSource(
+  role: "root" | "parent" | "current_policy",
+  owner: string,
+  kind: string,
+  id: string,
+  ceiling: DelegationLimits,
+): DelegationLimitSourceInput {
+  return Object.freeze({
+    role,
+    ref: Object.freeze({ owner, kind, id, revision: ceiling.revision }),
+    ceiling,
+  });
+}
+
+function delegationPayloadCeiling(value: number, multiplier: number): number {
+  const ceiling = value * multiplier;
+  if (!Number.isSafeInteger(ceiling) || ceiling < 1) {
+    throw new TypeError("Delegation payload ceiling must be a positive safe integer.");
+  }
+  return ceiling;
+}
+
+function localDelegationDeadline(startedAt: string, maxDurationMs: number): string {
+  const startedAtMs = Date.parse(startedAt);
+  if (!Number.isFinite(startedAtMs)) {
+    throw new TypeError("Delegation start time is invalid.");
+  }
+  return new Date(startedAtMs + maxDurationMs).toISOString();
+}
+
+function minimumDeadline(left: string, right: string): string {
+  return Date.parse(left) <= Date.parse(right) ? left : right;
+}
+
+function delegationMaterializationFailureCode(
+  error: unknown,
+): "delegation_request_invalid" | "delegation_authority_invalid" {
+  return error instanceof Error && /authority/i.test(error.message)
+    ? "delegation_authority_invalid"
+    : "delegation_request_invalid";
+}
+
 function descendantRejectionStatus(
-  code: DescendantRunReservationFailureCode | "descendant_run_start_failed",
+  code: Extract<DescendantExecutionOutcome, { readonly status: "rejected" }>["code"],
 ): Extract<DescendantExecutionOutcome, { readonly status: "rejected" }>["operationStatus"] {
   switch (code) {
     case "descendant_run_start_cancelled":
@@ -4475,7 +4786,14 @@ function descendantRejectionStatus(
     case "descendant_run_deadline_exceeded":
       return "timed_out";
     case "descendant_run_start_failed":
+    case "delegation_preparation_failed":
       return "failed";
+    case "delegation_request_invalid":
+    case "delegation_authority_invalid":
+    case "delegation_context_invalid":
+      return "invalid";
+    case "delegation_resource_limit_exceeded":
+      return "unavailable";
     case "descendant_run_depth_limit_exceeded":
     case "descendant_run_total_limit_exceeded":
     case "descendant_run_active_limit_exceeded":

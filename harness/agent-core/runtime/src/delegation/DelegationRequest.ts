@@ -40,6 +40,11 @@ export interface DelegationContextMaterialRef {
   readonly revision: string;
 }
 
+export interface DelegationContextMaterial {
+  readonly ref: DelegationContextMaterialRef;
+  readonly payload: ContextJsonValue;
+}
+
 export type DelegationContextMaterialRole =
   | "root_purpose"
   | "workspace"
@@ -481,6 +486,59 @@ export function createDelegationContextPlan(input: {
       material,
     ),
   });
+}
+
+export function createDelegationContextMaterial(input: {
+  readonly owner: string;
+  readonly kind: string;
+  readonly id: string;
+  readonly payload: unknown;
+}): DelegationContextMaterial {
+  strictRecord(input, "DelegationContextMaterialInput", [
+    "owner",
+    "kind",
+    "id",
+    "payload",
+  ]);
+  const material = deepFreeze({
+    owner: token(input.owner, "DelegationContextMaterial.owner"),
+    kind: token(input.kind, "DelegationContextMaterial.kind"),
+    id: token(input.id, "DelegationContextMaterial.id"),
+    payload: snapshotDelegationJsonValue(
+      input.payload as ContextJsonValue,
+      "DelegationContextMaterial.payload",
+    ),
+  });
+  return deepFreeze({
+    ref: {
+      owner: material.owner,
+      kind: material.kind,
+      id: material.id,
+      revision: createDelegationContractIdentity(
+        "agent-anything.delegation-context-material.v1",
+        material,
+      ),
+    },
+    payload: material.payload,
+  });
+}
+
+export function snapshotDelegationContextMaterial(
+  input: DelegationContextMaterial,
+): DelegationContextMaterial {
+  strictRecord(input, "DelegationContextMaterial", ["ref", "payload"]);
+  const snapshot = createDelegationContextMaterial({
+    owner: input.ref.owner,
+    kind: input.ref.kind,
+    id: input.ref.id,
+    payload: input.payload,
+  });
+  if (snapshot.ref.revision !== input.ref.revision) {
+    throw new TypeError(
+      "Delegation Context material revision does not match its immutable payload.",
+    );
+  }
+  return snapshot;
 }
 
 export function createDelegationResultExpectation(input: {

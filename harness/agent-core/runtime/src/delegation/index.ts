@@ -29,6 +29,7 @@ export {
 export type {
   DelegatedObjective,
   DelegationContextMaterialRef,
+  DelegationContextMaterial,
   DelegationContextMaterialRole,
   DelegationContextPlan,
   DelegationContextPlanEntry,
@@ -44,10 +45,12 @@ export type {
 export {
   DelegationRequestValidationError,
   createDelegationContextPlan,
+  createDelegationContextMaterial,
   createDelegationLimits,
   createDelegationResultExpectation,
   materializeDelegationRequest,
   snapshotDelegationContextPlan,
+  snapshotDelegationContextMaterial,
   snapshotDelegationLimits,
   snapshotDelegationPreparation,
   snapshotDelegationRequest,

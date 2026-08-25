@@ -2,7 +2,7 @@ import { ProviderBackedController } from "@agent-anything/agent-runtime/controll
 import { createSystemRetryExecutor, systemRetryClock } from "@agent-anything/agent-runtime/retry";
 import type { Controller } from "@agent-anything/agent-runtime/controller";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
-import type { DescendantRunCompositionPort } from "@agent-anything/agent-runtime/runner";
+import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/runner";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { ValidationHostProjection } from "@agent-anything/validation/projection";
 import type { Agent } from "@agent-anything/agent-core/agent";
@@ -88,7 +88,7 @@ export interface HelarcProductComposition {
   readonly controller: Controller<HelarcAgentOutput>;
   readonly actions: Awaited<ReturnType<typeof createHelarcActionComposition>>;
   readonly interactions: InteractionProtocolRegistrySnapshot;
-  readonly descendants: DescendantRunCompositionPort;
+  readonly delegation: RunnerDelegationComposition;
   readonly validation: HelarcValidationComposition;
   readonly runMetadata: Readonly<Record<string, unknown>>;
   getProductProjection(): HelarcProductRunProjection;
@@ -111,7 +111,7 @@ export async function createHelarcProductComposition(
   const admittedAt = now();
   const agent = createHelarcAgent();
   const clarification = createHelarcClarificationContribution(admittedAt);
-  const descendant = createHelarcDescendantAgentContribution(agent, admittedAt, now);
+  const descendant = createHelarcDescendantAgentContribution(agent, admittedAt);
   const validation = await createHelarcValidationComposition({
     workspace: input.workspace,
     codeSource: input.codeSource,
@@ -195,7 +195,7 @@ export async function createHelarcProductComposition(
     controller: providerController,
     actions,
     interactions,
-    descendants: descendant.composition,
+    delegation: descendant.delegation,
     validation,
     runMetadata,
     getProductProjection(): HelarcProductRunProjection {
