@@ -7,6 +7,7 @@ import type {
 } from "./runner/index.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as controllerApi from "./controller/index.js";
+import * as delegationApi from "./delegation/index.js";
 import * as planApi from "./plan/index.js";
 import * as progressApi from "./progress/index.js";
 import * as retryApi from "./retry/index.js";
@@ -25,6 +26,27 @@ describe("Agent Core Runtime public API", () => {
       "ProviderBackedController",
       "StructuredOutputError",
       "validateControllerDecision",
+    ]);
+    expect(Object.keys(delegationApi).sort()).toEqual([
+      "DelegationRequestValidationError",
+      "DelegationResultValidationError",
+      "createDelegationContextPlan",
+      "createDelegationLimits",
+      "createDelegationResult",
+      "createDelegationResultExpectation",
+      "deriveDelegationAuthority",
+      "deriveDelegationLimits",
+      "materializeDelegationRequest",
+      "snapshotDelegationAuthorityDerivation",
+      "snapshotDelegationAuthorityDimensions",
+      "snapshotDelegationContextPlan",
+      "snapshotDelegationLimitDerivation",
+      "snapshotDelegationLimits",
+      "snapshotDelegationPreparation",
+      "snapshotDelegationRequest",
+      "snapshotDelegationResult",
+      "snapshotDelegationResultExpectation",
+      "snapshotDelegationSteeringRoute",
     ]);
     expect(Object.keys(planApi).sort()).toEqual([
       "abandonPlan",

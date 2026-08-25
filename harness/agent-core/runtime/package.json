@@ -8,6 +8,10 @@
       "types": "./src/controller/index.ts",
       "import": "./dist/controller/index.js"
     },
+    "./delegation": {
+      "types": "./src/delegation/index.ts",
+      "import": "./dist/delegation/index.js"
+    },
     "./plan": {
       "types": "./src/plan/index.ts",
       "import": "./dist/plan/index.js"

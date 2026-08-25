@@ -32,6 +32,10 @@
       "types": "./src/control/index.ts",
       "import": "./dist/control/index.js"
     },
+    "./delegation": {
+      "types": "./src/delegation/index.ts",
+      "import": "./dist/delegation/index.js"
+    },
     "./task": {
       "types": "./src/task/index.ts",
       "import": "./dist/task/index.js"
