@@ -165,25 +165,36 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     expect(latency?.pairs.every((pair) => pair.difference < 0)).toBe(true);
   });
 
-  it("accepts the recursive Delegation Transfer successor without rewriting its predecessor", async () => {
+  it("preserves the accepted Delegation Transfer v1 while producing active v2 evidence", async () => {
     const predecessorBefore = JSON.stringify(
       HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE,
     );
+    const acceptedBefore = JSON.stringify(
+      HELARC_DELEGATION_TRANSFER_ACCEPTED_BASELINE,
+    );
     const candidate = await runDelegationTransferDeterministicEvaluation();
     const accepted = HELARC_DELEGATION_TRANSFER_ACCEPTED_BASELINE.delegationTransfer;
+    const { humanAttentionEvents, ...historicalMetrics } = accepted.metrics;
 
     expect(candidate).toMatchObject({
-      revision: accepted.evaluationRevision,
-      metrics: accepted.metrics,
+      revision: "delegation-transfer-deterministic-evaluation-v2",
+      metrics: {
+        ...historicalMetrics,
+        humanInteractionEvents: humanAttentionEvents,
+      },
       invariants: accepted.invariants,
       descendantRunCount: accepted.descendantRunCount,
       settledResultCount: accepted.settledResultCount,
-      digest: accepted.reportDigest,
     });
+    expect(accepted.evaluationRevision)
+      .toBe("delegation-transfer-deterministic-evaluation-v1");
+    expect(candidate.digest).not.toBe(accepted.reportDigest);
     expect(HELARC_DELEGATION_TRANSFER_BASELINE_ACCEPTANCE.predecessorAcceptanceRef)
       .toEqual(HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE.acceptanceRef);
     expect(JSON.stringify(HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE))
       .toBe(predecessorBefore);
+    expect(JSON.stringify(HELARC_DELEGATION_TRANSFER_ACCEPTED_BASELINE))
+      .toBe(acceptedBefore);
     expect(Object.isFrozen(HELARC_DELEGATION_TRANSFER_ACCEPTED_BASELINE)).toBe(true);
   }, 120_000);
 });

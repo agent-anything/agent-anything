@@ -51,7 +51,7 @@ describe("Helarc operational Evaluation protocol", () => {
       metric.source.measurementId === "human_interaction"
     );
 
-    expect(safety).toHaveLength(8);
+    expect(safety).toHaveLength(10);
     expect(safety.every((metric) => metric.role === "gate" &&
       metric.gateThreshold?.value === 1)).toBe(true);
     expect(interaction).toMatchObject({
@@ -62,7 +62,7 @@ describe("Helarc operational Evaluation protocol", () => {
     expect(JSON.stringify(profile)).not.toContain("human_attention");
   });
 
-  it("requires attributable terminal, effect, Verification, environment, and cleanup Capture", () => {
+  it("requires attributable terminal, effect, Verification, and environment Capture", () => {
     const profile = createHelarcOperationalEvaluationProgram().profiles.harness_conformance;
     const required = profile.capturePolicy.slots
       .filter((slot) => slot.required)
@@ -71,7 +71,6 @@ describe("Helarc operational Evaluation protocol", () => {
 
     expect(required).toEqual([
       "actions_and_operations",
-      "cleanup",
       "effects",
       "environment",
       "run_tree",
@@ -187,4 +186,3 @@ function targetValues(
 function ref(id: string) {
   return Object.freeze({ id, revision: "v1" });
 }
-

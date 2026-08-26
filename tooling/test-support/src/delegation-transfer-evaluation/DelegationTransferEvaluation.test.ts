@@ -23,6 +23,7 @@ describe("Delegation Transfer deterministic Evaluation", () => {
     });
     expect(Object.values(report.invariants).every(Boolean)).toBe(true);
     expect(report).toMatchObject({
+      revision: "delegation-transfer-deterministic-evaluation-v2",
       descendantRunCount: 2,
       settledResultCount: 2,
       prohibitedDisclosureCount: 0,
