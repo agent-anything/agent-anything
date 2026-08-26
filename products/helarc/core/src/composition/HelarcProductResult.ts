@@ -135,7 +135,9 @@ export interface HelarcVerificationCommunication {
   readonly snapshotRevision: number | null;
   readonly counts: readonly VerificationStateCount[];
   readonly activeChecks: number;
-  readonly gateStatus: VerificationHostProjection["gateStatus"];
+  readonly gateStatus: NonNullable<VerificationHostProjection["gate"]>["status"] | null;
+  readonly waiting: boolean;
+  readonly recoveryNeeded: boolean;
   readonly safeReasons: readonly string[];
   readonly updatedAt: string | null;
 }
@@ -238,6 +240,8 @@ function projectVerificationCommunication(
       counts: Object.freeze([]),
       activeChecks: 0,
       gateStatus: null,
+      waiting: false,
+      recoveryNeeded: false,
       safeReasons: Object.freeze(["verification_projection_unavailable"]),
       updatedAt: null,
     });
@@ -249,19 +253,21 @@ function projectVerificationCommunication(
     ? "not_required"
     : count("violated") > 0 || count("inconclusive") > 0 || count("stale") > 0
       ? "attention_required"
-      : verification.activeChecks > 0 || count("pending") > 0
+      : verification.waiting || verification.activeAttempts.length > 0 || count("pending") > 0
         ? "pending"
         : count("satisfied") > 0
           ? "satisfied"
-          : verification.gateStatus === "completion_eligible"
+          : verification.gate?.status === "completion_eligible"
             ? "not_required"
             : "pending";
   return Object.freeze({
     status,
     snapshotRevision: verification.snapshot.revision,
     counts: Object.freeze(verification.counts.map((entry) => Object.freeze({ ...entry }))),
-    activeChecks: verification.activeChecks,
-    gateStatus: verification.gateStatus,
+    activeChecks: verification.activeAttempts.length,
+    gateStatus: verification.gate?.status ?? null,
+    waiting: verification.waiting,
+    recoveryNeeded: verification.recoveryNeeded,
     safeReasons: Object.freeze([...verification.safeReasons]),
     updatedAt: verification.updatedAt,
   });

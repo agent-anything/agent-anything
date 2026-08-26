@@ -384,6 +384,8 @@ function snapshotProductResult(result: HelarcProductResult): HelarcProductResult
       counts: Object.freeze(result.verification.counts.map((entry) => Object.freeze({ ...entry }))),
       activeChecks: result.verification.activeChecks,
       gateStatus: result.verification.gateStatus,
+      waiting: result.verification.waiting,
+      recoveryNeeded: result.verification.recoveryNeeded,
       safeReasons: Object.freeze([...result.verification.safeReasons]),
       updatedAt: result.verification.updatedAt,
     }),

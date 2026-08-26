@@ -76,6 +76,10 @@ export {
   HELARC_DELEGATION_TRANSFER_ACCEPTED_BASELINE,
   HELARC_DELEGATION_TRANSFER_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcDelegationTransferBaseline.js";
+export {
+  HELARC_VERIFICATION_GUIDED_COMPLETION_ACCEPTED_BASELINE,
+  HELARC_VERIFICATION_GUIDED_COMPLETION_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcVerificationGuidedCompletionBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export type {

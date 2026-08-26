@@ -494,6 +494,8 @@ function runProjection(input: {
               counts: [],
               activeChecks: 0,
               gateStatus: "completion_eligible",
+              waiting: false,
+              recoveryNeeded: false,
               safeReasons: [],
               updatedAt: "2026-07-05T01:00:01.000Z",
             },

@@ -36,6 +36,8 @@ describe("Helarc Evaluation target public API", () => {
       "HELARC_VALIDATION_GATE_BASELINE_ACCEPTANCE",
       "HELARC_VALIDATION_PROFILE_ACCEPTED_BASELINE",
       "HELARC_VALIDATION_PROFILE_BASELINE_ACCEPTANCE",
+      "HELARC_VERIFICATION_GUIDED_COMPLETION_ACCEPTED_BASELINE",
+      "HELARC_VERIFICATION_GUIDED_COMPLETION_BASELINE_ACCEPTANCE",
       "adaptHelarcExternalBenchmarkManifest",
       "captureHelarcProductEffectiveness",
       "compareHelarcAgentInstructionEffectiveness",

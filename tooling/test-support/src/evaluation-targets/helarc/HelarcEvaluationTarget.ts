@@ -20,6 +20,11 @@ import type {
 } from "@agent-anything/action-execution/enforcement";
 import { Runner, type RunTreeLimits } from "@agent-anything/agent-runtime/runner";
 import { CurrentVerificationCompletionGate } from "@agent-anything/verification/completion";
+import type {
+  VerificationExecutionFactory,
+  VerificationExecutionPort,
+} from "@agent-anything/verification/execution";
+import type { VerificationEvaluationProjection } from "@agent-anything/verification/projection";
 import { createRunFailureCause, type RunFinalizationContext, type RunResult } from "@agent-anything/agent-runtime/run";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import {
@@ -33,6 +38,7 @@ import {
 import {
   createEvaluationFailure,
   createEvaluationRecordRef,
+  snapshotEvaluationData,
   type EvaluationDataValue,
   type EvaluationRecordRef,
 } from "@agent-anything/evaluation/definition";
@@ -176,6 +182,7 @@ export interface HelarcEvaluationRunMaterial<
   readonly productProjection: HelarcProductRunProjection;
   readonly runResult: RunResult<HelarcAgentOutput>;
   readonly hostProjection: HostRunStatusProjection;
+  readonly verificationEvaluationProjection: VerificationEvaluationProjection;
   readonly runtimeEvents: readonly RuntimeEvent[];
   readonly trace: RunTrace;
   readonly before: HelarcEvaluationWorkspaceSnapshot;
@@ -582,6 +589,18 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     },
   });
   let allocatedRunCount = 0;
+  const verificationExecutions = new Map<string, VerificationExecutionPort>();
+  const verification = bindHelarcVerificationCompletionGate(
+    product.verification,
+    new CurrentVerificationCompletionGate(clock.now),
+  );
+  const verificationFactory: VerificationExecutionFactory = Object.freeze({
+    async create(input: Parameters<VerificationExecutionFactory["create"]>[0]) {
+      const execution = await verification.executionFactory.create(input);
+      verificationExecutions.set(input.run.id, execution);
+      return execution;
+    },
+  });
   const runner = new Runner({
     controller: product.controller,
     contextProjection: createHelarcContextProjectionConfiguration(
@@ -603,10 +622,10 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
         retry: createEvaluationActionRetryPort(),
       },
     },
-    verification: bindHelarcVerificationCompletionGate(
-      product.verification,
-      new CurrentVerificationCompletionGate(clock.now),
-    ),
+    verification: Object.freeze({
+      ...verification,
+      executionFactory: verificationFactory,
+    }),
     interactions: product.interactions,
     runtimeEventPublisher: runtimePublisher,
     runTraceObserver: {
@@ -689,7 +708,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
         completion: createEvaluationVerificationCompletionConfig(),
       }),
       limits: {
-        maxIterations: options.maxIterations ?? 5,
+        maxIterations: options.maxIterations ?? 8,
         maxActions: options.maxActions ?? 8,
         maxConsecutiveActionFailures: 1,
         maxDurationMs: options.maxDurationMs ?? 30_000,
@@ -794,6 +813,10 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     unsubscribeInteractions();
   });
   const terminalProjection = active.getProjection();
+  const verificationExecution = verificationExecutions.get(hostResult.runResult.runId);
+  if (verificationExecution === undefined) {
+    throw new TypeError("Helarc Evaluation requires the root Verification execution.");
+  }
   const productResult = product.projectResult(
     hostResult.runResult,
     "disabled",
@@ -817,6 +840,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     productProjection: product.getProductProjection(),
     runResult: hostResult.runResult,
     hostProjection: terminalProjection,
+    verificationEvaluationProjection: await verificationExecution.projectEvaluation(),
     runtimeEvents: Object.freeze([...runtimeEvents]),
     trace,
     before: lease.before,
@@ -1138,17 +1162,11 @@ function captureHelarcMaterial(
       })),
       issues: material.trace.issues.map((issue) => issue.code),
     }),
-    captured("verification-summary", "verification", {
-      status: material.product.verification.status,
-      snapshotRevision: material.product.verification.snapshotRevision,
-      counts: material.product.verification.counts.map((count) => ({
-        state: count.state,
-        count: count.count,
-      })),
-      activeChecks: material.product.verification.activeChecks,
-      gateStatus: material.product.verification.gateStatus,
-      safeReasons: material.product.verification.safeReasons,
-    }),
+    captured(
+      "verification-summary",
+      "verification",
+      snapshotEvaluationData(material.verificationEvaluationProjection),
+    ),
     captured("tool-exposure-summary", "agent-core", {
       turns: exposureTurns,
       turnCount: exposureTurns.length,

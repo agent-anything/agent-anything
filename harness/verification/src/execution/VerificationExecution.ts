@@ -327,6 +327,10 @@ export interface VerificationExecutionPort {
   ): Promise<VerificationLedgerSnapshot>;
   closeCurrentState(input: VerificationExecutionCloseRequest): Promise<VerificationLedgerSnapshot>;
   readCurrentSnapshot(): Promise<VerificationCurrentSnapshot>;
+  waitForCurrentSnapshotChange(
+    afterRevision: number,
+    interruption: InvocationInterruptionContext,
+  ): Promise<VerificationCurrentSnapshot>;
   readLedgerSnapshot(): Promise<VerificationLedgerSnapshot>;
   readHistory(): Promise<readonly VerificationPersistenceRecord[]>;
   readPersistenceFailures(): Promise<readonly VerificationExecutionPersistenceFailure[]>;

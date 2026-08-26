@@ -70,6 +70,42 @@ describe("Run-scoped VerificationExecution", () => {
     const contextProjection = await rig.execution.projectContext({ maxPayloadBytes: 4_096 });
     expect(contextProjection.requirements).toEqual([]);
     expect(contextProjection.contribution).toBeNull();
+    expect(await rig.execution.projectHost()).toMatchObject({
+      activeAttempts: [],
+      gate: null,
+      waiting: false,
+      recoveryNeeded: false,
+    });
+    expect(await rig.execution.projectObservability()).toMatchObject({
+      activeAttempts: [],
+      latestResult: {
+        ref: result.ref,
+        status: "completed",
+        coverageRatio: 1,
+      },
+      latestAssessment: {
+        ref: assessment.ref,
+        requirement: ref("requirement"),
+        subject: ref("subject"),
+        verdict: "satisfied",
+      },
+      gate: null,
+      waiting: false,
+      recoveryNeeded: false,
+      safeCodes: [],
+    });
+    expect(await rig.execution.projectEvaluation()).toMatchObject({
+      requirements: [{ requirement: ref("requirement"), state: "satisfied" }],
+      attempts: [{ attempt: result.attempt, requirement: ref("requirement") }],
+      results: [{ result: result.ref, attempt: result.attempt, status: "completed" }],
+      assessments: [{
+        assessment: assessment.ref,
+        requirement: ref("requirement"),
+        subject: ref("subject"),
+        verdict: "satisfied",
+      }],
+      gate: null,
+    });
     expect((await rig.execution.readHistory()).map((record) => record.kind)).toEqual([
       "specification", "requirement", "subject", "check_definition", "check_attempt",
       "check_finding", "check_result", "evidence", "assessment",
@@ -507,6 +543,44 @@ describe("Run-scoped VerificationExecution", () => {
       status: "unassessed",
       pendingAttempts: [],
     });
+  });
+
+  it("waits for an exact current snapshot revision change without polling", async () => {
+    const rig = createRig();
+    await bootstrap(rig);
+    const before = await rig.execution.readCurrentSnapshot();
+    const changed = rig.execution.waitForCurrentSnapshotChange(
+      before.ref.revision,
+      liveInterruption(),
+    );
+
+    await rig.execution.closeCurrentState({
+      expectedRevision: before.ref.revision,
+      closedAt: "2026-08-18T00:01:00.000Z",
+    });
+
+    await expect(changed).resolves.toMatchObject({
+      ref: { runId: RUN.id, revision: before.ref.revision + 1 },
+    });
+  });
+
+  it("interrupts an exact current snapshot wait without fabricating a state change", async () => {
+    const rig = createRig();
+    await bootstrap(rig);
+    const before = await rig.execution.readCurrentSnapshot();
+    const controller = new AbortController();
+    const waiting = rig.execution.waitForCurrentSnapshotChange(
+      before.ref.revision,
+      cancellationInterruption(controller),
+    );
+
+    controller.abort();
+
+    await expect(waiting).rejects.toMatchObject({
+      failure: { code: "verification_snapshot_wait_interrupted" },
+      currentRevision: before.ref.revision,
+    });
+    expect((await rig.execution.readCurrentSnapshot()).ref.revision).toBe(before.ref.revision);
   });
 
   it("classifies output beyond the exact deadline as timed out", async () => {

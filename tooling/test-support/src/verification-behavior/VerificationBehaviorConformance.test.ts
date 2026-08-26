@@ -3,13 +3,13 @@ import {
   snapshotVerificationHostProjection,
 } from "@agent-anything/verification/projection";
 import { describe, expect, it } from "vitest";
-import { VALIDATION_BEHAVIOR_SCENARIOS } from "./VerificationBehaviorProfile.js";
+import { VERIFICATION_BEHAVIOR_SCENARIOS } from "./VerificationBehaviorProfile.js";
 
 const NOW = "2026-08-18T00:00:00.000Z";
 
 describe("Verification behavior conformance profile", () => {
   it("keeps a complete deterministic scenario inventory under semantic owners", () => {
-    const ids = VALIDATION_BEHAVIOR_SCENARIOS.map(({ id }) => id);
+    const ids = VERIFICATION_BEHAVIOR_SCENARIOS.map(({ id }) => id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toEqual(expect.arrayContaining([
       "profile.empty",
@@ -52,20 +52,21 @@ describe("Verification behavior conformance profile", () => {
     expect(() => snapshotVerificationHostProjection({
       snapshot,
       counts: [],
-      activeChecks: 0,
-      gateStatus: null,
+      activeAttempts: [],
+      gate: null,
+      waiting: false,
+      recoveryNeeded: false,
       safeReasons: [],
       updatedAt: NOW,
       rawEvidence: "secret",
     } as never)).toThrow(/unsupported field 'rawEvidence'/);
     expect(() => snapshotVerificationEvaluationProjection({
       snapshot,
-      checkStatus: "completed",
-      assessmentVerdict: "satisfied",
-      gateStatus: "completion_eligible",
-      latencyMs: 10,
-      costUnits: 1,
-      failureOwner: null,
+      requirements: [],
+      attempts: [],
+      results: [],
+      assessments: [],
+      gate: null,
       command: "secret",
     } as never)).toThrow(/unsupported field 'command'/);
   });

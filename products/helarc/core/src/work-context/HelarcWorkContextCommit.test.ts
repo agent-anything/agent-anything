@@ -341,6 +341,8 @@ function terminalCommit(expectedThreadRevision: number): HelarcRunTerminalCommit
           counts: [],
           activeChecks: 0,
           gateStatus: null,
+          waiting: false,
+          recoveryNeeded: false,
           safeReasons: [],
           updatedAt: COMPLETED_AT,
         },

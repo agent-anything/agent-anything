@@ -38,6 +38,8 @@ describe("Helarc Desktop IPC projection", () => {
       counts: [{ state: "pending", count: 1 }],
       activeChecks: 1,
       gateStatus: null,
+      waiting: true,
+      recoveryNeeded: true,
       safeReasons: ["verification_pending"],
       updatedAt: "2026-07-19T00:00:00.000Z",
     });
@@ -264,8 +266,10 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
       verification: {
         snapshot: { runId: "harness-run-1", revision: 3 },
         counts: [{ state: "pending", count: 1 }],
-        activeChecks: 1,
-        gateStatus: null,
+        activeAttempts: [{ id: "verification-attempt-1", ordinal: 1 }],
+        gate: null,
+        waiting: true,
+        recoveryNeeded: true,
         safeReasons: ["verification_pending"],
         updatedAt: "2026-07-19T00:00:00.000Z",
         privateVerificationState: SECRET,

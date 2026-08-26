@@ -568,7 +568,7 @@ function scenarioBehavior(scenario: string): readonly HelarcInstructionBehavior[
     denied_command: ["command", "completion"],
     malformed_output_retry: ["correction", "completion"],
     multi_file_mutation: ["edit", "verification", "completion"],
-    ordinary_shell_validation: ["command", "verification", "completion"],
+    ordinary_shell_verification: ["command", "verification", "completion"],
     failed_check_recovery: ["command", "correction", "verification", "completion"],
     stale_evidence: ["edit", "verification", "completion"],
     premature_completion: ["verification", "completion"],

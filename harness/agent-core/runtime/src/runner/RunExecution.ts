@@ -800,6 +800,9 @@ export class RunExecution<TOutput> {
           if (completion.kind === "cancelled") {
             return await this.settle({ status: "cancelled" });
           }
+          if (completion.kind === "wait") {
+            await this.waitForMandatoryVerification(completion);
+          }
           continue;
         }
         if (decision.decision.kind === "propose_stop") {
@@ -904,6 +907,16 @@ export class RunExecution<TOutput> {
     output: TOutput,
   ): Promise<
     | { readonly kind: "succeeded" | "continue" | "cancelled" | "blocked" }
+    | {
+        readonly kind: "wait";
+        readonly snapshotRevision: number;
+        readonly pending: readonly {
+          readonly attemptId: string;
+          readonly attemptOrdinal: number;
+          readonly requirementId: string;
+          readonly requirementRevision: string;
+        }[];
+      }
     | { readonly kind: "failed"; readonly failure: VerificationFailure }
   > {
     const execution = this.requireVerificationExecution();
@@ -1008,7 +1021,7 @@ export class RunExecution<TOutput> {
       "agent-anything.verification.completion-gate-input.v1",
       gateInput,
     );
-    await execution.recordCompletionGate({
+    const recorded = await execution.recordCompletionGate({
       record: { ref: invocation, inputRevision, decision },
       expectedRevision: current.ref.revision,
     }, this.invocationInterruption());
@@ -1047,7 +1060,83 @@ export class RunExecution<TOutput> {
         }),
       };
     }
+    if (decision.disposition === "wait") {
+      return {
+        kind: "wait",
+        snapshotRevision: recorded.current.ref.revision,
+        pending: mandatoryStates.flatMap((item) =>
+          item.current.status === "pending"
+            ? item.current.pendingAttempts.map((attempt) => Object.freeze({
+                attemptId: attempt.id,
+                attemptOrdinal: attempt.ordinal,
+                requirementId: item.current.requirement.id,
+                requirementRevision: item.current.requirement.revision,
+              }))
+            : []),
+      };
+    }
     return { kind: "continue" };
+  }
+
+  private async waitForMandatoryVerification(input: {
+    readonly snapshotRevision: number;
+    readonly pending: readonly {
+      readonly attemptId: string;
+      readonly attemptOrdinal: number;
+      readonly requirementId: string;
+      readonly requirementRevision: string;
+    }[];
+  }): Promise<void> {
+    if (input.pending.length === 0) {
+      throw new VerificationExecutionError(createVerificationFailure({
+        code: "verification_gate_wait_without_pending_work",
+        stage: "completion_gate",
+        message: "Completion Gate waiting requires exact active mandatory work.",
+        retryable: false,
+        cause: this.config.verification.completion.policy,
+      }), input.snapshotRevision);
+    }
+    const pendingSubjects = input.pending.map((item): PendingRunSubject => Object.freeze({
+      kind: "verification_check",
+      attemptId: item.attemptId,
+      attemptOrdinal: item.attemptOrdinal,
+      requirementId: item.requirementId,
+      requirementRevision: item.requirementRevision,
+      branchId: `verification:${item.attemptId}#${item.attemptOrdinal}`,
+      required: true,
+      openedInRunRevision: this.writer.getSnapshot().revision,
+    }));
+    for (const pending of pendingSubjects) this.addPending(pending);
+    this.publishCurrentState();
+
+    const deadlineAt = this.writer.getSnapshot().deadlineAt;
+    const waitController = new AbortController();
+    const runSignal = this.invocationInterruption().signal;
+    const abortForRun = () => waitController.abort();
+    runSignal.addEventListener("abort", abortForRun, { once: true });
+    let deadlineExpired = false;
+    const timeout = setTimeout(() => {
+      deadlineExpired = true;
+      waitController.abort();
+    }, Math.max(1, Date.parse(deadlineAt) - Date.parse(this.now())));
+    try {
+      await this.requireVerificationExecution().waitForCurrentSnapshotChange(
+        input.snapshotRevision,
+        Object.freeze({ signal: waitController.signal, interruption: null }),
+      );
+    } catch (error) {
+      if (!deadlineExpired && this.config.cancellation.context.request === null) throw error;
+    } finally {
+      clearTimeout(timeout);
+      runSignal.removeEventListener("abort", abortForRun);
+      const transition = this.config.cancellation.context.request !== null
+        ? "cancelled" as const
+        : deadlineExpired
+          ? "expired" as const
+          : "resolved" as const;
+      for (const pending of pendingSubjects) this.removePending(pending, transition, null);
+      this.publishCurrentState();
+    }
   }
 
   private async invokeCompletionGate(input: CompletionGateInput): Promise<CompletionGateDecision> {

@@ -279,8 +279,16 @@ describe("Verification Contract foundation", () => {
     const projection = snapshotVerificationHostProjection({
       snapshot: { runId: "run-1", revision: 1 },
       counts: [{ state: "unassessed", count: 1 }],
-      activeChecks: 0,
-      gateStatus: "blocked_unassessed",
+      activeAttempts: [],
+      gate: {
+        ref: ref("gate"),
+        status: "blocked_unassessed",
+        disposition: "continue",
+        reasonCodes: ["verification_requirement_unassessed"],
+        affectedRequirements: [ref("requirement")],
+      },
+      waiting: false,
+      recoveryNeeded: true,
       safeReasons: ["A mandatory Requirement is unassessed."],
       updatedAt: NOW,
     });

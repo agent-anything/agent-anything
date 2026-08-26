@@ -50,6 +50,19 @@ describe("Helarc Verification composition", () => {
       })]));
     expect((await execution.readHistory()).filter(({ kind }) => kind === "check_attempt"))
       .toHaveLength(1);
+    const materialized = materializeVerificationProfile({
+      profile: composition.profile,
+      run: RUN,
+      createdAt: NOW,
+    });
+    expect(materialized.requirements.find(({ ref }) => ref.id === "target-empty-marker")?.completionHandling)
+      .toEqual({
+        unassessed: "continue",
+        pending: "wait",
+        violated: "continue",
+        inconclusive: "continue",
+        stale: "continue",
+      });
   });
 
   it("assesses a mismatched exact target as violated and later marks a changed subject stale", async () => {

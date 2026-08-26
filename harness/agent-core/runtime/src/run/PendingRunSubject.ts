@@ -20,6 +20,13 @@ export type PendingRunSubject =
       readonly kind: "descendant_run";
       readonly relationId: string;
       readonly childRunId: string;
+    })
+  | (PendingRunSubjectBase & {
+      readonly kind: "verification_check";
+      readonly attemptId: string;
+      readonly attemptOrdinal: number;
+      readonly requirementId: string;
+      readonly requirementRevision: string;
     });
 
 export interface PendingRunSubjectProjection {
@@ -54,13 +61,23 @@ export function projectPendingRunSubject(
       revision: String(pending.openedInRunRevision),
     });
   }
+  if (pending.kind === "descendant_run") {
+    return Object.freeze({
+      kind: pending.kind,
+      branchId: pending.branchId,
+      required: pending.required,
+      owner: "agent-runtime",
+      subjectId: pending.childRunId,
+      revision: String(pending.openedInRunRevision),
+    });
+  }
   return Object.freeze({
     kind: pending.kind,
     branchId: pending.branchId,
     required: pending.required,
-    owner: "agent-runtime",
-    subjectId: pending.childRunId,
-    revision: String(pending.openedInRunRevision),
+    owner: "verification",
+    subjectId: pending.attemptId,
+    revision: String(pending.attemptOrdinal),
   });
 }
 

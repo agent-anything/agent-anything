@@ -37,7 +37,7 @@ describe("Helarc deterministic Evaluation target", () => {
       "inspect_and_complete",
       "malformed_output_retry",
       "multi_file_mutation",
-      "ordinary_shell_validation",
+      "ordinary_shell_verification",
       "premature_completion",
       "search",
       "stale_evidence",
@@ -114,17 +114,17 @@ describe("Helarc deterministic Evaluation target", () => {
   it("calibrates ordinary-operation Verification, recovery, freshness, and completion", async () => {
     const corpus = createHelarcEvaluationCorpus();
     const expectations = [
-      ["ordinary_shell_validation", "succeeded", "satisfied", "completion_eligible"],
+      ["ordinary_shell_verification", "succeeded", "satisfied", "completion_eligible"],
       ["failed_check_recovery", "succeeded", "satisfied", "completion_eligible"],
       ["multi_file_mutation", "succeeded", "satisfied", "completion_eligible"],
-      ["stale_evidence", "blocked", "attention_required", "blocked_violated"],
-      ["premature_completion", "blocked", "attention_required", "blocked_violated"],
+      ["stale_evidence", "blocked", "violated", "blocked_violated"],
+      ["premature_completion", "blocked", "violated", "blocked_violated"],
     ] as const;
 
     const outcomes = await Promise.all(expectations.map(async ([scenario]) =>
       invokeCase(corpus, requireCase(corpus, scenario))));
 
-    for (const [index, [, outcomeStatus, verificationStatus, gateStatus]] of expectations.entries()) {
+    for (const [index, [, outcomeStatus, requirementState, gateStatus]] of expectations.entries()) {
       const outcome = outcomes[index];
       if (outcome === undefined) throw new TypeError("Missing Verification Evaluation outcome.");
       const verificationSummary = outcome.capture.capture.slots.find(
@@ -138,9 +138,13 @@ describe("Helarc deterministic Evaluation target", () => {
         content: {
           kind: "inline",
           value: {
-            status: verificationStatus,
-            activeChecks: 0,
-            gateStatus,
+            requirements: expect.arrayContaining([
+              expect.objectContaining({ state: requirementState }),
+            ]),
+            attempts: expect.any(Array),
+            results: expect.any(Array),
+            assessments: expect.any(Array),
+            gate: { status: gateStatus },
           },
         },
       });
@@ -301,8 +305,11 @@ describe("Helarc deterministic Evaluation target", () => {
       content: {
         kind: "inline",
         value: {
-          status: "not_required",
-          gateStatus: "completion_eligible",
+          requirements: expect.any(Array),
+          attempts: expect.any(Array),
+          results: expect.any(Array),
+          assessments: expect.any(Array),
+          gate: { status: "completion_eligible" },
         },
       },
     });

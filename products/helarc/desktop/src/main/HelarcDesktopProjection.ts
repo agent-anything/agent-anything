@@ -368,6 +368,8 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
               counts: run.product.result.verification.counts.map((entry) => ({ ...entry })),
               activeChecks: run.product.result.verification.activeChecks,
               gateStatus: run.product.result.verification.gateStatus,
+              waiting: run.product.result.verification.waiting,
+              recoveryNeeded: run.product.result.verification.recoveryNeeded,
               safeReasons: [...run.product.result.verification.safeReasons],
               updatedAt: run.product.result.verification.updatedAt,
             },
@@ -498,8 +500,10 @@ function projectHostVerification(
   return {
     snapshotRevision: verification.snapshot.revision,
     counts: verification.counts.map((entry) => ({ ...entry })),
-    activeChecks: verification.activeChecks,
-    gateStatus: verification.gateStatus,
+    activeChecks: verification.activeAttempts.length,
+    gateStatus: verification.gate?.status ?? null,
+    waiting: verification.waiting,
+    recoveryNeeded: verification.recoveryNeeded,
     safeReasons: [...verification.safeReasons],
     updatedAt: verification.updatedAt,
   };

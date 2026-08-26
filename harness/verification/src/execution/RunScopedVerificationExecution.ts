@@ -132,6 +132,13 @@ export class VerificationExecution implements VerificationExecutionPort {
   private readonly gateRecords = new Map<string, CompletionGateRecord>();
   private readonly history: VerificationPersistenceRecord[] = [];
   private readonly persistenceFailures: VerificationExecutionPersistenceFailure[] = [];
+  private readonly currentSnapshotWaiters = new Set<{
+    readonly afterRevision: number;
+    readonly resolve: (snapshot: VerificationCurrentSnapshot) => void;
+    readonly reject: (error: VerificationExecutionError) => void;
+    readonly signal: AbortSignal;
+    readonly abort: () => void;
+  }>();
   private current: VerificationCurrentSnapshot;
   private acceptingCurrentChanges = true;
   private persistenceTail: Promise<void> = Promise.resolve();
@@ -632,6 +639,52 @@ export class VerificationExecution implements VerificationExecutionPort {
     return this.current;
   }
 
+  async waitForCurrentSnapshotChange(
+    afterRevision: number,
+    interruption: InvocationInterruptionContext,
+  ): Promise<VerificationCurrentSnapshot> {
+    if (!Number.isSafeInteger(afterRevision) || afterRevision < 0) {
+      throw new TypeError("Verification snapshot wait revision must be a non-negative safe integer.");
+    }
+    if (this.current.ref.revision > afterRevision) return this.current;
+    if (interruption.signal.aborted) {
+      throw new VerificationExecutionError(createVerificationFailure({
+        code: "verification_snapshot_wait_interrupted",
+        stage: "projection",
+        message: "Verification snapshot waiting was interrupted.",
+        retryable: true,
+        cause: null,
+      }), this.current.ref.revision);
+    }
+    return new Promise<VerificationCurrentSnapshot>((resolve, reject) => {
+      const waiter = {
+        afterRevision,
+        resolve: (snapshot: VerificationCurrentSnapshot) => {
+          interruption.signal.removeEventListener("abort", abort);
+          this.currentSnapshotWaiters.delete(waiter);
+          resolve(snapshot);
+        },
+        reject: (error: VerificationExecutionError) => {
+          interruption.signal.removeEventListener("abort", abort);
+          this.currentSnapshotWaiters.delete(waiter);
+          reject(error);
+        },
+        signal: interruption.signal,
+        abort: () => abort(),
+      };
+      const abort = () => waiter.reject(new VerificationExecutionError(createVerificationFailure({
+        code: "verification_snapshot_wait_interrupted",
+        stage: "projection",
+        message: "Verification snapshot waiting was interrupted.",
+        retryable: true,
+        cause: null,
+      }), this.current.ref.revision));
+      this.currentSnapshotWaiters.add(waiter);
+      interruption.signal.addEventListener("abort", abort, { once: true });
+      if (this.current.ref.revision > afterRevision) waiter.resolve(this.current);
+    });
+  }
+
   async readLedgerSnapshot(): Promise<VerificationLedgerSnapshot> {
     return deepFreeze({
       run: this.run,
@@ -1024,45 +1077,100 @@ export class VerificationExecution implements VerificationExecutionPort {
     const states: VerificationStateCount["state"][] = [
       "unassessed", "pending", "satisfied", "violated", "inconclusive", "stale",
     ];
+    const gate = this.projectCurrentGate();
+    const activeAttempts = this.current.requirementStates.flatMap((state) => state.pendingAttempts);
+    const safeReasons = this.current.requirementStates
+      .filter((state) => state.status !== "satisfied")
+      .map((state) => `verification_requirement_${state.status}`);
     return snapshotVerificationHostProjection({
       snapshot: this.current.ref,
       counts: states.map((state) => ({
         state,
         count: this.current.requirementStates.filter((item) => item.status === state).length,
       })),
-      activeChecks: this.current.requirementStates.reduce((sum, item) => sum + item.pendingAttempts.length, 0),
-      gateStatus: [...this.gateRecords.values()].at(-1)?.decision.status ?? null,
-      safeReasons: this.current.requirementStates
-        .filter((state) => state.status !== "satisfied")
-        .map((state) => `verification_requirement_${state.status}`),
+      activeAttempts,
+      gate,
+      waiting: gate?.disposition === "wait" && activeAttempts.length > 0,
+      recoveryNeeded: this.current.requirementStates.some((state) => state.status !== "satisfied"),
+      safeReasons: [...new Set([
+        ...safeReasons,
+        ...(gate?.reasonCodes ?? []),
+      ])],
       updatedAt: this.current.createdAt,
     });
   }
 
   async projectObservability(): Promise<VerificationObservabilityProjection> {
-    const latest = [...this.results.values()].at(-1) ?? null;
+    const latestResult = [...this.results.values()].at(-1) ?? null;
+    const latestAssessment = [...this.assessments.values()].at(-1) ?? null;
+    const gate = this.projectCurrentGate();
+    const activeAttempts = this.current.requirementStates.flatMap((state) => state.pendingAttempts);
+    const safeCodes = this.current.requirementStates
+      .filter((state) => state.status !== "satisfied")
+      .map((state) => `verification_requirement_${state.status}`);
     return snapshotVerificationObservabilityProjection({
       snapshot: this.current.ref,
-      checkStatus: latest?.status ?? null,
-      safeCode: latest?.failure?.code ?? null,
-      durationMs: latest === null ? null : Date.parse(latest.finishedAt) - Date.parse(latest.startedAt),
-      coverageRatio: latest?.coverage.ratio ?? null,
+      trigger: this.projectFeedbackTrigger(),
+      activeAttempts,
+      latestResult: latestResult === null ? null : {
+        ref: latestResult.ref,
+        status: latestResult.status,
+        failureCode: latestResult.failure?.code ?? null,
+        durationMs: Date.parse(latestResult.finishedAt) - Date.parse(latestResult.startedAt),
+        coverageRatio: latestResult.coverage.ratio,
+        costUnits: latestResult.costUnits,
+      },
+      latestAssessment: latestAssessment === null ? null : {
+        ref: latestAssessment.ref,
+        requirement: latestAssessment.requirement,
+        subject: latestAssessment.subject,
+        verdict: latestAssessment.verdict,
+      },
+      gate,
+      waiting: gate?.disposition === "wait" && activeAttempts.length > 0,
+      recoveryNeeded: this.current.requirementStates.some((state) => state.status !== "satisfied"),
+      safeCodes: [...new Set([
+        ...safeCodes,
+        ...(latestResult?.failure === null || latestResult?.failure === undefined
+          ? []
+          : [latestResult.failure.code]),
+        ...(gate?.reasonCodes ?? []),
+      ])],
       emittedAt: this.now(),
     });
   }
 
   async projectEvaluation(): Promise<VerificationEvaluationProjection> {
-    const latestResult = [...this.results.values()].at(-1) ?? null;
-    const latestAssessment = [...this.assessments.values()].at(-1) ?? null;
-    const latestGate = [...this.gateRecords.values()].at(-1) ?? null;
     return snapshotVerificationEvaluationProjection({
       snapshot: this.current.ref,
-      checkStatus: latestResult?.status ?? null,
-      assessmentVerdict: latestAssessment?.verdict ?? null,
-      gateStatus: latestGate?.decision.status ?? null,
-      latencyMs: latestResult === null ? null : Date.parse(latestResult.finishedAt) - Date.parse(latestResult.startedAt),
-      costUnits: latestResult?.costUnits ?? null,
-      failureOwner: latestResult?.failure?.cause?.owner ?? null,
+      requirements: this.current.requirementStates.map((state) => ({
+        requirement: state.requirement,
+        state: state.status,
+        subject: state.subject,
+        assessment: state.assessment,
+      })),
+      attempts: [...this.attempts.values()].map((attempt) => ({
+        attempt: attempt.ref,
+        requirement: attempt.requirement,
+        definition: attempt.definition,
+        origin: attempt.origin,
+      })),
+      results: [...this.results.values()].map((result) => ({
+        result: result.ref,
+        attempt: result.attempt,
+        status: result.status,
+        latencyMs: Date.parse(result.finishedAt) - Date.parse(result.startedAt),
+        costUnits: result.costUnits,
+        failureOwner: result.failure?.cause?.owner ?? null,
+        failureCode: result.failure?.code ?? null,
+      })),
+      assessments: [...this.assessments.values()].map((assessment) => ({
+        assessment: assessment.ref,
+        requirement: assessment.requirement,
+        subject: assessment.subject,
+        verdict: assessment.verdict,
+      })),
+      gate: this.projectCurrentGate(),
     });
   }
 
@@ -1564,6 +1672,9 @@ export class VerificationExecution implements VerificationExecutionPort {
       requirementStates: states,
       createdAt,
     });
+    for (const waiter of [...this.currentSnapshotWaiters]) {
+      if (this.current.ref.revision > waiter.afterRevision) waiter.resolve(this.current);
+    }
     return this.current;
   }
 

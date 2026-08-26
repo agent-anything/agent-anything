@@ -146,7 +146,7 @@ describe("Runner semantic integration", () => {
       createRunConfig(operations),
     );
 
-    expect(result).toMatchObject({
+    expect(result, JSON.stringify(result, null, 2)).toMatchObject({
       runId: "run_001",
       taskId: "task_001",
       startingAgent: { id: "agent_001", revision: "1" },
@@ -402,6 +402,90 @@ describe("Runner semantic integration", () => {
     }));
   });
 
+  it("waits for exact active mandatory Verification work without another Controller request", async () => {
+    const operations = createOperationFixture([]);
+    const settlement = deferred<VerificationCheckInterpretation>();
+    const processed = deferred<void>();
+    const events: RuntimeEvent[] = [];
+    const controller = new ScriptedController([
+      complete("Premature completion", "model_complete_1"),
+      async () => {
+        await processed.promise;
+        return complete("Completion after current Verification", "model_complete_2");
+      },
+    ]);
+    const handle = createRunner(controller, operations, {
+      verification: createVerificationScenario({
+        kind: "pure_pending",
+        settlement: settlement.promise,
+        onProcessed(error) {
+          if (error === null) processed.resolve();
+          else processed.reject(error);
+        },
+      }),
+      runtimeEventPublisher: { publish: (event) => events.push(event) },
+    }).start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { verification: createMandatoryVerificationConfig("wait") }),
+    );
+
+    await waitUntil(() => events.some((event) =>
+      event.name === "verification.gate.evaluated" &&
+      event.payload.disposition === "wait"
+    ));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(handle.getSnapshot().status).toBe("waiting");
+    expect(controller.calls).toHaveLength(1);
+    settlement.resolve(completedVerificationInterpretation());
+    const result = await handle.wait();
+
+    expect(result, JSON.stringify(result, null, 2)).toMatchObject({
+      status: "succeeded",
+      finalOutput: { summary: "Completion after current Verification" },
+    });
+    expect(controller.calls).toHaveLength(2);
+    expect(result.items.filter(({ payload }) =>
+      payload.kind === "pending_transition" &&
+      payload.pending.kind === "verification_check"
+    ).map(({ payload }) => payload.kind === "pending_transition" ? payload.transition : null))
+      .toEqual(["opened", "resolved"]);
+  });
+
+  it("lets cancellation terminate exact mandatory Verification waiting", async () => {
+    const operations = createOperationFixture([]);
+    const neverSettles = deferred<VerificationCheckInterpretation>();
+    const events: RuntimeEvent[] = [];
+    const controller = new ScriptedController([complete("Premature completion")]);
+    const handle = createRunner(controller, operations, {
+      verification: createVerificationScenario({
+        kind: "pure_pending",
+        settlement: neverSettles.promise,
+        onProcessed() {},
+      }),
+      runtimeEventPublisher: { publish: (event) => events.push(event) },
+    }).start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { verification: createMandatoryVerificationConfig("wait") }),
+    );
+    await waitUntil(() => events.some((event) =>
+      event.name === "verification.gate.evaluated" && event.payload.disposition === "wait"
+    ));
+
+    expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status)
+      .toBe("accepted");
+    const result = await handle.wait();
+
+    expect(result.status).toBe("cancelled");
+    expect(controller.calls).toHaveLength(1);
+    expect(result.items.filter(({ payload }) =>
+      payload.kind === "pending_transition" &&
+      payload.pending.kind === "verification_check" &&
+      payload.transition === "cancelled"
+    )).toHaveLength(1);
+  });
+
   it("bounds repeated non-eligible completion proposals without bypassing the Completion Gate", async () => {
     const operations = createOperationFixture([]);
     const gate: CompletionGatePort = {
@@ -511,6 +595,67 @@ describe("Runner semantic integration", () => {
         failure: { code: "verification_gate_provider_failed", stage: "completion_gate" },
       },
     });
+  });
+
+  it("fails closed when a Completion Gate requests waiting without exact active work", async () => {
+    const operations = createOperationFixture([]);
+    const gate: CompletionGatePort = {
+      async evaluate(input) {
+        return {
+          invocation: input.invocation,
+          verificationSnapshot: input.verificationSnapshot,
+          status: "blocked_pending",
+          disposition: "wait",
+          reasons: [{
+            owner: "verification",
+            code: "verification_requirement_pending",
+            message: "Mandatory Verification work is pending.",
+            requirement: null,
+          }],
+          failure: null,
+          decidedAt: NOW,
+        };
+      },
+    };
+    const result = await createRunner(
+      new ScriptedController([complete("Cannot wait")]),
+      operations,
+      {
+        verification: {
+          executionFactory: createTestVerificationExecutionFactory({ now: () => NOW }),
+          completionGate: gate,
+          preparation: null,
+          settledOperationResults: null,
+          checkResults: null,
+        },
+      },
+    ).run(createAgent(), createRunInput(), createRunConfig(operations));
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "verification_failed",
+      failure: {
+        kind: "verification",
+        failure: { code: "verification_gate_wait_without_pending_work" },
+      },
+    });
+  });
+
+  it("does not turn Controller failure into completion-recovery feedback", async () => {
+    const operations = createOperationFixture([]);
+    const events: RuntimeEvent[] = [];
+    const result = await createRunner(
+      new ScriptedController([() => { throw new Error("controller unavailable"); }]),
+      operations,
+      { runtimeEventPublisher: { publish: (event) => events.push(event) } },
+    ).run(createAgent(), createRunInput(), createRunConfig(operations));
+
+    expect(result.status).toBe("failed");
+    expect(events.filter((event) => event.name === "verification.gate.evaluated"))
+      .toHaveLength(0);
+    expect(result.items.filter(({ payload }) =>
+      payload.kind === "verification_feedback" && payload.verification.gate !== null
+    )).toHaveLength(0);
   });
 
   it("lets accepted cancellation outrank an in-flight eligible gate decision", async () => {
@@ -3421,6 +3566,11 @@ function createMandatoryVerificationConfig(
 
 type VerificationScenario =
   | { readonly kind: "pure_automatic"; readonly stale?: boolean }
+  | {
+      readonly kind: "pure_pending";
+      readonly settlement: Promise<VerificationCheckInterpretation>;
+      readonly onProcessed: (error: unknown | null) => void;
+    }
   | { readonly kind: "effectful_automatic"; readonly operation: OperationRevisionRef }
   | { readonly kind: "controller"; readonly operation: OperationRevisionRef };
 
@@ -3493,7 +3643,9 @@ function createVerificationScenario(input: VerificationScenario): RunnerDependen
     },
     pureChecks: {
       resolve: (ref) => ref.id === evaluator.id ? {
-        evaluate: async () => completedVerificationInterpretation(),
+        evaluate: async () => input.kind === "pure_pending"
+          ? input.settlement
+          : completedVerificationInterpretation(),
       } : null,
     },
     operationChecks: { resolve: () => null },
@@ -3541,14 +3693,25 @@ function createVerificationScenario(input: VerificationScenario): RunnerDependen
           configuration: null,
           coverageTarget: 1,
         } as const;
-        const result = input.kind === "effectful_automatic"
-          ? await automaticEffectfulChecks.execute(checkRequest, interruption)
-          : await execution.executeCheck({
+        const resultPromise = input.kind === "effectful_automatic"
+          ? automaticEffectfulChecks.execute(checkRequest, interruption)
+          : execution.executeCheck({
               ...checkRequest,
               origin: "trusted_automatic",
               runAction: null,
               expectedRevision: await verificationRevision(execution),
             }, interruption);
+        if (input.kind === "pure_pending") {
+          await waitForVerificationState(execution, "pending");
+          void resultPromise.then((result) =>
+            admitVerificationResultAndAssess(execution, result, interruption)
+          ).then(
+            () => input.onProcessed(null),
+            (error) => input.onProcessed(error),
+          );
+          return;
+        }
+        const result = await resultPromise;
         await admitVerificationResultAndAssess(execution, result, interruption);
         if (input.kind === "pure_automatic" && input.stale === true) {
           await execution.checkSubjectFreshness({
@@ -3610,7 +3773,7 @@ function verificationScenarioDefinition(
     acceptedOrigins: Object.freeze([
       input.kind === "controller" ? "controller" as const : "trusted_automatic" as const,
     ]),
-    effect: input.kind === "pure_automatic"
+    effect: input.kind === "pure_automatic" || input.kind === "pure_pending"
       ? Object.freeze({ kind: "pure" as const, evaluator, operationBinding: null })
       : Object.freeze({
           kind: "effectful" as const,
@@ -3684,6 +3847,17 @@ async function admitVerificationResultAndAssess(
 
 async function verificationRevision(execution: VerificationExecutionPort): Promise<number> {
   return (await execution.readCurrentSnapshot()).ref.revision;
+}
+
+async function waitForVerificationState(
+  execution: VerificationExecutionPort,
+  status: "unassessed" | "pending" | "satisfied" | "violated" | "inconclusive" | "stale",
+): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if ((await execution.readCurrentSnapshot()).requirementStates[0]?.status === status) return;
+    await Promise.resolve();
+  }
+  throw new Error(`Timed out waiting for Verification state '${status}'.`);
 }
 
 function verificationOwner(id: string, kind = "verification"): VerificationOwnerRef {

@@ -132,29 +132,69 @@ export interface VerificationContextProjection {
 export interface VerificationHostProjection {
   readonly snapshot: VerificationCurrentSnapshotRef;
   readonly counts: readonly VerificationStateCount[];
-  readonly activeChecks: number;
-  readonly gateStatus: CompletionGateDecisionStatus | null;
+  readonly activeAttempts: readonly CheckAttemptRef[];
+  readonly gate: VerificationProjectedGate | null;
+  readonly waiting: boolean;
+  readonly recoveryNeeded: boolean;
   readonly safeReasons: readonly string[];
   readonly updatedAt: string;
 }
 
 export interface VerificationObservabilityProjection {
   readonly snapshot: VerificationCurrentSnapshotRef;
-  readonly checkStatus: CheckResultStatus | null;
-  readonly safeCode: string | null;
-  readonly durationMs: number | null;
-  readonly coverageRatio: number | null;
+  readonly trigger: VerificationFeedbackTrigger;
+  readonly activeAttempts: readonly CheckAttemptRef[];
+  readonly latestResult: {
+    readonly ref: CheckResultRef;
+    readonly status: CheckResultStatus;
+    readonly failureCode: string | null;
+    readonly durationMs: number;
+    readonly coverageRatio: number;
+    readonly costUnits: number | null;
+  } | null;
+  readonly latestAssessment: {
+    readonly ref: VerificationAssessmentRef;
+    readonly requirement: VerificationRequirementRef;
+    readonly subject: VerificationSubjectSnapshotRef;
+    readonly verdict: VerificationAssessmentVerdict;
+  } | null;
+  readonly gate: VerificationProjectedGate | null;
+  readonly waiting: boolean;
+  readonly recoveryNeeded: boolean;
+  readonly safeCodes: readonly string[];
   readonly emittedAt: string;
 }
 
 export interface VerificationEvaluationProjection {
   readonly snapshot: VerificationCurrentSnapshotRef;
-  readonly checkStatus: CheckResultStatus | null;
-  readonly assessmentVerdict: VerificationAssessmentVerdict | null;
-  readonly gateStatus: CompletionGateDecisionStatus | null;
-  readonly latencyMs: number | null;
-  readonly costUnits: number | null;
-  readonly failureOwner: string | null;
+  readonly requirements: readonly {
+    readonly requirement: VerificationRequirementRef;
+    readonly state: VerificationStateCount["state"];
+    readonly subject: VerificationSubjectSnapshotRef | null;
+    readonly assessment: VerificationAssessmentRef | null;
+  }[];
+  readonly attempts: readonly {
+    readonly attempt: CheckAttemptRef;
+    readonly requirement: VerificationRequirementRef;
+    readonly definition: CheckDefinitionRef;
+    readonly origin: string;
+  }[];
+  readonly results: readonly {
+    readonly result: CheckResultRef;
+    readonly attempt: CheckAttemptRef;
+    readonly status: CheckResultStatus;
+    readonly latencyMs: number;
+    readonly costUnits: number | null;
+    readonly failureOwner: string | null;
+    readonly failureCode: string | null;
+  }[];
+  readonly assessments: readonly {
+    readonly assessment: VerificationAssessmentRef;
+    readonly requirement: VerificationRequirementRef;
+    readonly subject: VerificationSubjectSnapshotRef;
+    readonly verdict: VerificationAssessmentVerdict;
+  }[];
+  readonly gate: VerificationProjectedGate | null;
 }
 
 export function snapshotVerificationRunnerProjection(input: VerificationRunnerProjection): VerificationRunnerProjection {
@@ -199,8 +239,12 @@ export function snapshotVerificationContextProjection(input: VerificationContext
 
 export function snapshotVerificationHostProjection(input: VerificationHostProjection): VerificationHostProjection {
   strictRecord(input, "VerificationHostProjection", [
-    "snapshot", "counts", "activeChecks", "gateStatus", "safeReasons", "updatedAt",
+    "snapshot", "counts", "activeAttempts", "gate", "waiting", "recoveryNeeded",
+    "safeReasons", "updatedAt",
   ]);
+  if (typeof input.waiting !== "boolean" || typeof input.recoveryNeeded !== "boolean") {
+    throw new TypeError("VerificationHostProjection waiting and recovery flags must be boolean.");
+  }
   return deepFreeze({
     snapshot: snapshotRef(input.snapshot, "VerificationHostProjection.snapshot"),
     counts: unique(input.counts.map((item, index) => {
@@ -209,8 +253,10 @@ export function snapshotVerificationHostProjection(input: VerificationHostProjec
       state(item.state, `${path}.state`);
       return { state: item.state, count: nonNegative(item.count, `${path}.count`) };
     }), (item) => item.state, "VerificationHostProjection.counts"),
-    activeChecks: nonNegative(input.activeChecks, "VerificationHostProjection.activeChecks"),
-    gateStatus: nullableGateStatus(input.gateStatus, "VerificationHostProjection.gateStatus"),
+    activeAttempts: uniqueAttempts(input.activeAttempts, "VerificationHostProjection.activeAttempts"),
+    gate: input.gate === null ? null : projectedGate(input.gate, "VerificationHostProjection.gate"),
+    waiting: input.waiting,
+    recoveryNeeded: input.recoveryNeeded,
     safeReasons: textList(input.safeReasons, "VerificationHostProjection.safeReasons"),
     updatedAt: isoDateTime(input.updatedAt, "VerificationHostProjection.updatedAt"),
   });
@@ -218,33 +264,55 @@ export function snapshotVerificationHostProjection(input: VerificationHostProjec
 
 export function snapshotVerificationObservabilityProjection(input: VerificationObservabilityProjection): VerificationObservabilityProjection {
   strictRecord(input, "VerificationObservabilityProjection", [
-    "snapshot", "checkStatus", "safeCode", "durationMs", "coverageRatio", "emittedAt",
+    "snapshot", "trigger", "activeAttempts", "latestResult", "latestAssessment", "gate",
+    "waiting", "recoveryNeeded", "safeCodes", "emittedAt",
   ]);
+  if (typeof input.waiting !== "boolean" || typeof input.recoveryNeeded !== "boolean") {
+    throw new TypeError("VerificationObservabilityProjection waiting and recovery flags must be boolean.");
+  }
   return deepFreeze({
     snapshot: snapshotRef(input.snapshot, "VerificationObservabilityProjection.snapshot"),
-    checkStatus: nullableCheckStatus(input.checkStatus, "VerificationObservabilityProjection.checkStatus"),
-    safeCode: input.safeCode === null ? null : token(input.safeCode, "VerificationObservabilityProjection.safeCode"),
-    durationMs: nullableNonNegative(input.durationMs, "VerificationObservabilityProjection.durationMs"),
-    coverageRatio: nullableRatio(input.coverageRatio, "VerificationObservabilityProjection.coverageRatio"),
+    trigger: feedbackTrigger(input.trigger, "VerificationObservabilityProjection.trigger"),
+    activeAttempts: uniqueAttempts(input.activeAttempts, "VerificationObservabilityProjection.activeAttempts"),
+    latestResult: input.latestResult === null ? null : projectedOperationalResult(
+      input.latestResult,
+      "VerificationObservabilityProjection.latestResult",
+    ),
+    latestAssessment: input.latestAssessment === null ? null : projectedOperationalAssessment(
+      input.latestAssessment,
+      "VerificationObservabilityProjection.latestAssessment",
+    ),
+    gate: input.gate === null ? null : projectedGate(input.gate, "VerificationObservabilityProjection.gate"),
+    waiting: input.waiting,
+    recoveryNeeded: input.recoveryNeeded,
+    safeCodes: tokenList(input.safeCodes, "VerificationObservabilityProjection.safeCodes"),
     emittedAt: isoDateTime(input.emittedAt, "VerificationObservabilityProjection.emittedAt"),
   });
 }
 
 export function snapshotVerificationEvaluationProjection(input: VerificationEvaluationProjection): VerificationEvaluationProjection {
   strictRecord(input, "VerificationEvaluationProjection", [
-    "snapshot", "checkStatus", "assessmentVerdict", "gateStatus", "latencyMs", "costUnits", "failureOwner",
+    "snapshot", "requirements", "attempts", "results", "assessments", "gate",
   ]);
-  if (input.assessmentVerdict !== null && !ASSESSMENT_VERDICTS.includes(input.assessmentVerdict)) {
-    throw new TypeError("VerificationEvaluationProjection.assessmentVerdict is unsupported.");
-  }
   return deepFreeze({
     snapshot: snapshotRef(input.snapshot, "VerificationEvaluationProjection.snapshot"),
-    checkStatus: nullableCheckStatus(input.checkStatus, "VerificationEvaluationProjection.checkStatus"),
-    assessmentVerdict: input.assessmentVerdict,
-    gateStatus: nullableGateStatus(input.gateStatus, "VerificationEvaluationProjection.gateStatus"),
-    latencyMs: nullableNonNegative(input.latencyMs, "VerificationEvaluationProjection.latencyMs"),
-    costUnits: nullableNonNegative(input.costUnits, "VerificationEvaluationProjection.costUnits"),
-    failureOwner: input.failureOwner === null ? null : token(input.failureOwner, "VerificationEvaluationProjection.failureOwner"),
+    requirements: input.requirements.map((item, index) => projectedEvaluationRequirement(
+      item,
+      `VerificationEvaluationProjection.requirements[${index}]`,
+    )),
+    attempts: input.attempts.map((item, index) => projectedEvaluationAttempt(
+      item,
+      `VerificationEvaluationProjection.attempts[${index}]`,
+    )),
+    results: input.results.map((item, index) => projectedEvaluationResult(
+      item,
+      `VerificationEvaluationProjection.results[${index}]`,
+    )),
+    assessments: input.assessments.map((item, index) => projectedEvaluationAssessment(
+      item,
+      `VerificationEvaluationProjection.assessments[${index}]`,
+    )),
+    gate: input.gate === null ? null : projectedGate(input.gate, "VerificationEvaluationProjection.gate"),
   });
 }
 
@@ -381,6 +449,96 @@ function projectedGate(input: VerificationProjectedGate, path: string): Verifica
     disposition: input.disposition,
     reasonCodes: tokenList(input.reasonCodes, `${path}.reasonCodes`),
     affectedRequirements: uniqueRefs(input.affectedRequirements, `${path}.affectedRequirements`),
+  };
+}
+
+function projectedOperationalResult(
+  input: VerificationObservabilityProjection["latestResult"] & {},
+  path: string,
+): NonNullable<VerificationObservabilityProjection["latestResult"]> {
+  strictRecord(input, path, [
+    "ref", "status", "failureCode", "durationMs", "coverageRatio", "costUnits",
+  ]);
+  return {
+    ref: revisionRef(input.ref, `${path}.ref`),
+    status: nullableCheckStatus(input.status, `${path}.status`)!,
+    failureCode: input.failureCode === null ? null : token(input.failureCode, `${path}.failureCode`),
+    durationMs: nullableNonNegative(input.durationMs, `${path}.durationMs`)!,
+    coverageRatio: ratio(input.coverageRatio, `${path}.coverageRatio`),
+    costUnits: nullableNonNegative(input.costUnits, `${path}.costUnits`),
+  };
+}
+
+function projectedEvaluationRequirement(
+  input: VerificationEvaluationProjection["requirements"][number],
+  path: string,
+): VerificationEvaluationProjection["requirements"][number] {
+  strictRecord(input, path, ["requirement", "state", "subject", "assessment"]);
+  state(input.state, `${path}.state`);
+  return {
+    requirement: revisionRef(input.requirement, `${path}.requirement`),
+    state: input.state,
+    subject: input.subject === null ? null : revisionRef(input.subject, `${path}.subject`),
+    assessment: input.assessment === null ? null : revisionRef(input.assessment, `${path}.assessment`),
+  };
+}
+
+function projectedEvaluationAttempt(
+  input: VerificationEvaluationProjection["attempts"][number],
+  path: string,
+): VerificationEvaluationProjection["attempts"][number] {
+  strictRecord(input, path, ["attempt", "requirement", "definition", "origin"]);
+  return {
+    attempt: attemptRef(input.attempt, `${path}.attempt`),
+    requirement: revisionRef(input.requirement, `${path}.requirement`),
+    definition: revisionRef(input.definition, `${path}.definition`),
+    origin: token(input.origin, `${path}.origin`),
+  };
+}
+
+function projectedEvaluationResult(
+  input: VerificationEvaluationProjection["results"][number],
+  path: string,
+): VerificationEvaluationProjection["results"][number] {
+  strictRecord(input, path, [
+    "result", "attempt", "status", "latencyMs", "costUnits", "failureOwner", "failureCode",
+  ]);
+  return {
+    result: revisionRef(input.result, `${path}.result`),
+    attempt: attemptRef(input.attempt, `${path}.attempt`),
+    status: nullableCheckStatus(input.status, `${path}.status`)!,
+    latencyMs: nullableNonNegative(input.latencyMs, `${path}.latencyMs`)!,
+    costUnits: nullableNonNegative(input.costUnits, `${path}.costUnits`),
+    failureOwner: input.failureOwner === null ? null : token(input.failureOwner, `${path}.failureOwner`),
+    failureCode: input.failureCode === null ? null : token(input.failureCode, `${path}.failureCode`),
+  };
+}
+
+function projectedEvaluationAssessment(
+  input: VerificationEvaluationProjection["assessments"][number],
+  path: string,
+): VerificationEvaluationProjection["assessments"][number] {
+  strictRecord(input, path, ["assessment", "requirement", "subject", "verdict"]);
+  if (!ASSESSMENT_VERDICTS.includes(input.verdict)) throw new TypeError(`${path}.verdict is unsupported.`);
+  return {
+    assessment: revisionRef(input.assessment, `${path}.assessment`),
+    requirement: revisionRef(input.requirement, `${path}.requirement`),
+    subject: revisionRef(input.subject, `${path}.subject`),
+    verdict: input.verdict,
+  };
+}
+
+function projectedOperationalAssessment(
+  input: NonNullable<VerificationObservabilityProjection["latestAssessment"]>,
+  path: string,
+): NonNullable<VerificationObservabilityProjection["latestAssessment"]> {
+  strictRecord(input, path, ["ref", "requirement", "subject", "verdict"]);
+  if (!ASSESSMENT_VERDICTS.includes(input.verdict)) throw new TypeError(`${path}.verdict is unsupported.`);
+  return {
+    ref: revisionRef(input.ref, `${path}.ref`),
+    requirement: revisionRef(input.requirement, `${path}.requirement`),
+    subject: revisionRef(input.subject, `${path}.subject`),
+    verdict: input.verdict,
   };
 }
 

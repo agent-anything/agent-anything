@@ -291,6 +291,8 @@ function productResult(status: HelarcProductResult["status"]): HelarcProductResu
       counts: [],
       activeChecks: 0,
       gateStatus: null,
+      waiting: false,
+      recoveryNeeded: false,
       safeReasons: [],
       updatedAt: "2026-07-17T00:00:01.000Z",
     },

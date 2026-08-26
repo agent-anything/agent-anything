@@ -338,6 +338,8 @@ export interface HelarcHostVerificationSnapshot {
   }[];
   readonly activeChecks: number;
   readonly gateStatus: HelarcVerificationGateStatusSnapshot | null;
+  readonly waiting: boolean;
+  readonly recoveryNeeded: boolean;
   readonly safeReasons: readonly string[];
   readonly updatedAt: string;
 }
@@ -353,6 +355,8 @@ export interface HelarcProductVerificationSnapshot {
   readonly counts: HelarcHostVerificationSnapshot["counts"];
   readonly activeChecks: number;
   readonly gateStatus: HelarcVerificationGateStatusSnapshot | null;
+  readonly waiting: boolean;
+  readonly recoveryNeeded: boolean;
   readonly safeReasons: readonly string[];
   readonly updatedAt: string | null;
 }

@@ -364,11 +364,11 @@ function exactRequirement(
     disclosure: Object.freeze({ sensitivity: "internal" as const, audiences: Object.freeze(["model", "product", "verification"]) }),
     completionHandling: input.necessity === "mandatory"
       ? Object.freeze({
-          unassessed: "block" as const,
+          unassessed: "continue" as const,
           pending: "wait" as const,
-          violated: "block" as const,
-          inconclusive: "block" as const,
-          stale: "block" as const,
+          violated: "continue" as const,
+          inconclusive: "continue" as const,
+          stale: "continue" as const,
         })
       : continuingCompletionHandling(),
   });

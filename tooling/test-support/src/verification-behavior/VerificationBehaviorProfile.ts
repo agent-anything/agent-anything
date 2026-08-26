@@ -14,7 +14,7 @@ export interface VerificationBehaviorScenario {
   readonly expected: string;
 }
 
-export const VALIDATION_BEHAVIOR_SCENARIOS: readonly VerificationBehaviorScenario[] = deepFreeze([
+export const VERIFICATION_BEHAVIOR_SCENARIOS: readonly VerificationBehaviorScenario[] = deepFreeze([
   scenario("profile.empty", "profile", "not_required"),
   scenario("profile.mandatory", "profile", "gate_enforced"),
   scenario("command.completed", "command_check", "completed"),
