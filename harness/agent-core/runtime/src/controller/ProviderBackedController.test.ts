@@ -15,7 +15,7 @@ import {
   createInMemoryModelContinuationStore,
   ModelContinuationLifecycle,
 } from "@agent-anything/model-interaction/continuation";
-import type { Agent } from "@agent-anything/agent-core/agent";
+import { createAgentInstructions, type Agent } from "@agent-anything/agent-core/agent";
 import { snapshotContextProjection } from "@agent-anything/context/projection";
 import {
   createRunCancellationController,
@@ -1335,9 +1335,9 @@ function testPermissionProjection() {
 function createAgent(): Agent<TestOutput> {
   return {
     id: "agent_001",
+    revision: "1",
     name: "Test Agent",
-    instructions: "Complete the test task.",
-    tools: [],
+    instructions: testAgentInstructions("agent_001"),
     output: {
       validate(candidate) {
         if (
@@ -1357,6 +1357,20 @@ function createAgent(): Agent<TestOutput> {
     },
     metadata: {},
   };
+}
+
+function testAgentInstructions(agentId: string) {
+  return createAgentInstructions({
+    id: `${agentId}.instructions`,
+    release: { id: `${agentId}.release`, revision: "1" },
+    model: { providerId: "test-provider", modelId: "test-model" },
+    resolverRevision: "test-resolver.v1",
+    blocks: [{
+      id: "behavior",
+      source: { owner: "test", kind: "instruction_source", id: `${agentId}.behavior`, revision: "1" },
+      content: "Complete the test task.",
+    }],
+  });
 }
 
 function createTask(): AgentTask {

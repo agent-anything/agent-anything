@@ -60,5 +60,8 @@
   "private": true,
   "dependencies": {
     "@agent-anything/workspace": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1"
   }
 }

@@ -19,7 +19,11 @@ import {
   parseHelarcProviderResponse,
   type HelarcAgentOutput,
 } from "../controller/HelarcController.js";
-import { createHelarcAgent } from "../agent/HelarcAgent.js";
+import {
+  createHelarcAgent,
+  createHelarcDelegatedWorkerAgent,
+} from "../agent/HelarcAgent.js";
+import type { HelarcMainInstructionTarget } from "../instructions/index.js";
 import { createHelarcDescendantAgentContribution } from "../agent/HelarcDescendantAgent.js";
 import { HELARC_ACTION_CONTRACT_VERSION } from "../prompt/HelarcPromptAssembly.js";
 import {
@@ -75,6 +79,7 @@ export interface CreateHelarcProductCompositionInput {
   readonly task: AgentTask<HelarcTaskInput>;
   readonly workspace: WorkspaceSelection;
   readonly provider: Provider;
+  readonly instructionTarget: HelarcMainInstructionTarget;
   readonly codeSource: CodeSourcePort;
   readonly fileActions: HelarcFileActionContribution;
   readonly commandActions: HelarcCommandActionContribution;
@@ -85,6 +90,7 @@ export interface CreateHelarcProductCompositionInput {
 
 export interface HelarcProductComposition {
   readonly agent: Agent<HelarcAgentOutput>;
+  readonly delegatedAgent: Agent<HelarcAgentOutput>;
   readonly controller: Controller<HelarcAgentOutput>;
   readonly actions: Awaited<ReturnType<typeof createHelarcActionComposition>>;
   readonly interactions: InteractionProtocolRegistrySnapshot;
@@ -109,9 +115,19 @@ export async function createHelarcProductComposition(
 ): Promise<HelarcProductComposition> {
   const now = input.now ?? (() => new Date().toISOString());
   const admittedAt = now();
-  const agent = createHelarcAgent();
+  const providerId = input.provider.descriptor.id;
+  const modelId = input.provider.inputAccounting.model;
+  if (providerId !== input.provider.inputAccounting.providerId) {
+    throw new TypeError("Helarc Provider descriptor and Model Input Accounting identities differ.");
+  }
+  const agent = createHelarcAgent({
+    target: input.instructionTarget,
+    providerId,
+    modelId,
+  });
+  const delegatedAgent = createHelarcDelegatedWorkerAgent({ providerId, modelId });
   const clarification = createHelarcClarificationContribution(admittedAt);
-  const descendant = createHelarcDescendantAgentContribution(agent, admittedAt);
+  const descendant = createHelarcDescendantAgentContribution(delegatedAgent, admittedAt);
   const validation = await createHelarcValidationComposition({
     workspace: input.workspace,
     codeSource: input.codeSource,
@@ -188,10 +204,12 @@ export async function createHelarcProductComposition(
   );
   const runMetadata = Object.freeze({
     product: "helarc",
+    instructionTarget: input.instructionTarget,
   });
 
   return Object.freeze({
     agent,
+    delegatedAgent,
     controller: providerController,
     actions,
     interactions,

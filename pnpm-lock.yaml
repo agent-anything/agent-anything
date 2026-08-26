@@ -23,6 +23,10 @@ importers:
       '@agent-anything/workspace':
         specifier: workspace:*
         version: link:../../workspace
+    devDependencies:
+      '@types/node':
+        specifier: ^25.9.1
+        version: 25.9.1
 
   harness/agent-core/runtime:
     dependencies:

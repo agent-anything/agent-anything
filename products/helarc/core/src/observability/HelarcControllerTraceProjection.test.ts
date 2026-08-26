@@ -9,6 +9,7 @@ import {
 import { createControllerTurnTraceOperationId } from "@agent-anything/observability/tracing";
 import type { ControllerCallContext, ControllerDecision, ControllerInput } from "@agent-anything/agent-runtime/controller";
 import { createRunCancellationController } from "@agent-anything/agent-runtime/run";
+import { createAgentInstructions } from "@agent-anything/agent-core/agent";
 import { describe, expect, it } from "vitest";
 import {
   HelarcTracingController,
@@ -182,9 +183,9 @@ function createControllerInput(): ControllerInput {
     iteration: 1,
     agent: {
       id: "helarc",
+      revision: "1",
       name: "Helarc",
-      instructions: "Complete the task.",
-      tools: [],
+      instructions: testAgentInstructions("helarc"),
       output: {
         validate(candidate) {
           return { valid: true, output: candidate };
@@ -224,6 +225,20 @@ function createControllerInput(): ControllerInput {
     },
     metadata: {},
   };
+}
+
+function testAgentInstructions(agentId: string) {
+  return createAgentInstructions({
+    id: `${agentId}.instructions`,
+    release: { id: `${agentId}.release`, revision: "1" },
+    model: { providerId: "test-provider", modelId: "test-model" },
+    resolverRevision: "test-resolver.v1",
+    blocks: [{
+      id: "behavior",
+      source: { owner: "test", kind: "instruction_source", id: `${agentId}.behavior`, revision: "1" },
+      content: "Complete the task.",
+    }],
+  });
 }
 
 function runtimeEvent<TName extends RuntimeEventName>(

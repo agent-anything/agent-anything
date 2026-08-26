@@ -32,10 +32,11 @@ import {
 } from "@agent-anything/evaluation/campaign";
 import type { ProviderCallResult } from "@agent-anything/model-interaction";
 import type { HelarcExactTargetValidationRequirement } from "@agent-anything/helarc/validation";
+import { createHelarcAgent } from "@agent-anything/helarc/agent";
 
 export const HELARC_EVALUATION_TIME = "2026-08-12T00:00:00.000Z";
-export const HELARC_EVALUATION_CORPUS_REVISION = "helarc-delegation-transfer-corpus-v1";
-export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION = "helarc-delegation-transfer-target-v1";
+export const HELARC_EVALUATION_CORPUS_REVISION = "helarc-agent-instructions-corpus-v1";
+export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION = "helarc-agent-instructions-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
@@ -268,6 +269,9 @@ function createObjective(): EvaluationObjective {
   const requirements = [
     requirement("product.revision", "helarc.product"),
     requirement("agent.revision", "helarc.code-agent"),
+    requirement("agent.instructions.release", "helarc.product"),
+    requirement("agent.instructions.resolver", "helarc.product"),
+    requirement("agent.instructions.digest", "helarc.product"),
     requirement("prompt.revision", "helarc.code-agent"),
     requirement("action-contract.revision", "helarc.code-agent"),
     requirement("target-adapter.revision", "evaluation.target"),
@@ -320,18 +324,26 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v9-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v10-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const agent = createHelarcAgent({
+    target: "production",
+    providerId: "helarc-deterministic-scripted-provider",
+    modelId: "fake-model",
+  });
   const unavailableDirtyState = limitation(
     "working_tree_state_not_measured",
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-delegation-transfer-v1",
-    "agent.revision": "helarc-code-agent-validation-completion-v1",
+    "product.revision": "helarc-product-agent-instructions-v1",
+    "agent.revision": agent.revision,
+    "agent.instructions.release": `${agent.instructions.release.id}@${agent.instructions.release.revision}`,
+    "agent.instructions.resolver": agent.instructions.resolverRevision,
+    "agent.instructions.digest": `sha256:${agent.instructions.contentDigest.value}`,
     "prompt.revision": "helarc-prompt-v4",
     "action-contract.revision": "helarc-model-decision-v1",
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-delegation-transfer-v1",
+    "source.revision": "helarc-agent-instructions-v1",
     "provider.revision": "scripted-provider-v1",
     "model.revision": "scripted-controller-output-v1",
     "tool-profile.revision": "delegation-transfer-v1",
@@ -357,7 +369,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
         key: item.key,
         owner: item.owner,
         required: item.required,
-        sourceRevision: "helarc-delegation-transfer-v1",
+        sourceRevision: "helarc-agent-instructions-v1",
         schemaRef: item.schemaRef,
         status: "unavailable" as const,
         representation: null,

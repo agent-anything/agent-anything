@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Agent } from "@agent-anything/agent-core/agent";
+import { createAgentInstructions, type Agent } from "@agent-anything/agent-core/agent";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import {
   createInteractionProtocolRegistrySnapshot,
@@ -389,7 +389,7 @@ function testAgent(): Agent<TestOutput> {
     id: "progress-evaluation-agent",
     revision: "1",
     name: "Progress Evaluation Agent",
-    instructions: "Exercise deterministic Run Progress behavior.",
+    instructions: testAgentInstructions("progress-evaluation-agent"),
     output: {
       validate(candidate) {
         return typeof candidate === "object" && candidate !== null &&
@@ -399,6 +399,20 @@ function testAgent(): Agent<TestOutput> {
       },
     },
     metadata: {},
+  });
+}
+
+function testAgentInstructions(agentId: string) {
+  return createAgentInstructions({
+    id: `${agentId}.instructions`,
+    release: { id: `${agentId}.release`, revision: "1" },
+    model: { providerId: "deterministic-evaluation", modelId: "scripted" },
+    resolverRevision: "test-resolver.v1",
+    blocks: [{
+      id: "behavior",
+      source: { owner: "test-support", kind: "instruction_source", id: `${agentId}.behavior`, revision: "1" },
+      content: "Exercise deterministic Run Progress behavior.",
+    }],
   });
 }
 

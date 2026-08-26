@@ -17,7 +17,10 @@ describe("Helarc public API", () => {
   });
 
   it("exposes focused Product configuration, work-context, run, and composition values", () => {
-    expect(Object.keys(agentApi).sort()).toEqual(["createHelarcAgent"]);
+    expect(Object.keys(agentApi).sort()).toEqual([
+      "createHelarcAgent",
+      "createHelarcDelegatedWorkerAgent",
+    ]);
     expect(Object.keys(configurationApi).sort()).toEqual([
       "createHelarcProviderProfile",
       "createHelarcWorkspaceProfile",

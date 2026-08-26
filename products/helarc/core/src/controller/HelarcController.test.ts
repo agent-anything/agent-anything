@@ -17,6 +17,7 @@ import { createUtf8ModelInputAccounting } from "@agent-anything/model-interactio
 import { createToolCatalogSnapshot, type ToolDescriptorInput } from "@agent-anything/tools/catalog";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
 import { describe, expect, it } from "vitest";
+import { createAgentInstructions } from "@agent-anything/agent-core/agent";
 import {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,
@@ -348,7 +349,7 @@ function createControllerInput(): ControllerInput<HelarcAgentOutput> {
       id: "helarc",
       revision: "1",
       name: "Helarc",
-      instructions: "Complete the code task.",
+      instructions: testAgentInstructions("helarc"),
       output: { validate: (candidate) => ({ valid: true, output: candidate as HelarcAgentOutput }) },
       metadata: {},
     },
@@ -415,6 +416,20 @@ function createControllerInput(): ControllerInput<HelarcAgentOutput> {
     identity: { id: "identity-1", kind: "anonymous", displayName: "Test identity", metadata: {} },
     metadata: {},
   };
+}
+
+function testAgentInstructions(agentId: string) {
+  return createAgentInstructions({
+    id: `${agentId}.instructions`,
+    release: { id: `${agentId}.release`, revision: "1" },
+    model: { providerId: "fake-provider", modelId: "fake-model" },
+    resolverRevision: "test-resolver.v1",
+    blocks: [{
+      id: "behavior",
+      source: { owner: "test", kind: "instruction_source", id: `${agentId}.behavior`, revision: "1" },
+      content: "Complete the code task.",
+    }],
+  });
 }
 
 function tool(name: string, readOnly: boolean): ToolDescriptorInput {

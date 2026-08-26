@@ -224,7 +224,14 @@ const expectedLowerValueExports = {
     "listSelectedWorkspaces",
     "snapshotWorkspaceSelection",
   ],
-  "@agent-anything/agent-core/agent": ["snapshotAgent", "toAgentRevisionRef"],
+  "@agent-anything/agent-core/agent": [
+    "AGENT_INSTRUCTIONS_DIGEST_ALGORITHM",
+    "AGENT_INSTRUCTIONS_SCHEMA_VERSION",
+    "createAgentInstructions",
+    "snapshotAgent",
+    "snapshotAgentInstructions",
+    "toAgentRevisionRef",
+  ],
   "@agent-anything/agent-core/control": [],
   "@agent-anything/agent-core/delegation": [
     "snapshotDelegationOriginCorrelation",
@@ -785,7 +792,10 @@ const expectedValueExports = {
     "HELARC_PRODUCT_ID",
     "helarcProduct",
   ],
-  "@agent-anything/helarc/agent": ["createHelarcAgent"],
+  "@agent-anything/helarc/agent": [
+    "createHelarcAgent",
+    "createHelarcDelegatedWorkerAgent",
+  ],
   "@agent-anything/helarc/task": [
     "DEFAULT_HELARC_TASK_PROMPT_MAX_LENGTH",
     "HELARC_TASK_KIND",

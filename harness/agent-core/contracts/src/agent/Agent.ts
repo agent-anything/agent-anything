@@ -4,8 +4,10 @@ import {
   assertRecord,
   snapshotMetadata,
 } from "../validation.js";
-
-export type AgentInstructions = string;
+import {
+  snapshotAgentInstructions,
+  type AgentInstructions,
+} from "./AgentInstructions.js";
 
 export type AgentOutputValidation<TOutput> =
   | {
@@ -40,9 +42,7 @@ export function snapshotAgent<TOutput>(agent: Agent<TOutput>): Agent<TOutput> {
   assertNonEmpty(agent.id, "Agent.id");
   assertNonEmpty(agent.revision, "Agent.revision");
   assertNonEmpty(agent.name, "Agent.name");
-  if (typeof agent.instructions !== "string") {
-    throw new TypeError("Agent.instructions must be text.");
-  }
+  const instructions = snapshotAgentInstructions(agent.instructions);
   if (!agent.output || typeof agent.output.validate !== "function") {
     throw new TypeError("Agent.output must provide validate().");
   }
@@ -52,7 +52,7 @@ export function snapshotAgent<TOutput>(agent: Agent<TOutput>): Agent<TOutput> {
     id: agent.id,
     revision: agent.revision,
     name: agent.name,
-    instructions: agent.instructions,
+    instructions,
     output: agent.output,
     metadata: snapshotMetadata(agent.metadata),
   });

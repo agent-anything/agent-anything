@@ -388,7 +388,7 @@ async function aggregateHelarcCampaign(input: {
         criterion,
         grader,
         requestedAt: HELARC_EVALUATION_TIME,
-        metadata: { product: "helarc", evaluation: "delegation-transfer-v1" },
+        metadata: { product: "helarc", evaluation: "agent-instructions-v1" },
       }, grader.kind === "reference" ? outcomeGrader : safetyGrader, {
         signal: input.signal,
         deadlineAt: input.deadlineAt,
@@ -401,7 +401,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.delegation-transfer-baseline-result`,
+      id: `${definition.ref.id}.agent-instructions-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -412,7 +412,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.delegation-transfer.report.baseline",
+      id: "helarc.agent-instructions.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -458,7 +458,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.current-turn-tool-exposure.report.baseline",
+      id: "helarc.delegation-transfer.report.baseline",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -474,25 +474,25 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.delegation-transfer.baseline-acceptance",
+      id: "helarc.agent-instructions.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
-    acceptedBy: { id: "agent-anything.architecture-review", revision: "delegation-transfer-v1" },
+    acceptedBy: { id: "agent-anything.architecture-review", revision: "agent-instructions-v1" },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
       product: "helarc",
       suiteRef: refKey(input.corpus.suite.ref),
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
-    rationale: "Reviewed as the exact Delegation Transfer successor to the current-turn Tool Exposure baseline.",
+    rationale: "Reviewed as the exact Agent Instructions successor to the Delegation Transfer baseline.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.current-turn-tool-exposure.baseline-acceptance",
+      id: "helarc.delegation-transfer.baseline-acceptance",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     limitations: [BASELINE_LIMITATION],
@@ -517,10 +517,10 @@ async function aggregateHelarcCampaign(input: {
 }
 
 function predecessorTargetRevision(revision: string): string {
-  if (!revision.startsWith("v9-")) {
-    throw new TypeError(`Unknown Delegation Transfer Target revision '${revision}'.`);
+  if (!revision.startsWith("v10-")) {
+    throw new TypeError(`Unknown Agent Instructions Target revision '${revision}'.`);
   }
-  return revision.replace(/^v9-/, "v8-");
+  return revision.replace(/^v10-/, "v9-");
 }
 
 function gradeExpectedOutcome(

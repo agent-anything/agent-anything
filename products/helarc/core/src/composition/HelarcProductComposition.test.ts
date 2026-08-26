@@ -4,6 +4,7 @@ import type {
   ProviderRequest,
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import { createUtf8ModelInputAccounting } from "@agent-anything/model-interaction/input";
 import { createFailedRunResult } from "@agent-anything/agent-runtime/run";
 import { createActionRegistrationSnapshot } from "@agent-anything/canonical-action/registration";
 import {
@@ -50,6 +51,11 @@ describe("HelarcProductComposition", () => {
       id: "helarc-code-agent",
       name: "Helarc",
     });
+    expect(composition.delegatedAgent).toMatchObject({
+      id: "helarc-delegated-worker",
+      name: "Helarc Delegated Worker",
+    });
+    expect(composition.delegatedAgent.revision).not.toBe(composition.agent.revision);
     expect(composition.runMetadata).toMatchObject({
       product: "helarc",
     });
@@ -222,6 +228,7 @@ function createTask(workspaceRoot: string) {
   });
   if (!result.ok) throw new Error(result.error.message);
   return {
+    instructionTarget: "production" as const,
     task: result.task,
     workspace: {
       primary: {
@@ -347,6 +354,21 @@ function unavailableCodeSource(): CodeSourcePort {
 }
 
 class UnusedProvider implements Provider {
+  readonly inputAccounting = createUtf8ModelInputAccounting({
+    providerId: "unused-provider",
+    model: "unused-model",
+    maximumInputBytes: 4 * 1_024 * 1_024,
+    limitSource: "host_configured",
+    estimator: { id: "unused-provider.utf8-content", revision: "1" },
+    framing: { id: "unused-provider.test-framing", revision: "1" },
+    renderFraming(sections, outputFormat) {
+      return JSON.stringify({
+        messages: sections.map(({ role, content }) => ({ role, content: content.text })),
+        outputFormat,
+      });
+    },
+  });
+
   readonly descriptor = {
     id: "unused-provider",
     name: "Unused provider",
@@ -354,6 +376,7 @@ class UnusedProvider implements Provider {
       supportsToolPlanning: true,
       supportsStructuredOutput: true,
       supportsStreaming: false,
+      modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
     },
     requestRetryScheduler: { kind: "harness" as const },

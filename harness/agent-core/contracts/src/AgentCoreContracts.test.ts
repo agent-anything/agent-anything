@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
+  createAgentInstructions,
   snapshotAgent,
   type Agent,
 } from "./agent/index.js";
@@ -18,7 +19,7 @@ describe("Agent Core contracts", () => {
       id: "agent",
       revision: "1",
       name: "Agent",
-      instructions: "Complete the task.",
+      instructions: createTestInstructions(),
       output: {
         validate(candidate) {
           return typeof candidate === "object" && candidate !== null
@@ -88,4 +89,18 @@ function createWorkspace(id: string) {
     policyRefs: [],
     metadata: {},
   };
+}
+
+function createTestInstructions() {
+  return createAgentInstructions({
+    id: "test.agent.instructions",
+    release: { id: "test.agent.release", revision: "1" },
+    model: { providerId: "test-provider", modelId: "test-model" },
+    resolverRevision: "1",
+    blocks: [{
+      id: "behavior",
+      source: { owner: "test", kind: "instruction_source", id: "test.behavior", revision: "1" },
+      content: "Complete the task.",
+    }],
+  });
 }

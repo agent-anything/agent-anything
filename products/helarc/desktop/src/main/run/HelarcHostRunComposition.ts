@@ -253,6 +253,7 @@ export async function prepareHelarcHostRun(
     task: input.task,
     workspace: runWorkspace,
     provider: input.provider,
+    instructionTarget: "production",
     modelContinuationStore: input.modelContinuationStore,
     codeSource: createLocalCodeSourcePort(now),
     fileActions,

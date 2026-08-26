@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Agent } from "@agent-anything/agent-core/agent";
+import { createAgentInstructions, type Agent } from "@agent-anything/agent-core/agent";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import {
   createInteractionProtocolRegistrySnapshot,
@@ -148,7 +148,7 @@ function createAgent(): Agent<TestOutput> {
     id: "agent-1",
     revision: "1",
     name: "Host Conformance Agent",
-    instructions: "Complete the task.",
+    instructions: testAgentInstructions("agent-1"),
     output: {
       validate(candidate) {
         if (
@@ -160,6 +160,20 @@ function createAgent(): Agent<TestOutput> {
     },
     metadata: {},
   };
+}
+
+function testAgentInstructions(agentId: string) {
+  return createAgentInstructions({
+    id: `${agentId}.instructions`,
+    release: { id: `${agentId}.release`, revision: "1" },
+    model: { providerId: "test-provider", modelId: "test-model" },
+    resolverRevision: "test-resolver.v1",
+    blocks: [{
+      id: "behavior",
+      source: { owner: "test", kind: "instruction_source", id: `${agentId}.behavior`, revision: "1" },
+      content: "Complete the task.",
+    }],
+  });
 }
 
 function createRunInput(): RunInput {

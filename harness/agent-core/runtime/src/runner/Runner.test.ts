@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Agent, AgentRevisionRef } from "@agent-anything/agent-core/agent";
+import {
+  createAgentInstructions,
+  type Agent,
+  type AgentRevisionRef,
+} from "@agent-anything/agent-core/agent";
 import type { RunInput } from "@agent-anything/agent-core/input";
 import {
   createInteractionProtocolRegistrySnapshot,
@@ -3081,7 +3085,7 @@ function createAgent(
     id,
     revision,
     name,
-    instructions: "Complete the task.",
+    instructions: testAgentInstructions(id),
     output: {
       validate(candidate) {
         if (
@@ -3097,6 +3101,20 @@ function createAgent(
     },
     metadata: {},
   };
+}
+
+function testAgentInstructions(agentId: string) {
+  return createAgentInstructions({
+    id: `${agentId}.instructions`,
+    release: { id: `${agentId}.release`, revision: "1" },
+    model: { providerId: "test-provider", modelId: "test-model" },
+    resolverRevision: "test-resolver.v1",
+    blocks: [{
+      id: "behavior",
+      source: { owner: "test", kind: "instruction_source", id: `${agentId}.behavior`, revision: "1" },
+      content: "Complete the task.",
+    }],
+  });
 }
 
 function createRunInput(

@@ -546,6 +546,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     now: clock.now,
   });
   const product = await createHelarcProductComposition({
+    instructionTarget: "production",
     runId: productRunId,
     task: taskResult.task,
     workspace: runContext.workspace,
