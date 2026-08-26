@@ -34,7 +34,7 @@ export type RunProgressFactKind =
   | "tool_rejected"
   | "interaction_settlement"
   | "descendant_settlement"
-  | "validation_feedback"
+  | "verification_feedback"
   | "completion_gate"
   | "evidence_ref"
   | "artifact_ref"
@@ -77,7 +77,7 @@ export interface RunProgressBasisProjection {
   readonly toolSelectionRevision: string;
   readonly permissionFingerprint: string;
   readonly steeringFingerprint: string | null;
-  readonly validationSnapshotRevision: number;
+  readonly verificationSnapshotRevision: number;
 }
 
 export interface RunProgressBasis {

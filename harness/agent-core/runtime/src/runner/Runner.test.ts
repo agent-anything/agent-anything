@@ -64,25 +64,25 @@ import type { ActionExecutionNotification } from "@agent-anything/action-executi
 import { createAllowAllActionPolicyPort } from "@agent-anything/governance/policy";
 import {
   createTestContextProjection,
-  createTestValidationExecutionFactory,
+  createTestVerificationExecutionFactory,
 } from "@agent-anything/test-support";
 import {
-  CurrentValidationCompletionGate,
+  CurrentVerificationCompletionGate,
   type CompletionGateInput,
   type CompletionGatePort,
-} from "@agent-anything/validation/completion";
+} from "@agent-anything/verification/completion";
 import {
-  createValidationFailure,
-  type ValidationOwnerRef,
-} from "@agent-anything/validation/definition";
+  createVerificationFailure,
+  type VerificationOwnerRef,
+} from "@agent-anything/verification/definition";
 import {
-  DefaultValidationExecutionFactory,
+  DefaultVerificationExecutionFactory,
   type CheckDefinition,
   type CheckResult,
-  type ValidationCheckInterpretation,
-  type ValidationExecutionPort,
-} from "@agent-anything/validation/execution";
-import type { ValidationSubjectSnapshot } from "@agent-anything/validation/subject";
+  type VerificationCheckInterpretation,
+  type VerificationExecutionPort,
+} from "@agent-anything/verification/execution";
+import type { VerificationSubjectSnapshot } from "@agent-anything/verification/subject";
 import type {
   Controller,
   ControllerCallContext,
@@ -155,9 +155,9 @@ describe("Runner semantic integration", () => {
       finalOutput: { summary: "Done" },
     });
     expect(result.items.map(({ payload }) => payload.kind)).toEqual([
-      "validation_feedback",
+      "verification_feedback",
       "controller_turn",
-      "validation_feedback",
+      "verification_feedback",
       "terminal_transition",
     ]);
     expect(result.items.map(({ ref }) => ref.sequence)).toEqual([1, 2, 3, 4]);
@@ -248,16 +248,16 @@ describe("Runner semantic integration", () => {
     ).run(
       createAgent(),
       createRunInput(),
-      createRunConfig(operations, { validation: createMandatoryValidationConfig("block") }),
+      createRunConfig(operations, { verification: createMandatoryVerificationConfig("block") }),
     );
 
     expect(result, JSON.stringify(result, null, 2)).toMatchObject({
       status: "blocked",
-      code: "validation_blocked",
+      code: "verification_blocked",
     });
-    expect(result.items.some((item) => item.payload.kind === "validation_feedback")).toBe(true);
+    expect(result.items.some((item) => item.payload.kind === "verification_feedback")).toBe(true);
     expect(events).toContainEqual(expect.objectContaining({
-      name: "validation.gate.evaluated",
+      name: "verification.gate.evaluated",
       payload: expect.objectContaining({ status: "blocked_unassessed", disposition: "block" }),
     }));
   });
@@ -265,18 +265,18 @@ describe("Runner semantic integration", () => {
   it("satisfies a mandatory Requirement through a pure automatic Check without fabricating action state", async () => {
     const operations = createOperationFixture([]);
     const events: RuntimeEvent[] = [];
-    const validation = createValidationScenario({ kind: "pure_automatic" });
+    const verification = createVerificationScenario({ kind: "pure_automatic" });
     const result = await createRunner(
       new ScriptedController([complete("Validated")]),
       operations,
       {
-        validation,
+        verification,
         runtimeEventPublisher: { publish: (event) => events.push(event) },
       },
     ).run(
       createAgent(),
       createRunInput(),
-      createRunConfig(operations, { validation: createMandatoryValidationConfig("block") }),
+      createRunConfig(operations, { verification: createMandatoryVerificationConfig("block") }),
     );
 
     expect(result.status).toBe("succeeded");
@@ -287,16 +287,16 @@ describe("Runner semantic integration", () => {
       payload.kind === "terminal_transition" && payload.status === "succeeded"))
       .toHaveLength(1);
     expect(events.map(({ name }) => name)).toEqual(expect.arrayContaining([
-      "validation.check.started",
-      "validation.check.finished",
-      "validation.assessment.committed",
-      "validation.gate.evaluated",
+      "verification.check.started",
+      "verification.check.finished",
+      "verification.assessment.committed",
+      "verification.gate.evaluated",
     ]));
   });
 
   it("routes a trusted automatic effectful Check through one ordinary Operation RunAction", async () => {
-    const operation = operationRef("validation-check");
-    const actionExecution = createValidationActionExecutionFixture(operation);
+    const operation = operationRef("verification-check");
+    const actionExecution = createVerificationActionExecutionFixture(operation);
     const operations = createOperationFixture([
       operationSpec(operation, "direct", {
         requestOrigins: ["automatic_stage"],
@@ -306,13 +306,13 @@ describe("Runner semantic integration", () => {
     const result = await createRunner(
       new ScriptedController([complete("Validated")]),
       operations,
-      { validation: createValidationScenario({ kind: "effectful_automatic", operation }) },
+      { verification: createVerificationScenario({ kind: "effectful_automatic", operation }) },
     ).run(
       createAgent(),
       createRunInput(),
       createRunConfig(operations, {
-        actionExecution: createValidationActionExecutionConfig(),
-        validation: createMandatoryValidationConfig("block"),
+        actionExecution: createVerificationActionExecutionConfig(),
+        verification: createMandatoryVerificationConfig("block"),
       }),
     );
 
@@ -331,8 +331,8 @@ describe("Runner semantic integration", () => {
   });
 
   it("interprets one settled Controller Operation as a Check without replaying its effect", async () => {
-    const operation = operationRef("controller-validation-check");
-    const actionExecution = createValidationActionExecutionFixture(operation);
+    const operation = operationRef("controller-verification-check");
+    const actionExecution = createVerificationActionExecutionFixture(operation);
     const operations = createOperationFixture([
       operationSpec(operation, "direct", {
         requestOrigins: ["controller_protocol"],
@@ -345,14 +345,14 @@ describe("Runner semantic integration", () => {
       complete("The admitted check supports completion.", "model_complete"),
     ]);
     const result = await createRunner(controller, operations, {
-      validation: createValidationScenario({ kind: "controller", operation }),
+      verification: createVerificationScenario({ kind: "controller", operation }),
       runtimeEventPublisher: { publish: (event) => events.push(event) },
     }).run(
       createAgent(),
       createRunInput(),
       createRunConfig(operations, {
-        actionExecution: createValidationActionExecutionConfig(),
-        validation: createMandatoryValidationConfig("block"),
+        actionExecution: createVerificationActionExecutionConfig(),
+        verification: createMandatoryVerificationConfig("block"),
       }),
     );
 
@@ -370,11 +370,11 @@ describe("Runner semantic integration", () => {
     expect(observations(result).filter(({ payload }) => payload.kind === "operation"))
       .toHaveLength(1);
     expect(events).toContainEqual(expect.objectContaining({
-      name: "validation.check.started",
+      name: "verification.check.started",
       payload: expect.objectContaining({ origin: "controller" }),
     }));
     expect(events).toContainEqual(expect.objectContaining({
-      name: "validation.gate.evaluated",
+      name: "verification.gate.evaluated",
       payload: expect.objectContaining({ status: "completion_eligible" }),
     }));
   });
@@ -386,18 +386,18 @@ describe("Runner semantic integration", () => {
       new ScriptedController([complete("Stale completion")]),
       operations,
       {
-        validation: createValidationScenario({ kind: "pure_automatic", stale: true }),
+        verification: createVerificationScenario({ kind: "pure_automatic", stale: true }),
         runtimeEventPublisher: { publish: (event) => events.push(event) },
       },
     ).run(
       createAgent(),
       createRunInput(),
-      createRunConfig(operations, { validation: createMandatoryValidationConfig("block") }),
+      createRunConfig(operations, { verification: createMandatoryVerificationConfig("block") }),
     );
 
-    expect(result).toMatchObject({ status: "blocked", code: "validation_blocked" });
+    expect(result).toMatchObject({ status: "blocked", code: "verification_blocked" });
     expect(events).toContainEqual(expect.objectContaining({
-      name: "validation.gate.evaluated",
+      name: "verification.gate.evaluated",
       payload: expect.objectContaining({ status: "blocked_stale", disposition: "block" }),
     }));
   });
@@ -408,11 +408,11 @@ describe("Runner semantic integration", () => {
       async evaluate(input) {
         return {
           invocation: input.invocation,
-          validationSnapshot: input.validationSnapshot,
+          verificationSnapshot: input.verificationSnapshot,
           status: "blocked_unassessed",
           disposition: "continue",
           reasons: [{
-            owner: "validation",
+            owner: "verification",
             code: "completion_not_yet_established",
             message: "Completion is not yet established.",
             requirement: null,
@@ -435,8 +435,8 @@ describe("Runner semantic integration", () => {
       },
     ]);
     const result = await createRunner(controller, operations, {
-      validation: {
-        executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
+      verification: {
+        executionFactory: createTestVerificationExecutionFactory({ now: () => NOW }),
         completionGate: gate,
         preparation: null,
         settledOperationResults: null,
@@ -459,7 +459,7 @@ describe("Runner semantic integration", () => {
 
     expect(result).toMatchObject({ status: "blocked", code: "runtime_no_progress" });
     expect(controller.calls).toHaveLength(3);
-    expect(result.items.filter(({ payload }) => payload.kind === "validation_feedback"))
+    expect(result.items.filter(({ payload }) => payload.kind === "verification_feedback"))
       .toHaveLength(4);
     expect(result.items.at(-1)?.payload).toMatchObject({
       kind: "terminal_transition",
@@ -468,18 +468,18 @@ describe("Runner semantic integration", () => {
     });
   });
 
-  it("preserves a nested Validation Failure when Completion Gate execution fails", async () => {
+  it("preserves a nested Verification Failure when Completion Gate execution fails", async () => {
     const operations = createOperationFixture([]);
     const gate: CompletionGatePort = {
       async evaluate(input) {
         return {
           invocation: input.invocation,
-          validationSnapshot: input.validationSnapshot,
+          verificationSnapshot: input.verificationSnapshot,
           status: "invalid",
           disposition: "fail",
           reasons: [],
-          failure: createValidationFailure({
-            code: "validation_gate_provider_failed",
+          failure: createVerificationFailure({
+            code: "verification_gate_provider_failed",
             stage: "completion_gate",
             message: "Gate policy owner failed.",
             retryable: true,
@@ -493,8 +493,8 @@ describe("Runner semantic integration", () => {
       new ScriptedController([complete("Done")]),
       operations,
       {
-        validation: {
-          executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
+        verification: {
+          executionFactory: createTestVerificationExecutionFactory({ now: () => NOW }),
           completionGate: gate,
           preparation: null,
           settledOperationResults: null,
@@ -505,10 +505,10 @@ describe("Runner semantic integration", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      code: "validation_failed",
+      code: "verification_failed",
       failure: {
-        kind: "validation",
-        failure: { code: "validation_gate_provider_failed", stage: "completion_gate" },
+        kind: "verification",
+        failure: { code: "verification_gate_provider_failed", stage: "completion_gate" },
       },
     });
   });
@@ -528,8 +528,8 @@ describe("Runner semantic integration", () => {
       new ScriptedController([complete("Late completion")]),
       operations,
       {
-        validation: {
-          executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
+        verification: {
+          executionFactory: createTestVerificationExecutionFactory({ now: () => NOW }),
           completionGate: gate,
           preparation: null,
           settledOperationResults: null,
@@ -573,8 +573,8 @@ describe("Runner semantic integration", () => {
       ]),
       operations,
       {
-        validation: {
-          executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
+        verification: {
+          executionFactory: createTestVerificationExecutionFactory({ now: () => NOW }),
           completionGate: gate,
           preparation: null,
           settledOperationResults: null,
@@ -600,7 +600,7 @@ describe("Runner semantic integration", () => {
       finalOutput: { summary: "Fresh completion" },
     });
     expect(gateCalls).toBe(2);
-    expect(events.filter((event) => event.name === "validation.gate.evaluated"))
+    expect(events.filter((event) => event.name === "verification.gate.evaluated"))
       .toHaveLength(2);
   });
 
@@ -1469,21 +1469,21 @@ describe("Runner semantic integration", () => {
 
   it("inherits the root invocation Action observer into descendant execution", async () => {
     const childAgent = createAgent("agent_child", "1", "Child Agent");
-    const validationOperation = operationRef("validation-check");
-    const actionExecution = createValidationActionExecutionFixture(validationOperation);
+    const verificationOperation = operationRef("verification-check");
+    const actionExecution = createVerificationActionExecutionFixture(verificationOperation);
     let operations!: OperationFixture;
     let rootTools!: RunConfig["tools"];
     const controller = new ScriptedController([
       (input) => advance([toolCandidate(
         "Agent",
-        { prompt: "Delegate validation." },
+        { prompt: "Delegate verification." },
         input.toolExposure.controllerRequestId,
       )], "model_tool_1"),
       complete("Child complete", "model_child_complete"),
       complete("Root complete", "model_root_complete"),
     ]);
     operations = createOperationFixture([
-      operationSpec(validationOperation, "direct", {
+      operationSpec(verificationOperation, "direct", {
         requestOrigins: ["automatic_stage"],
         actionAdapterId: actionExecution.adapterId,
       }),
@@ -1499,17 +1499,17 @@ describe("Runner semantic integration", () => {
     const notifications: ActionExecutionNotification[] = [];
 
     const result = await createRunner(controller, operations, {
-      validation: createValidationScenario({
+      verification: createVerificationScenario({
         kind: "effectful_automatic",
-        operation: validationOperation,
+        operation: verificationOperation,
       }),
     }).run(
       createAgent(),
       createRunInput(),
       createRunConfig(operations, {
         tools: rootTools,
-        actionExecution: createValidationActionExecutionConfig(),
-        validation: createMandatoryValidationConfig("block"),
+        actionExecution: createVerificationActionExecutionConfig(),
+        verification: createMandatoryVerificationConfig("block"),
       }),
       {
         actionExecutionObserver: {
@@ -2003,7 +2003,7 @@ describe("Runner semantic integration", () => {
 
   it("lets unknown operation effect outrank no-progress termination while correction is active", async () => {
     const operation = operationRef("unknown-effect-after-correction");
-    const actionExecution = createValidationActionExecutionFixture(operation, {
+    const actionExecution = createVerificationActionExecutionFixture(operation, {
       status: "failed",
       effectState: "unknown",
       failure: {
@@ -2043,7 +2043,7 @@ describe("Runner semantic integration", () => {
       createAgent(),
       createRunInput(),
       createRunConfig(operations, {
-        actionExecution: createValidationActionExecutionConfig(),
+        actionExecution: createVerificationActionExecutionConfig(),
         limits: {
           progress: {
             checkpointWindowSize: 3,
@@ -2884,7 +2884,7 @@ function testDelegationResultRef(
   return Object.freeze({ id: ref.id, revision: ref.revision });
 }
 
-function createValidationActionExecutionFixture(
+function createVerificationActionExecutionFixture(
   operation: OperationRevisionRef,
   physicalOutcome: PhysicalAttemptOutcome<{ passed: boolean }> = {
     status: "completed",
@@ -2954,12 +2954,12 @@ function createValidationActionExecutionFixture(
             payload: { target: "D:/workspace/README.md" },
           },
           replayBasis: "none",
-          semanticBasis: { operation: "validation-read" },
+          semanticBasis: { operation: "verification-read" },
         }),
       };
     },
     async revalidate() {
-      return { status: "valid" as const, recordId: "validation-revalidation-1" };
+      return { status: "valid" as const, recordId: "verification-revalidation-1" };
     },
     async settle(_prepared, settlement) {
       const succeeded = settlement.status === "succeeded";
@@ -3001,15 +3001,15 @@ function createValidationActionExecutionFixture(
     }),
     records: {
       async recordPreEffect() {
-        return { recordId: "validation-pre-effect-1" };
+        return { recordId: "verification-pre-effect-1" };
       },
       async recordPostEffect() {
-        return { recordId: "validation-post-effect-1" };
+        return { recordId: "verification-post-effect-1" };
       },
     },
     retry: {
       async decide() {
-        return { status: "stop" as const, code: "validation_action_retry_disabled" };
+        return { status: "stop" as const, code: "verification_action_retry_disabled" };
       },
       async wait() {
         return "elapsed" as const;
@@ -3020,7 +3020,7 @@ function createValidationActionExecutionFixture(
   return Object.freeze({ adapterId: adapterDescriptor.id, dependencies, execute });
 }
 
-function createValidationActionExecutionConfig(): NonNullable<RunConfig["actionExecution"]> {
+function createVerificationActionExecutionConfig(): NonNullable<RunConfig["actionExecution"]> {
   return Object.freeze({
     policySnapshotId: "policy-1",
     securityContext: Object.freeze({
@@ -3186,7 +3186,7 @@ function createRunner(
     controller,
     contextProjection: createTestContextProjection(),
     operations,
-    validation: createTestValidationComposition(),
+    verification: createTestVerificationComposition(),
     interactions: createInteractionProtocolRegistrySnapshot("interaction-registry-1", []),
     now: () => NOW,
     createRunId: () => `run_${String(++runSequence).padStart(3, "0")}`,
@@ -3264,7 +3264,7 @@ function createRunConfig(
   overrides: {
     readonly tools?: RunConfig["tools"];
     readonly actionExecution?: RunConfig["actionExecution"];
-    readonly validation?: RunConfig["validation"];
+    readonly verification?: RunConfig["verification"];
     readonly limits?: Partial<Omit<RunConfig["limits"], "plan">>;
     readonly runTreeLimits?: Partial<RootRunConfig["runTreeLimits"]>;
   } = {},
@@ -3291,7 +3291,7 @@ function createRunConfig(
     permissions: createTestPermissionConfig(),
     tools: overrides.tools ?? emptyToolSelection(operations),
     actionExecution: overrides.actionExecution ?? null,
-    validation: overrides.validation ?? createTestValidationConfig(),
+    verification: overrides.verification ?? createTestVerificationConfig(),
     limits: {
       maxIterations: 12,
       maxActions: 24,
@@ -3333,20 +3333,20 @@ function createRunConfig(
   };
 }
 
-function createTestValidationComposition(): RunnerDependencies["validation"] {
+function createTestVerificationComposition(): RunnerDependencies["verification"] {
   return Object.freeze({
-    executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
-    completionGate: new CurrentValidationCompletionGate(() => NOW),
+    executionFactory: createTestVerificationExecutionFactory({ now: () => NOW }),
+    completionGate: new CurrentVerificationCompletionGate(() => NOW),
     preparation: null,
     settledOperationResults: null,
     checkResults: null,
   });
 }
 
-function createTestValidationConfig(): RunConfig["validation"] {
+function createTestVerificationConfig(): RunConfig["verification"] {
   const owner = (id: string) => Object.freeze({
     owner: "test-runtime",
-    kind: "validation",
+    kind: "verification",
     id,
     revision: "1",
   });
@@ -3362,7 +3362,7 @@ function createTestValidationConfig(): RunConfig["validation"] {
       requirements: Object.freeze([]),
     }),
     completion: Object.freeze({
-      policy: owner("current-validation-gate"),
+      policy: owner("current-verification-gate"),
       outputContract: owner("test-output-contract"),
       conditions: Object.freeze([]),
       maximumDurationMs: 1_000,
@@ -3370,13 +3370,13 @@ function createTestValidationConfig(): RunConfig["validation"] {
   });
 }
 
-function createMandatoryValidationConfig(
+function createMandatoryVerificationConfig(
   disposition: "continue" | "wait" | "block" | "fail",
-): RunConfig["validation"] {
-  const base = createTestValidationConfig();
+): RunConfig["verification"] {
+  const base = createTestVerificationConfig();
   const source = Object.freeze({
     owner: "test-runtime",
-    kind: "validation",
+    kind: "verification",
     id: "mandatory-source",
     revision: "1",
     sourceKind: "run_invocation" as const,
@@ -3392,7 +3392,7 @@ function createMandatoryValidationConfig(
         ref: Object.freeze({ id: "mandatory-requirement", revision: "1" }),
         source,
         kind: "test",
-        claim: "The required Validation claim is satisfied.",
+        claim: "The required Verification claim is satisfied.",
         purpose: "Protect successful completion.",
         necessity: "mandatory" as const,
         subjectKinds: Object.freeze(["test_subject"]),
@@ -3421,22 +3421,22 @@ function createMandatoryValidationConfig(
   });
 }
 
-type ValidationScenario =
+type VerificationScenario =
   | { readonly kind: "pure_automatic"; readonly stale?: boolean }
   | { readonly kind: "effectful_automatic"; readonly operation: OperationRevisionRef }
   | { readonly kind: "controller"; readonly operation: OperationRevisionRef };
 
-function createValidationScenario(input: ValidationScenario): RunnerDependencies["validation"] {
+function createVerificationScenario(input: VerificationScenario): RunnerDependencies["verification"] {
   const requirement = Object.freeze({ id: "mandatory-requirement", revision: "1" });
-  const subjectRef = Object.freeze({ id: "validation-subject", revision: "1" });
-  const adapter = validationOwner("validation-subject-adapter", "subject_adapter");
-  const evaluator = validationOwner("validation-pure-evaluator", "check_evaluator");
-  const interpreter = validationOwner("validation-result-interpreter", "result_interpreter");
-  const assessmentMethod = validationOwner("test-method", "assessment_method");
-  const definition = validationScenarioDefinition(input, evaluator, interpreter);
+  const subjectRef = Object.freeze({ id: "verification-subject", revision: "1" });
+  const adapter = verificationOwner("verification-subject-adapter", "subject_adapter");
+  const evaluator = verificationOwner("verification-pure-evaluator", "check_evaluator");
+  const interpreter = verificationOwner("verification-result-interpreter", "result_interpreter");
+  const assessmentMethod = verificationOwner("test-method", "assessment_method");
+  const definition = verificationScenarioDefinition(input, evaluator, interpreter);
   let identitySequence = 0;
-  let capturedSubject: ValidationSubjectSnapshot | null = null;
-  const executionFactory = new DefaultValidationExecutionFactory({
+  let capturedSubject: VerificationSubjectSnapshot | null = null;
+  const executionFactory = new DefaultVerificationExecutionFactory({
     clock: { now: () => NOW },
     identities: { nextId: (kind) => `${kind}-${++identitySequence}` },
     subjectAdapters: {
@@ -3449,18 +3449,18 @@ function createValidationScenario(input: ValidationScenario): RunnerDependencies
             run,
             owner: "test-runtime",
             kind: "test_subject",
-            stateRefs: Object.freeze([validationOwner("mandatory-source")]),
+            stateRefs: Object.freeze([verificationOwner("mandatory-source")]),
             capturedAt: NOW,
             environment: null,
             scope: Object.freeze([{ key: "workspace", value: "workspace_001" }]),
             coverage: Object.freeze({ kind: "complete" as const, ratio: 1 }),
             fingerprint: Object.freeze({
               algorithm: "sha256",
-              value: "validation-subject-v1",
+              value: "verification-subject-v1",
               basis: "test workspace state",
             }),
             sensitivity: "internal" as const,
-            audiences: Object.freeze(["validation"]),
+            audiences: Object.freeze(["verification"]),
             adapter,
           });
           return { status: "captured" as const, snapshot: capturedSubject };
@@ -3469,10 +3469,10 @@ function createValidationScenario(input: ValidationScenario): RunnerDependencies
           return capturedSubject === null
             ? {
                 status: "unavailable" as const,
-                failure: createValidationFailure({
-                  code: "validation_subject_not_captured",
+                failure: createVerificationFailure({
+                  code: "verification_subject_not_captured",
                   stage: "subject",
-                  message: "Validation subject has not been captured.",
+                  message: "Verification subject has not been captured.",
                   retryable: false,
                   cause: adapter,
                 }),
@@ -3487,21 +3487,21 @@ function createValidationScenario(input: ValidationScenario): RunnerDependencies
           ? {
               status: "stale" as const,
               snapshot: subjectRef,
-              current: Object.freeze({ id: "validation-subject", revision: "2" }),
-              change: validationOwner("workspace-change", "subject_change"),
+              current: Object.freeze({ id: "verification-subject", revision: "2" }),
+              change: verificationOwner("workspace-change", "subject_change"),
             }
           : { status: "current" as const, snapshot: subjectRef },
       }),
     },
     pureChecks: {
       resolve: (ref) => ref.id === evaluator.id ? {
-        evaluate: async () => completedValidationInterpretation(),
+        evaluate: async () => completedVerificationInterpretation(),
       } : null,
     },
     operationChecks: { resolve: () => null },
     interpreters: {
       resolve: (ref) => ref.id === interpreter.id ? {
-        interpret: async () => completedValidationInterpretation(),
+        interpret: async () => completedVerificationInterpretation(),
       } : null,
     },
     assessmentMethods: {
@@ -3515,9 +3515,9 @@ function createValidationScenario(input: ValidationScenario): RunnerDependencies
       } : null,
     },
   });
-  const composition: RunnerDependencies["validation"] = {
+  const composition: RunnerDependencies["verification"] = {
     executionFactory,
-    completionGate: new CurrentValidationCompletionGate(() => NOW),
+    completionGate: new CurrentVerificationCompletionGate(() => NOW),
     settledOperationResults: null,
     checkResults: null,
     preparation: {
@@ -3526,12 +3526,12 @@ function createValidationScenario(input: ValidationScenario): RunnerDependencies
           requirement,
           adapter,
           kind: "test_subject",
-          requestedSource: validationOwner("mandatory-source"),
-          expectedRevision: await validationRevision(execution),
+          requestedSource: verificationOwner("mandatory-source"),
+          expectedRevision: await verificationRevision(execution),
         }, interruption);
         await execution.admitCheckDefinition({
           definition,
-          expectedRevision: await validationRevision(execution),
+          expectedRevision: await verificationRevision(execution),
         }, interruption);
         if (input.kind === "controller") return;
         const checkRequest = {
@@ -3549,14 +3549,14 @@ function createValidationScenario(input: ValidationScenario): RunnerDependencies
               ...checkRequest,
               origin: "trusted_automatic",
               runAction: null,
-              expectedRevision: await validationRevision(execution),
+              expectedRevision: await verificationRevision(execution),
             }, interruption);
-        await admitValidationResultAndAssess(execution, result, interruption);
+        await admitVerificationResultAndAssess(execution, result, interruption);
         if (input.kind === "pure_automatic" && input.stale === true) {
           await execution.checkSubjectFreshness({
             requirement,
             snapshot: subjectRef,
-            expectedRevision: await validationRevision(execution),
+            expectedRevision: await verificationRevision(execution),
           }, interruption);
         }
       },
@@ -3583,11 +3583,11 @@ function createValidationScenario(input: ValidationScenario): RunnerDependencies
                 ...request,
                 origin: "controller" as const,
                 runAction: settled.runAction,
-                expectedRevision: await validationRevision(settled.execution),
+                expectedRevision: await verificationRevision(settled.execution),
               }),
               settlement: settled.settlement,
             }, interruption);
-            await admitValidationResultAndAssess(
+            await admitVerificationResultAndAssess(
               settled.execution,
               result,
               interruption,
@@ -3598,13 +3598,13 @@ function createValidationScenario(input: ValidationScenario): RunnerDependencies
       });
 }
 
-function validationScenarioDefinition(
-  input: ValidationScenario,
-  evaluator: ValidationOwnerRef,
-  interpreter: ValidationOwnerRef,
+function verificationScenarioDefinition(
+  input: VerificationScenario,
+  evaluator: VerificationOwnerRef,
+  interpreter: VerificationOwnerRef,
 ): CheckDefinition {
   return Object.freeze({
-    ref: Object.freeze({ id: "validation-check", revision: "1" }),
+    ref: Object.freeze({ id: "verification-check", revision: "1" }),
     owner: "test-runtime",
     family: "test_check",
     requirementKinds: Object.freeze(["test"]),
@@ -3632,15 +3632,15 @@ function validationScenarioDefinition(
   });
 }
 
-function completedValidationInterpretation(): ValidationCheckInterpretation {
+function completedVerificationInterpretation(): VerificationCheckInterpretation {
   return Object.freeze({
     status: "completed",
     findings: Object.freeze([Object.freeze({
       owner: "test-runtime",
-      claim: "The required Validation Check completed successfully.",
+      claim: "The required Verification Check completed successfully.",
       polarity: "supports" as const,
       severity: "info" as const,
-      sourceRefs: Object.freeze([validationOwner("check-output", "check_output")]),
+      sourceRefs: Object.freeze([verificationOwner("check-output", "check_output")]),
       limitations: Object.freeze([]),
     })]),
     coverage: Object.freeze({ ratio: 1, basis: "complete test Check" }),
@@ -3650,17 +3650,17 @@ function completedValidationInterpretation(): ValidationCheckInterpretation {
   });
 }
 
-async function admitValidationResultAndAssess(
-  execution: ValidationExecutionPort,
+async function admitVerificationResultAndAssess(
+  execution: VerificationExecutionPort,
   result: CheckResult,
   interruption: import("@agent-anything/agent-core/control").InvocationInterruptionContext,
 ): Promise<void> {
   if (result.status !== "completed" && result.status !== "partial") {
-    throw new Error(`Test Validation Check did not produce eligible Evidence: ${JSON.stringify(result)}`);
+    throw new Error(`Test Verification Check did not produce eligible Evidence: ${JSON.stringify(result)}`);
   }
   const requirement = Object.freeze({ id: "mandatory-requirement", revision: "1" });
-  const subject = Object.freeze({ id: "validation-subject", revision: "1" });
-  const evidence = Object.freeze({ id: "validation-evidence", revision: "1" });
+  const subject = Object.freeze({ id: "verification-subject", revision: "1" });
+  const evidence = Object.freeze({ id: "verification-evidence", revision: "1" });
   await execution.admitEvidence({
     evidence: Object.freeze({
       ref: evidence,
@@ -3670,25 +3670,25 @@ async function admitValidationResultAndAssess(
       admission: Object.freeze({ status: "admitted" as const, failure: null }),
       coverage: result.coverage,
       sensitivity: "internal" as const,
-      audiences: Object.freeze(["validation"]),
+      audiences: Object.freeze(["verification"]),
       limitations: result.limitations,
       createdAt: NOW,
     }),
-    expectedRevision: await validationRevision(execution),
+    expectedRevision: await verificationRevision(execution),
   }, interruption);
   await execution.assessRequirement({
     requirement,
     subject,
     evidenceRefs: Object.freeze([evidence]),
-    expectedRevision: await validationRevision(execution),
+    expectedRevision: await verificationRevision(execution),
   }, interruption);
 }
 
-async function validationRevision(execution: ValidationExecutionPort): Promise<number> {
+async function verificationRevision(execution: VerificationExecutionPort): Promise<number> {
   return (await execution.readCurrentSnapshot()).ref.revision;
 }
 
-function validationOwner(id: string, kind = "validation"): ValidationOwnerRef {
+function verificationOwner(id: string, kind = "verification"): VerificationOwnerRef {
   return Object.freeze({ owner: "test-runtime", kind, id, revision: "1" });
 }
 
@@ -3941,7 +3941,7 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
 function eligibleGateDecision(input: CompletionGateInput) {
   return Object.freeze({
     invocation: input.invocation,
-    validationSnapshot: input.validationSnapshot,
+    verificationSnapshot: input.verificationSnapshot,
     status: "completion_eligible" as const,
     disposition: null,
     reasons: Object.freeze([]) as readonly [],

@@ -54,7 +54,7 @@ describe("Helarc baseline Tool Contracts", () => {
       required: ["command"],
       properties: {
         run_in_background: { type: "boolean" },
-        validation_claim: { type: "string" },
+        verification_claim: { type: "string" },
       },
     });
     expect(findHelarcBaselineToolContract("TaskStop").binding).toMatchObject({

@@ -90,16 +90,16 @@ const focusedPublicSubpaths = new Map([
     ]),
   ],
   [
-    "@agent-anything/validation",
+    "@agent-anything/verification",
     new Set([
-      "@agent-anything/validation/assessment",
-      "@agent-anything/validation/completion",
-      "@agent-anything/validation/definition",
-      "@agent-anything/validation/evidence",
-      "@agent-anything/validation/execution",
-      "@agent-anything/validation/persistence",
-      "@agent-anything/validation/projection",
-      "@agent-anything/validation/subject",
+      "@agent-anything/verification/assessment",
+      "@agent-anything/verification/completion",
+      "@agent-anything/verification/definition",
+      "@agent-anything/verification/evidence",
+      "@agent-anything/verification/execution",
+      "@agent-anything/verification/persistence",
+      "@agent-anything/verification/projection",
+      "@agent-anything/verification/subject",
     ]),
   ],
   [
@@ -218,7 +218,7 @@ const focusedPublicSubpaths = new Map([
       "@agent-anything/helarc/task",
       "@agent-anything/helarc/thread",
       "@agent-anything/helarc/tools",
-      "@agent-anything/helarc/validation",
+      "@agent-anything/helarc/verification",
       "@agent-anything/helarc/work-context",
     ]),
   ],
@@ -227,7 +227,7 @@ const focusedPublicSubpaths = new Map([
     new Set([
       "@agent-anything/helarc-code-agent/file-operation",
       "@agent-anything/helarc-code-agent/source",
-      "@agent-anything/helarc-code-agent/validation",
+      "@agent-anything/helarc-code-agent/verification",
       "@agent-anything/helarc-code-agent/workspace",
     ]),
   ],
@@ -600,13 +600,13 @@ function checkArchitectureSource(file, text, isTestOnly) {
     report("removed_history_path", { file, message: "Restores a removed legacy history source path." });
   }
   if (
-    rel.startsWith("harness/validation/src/") &&
+    rel.startsWith("harness/verification/src/") &&
     /\/src\/(?:internal|common|shared)\//.test(rel)
   ) {
-    report("validation_ambiguous_source_owner", {
+    report("verification_ambiguous_source_owner", {
       file,
       owner,
-      message: "Validation source must belong to one of its eight explicit Contract families.",
+      message: "Verification source must belong to one of its eight explicit Contract families.",
     });
   }
   if (
@@ -1090,7 +1090,7 @@ function checkExecutionSourceTopology() {
         "task",
         "thread",
         "tools",
-        "validation",
+        "verification",
         "work-context",
       ],
       forbiddenPaths: ["src/review"],
@@ -1101,7 +1101,7 @@ function checkExecutionSourceTopology() {
         "PublicApi.test.ts",
         "file-operation",
         "source",
-        "validation",
+        "verification",
         "workspace",
       ],
       forbiddenPaths: [

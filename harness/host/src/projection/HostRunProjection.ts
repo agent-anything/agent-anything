@@ -24,7 +24,7 @@ import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { InteractionRequestRef } from "@agent-anything/interaction/protocol";
 import type { InteractionTransportReceipt } from "@agent-anything/interaction/records";
 import type { RunLifecycleStatus } from "@agent-anything/agent-core/run";
-import type { ValidationHostProjection } from "@agent-anything/validation/projection";
+import type { VerificationHostProjection } from "@agent-anything/verification/projection";
 import type {
   AgentInstructionBindingProjection,
   AgentInstructionBindingRef,
@@ -211,7 +211,7 @@ export interface HostRunProjection {
   readonly pendingInteractions: readonly HostPendingInteractionProjection[];
   readonly activeDelegations: readonly HostActiveDelegationProjection[];
   readonly retry: HostRetryProjection | null;
-  readonly validation: ValidationHostProjection | null;
+  readonly verification: VerificationHostProjection | null;
   readonly cancellation: HostCancellationProjection | null;
   readonly enforcement: HostEnforcementProjection;
   readonly terminal: HostTerminalRunProjection | null;
@@ -342,7 +342,7 @@ export function createHostRunProjection(
     pendingInteractions: Object.freeze([]),
     activeDelegations: Object.freeze([]),
     retry: null,
-    validation: null,
+    verification: null,
     cancellation: null,
     enforcement: Object.freeze({
       selected: input.enforcement,

@@ -8,7 +8,7 @@ packages:
   - "harness/context"
   - "harness/observability"
   - "harness/evaluation"
-  - "harness/validation"
+  - "harness/verification"
   - "harness/agent-core/runtime"
   - "harness/tools"
   - "harness/host"

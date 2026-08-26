@@ -1453,7 +1453,7 @@ function isArtifactKind(value: unknown): value is HelarcArtifactKind {
     value === "trace-projection" ||
     value === "tool-output-summary" ||
     value === "evidence-bundle" ||
-    value === "validation-report" ||
+    value === "verification-report" ||
     value === "evaluation-report" ||
     value === "engineering-review" ||
     value === "error-report";
@@ -1461,7 +1461,7 @@ function isArtifactKind(value: unknown): value is HelarcArtifactKind {
 
 function isArtifactProducerKind(value: unknown): value is HelarcArtifactProducer["kind"] {
   return value === "agent" || value === "product" || value === "tool" ||
-    value === "operation" || value === "validation" || value === "evaluation" ||
+    value === "operation" || value === "verification" || value === "evaluation" ||
     value === "review" || value === "user";
 }
 

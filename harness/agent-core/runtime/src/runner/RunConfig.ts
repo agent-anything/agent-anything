@@ -12,8 +12,8 @@ import type { RunProgressLimits } from "../progress/index.js";
 import type { RetryPolicy } from "../retry/index.js";
 import type { CancellationLimits, RunCancellationController } from "../run/index.js";
 import type { ResolvedRunPermissionConfig } from "../run/index.js";
-import type { CompletionGateConfiguration } from "@agent-anything/validation/completion";
-import type { ValidationProfile } from "@agent-anything/validation/definition";
+import type { CompletionGateConfiguration } from "@agent-anything/verification/completion";
+import type { VerificationProfile } from "@agent-anything/verification/definition";
 
 export type RunInfrastructureRequirement = "optional" | "required";
 
@@ -52,8 +52,8 @@ export interface RunActionExecutionConfig {
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
-export interface RunValidationConfig {
-  readonly profile: ValidationProfile;
+export interface RunVerificationConfig {
+  readonly profile: VerificationProfile;
   readonly completion: CompletionGateConfiguration;
 }
 
@@ -63,7 +63,7 @@ export interface RunConfig {
   readonly permissions: ResolvedRunPermissionConfig;
   readonly tools: ToolSelectionRevision;
   readonly actionExecution: RunActionExecutionConfig | null;
-  readonly validation: RunValidationConfig;
+  readonly verification: RunVerificationConfig;
   readonly limits: RunLimits;
   readonly audit: RunInfrastructureRequirement;
   readonly telemetry: RunInfrastructureRequirement;

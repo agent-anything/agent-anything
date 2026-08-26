@@ -15,7 +15,7 @@ import {
   type RunLimits,
   type RunTreeLimits,
 } from "@agent-anything/agent-runtime/runner";
-import { CurrentValidationCompletionGate } from "@agent-anything/validation/completion";
+import { CurrentVerificationCompletionGate } from "@agent-anything/verification/completion";
 import type { ContextManifestPersistencePort } from "@agent-anything/context/persistence";
 import {
   createCanonicalActorIdentity,
@@ -62,7 +62,7 @@ import {
   HELARC_TASK_STOP_BINDING,
   HELARC_TASK_STOP_OPERATION,
 } from "@agent-anything/helarc/tools";
-import { bindHelarcValidationCompletionGate } from "@agent-anything/helarc/validation";
+import { bindHelarcVerificationCompletionGate } from "@agent-anything/helarc/verification";
 import type { CodeAgentCommandLimits } from "@agent-anything/helarc-local-environment/command";
 import {
   createHelarcLocalCommandActionCapability,
@@ -339,9 +339,9 @@ export async function prepareHelarcHostRun(
       },
       delegation: product.delegation,
     },
-    validation: bindHelarcValidationCompletionGate(
-      product.validation,
-      new CurrentValidationCompletionGate(now),
+    verification: bindHelarcVerificationCompletionGate(
+      product.verification,
+      new CurrentVerificationCompletionGate(now),
     ),
     interactions: product.interactions,
     runtimeEventPublisher: productRuntimeEventPublisher,
@@ -378,9 +378,9 @@ export async function prepareHelarcHostRun(
         enforcement,
         metadata: runMetadata,
       },
-      validation: {
-        profile: product.validation.profile,
-        completion: createHelarcValidationCompletionConfig(),
+      verification: {
+        profile: product.verification.profile,
+        completion: createHelarcVerificationCompletionConfig(),
       },
       limits: runLimits,
       runTreeLimits,
@@ -453,7 +453,7 @@ export async function prepareHelarcHostRun(
           const productResult = product.projectResult(
             outcome.runResult,
             enforcement,
-            activeRun.getProjection().validation,
+            activeRun.getProjection().verification,
           );
           return Object.freeze({
             kind: "run_result",
@@ -470,15 +470,15 @@ export async function prepareHelarcHostRun(
   });
 }
 
-function createHelarcValidationCompletionConfig() {
+function createHelarcVerificationCompletionConfig() {
   const owner = (id: string) => Object.freeze({
     owner: "helarc",
-    kind: "validation",
+    kind: "verification",
     id,
     revision: "1",
   });
   return Object.freeze({
-    policy: owner("current-validation-gate"),
+    policy: owner("current-verification-gate"),
     outputContract: owner("agent-output-contract"),
     conditions: Object.freeze([]),
     maximumDurationMs: 5_000,

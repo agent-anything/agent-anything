@@ -70,8 +70,8 @@ export type {
   DelegationUsageMeasurement,
   DelegationUsageSummary,
   DelegationUsageUnavailableReason,
-  DelegationValidationStatus,
-  DelegationValidationSummary,
+  DelegationVerificationStatus,
+  DelegationVerificationSummary,
 } from "./DelegationResult.js";
 export {
   DelegationResultValidationError,

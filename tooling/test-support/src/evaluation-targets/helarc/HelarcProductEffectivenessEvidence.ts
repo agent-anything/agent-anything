@@ -30,7 +30,7 @@ export type HelarcProductEffectivenessSafetyGate =
 
 export interface HelarcProductEffectivenessDiagnostics {
   readonly trajectoryScore: number | null;
-  readonly validationScore: number | null;
+  readonly verificationScore: number | null;
   readonly latencyMs: number | null;
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
@@ -276,7 +276,7 @@ function snapshotDiagnostics(
   const values = requireRecord(input, `${path}.diagnostics`);
   const expectedKeys: readonly (keyof HelarcProductEffectivenessDiagnostics)[] = [
     "trajectoryScore",
-    "validationScore",
+    "verificationScore",
     "latencyMs",
     "inputTokens",
     "outputTokens",
@@ -287,7 +287,7 @@ function snapshotDiagnostics(
     throw new TypeError(`${path}.diagnostics must contain the exact admitted measurements.`);
   }
   assertNullableUnitInterval(values.trajectoryScore, `${path}.diagnostics.trajectoryScore`);
-  assertNullableUnitInterval(values.validationScore, `${path}.diagnostics.validationScore`);
+  assertNullableUnitInterval(values.verificationScore, `${path}.diagnostics.verificationScore`);
   assertNullableNonNegative(values.latencyMs, false, `${path}.diagnostics.latencyMs`);
   assertNullableNonNegative(values.inputTokens, true, `${path}.diagnostics.inputTokens`);
   assertNullableNonNegative(values.outputTokens, true, `${path}.diagnostics.outputTokens`);
@@ -299,7 +299,7 @@ function snapshotDiagnostics(
   );
   return Object.freeze({
     trajectoryScore: values.trajectoryScore as number | null,
-    validationScore: values.validationScore as number | null,
+    verificationScore: values.verificationScore as number | null,
     latencyMs: values.latencyMs as number | null,
     inputTokens: values.inputTokens as number | null,
     outputTokens: values.outputTokens as number | null,

@@ -345,9 +345,9 @@ export function createProgressCorrectionContextAdmissionProfile(): ContextAdmiss
   });
 }
 
-export function createValidationContextAdmissionProfile(): ContextAdmissionProfile {
+export function createVerificationContextAdmissionProfile(): ContextAdmissionProfile {
   return admissionProfile({
-    owner: "validation",
+    owner: "verification",
     sourceKinds: ["current_snapshot"],
     audiences: ["model"],
     retention: ["current"],

@@ -62,22 +62,22 @@ import {
   snapshotCompletionGateInput,
   type CompletionGateDecision,
   type CompletionGateInput,
-} from "@agent-anything/validation/completion";
+} from "@agent-anything/verification/completion";
 import {
-  createValidationFailure,
-  materializeValidationProfile,
-  type ValidationFailure,
-  type ValidationRequirement,
-} from "@agent-anything/validation/definition";
+  createVerificationFailure,
+  materializeVerificationProfile,
+  type VerificationFailure,
+  type VerificationRequirement,
+} from "@agent-anything/verification/definition";
 import {
-  ValidationExecutionError,
+  VerificationExecutionError,
   type CheckResult,
-  type ValidationExecutionPort,
-  type ValidationOperationCheckInput,
-  type ValidationOperationCheckResolverPort,
-  type ValidationLowerCheckSettlement,
-} from "@agent-anything/validation/execution";
-import type { ValidationHostProjection, ValidationRunnerProjection } from "@agent-anything/validation/projection";
+  type VerificationExecutionPort,
+  type VerificationOperationCheckInput,
+  type VerificationOperationCheckResolverPort,
+  type VerificationLowerCheckSettlement,
+} from "@agent-anything/verification/execution";
+import type { VerificationHostProjection, VerificationRunnerProjection } from "@agent-anything/verification/projection";
 import { createActionPermissionAssessmentPort } from "@agent-anything/permission/authority";
 import {
   APPROVAL_INTERACTION_PROTOCOL,
@@ -157,9 +157,9 @@ import {
 import type { RunExecutionUpdate, RunHandle } from "./RunHandle.js";
 import type { ResolvedRunConfig, RunConfig } from "./RunConfig.js";
 import type {
-  RunnerAutomaticEffectfulValidationCheckPort,
-  RunnerAutomaticEffectfulValidationCheckRequest,
-  RunnerValidationCheckRequest,
+  RunnerAutomaticEffectfulVerificationCheckPort,
+  RunnerAutomaticEffectfulVerificationCheckRequest,
+  RunnerVerificationCheckRequest,
   ResolvedRunnerDependencies,
 } from "./RunnerDependencies.js";
 import {
@@ -249,7 +249,7 @@ import {
   createSteeringContextContribution,
   createTaskContextAdmissionProfile,
   createTaskContextContribution,
-  createValidationContextAdmissionProfile,
+  createVerificationContextAdmissionProfile,
 } from "../context-contribution/index.js";
 import type {
   DescendantRunReservationFailureCode,
@@ -404,11 +404,11 @@ export class RunExecution<TOutput> {
   private runStartedEventEmitted = false;
   private steeringEpoch = 0;
   private retryProjection: import("./RunHandle.js").RunRetryProjection | null = null;
-  private validationExecution: ValidationExecutionPort | null = null;
-  private validationRequirements: readonly ValidationRequirement[] = Object.freeze([]);
-  private validationClosed = false;
-  private validationHostProjection: ValidationHostProjection | null = null;
-  private readonly emittedValidationRecordKeys = new Set<string>();
+  private verificationExecution: VerificationExecutionPort | null = null;
+  private verificationRequirements: readonly VerificationRequirement[] = Object.freeze([]);
+  private verificationClosed = false;
+  private verificationHostProjection: VerificationHostProjection | null = null;
+  private readonly emittedVerificationRecordKeys = new Set<string>();
   private readonly toolExposure: RunToolExposureCoordinator;
 
   constructor(
@@ -730,7 +730,7 @@ export class RunExecution<TOutput> {
       this.runStartedEventEmitted = true;
       this.emitCommittedContextTransition(this.writer.getSnapshot().context);
       this.emitCommittedRunItems(this.writer.getSnapshot());
-      await this.initializeValidation();
+      await this.initializeVerification();
       const startFailures = await this.recordLifecycle("started");
       if (startFailures.length > 0) {
         return await this.settle({
@@ -788,13 +788,13 @@ export class RunExecution<TOutput> {
             return await this.settle({ status: "succeeded", output: decision.decision.output });
           }
           if (completion.kind === "blocked") {
-            return await this.settle({ status: "blocked", code: "validation_blocked" });
+            return await this.settle({ status: "blocked", code: "verification_blocked" });
           }
           if (completion.kind === "failed") {
             return await this.settle({
               status: "failed",
-              code: "validation_failed",
-              failure: createRunFailureCause("validation", completion.failure),
+              code: "verification_failed",
+              failure: createRunFailureCause("verification", completion.failure),
             });
           }
           if (completion.kind === "cancelled") {
@@ -852,51 +852,51 @@ export class RunExecution<TOutput> {
     }
   }
 
-  private async initializeValidation(): Promise<void> {
-    const execution = await this.dependencies.validation.executionFactory.create({
+  private async initializeVerification(): Promise<void> {
+    const execution = await this.dependencies.verification.executionFactory.create({
       run: Object.freeze({ id: this.runId }),
-      operationChecks: this.createValidationOperationCheckResolver(),
+      operationChecks: this.createVerificationOperationCheckResolver(),
     });
     if (!execution || typeof execution.admitSpecification !== "function") {
-      throw new ValidationExecutionError(createValidationFailure({
-        code: "validation_execution_unavailable",
+      throw new VerificationExecutionError(createVerificationFailure({
+        code: "verification_execution_unavailable",
         stage: "admission",
-        message: "Validation execution factory did not create a valid Run-scoped execution.",
+        message: "Verification execution factory did not create a valid Run-scoped execution.",
         retryable: false,
-        cause: this.config.validation.profile.ref,
+        cause: this.config.verification.profile.ref,
       }), 0);
     }
-    this.validationExecution = execution;
-    const materialized = materializeValidationProfile({
-      profile: this.config.validation.profile,
+    this.verificationExecution = execution;
+    const materialized = materializeVerificationProfile({
+      profile: this.config.verification.profile,
       run: { id: this.runId },
       createdAt: this.startedAt,
     });
-    this.validationRequirements = materialized.requirements;
+    this.verificationRequirements = materialized.requirements;
     await execution.admitSpecification({
       specification: materialized.specification,
       requirements: materialized.requirements,
       expectedRevision: 0,
     }, this.invocationInterruption());
     try {
-      if (this.dependencies.validation.preparation !== null) {
-        await this.dependencies.validation.preparation.prepare({
+      if (this.dependencies.verification.preparation !== null) {
+        await this.dependencies.verification.preparation.prepare({
           run: Object.freeze({ id: this.runId }),
           execution,
-          automaticEffectfulChecks: this.createAutomaticEffectfulValidationCheckPort(),
+          automaticEffectfulChecks: this.createAutomaticEffectfulVerificationCheckPort(),
         }, this.invocationInterruption());
       }
     } catch (error) {
-      if (error instanceof ValidationExecutionError) throw error;
-      throw new ValidationExecutionError(createValidationFailure({
-        code: "validation_preparation_failed",
+      if (error instanceof VerificationExecutionError) throw error;
+      throw new VerificationExecutionError(createVerificationFailure({
+        code: "verification_preparation_failed",
         stage: "admission",
-        message: error instanceof Error ? error.message : "Validation preparation failed.",
+        message: error instanceof Error ? error.message : "Verification preparation failed.",
         retryable: false,
-        cause: this.config.validation.profile.ref,
+        cause: this.config.verification.profile.ref,
       }), (await execution.readCurrentSnapshot()).ref.revision);
     }
-    await this.commitValidationFeedback(null);
+    await this.commitVerificationFeedback(null);
   }
 
   private async evaluateCompletionGate(
@@ -904,9 +904,9 @@ export class RunExecution<TOutput> {
     output: TOutput,
   ): Promise<
     | { readonly kind: "succeeded" | "continue" | "cancelled" | "blocked" }
-    | { readonly kind: "failed"; readonly failure: ValidationFailure }
+    | { readonly kind: "failed"; readonly failure: VerificationFailure }
   > {
-    const execution = this.requireValidationExecution();
+    const execution = this.requireVerificationExecution();
     const runState = this.writer.getSnapshot();
     if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
     if (runState.status !== "running" && runState.status !== "waiting") {
@@ -915,19 +915,19 @@ export class RunExecution<TOutput> {
     const current = await execution.readCurrentSnapshot();
     const gateSteeringEpoch = this.steeringEpoch;
     const outputDigest = await createCanonicalSha256Digest(
-      "agent-anything.validation.completion-output.v1",
+      "agent-anything.verification.completion-output.v1",
       output,
     );
     const proposal = Object.freeze({
-      id: this.id("validation_proposal"),
+      id: this.id("verification_proposal"),
       revision: outputDigest,
     });
     const invocation = Object.freeze({
-      id: this.id("validation_gate"),
+      id: this.id("verification_gate"),
       revision: "1",
     });
     const mandatoryStates = current.requirementStates.flatMap((state) => {
-      const requirement = this.validationRequirements.find((candidate) =>
+      const requirement = this.verificationRequirements.find((candidate) =>
         candidate.ref.id === state.requirement.id &&
         candidate.ref.revision === state.requirement.revision);
       if (requirement?.necessity !== "mandatory") return [];
@@ -940,7 +940,7 @@ export class RunExecution<TOutput> {
     });
     const requestedAt = this.now();
     const configuredDeadline = Date.parse(requestedAt) +
-      this.config.validation.completion.maximumDurationMs;
+      this.config.verification.completion.maximumDurationMs;
     const deadlineAt = new Date(Math.min(
       Date.parse(runState.deadlineAt),
       configuredDeadline,
@@ -951,26 +951,26 @@ export class RunExecution<TOutput> {
       turn,
       proposal,
       proposalOutputDigest: outputDigest,
-      outputContract: this.config.validation.completion.outputContract,
+      outputContract: this.config.verification.completion.outputContract,
       specification: current.specification,
-      validationSnapshot: current.ref,
+      verificationSnapshot: current.ref,
       mandatoryStates,
       pendingWork: mandatoryStates.flatMap((item) =>
         item.current.pendingAttempts.map((attempt) => Object.freeze({
-          owner: "validation",
+          owner: "verification",
           kind: "check_attempt",
           id: attempt.id,
           revision: String(attempt.ordinal),
         }))),
-      conditions: this.config.validation.completion.conditions,
+      conditions: this.config.verification.completion.conditions,
       lifecycle: {
         runRevision: runState.revision,
         status: runState.status,
         cancellationRevision: this.config.cancellation.context.request === null ? 0 : 1,
         deadlineAt,
       },
-      policy: this.config.validation.completion.policy,
-      correlation: this.config.validation.profile.ref,
+      policy: this.config.verification.completion.policy,
+      correlation: this.config.verification.profile.ref,
       requestedAt,
     });
 
@@ -981,14 +981,14 @@ export class RunExecution<TOutput> {
       if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
       return {
         kind: "failed",
-        failure: error instanceof ValidationExecutionError
+        failure: error instanceof VerificationExecutionError
           ? error.failure
-          : createValidationFailure({
-              code: "validation_gate_failed",
+          : createVerificationFailure({
+              code: "verification_gate_failed",
               stage: "completion_gate",
               message: error instanceof Error ? error.message : "Completion Gate evaluation failed.",
               retryable: false,
-              cause: this.config.validation.completion.policy,
+              cause: this.config.verification.completion.policy,
             }),
       };
     }
@@ -997,15 +997,15 @@ export class RunExecution<TOutput> {
     if (currentAfterGate.ref.revision !== current.ref.revision ||
         decision.invocation.id !== invocation.id ||
         decision.invocation.revision !== invocation.revision ||
-        decision.validationSnapshot.runId !== current.ref.runId ||
-        decision.validationSnapshot.revision !== current.ref.revision) {
+        decision.verificationSnapshot.runId !== current.ref.runId ||
+        decision.verificationSnapshot.revision !== current.ref.revision) {
       return { kind: "continue" };
     }
     const runBasisCurrent = afterGate.revision === runState.revision &&
       this.steeringEpoch === gateSteeringEpoch &&
       this.config.cancellation.context.request === null;
     const inputRevision = await createCanonicalSha256Digest(
-      "agent-anything.validation.completion-gate-input.v1",
+      "agent-anything.verification.completion-gate-input.v1",
       gateInput,
     );
     await execution.recordCompletionGate({
@@ -1016,7 +1016,7 @@ export class RunExecution<TOutput> {
     if (!runBasisCurrent || this.writer.getSnapshot().revision !== runState.revision) {
       return { kind: "continue" };
     }
-    await this.commitValidationFeedback(decision);
+    await this.commitVerificationFeedback(decision);
 
     if (decision.status === "completion_eligible") return { kind: "succeeded" };
     if (decision.status === "invalid" || decision.status === "failed") {
@@ -1025,12 +1025,12 @@ export class RunExecution<TOutput> {
     if (decision.disposition === "fail") {
       return {
         kind: "failed",
-        failure: createValidationFailure({
-          code: "validation_completion_policy_failed",
+        failure: createVerificationFailure({
+          code: "verification_completion_policy_failed",
           stage: "completion_gate",
           message: decision.reasons[0].message,
           retryable: false,
-          cause: this.config.validation.completion.policy,
+          cause: this.config.verification.completion.policy,
         }),
       };
     }
@@ -1038,12 +1038,12 @@ export class RunExecution<TOutput> {
     if (decision.disposition === "wait" && gateInput.pendingWork.length === 0) {
       return {
         kind: "failed",
-        failure: createValidationFailure({
-          code: "validation_gate_wait_without_pending_work",
+        failure: createVerificationFailure({
+          code: "verification_gate_wait_without_pending_work",
           stage: "completion_gate",
           message: "Completion Gate requested waiting without exact active pending work.",
           retryable: false,
-          cause: this.config.validation.completion.policy,
+          cause: this.config.verification.completion.policy,
         }),
       };
     }
@@ -1059,27 +1059,27 @@ export class RunExecution<TOutput> {
     const interruption = this.invocationInterruption();
     let removeAbortListener: (() => void) | undefined;
     const timedOut = new Promise<CompletionGateDecision>((_resolve, reject) => {
-      timeout = setTimeout(() => reject(new ValidationExecutionError(
-        createValidationFailure({
-          code: "validation_gate_timed_out",
+      timeout = setTimeout(() => reject(new VerificationExecutionError(
+        createVerificationFailure({
+          code: "verification_gate_timed_out",
           stage: "completion_gate",
           message: "Completion Gate evaluation exceeded its deadline.",
           retryable: true,
-          cause: this.config.validation.completion.policy,
+          cause: this.config.verification.completion.policy,
         }),
-        input.validationSnapshot.revision,
+        input.verificationSnapshot.revision,
       )), delay);
     });
     const cancelled = new Promise<CompletionGateDecision>((_resolve, reject) => {
-      const onAbort = () => reject(new ValidationExecutionError(
-        createValidationFailure({
-          code: "validation_gate_cancelled",
+      const onAbort = () => reject(new VerificationExecutionError(
+        createVerificationFailure({
+          code: "verification_gate_cancelled",
           stage: "completion_gate",
           message: "Completion Gate evaluation was cancelled.",
           retryable: false,
-          cause: this.config.validation.completion.policy,
+          cause: this.config.verification.completion.policy,
         }),
-        input.validationSnapshot.revision,
+        input.verificationSnapshot.revision,
       ));
       if (interruption.signal.aborted) onAbort();
       else {
@@ -1089,7 +1089,7 @@ export class RunExecution<TOutput> {
     });
     try {
       return await Promise.race([
-        this.dependencies.validation.completionGate.evaluate(
+        this.dependencies.verification.completionGate.evaluate(
           input,
           interruption,
         ),
@@ -1102,7 +1102,7 @@ export class RunExecution<TOutput> {
     }
   }
 
-  private async commitValidationFeedback(
+  private async commitVerificationFeedback(
     decision: CompletionGateDecision | null,
   ): Promise<void> {
     const runState = this.writer.getSnapshot();
@@ -1111,8 +1111,8 @@ export class RunExecution<TOutput> {
         (runState.status !== "running" && runState.status !== "waiting")) {
       return;
     }
-    const execution = this.requireValidationExecution();
-    await this.emitValidationRecords(execution);
+    const execution = this.requireVerificationExecution();
+    await this.emitVerificationRecords(execution);
     const projection = await execution.projectRunner();
     const contextProjection = await execution.projectContext({
       maxPayloadBytes: this.dependencies.contextProjection.maxContributionPayloadBytes,
@@ -1121,35 +1121,35 @@ export class RunExecution<TOutput> {
     if (projection.snapshot.runId !== this.runId ||
         contextProjection.snapshot.runId !== this.runId ||
         contextProjection.snapshot.revision !== projection.snapshot.revision) {
-      throw new ValidationExecutionError(createValidationFailure({
-        code: "validation_projection_mismatch",
+      throw new VerificationExecutionError(createVerificationFailure({
+        code: "verification_projection_mismatch",
         stage: "projection",
-        message: "Validation projections do not describe the current Run snapshot.",
+        message: "Verification projections do not describe the current Run snapshot.",
         retryable: false,
         cause: null,
       }), projection.snapshot.revision);
     }
     if (hostProjection.snapshot.runId !== this.runId ||
         hostProjection.snapshot.revision !== projection.snapshot.revision) {
-      throw new ValidationExecutionError(createValidationFailure({
-        code: "validation_host_projection_mismatch",
+      throw new VerificationExecutionError(createVerificationFailure({
+        code: "verification_host_projection_mismatch",
         stage: "projection",
-        message: "Validation Host projection does not match the current Run snapshot.",
+        message: "Verification Host projection does not match the current Run snapshot.",
         retryable: false,
         cause: null,
       }), projection.snapshot.revision);
     }
-    this.validationHostProjection = hostProjection;
+    this.verificationHostProjection = hostProjection;
     this.writer.commit({
-      kind: "validation_feedback",
-      validation: projection,
+      kind: "verification_feedback",
+      verification: projection,
     }, (current) => Object.freeze({
       status: decision?.disposition === "wait"
         ? "waiting" as const
         : current.status === "waiting"
           ? "running" as const
           : current.status,
-      validation: Object.freeze({
+      verification: Object.freeze({
         snapshot: projection.snapshot,
         gate: projection.gate,
       }),
@@ -1158,22 +1158,22 @@ export class RunExecution<TOutput> {
         : this.applyContextContributions(
             current.context,
             Object.freeze([contextProjection.contribution]),
-            createValidationContextAdmissionProfile(),
-            "validation_feedback",
+            createVerificationContextAdmissionProfile(),
+            "verification_feedback",
             projection.gate?.id ?? null,
           ),
     }));
   }
 
-  private async emitValidationRecords(execution: ValidationExecutionPort): Promise<void> {
+  private async emitVerificationRecords(execution: VerificationExecutionPort): Promise<void> {
     const history = await execution.readHistory();
     const snapshotRevision = (await execution.readCurrentSnapshot()).ref.revision;
     for (const item of history) {
       if (item.kind === "check_attempt") {
         const key = `check_attempt:${item.record.ref.id}:${item.record.ref.ordinal}`;
-        if (this.emittedValidationRecordKeys.has(key) || item.record.startedAt === null) continue;
-        this.emittedValidationRecordKeys.add(key);
-        this.emit("validation.check.started", {
+        if (this.emittedVerificationRecordKeys.has(key) || item.record.startedAt === null) continue;
+        this.emittedVerificationRecordKeys.add(key);
+        this.emit("verification.check.started", {
           snapshotRevision,
           attemptId: item.record.ref.id,
           requirementId: item.record.requirement.id,
@@ -1181,9 +1181,9 @@ export class RunExecution<TOutput> {
         }, item.record.startedAt);
       } else if (item.kind === "check_result") {
         const key = `check_result:${item.record.ref.id}@${item.record.ref.revision}`;
-        if (this.emittedValidationRecordKeys.has(key)) continue;
-        this.emittedValidationRecordKeys.add(key);
-        this.emit("validation.check.finished", {
+        if (this.emittedVerificationRecordKeys.has(key)) continue;
+        this.emittedVerificationRecordKeys.add(key);
+        this.emit("verification.check.finished", {
           snapshotRevision,
           attemptId: item.record.attempt.id,
           status: item.record.status,
@@ -1193,9 +1193,9 @@ export class RunExecution<TOutput> {
         }, item.record.finishedAt);
       } else if (item.kind === "assessment") {
         const key = `assessment:${item.record.ref.id}@${item.record.ref.revision}`;
-        if (this.emittedValidationRecordKeys.has(key)) continue;
-        this.emittedValidationRecordKeys.add(key);
-        this.emit("validation.assessment.committed", {
+        if (this.emittedVerificationRecordKeys.has(key)) continue;
+        this.emittedVerificationRecordKeys.add(key);
+        this.emit("verification.assessment.committed", {
           snapshotRevision,
           requirementId: item.record.requirement.id,
           assessmentId: item.record.ref.id,
@@ -1203,9 +1203,9 @@ export class RunExecution<TOutput> {
         }, item.record.assessedAt);
       } else if (item.kind === "completion_gate") {
         const key = `completion_gate:${item.record.ref.id}@${item.record.ref.revision}`;
-        if (this.emittedValidationRecordKeys.has(key)) continue;
-        this.emittedValidationRecordKeys.add(key);
-        this.emit("validation.gate.evaluated", {
+        if (this.emittedVerificationRecordKeys.has(key)) continue;
+        this.emittedVerificationRecordKeys.add(key);
+        this.emit("verification.gate.evaluated", {
           snapshotRevision,
           gateId: item.record.ref.id,
           status: item.record.decision.status,
@@ -1216,42 +1216,42 @@ export class RunExecution<TOutput> {
     }
   }
 
-  private requireValidationExecution(): ValidationExecutionPort {
-    if (this.validationExecution === null) {
-      throw new ValidationExecutionError(createValidationFailure({
-        code: "validation_execution_unavailable",
+  private requireVerificationExecution(): VerificationExecutionPort {
+    if (this.verificationExecution === null) {
+      throw new VerificationExecutionError(createVerificationFailure({
+        code: "verification_execution_unavailable",
         stage: "admission",
-        message: "Run-scoped Validation execution is not initialized.",
+        message: "Run-scoped Verification execution is not initialized.",
         retryable: false,
-        cause: this.config.validation.profile.ref,
+        cause: this.config.verification.profile.ref,
       }), 0);
     }
-    return this.validationExecution;
+    return this.verificationExecution;
   }
 
-  private createValidationOperationCheckResolver(): ValidationOperationCheckResolverPort {
+  private createVerificationOperationCheckResolver(): VerificationOperationCheckResolverPort {
     return Object.freeze({
-      resolve: (definition: import("@agent-anything/validation/execution").CheckDefinition) => definition.effect.kind === "effectful"
+      resolve: (definition: import("@agent-anything/verification/execution").CheckDefinition) => definition.effect.kind === "effectful"
         ? Object.freeze({
             requestSettlement: (
-              input: ValidationOperationCheckInput,
+              input: VerificationOperationCheckInput,
               interruption: InvocationInterruptionContext,
-            ) => this.executeValidationOperationCheck(input, interruption),
+            ) => this.executeVerificationOperationCheck(input, interruption),
           })
         : null,
     });
   }
 
-  private createAutomaticEffectfulValidationCheckPort(): RunnerAutomaticEffectfulValidationCheckPort {
+  private createAutomaticEffectfulVerificationCheckPort(): RunnerAutomaticEffectfulVerificationCheckPort {
     return Object.freeze({
       execute: async (
-        request: RunnerAutomaticEffectfulValidationCheckRequest,
+        request: RunnerAutomaticEffectfulVerificationCheckRequest,
         interruption: InvocationInterruptionContext,
       ) => {
-        const execution = this.requireValidationExecution();
+        const execution = this.requireVerificationExecution();
         const current = await execution.readCurrentSnapshot();
         const invocationId = this.id("operation_invocation");
-        const action = this.materializeAutomaticValidationRunAction(
+        const action = this.materializeAutomaticVerificationRunAction(
           request.definition.id,
           invocationId,
         );
@@ -1261,45 +1261,45 @@ export class RunExecution<TOutput> {
           runAction: action.ref,
           expectedRevision: current.ref.revision,
         }, interruption);
-        await this.processValidationCheckResult(request, result, interruption);
+        await this.processVerificationCheckResult(request, result, interruption);
         return result;
       },
     });
   }
 
-  private async executeValidationOperationCheck(
-    input: ValidationOperationCheckInput,
+  private async executeVerificationOperationCheck(
+    input: VerificationOperationCheckInput,
     interruption: InvocationInterruptionContext,
-  ): Promise<ValidationLowerCheckSettlement> {
+  ): Promise<VerificationLowerCheckSettlement> {
     if (input.definition.effect.kind !== "effectful") {
-      return this.rejectValidationOperationCheck(
-        "validation_operation_check_binding_invalid",
-        "An operation-backed Validation Check requires an effectful definition.",
+      return this.rejectVerificationOperationCheck(
+        "verification_operation_check_binding_invalid",
+        "An operation-backed Verification Check requires an effectful definition.",
       );
     }
     if (interruption.signal.aborted || this.config.cancellation.context.request !== null) {
-      return this.rejectValidationOperationCheck(
-        "validation_operation_check_cancelled",
-        "Validation operation Check was cancelled before dispatch.",
+      return this.rejectVerificationOperationCheck(
+        "verification_operation_check_cancelled",
+        "Verification operation Check was cancelled before dispatch.",
       );
     }
     if (input.attempt.runAction === null) {
-      return this.rejectValidationOperationCheck(
-        "validation_effectful_check_action_required",
-        "An effectful Validation Check requires a Runner-materialized RunAction.",
+      return this.rejectVerificationOperationCheck(
+        "verification_effectful_check_action_required",
+        "An effectful Verification Check requires a Runner-materialized RunAction.",
       );
     }
     const action = this.findRunAction(input.attempt.runAction);
     if (action === null) {
-      return this.rejectValidationOperationCheck(
-        "validation_run_action_missing",
-        "Validation Check references a RunAction that is not committed in this Run.",
+      return this.rejectVerificationOperationCheck(
+        "verification_run_action_missing",
+        "Verification Check references a RunAction that is not committed in this Run.",
       );
     }
     if (action.subject.kind !== "operation" || action.subject.invocationId === null) {
-      return this.rejectValidationOperationCheck(
-        "validation_run_action_subject_invalid",
-        "An operation-backed Validation Check requires an Operation RunAction.",
+      return this.rejectVerificationOperationCheck(
+        "verification_run_action_subject_invalid",
+        "An operation-backed Verification Check requires an Operation RunAction.",
       );
     }
     const invocationId = action.subject.invocationId;
@@ -1319,16 +1319,16 @@ export class RunExecution<TOutput> {
       invocationId,
       parentInvocation: null,
       basis: Object.freeze({
-        owner: "validation",
+        owner: "verification",
         kind: "check_attempt",
         id: input.attempt.ref.id,
         revision: String(input.attempt.ref.ordinal),
       }),
     });
     if (result === null) {
-      return this.rejectValidationOperationCheck(
-        "validation_operation_check_unavailable",
-        "Validation Check Operation could not be dispatched.",
+      return this.rejectVerificationOperationCheck(
+        "verification_operation_check_unavailable",
+        "Verification Check Operation could not be dispatched.",
       );
     }
     this.commitOperationObservation(action, Object.freeze({ result, toolResult: null }));
@@ -1360,7 +1360,7 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private materializeAutomaticValidationRunAction(
+  private materializeAutomaticVerificationRunAction(
     checkAttemptId: string,
     invocationId: string,
   ): RuntimeRunAction {
@@ -1374,7 +1374,7 @@ export class RunExecution<TOutput> {
       }),
       provenance: Object.freeze({
         kind: "automatic" as const,
-        trigger: Object.freeze({ owner: "validation", operationId: checkAttemptId }),
+        trigger: Object.freeze({ owner: "verification", operationId: checkAttemptId }),
       }),
       subject: Object.freeze({
         kind: "operation" as const,
@@ -1406,14 +1406,14 @@ export class RunExecution<TOutput> {
     return null;
   }
 
-  private async rejectValidationOperationCheck(
-    code: `validation_${string}`,
+  private async rejectVerificationOperationCheck(
+    code: `verification_${string}`,
     message: string,
   ): Promise<never> {
-    const revision = this.validationExecution === null
+    const revision = this.verificationExecution === null
       ? 0
-      : (await this.validationExecution.readCurrentSnapshot()).ref.revision;
-    throw new ValidationExecutionError(createValidationFailure({
+      : (await this.verificationExecution.readCurrentSnapshot()).ref.revision;
+    throw new VerificationExecutionError(createVerificationFailure({
       code,
       stage: "check",
       message,
@@ -1789,7 +1789,7 @@ export class RunExecution<TOutput> {
         );
         if (outcome !== null) {
           this.commitOperationObservation(action, outcome);
-          await this.processSettledOperationValidation(
+          await this.processSettledOperationVerification(
             action,
             candidate.operation,
             candidate.request,
@@ -2152,7 +2152,7 @@ export class RunExecution<TOutput> {
             result,
             toolResult: adaptToolResult(call, result),
           });
-          await this.processSettledOperationValidation(
+          await this.processSettledOperationVerification(
             action,
             call.binding.operation,
             call.input,
@@ -2256,44 +2256,44 @@ export class RunExecution<TOutput> {
     return Object.freeze({ result: executed, toolResult: null });
   }
 
-  private async processSettledOperationValidation(
+  private async processSettledOperationVerification(
     action: RuntimeRunAction,
     operation: OperationRevisionRef,
     request: unknown,
     requestOrigin: OperationRequestOrigin,
     result: OperationResult,
   ): Promise<void> {
-    const processor = this.dependencies.validation.settledOperationResults;
+    const processor = this.dependencies.verification.settledOperationResults;
     if (processor === null) return;
     try {
       const changed = await processor.process({
         run: Object.freeze({ id: this.runId }),
-        execution: this.requireValidationExecution(),
+        execution: this.requireVerificationExecution(),
         runAction: action.ref,
         operation,
         request,
         requestOrigin,
-        settlement: this.validationLowerSettlement(result),
+        settlement: this.verificationLowerSettlement(result),
       }, this.invocationInterruption());
       if (!changed) return;
     } catch (error) {
-      if (error instanceof ValidationExecutionError) throw error;
-      throw new ValidationExecutionError(createValidationFailure({
-        code: "validation_settled_operation_processing_failed",
+      if (error instanceof VerificationExecutionError) throw error;
+      throw new VerificationExecutionError(createVerificationFailure({
+        code: "verification_settled_operation_processing_failed",
         stage: "check",
         message: error instanceof Error
           ? error.message
-          : "Settled Operation Validation processing failed.",
+          : "Settled Operation Verification processing failed.",
         retryable: false,
         cause: null,
-      }), (await this.requireValidationExecution().readCurrentSnapshot()).ref.revision);
+      }), (await this.requireVerificationExecution().readCurrentSnapshot()).ref.revision);
     }
-    await this.commitValidationFeedback(null);
+    await this.commitVerificationFeedback(null);
   }
 
-  private validationLowerSettlement(
+  private verificationLowerSettlement(
     result: OperationResult,
-  ): ValidationLowerCheckSettlement {
+  ): VerificationLowerCheckSettlement {
     const settlementRef = result.lowerRefs.find((reference) =>
       reference.owner === "canonical-action" &&
       reference.kind === "action_settlement");
@@ -2327,31 +2327,31 @@ export class RunExecution<TOutput> {
     });
   }
 
-  private async processValidationCheckResult(
-    request: RunnerValidationCheckRequest,
+  private async processVerificationCheckResult(
+    request: RunnerVerificationCheckRequest,
     result: CheckResult,
     interruption: InvocationInterruptionContext,
   ): Promise<void> {
-    const processor = this.dependencies.validation.checkResults;
+    const processor = this.dependencies.verification.checkResults;
     if (processor === null) return;
     try {
       await processor.process({
         run: Object.freeze({ id: this.runId }),
-        execution: this.requireValidationExecution(),
+        execution: this.requireVerificationExecution(),
         request,
         result,
       }, interruption);
     } catch (error) {
-      if (error instanceof ValidationExecutionError) throw error;
-      throw new ValidationExecutionError(createValidationFailure({
-        code: "validation_check_result_processing_failed",
+      if (error instanceof VerificationExecutionError) throw error;
+      throw new VerificationExecutionError(createVerificationFailure({
+        code: "verification_check_result_processing_failed",
         stage: "assessment",
         message: error instanceof Error
           ? error.message
-          : "Validation Check Result processing failed.",
+          : "Verification Check Result processing failed.",
         retryable: false,
         cause: null,
-      }), (await this.requireValidationExecution().readCurrentSnapshot()).ref.revision);
+      }), (await this.requireVerificationExecution().readCurrentSnapshot()).ref.revision);
     }
   }
 
@@ -3089,7 +3089,7 @@ export class RunExecution<TOutput> {
         ).length,
         evidenceCount: delegationResult.evidence.totalCount,
         artifactCount: delegationResult.artifacts.totalCount,
-        validationStatus: delegationResult.validation.status,
+        verificationStatus: delegationResult.verification.status,
         effectStatus: delegationResult.effects.status,
         uncertaintyCount: delegationResult.uncertainty.length,
         controllerTurns: delegationResult.usage.controllerTurns.status === "measured"
@@ -4095,7 +4095,7 @@ export class RunExecution<TOutput> {
       cancellationRequest,
       completedAt,
     ));
-    await this.closeValidation(completedAt);
+    await this.closeVerification(completedAt);
     const state = this.writer.getSnapshot();
     const base = {
       runId: this.runId,
@@ -4135,11 +4135,11 @@ export class RunExecution<TOutput> {
   }
 
   private failureFromError(error: unknown): Extract<TerminalCandidate<TOutput>, { readonly status: "failed" }> {
-    if (error instanceof ValidationExecutionError) {
+    if (error instanceof VerificationExecutionError) {
       return {
         status: "failed",
-        code: "validation_failed",
-        failure: createRunFailureCause("validation", error.failure),
+        code: "verification_failed",
+        failure: createRunFailureCause("verification", error.failure),
       };
     }
     if (error instanceof ContextContractError) {
@@ -4199,17 +4199,17 @@ export class RunExecution<TOutput> {
     };
   }
 
-  private async closeValidation(closedAt: string): Promise<void> {
-    if (this.validationExecution === null || this.validationClosed) return;
-    this.validationClosed = true;
-    const current = await this.validationExecution.readCurrentSnapshot();
+  private async closeVerification(closedAt: string): Promise<void> {
+    if (this.verificationExecution === null || this.verificationClosed) return;
+    this.verificationClosed = true;
+    const current = await this.verificationExecution.readCurrentSnapshot();
     try {
-      await this.validationExecution.closeCurrentState({
+      await this.verificationExecution.closeCurrentState({
         expectedRevision: current.ref.revision,
         closedAt,
       });
     } catch {
-      // Terminal Run truth is already committed; late Validation close failure is diagnostic only.
+      // Terminal Run truth is already committed; late Verification close failure is diagnostic only.
     }
   }
 
@@ -4435,7 +4435,7 @@ export class RunExecution<TOutput> {
         this.latestProgressAssessment(state),
       ),
       retry: this.retryProjection,
-      validation: this.validationHostProjection,
+      verification: this.verificationHostProjection,
       pendingInteractions: Object.freeze([
         ...this.interactions.getPendingProjections(),
         ...childPending,
@@ -4950,7 +4950,7 @@ function createDelegationResultContextMaterial(
       narrative: result.narrative,
       evidence: result.evidence,
       artifacts: result.artifacts,
-      validation: result.validation,
+      verification: result.verification,
       effects: result.effects,
       expectationCoverage: result.expectationCoverage,
       uncertainty: result.uncertainty,

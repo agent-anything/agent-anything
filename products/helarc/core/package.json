@@ -21,7 +21,7 @@
     "./artifacts": { "types": "./src/artifacts/index.ts", "import": "./dist/artifacts/index.js" },
     "./composition": { "types": "./src/composition/index.ts", "import": "./dist/composition/index.js" },
     "./observability": { "types": "./src/observability/index.ts", "import": "./dist/observability/index.js" },
-    "./validation": { "types": "./src/validation/index.ts", "import": "./dist/validation/index.js" }
+    "./verification": { "types": "./src/verification/index.ts", "import": "./dist/verification/index.js" }
   },
   "files": ["dist"],
   "scripts": {
@@ -52,7 +52,7 @@
     "@agent-anything/operation-catalog": "workspace:*",
     "@agent-anything/operation-composition": "workspace:*",
     "@agent-anything/tools": "workspace:*",
-    "@agent-anything/validation": "workspace:*",
+    "@agent-anything/verification": "workspace:*",
     "@agent-anything/workspace": "workspace:*"
   },
   "devDependencies": { "@types/node": "^25.9.1" }

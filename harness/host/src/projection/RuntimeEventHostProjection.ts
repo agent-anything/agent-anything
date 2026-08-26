@@ -37,7 +37,7 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     ...descendantFields(),
     "status", "code", "resultId", "resultRevision",
     "expectationPresentCount", "expectationUnmetCount", "evidenceCount", "artifactCount",
-    "validationStatus", "effectStatus", "uncertaintyCount", "controllerTurns", "actions",
+    "verificationStatus", "effectStatus", "uncertaintyCount", "controllerTurns", "actions",
     "modelUsageStatus", "limitStatus", "exhaustedLimit",
   ],
   "context.transition.committed": [
@@ -142,16 +142,16 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "code",
     "terminalRecordId",
   ],
-  "validation.check.started": [
+  "verification.check.started": [
     "snapshotRevision", "attemptId", "requirementId", "origin",
   ],
-  "validation.check.finished": [
+  "verification.check.finished": [
     "snapshotRevision", "attemptId", "status", "code", "durationMs", "coverageRatio",
   ],
-  "validation.assessment.committed": [
+  "verification.assessment.committed": [
     "snapshotRevision", "requirementId", "assessmentId", "verdict",
   ],
-  "validation.gate.evaluated": [
+  "verification.gate.evaluated": [
     "snapshotRevision", "gateId", "status", "disposition", "reasonCodes",
   ],
 };

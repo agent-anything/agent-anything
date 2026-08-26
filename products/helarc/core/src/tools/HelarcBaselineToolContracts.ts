@@ -294,7 +294,7 @@ const AGENT = contract({
       revision: { type: "string", minLength: 1, maxLength: 256 },
     }),
   }),
-  outputSchema: objectSchema(["delegation_result_id", "delegation_result_revision", "child_run_id", "status", "summary", "artifact_refs", "validation_status", "effect_status", "uncertainty", "failure_code"], {
+  outputSchema: objectSchema(["delegation_result_id", "delegation_result_revision", "child_run_id", "status", "summary", "artifact_refs", "verification_status", "effect_status", "uncertainty", "failure_code"], {
     delegation_result_id: { type: "string", minLength: 1, maxLength: 1_024 },
     delegation_result_revision: { type: "string", minLength: 1, maxLength: 256 },
     child_run_id: { type: "string", minLength: 1, maxLength: 1_024 },
@@ -304,7 +304,7 @@ const AGENT = contract({
       type: "array",
       items: { type: "string", minLength: 1, maxLength: 1_024 },
     },
-    validation_status: { type: "string" },
+    verification_status: { type: "string" },
     effect_status: { type: "string" },
     uncertainty: {
       type: "array",
@@ -325,7 +325,7 @@ const SHELL_INPUT = objectSchema(["command"], {
   description: { type: "string", minLength: 1, maxLength: 1_000 },
   timeout_ms: POSITIVE_INTEGER,
   run_in_background: { type: "boolean" },
-  validation_claim: {
+  verification_claim: {
     type: "string",
     enum: [
       "tests",

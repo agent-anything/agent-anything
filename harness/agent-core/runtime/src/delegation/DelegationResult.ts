@@ -26,7 +26,7 @@ import {
   snapshotDelegationRequest,
 } from "./DelegationRequest.js";
 
-export type DelegationValidationStatus =
+export type DelegationVerificationStatus =
   | "not_required"
   | "pending"
   | "satisfied"
@@ -35,8 +35,8 @@ export type DelegationValidationStatus =
   | "stale"
   | "unavailable";
 
-export interface DelegationValidationSummary {
-  readonly status: DelegationValidationStatus;
+export interface DelegationVerificationSummary {
+  readonly status: DelegationVerificationStatus;
   readonly snapshotRevision: string | null;
   readonly mandatoryTotal: number;
   readonly mandatorySatisfied: number;
@@ -106,8 +106,8 @@ export interface DelegationResultExpectationCoverage {
 export type DelegationUncertainty =
   | "effects_partial"
   | "effects_unknown"
-  | "validation_inconclusive"
-  | "validation_unavailable"
+  | "verification_inconclusive"
+  | "verification_unavailable"
   | "model_input_tokens_unavailable"
   | "model_output_tokens_unavailable"
   | "cost_units_unavailable";
@@ -133,7 +133,7 @@ export interface DelegationResult {
   readonly narrative: DelegationNarrative | null;
   readonly evidence: DelegationReferenceTransfer<EvidenceRef>;
   readonly artifacts: DelegationReferenceTransfer<ArtifactRef>;
-  readonly validation: DelegationValidationSummary;
+  readonly verification: DelegationVerificationSummary;
   readonly effects: DelegationEffectSummary;
   readonly usage: DelegationUsageSummary;
   readonly limits: DelegationLimits;
@@ -156,7 +156,7 @@ export function createDelegationResult(input: {
   readonly correlation: DelegationRunCorrelation;
   readonly childResult: RunResult;
   readonly narrative: string | null;
-  readonly validation: DelegationValidationSummary;
+  readonly verification: DelegationVerificationSummary;
   readonly effects: DelegationEffectSummary;
   readonly usage: DelegationUsageSummary;
   readonly limitDisposition: DelegationLimitDisposition;
@@ -169,7 +169,7 @@ export function createDelegationResult(input: {
       "correlation",
       "childResult",
       "narrative",
-      "validation",
+      "verification",
       "effects",
       "usage",
       "limitDisposition",
@@ -189,7 +189,7 @@ export function createDelegationResult(input: {
       input.narrative,
       request.expectedResult.maxNarrativeCharacters,
     );
-    const validation = snapshotValidation(input.validation);
+    const verification = snapshotVerification(input.verification);
     const effects = snapshotEffects(input.effects);
     const usage = snapshotUsage(input.usage);
     const limitDisposition = snapshotLimitDisposition(
@@ -215,11 +215,11 @@ export function createDelegationResult(input: {
         narrative,
         evidence,
         artifacts,
-        validation,
+        verification,
         effects,
       ),
     );
-    const uncertainty = deriveUncertainty(validation, effects, usage);
+    const uncertainty = deriveUncertainty(verification, effects, usage);
     const createdAt = isoDateTime(input.createdAt, "createdAt");
     if (Date.parse(createdAt) < Date.parse(input.childResult.completedAt)) {
       fail("delegation_result_time_invalid", "Delegation result cannot precede child settlement.");
@@ -231,7 +231,7 @@ export function createDelegationResult(input: {
       narrative,
       evidence,
       artifacts,
-      validation,
+      verification,
       effects,
       usage,
       limits: request.limits,
@@ -275,7 +275,7 @@ export function snapshotDelegationResult(
       "narrative",
       "evidence",
       "artifacts",
-      "validation",
+      "verification",
       "effects",
       "usage",
       "limits",
@@ -303,13 +303,13 @@ export function snapshotDelegationResult(
       : snapshotNarrativeValue(input.narrative, limits.maxResultBytes);
     const evidence = snapshotReferenceTransfer(input.evidence, "evidence");
     const artifacts = snapshotReferenceTransfer(input.artifacts, "artifacts");
-    const validation = snapshotValidation(input.validation);
+    const verification = snapshotVerification(input.verification);
     const effects = snapshotEffects(input.effects);
     const usage = snapshotUsage(input.usage);
     const limitDisposition = snapshotLimitDisposition(input.limitDisposition, limits);
     const expectationCoverage = snapshotCoverage(input.expectationCoverage);
     const uncertainty = snapshotUncertainty(input.uncertainty);
-    const expectedUncertainty = deriveUncertainty(validation, effects, usage);
+    const expectedUncertainty = deriveUncertainty(verification, effects, usage);
     if (
       uncertainty.length !== expectedUncertainty.length ||
       uncertainty.some((value, index) => value !== expectedUncertainty[index])
@@ -324,7 +324,7 @@ export function snapshotDelegationResult(
       narrative,
       evidence,
       artifacts,
-      validation,
+      verification,
       effects,
       usage,
       limits,
@@ -393,10 +393,10 @@ function snapshotNarrativeValue(
   return Object.freeze({ trust: "attributed_model_output", text: input.text });
 }
 
-function snapshotValidation(
-  input: DelegationValidationSummary,
-): DelegationValidationSummary {
-  strictRecord(input, "DelegationValidationSummary", [
+function snapshotVerification(
+  input: DelegationVerificationSummary,
+): DelegationVerificationSummary {
+  strictRecord(input, "DelegationVerificationSummary", [
     "status",
     "snapshotRevision",
     "mandatoryTotal",
@@ -412,7 +412,7 @@ function snapshotValidation(
     "stale",
     "unavailable",
   ].includes(input.status)) {
-    throw new TypeError("Delegation Validation status is unsupported.");
+    throw new TypeError("Delegation Verification status is unsupported.");
   }
   const mandatoryTotal = nonNegativeInteger(input.mandatoryTotal, "mandatoryTotal");
   const mandatorySatisfied = nonNegativeInteger(
@@ -420,16 +420,16 @@ function snapshotValidation(
     "mandatorySatisfied",
   );
   if (mandatorySatisfied > mandatoryTotal) {
-    throw new TypeError("Delegation Validation satisfied count exceeds total.");
+    throw new TypeError("Delegation Verification satisfied count exceeds total.");
   }
   if (!Array.isArray(input.limitationCodes) || input.limitationCodes.length > 128) {
-    throw new TypeError("Delegation Validation limitations must be bounded.");
+    throw new TypeError("Delegation Verification limitations must be bounded.");
   }
   const limitationCodes = input.limitationCodes.map((code, index) =>
     token(code, `limitationCodes[${index}]`),
   );
   if (new Set(limitationCodes).size !== limitationCodes.length) {
-    throw new TypeError("Delegation Validation limitations must be unique.");
+    throw new TypeError("Delegation Verification limitations must be unique.");
   }
   return deepFreeze({
     status: input.status,
@@ -671,7 +671,7 @@ function snapshotCoverage(
       "disposition",
       "itemCount",
     ]);
-    if (!["narrative", "evidence", "artifacts", "validation", "effects"].includes(item.form)) {
+    if (!["narrative", "evidence", "artifacts", "verification", "effects"].includes(item.form)) {
       throw new TypeError("Delegation expectation coverage form is unsupported.");
     }
     if (typeof item.required !== "boolean") {
@@ -699,8 +699,8 @@ function snapshotUncertainty(
   const supported: readonly DelegationUncertainty[] = [
     "effects_partial",
     "effects_unknown",
-    "validation_inconclusive",
-    "validation_unavailable",
+    "verification_inconclusive",
+    "verification_unavailable",
     "model_input_tokens_unavailable",
     "model_output_tokens_unavailable",
     "cost_units_unavailable",
@@ -730,7 +730,7 @@ function coverageFor(
   narrative: DelegationNarrative | null,
   evidence: DelegationReferenceTransfer<EvidenceRef>,
   artifacts: DelegationReferenceTransfer<ArtifactRef>,
-  validation: DelegationValidationSummary,
+  verification: DelegationVerificationSummary,
   _effects: DelegationEffectSummary,
 ): DelegationResultExpectationCoverage {
   let present = false;
@@ -749,8 +749,8 @@ function coverageFor(
       present = artifacts.totalCount > 0;
       itemCount = artifacts.totalCount;
       break;
-    case "validation":
-      unavailable = validation.status === "unavailable";
+    case "verification":
+      unavailable = verification.status === "unavailable";
       present = !unavailable;
       itemCount = present ? 1 : 0;
       break;
@@ -774,15 +774,15 @@ function coverageFor(
 }
 
 function deriveUncertainty(
-  validation: DelegationValidationSummary,
+  verification: DelegationVerificationSummary,
   effects: DelegationEffectSummary,
   usage: DelegationUsageSummary,
 ): readonly DelegationUncertainty[] {
   const values: DelegationUncertainty[] = [];
   if (effects.status === "partial") values.push("effects_partial");
   if (effects.status === "unknown") values.push("effects_unknown");
-  if (validation.status === "inconclusive") values.push("validation_inconclusive");
-  if (validation.status === "unavailable") values.push("validation_unavailable");
+  if (verification.status === "inconclusive") values.push("verification_inconclusive");
+  if (verification.status === "unavailable") values.push("verification_unavailable");
   if (usage.modelInputTokens.status === "unavailable") values.push("model_input_tokens_unavailable");
   if (usage.modelOutputTokens.status === "unavailable") values.push("model_output_tokens_unavailable");
   if (usage.costUnits.status === "unavailable") values.push("cost_units_unavailable");

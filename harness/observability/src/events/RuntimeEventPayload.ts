@@ -5,7 +5,7 @@ export type RuntimeRunItemKind =
   | "state_transition"
   | "pending_transition"
   | "cancellation_transition"
-  | "validation_feedback"
+  | "verification_feedback"
   | "progress_assessment"
   | "progress_correction"
   | "terminal_transition";
@@ -52,7 +52,7 @@ export type RuntimeRunProgressFactKind =
   | "tool_rejected"
   | "interaction_settlement"
   | "descendant_settlement"
-  | "validation_feedback"
+  | "verification_feedback"
   | "completion_gate"
   | "evidence_ref"
   | "artifact_ref"
@@ -138,7 +138,7 @@ export interface RunDescendantSettledRuntimeEventPayload
   readonly expectationUnmetCount: number;
   readonly evidenceCount: number;
   readonly artifactCount: number;
-  readonly validationStatus: string;
+  readonly verificationStatus: string;
   readonly effectStatus: string;
   readonly uncertaintyCount: number;
   readonly controllerTurns: number;
@@ -284,14 +284,14 @@ export interface InteractionSettledRuntimeEventPayload {
   readonly terminalRecordId: string;
 }
 
-export interface ValidationCheckStartedRuntimeEventPayload {
+export interface VerificationCheckStartedRuntimeEventPayload {
   readonly snapshotRevision: number;
   readonly attemptId: string;
   readonly requirementId: string;
   readonly origin: "controller" | "trusted_automatic" | "trusted_workflow" | "owner_request";
 }
 
-export interface ValidationCheckFinishedRuntimeEventPayload {
+export interface VerificationCheckFinishedRuntimeEventPayload {
   readonly snapshotRevision: number;
   readonly attemptId: string;
   readonly status: "invalid" | "unavailable" | "denied" | "cancelled" | "timed_out" | "failed" | "partial" | "completed";
@@ -300,14 +300,14 @@ export interface ValidationCheckFinishedRuntimeEventPayload {
   readonly coverageRatio: number;
 }
 
-export interface ValidationAssessmentCommittedRuntimeEventPayload {
+export interface VerificationAssessmentCommittedRuntimeEventPayload {
   readonly snapshotRevision: number;
   readonly requirementId: string;
   readonly assessmentId: string;
   readonly verdict: "satisfied" | "violated" | "inconclusive";
 }
 
-export interface ValidationGateEvaluatedRuntimeEventPayload {
+export interface VerificationGateEvaluatedRuntimeEventPayload {
   readonly snapshotRevision: number;
   readonly gateId: string;
   readonly status: "completion_eligible" | "blocked_unassessed" | "blocked_pending" | "blocked_stale" | "blocked_violated" | "blocked_inconclusive" | "invalid" | "failed";
@@ -337,10 +337,10 @@ export interface RuntimeEventPayloadMap {
   readonly "operation.finished": OperationFinishedRuntimeEventPayload;
   readonly "interaction.opened": InteractionOpenedRuntimeEventPayload;
   readonly "interaction.settled": InteractionSettledRuntimeEventPayload;
-  readonly "validation.check.started": ValidationCheckStartedRuntimeEventPayload;
-  readonly "validation.check.finished": ValidationCheckFinishedRuntimeEventPayload;
-  readonly "validation.assessment.committed": ValidationAssessmentCommittedRuntimeEventPayload;
-  readonly "validation.gate.evaluated": ValidationGateEvaluatedRuntimeEventPayload;
+  readonly "verification.check.started": VerificationCheckStartedRuntimeEventPayload;
+  readonly "verification.check.finished": VerificationCheckFinishedRuntimeEventPayload;
+  readonly "verification.assessment.committed": VerificationAssessmentCommittedRuntimeEventPayload;
+  readonly "verification.gate.evaluated": VerificationGateEvaluatedRuntimeEventPayload;
 }
 
 export type RuntimeEventName = keyof RuntimeEventPayloadMap;

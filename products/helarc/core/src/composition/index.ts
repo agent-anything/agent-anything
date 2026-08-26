@@ -26,7 +26,7 @@ export type {
   HelarcRunActionSettlementStatus,
   HelarcRunActionSummary,
   HelarcRunResultSummary,
-  HelarcValidationCommunication,
+  HelarcVerificationCommunication,
 } from "./HelarcProductResult.js";
 export {
   mapRuntimeEventToHelarcActivity,

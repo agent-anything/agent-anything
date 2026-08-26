@@ -15,7 +15,7 @@ export {
   createSteeringContextAdmissionProfile,
   createTaskContextContribution,
   createTaskContextAdmissionProfile,
-  createValidationContextAdmissionProfile,
+  createVerificationContextAdmissionProfile,
   toContextJsonValue,
 } from "./RunContextContribution.js";
 export type { CreateRunContextContributionInput } from "./RunContextContribution.js";

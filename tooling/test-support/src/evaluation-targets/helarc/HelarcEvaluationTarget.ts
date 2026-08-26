@@ -19,7 +19,7 @@ import type {
   ActionRetryDecisionPort,
 } from "@agent-anything/action-execution/enforcement";
 import { Runner, type RunTreeLimits } from "@agent-anything/agent-runtime/runner";
-import { CurrentValidationCompletionGate } from "@agent-anything/validation/completion";
+import { CurrentVerificationCompletionGate } from "@agent-anything/verification/completion";
 import { createRunFailureCause, type RunFinalizationContext, type RunResult } from "@agent-anything/agent-runtime/run";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import {
@@ -85,7 +85,7 @@ import {
   HELARC_TASK_STOP_BINDING,
   HELARC_TASK_STOP_OPERATION,
 } from "@agent-anything/helarc/tools";
-import { bindHelarcValidationCompletionGate } from "@agent-anything/helarc/validation";
+import { bindHelarcVerificationCompletionGate } from "@agent-anything/helarc/verification";
 import { createHelarcTask } from "@agent-anything/helarc/task";
 import {
   createCodeAgentCanonicalWorkspaceRoots,
@@ -150,7 +150,7 @@ export interface HelarcEvaluationExecutableCase {
   readonly fixture: HelarcEvaluationCaseDefinition["fixture"];
   readonly script: HelarcEvaluationCaseDefinition["script"];
   readonly expectedClaim: HelarcEvaluationCaseDefinition["expectedClaim"];
-  readonly validationTargets: HelarcEvaluationCaseDefinition["validationTargets"];
+  readonly verificationTargets: HelarcEvaluationCaseDefinition["verificationTargets"];
 }
 
 export interface HelarcEvaluationRunOptions {
@@ -563,8 +563,8 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     codeSource: createLocalCodeSourcePort(clock.now),
     fileActions,
     commandActions,
-    validationTargets: bindValidationTargets(
-      caseDefinition.validationTargets,
+    verificationTargets: bindVerificationTargets(
+      caseDefinition.verificationTargets,
       workspace.primary.id,
     ),
     now: clock.now,
@@ -603,9 +603,9 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
         retry: createEvaluationActionRetryPort(),
       },
     },
-    validation: bindHelarcValidationCompletionGate(
-      product.validation,
-      new CurrentValidationCompletionGate(clock.now),
+    verification: bindHelarcVerificationCompletionGate(
+      product.verification,
+      new CurrentVerificationCompletionGate(clock.now),
     ),
     interactions: product.interactions,
     runtimeEventPublisher: runtimePublisher,
@@ -684,9 +684,9 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
         enforcement: "disabled",
         metadata: {},
       },
-      validation: Object.freeze({
-        profile: product.validation.profile,
-        completion: createEvaluationValidationCompletionConfig(),
+      verification: Object.freeze({
+        profile: product.verification.profile,
+        completion: createEvaluationVerificationCompletionConfig(),
       }),
       limits: {
         maxIterations: options.maxIterations ?? 5,
@@ -797,7 +797,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
   const productResult = product.projectResult(
     hostResult.runResult,
     "disabled",
-    terminalProjection.validation,
+    terminalProjection.verification,
   );
   if (trace === null) throw new TypeError("Helarc Evaluation requires one complete RunTrace.");
   const observationRef = createEvaluationRecordRef({
@@ -853,10 +853,10 @@ function createEvaluationInteractionSubmission(
   return Object.freeze({ answers: Object.freeze(normalized) });
 }
 
-function bindValidationTargets(
-  targets: HelarcEvaluationCaseDefinition["validationTargets"],
+function bindVerificationTargets(
+  targets: HelarcEvaluationCaseDefinition["verificationTargets"],
   primaryWorkspaceId: string,
-): HelarcEvaluationCaseDefinition["validationTargets"] {
+): HelarcEvaluationCaseDefinition["verificationTargets"] {
   return Object.freeze(targets.map((requirement) => Object.freeze({
     ...requirement,
     target: Object.freeze({
@@ -873,15 +873,15 @@ function bindValidationTargets(
   })));
 }
 
-function createEvaluationValidationCompletionConfig() {
+function createEvaluationVerificationCompletionConfig() {
   const owner = (id: string) => Object.freeze({
     owner: "helarc-evaluation",
-    kind: "validation",
+    kind: "verification",
     id,
     revision: "1",
   });
   return Object.freeze({
-    policy: owner("current-validation-gate"),
+    policy: owner("current-verification-gate"),
     outputContract: owner("helarc-output-contract"),
     conditions: Object.freeze([]),
     maximumDurationMs: 1_000,
@@ -1138,16 +1138,16 @@ function captureHelarcMaterial(
       })),
       issues: material.trace.issues.map((issue) => issue.code),
     }),
-    captured("validation-summary", "validation", {
-      status: material.product.validation.status,
-      snapshotRevision: material.product.validation.snapshotRevision,
-      counts: material.product.validation.counts.map((count) => ({
+    captured("verification-summary", "verification", {
+      status: material.product.verification.status,
+      snapshotRevision: material.product.verification.snapshotRevision,
+      counts: material.product.verification.counts.map((count) => ({
         state: count.state,
         count: count.count,
       })),
-      activeChecks: material.product.validation.activeChecks,
-      gateStatus: material.product.validation.gateStatus,
-      safeReasons: material.product.validation.safeReasons,
+      activeChecks: material.product.verification.activeChecks,
+      gateStatus: material.product.verification.gateStatus,
+      safeReasons: material.product.verification.safeReasons,
     }),
     captured("tool-exposure-summary", "agent-core", {
       turns: exposureTurns,

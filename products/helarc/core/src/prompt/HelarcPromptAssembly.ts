@@ -109,7 +109,7 @@ function assemble(
     promptSection("context_projection", "user", contextContent),
     promptSection("current_plan", "user", `Current plan:\n${JSON.stringify(input.plan)}`),
     promptSection("current_progress", "user", `Current progress:\n${JSON.stringify(input.progress)}`),
-    promptSection("current_validation", "user", `Current validation:\n${JSON.stringify(input.validation)}`),
+    promptSection("current_validation", "user", `Current verification:\n${JSON.stringify(input.verification)}`),
     promptSection("permission_context", "user", `Permission context:\n${JSON.stringify(input.permission)}`),
     promptSection("pending_interactions", "user", `Pending interactions:\n${JSON.stringify(input.pending)}`),
     ...(correctionMessage === null

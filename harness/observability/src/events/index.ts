@@ -34,10 +34,10 @@ export type {
   RuntimeRunProgressFactKind,
   RuntimeRunProgressFactRef,
   RuntimeRunProgressReasonCode,
-  ValidationAssessmentCommittedRuntimeEventPayload,
-  ValidationCheckFinishedRuntimeEventPayload,
-  ValidationCheckStartedRuntimeEventPayload,
-  ValidationGateEvaluatedRuntimeEventPayload,
+  VerificationAssessmentCommittedRuntimeEventPayload,
+  VerificationCheckFinishedRuntimeEventPayload,
+  VerificationCheckStartedRuntimeEventPayload,
+  VerificationGateEvaluatedRuntimeEventPayload,
   RuntimeTerminalStatus,
 } from "./RuntimeEventPayload.js";
 export { RuntimeEventStream, type CreateRuntimeEventStreamInput, type RuntimeEventIdentityFactory, type RuntimeEventIdentityInput } from "./RuntimeEventStream.js";

@@ -25,7 +25,7 @@ test("accepts current owner-directed source forms", () => {
       text: "export interface CatalogRealizationRecord {}",
     },
     {
-      sourcePath: "products/helarc/core/src/validation/HelarcValidationComposition.ts",
+      sourcePath: "products/helarc/core/src/verification/HelarcVerificationComposition.ts",
       text: [
         'import type { CompositeDefinition } from "@agent-anything/operation-composition/definition";',
         'import type { CodeSourcePort } from "@agent-anything/helarc-code-agent/source";',
@@ -232,7 +232,7 @@ test("rejects opaque Provider continuation in canonical Context, Run, and Produc
   }
 });
 
-test("rejects detailed Validation authority in bounded state and consumer surfaces", () => {
+test("rejects detailed Verification authority in bounded state and consumer surfaces", () => {
   for (const sourcePath of [
     "harness/agent-core/contracts/src/run/RunState.ts",
     "harness/context/src/projection/ContextProjection.ts",
@@ -243,32 +243,32 @@ test("rejects detailed Validation authority in bounded state and consumer surfac
   ]) {
     const violations = evaluateSourceOwnershipRules({
       sourcePath,
-      text: "readonly validation: ValidationLedgerSnapshot;",
+      text: "readonly verification: VerificationLedgerSnapshot;",
     });
     assert.deepEqual(
       violations.map(({ rule }) => rule),
-      ["validation_detailed_state_leakage"],
+      ["verification_detailed_state_leakage"],
     );
   }
 });
 
-test("rejects physical execution and semantic processor dependencies in Validation owners", () => {
+test("rejects physical execution and semantic processor dependencies in Verification owners", () => {
   const physical = evaluateSourceOwnershipRules({
-    sourcePath: "products/helarc/core/src/validation/PhysicalValidation.ts",
+    sourcePath: "products/helarc/core/src/verification/PhysicalVerification.ts",
     text: 'import { executor } from "@agent-anything/helarc-local-environment/command";',
   });
   const semantic = evaluateSourceOwnershipRules({
-    sourcePath: "harness/validation/src/execution/LanguageValidation.ts",
+    sourcePath: "harness/verification/src/execution/LanguageVerification.ts",
     text: 'import { parse } from "@vendor/tree-sitter-typescript";',
   });
 
   assert.deepEqual(
     physical.map(({ rule }) => rule),
-    ["product_validation_physical_execution_dependency"],
+    ["product_verification_physical_execution_dependency"],
   );
   assert.deepEqual(
     semantic.map(({ rule }) => rule),
-    ["validation_semantic_processor_dependency"],
+    ["verification_semantic_processor_dependency"],
   );
 });
 
@@ -284,15 +284,15 @@ test("requires the Runner Completion Gate before success settlement", () => {
   );
 });
 
-test("rejects production no-check Validation factories", () => {
+test("rejects production no-check Verification factories", () => {
   const violations = evaluateSourceOwnershipRules({
-    sourcePath: "harness/validation/src/execution/NoCheckFactory.ts",
-    text: "export function createNoCheckValidationExecutionFactory() {}",
+    sourcePath: "harness/verification/src/execution/NoCheckFactory.ts",
+    text: "export function createNoCheckVerificationExecutionFactory() {}",
   });
 
   assert.deepEqual(
     violations.map(({ rule }) => rule),
-    ["production_validation_bypass"],
+    ["production_verification_bypass"],
   );
 });
 

@@ -1286,7 +1286,7 @@ function createControllerInput(): ControllerInput<TestOutput> {
       correctionRounds: 0,
       activeCorrectionRound: null,
     },
-    validation: { snapshot: { runId: "run_001", revision: 0 }, gate: null },
+    verification: { snapshot: { runId: "run_001", revision: 0 }, gate: null },
     permission: testPermissionProjection(),
     pending: [],
     workspace: {

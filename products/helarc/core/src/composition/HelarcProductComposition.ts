@@ -4,7 +4,7 @@ import type { Controller } from "@agent-anything/agent-runtime/controller";
 import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/runner";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
-import type { ValidationHostProjection } from "@agent-anything/validation/projection";
+import type { VerificationHostProjection } from "@agent-anything/verification/projection";
 import type { Agent } from "@agent-anything/agent-core/agent";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
@@ -34,10 +34,10 @@ import {
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
 import type { Provider } from "@agent-anything/model-interaction";
 import {
-  createHelarcValidationComposition,
-  type HelarcExactTargetValidationRequirement,
-  type HelarcValidationComposition,
-} from "../validation/index.js";
+  createHelarcVerificationComposition,
+  type HelarcExactTargetVerificationRequirement,
+  type HelarcVerificationComposition,
+} from "../verification/index.js";
 import {
   ModelContinuationLifecycle,
   type ModelContinuationSafeEvent,
@@ -83,7 +83,7 @@ export interface CreateHelarcProductCompositionInput {
   readonly codeSource: CodeSourcePort;
   readonly fileActions: HelarcFileActionContribution;
   readonly commandActions: HelarcCommandActionContribution;
-  readonly validationTargets?: readonly HelarcExactTargetValidationRequirement[];
+  readonly verificationTargets?: readonly HelarcExactTargetVerificationRequirement[];
   readonly modelContinuationStore?: ModelContinuationStore;
   readonly now?: () => string;
 }
@@ -95,7 +95,7 @@ export interface HelarcProductComposition {
   readonly actions: Awaited<ReturnType<typeof createHelarcActionComposition>>;
   readonly interactions: InteractionProtocolRegistrySnapshot;
   readonly delegation: RunnerDelegationComposition;
-  readonly validation: HelarcValidationComposition;
+  readonly verification: HelarcVerificationComposition;
   readonly runMetadata: Readonly<Record<string, unknown>>;
   getProductProjection(): HelarcProductRunProjection;
   subscribeProductProjection(listener: HelarcProductRunProjectionListener): () => void;
@@ -106,7 +106,7 @@ export interface HelarcProductComposition {
   projectResult(
     runResult: RunResult<HelarcAgentOutput>,
     selectedEnforcement: SandboxEnforcement,
-    validation: ValidationHostProjection | null,
+    verification: VerificationHostProjection | null,
   ): HelarcProductResult;
 }
 
@@ -128,11 +128,11 @@ export async function createHelarcProductComposition(
   const delegatedAgent = createHelarcDelegatedWorkerAgent({ providerId, modelId });
   const clarification = createHelarcClarificationContribution(admittedAt);
   const descendant = createHelarcDescendantAgentContribution(delegatedAgent, admittedAt);
-  const validation = await createHelarcValidationComposition({
+  const verification = await createHelarcVerificationComposition({
     workspace: input.workspace,
     codeSource: input.codeSource,
     commandEnvironment: input.commandActions.environment,
-    exactTargets: input.validationTargets,
+    exactTargets: input.verificationTargets,
     admittedAt,
     now,
   });
@@ -214,7 +214,7 @@ export async function createHelarcProductComposition(
     actions,
     interactions,
     delegation: descendant.delegation,
-    validation,
+    verification,
     runMetadata,
     getProductProjection(): HelarcProductRunProjection {
       return productProjection;
@@ -254,14 +254,14 @@ export async function createHelarcProductComposition(
     projectResult(
       runResult: RunResult<HelarcAgentOutput>,
       selectedEnforcement: SandboxEnforcement,
-      validationProjection: ValidationHostProjection | null,
+      verificationProjection: VerificationHostProjection | null,
     ): HelarcProductResult {
       const result = projectHelarcProductResult(
         input.task,
         input.workspace,
         runResult,
         selectedEnforcement,
-        validationProjection,
+        verificationProjection,
       );
       publishProductUpdate({ kind: "result_settled", result });
       return result;

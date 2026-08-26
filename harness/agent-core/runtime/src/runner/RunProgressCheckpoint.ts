@@ -39,7 +39,7 @@ export async function assessCommittedRunProgress<TOutput>(
     toolSelectionRevision: input.config.tools.revision,
     permissionFingerprint: await permissionFingerprint(input.state, input.config),
     steeringFingerprint: await steeringFingerprint(input.state.items),
-    validationSnapshotRevision: input.state.validation.snapshot.revision,
+    verificationSnapshotRevision: input.state.verification.snapshot.revision,
   });
   return assessRunProgress({
     runId: input.state.run.id,
@@ -106,8 +106,8 @@ async function collectCommittedFacts<TOutput>(
           return [{ kind: "steering", steering: payload.steering }];
         }
         return [];
-      case "validation_feedback":
-        return [{ kind: "validation_feedback", validation: payload.validation }];
+      case "verification_feedback":
+        return [{ kind: "verification_feedback", verification: payload.verification }];
       case "pending_transition":
         return payload.transition === "opened" && payload.pending.required
           ? [{ kind: "required_pending", pending: projectPendingRunSubject(payload.pending) }]

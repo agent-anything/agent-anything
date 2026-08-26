@@ -82,7 +82,7 @@ export function createBlockedRunResult<TOutput = never>(input: CreateRunResultBa
   if (
     code !== "runtime_no_safe_path" &&
     code !== "runtime_no_progress" &&
-    code !== "validation_blocked"
+    code !== "verification_blocked"
   ) {
     throw new TypeError("Blocked RunResult code is invalid.");
   }
@@ -205,14 +205,14 @@ function assertRunFailureCause(value: RunFailureCause, field: string): void {
   const kinds = new Set([
     "runtime", "model", "provider", "operation", "interaction", "approval",
     "permission", "policy", "action_execution", "sandbox", "tool", "composite",
-    "descendant", "context", "audit", "telemetry", "validation",
+    "descendant", "context", "audit", "telemetry", "verification",
   ]);
   if (!isRecord(value) || !kinds.has(String(value.kind)) || !isRecord(value.failure)) {
     throw new TypeError(`${field} must be a valid RunFailureCause.`);
   }
   token(value.failure.code as string, `${field}.failure.code`);
   token(value.failure.message as string, `${field}.failure.message`);
-  if (value.kind === "validation") {
+  if (value.kind === "verification") {
     token(value.failure.stage as string, `${field}.failure.stage`);
     if (typeof value.failure.retryable !== "boolean") {
       throw new TypeError(`${field}.failure.retryable must be boolean.`);
@@ -238,7 +238,7 @@ function assertFailureCode(code: RunFailureCode): void {
   if (![
     "runtime_execution_failed", "runtime_limit_exceeded", "runtime_deadline_exceeded",
     "context_projection_failed", "controller_failed", "operation_failed",
-    "interaction_failed", "required_finalization_failed", "validation_failed",
+    "interaction_failed", "required_finalization_failed", "verification_failed",
     "tool_exposure_failed",
     "unknown_effect",
   ].includes(code)) {

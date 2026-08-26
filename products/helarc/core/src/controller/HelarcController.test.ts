@@ -441,7 +441,7 @@ function createControllerInput(
       correctionRounds: 0,
       activeCorrectionRound: null,
     },
-    validation: { snapshot: { runId: "run-1", revision: 0 }, gate: null },
+    verification: { snapshot: { runId: "run-1", revision: 0 }, gate: null },
     permission: {
       profile: {
         profileId: "test-profile",

@@ -101,11 +101,11 @@ export function prepareControllerOperation<TOutput>(
       correctionRounds: input.state.progress.correctionRounds,
       activeCorrectionRound: input.state.progress.activeCorrectionRound,
     }),
-    validation: Object.freeze({
-      snapshot: Object.freeze({ ...input.state.validation.snapshot }),
-      gate: input.state.validation.gate === null
+    verification: Object.freeze({
+      snapshot: Object.freeze({ ...input.state.verification.snapshot }),
+      gate: input.state.verification.gate === null
         ? null
-        : Object.freeze({ ...input.state.validation.gate }),
+        : Object.freeze({ ...input.state.verification.gate }),
     }),
     permission: projectPermissionContext(
       input.config.permissions,

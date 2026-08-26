@@ -21,8 +21,8 @@ import {
   createToolRegistrationSnapshot,
 } from "@agent-anything/tools/registration";
 import {
-  CurrentValidationCompletionGate,
-} from "@agent-anything/validation/completion";
+  CurrentVerificationCompletionGate,
+} from "@agent-anything/verification/completion";
 import type {
   Controller,
   ControllerCallContext,
@@ -51,7 +51,7 @@ import {
   type RunnerDependencies,
 } from "@agent-anything/agent-runtime/runner";
 import { createTestContextProjection } from "../TestContextProjectionConfiguration.js";
-import { createTestValidationExecutionFactory } from "../TestValidationExecutionFactory.js";
+import { createTestVerificationExecutionFactory } from "../TestVerificationExecutionFactory.js";
 
 const NOW = "2026-08-24T00:00:00.000Z";
 const SECRET = "run-progress-evaluation-prohibited-payload";
@@ -252,9 +252,9 @@ async function runBoundedPlanChurnProbe(): Promise<RunProgressRuntimeProbe> {
     controller,
     contextProjection: createTestContextProjection(),
     operations,
-    validation: {
-      executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
-      completionGate: new CurrentValidationCompletionGate(() => NOW),
+    verification: {
+      executionFactory: createTestVerificationExecutionFactory({ now: () => NOW }),
+      completionGate: new CurrentVerificationCompletionGate(() => NOW),
       preparation: null,
       settledOperationResults: null,
       checkResults: null,
@@ -344,7 +344,7 @@ function runConfig(operations: RunnerOperationComposition): RootRunConfig {
     permissions: permissionConfig(),
     tools: createFixedLocalToolSelection(registrations, operations.catalog, []),
     actionExecution: null,
-    validation: emptyValidationConfig(),
+    verification: emptyVerificationConfig(),
     limits: {
       maxIterations: 20,
       maxActions: 20,
@@ -465,8 +465,8 @@ function advance(
   });
 }
 
-function emptyValidationConfig(): RootRunConfig["validation"] {
-  const ref = (id: string) => ({ owner: "evaluation", kind: "validation", id, revision: "1" });
+function emptyVerificationConfig(): RootRunConfig["verification"] {
+  const ref = (id: string) => ({ owner: "evaluation", kind: "verification", id, revision: "1" });
   const source = { ...ref("profile-source"), sourceKind: "run_invocation" as const };
   return deepFreeze({
     profile: {
@@ -547,7 +547,7 @@ function basis(
     toolSelectionRevision: "tool-selection-1",
     permissionFingerprint: digest("permission"),
     steeringFingerprint: null,
-    validationSnapshotRevision: 0,
+    verificationSnapshotRevision: 0,
     ...overrides,
   });
 }

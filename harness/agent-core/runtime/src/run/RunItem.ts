@@ -11,7 +11,7 @@ import type { RunSteeringApplication } from "./RunSteering.js";
 import type { RunFailureCause } from "./RunFailure.js";
 import type { RunObservation } from "./RunObservation.js";
 import type { RunBlockedCode, RunFailureCode, RunResultStatus } from "./RunStatus.js";
-import type { ValidationRunnerProjection } from "@agent-anything/validation/projection";
+import type { VerificationRunnerProjection } from "@agent-anything/verification/projection";
 import type { ToolRevisionRef } from "@agent-anything/tools/identity";
 import type { ToolBindingUnavailableReason } from "@agent-anything/tools/selection";
 import type {
@@ -83,8 +83,8 @@ export type RunItemPayload<TOutput = unknown> =
     }
   | { readonly kind: "cancellation_transition"; readonly transition: "requested" | "settled"; readonly cancellation: RunCancellationSummary }
   | {
-      readonly kind: "validation_feedback";
-      readonly validation: ValidationRunnerProjection;
+      readonly kind: "verification_feedback";
+      readonly verification: VerificationRunnerProjection;
     }
   | {
       readonly kind: "progress_assessment";

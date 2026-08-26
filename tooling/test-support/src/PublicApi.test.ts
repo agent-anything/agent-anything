@@ -11,7 +11,7 @@ describe("Test Support public API", () => {
       "FakeRuntimeEventPublisher",
       "FakeTelemetryPort",
       "createTestContextProjection",
-      "createTestValidationExecutionFactory",
+      "createTestVerificationExecutionFactory",
     ]);
   });
 });

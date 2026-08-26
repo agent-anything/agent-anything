@@ -123,32 +123,32 @@ describe("RunTraceAssembler", () => {
       code: null,
       terminalRecordId: "interaction-terminal-1",
     }, COMPLETED_AT);
-    stream.emit("validation.check.started", {
+    stream.emit("verification.check.started", {
       snapshotRevision: 4,
-      attemptId: "validation-attempt-1",
+      attemptId: "verification-attempt-1",
       requirementId: "requirement-1",
       origin: "trusted_automatic",
     }, STARTED_AT);
-    stream.emit("validation.check.finished", {
+    stream.emit("verification.check.finished", {
       snapshotRevision: 5,
-      attemptId: "validation-attempt-1",
+      attemptId: "verification-attempt-1",
       status: "completed",
       code: null,
       durationMs: 25,
       coverageRatio: 1,
     }, COMPLETED_AT);
-    stream.emit("validation.assessment.committed", {
+    stream.emit("verification.assessment.committed", {
       snapshotRevision: 7,
       requirementId: "requirement-1",
       assessmentId: "assessment-1",
       verdict: "satisfied",
     }, COMPLETED_AT);
-    stream.emit("validation.gate.evaluated", {
+    stream.emit("verification.gate.evaluated", {
       snapshotRevision: 8,
       gateId: "gate-1",
       status: "completion_eligible",
       disposition: null,
-      reasonCodes: ["validation_completion_eligible"],
+      reasonCodes: ["verification_completion_eligible"],
     }, COMPLETED_AT);
     stream.emit("run.item.appended", {
       itemId: "item-1",
@@ -216,11 +216,11 @@ describe("RunTraceAssembler", () => {
       outcome: "projected",
       code: null,
     })]);
-    expect(trace.spans[0]?.attributes.validation).toEqual([
+    expect(trace.spans[0]?.attributes.verification).toEqual([
       {
         event: "check_started",
         snapshotRevision: 4,
-        subjectId: "validation-attempt-1",
+        subjectId: "verification-attempt-1",
         status: "running",
         code: null,
         durationMs: null,
@@ -229,7 +229,7 @@ describe("RunTraceAssembler", () => {
       {
         event: "check_finished",
         snapshotRevision: 5,
-        subjectId: "validation-attempt-1",
+        subjectId: "verification-attempt-1",
         status: "completed",
         code: null,
         durationMs: 25,
@@ -249,7 +249,7 @@ describe("RunTraceAssembler", () => {
         snapshotRevision: 8,
         subjectId: "gate-1",
         status: "completion_eligible",
-        code: "validation_completion_eligible",
+        code: "verification_completion_eligible",
         durationMs: null,
         coverageRatio: null,
       },

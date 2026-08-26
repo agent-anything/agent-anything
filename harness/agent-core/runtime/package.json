@@ -65,7 +65,7 @@
     "@agent-anything/model-interaction": "workspace:*",
     "@agent-anything/agent-core": "workspace:*",
     "@agent-anything/tools": "workspace:*",
-    "@agent-anything/validation": "workspace:*",
+    "@agent-anything/verification": "workspace:*",
     "@agent-anything/workspace": "workspace:*"
   },
   "devDependencies": {

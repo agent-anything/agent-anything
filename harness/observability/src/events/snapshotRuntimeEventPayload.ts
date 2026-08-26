@@ -75,7 +75,7 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
         expectationUnmetCount: nonNegativeInteger(payload.expectationUnmetCount, "run.descendant.settled.expectationUnmetCount"),
         evidenceCount: nonNegativeInteger(payload.evidenceCount, "run.descendant.settled.evidenceCount"),
         artifactCount: nonNegativeInteger(payload.artifactCount, "run.descendant.settled.artifactCount"),
-        validationStatus: token(payload.validationStatus, "run.descendant.settled.validationStatus"),
+        verificationStatus: token(payload.verificationStatus, "run.descendant.settled.verificationStatus"),
         effectStatus: token(payload.effectStatus, "run.descendant.settled.effectStatus"),
         uncertaintyCount: nonNegativeInteger(payload.uncertaintyCount, "run.descendant.settled.uncertaintyCount"),
         controllerTurns: nonNegativeInteger(payload.controllerTurns, "run.descendant.settled.controllerTurns"),
@@ -172,47 +172,47 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
         code: nullableToken(payload.code, "interaction.settled.code"),
         terminalRecordId: token(payload.terminalRecordId, "interaction.settled.terminalRecordId"),
       }) as RuntimeEventPayloadMap[TName];
-    case "validation.check.started":
+    case "verification.check.started":
       return freeze({
-        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "validation.check.started.snapshotRevision"),
-        attemptId: token(payload.attemptId, "validation.check.started.attemptId"),
-        requirementId: token(payload.requirementId, "validation.check.started.requirementId"),
-        origin: oneOf(payload.origin, ["controller", "trusted_automatic", "trusted_workflow", "owner_request"] as const, "validation.check.started.origin"),
+        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "verification.check.started.snapshotRevision"),
+        attemptId: token(payload.attemptId, "verification.check.started.attemptId"),
+        requirementId: token(payload.requirementId, "verification.check.started.requirementId"),
+        origin: oneOf(payload.origin, ["controller", "trusted_automatic", "trusted_workflow", "owner_request"] as const, "verification.check.started.origin"),
       }) as RuntimeEventPayloadMap[TName];
-    case "validation.check.finished":
+    case "verification.check.finished":
       return freeze({
-        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "validation.check.finished.snapshotRevision"),
-        attemptId: token(payload.attemptId, "validation.check.finished.attemptId"),
-        status: oneOf(payload.status, ["invalid", "unavailable", "denied", "cancelled", "timed_out", "failed", "partial", "completed"] as const, "validation.check.finished.status"),
-        code: nullableToken(payload.code, "validation.check.finished.code"),
-        durationMs: nonNegative(payload.durationMs, "validation.check.finished.durationMs"),
-        coverageRatio: ratio(payload.coverageRatio, "validation.check.finished.coverageRatio"),
+        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "verification.check.finished.snapshotRevision"),
+        attemptId: token(payload.attemptId, "verification.check.finished.attemptId"),
+        status: oneOf(payload.status, ["invalid", "unavailable", "denied", "cancelled", "timed_out", "failed", "partial", "completed"] as const, "verification.check.finished.status"),
+        code: nullableToken(payload.code, "verification.check.finished.code"),
+        durationMs: nonNegative(payload.durationMs, "verification.check.finished.durationMs"),
+        coverageRatio: ratio(payload.coverageRatio, "verification.check.finished.coverageRatio"),
       }) as RuntimeEventPayloadMap[TName];
-    case "validation.assessment.committed":
+    case "verification.assessment.committed":
       return freeze({
-        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "validation.assessment.committed.snapshotRevision"),
-        requirementId: token(payload.requirementId, "validation.assessment.committed.requirementId"),
-        assessmentId: token(payload.assessmentId, "validation.assessment.committed.assessmentId"),
-        verdict: oneOf(payload.verdict, ["satisfied", "violated", "inconclusive"] as const, "validation.assessment.committed.verdict"),
+        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "verification.assessment.committed.snapshotRevision"),
+        requirementId: token(payload.requirementId, "verification.assessment.committed.requirementId"),
+        assessmentId: token(payload.assessmentId, "verification.assessment.committed.assessmentId"),
+        verdict: oneOf(payload.verdict, ["satisfied", "violated", "inconclusive"] as const, "verification.assessment.committed.verdict"),
       }) as RuntimeEventPayloadMap[TName];
-    case "validation.gate.evaluated":
+    case "verification.gate.evaluated":
       return freeze({
-        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "validation.gate.evaluated.snapshotRevision"),
-        gateId: token(payload.gateId, "validation.gate.evaluated.gateId"),
-        status: oneOf(payload.status, ["completion_eligible", "blocked_unassessed", "blocked_pending", "blocked_stale", "blocked_violated", "blocked_inconclusive", "invalid", "failed"] as const, "validation.gate.evaluated.status"),
-        disposition: payload.disposition === null ? null : oneOf(payload.disposition, ["continue", "wait", "block", "fail"] as const, "validation.gate.evaluated.disposition"),
-        reasonCodes: tokenArray(payload.reasonCodes, "validation.gate.evaluated.reasonCodes"),
+        snapshotRevision: nonNegativeInteger(payload.snapshotRevision, "verification.gate.evaluated.snapshotRevision"),
+        gateId: token(payload.gateId, "verification.gate.evaluated.gateId"),
+        status: oneOf(payload.status, ["completion_eligible", "blocked_unassessed", "blocked_pending", "blocked_stale", "blocked_violated", "blocked_inconclusive", "invalid", "failed"] as const, "verification.gate.evaluated.status"),
+        disposition: payload.disposition === null ? null : oneOf(payload.disposition, ["continue", "wait", "block", "fail"] as const, "verification.gate.evaluated.disposition"),
+        reasonCodes: tokenArray(payload.reasonCodes, "verification.gate.evaluated.reasonCodes"),
       }) as RuntimeEventPayloadMap[TName];
   }
 }
 
-const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "observation", "state_transition", "pending_transition", "cancellation_transition", "validation_feedback", "progress_assessment", "progress_correction", "terminal_transition"];
+const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "observation", "state_transition", "pending_transition", "cancellation_transition", "verification_feedback", "progress_assessment", "progress_correction", "terminal_transition"];
 const terminalStatuses: readonly RuntimeTerminalStatus[] = ["succeeded", "blocked", "failed", "cancelled"];
 const bindingKinds: readonly RuntimeOperationBindingKind[] = ["internal", "direct", "hosted", "composite", "descendant_agent"];
 const correlationKinds: readonly RuntimeOperationCorrelationKind[] = ["run_action", "run_request", "owner_operation", "evaluation_trial"];
 const operationStatuses: readonly RuntimeOperationStatus[] = ["succeeded", "partial", "failed", "unavailable", "denied", "cancelled", "timed_out", "invalid", "unknown_effect"];
 const progressReasonCodes: readonly RuntimeRunProgressReasonCode[] = ["new_trusted_fact", "equivalent_fact_repeated", "activity_without_structural_change", "plan_declaration_only", "progression_basis_changed", "required_work_pending", "no_committed_facts"];
-const progressFactKinds: readonly RuntimeRunProgressFactKind[] = ["controller_turn", "run_action", "plan_update", "active_agent", "steering", "operation_result", "operation_rejected", "tool_rejected", "interaction_settlement", "descendant_settlement", "validation_feedback", "completion_gate", "evidence_ref", "artifact_ref", "required_pending", "unsupported_committed_fact"];
+const progressFactKinds: readonly RuntimeRunProgressFactKind[] = ["controller_turn", "run_action", "plan_update", "active_agent", "steering", "operation_result", "operation_rejected", "tool_rejected", "interaction_settlement", "descendant_settlement", "verification_feedback", "completion_gate", "evidence_ref", "artifact_ref", "required_pending", "unsupported_committed_fact"];
 const contextTransitionOperationKinds: readonly RuntimeContextTransitionOperationKind[] = ["add", "replace", "invalidate", "remove"];
 const descendantFailureCodes: readonly RuntimeDescendantRunFailureCode[] = [
   "descendant_run_start_cancelled",

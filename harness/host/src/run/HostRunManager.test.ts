@@ -175,7 +175,7 @@ function createFakeHandle(runId: string) {
     retry: null,
     pendingInteractions: [],
     activeDelegations: [],
-    validation: null,
+    verification: null,
     runTree: rootTree(runId),
     result: null,
   };

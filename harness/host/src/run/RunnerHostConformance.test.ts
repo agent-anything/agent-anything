@@ -33,9 +33,9 @@ import {
 } from "@agent-anything/agent-runtime/runner";
 import {
   createTestContextProjection,
-  createTestValidationExecutionFactory,
+  createTestVerificationExecutionFactory,
 } from "@agent-anything/test-support";
-import { CurrentValidationCompletionGate } from "@agent-anything/validation/completion";
+import { CurrentVerificationCompletionGate } from "@agent-anything/verification/completion";
 import { createHostRunManager } from "./HostRunManager.js";
 
 interface TestOutput {
@@ -107,7 +107,7 @@ function createManager(controller: Controller<TestOutput>) {
     controller,
     contextProjection: createTestContextProjection(),
     operations: emptyOperations(),
-    validation: createTestValidationComposition(),
+    verification: createTestVerificationComposition(),
     interactions: createInteractionProtocolRegistrySnapshot("interaction-registry-1", []),
     createRunId: () => "run-host-conformance",
     now: () => NOW,
@@ -220,7 +220,7 @@ function createRunConfig(tools: RunConfig["tools"]): RunConfig {
     permissions: permissionConfig(),
     tools,
     actionExecution: null,
-    validation: createTestValidationConfig(),
+    verification: createTestVerificationConfig(),
     limits: {
       maxIterations: 4,
       maxActions: 4,
@@ -260,20 +260,20 @@ function createRunConfig(tools: RunConfig["tools"]): RunConfig {
   };
 }
 
-function createTestValidationComposition() {
+function createTestVerificationComposition() {
   return Object.freeze({
-    executionFactory: createTestValidationExecutionFactory({ now: () => NOW }),
-    completionGate: new CurrentValidationCompletionGate(() => NOW),
+    executionFactory: createTestVerificationExecutionFactory({ now: () => NOW }),
+    completionGate: new CurrentVerificationCompletionGate(() => NOW),
     preparation: null,
     settledOperationResults: null,
     checkResults: null,
   });
 }
 
-function createTestValidationConfig(): RunConfig["validation"] {
+function createTestVerificationConfig(): RunConfig["verification"] {
   const owner = (id: string) => Object.freeze({
     owner: "host-conformance",
-    kind: "validation",
+    kind: "verification",
     id,
     revision: "1",
   });
@@ -286,7 +286,7 @@ function createTestValidationConfig(): RunConfig["validation"] {
       requirements: Object.freeze([]),
     }),
     completion: Object.freeze({
-      policy: owner("current-validation-gate"),
+      policy: owner("current-verification-gate"),
       outputContract: owner("test-output-contract"),
       conditions: Object.freeze([]),
       maximumDurationMs: 1_000,

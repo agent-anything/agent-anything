@@ -41,7 +41,7 @@ export interface HelarcProductEffectivenessMean {
 export interface HelarcProductEffectivenessDiagnosticSummary {
   readonly reliability: number;
   readonly trajectory: number | null;
-  readonly validation: number | null;
+  readonly verification: number | null;
   readonly latencyMs: number | null;
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
@@ -228,7 +228,7 @@ function summarizeDiagnostics(
   return Object.freeze({
     reliability: completed.length / required,
     trajectory: averageDiagnostics(completed, "trajectoryScore"),
-    validation: averageDiagnostics(completed, "validationScore"),
+    verification: averageDiagnostics(completed, "verificationScore"),
     latencyMs: averageDiagnostics(completed, "latencyMs"),
     inputTokens: averageDiagnostics(completed, "inputTokens"),
     outputTokens: averageDiagnostics(completed, "outputTokens"),
@@ -420,7 +420,7 @@ function createDiagnosticMetricSummaries(
   const definitions = [
     ["reliability", "reliability"],
     ["trajectory", "trajectory"],
-    ["validation", "trajectory"],
+    ["verification", "trajectory"],
     ["latencyMs", "efficiency"],
     ["inputTokens", "efficiency"],
     ["outputTokens", "efficiency"],
@@ -557,7 +557,7 @@ function diagnosticData(summary: HelarcProductEffectivenessDiagnosticSummary) {
   return {
     reliability: summary.reliability,
     trajectory: summary.trajectory,
-    validation: summary.validation,
+    verification: summary.verification,
     latencyMs: summary.latencyMs,
     inputTokens: summary.inputTokens,
     outputTokens: summary.outputTokens,

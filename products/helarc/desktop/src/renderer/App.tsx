@@ -654,7 +654,7 @@ export function RunTerminalPanel({
   const terminal = run.host.terminal;
   if (terminal === null) return null;
   const safeOutput = run.product.result?.output ?? null;
-  const validation = run.product.result?.validation ?? null;
+  const verification = run.product.result?.verification ?? null;
   const failed = run.display.status === "failed" || run.display.status === "blocked" ||
     run.display.status === "rejected" || run.display.status === "cancelled";
 
@@ -682,10 +682,10 @@ export function RunTerminalPanel({
             <dd>{enforcementLabel(safeOutput.enforcement)}</dd>
           </div>
         ) : null}
-        {validation ? (
+        {verification ? (
           <div>
-            <dt>Validation</dt>
-            <dd>{validationLabel(validation)}</dd>
+            <dt>Verification</dt>
+            <dd>{verificationLabel(verification)}</dd>
           </div>
         ) : null}
         {run.host.progress.disposition ? (
@@ -1331,20 +1331,20 @@ function runProgressLabel(progress: ActiveRunProjection["host"]["progress"]): st
   return `${status}, checkpoint ${progress.checkpointSequence}${correction}`;
 }
 
-function validationLabel(
-  validation: NonNullable<ActiveRunProjection["product"]["result"]>["validation"],
+function verificationLabel(
+  verification: NonNullable<ActiveRunProjection["product"]["result"]>["verification"],
 ): string {
-  switch (validation.status) {
+  switch (verification.status) {
     case "not_required":
       return "Not required";
     case "pending":
-      return validation.activeChecks > 0
-        ? `${validation.activeChecks} check${validation.activeChecks === 1 ? "" : "s"} running`
+      return verification.activeChecks > 0
+        ? `${verification.activeChecks} check${verification.activeChecks === 1 ? "" : "s"} running`
         : "Pending";
     case "satisfied":
       return "Satisfied";
     case "attention_required": {
-      const count = validation.counts
+      const count = verification.counts
         .filter(({ state }) => state === "violated" || state === "inconclusive" || state === "stale")
         .reduce((total, entry) => total + entry.count, 0);
       return count > 0 ? `Attention required (${count})` : "Attention required";

@@ -44,15 +44,15 @@ describe("delegation authority", () => {
   it("intersects allowed authority, unions required constraints, and uses the earliest deadline", () => {
     const authority = authorityDerivation();
     const tool = authority.effective.find((dimension) => dimension.kind === "tool")!;
-    const validation = authority.effective.find(
-      (dimension) => dimension.kind === "validation",
+    const verification = authority.effective.find(
+      (dimension) => dimension.kind === "verification",
     )!;
 
     expect(tool.allowed).toEqual(["tool:read"]);
-    expect(validation.required).toEqual([
-      "validation:agent",
-      "validation:parent",
-      "validation:root",
+    expect(verification.required).toEqual([
+      "verification:agent",
+      "verification:parent",
+      "verification:root",
     ]);
     expect(authority.deadlineAt).toBe("2026-08-25T00:04:00.000Z");
     expect(Object.isFrozen(authority.sources)).toBe(true);
@@ -234,9 +234,9 @@ describe("delegation result", () => {
         artifactRefs: ["artifact-1"],
       }, { summary: "child output" }),
       narrative: "Useful child findings.",
-      validation: {
+      verification: {
         status: "satisfied",
-        snapshotRevision: "validation-v1",
+        snapshotRevision: "verification-v1",
         mandatoryTotal: 1,
         mandatorySatisfied: 1,
         limitationCodes: [],
@@ -289,7 +289,7 @@ describe("delegation result", () => {
         }),
       ),
       narrative: "Some work may still be useful.",
-      validation: {
+      verification: {
         status: "unavailable",
         snapshotRevision: null,
         mandatoryTotal: 1,
@@ -312,7 +312,7 @@ describe("delegation result", () => {
     expect(result.terminal.failureKind).toBe("runtime");
     expect(result.narrative?.text).toContain("useful");
     expect(result.uncertainty).toContain("effects_unknown");
-    expect(result.uncertainty).toContain("validation_unavailable");
+    expect(result.uncertainty).toContain("verification_unavailable");
     expect(result.expectationCoverage.find(({ form }) => form === "evidence")?.disposition)
       .toBe("failed");
   });
@@ -334,7 +334,7 @@ describe("delegation result", () => {
         completedAt: "2026-08-25T00:02:00.000Z",
       }, { summary: "done" }),
       narrative: null,
-      validation: noValidation(),
+      verification: noVerification(),
       effects: noEffects(),
       usage: usage(),
       limitDisposition: withinLimits(),
@@ -404,7 +404,7 @@ function preparation(overrides: {
       requirements: [
         { form: "narrative", required: true, maxItems: 1 },
         { form: "evidence", required: false, maxItems: 8 },
-        { form: "validation", required: false, maxItems: 1 },
+        { form: "verification", required: false, maxItems: 1 },
         { form: "effects", required: true, maxItems: 1 },
       ],
       maxNarrativeCharacters: 8_192,
@@ -557,7 +557,7 @@ function authorityDimensions(
     "tool",
     "permission",
     "action_execution",
-    "validation",
+    "verification",
     "disclosure",
   ] as const;
   return kinds.map((kind) => ({
@@ -567,8 +567,8 @@ function authorityDimensions(
       : kind === "tool"
         ? ["tool:read"]
         : [`${kind}:bounded`],
-    required: kind === "validation" && ["root", "parent", "child_agent"].includes(role)
-      ? [`validation:${role === "child_agent" ? "agent" : role}`]
+    required: kind === "verification" && ["root", "parent", "child_agent"].includes(role)
+      ? [`verification:${role === "child_agent" ? "agent" : role}`]
       : [],
   }));
 }
@@ -632,7 +632,7 @@ function noEffects() {
   } as const;
 }
 
-function noValidation() {
+function noVerification() {
   return {
     status: "not_required",
     snapshotRevision: null,

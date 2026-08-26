@@ -335,7 +335,7 @@ function terminalCommit(expectedThreadRevision: number): HelarcRunTerminalCommit
         composites: [],
         children: [],
         interactions: [],
-        validation: {
+        verification: {
           status: "not_required",
           snapshotRevision: 1,
           counts: [],

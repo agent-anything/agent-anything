@@ -11,7 +11,7 @@ export interface ContextContinuityFailureSignals {
   readonly providerTransportFailed?: boolean;
   readonly modelReasoningFailed?: boolean;
   readonly executionFailed?: boolean;
-  readonly validationFailed?: boolean;
+  readonly verificationFailed?: boolean;
 }
 
 export function classifyContextContinuityFailure(
@@ -27,6 +27,6 @@ export function classifyContextContinuityFailure(
   if (input.providerTransportFailed === true) return "provider_transport";
   if (input.modelReasoningFailed === true) return "model_reasoning";
   if (input.executionFailed === true) return "execution";
-  if (input.validationFailed === true) return "validation";
+  if (input.verificationFailed === true) return "verification";
   return "none";
 }

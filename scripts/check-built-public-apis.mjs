@@ -70,7 +70,7 @@ const packageExportKeys = {
     "./report",
     "./trial",
   ],
-  "harness/validation": [
+  "harness/verification": [
     "./assessment",
     "./completion",
     "./definition",
@@ -118,7 +118,7 @@ const packageExportKeys = {
   "products/helarc/code-agent": [
     "./file-operation",
     "./source",
-    "./validation",
+    "./verification",
     "./workspace",
   ],
   "products/helarc/core": [
@@ -136,7 +136,7 @@ const packageExportKeys = {
     "./task",
     "./thread",
     "./tools",
-    "./validation",
+    "./verification",
     "./work-context",
   ],
   "products/helarc/local-environment": [
@@ -450,7 +450,7 @@ const expectedLowerValueExports = {
     "FakeRuntimeEventPublisher",
     "FakeTelemetryPort",
     "createTestContextProjection",
-    "createTestValidationExecutionFactory",
+    "createTestVerificationExecutionFactory",
   ],
   "@agent-anything/test-support/evaluation-targets/helarc": [
     "HELARC_AGENT_INSTRUCTION_EVALUATION_REVISION",
@@ -776,11 +776,11 @@ const expectedValueExports = {
   ],
   "@agent-anything/helarc-code-agent/workspace": ["resolveWorkspacePath"],
   "@agent-anything/helarc-code-agent/source": [],
-  "@agent-anything/helarc-code-agent/validation": [
+  "@agent-anything/helarc-code-agent/verification": [
     "EXACT_CODE_SOURCE_CHECK_FAMILY",
     "EXACT_CODE_SOURCE_EVALUATOR_REF",
     "EXACT_CODE_SOURCE_SUBJECT_KIND",
-    "createExactCodeSourceValidationContribution",
+    "createExactCodeSourceVerificationContribution",
   ],
   "@agent-anything/helarc-code-agent/file-operation": [
     "CODE_AGENT_EDIT_TOOL",
@@ -905,9 +905,9 @@ const expectedValueExports = {
     "projectHelarcProductResult",
   ],
   "@agent-anything/helarc/artifacts": ["createHelarcArtifact"],
-  "@agent-anything/helarc/validation": [
-    "bindHelarcValidationCompletionGate",
-    "createHelarcValidationComposition",
+  "@agent-anything/helarc/verification": [
+    "bindHelarcVerificationCompletionGate",
+    "createHelarcVerificationComposition",
   ],
   "@agent-anything/helarc-local-environment/command": [
     "HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID",
@@ -998,48 +998,48 @@ const expectedRemoteIntegrationValueExports = {
   "@agent-anything/remote-integrations/transport": [],
 };
 
-const expectedValidationValueExports = {
-  "@agent-anything/validation/definition": [
-    "createValidationFailure",
-    "materializeValidationProfile",
-    "snapshotValidationProfile",
-    "snapshotValidationRequirement",
-    "snapshotValidationSpecification",
+const expectedVerificationValueExports = {
+  "@agent-anything/verification/definition": [
+    "createVerificationFailure",
+    "materializeVerificationProfile",
+    "snapshotVerificationProfile",
+    "snapshotVerificationRequirement",
+    "snapshotVerificationSpecification",
   ],
-  "@agent-anything/validation/subject": [
-    "snapshotValidationSubjectSnapshot",
+  "@agent-anything/verification/subject": [
+    "snapshotVerificationSubjectSnapshot",
   ],
-  "@agent-anything/validation/execution": [
-    "DefaultValidationExecutionFactory",
-    "ValidationExecution",
-    "ValidationExecutionError",
+  "@agent-anything/verification/execution": [
+    "DefaultVerificationExecutionFactory",
+    "VerificationExecution",
+    "VerificationExecutionError",
     "snapshotCheckAttempt",
     "snapshotCheckDefinition",
     "snapshotCheckResult",
   ],
-  "@agent-anything/validation/evidence": [
-    "snapshotValidationEvidence",
+  "@agent-anything/verification/evidence": [
+    "snapshotVerificationEvidence",
   ],
-  "@agent-anything/validation/assessment": [
-    "snapshotValidationAssessment",
-    "snapshotValidationCurrentRequirementState",
-    "snapshotValidationCurrentSnapshot",
+  "@agent-anything/verification/assessment": [
+    "snapshotVerificationAssessment",
+    "snapshotVerificationCurrentRequirementState",
+    "snapshotVerificationCurrentSnapshot",
   ],
-  "@agent-anything/validation/completion": [
-    "CurrentValidationCompletionGate",
+  "@agent-anything/verification/completion": [
+    "CurrentVerificationCompletionGate",
     "snapshotCompletionGateConfiguration",
     "snapshotCompletionGateDecision",
     "snapshotCompletionGateInput",
   ],
-  "@agent-anything/validation/projection": [
-    "snapshotValidationContextProjection",
-    "snapshotValidationEvaluationProjection",
-    "snapshotValidationHostProjection",
-    "snapshotValidationObservabilityProjection",
-    "snapshotValidationRunnerProjection",
+  "@agent-anything/verification/projection": [
+    "snapshotVerificationContextProjection",
+    "snapshotVerificationEvaluationProjection",
+    "snapshotVerificationHostProjection",
+    "snapshotVerificationObservabilityProjection",
+    "snapshotVerificationRunnerProjection",
   ],
-  "@agent-anything/validation/persistence": [
-    "snapshotValidationPersistenceReceipt",
+  "@agent-anything/verification/persistence": [
+    "snapshotVerificationPersistenceReceipt",
   ],
 };
 
@@ -1183,18 +1183,18 @@ if (process.argv.includes("--evaluation-only")) {
   process.exit(0);
 }
 
-if (process.argv.includes("--validation-only")) {
+if (process.argv.includes("--verification-only")) {
   checkBuiltSurfaces(
-    expectedValidationValueExports,
+    expectedVerificationValueExports,
     [
-      "@agent-anything/validation",
-      "@agent-anything/validation/internal",
-      "@agent-anything/validation/common",
-      "@agent-anything/validation/shared",
+      "@agent-anything/verification",
+      "@agent-anything/verification/internal",
+      "@agent-anything/verification/common",
+      "@agent-anything/verification/shared",
     ],
-    join(repoRoot, "harness/validation"),
+    join(repoRoot, "harness/verification"),
   );
-  console.log("Built Validation public API check passed.");
+  console.log("Built Verification public API check passed.");
   process.exit(0);
 }
 
@@ -1341,14 +1341,14 @@ checkBuiltSurfaces(
   join(repoRoot, "harness/evaluation"),
 );
 checkBuiltSurfaces(
-  expectedValidationValueExports,
+  expectedVerificationValueExports,
   [
-    "@agent-anything/validation",
-    "@agent-anything/validation/internal",
-    "@agent-anything/validation/common",
-    "@agent-anything/validation/shared",
+    "@agent-anything/verification",
+    "@agent-anything/verification/internal",
+    "@agent-anything/verification/common",
+    "@agent-anything/verification/shared",
   ],
-  join(repoRoot, "harness/validation"),
+  join(repoRoot, "harness/verification"),
 );
 checkBuiltSurfaces(
   expectedValueExports,

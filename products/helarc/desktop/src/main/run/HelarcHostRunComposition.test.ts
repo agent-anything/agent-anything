@@ -211,7 +211,7 @@ describe("Helarc Host Run composition", () => {
       "run.item.appended",
       "controller.tool_exposure.resolved",
       "controller.finished",
-      "validation.gate.evaluated",
+      "verification.gate.evaluated",
       "context.transition.committed",
       "run.item.appended",
       "run.item.appended",

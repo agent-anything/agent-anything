@@ -147,7 +147,7 @@ export function evaluateSourceOwnershipRules({
       );
     }
 
-    const isBoundedValidationConsumer =
+    const isBoundedVerificationConsumer =
       path.startsWith("harness/agent-core/contracts/src/") ||
       path.startsWith("harness/context/src/") ||
       path.startsWith("harness/host/src/") ||
@@ -155,37 +155,37 @@ export function evaluateSourceOwnershipRules({
       path.startsWith("products/helarc/desktop/src/shared/") ||
       /^products\/helarc\/core\/src\/(?:result|run|work-context)\//.test(path);
     if (
-      isBoundedValidationConsumer &&
-      /\b(?:ValidationExecution(?:Port|Factory)?|ValidationLedgerSnapshot|ValidationRecord|ValidationEvidence|ValidationAssessment|ValidationSubjectSnapshot|ValidationCurrentRequirementState|CheckAttempt|CheckResult)\b/.test(text)
+      isBoundedVerificationConsumer &&
+      /\b(?:VerificationExecution(?:Port|Factory)?|VerificationLedgerSnapshot|VerificationRecord|VerificationEvidence|VerificationAssessment|VerificationSubjectSnapshot|VerificationCurrentRequirementState|CheckAttempt|CheckResult)\b/.test(text)
     ) {
       reject(
-        "validation_detailed_state_leakage",
-        "Canonical state and consumer-facing surfaces must use bounded Validation projections instead of detailed Validation records or execution authority.",
+        "verification_detailed_state_leakage",
+        "Canonical state and consumer-facing surfaces must use bounded Verification projections instead of detailed Verification records or execution authority.",
       );
     }
 
-    const isProductValidationSource = path.startsWith("products/helarc/core/src/validation/");
+    const isProductVerificationSource = path.startsWith("products/helarc/core/src/verification/");
     if (
-      isProductValidationSource &&
+      isProductVerificationSource &&
       /from\s+["']@agent-anything\/(?:action-execution|helarc-local-environment)(?:[/'"]|$)/.test(text)
     ) {
       reject(
-        "product_validation_physical_execution_dependency",
-        "Product Validation may compose Operations and exact adapters but cannot depend on physical execution, sandbox, or local-environment implementations.",
+        "product_verification_physical_execution_dependency",
+        "Product Verification may compose Operations and exact adapters but cannot depend on physical execution, sandbox, or local-environment implementations.",
       );
     }
 
-    const isValidationSource =
-      path.startsWith("harness/validation/src/") ||
-      path.startsWith("products/helarc/core/src/validation/") ||
-      path.startsWith("products/helarc/code-agent/src/validation/");
+    const isVerificationSource =
+      path.startsWith("harness/verification/src/") ||
+      path.startsWith("products/helarc/core/src/verification/") ||
+      path.startsWith("products/helarc/code-agent/src/verification/");
     if (
-      isValidationSource &&
+      isVerificationSource &&
       /from\s+["'][^"']*(?:tree-sitter|language-server|semantic-search|code-understanding|source-indexer|ast-parser|compiler-adapter)[^"']*["']/.test(text)
     ) {
       reject(
-        "validation_semantic_processor_dependency",
-        "Validation Contracts and composition cannot depend on language-specific or Code Understanding processors.",
+        "verification_semantic_processor_dependency",
+        "Verification Contracts and composition cannot depend on language-specific or Code Understanding processors.",
       );
     }
 
@@ -202,10 +202,10 @@ export function evaluateSourceOwnershipRules({
       );
     }
 
-    if (/\bcreateNoCheckValidationExecutionFactory\b/.test(text)) {
+    if (/\bcreateNoCheckVerificationExecutionFactory\b/.test(text)) {
       reject(
-        "production_validation_bypass",
-        "Production sources cannot provide or consume a no-check Validation execution bypass.",
+        "production_verification_bypass",
+        "Production sources cannot provide or consume a no-check Verification execution bypass.",
       );
     }
 

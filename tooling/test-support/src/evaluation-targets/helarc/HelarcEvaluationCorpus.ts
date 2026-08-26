@@ -31,7 +31,7 @@ import {
   type EvaluationCampaign,
 } from "@agent-anything/evaluation/campaign";
 import type { ProviderCallResult } from "@agent-anything/model-interaction";
-import type { HelarcExactTargetValidationRequirement } from "@agent-anything/helarc/validation";
+import type { HelarcExactTargetVerificationRequirement } from "@agent-anything/helarc/verification";
 import { createHelarcAgent } from "@agent-anything/helarc/agent";
 
 export const HELARC_EVALUATION_TIME = "2026-08-12T00:00:00.000Z";
@@ -90,7 +90,7 @@ export interface HelarcEvaluationCaseDefinition {
   readonly fixture: HelarcEvaluationFixture;
   readonly script: HelarcEvaluationScript;
   readonly expectedClaim: HelarcEvaluationExpectedClaim;
-  readonly validationTargets: readonly HelarcExactTargetValidationRequirement[];
+  readonly verificationTargets: readonly HelarcExactTargetVerificationRequirement[];
 }
 
 export interface HelarcEvaluationCorpus {
@@ -579,15 +579,15 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       retryCount: 0,
       permissionPreset: "full_access",
       approvalDecision: null,
-      validationTargets: [
+      verificationTargets: [
         exactFileTarget("alpha", "alpha.txt", "alpha\n"),
         exactFileTarget("beta", "beta.txt", "beta\n"),
       ],
     }),
     caseDefinition({
-      id: "ordinary-shell-validation",
+      id: "ordinary-shell-verification",
       scenario: "ordinary_shell_validation",
-      prompt: "Run one ordinary command as a test Validation check.",
+      prompt: "Run one ordinary command as a test Verification check.",
       fixtureFiles: {},
       outputs: [
         {
@@ -596,9 +596,9 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
           reason: "Run the requested command and interpret its settled result.",
           input: {
             command: process.platform === "win32"
-              ? "Write-Output 'validation-ok'"
-              : "printf 'validation-ok\\n'",
-            validation_claim: "tests",
+              ? "Write-Output 'verification-ok'"
+              : "printf 'verification-ok\\n'",
+            verification_claim: "tests",
           },
         },
         { kind: "completion", summary: "The ordinary command check passed." },
@@ -626,7 +626,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
             command: process.platform === "win32"
               ? "Write-Error 'expected failure'; exit 1"
               : "printf 'expected failure\\n' >&2; exit 1",
-            validation_claim: "tests",
+            verification_claim: "tests",
           },
         },
         {
@@ -637,7 +637,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
             command: process.platform === "win32"
               ? "Write-Output 'recovered'"
               : "printf 'recovered\\n'",
-            validation_claim: "tests",
+            verification_claim: "tests",
           },
         },
         { kind: "completion", summary: "Recovered and completed the current check." },
@@ -673,7 +673,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       retryCount: 0,
       permissionPreset: "full_access",
       approvalDecision: null,
-      validationTargets: [exactFileTarget("tracked-original", "tracked.txt", "original\n")],
+      verificationTargets: [exactFileTarget("tracked-original", "tracked.txt", "original\n")],
     }),
     caseDefinition({
       id: "premature-completion",
@@ -691,7 +691,7 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
       retryCount: 0,
       permissionPreset: "full_access",
       approvalDecision: null,
-      validationTargets: [exactFileTarget("required", "required.txt", "ready\n")],
+      verificationTargets: [exactFileTarget("required", "required.txt", "ready\n")],
     }),
   ].sort((left, right) => left.definition.ref.id.localeCompare(right.definition.ref.id));
 }
@@ -710,7 +710,7 @@ function caseDefinition(input: {
   readonly retryCount: number;
   readonly permissionPreset: HelarcEvaluationPermissionPreset;
   readonly approvalDecision: "decline" | null;
-  readonly validationTargets?: readonly HelarcExactTargetValidationRequirement[];
+  readonly verificationTargets?: readonly HelarcExactTargetVerificationRequirement[];
 }): HelarcEvaluationCaseDefinition {
   const caseRef = ref(`helarc.phase26.case.${input.id}`);
   const caseFixture = createFixture(
@@ -774,7 +774,7 @@ function caseDefinition(input: {
     fixture: caseFixture,
     script,
     expectedClaim,
-    validationTargets: Object.freeze([...(input.validationTargets ?? [])]),
+    verificationTargets: Object.freeze([...(input.verificationTargets ?? [])]),
   });
 }
 
@@ -782,7 +782,7 @@ function exactFileTarget(
   id: string,
   path: string,
   content: string,
-): HelarcExactTargetValidationRequirement {
+): HelarcExactTargetVerificationRequirement {
   const digest = `sha256:${sha256(content)}`;
   return Object.freeze({
     target: Object.freeze({
@@ -951,7 +951,7 @@ function createCapturePolicy(): EvaluationCapturePolicy {
       captureSlot("artifact-observations", "agent-core", true, graderConsumers),
       captureSlot("interaction-review", "helarc.product", true, graderConsumers),
       captureSlot("trace-summary", "observability", true, graderConsumers),
-      captureSlot("validation-summary", "validation", true, []),
+      captureSlot("verification-summary", "verification", true, []),
       captureSlot("tool-exposure-summary", "agent-core", true, []),
     ],
     createdAt: HELARC_EVALUATION_TIME,

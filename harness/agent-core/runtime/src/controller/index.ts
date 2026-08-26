@@ -4,7 +4,7 @@ export type {
   ControllerDecision,
   ControllerInput,
   ControllerRunProgressProjection,
-  ControllerValidationProjection,
+  ControllerVerificationProjection,
   ControllerPreProjectionInput,
   ControllerModelItem,
   ControllerRetryContext,

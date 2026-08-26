@@ -354,7 +354,7 @@ function scriptedCase(
       requiredActionNames: Object.freeze([...requiredActionNames].sort()),
       retryCount: 0,
     }),
-    validationTargets: Object.freeze([]),
+    verificationTargets: Object.freeze([]),
   });
 }
 
@@ -430,8 +430,8 @@ function trialMetrics(
     };
   }, { inputTokens: 0, outputTokens: 0 });
   const outcomeCorrect = expectedOutcomeMatches(material);
-  const validationObserved = material.product.validation.status !== "not_required" ||
-    items.some((item) => item.payload.kind === "validation_feedback");
+  const verificationObserved = material.product.verification.status !== "not_required" ||
+    items.some((item) => item.payload.kind === "verification_feedback");
   const invalidOrUnsafeActionAttempts = material.product.effects.filter((effect) =>
     effect.status !== "succeeded"
   ).length;
@@ -450,7 +450,7 @@ function trialMetrics(
       item.payload.kind === "progress_correction"
     ).length,
     delegationCalls: actionNames.filter((name) => name === "Agent").length,
-    verificationObserved: validationObserved,
+    verificationObserved: verificationObserved,
     terminalTruth: expectedTerminalMatches(material),
     latencyMs: Math.max(
       0,
@@ -528,12 +528,12 @@ function semanticOutcomeFingerprint(
       effectCertainty: effect.effectCertainty,
       completionExtent: effect.completionExtent,
     })),
-    validation: {
-      status: material.product.validation.status,
-      counts: material.product.validation.counts,
-      activeChecks: material.product.validation.activeChecks,
-      gateStatus: material.product.validation.gateStatus,
-      safeReasons: material.product.validation.safeReasons,
+    verification: {
+      status: material.product.verification.status,
+      counts: material.product.verification.counts,
+      activeChecks: material.product.verification.activeChecks,
+      gateStatus: material.product.verification.gateStatus,
+      safeReasons: material.product.verification.safeReasons,
     },
     plans: material.runResult.items.flatMap((item) =>
       item.payload.kind === "state_transition" && item.payload.transition === "plan"
@@ -710,7 +710,7 @@ function summarizeDiagnostics(
   const completed = bundle.trials.filter((trial) => trial.status === "completed");
   return Object.freeze({
     trajectoryScore: average(completed.map((trial) => trial.diagnostics.trajectoryScore)),
-    validationScore: average(completed.map((trial) => trial.diagnostics.validationScore)),
+    verificationScore: average(completed.map((trial) => trial.diagnostics.verificationScore)),
     latencyMs: average(completed.map((trial) => trial.diagnostics.latencyMs)),
     inputTokens: average(completed.map((trial) => trial.diagnostics.inputTokens)),
     outputTokens: average(completed.map((trial) => trial.diagnostics.outputTokens)),

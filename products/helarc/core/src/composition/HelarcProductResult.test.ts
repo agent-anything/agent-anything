@@ -142,14 +142,14 @@ describe("HelarcProductResult", () => {
         ],
         activeChecks: 0,
         gateStatus: "blocked_violated",
-        safeReasons: ["mandatory_validation_violated"],
+        safeReasons: ["mandatory_verification_violated"],
         updatedAt: COMPLETED_AT,
       },
     );
 
     expect(projected.status).toBe("failed");
     expect(projected.runResult).toMatchObject({ status: "failed", code: "unknown_effect" });
-    expect(projected.validation).toEqual({
+    expect(projected.verification).toEqual({
       status: "attention_required",
       snapshotRevision: 7,
       counts: [
@@ -158,7 +158,7 @@ describe("HelarcProductResult", () => {
       ],
       activeChecks: 0,
       gateStatus: "blocked_violated",
-      safeReasons: ["mandatory_validation_violated"],
+      safeReasons: ["mandatory_verification_violated"],
       updatedAt: COMPLETED_AT,
     });
     expect(projected.runActions).toEqual([

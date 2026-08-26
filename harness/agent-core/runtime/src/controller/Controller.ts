@@ -98,7 +98,7 @@ export interface ControllerInput<TOutput = unknown> {
   >;
   readonly plan: PlanProjection | null;
   readonly progress: ControllerRunProgressProjection;
-  readonly validation: ControllerValidationProjection;
+  readonly verification: ControllerVerificationProjection;
   readonly permission: PermissionContextProjection;
   readonly pending: readonly PendingRunSubjectProjection[];
   readonly workspace: WorkspaceSelection | null;
@@ -113,7 +113,7 @@ export interface ControllerRunProgressProjection {
   readonly activeCorrectionRound: number | null;
 }
 
-export interface ControllerValidationProjection {
+export interface ControllerVerificationProjection {
   readonly snapshot: Readonly<{ readonly runId: string; readonly revision: number }>;
   readonly gate: Readonly<{
     readonly id: string;

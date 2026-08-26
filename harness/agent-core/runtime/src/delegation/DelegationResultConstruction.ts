@@ -8,7 +8,7 @@ import {
   type DelegationLimitDisposition,
   type DelegationResult,
   type DelegationUsageSummary,
-  type DelegationValidationSummary,
+  type DelegationVerificationSummary,
 } from "./DelegationResult.js";
 import type { DelegationRequest } from "./DelegationRequest.js";
 
@@ -32,7 +32,7 @@ export function constructDelegationResult(
     correlation: input.correlation,
     childResult: input.childResult,
     narrative: input.narrative,
-    validation: validationSummary(input.childResult.items),
+    verification: verificationSummary(input.childResult.items),
     effects: effectSummary(input.childResult.items),
     usage,
     limitDisposition: limitDisposition(
@@ -44,13 +44,13 @@ export function constructDelegationResult(
   });
 }
 
-function validationSummary(
+function verificationSummary(
   items: readonly RunItem[],
-): DelegationValidationSummary {
+): DelegationVerificationSummary {
   const projection = [...items].reverse().find(
-    ({ payload }) => payload.kind === "validation_feedback",
+    ({ payload }) => payload.kind === "verification_feedback",
   );
-  if (projection === undefined || projection.payload.kind !== "validation_feedback") {
+  if (projection === undefined || projection.payload.kind !== "verification_feedback") {
     return Object.freeze({
       status: "not_required" as const,
       snapshotRevision: null,
@@ -59,9 +59,9 @@ function validationSummary(
       limitationCodes: Object.freeze([]),
     });
   }
-  const validation = projection.payload.validation;
-  const states = validation.feedback.map(({ state }) => state);
-  const status = validation.pendingAttempts.length > 0 ||
+  const verification = projection.payload.verification;
+  const states = verification.feedback.map(({ state }) => state);
+  const status = verification.pendingAttempts.length > 0 ||
       states.some((state) => state === "pending" || state === "unassessed")
     ? "pending" as const
     : states.some((state) => state === "violated")
@@ -73,14 +73,14 @@ function validationSummary(
           : states.length === 0
             ? "not_required" as const
             : "satisfied" as const;
-  const limitationCodes = validation.feedback
+  const limitationCodes = verification.feedback
     .filter(({ state }) => state !== "satisfied")
     .map(({ code }) => code)
     .filter((code, index, values) => values.indexOf(code) === index);
   return Object.freeze({
     status,
-    snapshotRevision: `${validation.snapshot.runId}:${validation.snapshot.revision}`,
-    mandatoryTotal: validation.feedback.length,
+    snapshotRevision: `${verification.snapshot.runId}:${verification.snapshot.revision}`,
+    mandatoryTotal: verification.feedback.length,
     mandatorySatisfied: states.filter((state) => state === "satisfied").length,
     limitationCodes: Object.freeze(limitationCodes),
   });

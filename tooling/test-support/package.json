@@ -41,12 +41,12 @@
     "typecheck:harness": "tsc -p tsconfig.harness.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:context-continuity": "vitest run src/context-continuity-evaluation/ContextContinuityEvaluation.test.ts src/context-continuity-evaluation/ContextContinuityAdverseConformance.test.ts src/context-continuity-evaluation/ContextContinuityPublicApi.test.ts",
-    "test:validation-behavior": "vitest run src/validation-behavior/ValidationBehaviorConformance.test.ts src/validation-behavior/ValidationBehaviorEvaluation.test.ts",
+    "test:verification-behavior": "vitest run src/verification-behavior/VerificationBehaviorConformance.test.ts src/verification-behavior/VerificationBehaviorEvaluation.test.ts",
     "test:run-progress": "vitest run src/run-progress-evaluation/RunProgressEvaluation.test.ts src/run-progress-evaluation/RunProgressEvaluationPublicApi.test.ts",
     "test:tool-exposure": "vitest run src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluation.test.ts src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluationPublicApi.test.ts",
     "test:delegation-transfer": "vitest run src/delegation-transfer-evaluation/DelegationTransferEvaluation.test.ts src/delegation-transfer-evaluation/DelegationTransferEvaluationPublicApi.test.ts",
     "test:agent-instructions": "vitest run src/evaluation-targets/helarc/HelarcAgentInstructionEvaluation.test.ts src/evaluation-targets/helarc/HelarcProductEffectivenessProtocol.test.ts src/evaluation-targets/helarc/HelarcProductEffectivenessCapture.test.ts src/evaluation-targets/helarc/HelarcEvaluationPublicApi.test.ts",
-    "test:evaluation": "vitest run src/evaluation-targets/helarc/HelarcEvaluationRegression.test.ts src/context-continuity-evaluation/ContextContinuityEvaluation.test.ts src/context-continuity-evaluation/ContextContinuityAdverseConformance.test.ts src/validation-behavior/ValidationBehaviorEvaluation.test.ts src/run-progress-evaluation/RunProgressEvaluation.test.ts src/run-progress-evaluation/RunProgressEvaluationPublicApi.test.ts src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluation.test.ts src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluationPublicApi.test.ts src/delegation-transfer-evaluation/DelegationTransferEvaluation.test.ts src/delegation-transfer-evaluation/DelegationTransferEvaluationPublicApi.test.ts",
+    "test:evaluation": "vitest run src/evaluation-targets/helarc/HelarcEvaluationRegression.test.ts src/context-continuity-evaluation/ContextContinuityEvaluation.test.ts src/context-continuity-evaluation/ContextContinuityAdverseConformance.test.ts src/verification-behavior/VerificationBehaviorEvaluation.test.ts src/run-progress-evaluation/RunProgressEvaluation.test.ts src/run-progress-evaluation/RunProgressEvaluationPublicApi.test.ts src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluation.test.ts src/current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluationPublicApi.test.ts src/delegation-transfer-evaluation/DelegationTransferEvaluation.test.ts src/delegation-transfer-evaluation/DelegationTransferEvaluationPublicApi.test.ts",
     "evaluation:baseline:candidate": "node scripts/emit-helarc-evaluation-baseline.mjs",
     "evaluation:product-effectiveness:compare": "node scripts/compare-helarc-product-effectiveness.mjs"
   },
@@ -74,7 +74,7 @@
     "@agent-anything/operation-catalog": "workspace:*",
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/tools": "workspace:*",
-    "@agent-anything/validation": "workspace:*",
+    "@agent-anything/verification": "workspace:*",
     "@agent-anything/workspace": "workspace:*"
   },
   "devDependencies": {

@@ -4,7 +4,7 @@ import type { ArtifactRef } from "@agent-anything/agent-core/run";
 import type { EvidenceRef } from "@agent-anything/context/evidence";
 import type { OperationResult } from "@agent-anything/operation-catalog/result";
 import type { ToolResult } from "@agent-anything/tools/result";
-import type { ValidationRunnerProjection } from "@agent-anything/validation/projection";
+import type { VerificationRunnerProjection } from "@agent-anything/verification/projection";
 import type { PlanUpdateOutcome } from "../plan/index.js";
 import type {
   PendingRunSubjectProjection,
@@ -68,7 +68,7 @@ export type RunProgressCommittedFactInput =
       readonly lowerRefs: readonly RunProgressFactRef[];
       readonly toolResult: ToolResult;
     }
-  | { readonly kind: "validation_feedback"; readonly validation: ValidationRunnerProjection }
+  | { readonly kind: "verification_feedback"; readonly verification: VerificationRunnerProjection }
   | { readonly kind: "evidence_ref"; readonly ref: EvidenceRef }
   | { readonly kind: "artifact_ref"; readonly ref: ArtifactRef }
   | { readonly kind: "required_pending"; readonly pending: PendingRunSubjectProjection };
@@ -90,9 +90,9 @@ export async function createRunProgressBasis(
       "RunProgressBasis.permissionFingerprint",
     ),
     steeringFingerprint: nullableFingerprint(projection.steeringFingerprint),
-    validationSnapshotRevision: nonNegative(
-      projection.validationSnapshotRevision,
-      "RunProgressBasis.validationSnapshotRevision",
+    verificationSnapshotRevision: nonNegative(
+      projection.verificationSnapshotRevision,
+      "RunProgressBasis.verificationSnapshotRevision",
     ),
   });
   return deepFreeze({
@@ -186,31 +186,31 @@ export async function createRunProgressSemanticFacts(
         lowerRefs: normalizeFactRefs(input.lowerRefs),
         tool: normalizeToolResult(input.toolResult),
       });
-    case "validation_feedback": {
-      const validation = input.validation;
+    case "verification_feedback": {
+      const verification = input.verification;
       const feedback = await one(
         input.kind,
-        "validation",
-        validation.snapshot.runId,
+        "verification",
+        verification.snapshot.runId,
         null,
         "strong",
         {
-          feedback: validation.feedback.map((item) => ({
+          feedback: verification.feedback.map((item) => ({
             requirement: item.requirement,
             state: item.state,
             code: item.code,
             recoveryNeeded: item.recoveryNeeded,
           })),
-          pendingAttempts: validation.pendingAttempts.map((item) => ({ ordinal: item.ordinal })),
+          pendingAttempts: verification.pendingAttempts.map((item) => ({ ordinal: item.ordinal })),
         },
       );
-      if (validation.gate === null) return feedback;
+      if (verification.gate === null) return feedback;
       return Object.freeze([
         ...feedback,
         ...(await one(
           "completion_gate",
-          "validation",
-          validation.snapshot.runId,
+          "verification",
+          verification.snapshot.runId,
           null,
           "strong",
           { gateRecorded: true },

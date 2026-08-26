@@ -32,18 +32,18 @@ import type { CompositeDefinitionRevision } from "@agent-anything/operation-comp
 import type { CompositeExecutionDependencies } from "@agent-anything/operation-composition/execution";
 import type { RetryExecutor } from "../retry/RetryExecutor.js";
 import type { RunResult } from "../run/RunResult.js";
-import type { CompletionGatePort } from "@agent-anything/validation/completion";
+import type { CompletionGatePort } from "@agent-anything/verification/completion";
 import type {
   CheckAttemptRef,
   CheckDefinitionRef,
   CheckResult,
-  ValidationCheckRequest,
-  ValidationExecutionFactory,
-  ValidationExecutionPort,
-  ValidationLowerCheckSettlement,
-} from "@agent-anything/validation/execution";
-import type { ValidationOwnerRef, ValidationRequirementRef } from "@agent-anything/validation/definition";
-import type { ValidationSubjectSnapshotRef } from "@agent-anything/validation/subject";
+  VerificationCheckRequest,
+  VerificationExecutionFactory,
+  VerificationExecutionPort,
+  VerificationLowerCheckSettlement,
+} from "@agent-anything/verification/execution";
+import type { VerificationOwnerRef, VerificationRequirementRef } from "@agent-anything/verification/definition";
+import type { VerificationSubjectSnapshotRef } from "@agent-anything/verification/subject";
 import type { RunRef } from "@agent-anything/agent-core/run";
 import type { RunFinalizationContext } from "../run/RunCancellation.js";
 import type { RunFailureCause } from "../run/RunFailure.js";
@@ -92,8 +92,8 @@ export type RunnerIdentityKind =
   | "context_transition"
   | "context_contribution"
   | "context_refresh"
-  | "validation_gate"
-  | "validation_proposal";
+  | "verification_gate"
+  | "verification_proposal";
 
 export interface CreateRunnerIdentityInput {
   readonly kind: RunnerIdentityKind;
@@ -232,64 +232,64 @@ export interface RunnerOperationComposition {
   readonly delegation?: RunnerDelegationComposition;
 }
 
-export interface RunnerValidationComposition {
-  readonly executionFactory: ValidationExecutionFactory;
+export interface RunnerVerificationComposition {
+  readonly executionFactory: VerificationExecutionFactory;
   readonly completionGate: CompletionGatePort;
-  readonly preparation: RunnerValidationPreparationPort | null;
-  readonly settledOperationResults: RunnerValidationSettledOperationResultProcessorPort | null;
-  readonly checkResults: RunnerValidationCheckResultProcessorPort | null;
+  readonly preparation: RunnerVerificationPreparationPort | null;
+  readonly settledOperationResults: RunnerVerificationSettledOperationResultProcessorPort | null;
+  readonly checkResults: RunnerVerificationCheckResultProcessorPort | null;
 }
 
-export interface RunnerValidationPreparationPort {
+export interface RunnerVerificationPreparationPort {
   prepare(
     input: {
       readonly run: RunRef;
-      readonly execution: ValidationExecutionPort;
-      readonly automaticEffectfulChecks: RunnerAutomaticEffectfulValidationCheckPort;
+      readonly execution: VerificationExecutionPort;
+      readonly automaticEffectfulChecks: RunnerAutomaticEffectfulVerificationCheckPort;
     },
     interruption: InvocationInterruptionContext,
   ): Promise<void>;
 }
 
-export type RunnerAutomaticEffectfulValidationCheckRequest = Omit<
-  ValidationCheckRequest,
+export type RunnerAutomaticEffectfulVerificationCheckRequest = Omit<
+  VerificationCheckRequest,
   "origin" | "runAction" | "expectedRevision"
 >;
 
-export interface RunnerAutomaticEffectfulValidationCheckPort {
+export interface RunnerAutomaticEffectfulVerificationCheckPort {
   execute(
-    request: RunnerAutomaticEffectfulValidationCheckRequest,
+    request: RunnerAutomaticEffectfulVerificationCheckRequest,
     interruption: InvocationInterruptionContext,
   ): Promise<CheckResult>;
 }
 
-export interface RunnerValidationCheckRequest {
-  readonly requirement: ValidationRequirementRef;
-  readonly subject: ValidationSubjectSnapshotRef;
+export interface RunnerVerificationCheckRequest {
+  readonly requirement: VerificationRequirementRef;
+  readonly subject: VerificationSubjectSnapshotRef;
   readonly definition: CheckDefinitionRef;
   readonly predecessor: CheckAttemptRef | null;
-  readonly environment: ValidationOwnerRef | null;
-  readonly configuration: ValidationOwnerRef | null;
+  readonly environment: VerificationOwnerRef | null;
+  readonly configuration: VerificationOwnerRef | null;
   readonly coverageTarget: number;
 }
 
-export interface RunnerValidationSettledOperationResultProcessorPort {
+export interface RunnerVerificationSettledOperationResultProcessorPort {
   process(input: {
     readonly run: RunRef;
-    readonly execution: ValidationExecutionPort;
+    readonly execution: VerificationExecutionPort;
     readonly runAction: RunActionRef;
     readonly operation: OperationRevisionRef;
     readonly request: unknown;
     readonly requestOrigin: OperationRequestOrigin;
-    readonly settlement: ValidationLowerCheckSettlement;
+    readonly settlement: VerificationLowerCheckSettlement;
   }, interruption: InvocationInterruptionContext): Promise<boolean>;
 }
 
-export interface RunnerValidationCheckResultProcessorPort {
+export interface RunnerVerificationCheckResultProcessorPort {
   process(input: {
     readonly run: RunRef;
-    readonly execution: ValidationExecutionPort;
-    readonly request: RunnerValidationCheckRequest;
+    readonly execution: VerificationExecutionPort;
+    readonly request: RunnerVerificationCheckRequest;
     readonly result: CheckResult;
   }, interruption: InvocationInterruptionContext): Promise<void>;
 }
@@ -302,7 +302,7 @@ export interface RunnerDependencies {
   readonly controller: import("../controller/index.js").Controller<unknown>;
   readonly contextProjection: RunnerContextProjection;
   readonly operations: RunnerOperationComposition;
-  readonly validation: RunnerValidationComposition;
+  readonly verification: RunnerVerificationComposition;
   readonly interactions: InteractionProtocolRegistrySnapshot;
   readonly agents?: AgentResolverPort;
   readonly runtimeEventPublisher?: RuntimeEventPublisher;
@@ -324,5 +324,5 @@ export interface RunInvocationOptions {
 
 export type ResolvedRunnerDependencies = Required<Pick<
   RunnerDependencies,
-  "controller" | "contextProjection" | "operations" | "validation" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor"
->> & Omit<RunnerDependencies, "controller" | "contextProjection" | "operations" | "validation" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor">;
+  "controller" | "contextProjection" | "operations" | "verification" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor"
+>> & Omit<RunnerDependencies, "controller" | "contextProjection" | "operations" | "verification" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor">;

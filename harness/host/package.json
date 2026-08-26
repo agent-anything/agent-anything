@@ -51,7 +51,7 @@
     "@agent-anything/permission": "workspace:*",
     "@agent-anything/interaction": "workspace:*",
     "@agent-anything/agent-core": "workspace:*",
-    "@agent-anything/validation": "workspace:*",
+    "@agent-anything/verification": "workspace:*",
     "@agent-anything/workspace": "workspace:*"
   },
   "devDependencies": {

@@ -20,7 +20,7 @@ import {
   type RunProgressProjection,
 } from "../progress/index.js";
 import type { RetryEvent } from "../retry/index.js";
-import type { ValidationHostProjection } from "@agent-anything/validation/projection";
+import type { VerificationHostProjection } from "@agent-anything/verification/projection";
 import type { RunTreeExecutionSnapshot } from "./RunTreeExecution.js";
 import type {
   DelegationSteeringReceipt,
@@ -62,7 +62,7 @@ export interface RunOperationSnapshot<TOutput = unknown> {
   readonly plan: PlanProjection | null;
   readonly progress: RunProgressProjection;
   readonly retry: RunRetryProjection | null;
-  readonly validation: ValidationHostProjection | null;
+  readonly verification: VerificationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
   readonly activeDelegations: readonly ActiveDelegationProjection[];
   readonly runTree: RunTreeExecutionSnapshot;
@@ -93,7 +93,7 @@ export interface RunExecutionUpdate<TOutput> {
   readonly plan: PlanProjection | null;
   readonly progress: RunProgressProjection;
   readonly retry: RunRetryProjection | null;
-  readonly validation: ValidationHostProjection | null;
+  readonly verification: VerificationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
   readonly activeDelegations: readonly ActiveDelegationProjection[];
   readonly result: RunResult<TOutput> | null;
@@ -130,7 +130,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       plan: null,
       progress: projectRunProgress(createInitialRunProgressState(), null),
       retry: null,
-      validation: null,
+      verification: null,
       pendingInteractions: Object.freeze([]),
       activeDelegations: Object.freeze([]),
       runTree: initialRunTree,
@@ -166,7 +166,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       plan: update.plan,
       progress: update.progress,
       retry: update.retry,
-      validation: update.validation,
+      verification: update.verification,
       pendingInteractions: update.pendingInteractions,
       activeDelegations: update.activeDelegations,
       runTree: this.snapshot.runTree,
@@ -301,7 +301,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
         plan: this.snapshot.plan,
         progress: this.snapshot.progress,
         retry: this.snapshot.retry,
-        validation: this.snapshot.validation,
+        verification: this.snapshot.verification,
         pendingInteractions: Object.freeze([]),
         activeDelegations: Object.freeze([]),
         result,

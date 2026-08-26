@@ -11,8 +11,8 @@ import type { RunCancellationRequest } from "./RunCancellation.js";
 import type { RunFailureCause } from "./RunFailure.js";
 import type { RunItem } from "./RunItem.js";
 import type { RunBlockedCode, RunFailureCode } from "./RunStatus.js";
-import type { ValidationCurrentSnapshotRef } from "@agent-anything/validation/assessment";
-import type { CompletionGateInvocationRef } from "@agent-anything/validation/completion";
+import type { VerificationCurrentSnapshotRef } from "@agent-anything/verification/assessment";
+import type { CompletionGateInvocationRef } from "@agent-anything/verification/completion";
 import type { RunProgressState } from "../progress/index.js";
 import type { AgentInstructionBindingRef } from "../instructions/index.js";
 
@@ -23,8 +23,8 @@ export interface RunCounters {
   readonly consecutiveActionFailures: number;
 }
 
-export interface RunValidationState {
-  readonly snapshot: ValidationCurrentSnapshotRef;
+export interface RunVerificationState {
+  readonly snapshot: VerificationCurrentSnapshotRef;
   readonly gate: CompletionGateInvocationRef | null;
 }
 
@@ -46,7 +46,7 @@ interface RunStateBase<TOutput> {
   readonly counters: RunCounters;
   readonly pending: readonly PendingRunSubject[];
   readonly permission: RunPermissionState;
-  readonly validation: RunValidationState;
+  readonly verification: RunVerificationState;
   readonly progress: RunProgressState;
   readonly evidenceRefs: readonly EvidenceRef[];
   readonly artifactRefs: readonly ArtifactRef[];

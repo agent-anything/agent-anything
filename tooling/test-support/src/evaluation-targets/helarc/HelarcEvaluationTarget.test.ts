@@ -111,7 +111,7 @@ describe("Helarc deterministic Evaluation target", () => {
     });
   }, 120_000);
 
-  it("calibrates ordinary-operation Validation, recovery, freshness, and completion", async () => {
+  it("calibrates ordinary-operation Verification, recovery, freshness, and completion", async () => {
     const corpus = createHelarcEvaluationCorpus();
     const expectations = [
       ["ordinary_shell_validation", "succeeded", "satisfied", "completion_eligible"],
@@ -124,21 +124,21 @@ describe("Helarc deterministic Evaluation target", () => {
     const outcomes = await Promise.all(expectations.map(async ([scenario]) =>
       invokeCase(corpus, requireCase(corpus, scenario))));
 
-    for (const [index, [, outcomeStatus, validationStatus, gateStatus]] of expectations.entries()) {
+    for (const [index, [, outcomeStatus, verificationStatus, gateStatus]] of expectations.entries()) {
       const outcome = outcomes[index];
-      if (outcome === undefined) throw new TypeError("Missing Validation Evaluation outcome.");
-      const validationSummary = outcome.capture.capture.slots.find(
-        (slot) => slot.slotId === "validation-summary",
+      if (outcome === undefined) throw new TypeError("Missing Verification Evaluation outcome.");
+      const verificationSummary = outcome.capture.capture.slots.find(
+        (slot) => slot.slotId === "verification-summary",
       );
       expect(outcome.observation.outcome.status).toBe(outcomeStatus);
-      expect(validationSummary).toMatchObject({
-        owner: "validation",
+      expect(verificationSummary).toMatchObject({
+        owner: "verification",
         required: true,
         status: "captured",
         content: {
           kind: "inline",
           value: {
-            status: validationStatus,
+            status: verificationStatus,
             activeChecks: 0,
             gateStatus,
           },
@@ -291,11 +291,11 @@ describe("Helarc deterministic Evaluation target", () => {
       owner: "provider",
       code: "provider_request_failed",
     });
-    const validationSummary = completed.capture.capture.slots.find(
-      (slot) => slot.slotId === "validation-summary",
+    const verificationSummary = completed.capture.capture.slots.find(
+      (slot) => slot.slotId === "verification-summary",
     );
-    expect(validationSummary).toMatchObject({
-      owner: "validation",
+    expect(verificationSummary).toMatchObject({
+      owner: "verification",
       required: true,
       status: "captured",
       content: {
@@ -306,10 +306,10 @@ describe("Helarc deterministic Evaluation target", () => {
         },
       },
     });
-    const serializedValidation = JSON.stringify(validationSummary);
-    expect(serializedValidation).not.toContain("rootPath");
-    expect(serializedValidation).not.toContain("rawEvidence");
-    expect(serializedValidation).not.toContain("commandLine");
+    const serializedVerification = JSON.stringify(verificationSummary);
+    expect(serializedVerification).not.toContain("rootPath");
+    expect(serializedVerification).not.toContain("rawEvidence");
+    expect(serializedVerification).not.toContain("commandLine");
     const serialized = JSON.stringify(providerFailure);
     expect(serialized).not.toContain(secret);
     expect(serialized).not.toContain("agent-anything-helarc-eval-");

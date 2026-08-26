@@ -157,26 +157,26 @@ describe("HostRunProjectionReducer", () => {
     });
   });
 
-  it("projects only the bounded Host Validation view from a RunHandle snapshot", () => {
-    const validation = Object.freeze({
+  it("projects only the bounded Host Verification view from a RunHandle snapshot", () => {
+    const verification = Object.freeze({
       snapshot: Object.freeze({ runId: "run-1", revision: 7 }),
       counts: Object.freeze([
         Object.freeze({ state: "satisfied" as const, count: 1 }),
       ]),
       activeChecks: 0,
       gateStatus: "completion_eligible" as const,
-      safeReasons: Object.freeze(["validation_completion_eligible"]),
+      safeReasons: Object.freeze(["verification_completion_eligible"]),
       updatedAt: NOW,
     });
     const projection = apply(initialProjection(), runOperationUpdate(1, {
       sequence: 1,
       runRevision: 3,
-      validation,
+      verification,
     }));
 
-    expect(projection.validation).toEqual(validation);
-    expect(JSON.stringify(projection.validation)).not.toContain("evidence");
-    expect(JSON.stringify(projection.validation)).not.toContain("command");
+    expect(projection.verification).toEqual(verification);
+    expect(JSON.stringify(projection.verification)).not.toContain("evidence");
+    expect(JSON.stringify(projection.verification)).not.toContain("command");
   });
 
   it("projects canonical Action attempt and settlement without executor payload", () => {
@@ -442,7 +442,7 @@ function runOperationUpdate(
       plan: null,
       progress: initialProgress(),
       retry: null,
-      validation: null,
+      verification: null,
       pendingInteractions: [],
       activeDelegations: [],
       runTree: rootTree(),

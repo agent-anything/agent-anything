@@ -42,11 +42,11 @@ export function projectDelegationRunAuthority(
         enforcement: config.actionExecution.enforcement,
         metadata: config.actionExecution.metadata,
       };
-  const validationAllowed = [
-    `${config.validation.profile.ref.owner}/${config.validation.profile.ref.kind}/${config.validation.profile.ref.id}@${config.validation.profile.ref.revision}`,
-    `specification:${config.validation.profile.specification.id}@${config.validation.profile.specification.revision}`,
+  const verificationAllowed = [
+    `${config.verification.profile.ref.owner}/${config.verification.profile.ref.kind}/${config.verification.profile.ref.id}@${config.verification.profile.ref.revision}`,
+    `specification:${config.verification.profile.specification.id}@${config.verification.profile.specification.revision}`,
   ];
-  const validationRequired = config.validation.profile.requirements.map(
+  const verificationRequired = config.verification.profile.requirements.map(
     ({ ref }) => `${ref.id}@${ref.revision}`,
   );
   return deepFreeze([
@@ -77,9 +77,9 @@ export function projectDelegationRunAuthority(
         : [`enforcement:${config.actionExecution!.enforcement}`],
     },
     {
-      kind: "validation",
-      allowed: validationAllowed,
-      required: validationRequired,
+      kind: "verification",
+      allowed: verificationAllowed,
+      required: verificationRequired,
     },
     {
       kind: "disclosure",
@@ -155,7 +155,7 @@ export function deriveDelegatedRunConfig(input: {
     permissions,
     tools,
     actionExecution: input.parent.actionExecution,
-    validation: input.parent.validation,
+    verification: input.parent.verification,
     limits: Object.freeze({
       ...input.parent.limits,
       maxIterations: Math.min(

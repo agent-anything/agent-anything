@@ -66,7 +66,7 @@ export function createHelarcProductCommandDispatcher(
         command = snapshotHelarcProductCommand(candidate);
       } catch (error) {
         return Promise.resolve(
-          rejectedReceipt(candidate, validationCode(error)),
+          rejectedReceipt(candidate, verificationCode(error)),
         ) as Promise<HelarcProductCommandReceipt<TKind>>;
       }
 
@@ -295,7 +295,7 @@ function digestCommand(command: HelarcProductCommand): string {
     .digest("hex");
 }
 
-function validationCode(error: unknown): HelarcProductCommandRejectionCode {
+function verificationCode(error: unknown): HelarcProductCommandRejectionCode {
   return error instanceof ProductCommandValidationError
     ? error.code
     : "helarc_product_command_invalid";

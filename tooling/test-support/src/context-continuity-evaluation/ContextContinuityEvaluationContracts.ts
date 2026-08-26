@@ -40,7 +40,7 @@ export type ContextContinuityFailureAttribution =
   | "tool_exposure"
   | "provider_transport"
   | "execution"
-  | "validation";
+  | "verification";
 
 export type ContextContinuityDownstreamOutcome =
   | "succeeded"

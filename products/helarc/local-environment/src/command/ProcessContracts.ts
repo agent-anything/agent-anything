@@ -6,7 +6,7 @@ export interface CodeAgentCommandLimits {
   maxOutputFileBytes: number;
   maxCommandBytes: number;
   maxDescriptionChars: number;
-  maxValidationClaimChars: number;
+  maxVerificationClaimChars: number;
   maxActiveTasks: number;
   maxSettledTasks: number;
 }

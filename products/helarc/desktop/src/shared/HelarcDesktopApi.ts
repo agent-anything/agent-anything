@@ -312,7 +312,7 @@ export interface HelarcModelContinuationSnapshot {
   readonly occurredAt: string;
 }
 
-export type HelarcValidationStateSnapshot =
+export type HelarcVerificationStateSnapshot =
   | "unassessed"
   | "pending"
   | "satisfied"
@@ -320,7 +320,7 @@ export type HelarcValidationStateSnapshot =
   | "inconclusive"
   | "stale";
 
-export type HelarcValidationGateStatusSnapshot =
+export type HelarcVerificationGateStatusSnapshot =
   | "completion_eligible"
   | "blocked_unassessed"
   | "blocked_pending"
@@ -330,19 +330,19 @@ export type HelarcValidationGateStatusSnapshot =
   | "invalid"
   | "failed";
 
-export interface HelarcHostValidationSnapshot {
+export interface HelarcHostVerificationSnapshot {
   readonly snapshotRevision: number;
   readonly counts: readonly {
-    readonly state: HelarcValidationStateSnapshot;
+    readonly state: HelarcVerificationStateSnapshot;
     readonly count: number;
   }[];
   readonly activeChecks: number;
-  readonly gateStatus: HelarcValidationGateStatusSnapshot | null;
+  readonly gateStatus: HelarcVerificationGateStatusSnapshot | null;
   readonly safeReasons: readonly string[];
   readonly updatedAt: string;
 }
 
-export interface HelarcProductValidationSnapshot {
+export interface HelarcProductVerificationSnapshot {
   readonly status:
     | "not_required"
     | "pending"
@@ -350,9 +350,9 @@ export interface HelarcProductValidationSnapshot {
     | "attention_required"
     | "unavailable";
   readonly snapshotRevision: number | null;
-  readonly counts: HelarcHostValidationSnapshot["counts"];
+  readonly counts: HelarcHostVerificationSnapshot["counts"];
   readonly activeChecks: number;
-  readonly gateStatus: HelarcValidationGateStatusSnapshot | null;
+  readonly gateStatus: HelarcVerificationGateStatusSnapshot | null;
   readonly safeReasons: readonly string[];
   readonly updatedAt: string | null;
 }
@@ -389,7 +389,7 @@ export interface HelarcInstructionBindingSnapshot {
 
 export interface HelarcRunProductResultSnapshot {
   readonly status: "completed" | "rejected" | "failed" | "blocked" | "cancelled";
-  readonly validation: HelarcProductValidationSnapshot;
+  readonly verification: HelarcProductVerificationSnapshot;
   readonly output: {
     readonly taskId: string;
     readonly workspace: {
@@ -435,7 +435,7 @@ export interface HelarcRunSnapshot {
     readonly runTree: HelarcRunTreeSnapshot;
     readonly activeDelegations: readonly HelarcActiveDelegationSnapshot[];
     readonly progress: HelarcRunProgressSnapshot;
-    readonly validation: HelarcHostValidationSnapshot | null;
+    readonly verification: HelarcHostVerificationSnapshot | null;
     readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
     readonly terminal: {
       readonly status: "completed" | "blocked" | "failed" | "cancelled";
@@ -474,7 +474,7 @@ export type HelarcArtifactSnapshotKind =
   | "trace-projection"
   | "tool-output-summary"
   | "evidence-bundle"
-  | "validation-report"
+  | "verification-report"
   | "evaluation-report"
   | "engineering-review"
   | "error-report";
@@ -812,7 +812,7 @@ export interface HelarcHostRunStatusSnapshot {
   readonly runTree: HelarcRunTreeSnapshot;
   readonly activeDelegations: readonly HelarcActiveDelegationSnapshot[];
   readonly progress: HelarcRunProgressSnapshot;
-  readonly validation: HelarcHostValidationSnapshot | null;
+  readonly verification: HelarcHostVerificationSnapshot | null;
   readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
   readonly terminal: HelarcRunSnapshot["host"]["terminal"];
 }

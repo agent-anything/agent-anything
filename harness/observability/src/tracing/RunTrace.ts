@@ -56,10 +56,10 @@ export interface RuntimeRunTraceAttributes {
   readonly errorCodes: readonly string[];
   readonly contextTransitions: readonly ContextTransitionTraceRecord[];
   readonly contextProjections: readonly ContextProjectionTraceRecord[];
-  readonly validation: readonly ValidationTraceRecord[];
+  readonly verification: readonly VerificationTraceRecord[];
 }
 
-export interface ValidationTraceRecord {
+export interface VerificationTraceRecord {
   readonly event: "check_started" | "check_finished" | "assessment_committed" | "gate_evaluated";
   readonly snapshotRevision: number;
   readonly subjectId: string;

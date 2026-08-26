@@ -3,7 +3,7 @@ export type {
   RunConfig,
   RunLimits,
   RunTreeLimits,
-  RunValidationConfig,
+  RunVerificationConfig,
 } from "./RunConfig.js";
 export type {
   DelegationPreparationPort,
@@ -14,15 +14,15 @@ export type {
   OperationToolAvailabilityParticipant,
   RunnerContextProjection,
   RunInvocationOptions,
-  RunnerAutomaticEffectfulValidationCheckPort,
-  RunnerAutomaticEffectfulValidationCheckRequest,
+  RunnerAutomaticEffectfulVerificationCheckPort,
+  RunnerAutomaticEffectfulVerificationCheckRequest,
   RunnerDependencies,
   RunnerDelegationComposition,
-  RunnerValidationCheckRequest,
-  RunnerValidationCheckResultProcessorPort,
-  RunnerValidationComposition,
-  RunnerValidationPreparationPort,
-  RunnerValidationSettledOperationResultProcessorPort,
+  RunnerVerificationCheckRequest,
+  RunnerVerificationCheckResultProcessorPort,
+  RunnerVerificationComposition,
+  RunnerVerificationPreparationPort,
+  RunnerVerificationSettledOperationResultProcessorPort,
   ToolPathAvailability,
 } from "./RunnerDependencies.js";
 export type {

@@ -46,7 +46,7 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
       errorCodes: [],
       contextTransitions: [],
       contextProjections: [],
-      validation: [],
+      verification: [],
     });
   }
 
@@ -212,8 +212,8 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
           code: event.payload.code,
         });
         break;
-      case "validation.check.started":
-        this.appendValidationTrace(event, {
+      case "verification.check.started":
+        this.appendVerificationTrace(event, {
           event: "check_started",
           snapshotRevision: event.payload.snapshotRevision,
           subjectId: event.payload.attemptId,
@@ -223,8 +223,8 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
           coverageRatio: null,
         });
         break;
-      case "validation.check.finished":
-        this.appendValidationTrace(event, {
+      case "verification.check.finished":
+        this.appendVerificationTrace(event, {
           event: "check_finished",
           snapshotRevision: event.payload.snapshotRevision,
           subjectId: event.payload.attemptId,
@@ -234,8 +234,8 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
           coverageRatio: event.payload.coverageRatio,
         });
         break;
-      case "validation.assessment.committed":
-        this.appendValidationTrace(event, {
+      case "verification.assessment.committed":
+        this.appendVerificationTrace(event, {
           event: "assessment_committed",
           snapshotRevision: event.payload.snapshotRevision,
           subjectId: event.payload.assessmentId,
@@ -245,8 +245,8 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
           coverageRatio: null,
         });
         break;
-      case "validation.gate.evaluated":
-        this.appendValidationTrace(event, {
+      case "verification.gate.evaluated":
+        this.appendVerificationTrace(event, {
           event: "gate_evaluated",
           snapshotRevision: event.payload.snapshotRevision,
           subjectId: event.payload.gateId,
@@ -269,13 +269,13 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
 
   getSnapshot(): RunTrace { return this.snapshot(this.completed ? this.finalStatus() : "active"); }
 
-  private appendValidationTrace(
+  private appendVerificationTrace(
     event: RuntimeEvent,
-    record: import("./RunTrace.js").ValidationTraceRecord,
+    record: import("./RunTrace.js").VerificationTraceRecord,
   ): void {
     const root = this.spans.get(this.input.runId)!;
-    root.attributes.validation = [
-      ...(root.attributes.validation as import("./RunTrace.js").ValidationTraceRecord[]),
+    root.attributes.verification = [
+      ...(root.attributes.verification as import("./RunTrace.js").VerificationTraceRecord[]),
       Object.freeze(record),
     ];
     root.links.push(link("runtime_event", event.id));

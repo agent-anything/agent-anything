@@ -186,7 +186,7 @@ describe("Host RuntimeEvent projection", () => {
     expect(projected.payload).not.toHaveProperty("records");
   });
 
-  it("keeps only safe Validation correlation and excludes detailed evidence", () => {
+  it("keeps only safe Verification correlation and excludes detailed evidence", () => {
     const event = Object.freeze({
       schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
       id: "event-4",
@@ -194,7 +194,7 @@ describe("Host RuntimeEvent projection", () => {
       taskId: "task-1",
       lineage: Object.freeze({ kind: "root", root: Object.freeze({ id: "run-1" }), depth: 0 }),
       sequence: 4,
-      name: "validation.check.finished",
+      name: "verification.check.finished",
       occurredAt: "2026-08-03T00:00:00.000Z",
       payload: Object.freeze({
         snapshotRevision: 7,
@@ -264,7 +264,7 @@ describe("Host RuntimeEvent projection", () => {
         expectationUnmetCount: 1,
         evidenceCount: 2,
         artifactCount: 1,
-        validationStatus: "satisfied",
+        verificationStatus: "satisfied",
         effectStatus: "known",
         uncertaintyCount: 0,
         controllerTurns: 4,
@@ -301,7 +301,7 @@ describe("Host RuntimeEvent projection", () => {
       expectationUnmetCount: 1,
       evidenceCount: 2,
       artifactCount: 1,
-      validationStatus: "satisfied",
+      verificationStatus: "satisfied",
       effectStatus: "known",
       uncertaintyCount: 0,
       controllerTurns: 4,

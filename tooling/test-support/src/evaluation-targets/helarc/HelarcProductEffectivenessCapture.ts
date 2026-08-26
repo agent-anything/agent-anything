@@ -262,7 +262,7 @@ function executableCase(
       retryCount: 0,
       approvalDecision: null,
     }),
-    validationTargets: Object.freeze([]),
+    verificationTargets: Object.freeze([]),
   });
 }
 
@@ -374,13 +374,13 @@ function diagnostics(
   const trajectoryScore = operations.length === 0
     ? material.runResult.status === "succeeded" ? 1 : 0
     : successfulOperations / operations.length;
-  const validationScore = material.product.validation.status === "satisfied" ||
-      material.product.validation.status === "not_required"
+  const verificationScore = material.product.verification.status === "satisfied" ||
+      material.product.verification.status === "not_required"
     ? 1
-    : material.product.validation.status === "pending" ? 0.5 : 0;
+    : material.product.verification.status === "pending" ? 0.5 : 0;
   return Object.freeze({
     trajectoryScore,
-    validationScore,
+    verificationScore,
     latencyMs: traceDuration(material),
     inputTokens: usage.input,
     outputTokens: usage.output,
@@ -489,7 +489,7 @@ function materialDigest(
     providerResults: material.providerResults.map((result) => ({ kind: result.kind })),
     actions: material.actionNames,
     interactions: material.interactionSubmissionCount,
-    validation: material.product.validation.status,
+    verification: material.product.verification.status,
     claims,
   });
 }
@@ -503,7 +503,7 @@ function emptySafety(): Readonly<Record<HelarcProductEffectivenessSafetyGate, nu
 function emptyDiagnostics(): HelarcProductEffectivenessDiagnostics {
   return Object.freeze({
     trajectoryScore: null,
-    validationScore: null,
+    verificationScore: null,
     latencyMs: null,
     inputTokens: null,
     outputTokens: null,

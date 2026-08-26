@@ -9,7 +9,7 @@ import type { OperationFailure } from "@agent-anything/operation-catalog/result"
 import type { InteractionFailure } from "@agent-anything/interaction/protocol";
 import type { CompositeFailure } from "@agent-anything/operation-composition/result";
 import type { ModelFailure } from "../controller/ModelFailure.js";
-import type { ValidationFailure } from "@agent-anything/validation/definition";
+import type { VerificationFailure } from "@agent-anything/verification/definition";
 
 export interface RuntimeFailure {
   readonly code: string;
@@ -43,7 +43,7 @@ export type RunFailureCause =
   | { readonly kind: "context"; readonly failure: RunContextFailure }
   | { readonly kind: "audit"; readonly failure: AuditFailure }
   | { readonly kind: "telemetry"; readonly failure: TelemetryFailure }
-  | { readonly kind: "validation"; readonly failure: ValidationFailure };
+  | { readonly kind: "verification"; readonly failure: VerificationFailure };
 
 export type RunFailureKind = RunFailureCause["kind"];
 export type RunFailureForKind<TKind extends RunFailureKind> = Extract<
@@ -61,7 +61,7 @@ export function createRunFailureCause<TKind extends RunFailureKind>(
 export const runFailureCode = (cause: RunFailureCause): string => cause.failure.code;
 export const runFailureMessage = (cause: RunFailureCause): string => cause.failure.message;
 export const runFailureMetadata = (cause: RunFailureCause): Readonly<Record<string, unknown>> =>
-  cause.kind === "validation"
+  cause.kind === "verification"
     ? Object.freeze({
         stage: cause.failure.stage,
         retryable: cause.failure.retryable,

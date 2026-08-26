@@ -80,16 +80,16 @@ describe("Evaluation definitions", () => {
           limitation: null,
         },
         {
-          key: "validation.summary",
-          owner: "validation",
+          key: "verification.summary",
+          owner: "verification",
           required: false,
           sourceRevision: "unavailable-v1",
-          schemaRef: schema("validation-summary"),
+          schemaRef: schema("verification-summary"),
           status: "unavailable",
           representation: null,
           sensitivity: "internal",
           disclosure: "internal",
-          limitation: limitation("validation_unavailable"),
+          limitation: limitation("verification_unavailable"),
         },
       ],
       createdAt: CREATED_AT,
@@ -99,7 +99,7 @@ describe("Evaluation definitions", () => {
 
     expect(snapshot.manifest.map((item) => item.key)).toEqual([
       "agent.revision",
-      "validation.summary",
+      "verification.summary",
     ]);
     expect(Object.isFrozen(snapshot.manifest)).toBe(true);
 
@@ -107,11 +107,11 @@ describe("Evaluation definitions", () => {
       ...snapshot,
       ref: ref("incomplete"),
       manifest: [snapshot.manifest[0]],
-    }, objective)).toThrow(/missing 'validation.summary'/);
+    }, objective)).toThrow(/missing 'verification.summary'/);
     expect(() => createEvaluationTargetSnapshot({
       ...snapshot,
       ref: ref("over-disclosed"),
-      manifest: snapshot.manifest.map((entry) => entry.key === "validation.summary"
+      manifest: snapshot.manifest.map((entry) => entry.key === "verification.summary"
         ? { ...entry, disclosure: "public" as const }
         : entry),
     }, objective)).toThrow(/disclosure/);
@@ -178,12 +178,12 @@ function createObjective(): EvaluationObjective {
         description: "Exact Agent revision.",
       },
       {
-        key: "validation.summary",
-        owner: "validation",
+        key: "verification.summary",
+        owner: "verification",
         required: false,
-        schemaRef: schema("validation-summary"),
+        schemaRef: schema("verification-summary"),
         maximumSensitivity: "internal",
-        description: "Optional Validation summary.",
+        description: "Optional Verification summary.",
       },
     ],
     suiteConstraints: {},

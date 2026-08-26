@@ -184,7 +184,7 @@ function applyRunOperation(
       })
     )),
     retry: projectRetry(snapshot.retry),
-    validation: snapshot.validation,
+    verification: snapshot.verification,
   });
 }
 

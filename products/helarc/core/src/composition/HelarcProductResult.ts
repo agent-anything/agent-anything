@@ -10,7 +10,7 @@ import type {
 import { projectRuntimeEventForHost } from "@agent-anything/host/projection";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import type { HelarcControllerTraceProjection } from "../observability/index.js";
-import type { ValidationHostProjection, ValidationStateCount } from "@agent-anything/validation/projection";
+import type { VerificationHostProjection, VerificationStateCount } from "@agent-anything/verification/projection";
 
 export type HelarcProductStatus =
   | "completed"
@@ -125,7 +125,7 @@ export interface HelarcInteractionSummary {
   readonly status: "resolved" | "expired" | "cancelled" | "invalidated" | "failed";
 }
 
-export interface HelarcValidationCommunication {
+export interface HelarcVerificationCommunication {
   readonly status:
     | "not_required"
     | "pending"
@@ -133,9 +133,9 @@ export interface HelarcValidationCommunication {
     | "attention_required"
     | "unavailable";
   readonly snapshotRevision: number | null;
-  readonly counts: readonly ValidationStateCount[];
+  readonly counts: readonly VerificationStateCount[];
   readonly activeChecks: number;
-  readonly gateStatus: ValidationHostProjection["gateStatus"];
+  readonly gateStatus: VerificationHostProjection["gateStatus"];
   readonly safeReasons: readonly string[];
   readonly updatedAt: string | null;
 }
@@ -163,7 +163,7 @@ export interface HelarcProductResult {
   readonly composites: readonly HelarcCompositeWorkSummary[];
   readonly children: readonly HelarcChildWorkSummary[];
   readonly interactions: readonly HelarcInteractionSummary[];
-  readonly validation: HelarcValidationCommunication;
+  readonly verification: HelarcVerificationCommunication;
   readonly uncertainty: readonly string[];
   readonly residualRisk: readonly string[];
   readonly incompleteWork: readonly string[];
@@ -176,7 +176,7 @@ export function projectHelarcProductResult(
   workspace: WorkspaceSelection,
   runResult: RunResult<HelarcAgentOutput>,
   selectedEnforcement: SandboxEnforcement,
-  validation: ValidationHostProjection | null,
+  verification: VerificationHostProjection | null,
 ): HelarcProductResult {
   const agentOutput = runResult.status === "succeeded" ? runResult.finalOutput : null;
   const safeErrors = collectSafeRunErrors(runResult);
@@ -215,7 +215,7 @@ export function projectHelarcProductResult(
     composites,
     children,
     interactions,
-    validation: projectValidationCommunication(validation),
+    verification: projectVerificationCommunication(verification),
     uncertainty,
     residualRisk: Object.freeze(uncertainty.length === 0 ? [] : [
       "One or more effects could not be confirmed from the terminal Run record.",
@@ -228,42 +228,42 @@ export function projectHelarcProductResult(
   });
 }
 
-function projectValidationCommunication(
-  validation: ValidationHostProjection | null,
-): HelarcValidationCommunication {
-  if (validation === null) {
+function projectVerificationCommunication(
+  verification: VerificationHostProjection | null,
+): HelarcVerificationCommunication {
+  if (verification === null) {
     return Object.freeze({
       status: "unavailable" as const,
       snapshotRevision: null,
       counts: Object.freeze([]),
       activeChecks: 0,
       gateStatus: null,
-      safeReasons: Object.freeze(["validation_projection_unavailable"]),
+      safeReasons: Object.freeze(["verification_projection_unavailable"]),
       updatedAt: null,
     });
   }
-  const count = (state: ValidationStateCount["state"]) =>
-    validation.counts.find((entry) => entry.state === state)?.count ?? 0;
-  const total = validation.counts.reduce((sum, entry) => sum + entry.count, 0);
-  const status: HelarcValidationCommunication["status"] = total === 0
+  const count = (state: VerificationStateCount["state"]) =>
+    verification.counts.find((entry) => entry.state === state)?.count ?? 0;
+  const total = verification.counts.reduce((sum, entry) => sum + entry.count, 0);
+  const status: HelarcVerificationCommunication["status"] = total === 0
     ? "not_required"
     : count("violated") > 0 || count("inconclusive") > 0 || count("stale") > 0
       ? "attention_required"
-      : validation.activeChecks > 0 || count("pending") > 0
+      : verification.activeChecks > 0 || count("pending") > 0
         ? "pending"
         : count("satisfied") > 0
           ? "satisfied"
-          : validation.gateStatus === "completion_eligible"
+          : verification.gateStatus === "completion_eligible"
             ? "not_required"
             : "pending";
   return Object.freeze({
     status,
-    snapshotRevision: validation.snapshot.revision,
-    counts: Object.freeze(validation.counts.map((entry) => Object.freeze({ ...entry }))),
-    activeChecks: validation.activeChecks,
-    gateStatus: validation.gateStatus,
-    safeReasons: Object.freeze([...validation.safeReasons]),
-    updatedAt: validation.updatedAt,
+    snapshotRevision: verification.snapshot.revision,
+    counts: Object.freeze(verification.counts.map((entry) => Object.freeze({ ...entry }))),
+    activeChecks: verification.activeChecks,
+    gateStatus: verification.gateStatus,
+    safeReasons: Object.freeze([...verification.safeReasons]),
+    updatedAt: verification.updatedAt,
   });
 }
 

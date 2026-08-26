@@ -66,9 +66,9 @@ importers:
       '@agent-anything/tools':
         specifier: workspace:*
         version: link:../../tools
-      '@agent-anything/validation':
+      '@agent-anything/verification':
         specifier: workspace:*
-        version: link:../../validation
+        version: link:../../verification
       '@agent-anything/workspace':
         specifier: workspace:*
         version: link:../../workspace
@@ -112,9 +112,9 @@ importers:
       '@agent-anything/permission':
         specifier: workspace:*
         version: link:../safety/permission
-      '@agent-anything/validation':
+      '@agent-anything/verification':
         specifier: workspace:*
-        version: link:../validation
+        version: link:../verification
       '@agent-anything/workspace':
         specifier: workspace:*
         version: link:../workspace
@@ -313,7 +313,7 @@ importers:
         specifier: ^25.9.1
         version: 25.9.1
 
-  harness/validation:
+  harness/verification:
     dependencies:
       '@agent-anything/agent-core':
         specifier: workspace:*
@@ -344,9 +344,9 @@ importers:
       '@agent-anything/tools':
         specifier: workspace:*
         version: link:../../../harness/tools
-      '@agent-anything/validation':
+      '@agent-anything/verification':
         specifier: workspace:*
-        version: link:../../../harness/validation
+        version: link:../../../harness/verification
       '@agent-anything/workspace':
         specifier: workspace:*
         version: link:../../../harness/workspace
@@ -396,9 +396,9 @@ importers:
       '@agent-anything/tools':
         specifier: workspace:*
         version: link:../../../harness/tools
-      '@agent-anything/validation':
+      '@agent-anything/verification':
         specifier: workspace:*
-        version: link:../../../harness/validation
+        version: link:../../../harness/verification
       '@agent-anything/workspace':
         specifier: workspace:*
         version: link:../../../harness/workspace
@@ -451,9 +451,9 @@ importers:
       '@agent-anything/provider-integrations':
         specifier: workspace:*
         version: link:../../../harness/integrations/providers
-      '@agent-anything/validation':
+      '@agent-anything/verification':
         specifier: workspace:*
-        version: link:../../../harness/validation
+        version: link:../../../harness/verification
       '@agent-anything/workspace':
         specifier: workspace:*
         version: link:../../../harness/workspace
@@ -564,9 +564,9 @@ importers:
       '@agent-anything/tools':
         specifier: workspace:*
         version: link:../../harness/tools
-      '@agent-anything/validation':
+      '@agent-anything/verification':
         specifier: workspace:*
-        version: link:../../harness/validation
+        version: link:../../harness/verification
       '@agent-anything/workspace':
         specifier: workspace:*
         version: link:../../harness/workspace

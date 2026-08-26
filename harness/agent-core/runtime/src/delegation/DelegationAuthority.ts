@@ -12,7 +12,7 @@ export type DelegationAuthorityDimensionKind =
   | "tool"
   | "permission"
   | "action_execution"
-  | "validation"
+  | "verification"
   | "disclosure";
 
 export type DelegationAuthoritySourceRole =
@@ -73,7 +73,7 @@ const dimensionKinds: readonly DelegationAuthorityDimensionKind[] = [
   "tool",
   "permission",
   "action_execution",
-  "validation",
+  "verification",
   "disclosure",
 ];
 

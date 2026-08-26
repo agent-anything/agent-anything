@@ -8,7 +8,7 @@ export const defaultCodeAgentCommandLimits: CodeAgentCommandLimits = {
   maxOutputFileBytes: 2_000_000,
   maxCommandBytes: 65_536,
   maxDescriptionChars: 1_000,
-  maxValidationClaimChars: 4_096,
+  maxVerificationClaimChars: 4_096,
   maxActiveTasks: 8,
   maxSettledTasks: 64,
 };

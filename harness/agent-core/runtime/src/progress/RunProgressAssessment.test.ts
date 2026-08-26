@@ -163,7 +163,7 @@ describe("Run Progress semantic fingerprints", () => {
       { kind: "tool_rejected", code: "tool_not_found" },
       { kind: "interaction_settlement", owner: "interaction", status: "resolved", contentDigest: "sha256:answer", lowerRefs: [], toolResult: null },
       { kind: "descendant_settlement", status: "succeeded", failureOwner: null, failureCode: null, lowerRefs: [], toolResult: toolResult() },
-      { kind: "validation_feedback", validation: validationProjection() },
+      { kind: "verification_feedback", verification: verificationProjection() },
       { kind: "evidence_ref", ref: "evidence-1" },
       { kind: "artifact_ref", ref: "artifact-1" },
       { kind: "required_pending", pending: { kind: "interaction", branchId: "b", required: true, owner: "interaction", subjectId: "s", revision: "1" } },
@@ -174,7 +174,7 @@ describe("Run Progress semantic fingerprints", () => {
     expect(kinds).toEqual([
       "controller_turn", "run_action", "plan_update", "active_agent", "steering",
       "operation_result", "operation_rejected", "tool_rejected",
-      "interaction_settlement", "descendant_settlement", "validation_feedback",
+      "interaction_settlement", "descendant_settlement", "verification_feedback",
       "completion_gate", "evidence_ref", "artifact_ref", "required_pending",
     ]);
   });
@@ -293,7 +293,7 @@ async function createBasis(
     toolSelectionRevision: "tools-1",
     permissionFingerprint: digest("b"),
     steeringFingerprint: null,
-    validationSnapshotRevision: 0,
+    verificationSnapshotRevision: 0,
     ...overrides,
   });
 }
@@ -383,7 +383,7 @@ function steering() {
   };
 }
 
-function validationProjection() {
+function verificationProjection() {
   return {
     snapshot: { runId: "run-1", revision: 1 },
     feedback: [],

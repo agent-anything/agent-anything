@@ -375,7 +375,7 @@ function projectionCommit(
         },
         pendingInteractions: [],
         retry: null,
-        validation: null,
+        verification: null,
         cancellation: null,
         enforcement: {
           selected: "disabled",
@@ -445,7 +445,7 @@ function terminalCommit(): HelarcRunTerminalCommit {
         composites: [],
         children: [],
         interactions: [],
-        validation: {
+        verification: {
           status: "not_required",
           snapshotRevision: 1,
           counts: [],

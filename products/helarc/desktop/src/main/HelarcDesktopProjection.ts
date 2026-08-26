@@ -11,7 +11,7 @@ import type {
   HelarcAdditionalPermissionsSnapshot,
   HelarcApprovalReviewRequestSnapshot,
   HelarcHostCommandReceipt,
-  HelarcHostValidationSnapshot,
+  HelarcHostVerificationSnapshot,
   HelarcInteractionRequestRefSnapshot,
   HelarcMainSnapshot as DesktopSnapshot,
   HelarcPendingInteractionSnapshot,
@@ -260,7 +260,7 @@ export function projectHelarcRunStatusQueryReceipt(
       runTree: projectRunTree(receipt.projection.runTree),
       activeDelegations: projectActiveDelegations(receipt.projection.activeDelegations),
       progress: projectRunProgress(receipt.projection.progress),
-      validation: projectHostValidation(receipt.projection.validation),
+      verification: projectHostVerification(receipt.projection.verification),
       pendingInteractions: receipt.projection.pendingInteractions.map(projectPendingInteraction),
       terminal: receipt.projection.terminal === null
         ? null
@@ -327,7 +327,7 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
       runTree: projectRunTree(run.host.runTree),
       activeDelegations: projectActiveDelegations(run.host.activeDelegations),
       progress: projectRunProgress(run.host.progress),
-      validation: projectHostValidation(run.host.validation),
+      verification: projectHostVerification(run.host.verification),
       pendingInteractions: run.host.pendingInteractions.map(projectPendingInteraction),
       terminal: run.host.terminal === null
         ? null
@@ -362,14 +362,14 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
         ? null
         : {
             status: run.product.result.status,
-            validation: {
-              status: run.product.result.validation.status,
-              snapshotRevision: run.product.result.validation.snapshotRevision,
-              counts: run.product.result.validation.counts.map((entry) => ({ ...entry })),
-              activeChecks: run.product.result.validation.activeChecks,
-              gateStatus: run.product.result.validation.gateStatus,
-              safeReasons: [...run.product.result.validation.safeReasons],
-              updatedAt: run.product.result.validation.updatedAt,
+            verification: {
+              status: run.product.result.verification.status,
+              snapshotRevision: run.product.result.verification.snapshotRevision,
+              counts: run.product.result.verification.counts.map((entry) => ({ ...entry })),
+              activeChecks: run.product.result.verification.activeChecks,
+              gateStatus: run.product.result.verification.gateStatus,
+              safeReasons: [...run.product.result.verification.safeReasons],
+              updatedAt: run.product.result.verification.updatedAt,
             },
             output: {
               taskId: run.product.result.output.taskId,
@@ -491,17 +491,17 @@ function projectActivitySource(
   };
 }
 
-function projectHostValidation(
-  validation: NonNullable<NonNullable<MainSnapshot["run"]>["host"]["validation"]> | null,
-): HelarcHostValidationSnapshot | null {
-  if (validation === null) return null;
+function projectHostVerification(
+  verification: NonNullable<NonNullable<MainSnapshot["run"]>["host"]["verification"]> | null,
+): HelarcHostVerificationSnapshot | null {
+  if (verification === null) return null;
   return {
-    snapshotRevision: validation.snapshot.revision,
-    counts: validation.counts.map((entry) => ({ ...entry })),
-    activeChecks: validation.activeChecks,
-    gateStatus: validation.gateStatus,
-    safeReasons: [...validation.safeReasons],
-    updatedAt: validation.updatedAt,
+    snapshotRevision: verification.snapshot.revision,
+    counts: verification.counts.map((entry) => ({ ...entry })),
+    activeChecks: verification.activeChecks,
+    gateStatus: verification.gateStatus,
+    safeReasons: [...verification.safeReasons],
+    updatedAt: verification.updatedAt,
   };
 }
 

@@ -133,13 +133,13 @@ describe("Helarc work context domain", () => {
       ...artifact(),
       completeness: "unknown",
       integrity: { status: "unverified" },
-      limitations: ["Validation was not evaluated."],
+      limitations: ["Verification was not evaluated."],
     })).toMatchObject({
       ok: true,
       artifact: {
         completeness: "unknown",
         integrity: { status: "unverified" },
-        limitations: ["Validation was not evaluated."],
+        limitations: ["Verification was not evaluated."],
       },
     });
   });

@@ -82,7 +82,7 @@ describe("Helarc Product-effectiveness Evidence and comparison", () => {
     expect(comparison.report.gateOutcomes.every((item) => item.status === "passed")).toBe(true);
     expect(comparison.diagnostics.helarc.reliability).toBe(1);
     expect(comparison.diagnostics.helarc.trajectory).toBeCloseTo(0.8);
-    expect(comparison.diagnostics.helarc.validation).toBe(1);
+    expect(comparison.diagnostics.helarc.verification).toBe(1);
   });
 
   it("fails the ratio and absolute safety gates independently", () => {
@@ -183,7 +183,7 @@ function createBundle(
         safety,
         diagnostics: {
           trajectoryScore: 0.8,
-          validationScore: 1,
+          verificationScore: 1,
           latencyMs: targetName === "codex" ? 1_000 : 1_200,
           inputTokens: 100,
           outputTokens: 50,
@@ -266,7 +266,7 @@ function targetValues(targetName: HelarcProductEffectivenessTargetName): HelarcP
     policy: { revision: "policy-v1" },
     permission: { preset: "ask" },
     sandbox: { enforcement: "disabled" },
-    validation: { revision: "validation-v1" },
+    verification: { revision: "verification-v1" },
     limits: { maximumDurationMs: 300_000, maximumOperations: 100 },
     environment: { fixture: "product-effectiveness-environment-v1" },
     limitations: { items: [] },

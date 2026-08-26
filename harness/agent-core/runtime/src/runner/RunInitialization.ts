@@ -63,7 +63,7 @@ export function createInitialRunState<TOutput>(input: {
     cancellationRequest: null,
     completedAt: null,
     permission: permissionState,
-    validation: Object.freeze({
+    verification: Object.freeze({
       snapshot: Object.freeze({ runId: input.runId, revision: 0 }),
       gate: null,
     }),

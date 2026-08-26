@@ -75,10 +75,10 @@ export class Runner {
     if (!dependencies.controller || typeof dependencies.controller.next !== "function") {
       throw new TypeError("Runner requires a Controller.");
     }
-    if (!dependencies.validation ||
-        typeof dependencies.validation.executionFactory?.create !== "function" ||
-        typeof dependencies.validation.completionGate?.evaluate !== "function") {
-      throw new TypeError("Runner requires explicit Validation execution and Completion Gate dependencies.");
+    if (!dependencies.verification ||
+        typeof dependencies.verification.executionFactory?.create !== "function" ||
+        typeof dependencies.verification.completionGate?.evaluate !== "function") {
+      throw new TypeError("Runner requires explicit Verification execution and Completion Gate dependencies.");
     }
 
     const now = dependencies.now ?? (() => new Date().toISOString());
@@ -524,23 +524,23 @@ function snapshotRunnerContextProjection(
     throw new TypeError("Runner requires a Context projection policy operation.");
   }
   const request = snapshotContextProjectionRequest({
-    id: "runner-context-projection-validation",
+    id: "runner-context-projection-verification",
     activeContext: Object.freeze({
-      id: "runner-context-validation",
-      runId: "runner-context-validation",
+      id: "runner-context-verification",
+      runId: "runner-context-verification",
       version: 0,
     }),
     consumer: Object.freeze({
       owner: "agent-core",
       kind: "controller",
-      id: "runner-context-validation",
+      id: "runner-context-verification",
     }),
     purpose: input.purpose,
     profile: input.profile,
     budget: Object.freeze({ unit: "bytes", maximum: 0 }),
     policy: input.policy.ref,
     estimator: Object.freeze({
-      id: "runner-context-estimator-validation",
+      id: "runner-context-estimator-verification",
       revision: "1",
       unit: "bytes",
       accuracy: "exact",
