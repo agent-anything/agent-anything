@@ -48,7 +48,7 @@ describe("Helarc Agent Instruction Evaluation", () => {
     expect(denied.minimal.metrics).toMatchObject({
       outcomeCorrect: true,
       invalidOrUnsafeActionAttempts: 1,
-      humanAttentionEvents: 1,
+      humanInteractionEvents: 1,
       terminalTruth: true,
     });
     expect(denied.production.metrics).toMatchObject(denied.minimal.metrics);

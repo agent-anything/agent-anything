@@ -19,6 +19,7 @@
     "evaluation:product-effectiveness:compare": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/test-support build && node scripts/run-pnpm.mjs --filter @agent-anything/test-support evaluation:product-effectiveness:compare",
     "test": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs run architecture:check && node scripts/run-pnpm.mjs build && node scripts/run-pnpm.mjs -r run test",
     "test:evaluation": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/agent-runtime test && node scripts/run-pnpm.mjs --filter @agent-anything/test-support test:evaluation",
+    "test:operational-evaluation": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/test-support test:operational-evaluation",
     "test:agent-instructions": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs --filter @agent-anything/test-support test:agent-instructions",
     "typecheck": "node scripts/check-runtime.mjs && node scripts/run-pnpm.mjs -r run typecheck"
   },

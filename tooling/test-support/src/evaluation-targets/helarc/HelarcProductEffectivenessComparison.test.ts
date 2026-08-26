@@ -188,7 +188,7 @@ function createBundle(
           inputTokens: 100,
           outputTokens: 50,
           toolCalls: 3,
-          humanAttentionEvents: profile.id === "clarification" ? 1 : 0,
+          humanInteractionEvents: profile.id === "clarification" ? 1 : 0,
         },
         exclusion: null,
         provenance: {

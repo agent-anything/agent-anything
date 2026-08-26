@@ -25,7 +25,7 @@ export interface DelegationTransferMetrics {
   readonly toolCallCount: number;
   readonly modelTurnCount: number;
   readonly latencyMs: number;
-  readonly humanAttentionEvents: number;
+  readonly humanInteractionEvents: number;
   readonly terminalOutcome: "succeeded" | "blocked" | "failed" | "cancelled";
 }
 
@@ -251,7 +251,7 @@ function projectMetrics(material: HelarcEvaluationRunMaterial): DelegationTransf
     toolCallCount,
     modelTurnCount: material.providerRequests.length,
     latencyMs: traceDuration(material),
-    humanAttentionEvents: material.interactionSubmissionCount,
+    humanInteractionEvents: material.interactionSubmissionCount,
     terminalOutcome: material.runResult.status,
   });
 }

@@ -8,6 +8,13 @@ import type {
 } from "../../../delegation-transfer-evaluation/DelegationTransferEvaluation.js";
 import { HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE } from "./HelarcCurrentTurnToolExposureBaseline.js";
 
+type HistoricalDelegationTransferMetrics = Omit<
+  DelegationTransferMetrics,
+  "humanInteractionEvents"
+> & {
+  readonly humanAttentionEvents: number;
+};
+
 const TARGET_MANIFEST_DIGEST = "088bc588f4ea0f9c9b0428ac19b6372913bd5e94ed982e4e678af57c61b10689";
 const TARGET_REVISION = HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE.targetSnapshotRef.revision
   .replace(/^v8-/, "v9-");
@@ -47,7 +54,7 @@ const CASE_DIGEST_BY_KEY = Object.freeze<Record<string, string>>({
   "stale-evidence:2": "79b736496c190353c7060f3acd487190ff3ad70e82e7fe13a2a938f032319097",
 });
 
-const delegationMetrics: DelegationTransferMetrics = Object.freeze({
+const delegationMetrics: HistoricalDelegationTransferMetrics = Object.freeze({
   objectiveRetentionRate: 1,
   unnecessaryDelegationCount: 0,
   semanticDriftCount: 0,
@@ -126,7 +133,7 @@ export const HELARC_DELEGATION_TRANSFER_ACCEPTED_BASELINE = deepFreeze({
   readonly delegationTransfer: {
     readonly evaluationRevision: "delegation-transfer-deterministic-evaluation-v1";
     readonly reportDigest: string;
-    readonly metrics: DelegationTransferMetrics;
+    readonly metrics: HistoricalDelegationTransferMetrics;
     readonly invariants: DelegationTransferInvariantSummary;
     readonly descendantRunCount: number;
     readonly settledResultCount: number;

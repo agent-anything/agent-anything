@@ -18,7 +18,7 @@ describe("Delegation Transfer deterministic Evaluation", () => {
       toolCallCount: 2,
       modelTurnCount: 5,
       latencyMs: 283,
-      humanAttentionEvents: 0,
+      humanInteractionEvents: 0,
       terminalOutcome: "succeeded",
     });
     expect(Object.values(report.invariants).every(Boolean)).toBe(true);

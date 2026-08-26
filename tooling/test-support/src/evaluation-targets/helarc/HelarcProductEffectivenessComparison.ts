@@ -46,7 +46,7 @@ export interface HelarcProductEffectivenessDiagnosticSummary {
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
   readonly toolCalls: number | null;
-  readonly humanAttentionEvents: number | null;
+  readonly humanInteractionEvents: number | null;
 }
 
 export interface HelarcProductEffectivenessComparison {
@@ -233,7 +233,7 @@ function summarizeDiagnostics(
     inputTokens: averageDiagnostics(completed, "inputTokens"),
     outputTokens: averageDiagnostics(completed, "outputTokens"),
     toolCalls: averageDiagnostics(completed, "toolCalls"),
-    humanAttentionEvents: averageDiagnostics(completed, "humanAttentionEvents"),
+    humanInteractionEvents: averageDiagnostics(completed, "humanInteractionEvents"),
   });
 }
 
@@ -425,7 +425,7 @@ function createDiagnosticMetricSummaries(
     ["inputTokens", "efficiency"],
     ["outputTokens", "efficiency"],
     ["toolCalls", "efficiency"],
-    ["humanAttentionEvents", "collaboration"],
+    ["humanInteractionEvents", "collaboration"],
   ] as const satisfies readonly [
     keyof HelarcProductEffectivenessDiagnosticSummary,
     EvaluationDimension,
@@ -562,7 +562,7 @@ function diagnosticData(summary: HelarcProductEffectivenessDiagnosticSummary) {
     inputTokens: summary.inputTokens,
     outputTokens: summary.outputTokens,
     toolCalls: summary.toolCalls,
-    humanAttentionEvents: summary.humanAttentionEvents,
+    humanInteractionEvents: summary.humanInteractionEvents,
   };
 }
 

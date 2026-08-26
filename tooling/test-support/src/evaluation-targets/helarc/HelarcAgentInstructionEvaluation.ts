@@ -63,7 +63,7 @@ export interface HelarcAgentInstructionTrialMetrics {
   readonly latencyMs: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
-  readonly humanAttentionEvents: number;
+  readonly humanInteractionEvents: number;
 }
 
 export interface HelarcAgentInstructionConformancePair {
@@ -458,7 +458,7 @@ function trialMetrics(
     ),
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
-    humanAttentionEvents: material.interactionSubmissionCount +
+    humanInteractionEvents: material.interactionSubmissionCount +
       (material.approval.decision === null ? 0 : 1),
   });
 }
@@ -715,8 +715,8 @@ function summarizeDiagnostics(
     inputTokens: average(completed.map((trial) => trial.diagnostics.inputTokens)),
     outputTokens: average(completed.map((trial) => trial.diagnostics.outputTokens)),
     toolCalls: average(completed.map((trial) => trial.diagnostics.toolCalls)),
-    humanAttentionEvents: average(
-      completed.map((trial) => trial.diagnostics.humanAttentionEvents),
+    humanInteractionEvents: average(
+      completed.map((trial) => trial.diagnostics.humanInteractionEvents),
     ),
   });
 }

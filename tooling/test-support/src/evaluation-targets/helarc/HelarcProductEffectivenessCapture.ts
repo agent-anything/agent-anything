@@ -385,7 +385,7 @@ function diagnostics(
     inputTokens: usage.input,
     outputTokens: usage.output,
     toolCalls: countToolCalls(material),
-    humanAttentionEvents: material.interactionSubmissionCount,
+    humanInteractionEvents: material.interactionSubmissionCount,
   });
 }
 
@@ -508,7 +508,7 @@ function emptyDiagnostics(): HelarcProductEffectivenessDiagnostics {
     inputTokens: null,
     outputTokens: null,
     toolCalls: null,
-    humanAttentionEvents: null,
+    humanInteractionEvents: null,
   });
 }
 

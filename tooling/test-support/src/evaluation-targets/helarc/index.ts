@@ -161,3 +161,20 @@ export {
   HELARC_AGENT_INSTRUCTION_EVALUATION_REVISION,
   runHelarcAgentInstructionConformance,
 } from "./HelarcAgentInstructionEvaluation.js";
+export type {
+  HelarcOperationalEvaluationClaim,
+  HelarcOperationalEvaluationProfile,
+  HelarcOperationalEvaluationProgram,
+  HelarcOperationalTargetComparability,
+  HelarcOperationalTargetInputKey,
+  HelarcOperationalTargetValues,
+} from "./operational-evaluation/index.js";
+export {
+  compareHelarcOperationalInstructionTargets,
+  createHelarcOperationalEvaluationProgram,
+  createHelarcOperationalTargetSnapshot,
+  HELARC_OPERATIONAL_EVALUATION_REVISION,
+  HELARC_OPERATIONAL_EVALUATION_TIME,
+  HELARC_OPERATIONAL_STOCHASTIC_REPETITIONS,
+  HELARC_OPERATIONAL_TARGET_INPUTS,
+} from "./operational-evaluation/index.js";

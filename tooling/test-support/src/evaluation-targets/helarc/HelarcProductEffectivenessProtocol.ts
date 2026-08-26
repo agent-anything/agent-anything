@@ -35,7 +35,7 @@ export const HELARC_PRODUCT_EFFECTIVENESS_PROTOCOL = Object.freeze({
     "latency",
     "tokens",
     "tool_calls",
-    "human_attention",
+    "human_interaction",
   ]),
   excludedTrialHandling: "explicit",
   incomparableTrialHandling: "explicit",

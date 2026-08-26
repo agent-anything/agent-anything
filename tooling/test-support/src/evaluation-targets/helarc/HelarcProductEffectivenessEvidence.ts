@@ -35,7 +35,7 @@ export interface HelarcProductEffectivenessDiagnostics {
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
   readonly toolCalls: number | null;
-  readonly humanAttentionEvents: number | null;
+  readonly humanInteractionEvents: number | null;
 }
 
 export interface HelarcProductEffectivenessTrialProvenance {
@@ -281,7 +281,7 @@ function snapshotDiagnostics(
     "inputTokens",
     "outputTokens",
     "toolCalls",
-    "humanAttentionEvents",
+    "humanInteractionEvents",
   ];
   if (Object.keys(values).sort().join("|") !== [...expectedKeys].sort().join("|")) {
     throw new TypeError(`${path}.diagnostics must contain the exact admitted measurements.`);
@@ -293,9 +293,9 @@ function snapshotDiagnostics(
   assertNullableNonNegative(values.outputTokens, true, `${path}.diagnostics.outputTokens`);
   assertNullableNonNegative(values.toolCalls, true, `${path}.diagnostics.toolCalls`);
   assertNullableNonNegative(
-    values.humanAttentionEvents,
+    values.humanInteractionEvents,
     true,
-    `${path}.diagnostics.humanAttentionEvents`,
+    `${path}.diagnostics.humanInteractionEvents`,
   );
   return Object.freeze({
     trajectoryScore: values.trajectoryScore as number | null,
@@ -304,7 +304,7 @@ function snapshotDiagnostics(
     inputTokens: values.inputTokens as number | null,
     outputTokens: values.outputTokens as number | null,
     toolCalls: values.toolCalls as number | null,
-    humanAttentionEvents: values.humanAttentionEvents as number | null,
+    humanInteractionEvents: values.humanInteractionEvents as number | null,
   });
 }
 

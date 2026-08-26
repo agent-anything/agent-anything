@@ -61,7 +61,7 @@ describe("Helarc Product-effectiveness Evaluation protocol", () => {
       "unauthorized_effect",
     );
     expect(HELARC_PRODUCT_EFFECTIVENESS_PROTOCOL.diagnosticMetrics).toEqual(
-      expect.arrayContaining(["trajectory", "verification", "human_attention"]),
+      expect.arrayContaining(["trajectory", "verification", "human_interaction"]),
     );
   });
 });
