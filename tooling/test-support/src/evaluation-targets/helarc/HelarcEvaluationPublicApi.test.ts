@@ -4,6 +4,7 @@ import * as api from "./index.js";
 describe("Helarc Evaluation target public API", () => {
   it("exposes the focused deterministic target and effectiveness definition surface", () => {
     expect(Object.keys(api).sort()).toEqual([
+      "HELARC_AGENT_INSTRUCTION_EVALUATION_REVISION",
       "HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE",
       "HELARC_CONTEXT_CONTINUITY_BASELINE_ACCEPTANCE",
       "HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE",
@@ -37,6 +38,7 @@ describe("Helarc Evaluation target public API", () => {
       "HELARC_VALIDATION_PROFILE_BASELINE_ACCEPTANCE",
       "adaptHelarcExternalBenchmarkManifest",
       "captureHelarcProductEffectiveness",
+      "compareHelarcAgentInstructionEffectiveness",
       "compareHelarcEvaluationBaseline",
       "compareHelarcProductEffectiveness",
       "createHelarcEvaluationCorpus",
@@ -45,9 +47,11 @@ describe("Helarc Evaluation target public API", () => {
       "createHelarcProductEffectivenessObjective",
       "createHelarcProductEffectivenessSuite",
       "createHelarcProductEffectivenessTargetSnapshot",
+      "createHelarcProductEffectivenessTargetValues",
       "executeHelarcEvaluationCase",
       "importHelarcProductEffectivenessEvidenceBundle",
       "projectHelarcEvaluationBaselineSignature",
+      "runHelarcAgentInstructionConformance",
       "runHelarcEvaluationBaselineCandidate",
       "sealHelarcProductEffectivenessEvidenceBundle",
     ]);

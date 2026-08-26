@@ -134,6 +134,7 @@ function createComparisonFixture() {
       targetName: "codex",
       sourceRevision: "codex-reference-v1",
       values: targetValues("codex"),
+      disposition: { status: "comparable" },
       createdAt: HELARC_PRODUCT_EFFECTIVENESS_TIME,
     }),
     helarc: createHelarcProductEffectivenessTargetSnapshot({
@@ -143,6 +144,7 @@ function createComparisonFixture() {
       targetName: "helarc",
       sourceRevision: "helarc-candidate-v1",
       values: targetValues("helarc"),
+      disposition: { status: "comparable" },
       createdAt: HELARC_PRODUCT_EFFECTIVENESS_TIME,
     }),
   };
@@ -248,14 +250,25 @@ function targetValues(targetName: HelarcProductEffectivenessTargetName): HelarcP
   return {
     product: { targetName, version: "v1" },
     agent: { identity: `${targetName}-agent-v1` },
-    prompt: { revision: `${targetName}-instructions-v1` },
+    agent_instructions: {
+      target: "production",
+      release: { id: `${targetName}-instructions`, revision: "v1" },
+      resolverRevision: `${targetName}-resolver-v1`,
+      contentDigest: `sha256:${"a".repeat(64)}`,
+      blocks: [{ id: "behavior", source: { id: "behavior", revision: "v1" } }],
+      fullTextExcluded: true,
+    },
+    product_protocol: { revision: `${targetName}-protocol-v1` },
     model: { id: `${targetName}-model`, revision: "v1" },
     provider: { id: `${targetName}-provider`, revision: "v1" },
-    tool_catalog: { revision: `${targetName}-tool-catalog-v1` },
-    environment: { fixture: "product-effectiveness-environment-v1" },
-    settings: { revision: `${targetName}-settings-v1` },
+    tool_exposure: { revision: `${targetName}-tool-exposure-v1` },
+    context_projection: { revision: "context-projection-v1" },
+    policy: { revision: "policy-v1" },
     permission: { preset: "ask" },
-    budget: { maximumDurationMs: 300_000, maximumOperations: 100 },
+    sandbox: { enforcement: "disabled" },
+    validation: { revision: "validation-v1" },
+    limits: { maximumDurationMs: 300_000, maximumOperations: 100 },
+    environment: { fixture: "product-effectiveness-environment-v1" },
     limitations: { items: [] },
   };
 }

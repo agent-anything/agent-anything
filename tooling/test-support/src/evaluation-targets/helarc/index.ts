@@ -79,12 +79,14 @@ export {
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export type {
+  HelarcEvaluationDisposition,
   HelarcProductEffectivenessTargetInputKey,
   HelarcProductEffectivenessTargetValues,
 } from "./HelarcProductEffectivenessProtocol.js";
 export {
   createHelarcProductEffectivenessObjective,
   createHelarcProductEffectivenessTargetSnapshot,
+  createHelarcProductEffectivenessTargetValues,
   HELARC_PRODUCT_EFFECTIVENESS_PROTOCOL,
   HELARC_PRODUCT_EFFECTIVENESS_TARGET_INPUTS,
 } from "./HelarcProductEffectivenessProtocol.js";
@@ -141,3 +143,17 @@ export type {
   HelarcEvaluationWorkspaceSnapshot,
 } from "./HelarcEvaluationTarget.js";
 export { executeHelarcEvaluationCase } from "./HelarcEvaluationTarget.js";
+export type {
+  HelarcAgentInstructionConformancePair,
+  HelarcAgentInstructionConformanceReport,
+  HelarcAgentInstructionEffectivenessComparison,
+  HelarcAgentInstructionEvaluationDisposition,
+  HelarcAgentInstructionTargetIdentity,
+  HelarcAgentInstructionTrialMetrics,
+  HelarcInstructionBehavior,
+} from "./HelarcAgentInstructionEvaluation.js";
+export {
+  compareHelarcAgentInstructionEffectiveness,
+  HELARC_AGENT_INSTRUCTION_EVALUATION_REVISION,
+  runHelarcAgentInstructionConformance,
+} from "./HelarcAgentInstructionEvaluation.js";

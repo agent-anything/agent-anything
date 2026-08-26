@@ -10,6 +10,7 @@ import {
   captureHelarcProductEffectiveness,
   createHelarcProductEffectivenessDefinition,
   createHelarcProductEffectivenessTargetSnapshot,
+  createHelarcProductEffectivenessTargetValues,
 } from "../tooling/test-support/dist/evaluation-targets/helarc/index.js";
 
 const options = parseArguments(process.argv.slice(2));
@@ -17,7 +18,7 @@ const providerKind = requiredEnvironment("HELARC_EVALUATION_PROVIDER");
 const model = requiredEnvironment("HELARC_EVALUATION_MODEL");
 const baseUrl = safeProviderBaseUrl(requiredEnvironment("HELARC_EVALUATION_BASE_URL"));
 const productVersion = requiredEnvironment("HELARC_EVALUATION_PRODUCT_VERSION");
-const promptRevision = requiredEnvironment("HELARC_EVALUATION_PROMPT_REVISION");
+const instructionTarget = instructionTargetEnvironment();
 const environment = requiredEnvironment("HELARC_EVALUATION_ENVIRONMENT");
 const timeoutMs = positiveInteger(
   process.env.HELARC_EVALUATION_TIMEOUT_MS ?? "120000",
@@ -30,34 +31,37 @@ const maximumInputBytes = positiveInteger(
 const definition = createHelarcProductEffectivenessDefinition();
 const createdAt = new Date().toISOString();
 const targetSnapshot = createHelarcProductEffectivenessTargetSnapshot({
-  ref: { id: "helarc.product-effectiveness.target.helarc", revision: productVersion },
+  ref: {
+    id: `helarc.product-effectiveness.target.helarc.${instructionTarget}`,
+    revision: productVersion,
+  },
   targetRef: { id: "helarc.product", revision: productVersion },
   objective: definition.objective,
   targetName: "helarc",
   sourceRevision: productVersion,
-  values: {
-    product: { id: "helarc", version: productVersion },
-    agent: { id: "helarc-code-agent", revision: productVersion },
-    prompt: { revision: promptRevision, completePromptExcluded: true },
-    model: { id: model },
-    provider: {
-      kind: providerKind,
-      baseUrl,
-      authentication: providerKind === "openai-compatible" &&
-          (process.env.HELARC_EVALUATION_API_KEY ?? "").length > 0
-        ? "bearer"
-        : "none",
-    },
-    tool_catalog: { profile: "helarc-bounded-code-agent", revision: productVersion },
-    environment: { id: environment, sandboxEnforcement: "disabled" },
-    settings: { providerTimeoutMs: timeoutMs },
-    permission: { profile: "full_access", reviewer: "none" },
-    budget: { maximumDurationMs: 300000, maximumOperations: 100, repetitions: 3 },
+  values: createHelarcProductEffectivenessTargetValues({
+    instructionTarget,
+    productVersion,
+    providerId: providerKind,
+    providerKind,
+    providerRevision: productVersion,
+    providerEndpoint: baseUrl,
+    providerAuthentication: providerKind === "openai-compatible" &&
+        (process.env.HELARC_EVALUATION_API_KEY ?? "").length > 0
+      ? "bearer"
+      : "none",
+    modelId: model,
+    modelRevision: productVersion,
+    environmentId: environment,
+    providerTimeoutMs: timeoutMs,
+    maximumInputBytes,
+    sandboxEnforcement: "disabled",
     limitations: [
       "Local Sandbox enforcement is disabled in the current Evaluation target.",
       "The comparison applies only to the exact fixed Product-effectiveness Suite.",
     ],
-  },
+  }),
+  disposition: { status: "comparable" },
   createdAt,
 });
 const providerFactory = () => createProvider({
@@ -71,6 +75,7 @@ const bundle = await captureHelarcProductEffectiveness({
   objective: definition.objective,
   suite: definition.suite,
   targetSnapshot,
+  instructionTarget,
   providerFactory,
   productVersion,
   model,
@@ -129,6 +134,16 @@ function requiredEnvironment(name) {
     throw new TypeError(`${name} is required.`);
   }
   return value.trim();
+}
+
+function instructionTargetEnvironment() {
+  const value = requiredEnvironment("HELARC_EVALUATION_INSTRUCTION_TARGET");
+  if (value !== "minimal" && value !== "production") {
+    throw new TypeError(
+      "HELARC_EVALUATION_INSTRUCTION_TARGET must be 'minimal' or 'production'.",
+    );
+  }
+  return value;
 }
 
 function positiveInteger(value, name) {

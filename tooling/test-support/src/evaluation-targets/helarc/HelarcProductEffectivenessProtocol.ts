@@ -6,6 +6,12 @@ import {
   type EvaluationRecordRef,
   type EvaluationTargetSnapshot,
 } from "@agent-anything/evaluation/definition";
+import {
+  createHelarcAgent,
+  type CreateHelarcAgentInput,
+} from "@agent-anything/helarc/agent";
+
+type HelarcMainInstructionTarget = CreateHelarcAgentInput["target"];
 
 export const HELARC_PRODUCT_EFFECTIVENESS_PROTOCOL = Object.freeze({
   revision: "helarc.product-effectiveness.v1",
@@ -39,16 +45,28 @@ export const HELARC_PRODUCT_EFFECTIVENESS_PROTOCOL = Object.freeze({
 export const HELARC_PRODUCT_EFFECTIVENESS_TARGET_INPUTS = Object.freeze([
   targetInput("product", "helarc-product"),
   targetInput("agent", "helarc-product"),
-  targetInput("prompt", "helarc-product"),
+  targetInput("agent_instructions", "helarc-product"),
+  targetInput("product_protocol", "helarc-product"),
   targetInput("model", "model-interaction"),
   targetInput("provider", "model-interaction"),
-  targetInput("tool_catalog", "tools"),
-  targetInput("environment", "evaluation-environment"),
-  targetInput("settings", "evaluation-target"),
+  targetInput("tool_exposure", "tools"),
+  targetInput("context_projection", "context"),
+  targetInput("policy", "governance"),
   targetInput("permission", "permission"),
-  targetInput("budget", "evaluation"),
+  targetInput("sandbox", "action-execution"),
+  targetInput("validation", "validation"),
+  targetInput("limits", "agent-runtime"),
+  targetInput("environment", "evaluation-environment"),
   targetInput("limitations", "evaluation-target"),
 ] as const);
+
+export type HelarcEvaluationDisposition =
+  | { readonly status: "comparable" }
+  | {
+      readonly status: "unavailable" | "excluded" | "failed" | "incomparable";
+      readonly code: string;
+      readonly reason: string;
+    };
 
 export type HelarcProductEffectivenessTargetInputKey =
   typeof HELARC_PRODUCT_EFFECTIVENESS_TARGET_INPUTS[number]["key"];
@@ -56,6 +74,78 @@ export type HelarcProductEffectivenessTargetInputKey =
 export type HelarcProductEffectivenessTargetValues = Readonly<
   Record<HelarcProductEffectivenessTargetInputKey, EvaluationDataValue>
 >;
+
+export function createHelarcProductEffectivenessTargetValues(input: {
+  readonly instructionTarget: HelarcMainInstructionTarget;
+  readonly productVersion: string;
+  readonly providerId: string;
+  readonly providerKind: string;
+  readonly providerRevision: string;
+  readonly providerEndpoint: string;
+  readonly providerAuthentication: "none" | "bearer";
+  readonly modelId: string;
+  readonly modelRevision: string;
+  readonly environmentId: string;
+  readonly providerTimeoutMs: number;
+  readonly maximumInputBytes: number;
+  readonly sandboxEnforcement: "disabled" | "enforced";
+  readonly limitations: readonly string[];
+}): HelarcProductEffectivenessTargetValues {
+  const agent = createHelarcAgent({
+    target: input.instructionTarget,
+    providerId: input.providerId,
+    modelId: input.modelId,
+  });
+  return Object.freeze({
+    product: Object.freeze({ id: "helarc", version: input.productVersion }),
+    agent: Object.freeze({ id: agent.id, revision: agent.revision }),
+    agent_instructions: Object.freeze({
+      target: input.instructionTarget,
+      release: Object.freeze({ ...agent.instructions.release }),
+      instructions: Object.freeze({ ...agent.instructions.ref }),
+      resolverRevision: agent.instructions.resolverRevision,
+      contentDigest: Object.freeze({ ...agent.instructions.contentDigest }),
+      providerId: agent.instructions.model.providerId,
+      modelId: agent.instructions.model.modelId,
+      blocks: Object.freeze(agent.instructions.blocks.map((block) => Object.freeze({
+        id: block.id,
+        source: Object.freeze({ ...block.source }),
+      }))),
+      fullTextExcluded: true,
+    }),
+    product_protocol: Object.freeze({
+      promptArchitectureRevision: "helarc-prompt-v4",
+      actionContractRevision: "helarc-model-decision-v1",
+    }),
+    model: Object.freeze({ id: input.modelId, revision: input.modelRevision }),
+    provider: Object.freeze({
+      id: input.providerId,
+      kind: input.providerKind,
+      revision: input.providerRevision,
+      endpoint: input.providerEndpoint,
+      authentication: input.providerAuthentication,
+    }),
+    tool_exposure: Object.freeze({
+      profile: "helarc-bounded-code-agent",
+      revision: "trusted-tool-exposure-v1",
+    }),
+    context_projection: Object.freeze({ revision: "helarc-context-projection-v1" }),
+    policy: Object.freeze({ snapshotId: "helarc-evaluation-policy-v1" }),
+    permission: Object.freeze({ profile: "full_access", reviewer: "none" }),
+    sandbox: Object.freeze({ enforcement: input.sandboxEnforcement }),
+    validation: Object.freeze({ profile: "helarc-code-agent", completionGate: "current" }),
+    limits: Object.freeze({
+      maximumDurationMs: 300_000,
+      maximumOperations: 100,
+      maximumIterations: 50,
+      providerTimeoutMs: input.providerTimeoutMs,
+      maximumInputBytes: input.maximumInputBytes,
+      repetitions: 3,
+    }),
+    environment: Object.freeze({ id: input.environmentId }),
+    limitations: Object.freeze([...input.limitations]),
+  });
+}
 
 export function createHelarcProductEffectivenessObjective(input: {
   readonly ref: EvaluationRecordRef;
@@ -126,6 +216,7 @@ export function createHelarcProductEffectivenessTargetSnapshot(input: {
   readonly targetName: "codex" | "helarc";
   readonly sourceRevision: string;
   readonly values: HelarcProductEffectivenessTargetValues;
+  readonly disposition: HelarcEvaluationDisposition;
   readonly createdAt: string;
 }): EvaluationTargetSnapshot {
   return createEvaluationTargetSnapshot({
@@ -155,6 +246,13 @@ export function createHelarcProductEffectivenessTargetSnapshot(input: {
       protocolRevision: HELARC_PRODUCT_EFFECTIVENESS_PROTOCOL.revision,
       targetName: input.targetName,
       claim: HELARC_PRODUCT_EFFECTIVENESS_PROTOCOL.claim,
+      disposition: input.disposition.status,
+      dispositionCode: input.disposition.status === "comparable"
+        ? null
+        : input.disposition.code,
+      dispositionReason: input.disposition.status === "comparable"
+        ? null
+        : input.disposition.reason,
     },
     limitations: [],
   }, input.objective);

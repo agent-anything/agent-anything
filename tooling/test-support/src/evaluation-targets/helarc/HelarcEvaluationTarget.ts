@@ -69,6 +69,7 @@ import {
   type HelarcProductResult,
   validateHelarcToolInput,
 } from "@agent-anything/helarc/composition";
+import type { CreateHelarcAgentInput } from "@agent-anything/helarc/agent";
 import type { HelarcProductRunProjection } from "@agent-anything/helarc/run";
 import {
   resolveHelarcPermissionPreset,
@@ -126,6 +127,8 @@ const TARGET_LIMITATION = Object.freeze({
   metadata: Object.freeze({}),
 });
 
+type HelarcMainInstructionTarget = CreateHelarcAgentInput["target"];
+
 export interface HelarcEvaluationWorkspaceSnapshot {
   readonly files: readonly HelarcEvaluationFixtureFile[];
 }
@@ -151,6 +154,7 @@ export interface HelarcEvaluationExecutableCase {
 }
 
 export interface HelarcEvaluationRunOptions {
+  readonly instructionTarget?: HelarcMainInstructionTarget;
   readonly provider?: Provider;
   readonly interactionAnswers?: Readonly<Record<string, string>>;
   readonly now?: () => string;
@@ -164,6 +168,7 @@ export interface HelarcEvaluationRunMaterial<
   TCase extends HelarcEvaluationExecutableCase = HelarcEvaluationCaseDefinition,
 > {
   readonly trialRef: EvaluationRecordRef;
+  readonly instructionTarget: HelarcMainInstructionTarget;
   readonly observationRef: EvaluationRecordRef;
   readonly environmentRef: EvaluationRecordRef;
   readonly caseDefinition: TCase;
@@ -377,7 +382,8 @@ export async function executeHelarcEvaluationCase<
 >(input: {
   readonly trial: EvaluationTrial;
   readonly caseDefinition: TCase;
-  readonly provider: Provider;
+  readonly provider?: Provider;
+  readonly instructionTarget?: HelarcMainInstructionTarget;
   readonly signal: AbortSignal;
   readonly interactionAnswers?: Readonly<Record<string, string>>;
   readonly now?: () => string;
@@ -405,7 +411,10 @@ export async function executeHelarcEvaluationCase<
       }),
       input.signal,
       {
-        provider: input.provider,
+        ...(input.provider === undefined ? {} : { provider: input.provider }),
+        ...(input.instructionTarget === undefined
+          ? {}
+          : { instructionTarget: input.instructionTarget }),
         ...(input.interactionAnswers === undefined
           ? {}
           : { interactionAnswers: input.interactionAnswers }),
@@ -546,7 +555,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     now: clock.now,
   });
   const product = await createHelarcProductComposition({
-    instructionTarget: "production",
+    instructionTarget: options.instructionTarget ?? "production",
     runId: productRunId,
     task: taskResult.task,
     workspace: runContext.workspace,
@@ -797,6 +806,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
   });
   return Object.freeze({
     trialRef: trial.ref,
+    instructionTarget: options.instructionTarget ?? "production",
     observationRef,
     environmentRef: createEvaluationRecordRef({
       id: `${trial.ref.id}.environment`,

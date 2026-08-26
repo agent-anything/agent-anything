@@ -9,6 +9,7 @@ import type {
 } from "@agent-anything/evaluation/definition";
 import { createEvaluationTrial } from "@agent-anything/evaluation/trial";
 import type { Provider } from "@agent-anything/model-interaction";
+import type { CreateHelarcAgentInput } from "@agent-anything/helarc/agent";
 
 import type {
   HelarcEvaluationExecutableCase,
@@ -31,10 +32,13 @@ import {
   type HelarcProductEffectivenessSuiteProfile,
 } from "./HelarcProductEffectivenessSuite.js";
 
+type HelarcMainInstructionTarget = CreateHelarcAgentInput["target"];
+
 export interface CaptureHelarcProductEffectivenessInput {
   readonly objective: EvaluationObjective;
   readonly suite: HelarcProductEffectivenessSuiteProfile;
   readonly targetSnapshot: EvaluationTargetSnapshot;
+  readonly instructionTarget: HelarcMainInstructionTarget;
   readonly providerFactory: (input: {
     readonly caseProfile: HelarcProductEffectivenessCaseProfile;
     readonly repetitionOrdinal: number;
@@ -52,6 +56,10 @@ export async function captureHelarcProductEffectiveness(
   if (input.targetSnapshot.metadata.targetName !== "helarc") {
     throw new TypeError("Helarc capture requires a Helarc Target Snapshot.");
   }
+  if (input.targetSnapshot.metadata.disposition !== "comparable") {
+    throw new TypeError("Helarc capture requires a comparable Target Snapshot.");
+  }
+  assertInstructionTarget(input.targetSnapshot, input.instructionTarget);
   const createdAt = input.createdAt ?? new Date().toISOString();
   const trials: HelarcProductEffectivenessTrialEvidence[] = [];
   for (const caseProfile of input.suite.cases) {
@@ -120,6 +128,7 @@ async function captureTrial(input: CaptureHelarcProductEffectivenessInput & {
       trial,
       caseDefinition,
       provider,
+      instructionTarget: input.instructionTarget,
       signal,
       interactionAnswers: input.caseProfile.interactionAnswers,
       now: () => new Date().toISOString(),
@@ -195,6 +204,25 @@ async function captureTrial(input: CaptureHelarcProductEffectivenessInput & {
       limitations: Object.freeze(["The failed execution contributes no inferred score or safety value."]),
     });
   }
+}
+
+function assertInstructionTarget(
+  snapshot: EvaluationTargetSnapshot,
+  expected: HelarcMainInstructionTarget,
+): void {
+  const entry = snapshot.manifest.find((candidate) => candidate.key === "agent_instructions");
+  const value = entry?.representation?.kind === "value"
+    ? entry.representation.value
+    : null;
+  if (!isEvaluationDataObject(value) || value.target !== expected) {
+    throw new TypeError("Helarc Target Snapshot instruction target does not match capture input.");
+  }
+}
+
+function isEvaluationDataObject(
+  value: unknown,
+): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function executableCase(

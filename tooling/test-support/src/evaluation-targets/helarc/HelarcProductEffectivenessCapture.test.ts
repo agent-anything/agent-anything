@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import { FakeProvider } from "../../FakeProvider.js";
 import { captureHelarcProductEffectiveness } from "./HelarcProductEffectivenessCapture.js";
 import { createHelarcProductEffectivenessDefinition } from "./HelarcProductEffectivenessDefinition.js";
-import { createHelarcProductEffectivenessTargetSnapshot } from "./HelarcProductEffectivenessProtocol.js";
+import {
+  createHelarcProductEffectivenessTargetSnapshot,
+  createHelarcProductEffectivenessTargetValues,
+} from "./HelarcProductEffectivenessProtocol.js";
 import { HELARC_PRODUCT_EFFECTIVENESS_TIME } from "./HelarcProductEffectivenessSuite.js";
 
 describe("Helarc Product-effectiveness capture", () => {
@@ -22,19 +25,23 @@ describe("Helarc Product-effectiveness capture", () => {
       objective: definition.objective,
       targetName: "helarc",
       sourceRevision: "test-target-v1",
-      values: {
-        product: { id: "helarc", version: "test" },
-        agent: { id: "helarc-code-agent", revision: "test" },
-        prompt: { revision: "test-prompt" },
-        model: { id: "test-model" },
-        provider: { id: "test-provider" },
-        tool_catalog: { revision: "test-catalog" },
-        environment: { id: "isolated-test" },
-        settings: { revision: "test-settings" },
-        permission: { profile: "full_access" },
-        budget: { maximumDurationMs: 300_000, maximumOperations: 100 },
-        limitations: { items: ["Test fixture only."] },
-      },
+      values: createHelarcProductEffectivenessTargetValues({
+        instructionTarget: "production",
+        productVersion: "test",
+        providerId: "fake-provider",
+        providerKind: "fake",
+        providerRevision: "test-provider-v1",
+        providerEndpoint: "memory://fake-provider",
+        providerAuthentication: "none",
+        modelId: "fake-model",
+        modelRevision: "test-model-v1",
+        environmentId: "isolated-test",
+        providerTimeoutMs: 120_000,
+        maximumInputBytes: 1_048_576,
+        sandboxEnforcement: "disabled",
+        limitations: ["Test fixture only."],
+      }),
+      disposition: { status: "comparable" },
       createdAt: HELARC_PRODUCT_EFFECTIVENESS_TIME,
     });
 
@@ -42,6 +49,7 @@ describe("Helarc Product-effectiveness capture", () => {
       objective: definition.objective,
       suite,
       targetSnapshot,
+      instructionTarget: "production",
       providerFactory: () => new FakeProvider({
         results: [{
           kind: "succeeded",

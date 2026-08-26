@@ -26,6 +26,7 @@ describe("Helarc Product-effectiveness Evaluation protocol", () => {
       targetName: "codex",
       sourceRevision: "codex-reference-1",
       values: targetValues("codex"),
+      disposition: { status: "comparable" },
       createdAt: TIME,
     });
     const helarc = createHelarcProductEffectivenessTargetSnapshot({
@@ -35,6 +36,7 @@ describe("Helarc Product-effectiveness Evaluation protocol", () => {
       targetName: "helarc",
       sourceRevision: "helarc-candidate-1",
       values: targetValues("helarc"),
+      disposition: { status: "comparable" },
       createdAt: TIME,
     });
 
@@ -68,14 +70,25 @@ function targetValues(targetName: "codex" | "helarc"): HelarcProductEffectivenes
   return {
     product: { targetName, version: "1" },
     agent: { identity: `${targetName}-agent` },
-    prompt: { revision: "prompt-1" },
+    agent_instructions: {
+      target: "production",
+      release: { id: `${targetName}-instructions`, revision: "1" },
+      resolverRevision: "resolver-1",
+      contentDigest: `sha256:${"a".repeat(64)}`,
+      blocks: [{ id: "behavior", source: { id: "behavior", revision: "1" } }],
+      fullTextExcluded: true,
+    },
+    product_protocol: { revision: "protocol-1" },
     model: { id: "declared-model", revision: "1" },
     provider: { id: "declared-provider", revision: "1" },
-    tool_catalog: { revision: "tool-catalog-1" },
-    environment: { fixture: "repository-fixture-1" },
-    settings: { revision: "settings-1" },
+    tool_exposure: { revision: "tool-exposure-1" },
+    context_projection: { revision: "context-projection-1" },
+    policy: { revision: "policy-1" },
     permission: { preset: "ask" },
-    budget: { maximumDurationMs: 300_000, maximumOperations: 100 },
+    sandbox: { enforcement: "disabled" },
+    validation: { revision: "validation-1" },
+    limits: { maximumDurationMs: 300_000, maximumOperations: 100 },
+    environment: { fixture: "repository-fixture-1" },
     limitations: { items: [] },
   };
 }
