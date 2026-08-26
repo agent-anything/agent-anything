@@ -18,6 +18,7 @@ import type {
   RunProgressAssessment,
   RunProgressCorrectionFeedback,
 } from "../progress/index.js";
+import type { AgentInstructionBindingRef } from "../instructions/index.js";
 
 export interface ControllerToolExposureRecord {
   readonly proofId: string;
@@ -47,6 +48,7 @@ export type RunItemPayload<TOutput = unknown> =
       readonly turn: ControllerTurnRef;
       readonly status: "decided" | "failed" | "interrupted";
       readonly decisionKind: "advance" | "propose_completion" | "propose_stop" | null;
+      readonly instructionBinding: AgentInstructionBindingRef;
       readonly toolExposure: ControllerToolExposureRecord;
       readonly modelItems: readonly ControllerModelItem[];
       readonly failure: RunFailureCause | null;
@@ -64,6 +66,8 @@ export type RunItemPayload<TOutput = unknown> =
       readonly transition: "active_agent";
       readonly previousAgent: AgentRevisionRef;
       readonly activeAgent: AgentRevisionRef;
+      readonly previousInstructionBinding: AgentInstructionBindingRef;
+      readonly activeInstructionBinding: AgentInstructionBindingRef;
       readonly reason: string;
     }
   | {

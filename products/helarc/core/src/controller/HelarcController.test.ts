@@ -18,6 +18,7 @@ import { createToolCatalogSnapshot, type ToolDescriptorInput } from "@agent-anyt
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
 import { describe, expect, it } from "vitest";
 import { createAgentInstructions } from "@agent-anything/agent-core/agent";
+import { createAgentInstructionBinding } from "@agent-anything/agent-runtime/instructions";
 import {
   buildHelarcActionDecisionRulesText,
   buildHelarcActionProtocolText,
@@ -62,7 +63,31 @@ describe("Helarc controller", () => {
       exposedToolCount: 5,
       omittedToolCount: 0,
       exposedToolNames: ["Edit", "Glob", "Grep", "Read", "Write"],
+      instructionBindingId: createControllerInput().instructionBinding.ref.id,
+      agentInstructionReleaseId: "helarc.release",
+      agentInstructionBlockCount: 1,
+      agentInstructionProviderId: "fake-provider",
+      agentInstructionModelId: "helarc-controller-test-model",
     });
+    expect(request.composition.sections[0]).toMatchObject({
+      id: "helarc:model-input:agent-instructions:behavior",
+      kind: "agent_instruction",
+      role: "system",
+      necessity: "mandatory",
+      content: { text: "Complete the code task." },
+    });
+    expect(request.composition.lineage).toMatchObject({
+      instructionBinding: {
+        id: createControllerInput().instructionBinding.ref.id,
+      },
+      instructionRelease: { id: "helarc.release", revision: "1" },
+      instructionModel: {
+        providerId: "fake-provider",
+        model: "helarc-controller-test-model",
+      },
+      instructionBlocks: [{ id: "helarc.behavior", revision: "1" }],
+    });
+    expect(JSON.stringify(request.metadata)).not.toContain("Complete the code task.");
     expect(request.outputFormat).toMatchObject({
       kind: "json_schema",
       name: "helarc_model_decision",
@@ -158,11 +183,27 @@ describe("Helarc controller", () => {
       renderFraming: (_sections, outputFormat) => JSON.stringify(outputFormat),
     });
 
-    expect(() => buildHelarcProviderRequest(createControllerInput(), {
+    expect(() => buildHelarcProviderRequest(createControllerInput("tiny-provider", "tiny-model"), {
       attemptNumber: 1,
       correction: null,
       inputAccounting: accounting,
     })).toThrow("Complete mandatory model input exceeds the effective input limit.");
+  });
+
+  it("rejects an instruction binding for a different Provider model before transport", () => {
+    expect(() => buildHelarcProviderRequest(createControllerInput(), {
+      attemptNumber: 1,
+      correction: null,
+      inputAccounting: createUtf8ModelInputAccounting({
+        providerId: "other-provider",
+        model: "other-model",
+        maximumInputBytes: 4 * 1_024 * 1_024,
+        limitSource: "host_configured",
+        estimator: { id: "other.utf8", revision: "1" },
+        framing: { id: "other.framing", revision: "1" },
+        renderFraming: () => "",
+      }),
+    })).toThrow("must match");
   });
 
   it("assembles the four-decision model Contract without a proposal workflow", () => {
@@ -174,7 +215,7 @@ describe("Helarc controller", () => {
 
     expect(assembly.promptSections.filter(({ role }) => role === "system").map(({ id }) => id))
       .toEqual([
-        "agent_identity",
+        "agent-instructions:behavior",
         "output_format",
         "action_protocol",
         "action_decision_rules",
@@ -341,18 +382,28 @@ const FILE_TOOLS = [
   tool("Write", false),
 ];
 
-function createControllerInput(): ControllerInput<HelarcAgentOutput> {
+function createControllerInput(
+  providerId = "fake-provider",
+  modelId = "helarc-controller-test-model",
+): ControllerInput<HelarcAgentOutput> {
+  const agent = {
+    id: "helarc",
+    revision: "1",
+    name: "Helarc",
+    instructions: testAgentInstructions("helarc", providerId, modelId),
+    output: { validate: (candidate: unknown) => ({ valid: true as const, output: candidate as HelarcAgentOutput }) },
+    metadata: {},
+  };
   return {
     runId: "run-1",
     iteration: 1,
-    agent: {
-      id: "helarc",
-      revision: "1",
-      name: "Helarc",
-      instructions: testAgentInstructions("helarc"),
-      output: { validate: (candidate) => ({ valid: true, output: candidate as HelarcAgentOutput }) },
-      metadata: {},
-    },
+    agent,
+    instructionBinding: createAgentInstructionBinding({
+      run: { id: "run-1" },
+      agent,
+      effectiveFromRunRevision: 0,
+      supersedes: null,
+    }),
     task: {
       id: "task-1",
       kind: "helarc.code-task",
@@ -384,6 +435,13 @@ function createControllerInput(): ControllerInput<HelarcAgentOutput> {
       accounting: { unit: "bytes", consideredItems: 0, projectedItems: 0, projectedAmount: 0 },
     },
     plan: null,
+    progress: {
+      checkpointSequence: 0,
+      consecutiveNonAdvancingCheckpoints: 0,
+      correctionRounds: 0,
+      activeCorrectionRound: null,
+    },
+    validation: { snapshot: { runId: "run-1", revision: 0 }, gate: null },
     permission: {
       profile: {
         profileId: "test-profile",
@@ -418,11 +476,11 @@ function createControllerInput(): ControllerInput<HelarcAgentOutput> {
   };
 }
 
-function testAgentInstructions(agentId: string) {
+function testAgentInstructions(agentId: string, providerId: string, modelId: string) {
   return createAgentInstructions({
     id: `${agentId}.instructions`,
     release: { id: `${agentId}.release`, revision: "1" },
-    model: { providerId: "fake-provider", modelId: "fake-model" },
+    model: { providerId, modelId },
     resolverRevision: "test-resolver.v1",
     blocks: [{
       id: "behavior",

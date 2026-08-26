@@ -19,7 +19,16 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
   record(payload, `${name}.payload`);
   switch (name) {
     case "run.started":
-      return freeze({ status: exact(payload.status, "running", "run.started.status"), activeAgentId: token(payload.activeAgentId, "run.started.activeAgentId") }) as RuntimeEventPayloadMap[TName];
+      return freeze({
+        status: exact(payload.status, "running", "run.started.status"),
+        activeAgentId: token(payload.activeAgentId, "run.started.activeAgentId"),
+        activeAgentRevision: token(payload.activeAgentRevision, "run.started.activeAgentRevision"),
+        instructionBindingId: token(payload.instructionBindingId, "run.started.instructionBindingId"),
+        instructionBindingRevision: token(
+          payload.instructionBindingRevision,
+          "run.started.instructionBindingRevision",
+        ),
+      }) as RuntimeEventPayloadMap[TName];
     case "run.item.appended":
       return freeze({ itemId: token(payload.itemId, "run.item.appended.itemId"), itemKind: oneOf(payload.itemKind, runItemKinds, "run.item.appended.itemKind"), itemSequence: positive(payload.itemSequence, "run.item.appended.itemSequence") }) as RuntimeEventPayloadMap[TName];
     case "run.progress.assessed":

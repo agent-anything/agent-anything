@@ -460,6 +460,7 @@ function runProjection(input: {
       taskId: "task-1",
       startedAt: "2026-07-05T01:00:00.000Z",
       runRevision: 0,
+      instructionBinding: null,
       runTree: input.runTree ?? rootRunTree(),
       activeDelegations: input.activeDelegations ?? [],
       progress: input.progress ?? {

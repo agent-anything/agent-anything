@@ -169,6 +169,7 @@ function applyRunOperation(
   return applied(current, sequence, {
     runOperationSequence: snapshot.sequence,
     runRevision: snapshot.runRevision,
+    instructionBinding: snapshot.instructionBinding,
     runTree: projectHostRunTree(snapshot.runTree),
     status,
     plan: snapshot.plan,

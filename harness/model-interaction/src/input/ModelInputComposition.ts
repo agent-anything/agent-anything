@@ -68,9 +68,12 @@ export interface ModelInputCompositionFailure {
 }
 
 export class ModelInputCompositionError extends Error {
+  readonly code: ModelInputCompositionFailureCode;
+
   constructor(readonly failure: ModelInputCompositionFailure) {
     super(failure.message);
     this.name = "ModelInputCompositionError";
+    this.code = failure.code;
   }
 }
 

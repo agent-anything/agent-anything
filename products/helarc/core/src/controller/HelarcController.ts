@@ -32,6 +32,15 @@ export type HelarcAgentOutput = { kind: "complete"; summary: string };
 
 export type HelarcProviderStructuredOutput = HelarcModelDecision;
 
+class HelarcInstructionModelMismatchError extends TypeError {
+  readonly code = "agent_instruction_model_mismatch";
+
+  constructor() {
+    super("Active Agent instructions, instruction binding, and Provider model must match.");
+    this.name = "HelarcInstructionModelMismatchError";
+  }
+}
+
 export type HelarcControllerParseErrorCode =
   | "controller_output_too_large"
   | "controller_output_not_json"
@@ -50,6 +59,7 @@ export function buildHelarcProviderRequest(
   input: ControllerInput<HelarcAgentOutput>,
   context: ProviderRequestBuildContext,
 ): ProviderRequest {
+  assertInstructionModelIdentity(input, context);
   const outputFormat = createHelarcControllerOutputFormat(input.toolExposure);
   const correctionMessage = context.correction === null
     ? null
@@ -75,6 +85,54 @@ export function buildHelarcProviderRequest(
     contextProjectedAmount: input.context.accounting.amount,
     sections: promptAssembly.sections,
     lineage: Object.freeze({
+      instructionBinding: Object.freeze({
+        owner: "agent-runtime",
+        kind: "agent_instruction_binding",
+        id: input.instructionBinding.ref.id,
+        revision: input.instructionBinding.ref.revision,
+      }),
+      agent: Object.freeze({
+        owner: "agent-core",
+        kind: "agent_revision",
+        id: input.agent.id,
+        revision: input.agent.revision,
+      }),
+      instructions: Object.freeze({
+        owner: "agent-core",
+        kind: "agent_instructions",
+        id: input.agent.instructions.ref.id,
+        revision: input.agent.instructions.ref.revision,
+      }),
+      instructionRelease: Object.freeze({
+        owner: "helarc",
+        kind: "agent_instruction_release",
+        id: input.agent.instructions.release.id,
+        revision: input.agent.instructions.release.revision,
+      }),
+      instructionResolver: Object.freeze({
+        owner: "helarc",
+        kind: "agent_instruction_resolver",
+        id: `${input.agent.instructions.release.id}:resolver`,
+        revision: input.agent.instructions.resolverRevision,
+      }),
+      instructionContent: Object.freeze({
+        owner: "agent-core",
+        kind: "agent_instruction_content_digest",
+        id: input.agent.instructions.ref.id,
+        revision: `sha256:${input.agent.instructions.contentDigest.value}`,
+      }),
+      instructionModel: Object.freeze({
+        providerId: input.agent.instructions.model.providerId,
+        model: input.agent.instructions.model.modelId,
+      }),
+      instructionBlocks: Object.freeze(input.agent.instructions.blocks.map((block) =>
+        Object.freeze({
+          owner: block.source.owner,
+          kind: block.source.kind,
+          id: block.source.id,
+          revision: block.source.revision,
+        })
+      )),
       activeContext: Object.freeze({
         owner: "context",
         kind: "active_context",
@@ -153,6 +211,24 @@ export function buildHelarcProviderRequest(
       toolExposureOmissionReasons: input.toolExposure.omissionReasons,
       exposedToolNames: promptAssembly.exposedToolNames,
       promptSectionIds: promptAssembly.promptSections.map((section) => section.id),
+      instructionBindingId: input.instructionBinding.ref.id,
+      instructionBindingRevision: input.instructionBinding.ref.revision,
+      instructionBindingEffectiveFromRunRevision:
+        input.instructionBinding.effectiveFromRunRevision,
+      instructionBindingSupersedesId: input.instructionBinding.supersedes?.id ?? null,
+      instructionBindingSupersedesRevision:
+        input.instructionBinding.supersedes?.revision ?? null,
+      agentId: input.agent.id,
+      agentRevision: input.agent.revision,
+      agentInstructionsId: input.agent.instructions.ref.id,
+      agentInstructionsRevision: input.agent.instructions.ref.revision,
+      agentInstructionReleaseId: input.agent.instructions.release.id,
+      agentInstructionReleaseRevision: input.agent.instructions.release.revision,
+      agentInstructionResolverRevision: input.agent.instructions.resolverRevision,
+      agentInstructionContentDigest: input.agent.instructions.contentDigest.value,
+      agentInstructionBlockCount: input.agent.instructions.blocks.length,
+      agentInstructionProviderId: input.agent.instructions.model.providerId,
+      agentInstructionModelId: input.agent.instructions.model.modelId,
       modelInputCompositionId: composition.id,
       contextProjectionId: input.context.id,
       contextManifestId: input.contextManifest.id,
@@ -206,6 +282,21 @@ function helarcStructuredOutputFailure(
         code,
         correctionFeedback: "Return one JSON object that satisfies the active Helarc action contract.",
       };
+  }
+}
+
+function assertInstructionModelIdentity(
+  input: ControllerInput<HelarcAgentOutput>,
+  context: ProviderRequestBuildContext,
+): void {
+  const model = input.agent.instructions.model;
+  if (
+    input.instructionBinding.model.providerId !== model.providerId ||
+    input.instructionBinding.model.modelId !== model.modelId ||
+    context.inputAccounting.providerId !== model.providerId ||
+    context.inputAccounting.model !== model.modelId
+  ) {
+    throw new HelarcInstructionModelMismatchError();
   }
 }
 
@@ -344,6 +435,24 @@ function createControllerTraceMetadata(
     omittedToolCount: input.toolExposure.omittedToolCount,
     toolExposureOmissionReasons: input.toolExposure.omissionReasons,
     exposedToolNames: input.toolExposure.catalog.tools.map((tool) => tool.name),
+    instructionBindingId: input.instructionBinding.ref.id,
+    instructionBindingRevision: input.instructionBinding.ref.revision,
+    instructionBindingEffectiveFromRunRevision:
+      input.instructionBinding.effectiveFromRunRevision,
+    instructionBindingSupersedesId: input.instructionBinding.supersedes?.id ?? null,
+    instructionBindingSupersedesRevision:
+      input.instructionBinding.supersedes?.revision ?? null,
+    agentId: input.agent.id,
+    agentRevision: input.agent.revision,
+    agentInstructionsId: input.agent.instructions.ref.id,
+    agentInstructionsRevision: input.agent.instructions.ref.revision,
+    agentInstructionReleaseId: input.agent.instructions.release.id,
+    agentInstructionReleaseRevision: input.agent.instructions.release.revision,
+    agentInstructionResolverRevision: input.agent.instructions.resolverRevision,
+    agentInstructionContentDigest: input.agent.instructions.contentDigest.value,
+    agentInstructionBlockCount: input.agent.instructions.blocks.length,
+    agentInstructionProviderId: input.agent.instructions.model.providerId,
+    agentInstructionModelId: input.agent.instructions.model.modelId,
   };
 
   if (output.kind === "tool_call") {

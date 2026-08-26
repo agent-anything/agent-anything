@@ -336,6 +336,7 @@ function projectionCommit(
         sequence,
         runOperationSequence: sequence,
         runRevision: 0,
+        instructionBinding: null,
         status: "running",
         startedAt: STARTED_AT,
         runTree: {
@@ -415,6 +416,8 @@ function terminalCommit(): HelarcRunTerminalCommit {
         itemCount: 0,
         evidenceCount: 0,
         artifactCount: 1,
+        startingInstructionBinding: instructionBindingRef("run-1"),
+        finalInstructionBinding: instructionBindingRef("run-1"),
         failure: null,
         relatedFailures: [],
         cancellation: null,
@@ -501,4 +504,11 @@ function terminalCommit(): HelarcRunTerminalCommit {
       createdAt: COMPLETED_AT,
     }],
   };
+}
+
+function instructionBindingRef(runId: string) {
+  return Object.freeze({
+    id: `${runId}:agent-instruction-binding:0`,
+    revision: `sha256:${"0".repeat(64)}`,
+  });
 }

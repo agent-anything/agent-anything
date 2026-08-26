@@ -30,6 +30,14 @@ describe("Agent Core Run public API", () => {
         taskId: "task-1",
         startingAgent: { id: "agent-1", revision: "1" },
         finalActiveAgent: { id: "agent-1", revision: "1" },
+        startingInstructionBinding: {
+          id: "run-1:agent-instruction-binding:0",
+          revision: `sha256:${"0".repeat(64)}`,
+        },
+        finalInstructionBinding: {
+          id: "run-1:agent-instruction-binding:0",
+          revision: `sha256:${"0".repeat(64)}`,
+        },
         startedAt: "2026-01-01T00:00:00.000Z",
         completedAt: "2026-01-01T00:00:01.000Z",
         items: [item],

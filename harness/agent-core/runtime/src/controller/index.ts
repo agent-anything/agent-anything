@@ -3,6 +3,8 @@ export type {
   ControllerCallContext,
   ControllerDecision,
   ControllerInput,
+  ControllerRunProgressProjection,
+  ControllerValidationProjection,
   ControllerPreProjectionInput,
   ControllerModelItem,
   ControllerRetryContext,

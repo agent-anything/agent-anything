@@ -45,7 +45,10 @@ describe("OpenAICompatibleProvider", () => {
       },
       body: {
         model: "model-a",
-        messages: [{ role: "user", content: "hello" }],
+        messages: [
+          { role: "system", content: "Follow the test instructions." },
+          { role: "user", content: "hello" },
+        ],
         stream: false,
         response_format: {
           type: "json_schema",
@@ -268,7 +271,10 @@ function request(provider: OpenAICompatibleProvider): ProviderRequest {
     outputReserve: { unit: "bytes", amount: 0 },
     contextBudget: { unit: "bytes", amount: 0 },
     contextProjectedAmount: 0,
-    sections: [section("user", "user", "hello")],
+    sections: [
+      section("instructions", "system", "Follow the test instructions."),
+      section("user", "user", "hello"),
+    ],
     lineage: testLineage(),
     composedAt: "2026-08-17T00:00:00.000Z",
   });
@@ -282,11 +288,11 @@ function request(provider: OpenAICompatibleProvider): ProviderRequest {
   };
 }
 
-function section(id: string, role: "user", text: string) {
+function section(id: string, role: "system" | "user", text: string) {
   return {
     id,
     source: { owner: "provider-test", kind: "message", id, revision: "1" },
-    kind: "message",
+    kind: id === "instructions" ? "agent_instruction" : "message",
     role,
     necessity: "mandatory" as const,
     content: { kind: "text" as const, text },
@@ -295,6 +301,14 @@ function section(id: string, role: "user", text: string) {
 
 function testLineage() {
   return {
+    instructionBinding: { owner: "agent-runtime", kind: "agent_instruction_binding", id: "binding", revision: "1" },
+    agent: { owner: "agent-core", kind: "agent_revision", id: "agent", revision: "1" },
+    instructions: { owner: "agent-core", kind: "agent_instructions", id: "instructions", revision: "1" },
+    instructionRelease: { owner: "provider-test", kind: "agent_instruction_release", id: "release", revision: "1" },
+    instructionResolver: { owner: "provider-test", kind: "agent_instruction_resolver", id: "resolver", revision: "1" },
+    instructionContent: { owner: "agent-core", kind: "agent_instruction_content_digest", id: "instructions", revision: "1" },
+    instructionModel: { providerId: "openai-compatible.chat-completions", model: "model-a" },
+    instructionBlocks: [{ owner: "provider-test", kind: "message", id: "instructions", revision: "1" }],
     activeContext: null,
     contextProjection: null,
     projectionManifest: null,

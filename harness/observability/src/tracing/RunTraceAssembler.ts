@@ -66,6 +66,9 @@ export class RunTraceAssembler implements RuntimeEventPublisher {
         else {
           span.startedAt = event.occurredAt;
           span.attributes.activeAgentId = event.payload.activeAgentId;
+          span.attributes.activeAgentRevision = event.payload.activeAgentRevision;
+          span.attributes.instructionBindingId = event.payload.instructionBindingId;
+          span.attributes.instructionBindingRevision = event.payload.instructionBindingRevision;
           span.links.push(link("runtime_event", event.id));
         }
         break;

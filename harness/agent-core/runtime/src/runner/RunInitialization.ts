@@ -8,10 +8,16 @@ import {
 } from "../run/index.js";
 import type { ResolvedRunConfig } from "./RunConfig.js";
 import { createInitialRunProgressState } from "../progress/index.js";
+import {
+  assertAgentInstructionBindingMatches,
+  snapshotAgentInstructionBindingRef,
+  type AgentInstructionBinding,
+} from "../instructions/index.js";
 
 export function createInitialRunState<TOutput>(input: {
   readonly runId: string;
   readonly agent: Agent<TOutput>;
+  readonly instructionBinding: AgentInstructionBinding;
   readonly input: RunInput;
   readonly config: ResolvedRunConfig;
   readonly startedAt: string;
@@ -20,6 +26,18 @@ export function createInitialRunState<TOutput>(input: {
 }): RunState<TOutput> {
   const permissionState = createInitialRunPermissionState(input.config.permissions);
   const agent = toAgentRevisionRef(input.agent);
+  assertAgentInstructionBindingMatches({
+    binding: input.instructionBinding,
+    run: { id: input.runId },
+    agent: input.agent,
+  });
+  if (input.instructionBinding.effectiveFromRunRevision !== 0) {
+    throw new TypeError("Starting AgentInstructionBinding must be effective from Run revision 0.");
+  }
+  if (input.instructionBinding.supersedes !== null) {
+    throw new TypeError("Starting AgentInstructionBinding cannot supersede another binding.");
+  }
+  const instructionBinding = snapshotAgentInstructionBindingRef(input.instructionBinding.ref);
   const context = createEmptyActiveContext({
     id: input.activeContextId,
     runId: input.runId,
@@ -31,6 +49,8 @@ export function createInitialRunState<TOutput>(input: {
     taskId: input.input.task.id,
     startingAgent: agent,
     activeAgent: agent,
+    startingInstructionBinding: instructionBinding,
+    activeInstructionBinding: instructionBinding,
     workspace: input.config.workspace,
     identity: input.config.identity,
     startedAt: input.startedAt,

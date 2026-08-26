@@ -23,6 +23,11 @@ import type {
   ResolvedRunnerDependencies,
   RunnerContextProjection,
 } from "./RunnerDependencies.js";
+import {
+  assertAgentInstructionBindingMatches,
+  snapshotAgentInstructionBinding,
+  type AgentInstructionBinding,
+} from "../instructions/index.js";
 
 export interface PreparedControllerOperation<TOutput> {
   readonly input: ControllerInput<TOutput>;
@@ -50,6 +55,7 @@ export class ContextProjectionPreparationError extends ContextContractError {
 
 export interface PrepareControllerOperationInput<TOutput> {
   readonly agent: Agent<TOutput>;
+  readonly instructionBinding: AgentInstructionBinding;
   readonly runInput: RunInput;
   readonly config: ResolvedRunConfig;
   readonly state: RunState<TOutput>;
@@ -62,6 +68,17 @@ export interface PrepareControllerOperationInput<TOutput> {
 export function prepareControllerOperation<TOutput>(
   input: PrepareControllerOperationInput<TOutput>,
 ): PreparedControllerOperation<TOutput> {
+  assertAgentInstructionBindingMatches({
+    binding: input.instructionBinding,
+    run: input.state.run,
+    agent: input.agent,
+  });
+  if (
+    input.state.activeInstructionBinding.id !== input.instructionBinding.ref.id ||
+    input.state.activeInstructionBinding.revision !== input.instructionBinding.ref.revision
+  ) {
+    throw new TypeError("Active RunState instruction binding does not match Controller input.");
+  }
   const pendingApprovalCount = input.state.pending.filter(
     (candidate) =>
       candidate.kind === "interaction" &&
@@ -72,10 +89,24 @@ export function prepareControllerOperation<TOutput>(
     runId: input.state.run.id,
     iteration: input.iteration,
     agent: input.agent,
+    instructionBinding: snapshotAgentInstructionBinding(input.instructionBinding),
     task: input.runInput.task,
     inputItems: input.runInput.items,
     toolExposure: input.exposure,
     plan: input.state.plan === null ? null : projectPlan(input.state.plan),
+    progress: Object.freeze({
+      checkpointSequence: input.state.progress.checkpointSequence,
+      consecutiveNonAdvancingCheckpoints:
+        input.state.progress.consecutiveNonAdvancingCheckpoints,
+      correctionRounds: input.state.progress.correctionRounds,
+      activeCorrectionRound: input.state.progress.activeCorrectionRound,
+    }),
+    validation: Object.freeze({
+      snapshot: Object.freeze({ ...input.state.validation.snapshot }),
+      gate: input.state.validation.gate === null
+        ? null
+        : Object.freeze({ ...input.state.validation.gate }),
+    }),
     permission: projectPermissionContext(
       input.config.permissions,
       input.state.permission,

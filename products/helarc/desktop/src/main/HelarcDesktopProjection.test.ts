@@ -10,6 +10,7 @@ describe("Helarc Desktop IPC projection", () => {
 
     expect(Object.keys(projected.run?.host ?? {}).sort()).toEqual([
       "activeDelegations",
+      "instructionBinding",
       "pendingInteractions",
       "progress",
       "runRevision",
@@ -47,6 +48,12 @@ describe("Helarc Desktop IPC projection", () => {
       consecutiveNonAdvancingCheckpoints: 2,
       correctionRounds: 1,
       activeCorrectionRound: 1,
+    });
+    expect(projected.run?.host.instructionBinding).toMatchObject({
+      agent: { id: "helarc", revision: "agent-revision-1" },
+      release: { id: "helarc.production", revision: "1" },
+      model: { providerId: "provider-1", modelId: "model-1" },
+      blockCount: 7,
     });
     expect(projected.provider.configured && projected.provider.activeProfile)
       .not.toHaveProperty("storedCredential");
@@ -192,6 +199,24 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
       runRevision: 0,
       status: "running",
       startedAt: "2026-07-19T00:00:00.000Z",
+      instructionBinding: {
+        ref: {
+          id: "harness-run-1:agent-instruction-binding:0",
+          revision: `sha256:${"a".repeat(64)}`,
+        },
+        agent: { id: "helarc", revision: "agent-revision-1" },
+        instructions: {
+          id: "helarc.instructions",
+          revision: `sha256:${"b".repeat(64)}`,
+        },
+        release: { id: "helarc.production", revision: "1" },
+        model: { providerId: "provider-1", modelId: "model-1" },
+        resolverRevision: "resolver-1",
+        contentDigest: { algorithm: "sha256", value: "b".repeat(64) },
+        blockCount: 7,
+        effectiveFromRunRevision: 0,
+        supersedes: null,
+      },
       runTree: {
         rootRunId: "harness-run-1",
         revision: 1,

@@ -111,6 +111,8 @@ describe("HelarcProductResult", () => {
       taskId: task.task.id,
       startingAgent: { id: "helarc-code-agent", revision: "1" },
       finalActiveAgent: { id: "helarc-code-agent", revision: "1" },
+      startingInstructionBinding: testInstructionBinding("run-1"),
+      finalInstructionBinding: testInstructionBinding("run-1"),
       startedAt: STARTED_AT,
       completedAt: COMPLETED_AT,
       items,
@@ -199,6 +201,13 @@ describe("HelarcProductResult", () => {
     ]));
   });
 });
+
+function testInstructionBinding(runId: string) {
+  return Object.freeze({
+    id: `${runId}:agent-instruction-binding:0`,
+    revision: `sha256:${"0".repeat(64)}`,
+  });
+}
 
 function runAction(id: string, sequence: number, invocationId: string) {
   return {

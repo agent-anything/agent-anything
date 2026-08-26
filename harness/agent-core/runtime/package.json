@@ -12,6 +12,10 @@
       "types": "./src/delegation/index.ts",
       "import": "./dist/delegation/index.js"
     },
+    "./instructions": {
+      "types": "./src/instructions/index.ts",
+      "import": "./dist/instructions/index.js"
+    },
     "./plan": {
       "types": "./src/plan/index.ts",
       "import": "./dist/plan/index.js"

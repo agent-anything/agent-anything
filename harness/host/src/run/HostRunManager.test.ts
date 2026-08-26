@@ -169,6 +169,7 @@ function createFakeHandle(runId: string) {
     runRevision: 0,
     status: "initializing",
     lastRunItemSequence: 0,
+    instructionBinding: null,
     plan: null,
     progress: initialProgress(),
     retry: null,
@@ -310,7 +311,13 @@ function runStartedEvent(): RuntimeEvent {
     sequence: 1,
     name: "run.started",
     occurredAt: NOW,
-    payload: Object.freeze({ status: "running", activeAgentId: "agent-1" }),
+    payload: Object.freeze({
+      status: "running",
+      activeAgentId: "agent-1",
+      activeAgentRevision: "1",
+      instructionBindingId: "run-1:agent-instruction-binding:0",
+      instructionBindingRevision: `sha256:${"0".repeat(64)}`,
+    }),
   });
 }
 
@@ -360,9 +367,18 @@ function succeededResult() {
     taskId: "task-1",
     startingAgent: { id: "agent-1", revision: "1" },
     finalActiveAgent: { id: "agent-1", revision: "1" },
+    startingInstructionBinding: instructionBindingRef("run-1"),
+    finalInstructionBinding: instructionBindingRef("run-1"),
     startedAt: NOW,
     completedAt: LATER,
   }, { summary: "done" });
+}
+
+function instructionBindingRef(runId: string) {
+  return Object.freeze({
+    id: `${runId}:agent-instruction-binding:0`,
+    revision: `sha256:${"0".repeat(64)}`,
+  });
 }
 
 const REQUEST: InteractionRequestRef = Object.freeze({

@@ -98,6 +98,17 @@ export interface ModelInputSection {
 }
 
 export interface ModelInputLineage {
+  readonly instructionBinding: ModelInputSourceRef;
+  readonly agent: ModelInputSourceRef;
+  readonly instructions: ModelInputSourceRef;
+  readonly instructionRelease: ModelInputSourceRef;
+  readonly instructionResolver: ModelInputSourceRef;
+  readonly instructionContent: ModelInputSourceRef;
+  readonly instructionModel: {
+    readonly providerId: string;
+    readonly model: string;
+  };
+  readonly instructionBlocks: readonly ModelInputSourceRef[];
   readonly activeContext: ModelInputSourceRef | null;
   readonly contextProjection: ModelInputSourceRef | null;
   readonly projectionManifest: ModelInputSourceRef | null;
@@ -220,6 +231,13 @@ export function snapshotModelInputComposition(
   if (remainingAmount < 0) {
     throw new TypeError("ModelInputComposition exceeds the model input limit.");
   }
+  const lineage = snapshotLineage(input.lineage);
+  assertInstructionLineage({
+    providerId: input.providerId,
+    model: input.model,
+    sections,
+    lineage,
+  });
   strictRecord(input.accounting, "ModelInputComposition.accounting", [
     "unit", "sectionAmount", "framingAmount", "inputAmount",
     "outputReserveAmount", "remainingAmount",
@@ -245,7 +263,7 @@ export function snapshotModelInputComposition(
     framing,
     contextBudget,
     sections: Object.freeze(sections),
-    lineage: snapshotLineage(input.lineage),
+    lineage,
     accounting: Object.freeze({
       unit: estimator.unit,
       sectionAmount,
@@ -256,6 +274,47 @@ export function snapshotModelInputComposition(
     }),
     composedAt: isoDateTime(input.composedAt, "ModelInputComposition.composedAt"),
   });
+}
+
+function assertInstructionLineage(input: {
+  readonly providerId: string;
+  readonly model: string;
+  readonly sections: readonly ModelInputSection[];
+  readonly lineage: ModelInputLineage;
+}): void {
+  if (
+    input.lineage.instructionModel.providerId !== input.providerId ||
+    input.lineage.instructionModel.model !== input.model
+  ) {
+    throw new TypeError("Model input instruction lineage must match the Provider model identity.");
+  }
+  const instructionSections = input.sections.filter(
+    (section) => section.kind === "agent_instruction",
+  );
+  if (instructionSections.length !== input.lineage.instructionBlocks.length) {
+    throw new TypeError("Model input instruction sections must match instruction block lineage.");
+  }
+  for (let index = 0; index < instructionSections.length; index += 1) {
+    const section = instructionSections[index]!;
+    const source = input.lineage.instructionBlocks[index]!;
+    if (
+      input.sections[index] !== section ||
+      section.role !== "system" ||
+      section.necessity !== "mandatory" ||
+      !sameSource(section.source, source)
+    ) {
+      throw new TypeError(
+        "Agent instruction sections must be the leading ordered mandatory system sections.",
+      );
+    }
+  }
+}
+
+function sameSource(left: ModelInputSourceRef, right: ModelInputSourceRef): boolean {
+  return left.owner === right.owner &&
+    left.kind === right.kind &&
+    left.id === right.id &&
+    left.revision === right.revision;
 }
 
 export function snapshotModelOutputFormat(input: ModelOutputFormat): ModelOutputFormat {
@@ -392,10 +451,23 @@ function snapshotContent(input: ModelInputContent, path: string): ModelInputCont
 
 function snapshotLineage(input: ModelInputLineage): ModelInputLineage {
   strictRecord(input, "ModelInputComposition.lineage", [
+    "instructionBinding", "agent", "instructions", "instructionRelease",
+    "instructionResolver", "instructionContent", "instructionModel", "instructionBlocks",
     "activeContext", "contextProjection", "projectionManifest", "toolSelection",
     "toolExposureContent", "toolExposureBasis", "toolExposureProof", "protocol", "policy",
   ]);
   return Object.freeze({
+    instructionBinding: snapshotSource(input.instructionBinding, "ModelInputComposition.lineage.instructionBinding"),
+    agent: snapshotSource(input.agent, "ModelInputComposition.lineage.agent"),
+    instructions: snapshotSource(input.instructions, "ModelInputComposition.lineage.instructions"),
+    instructionRelease: snapshotSource(input.instructionRelease, "ModelInputComposition.lineage.instructionRelease"),
+    instructionResolver: snapshotSource(input.instructionResolver, "ModelInputComposition.lineage.instructionResolver"),
+    instructionContent: snapshotSource(input.instructionContent, "ModelInputComposition.lineage.instructionContent"),
+    instructionModel: snapshotInstructionModel(input.instructionModel),
+    instructionBlocks: snapshotSourceList(
+      input.instructionBlocks,
+      "ModelInputComposition.lineage.instructionBlocks",
+    ),
     activeContext: snapshotNullableSource(input.activeContext, "ModelInputComposition.lineage.activeContext"),
     contextProjection: snapshotNullableSource(input.contextProjection, "ModelInputComposition.lineage.contextProjection"),
     projectionManifest: snapshotNullableSource(input.projectionManifest, "ModelInputComposition.lineage.projectionManifest"),
@@ -406,6 +478,26 @@ function snapshotLineage(input: ModelInputLineage): ModelInputLineage {
     protocol: snapshotSource(input.protocol, "ModelInputComposition.lineage.protocol"),
     policy: snapshotSource(input.policy, "ModelInputComposition.lineage.policy"),
   });
+}
+
+function snapshotInstructionModel(
+  input: ModelInputLineage["instructionModel"],
+): ModelInputLineage["instructionModel"] {
+  strictRecord(input, "ModelInputComposition.lineage.instructionModel", ["providerId", "model"]);
+  return Object.freeze({
+    providerId: token(input.providerId, "ModelInputComposition.lineage.instructionModel.providerId"),
+    model: token(input.model, "ModelInputComposition.lineage.instructionModel.model"),
+  });
+}
+
+function snapshotSourceList(
+  input: readonly ModelInputSourceRef[],
+  path: string,
+): readonly ModelInputSourceRef[] {
+  if (!Array.isArray(input) || input.length === 0) {
+    throw new TypeError(`${path} must be a non-empty array.`);
+  }
+  return Object.freeze(input.map((source, index) => snapshotSource(source, `${path}[${index}]`)));
 }
 
 function snapshotNullableSource(input: ModelInputSourceRef | null, path: string): ModelInputSourceRef | null {

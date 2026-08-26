@@ -26,6 +26,7 @@ import type {
   DelegationSteeringReceipt,
   DelegationSteeringRoute,
 } from "../delegation/index.js";
+import type { AgentInstructionBindingProjection } from "../instructions/index.js";
 
 export interface RunPendingInteractionProjection {
   readonly envelope: SafeInteractionEnvelope<unknown>;
@@ -57,6 +58,7 @@ export interface RunOperationSnapshot<TOutput = unknown> {
   readonly runRevision: number;
   readonly status: RunLifecycleStatus;
   readonly lastRunItemSequence: number;
+  readonly instructionBinding: AgentInstructionBindingProjection | null;
   readonly plan: PlanProjection | null;
   readonly progress: RunProgressProjection;
   readonly retry: RunRetryProjection | null;
@@ -87,6 +89,7 @@ export interface RunExecutionUpdate<TOutput> {
   readonly runRevision: number;
   readonly status: RunLifecycleStatus;
   readonly lastRunItemSequence: number;
+  readonly instructionBinding: AgentInstructionBindingProjection | null;
   readonly plan: PlanProjection | null;
   readonly progress: RunProgressProjection;
   readonly retry: RunRetryProjection | null;
@@ -123,6 +126,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       runRevision: 0,
       status: "initializing",
       lastRunItemSequence: 0,
+      instructionBinding: null,
       plan: null,
       progress: projectRunProgress(createInitialRunProgressState(), null),
       retry: null,
@@ -158,6 +162,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       runRevision: update.runRevision,
       status: update.status,
       lastRunItemSequence: update.lastRunItemSequence,
+      instructionBinding: update.instructionBinding,
       plan: update.plan,
       progress: update.progress,
       retry: update.retry,
@@ -292,6 +297,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
         runRevision: this.snapshot.runRevision,
         status: terminalStatus(result),
         lastRunItemSequence: result.items.at(-1)?.ref.sequence ?? 0,
+        instructionBinding: this.snapshot.instructionBinding,
         plan: this.snapshot.plan,
         progress: this.snapshot.progress,
         retry: this.snapshot.retry,

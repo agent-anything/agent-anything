@@ -226,6 +226,8 @@ describe("delegation result", () => {
         taskId: "task-child",
         startingAgent: CHILD_AGENT,
         finalActiveAgent: CHILD_AGENT,
+        startingInstructionBinding: childInstructionBinding("run-child"),
+        finalInstructionBinding: childInstructionBinding("run-child"),
         startedAt: "2026-08-25T00:01:00.000Z",
         completedAt: "2026-08-25T00:02:00.000Z",
         evidenceRefs: ["evidence-1"],
@@ -273,6 +275,8 @@ describe("delegation result", () => {
           taskId: "task-child",
           startingAgent: CHILD_AGENT,
           finalActiveAgent: CHILD_AGENT,
+          startingInstructionBinding: childInstructionBinding("run-child"),
+          finalInstructionBinding: childInstructionBinding("run-child"),
           startedAt: "2026-08-25T00:01:00.000Z",
           completedAt: "2026-08-25T00:02:00.000Z",
         },
@@ -324,6 +328,8 @@ describe("delegation result", () => {
         taskId: "task-child",
         startingAgent: CHILD_AGENT,
         finalActiveAgent: CHILD_AGENT,
+        startingInstructionBinding: childInstructionBinding("run-other"),
+        finalInstructionBinding: childInstructionBinding("run-other"),
         startedAt: "2026-08-25T00:01:00.000Z",
         completedAt: "2026-08-25T00:02:00.000Z",
       }, { summary: "done" }),
@@ -585,6 +591,13 @@ function childCorrelation(accepted: ReturnType<typeof request>) {
       agent: CHILD_AGENT,
     },
   } as const;
+}
+
+function childInstructionBinding(runId: string) {
+  return Object.freeze({
+    id: `${runId}:agent-instruction-binding:0`,
+    revision: `sha256:${"0".repeat(64)}`,
+  });
 }
 
 function usage() {

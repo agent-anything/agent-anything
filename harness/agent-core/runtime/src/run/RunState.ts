@@ -14,6 +14,7 @@ import type { RunBlockedCode, RunFailureCode } from "./RunStatus.js";
 import type { ValidationCurrentSnapshotRef } from "@agent-anything/validation/assessment";
 import type { CompletionGateInvocationRef } from "@agent-anything/validation/completion";
 import type { RunProgressState } from "../progress/index.js";
+import type { AgentInstructionBindingRef } from "../instructions/index.js";
 
 export interface RunCounters {
   readonly controllerTurns: number;
@@ -33,6 +34,8 @@ interface RunStateBase<TOutput> {
   readonly taskId: string;
   readonly startingAgent: AgentRevisionRef;
   readonly activeAgent: AgentRevisionRef;
+  readonly startingInstructionBinding: AgentInstructionBindingRef;
+  readonly activeInstructionBinding: AgentInstructionBindingRef;
   readonly workspace: WorkspaceSelection | null;
   readonly identity: IdentityRef;
   readonly startedAt: string;

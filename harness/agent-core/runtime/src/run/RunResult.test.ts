@@ -10,6 +10,10 @@ import type { RunFailureCause } from "./RunFailure.js";
 
 const startedAt = "2026-07-13T00:00:00.000Z";
 const completedAt = "2026-07-13T00:00:01.000Z";
+const TEST_INSTRUCTION_BINDING = Object.freeze({
+  id: "run-1:agent-instruction-binding:0",
+  revision: `sha256:${"0".repeat(64)}`,
+});
 
 describe("RunResult", () => {
   it("constructs structurally distinct terminal results", () => {
@@ -138,6 +142,8 @@ function base<TOutput = unknown>(): CreateRunResultBaseInput<TOutput> {
     taskId: "task-1",
     startingAgent: { id: "agent.test", revision: "1" },
     finalActiveAgent: { id: "agent.test", revision: "1" },
+    startingInstructionBinding: TEST_INSTRUCTION_BINDING,
+    finalInstructionBinding: TEST_INSTRUCTION_BINDING,
     startedAt,
     completedAt,
   };

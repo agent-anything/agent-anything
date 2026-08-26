@@ -25,7 +25,7 @@ describe("HostRunProjectionReducer", () => {
     let projection = initialProjection();
     projection = apply(projection, runtimeUpdate(1, "run.started", {
       status: "running",
-      activeAgentId: "agent-1",
+      ...runStartedIdentity("agent-1"),
     }));
     expect(projection).toMatchObject({ sequence: 1, status: "running" });
 
@@ -55,7 +55,7 @@ describe("HostRunProjectionReducer", () => {
   it("projects Plan and generic pending Interaction only from RunHandle snapshots", () => {
     let projection = apply(initialProjection(), runtimeUpdate(1, "run.started", {
       status: "running",
-      activeAgentId: "agent-1",
+      ...runStartedIdentity("agent-1"),
     }));
     projection = apply(projection, runOperationUpdate(2, {
       sequence: 1,
@@ -182,7 +182,7 @@ describe("HostRunProjectionReducer", () => {
   it("projects canonical Action attempt and settlement without executor payload", () => {
     let projection = apply(initialProjection(), runtimeUpdate(1, "run.started", {
       status: "running",
-      activeAgentId: "agent-1",
+      ...runStartedIdentity("agent-1"),
     }));
     projection = apply(projection, {
       kind: "action_execution",
@@ -237,7 +237,7 @@ describe("HostRunProjectionReducer", () => {
   it("rejects stale, cross-Run, regressed, and post-terminal updates by identity", () => {
     const started = apply(initialProjection(), runtimeUpdate(1, "run.started", {
       status: "running",
-      activeAgentId: "agent-1",
+      ...runStartedIdentity("agent-1"),
     }));
     expect(reduceHostRunProjection(
       started,
@@ -294,7 +294,7 @@ describe("HostRunProjectionReducer", () => {
 
     const result = store.apply(runtimeUpdate(1, "run.started", {
       status: "running",
-      activeAgentId: "agent-1",
+      ...runStartedIdentity("agent-1"),
     }));
 
     expect(result).toMatchObject({ status: "applied", projection: { status: "running" } });
@@ -318,7 +318,7 @@ describe("HostRunProjectionReducer", () => {
     let projection = apply(initialProjection(), runtimeUpdate(
       1,
       "run.started",
-      { status: "running", activeAgentId: "agent-child" },
+      { status: "running", ...runStartedIdentity("agent-child", "run-child") },
       "run-child",
       childLineage,
     ));
@@ -327,7 +327,7 @@ describe("HostRunProjectionReducer", () => {
       projection,
       runtimeUpdate(2, "run.started", {
         status: "running",
-        activeAgentId: "foreign-agent",
+        ...runStartedIdentity("foreign-agent", "run-foreign"),
       }, "run-foreign"),
     )).toMatchObject({ status: "rejected", code: "run_tree_root_mismatch" });
 
@@ -438,6 +438,7 @@ function runOperationUpdate(
       runRevision: 1,
       status: "running",
       lastRunItemSequence: 0,
+      instructionBinding: null,
       plan: null,
       progress: initialProgress(),
       retry: null,
@@ -544,6 +545,8 @@ function succeededResult() {
     taskId: "task-1",
     startingAgent: { id: "agent-1", revision: "1" },
     finalActiveAgent: { id: "agent-1", revision: "1" },
+    startingInstructionBinding: instructionBindingRef("run-1"),
+    finalInstructionBinding: instructionBindingRef("run-1"),
     startedAt: NOW,
     completedAt: LATER,
     metadata: { durationMs: 1_000, privatePrompt: "must not survive" },
@@ -563,3 +566,19 @@ const REQUEST: InteractionRequestRef = Object.freeze({
 });
 const NOW = "2026-08-13T00:00:00.000Z";
 const LATER = "2026-08-13T00:00:01.000Z";
+
+function runStartedIdentity(agentId: string, runId = "run-1") {
+  return {
+    activeAgentId: agentId,
+    activeAgentRevision: "1",
+    instructionBindingId: `${runId}:agent-instruction-binding:0`,
+    instructionBindingRevision: `sha256:${"0".repeat(64)}`,
+  };
+}
+
+function instructionBindingRef(runId: string) {
+  return Object.freeze({
+    id: `${runId}:agent-instruction-binding:0`,
+    revision: `sha256:${"0".repeat(64)}`,
+  });
+}

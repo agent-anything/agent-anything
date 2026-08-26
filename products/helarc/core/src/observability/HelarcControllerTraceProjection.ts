@@ -21,6 +21,22 @@ export interface HelarcControllerTraceProjection {
   readonly toolExposureOmissionReasons: readonly string[];
   readonly exposedToolNames: readonly string[];
   readonly requestedToolName: string | null;
+  readonly instructionBindingId: string | null;
+  readonly instructionBindingRevision: string | null;
+  readonly instructionBindingEffectiveFromRunRevision: number | null;
+  readonly instructionBindingSupersedesId: string | null;
+  readonly instructionBindingSupersedesRevision: string | null;
+  readonly agentId: string | null;
+  readonly agentRevision: string | null;
+  readonly agentInstructionsId: string | null;
+  readonly agentInstructionsRevision: string | null;
+  readonly agentInstructionReleaseId: string | null;
+  readonly agentInstructionReleaseRevision: string | null;
+  readonly agentInstructionResolverRevision: string | null;
+  readonly agentInstructionContentDigest: string | null;
+  readonly agentInstructionBlockCount: number | null;
+  readonly agentInstructionProviderId: string | null;
+  readonly agentInstructionModelId: string | null;
 }
 
 export class HelarcTracingController<TOutput = unknown> implements Controller<TOutput> {
@@ -94,6 +110,26 @@ function createHelarcControllerTraceProjection(
     ),
     exposedToolNames: Object.freeze(readTraceStringArray(source.exposedToolNames)),
     requestedToolName: readTraceString(source.requestedToolName),
+    instructionBindingId: readTraceString(source.instructionBindingId),
+    instructionBindingRevision: readTraceString(source.instructionBindingRevision),
+    instructionBindingEffectiveFromRunRevision: readTraceNonNegativeInteger(
+      source.instructionBindingEffectiveFromRunRevision,
+    ),
+    instructionBindingSupersedesId: readTraceString(source.instructionBindingSupersedesId),
+    instructionBindingSupersedesRevision: readTraceString(
+      source.instructionBindingSupersedesRevision,
+    ),
+    agentId: readTraceString(source.agentId),
+    agentRevision: readTraceString(source.agentRevision),
+    agentInstructionsId: readTraceString(source.agentInstructionsId),
+    agentInstructionsRevision: readTraceString(source.agentInstructionsRevision),
+    agentInstructionReleaseId: readTraceString(source.agentInstructionReleaseId),
+    agentInstructionReleaseRevision: readTraceString(source.agentInstructionReleaseRevision),
+    agentInstructionResolverRevision: readTraceString(source.agentInstructionResolverRevision),
+    agentInstructionContentDigest: readTraceString(source.agentInstructionContentDigest),
+    agentInstructionBlockCount: readTraceNonNegativeInteger(source.agentInstructionBlockCount),
+    agentInstructionProviderId: readTraceString(source.agentInstructionProviderId),
+    agentInstructionModelId: readTraceString(source.agentInstructionModelId),
   });
 }
 

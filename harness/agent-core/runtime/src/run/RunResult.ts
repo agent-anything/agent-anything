@@ -5,6 +5,10 @@ import type { RunCancellationSummary } from "./RunCancellation.js";
 import type { RunFailureCause } from "./RunFailure.js";
 import type { RunItem } from "./RunItem.js";
 import type { RunBlockedCode, RunFailureCode } from "./RunStatus.js";
+import {
+  snapshotAgentInstructionBindingRef,
+  type AgentInstructionBindingRef,
+} from "../instructions/index.js";
 
 interface RunResultBase<TOutput> {
   readonly run: RunRef;
@@ -12,6 +16,8 @@ interface RunResultBase<TOutput> {
   readonly taskId: string;
   readonly startingAgent: AgentRevisionRef;
   readonly finalActiveAgent: AgentRevisionRef;
+  readonly startingInstructionBinding: AgentInstructionBindingRef;
+  readonly finalInstructionBinding: AgentInstructionBindingRef;
   readonly startedAt: string;
   readonly completedAt: string;
   readonly items: readonly RunItem<TOutput>[];
@@ -59,6 +65,8 @@ export interface CreateRunResultBaseInput<TOutput = unknown> {
   readonly taskId: string;
   readonly startingAgent: AgentRevisionRef;
   readonly finalActiveAgent: AgentRevisionRef;
+  readonly startingInstructionBinding: AgentInstructionBindingRef;
+  readonly finalInstructionBinding: AgentInstructionBindingRef;
   readonly startedAt: string;
   readonly completedAt: string;
   readonly items?: readonly RunItem<TOutput>[];
@@ -103,6 +111,12 @@ function base<TOutput>(input: CreateRunResultBaseInput<TOutput>): RunResultBase<
   token(input.taskId, "taskId");
   const startingAgent = snapshotAgentRef(input.startingAgent, "startingAgent");
   const finalActiveAgent = snapshotAgentRef(input.finalActiveAgent, "finalActiveAgent");
+  const startingInstructionBinding = snapshotAgentInstructionBindingRef(
+    input.startingInstructionBinding,
+  );
+  const finalInstructionBinding = snapshotAgentInstructionBindingRef(
+    input.finalInstructionBinding,
+  );
   const startedAtMs = dateTime(input.startedAt, "startedAt");
   const completedAtMs = dateTime(input.completedAt, "completedAt");
   if (completedAtMs < startedAtMs) {
@@ -120,6 +134,8 @@ function base<TOutput>(input: CreateRunResultBaseInput<TOutput>): RunResultBase<
     taskId: input.taskId,
     startingAgent,
     finalActiveAgent,
+    startingInstructionBinding,
+    finalInstructionBinding,
     startedAt: input.startedAt,
     completedAt: input.completedAt,
     items,

@@ -92,7 +92,7 @@ function validComposition(): ModelInputComposition {
         id: "instructions",
         revision: "3",
       },
-      kind: "product_instructions",
+      kind: "agent_instruction",
       role: "system",
       necessity: "mandatory",
       content: { kind: "text", text: "Follow the product protocol." },
@@ -112,6 +112,14 @@ function validComposition(): ModelInputComposition {
       accounting: { unit: "tokens", amount: 30 },
     }],
     lineage: {
+      instructionBinding: { owner: "agent-runtime", kind: "agent_instruction_binding", id: "binding-1", revision: "1" },
+      agent: { owner: "agent-core", kind: "agent_revision", id: "agent-1", revision: "1" },
+      instructions: { owner: "agent-core", kind: "agent_instructions", id: "instructions-1", revision: "1" },
+      instructionRelease: { owner: "helarc", kind: "agent_instruction_release", id: "release-1", revision: "1" },
+      instructionResolver: { owner: "helarc", kind: "agent_instruction_resolver", id: "resolver-1", revision: "1" },
+      instructionContent: { owner: "agent-core", kind: "agent_instruction_content_digest", id: "instructions-1", revision: "1" },
+      instructionModel: { providerId: "provider-1", model: "model-1" },
+      instructionBlocks: [{ owner: "helarc", kind: "prompt_section", id: "instructions", revision: "3" }],
       activeContext: {
         owner: "context",
         kind: "active_context",

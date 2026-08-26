@@ -100,6 +100,7 @@ const packageExportKeys = {
   "harness/agent-core/runtime": [
     "./controller",
     "./delegation",
+    "./instructions",
     "./plan",
     "./progress",
     "./retry",

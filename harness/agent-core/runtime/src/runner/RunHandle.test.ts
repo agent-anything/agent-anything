@@ -195,22 +195,28 @@ function cancellation() {
 }
 
 function succeededResult() {
+  const instructionBinding = testInstructionBinding();
   return createSucceededRunResult({
     runId: "run-1",
     taskId: "task-1",
     startingAgent: { id: "agent-1", revision: "1" },
     finalActiveAgent: { id: "agent-1", revision: "1" },
+    startingInstructionBinding: instructionBinding,
+    finalInstructionBinding: instructionBinding,
     startedAt: NOW,
     completedAt: LATER,
   }, { summary: "done" });
 }
 
 function failedResult() {
+  const instructionBinding = testInstructionBinding();
   return createFailedRunResult({
     runId: "run-1",
     taskId: "task-1",
     startingAgent: { id: "agent-1", revision: "1" },
     finalActiveAgent: { id: "agent-1", revision: "1" },
+    startingInstructionBinding: instructionBinding,
+    finalInstructionBinding: instructionBinding,
     startedAt: NOW,
     completedAt: LATER,
   }, "runtime_execution_failed", createRunFailureCause("runtime", {
@@ -219,6 +225,13 @@ function failedResult() {
     retryable: false,
     metadata: {},
   }));
+}
+
+function testInstructionBinding() {
+  return Object.freeze({
+    id: "run-1:agent-instruction-binding:0",
+    revision: `sha256:${"0".repeat(64)}`,
+  });
 }
 
 function runTree(revision: number): RunTreeExecutionSnapshot {

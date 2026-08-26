@@ -374,6 +374,19 @@ export interface HelarcRunProgressSnapshot {
   readonly activeCorrectionRound: number | null;
 }
 
+export interface HelarcInstructionBindingSnapshot {
+  readonly ref: Readonly<{ readonly id: string; readonly revision: string }>;
+  readonly agent: Readonly<{ readonly id: string; readonly revision: string }>;
+  readonly instructions: Readonly<{ readonly id: string; readonly revision: string }>;
+  readonly release: Readonly<{ readonly id: string; readonly revision: string }>;
+  readonly model: Readonly<{ readonly providerId: string; readonly modelId: string }>;
+  readonly resolverRevision: string;
+  readonly contentDigest: Readonly<{ readonly algorithm: "sha256"; readonly value: string }>;
+  readonly blockCount: number;
+  readonly effectiveFromRunRevision: number;
+  readonly supersedes: Readonly<{ readonly id: string; readonly revision: string }> | null;
+}
+
 export interface HelarcRunProductResultSnapshot {
   readonly status: "completed" | "rejected" | "failed" | "blocked" | "cancelled";
   readonly validation: HelarcProductValidationSnapshot;
@@ -418,6 +431,7 @@ export interface HelarcRunSnapshot {
     readonly taskId: string;
     readonly startedAt: string;
     readonly runRevision: number;
+    readonly instructionBinding: HelarcInstructionBindingSnapshot | null;
     readonly runTree: HelarcRunTreeSnapshot;
     readonly activeDelegations: readonly HelarcActiveDelegationSnapshot[];
     readonly progress: HelarcRunProgressSnapshot;
@@ -784,6 +798,7 @@ export interface HelarcHostRunStatusSnapshot {
   readonly runId: string;
   readonly taskId: string;
   readonly runRevision: number;
+  readonly instructionBinding: HelarcInstructionBindingSnapshot | null;
   readonly status:
     | "starting"
     | "running"

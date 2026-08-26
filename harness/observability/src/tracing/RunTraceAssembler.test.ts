@@ -20,7 +20,7 @@ describe("RunTraceAssembler", () => {
 
     stream.emit("run.started", {
       status: "running",
-      activeAgentId: "agent-1",
+      ...runStartedIdentity("agent-1"),
     }, STARTED_AT);
     stream.emit("context.transition.committed", {
       transitionId: "transition-1",
@@ -281,7 +281,7 @@ describe("RunTraceAssembler", () => {
     const stream = createStream(assembler);
     stream.emit("run.started", {
       status: "running",
-      activeAgentId: "agent-1",
+      ...runStartedIdentity("agent-1"),
     }, STARTED_AT);
     stream.emit("controller.finished", {
       turnId: "turn-1",
@@ -316,7 +316,7 @@ describe("RunTraceAssembler", () => {
     const stream = createStream(assembler);
     stream.emit("run.started", {
       status: "running",
-      activeAgentId: "agent-1",
+      ...runStartedIdentity("agent-1"),
     }, STARTED_AT);
     stream.emit("operation.started", {
       invocationId: "operation-invocation-1",
@@ -353,7 +353,7 @@ describe("RunTraceAssembler", () => {
     const assembler = createAssembler();
     createStream(assembler).emit("run.started", {
       status: "running",
-      activeAgentId: "agent-1",
+      ...runStartedIdentity("agent-1"),
     }, STARTED_AT);
     const foreign = createStream(undefined, "run-2").emit("controller.started", {
       turnId: "foreign-turn",
@@ -362,7 +362,7 @@ describe("RunTraceAssembler", () => {
     assembler.publish(foreign);
     const regressed = createStream(undefined).emit("run.started", {
       status: "running",
-      activeAgentId: "different-agent",
+      ...runStartedIdentity("different-agent"),
     }, COMPLETED_AT);
     assembler.publish(regressed);
 
@@ -378,10 +378,10 @@ describe("RunTraceAssembler", () => {
     const assembler = createAssembler();
     createStream(assembler).emit("run.started", {
       status: "running",
-      activeAgentId: "agent-1",
+      ...runStartedIdentity("agent-1"),
     }, STARTED_AT);
     const source = createStream(undefined);
-    source.emit("run.started", { status: "running", activeAgentId: "agent-1" });
+    source.emit("run.started", { status: "running", ...runStartedIdentity("agent-1") });
     source.emit("run.item.appended", {
       itemId: "item-ignored",
       itemKind: "state_transition",
@@ -457,7 +457,7 @@ describe("RunTraceAssembler", () => {
     });
     createStream(assembler, "run-child", lineage).emit("run.started", {
       status: "running",
-      activeAgentId: "agent-child",
+      ...runStartedIdentity("agent-child", "run-child"),
     });
     lineage.root.id = "mutated";
 
@@ -493,6 +493,15 @@ function createAssembler(
     createSpanId: ({ sequence }) => `span-${sequence}`,
     observers,
   });
+}
+
+function runStartedIdentity(agentId: string, runId = "run-1") {
+  return {
+    activeAgentId: agentId,
+    activeAgentRevision: "1",
+    instructionBindingId: `${runId}:agent-instruction-binding:0`,
+    instructionBindingRevision: `sha256:${"0".repeat(64)}`,
+  };
 }
 
 function createStream(

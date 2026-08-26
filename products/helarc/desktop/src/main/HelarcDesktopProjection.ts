@@ -254,6 +254,7 @@ export function projectHelarcRunStatusQueryReceipt(
       runId: receipt.projection.runId,
       taskId: receipt.projection.taskId,
       runRevision: receipt.projection.runRevision,
+      instructionBinding: projectInstructionBinding(receipt.projection.instructionBinding),
       status: receipt.projection.status,
       startedAt: receipt.projection.startedAt,
       runTree: projectRunTree(receipt.projection.runTree),
@@ -322,6 +323,7 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
       taskId: run.host.taskId,
       startedAt: run.host.startedAt,
       runRevision: run.host.runRevision,
+      instructionBinding: projectInstructionBinding(run.host.instructionBinding),
       runTree: projectRunTree(run.host.runTree),
       activeDelegations: projectActiveDelegations(run.host.activeDelegations),
       progress: projectRunProgress(run.host.progress),
@@ -389,6 +391,24 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
             },
           },
     },
+  };
+}
+
+function projectInstructionBinding(
+  input: import("@agent-anything/agent-runtime/instructions").AgentInstructionBindingProjection | null,
+): import("../shared/HelarcDesktopApi.js").HelarcInstructionBindingSnapshot | null {
+  if (input === null) return null;
+  return {
+    ref: { ...input.ref },
+    agent: { ...input.agent },
+    instructions: { ...input.instructions },
+    release: { ...input.release },
+    model: { ...input.model },
+    resolverRevision: input.resolverRevision,
+    contentDigest: { ...input.contentDigest },
+    blockCount: input.blockCount,
+    effectiveFromRunRevision: input.effectiveFromRunRevision,
+    supersedes: input.supersedes === null ? null : { ...input.supersedes },
   };
 }
 

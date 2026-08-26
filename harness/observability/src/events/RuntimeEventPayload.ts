@@ -15,6 +15,9 @@ export type RuntimeTerminalStatus = "succeeded" | "blocked" | "failed" | "cancel
 export interface RunStartedRuntimeEventPayload {
   readonly status: "running";
   readonly activeAgentId: string;
+  readonly activeAgentRevision: string;
+  readonly instructionBindingId: string;
+  readonly instructionBindingRevision: string;
 }
 
 export interface RunItemAppendedRuntimeEventPayload {

@@ -5,7 +5,13 @@ import type {
 } from "@agent-anything/observability/events";
 
 const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
-  "run.started": ["status", "activeAgentId"],
+  "run.started": [
+    "status",
+    "activeAgentId",
+    "activeAgentRevision",
+    "instructionBindingId",
+    "instructionBindingRevision",
+  ],
   "run.item.appended": ["itemId", "itemKind", "itemSequence"],
   "run.progress.assessed": [
     "checkpointSequence",

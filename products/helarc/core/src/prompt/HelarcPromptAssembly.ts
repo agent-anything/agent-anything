@@ -26,7 +26,6 @@ export const HELARC_CONTEXT_SECTION_HEADER = "Context projection:";
 export const HELARC_MODEL_OUTPUT_RESERVE_BYTES = 256_000;
 
 export type HelarcPromptSectionId =
-  | "agent_identity"
   | "output_format"
   | "action_protocol"
   | "action_decision_rules"
@@ -38,12 +37,16 @@ export type HelarcPromptSectionId =
   | "run_input_items"
   | "context_projection"
   | "current_plan"
+  | "current_progress"
+  | "current_validation"
   | "permission_context"
   | "pending_interactions"
   | "structured_output_correction";
 
 export interface HelarcPromptSection {
-  readonly id: HelarcPromptSectionId;
+  readonly id: string;
+  readonly source: ModelInputSectionCandidate["source"];
+  readonly kind: "agent_instruction" | "product_protocol" | "run_material";
   readonly role: ModelInputSectionCandidate["role"];
   readonly necessity: ModelInputSectionCandidate["necessity"];
   readonly content: string;
@@ -99,11 +102,14 @@ function assemble(
 ): HelarcPromptAssemblyResult {
   const exposedToolNames = Object.freeze(input.toolExposure.catalog.tools.map((tool) => tool.name));
   const promptSections = Object.freeze([
+    ...buildAgentInstructionSections(input),
     ...buildSystemPromptSections(input.toolExposure),
     promptSection("task", "user", `Task:\n${readHelarcTaskPrompt(input)}`),
     promptSection("run_input_items", "user", `Run input items:\n${JSON.stringify(input.inputItems)}`),
     promptSection("context_projection", "user", contextContent),
     promptSection("current_plan", "user", `Current plan:\n${JSON.stringify(input.plan)}`),
+    promptSection("current_progress", "user", `Current progress:\n${JSON.stringify(input.progress)}`),
+    promptSection("current_validation", "user", `Current validation:\n${JSON.stringify(input.validation)}`),
     promptSection("permission_context", "user", `Permission context:\n${JSON.stringify(input.permission)}`),
     promptSection("pending_interactions", "user", `Pending interactions:\n${JSON.stringify(input.pending)}`),
     ...(correctionMessage === null
@@ -133,7 +139,6 @@ function buildSystemPromptSections(
     toolExposure.catalog.tools.map(({ name }) => name),
   );
   return Object.freeze([
-    promptSection("agent_identity", "system", "You are Helarc, a careful code agent."),
     promptSection("output_format", "system", "Return only JSON. Do not wrap it in markdown."),
     promptSection("action_protocol", "system", buildHelarcActionProtocolText(actionContract)),
     promptSection("action_decision_rules", "system", buildHelarcActionDecisionRulesText(actionContract)),
@@ -159,12 +164,42 @@ function buildSystemPromptSections(
   ]);
 }
 
+function buildAgentInstructionSections(
+  input: ControllerPreProjectionInput | ControllerInput,
+): readonly HelarcPromptSection[] {
+  return Object.freeze(input.agent.instructions.blocks.map((block) => Object.freeze({
+    id: `agent-instructions:${block.id}`,
+    source: Object.freeze({
+      owner: block.source.owner,
+      kind: block.source.kind,
+      id: block.source.id,
+      revision: block.source.revision,
+    }),
+    kind: "agent_instruction" as const,
+    role: "system" as const,
+    necessity: "mandatory" as const,
+    content: block.content,
+  })));
+}
+
 function promptSection(
   id: HelarcPromptSectionId,
   role: ModelInputSectionCandidate["role"],
   content: string,
 ): HelarcPromptSection {
-  return Object.freeze({ id, role, necessity: "mandatory" as const, content });
+  return Object.freeze({
+    id,
+    source: Object.freeze({
+      owner: "helarc",
+      kind: "prompt_section",
+      id,
+      revision: HELARC_PROMPT_ARCHITECTURE_VERSION,
+    }),
+    kind: role === "system" ? "product_protocol" as const : "run_material" as const,
+    role,
+    necessity: "mandatory" as const,
+    content,
+  });
 }
 
 function toModelInputSection(
@@ -181,13 +216,8 @@ function toModelInputSection(
           id: context.id,
           revision: String(context.activeContext.version),
         })
-      : Object.freeze({
-          owner: "helarc",
-          kind: "prompt_section",
-          id: section.id,
-          revision: HELARC_PROMPT_ARCHITECTURE_VERSION,
-        }),
-    kind: isContext ? "context_projection" : "product_prompt",
+      : section.source,
+    kind: isContext ? "context_projection" : section.kind,
     role: section.role,
     necessity: section.necessity,
     content: Object.freeze({ kind: "text" as const, text: section.content }),

@@ -25,6 +25,10 @@ import type { InteractionRequestRef } from "@agent-anything/interaction/protocol
 import type { InteractionTransportReceipt } from "@agent-anything/interaction/records";
 import type { RunLifecycleStatus } from "@agent-anything/agent-core/run";
 import type { ValidationHostProjection } from "@agent-anything/validation/projection";
+import type {
+  AgentInstructionBindingProjection,
+  AgentInstructionBindingRef,
+} from "@agent-anything/agent-runtime/instructions";
 
 export type HostRunProjectionStatus =
   | "starting"
@@ -184,6 +188,8 @@ export interface HostTerminalRunProjection {
   readonly itemCount: number;
   readonly evidenceCount: number;
   readonly artifactCount: number;
+  readonly startingInstructionBinding: AgentInstructionBindingRef;
+  readonly finalInstructionBinding: AgentInstructionBindingRef;
   readonly failure: HostTerminalFailureProjection | null;
   readonly relatedFailures: readonly HostTerminalFailureProjection[];
   readonly cancellation: HostCancellationProjection | null;
@@ -196,6 +202,7 @@ export interface HostRunProjection {
   readonly sequence: number;
   readonly runOperationSequence: number;
   readonly runRevision: number;
+  readonly instructionBinding: AgentInstructionBindingProjection | null;
   readonly status: HostRunProjectionStatus;
   readonly startedAt: string;
   readonly runTree: HostRunTreeProjection;
@@ -326,6 +333,7 @@ export function createHostRunProjection(
     sequence: 0,
     runOperationSequence: 0,
     runRevision: 0,
+    instructionBinding: null,
     status: "starting" as const,
     startedAt: input.startedAt,
     runTree: projectRunTree(input.runTree),
@@ -458,6 +466,8 @@ export function createHostTerminalRunProjection<TOutput>(
     itemCount: input.runResult.items.length,
     evidenceCount: input.runResult.evidenceRefs.length,
     artifactCount: input.runResult.artifactRefs.length,
+    startingInstructionBinding: input.runResult.startingInstructionBinding,
+    finalInstructionBinding: input.runResult.finalInstructionBinding,
     failure: input.runResult.failure === null
       ? null
       : projectFailure(input.runResult.failure),

@@ -36,6 +36,7 @@ import {
   createSystemRetryExecutor,
   systemRetryClock,
 } from "../retry/index.js";
+import { createAgentInstructionBinding } from "../instructions/index.js";
 
 interface TestOutput {
   readonly summary: string;
@@ -71,7 +72,10 @@ describe("ProviderBackedController", () => {
     expect(provider.requests()).toHaveLength(1);
     expect(provider.requests()[0]).toMatchObject({
       capability: "agent-control",
-      messages: [{ role: "user", content: "Run run_001 for task task_001." }],
+      messages: [
+        { role: "system", content: "Complete the test task." },
+        { role: "user", content: "Run run_001 for task task_001." },
+      ],
       composition: { providerId: "fake-provider", model: "fake-model" },
     });
     expect(Object.isFrozen(result)).toBe(true);
@@ -398,7 +402,7 @@ describe("ProviderBackedController", () => {
     expect(buildRequest).toHaveBeenCalledTimes(1);
     expect(requests).toHaveLength(2);
     expect(requests[0]).not.toBe(requests[1]);
-    expect(requests[1].messages[0].content).toBe("original request");
+    expect(requests[1].messages[1]?.content).toBe("original request");
     const providerEvents = events.filter((event) => event.owner === "provider_request");
     expect(providerEvents.map((event) => event.type)).toEqual([
       "retry_attempt_started",
@@ -1212,11 +1216,18 @@ function createController(
 
 function createControllerInput(): ControllerInput<TestOutput> {
   const task = createTask();
+  const agent = createAgent();
   const toolCatalog = createToolCatalogSnapshot([]);
   return {
     runId: "run_001",
     iteration: 1,
-    agent: createAgent(),
+    agent,
+    instructionBinding: createAgentInstructionBinding({
+      run: { id: "run_001" },
+      agent,
+      effectiveFromRunRevision: 0,
+      supersedes: null,
+    }),
     task,
     inputItems: [],
     toolExposure: {
@@ -1269,6 +1280,13 @@ function createControllerInput(): ControllerInput<TestOutput> {
       }),
     }),
     plan: null,
+    progress: {
+      checkpointSequence: 0,
+      consecutiveNonAdvancingCheckpoints: 0,
+      correctionRounds: 0,
+      activeCorrectionRound: null,
+    },
+    validation: { snapshot: { runId: "run_001", revision: 0 }, gate: null },
     permission: testPermissionProjection(),
     pending: [],
     workspace: {
@@ -1427,7 +1445,15 @@ function accountTestRequest(
   input: ControllerInput<TestOutput>,
   context: ProviderRequestBuildContext,
 ): ProviderRequest {
-  const sections = request.messages.map((message, index) => Object.freeze({
+  const instructionSections = input.agent.instructions.blocks.map((block, index) => Object.freeze({
+    id: `test:model-input:instruction:${index}`,
+    source: Object.freeze({ ...block.source }),
+    kind: "agent_instruction",
+    role: "system" as const,
+    necessity: "mandatory" as const,
+    content: Object.freeze({ kind: "text" as const, text: block.content }),
+  }));
+  const requestSections = request.messages.map((message, index) => Object.freeze({
     id: `test:model-input:${index}`,
     source: Object.freeze({
       owner: "agent-runtime-test",
@@ -1440,6 +1466,7 @@ function accountTestRequest(
     necessity: "mandatory" as const,
     content: Object.freeze({ kind: "text" as const, text: message.content }),
   }));
+  const sections = Object.freeze([...instructionSections, ...requestSections]);
   const composition = composeModelInput({
     id: `${input.runId}:test-model-input:${context.attemptNumber}`,
     providerId: provider.inputAccounting.providerId,
@@ -1451,6 +1478,49 @@ function accountTestRequest(
     contextProjectedAmount: 0,
     sections,
     lineage: Object.freeze({
+      instructionBinding: Object.freeze({
+        owner: "agent-runtime",
+        kind: "agent_instruction_binding",
+        id: input.instructionBinding.ref.id,
+        revision: input.instructionBinding.ref.revision,
+      }),
+      agent: Object.freeze({
+        owner: "agent-core",
+        kind: "agent_revision",
+        id: input.agent.id,
+        revision: input.agent.revision,
+      }),
+      instructions: Object.freeze({
+        owner: "agent-core",
+        kind: "agent_instructions",
+        id: input.agent.instructions.ref.id,
+        revision: input.agent.instructions.ref.revision,
+      }),
+      instructionRelease: Object.freeze({
+        owner: "test",
+        kind: "agent_instruction_release",
+        id: input.agent.instructions.release.id,
+        revision: input.agent.instructions.release.revision,
+      }),
+      instructionResolver: Object.freeze({
+        owner: "test",
+        kind: "agent_instruction_resolver",
+        id: "test-resolver",
+        revision: input.agent.instructions.resolverRevision,
+      }),
+      instructionContent: Object.freeze({
+        owner: "agent-core",
+        kind: "agent_instruction_content_digest",
+        id: input.agent.instructions.ref.id,
+        revision: `sha256:${input.agent.instructions.contentDigest.value}`,
+      }),
+      instructionModel: Object.freeze({
+        providerId: provider.inputAccounting.providerId,
+        model: provider.inputAccounting.model,
+      }),
+      instructionBlocks: Object.freeze(input.agent.instructions.blocks.map((block) =>
+        Object.freeze({ ...block.source })
+      )),
       activeContext: null,
       contextProjection: null,
       projectionManifest: null,

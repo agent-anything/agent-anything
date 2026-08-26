@@ -89,7 +89,10 @@ describe("RuntimeEventStream", () => {
     };
     const stream = createStream([publisher, publisher]);
 
-    stream.emit("run.started", { status: "running", activeAgentId: "agent-1" });
+    stream.emit("run.started", {
+      status: "running",
+      ...runStartedIdentity("agent-1"),
+    });
     stream.emit("controller.started", { turnId: "turn-1", iteration: 1 });
 
     expect(events.map((event) => [event.id, event.sequence])).toEqual([
@@ -379,3 +382,12 @@ function createStream(
 }
 
 const NOW = "2026-08-13T00:00:00.000Z";
+
+function runStartedIdentity(agentId: string) {
+  return {
+    activeAgentId: agentId,
+    activeAgentRevision: "1",
+    instructionBindingId: "run-1:agent-instruction-binding:0",
+    instructionBindingRevision: `sha256:${"0".repeat(64)}`,
+  };
+}

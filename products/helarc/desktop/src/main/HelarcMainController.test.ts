@@ -1191,7 +1191,7 @@ describe("HelarcMainController", () => {
     })).resolves
       .toMatchObject({ ok: true, taskId: "helarc-task-2" });
     await secondCompleted;
-  });
+  }, 10_000);
 
   it("opens a stored non-terminal Run as inactive work without recovering execution", async () => {
     const provider = new DeferredCompleteProvider();

@@ -653,6 +653,10 @@ function createEmergencyRunResult<TOutput>(
   taskId: string,
 ): RunResult<TOutput> {
   const unknownAgent = Object.freeze({ id: "unknown", revision: "unknown" });
+  const unknownInstructionBinding = Object.freeze({
+    id: `${runId}:agent-instruction-binding:unknown`,
+    revision: `sha256:${"0".repeat(64)}`,
+  });
   const completedAt = new Date().toISOString();
   const failure = createRunFailureCause("runtime", Object.freeze({
     code: "runtime_execution_failed",
@@ -666,6 +670,8 @@ function createEmergencyRunResult<TOutput>(
       taskId,
       startingAgent: unknownAgent,
       finalActiveAgent: unknownAgent,
+      startingInstructionBinding: unknownInstructionBinding,
+      finalInstructionBinding: unknownInstructionBinding,
       startedAt: completedAt,
       completedAt,
       items: Object.freeze([]),

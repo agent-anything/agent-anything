@@ -116,6 +116,8 @@ describe("HelarcProductComposition", () => {
       taskId: "helarc-composition-test-task",
       startingAgent: { id: "helarc-code-agent", revision: "1" },
       finalActiveAgent: { id: "helarc-code-agent", revision: "1" },
+      startingInstructionBinding: testInstructionBinding("run-1"),
+      finalInstructionBinding: testInstructionBinding("run-1"),
       startedAt: "2026-07-17T00:00:00.000Z",
       completedAt: "2026-07-17T00:00:01.000Z",
       metadata: { rawProvider: secret },
@@ -202,6 +204,13 @@ describe("HelarcProductComposition", () => {
     expect(composition.getProductProjection().activity).toEqual([]);
   });
 });
+
+function testInstructionBinding(runId: string) {
+  return Object.freeze({
+    id: `${runId}:agent-instruction-binding:0`,
+    revision: `sha256:${"0".repeat(64)}`,
+  });
+}
 
 function runtimeEvent(
   id: string,

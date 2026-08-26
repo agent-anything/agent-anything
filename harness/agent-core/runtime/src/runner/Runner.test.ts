@@ -162,6 +162,16 @@ describe("Runner semantic integration", () => {
     ]);
     expect(result.items.map(({ ref }) => ref.sequence)).toEqual([1, 2, 3, 4]);
     expect(controller.calls).toHaveLength(1);
+    expect(controller.calls[0]?.instructionBinding).toMatchObject({
+      run: { id: "run_001" },
+      agent: { id: "agent_001", revision: "1" },
+      effectiveFromRunRevision: 0,
+      supersedes: null,
+    });
+    expect(result.startingInstructionBinding).toEqual(
+      controller.calls[0]?.instructionBinding.ref,
+    );
+    expect(result.finalInstructionBinding).toEqual(result.startingInstructionBinding);
     const turn = result.items.find(({ payload }) => payload.kind === "controller_turn");
     expect(turn?.payload).toMatchObject({
       kind: "controller_turn",
@@ -2263,6 +2273,12 @@ describe("Runner semantic integration", () => {
         expect(input.runId).toBe("run_001");
         expect(input.task.id).toBe("task_001");
         expect(input.agent).toMatchObject({ id: specialist.id, revision: specialist.revision });
+        expect(input.instructionBinding).toMatchObject({
+          agent: { id: specialist.id, revision: specialist.revision },
+          instructions: specialist.instructions.ref,
+          effectiveFromRunRevision: 6,
+        });
+        expect(input.instructionBinding.supersedes).not.toBeNull();
         return complete("Specialist complete", "model_complete_2");
       },
     ]);
@@ -2273,6 +2289,7 @@ describe("Runner semantic integration", () => {
       createRunConfig(operations),
     );
 
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
     expect(result).toMatchObject({
       runId: "run_001",
       taskId: "task_001",
@@ -2280,11 +2297,112 @@ describe("Runner semantic integration", () => {
       finalActiveAgent: { id: "agent_specialist", revision: "2" },
       status: "succeeded",
     });
+    expect(result.finalInstructionBinding).not.toEqual(result.startingInstructionBinding);
     expect(result.items).toContainEqual(expect.objectContaining({
       payload: expect.objectContaining({
         kind: "state_transition",
         transition: "active_agent",
+        previousInstructionBinding: result.startingInstructionBinding,
+        activeInstructionBinding: result.finalInstructionBinding,
       }),
+    }));
+  });
+
+  it("rejects a previously observed Agent revision with different instructions", async () => {
+    const operations = createOperationFixture([]);
+    const specialist = createAgent("agent_specialist", "2", "Specialist");
+    const bridge = createAgent("agent_bridge", "1", "Bridge");
+    const conflictingSpecialist: Agent<TestOutput> = {
+      ...specialist,
+      instructions: createAgentInstructions({
+        id: specialist.instructions.ref.id,
+        release: specialist.instructions.release,
+        model: specialist.instructions.model,
+        resolverRevision: specialist.instructions.resolverRevision,
+        blocks: [{
+          id: "behavior",
+          source: {
+            owner: "test",
+            kind: "instruction_source",
+            id: `${specialist.id}.behavior`,
+            revision: "2",
+          },
+          content: "Conflicting instructions for the same Agent revision.",
+        }],
+      }),
+    };
+    let specialistResolutions = 0;
+    const resolver = {
+      async resolve(ref: AgentRevisionRef) {
+        if (ref.id === bridge.id && ref.revision === bridge.revision) {
+          return {
+            status: "admitted" as const,
+            agent: bridge,
+            admissionEvidenceRef: "agent-admission-bridge",
+            code: null,
+          };
+        }
+        if (ref.id === specialist.id && ref.revision === specialist.revision) {
+          specialistResolutions += 1;
+          return {
+            status: "admitted" as const,
+            agent: specialistResolutions === 1 ? specialist : conflictingSpecialist,
+            admissionEvidenceRef: `agent-admission-specialist-${specialistResolutions}`,
+            code: null,
+          };
+        }
+        return {
+          status: "unavailable" as const,
+          agent: null,
+          admissionEvidenceRef: null,
+          code: "agent_unavailable",
+        };
+      },
+    };
+    const handoff = (
+      expectedRunRevision: number,
+      currentAgent: Agent<TestOutput>,
+      targetAgent: Agent<TestOutput>,
+      admissionEvidenceRef: string,
+      modelItemId: string,
+    ) => advance([{
+      kind: "state_transition",
+      transition: "handoff",
+      input: {
+        expectedRunRevision,
+        currentAgent: { id: currentAgent.id, revision: currentAgent.revision },
+        targetAgent: { id: targetAgent.id, revision: targetAgent.revision },
+        reason: `Use ${targetAgent.name}.`,
+        transferPolicy: "all_context",
+        admissionEvidenceRef,
+      },
+      modelItemId,
+    }], modelItemId);
+    const controller = new ScriptedController([
+      handoff(3, createAgent(), specialist, "agent-admission-specialist-1", "model_handoff_1"),
+      handoff(9, specialist, bridge, "agent-admission-bridge", "model_handoff_2"),
+      handoff(15, bridge, specialist, "agent-admission-specialist-2", "model_handoff_3"),
+      (input) => {
+        expect(input.agent).toMatchObject({ id: bridge.id, revision: bridge.revision });
+        expect(input.instructionBinding.instructions).toEqual(bridge.instructions.ref);
+        return complete("Bridge complete", "model_complete_4");
+      },
+    ]);
+
+    const result = await createRunner(controller, operations, { agents: resolver }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations),
+    );
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(result.finalActiveAgent).toEqual({ id: bridge.id, revision: bridge.revision });
+    expect(observations(result)).toContainEqual(expect.objectContaining({
+      payload: {
+        kind: "handoff",
+        status: "rejected",
+        code: "handoff_agent_revision_conflict",
+      },
     }));
   });
 

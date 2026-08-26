@@ -526,7 +526,7 @@ function composeCompleteInput(contextFragments: readonly string[]): ContextConti
     contextProjectedAmount: contextFragments.reduce((sum, value) =>
       sum + new TextEncoder().encode(value).byteLength, 0),
     sections: [
-      modelSection("product", "system", "Product rules."),
+      instructionSection(),
       modelSection("task", "user", "Perform the deterministic fixture."),
       modelSection("context", "user", contextFragments.join("\n")),
     ],
@@ -555,7 +555,7 @@ function composeForReconstruction() {
     contextBudget: { unit: "bytes", amount: 128 },
     contextProjectedAmount: 12,
     sections: [
-      modelSection("product", "system", "Product rules."),
+      instructionSection(),
       modelSection("task", "user", "Reconstruct this request."),
       modelSection("context", "user", "current data"),
     ],
@@ -587,8 +587,69 @@ function modelSection(id: string, role: "system" | "user", text: string) {
   };
 }
 
+function instructionSection() {
+  return {
+    id: "agent-instruction",
+    source: instructionBlockSource(),
+    kind: "agent_instruction",
+    role: "system" as const,
+    necessity: "mandatory" as const,
+    content: { kind: "text" as const, text: "Product rules." },
+  };
+}
+
+function instructionBlockSource() {
+  return {
+    owner: "test-support",
+    kind: "evaluation_agent_instruction",
+    id: "context-continuity.instructions.behavior",
+    revision: "1",
+  };
+}
+
 function modelInputLineage() {
   return {
+    instructionBinding: {
+      owner: "agent-runtime",
+      kind: "agent_instruction_binding",
+      id: "context-continuity-run:agent-instruction-binding:0",
+      revision: `sha256:${"a".repeat(64)}`,
+    },
+    agent: {
+      owner: "agent-core",
+      kind: "agent_revision",
+      id: "context-continuity-agent",
+      revision: "1",
+    },
+    instructions: {
+      owner: "agent-core",
+      kind: "agent_instructions",
+      id: "context-continuity.instructions",
+      revision: `sha256:${"b".repeat(64)}`,
+    },
+    instructionRelease: {
+      owner: "test-support",
+      kind: "evaluation_instruction_release",
+      id: "context-continuity.instructions.release",
+      revision: "1",
+    },
+    instructionResolver: {
+      owner: "test-support",
+      kind: "evaluation_instruction_resolver",
+      id: "context-continuity.instructions.resolver",
+      revision: "1",
+    },
+    instructionContent: {
+      owner: "agent-core",
+      kind: "agent_instruction_content_digest",
+      id: "context-continuity.instructions",
+      revision: `sha256:${"b".repeat(64)}`,
+    },
+    instructionModel: {
+      providerId: "provider-neutral",
+      model: "deterministic-model",
+    },
+    instructionBlocks: [instructionBlockSource()],
     activeContext: { owner: "context", kind: "active-context", id: CONTEXT_ID, revision: "1" },
     contextProjection: { owner: "context", kind: "projection", id: "projection", revision: "1" },
     projectionManifest: { owner: "context", kind: "manifest", id: "manifest", revision: "1" },

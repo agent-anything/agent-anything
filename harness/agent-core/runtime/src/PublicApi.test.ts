@@ -8,6 +8,7 @@ import type {
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as controllerApi from "./controller/index.js";
 import * as delegationApi from "./delegation/index.js";
+import * as instructionsApi from "./instructions/index.js";
 import * as planApi from "./plan/index.js";
 import * as progressApi from "./progress/index.js";
 import * as retryApi from "./retry/index.js";
@@ -50,6 +51,13 @@ describe("Agent Core Runtime public API", () => {
       "snapshotDelegationResult",
       "snapshotDelegationResultExpectation",
       "snapshotDelegationSteeringRoute",
+    ]);
+    expect(Object.keys(instructionsApi).sort()).toEqual([
+      "assertAgentInstructionBindingMatches",
+      "createAgentInstructionBinding",
+      "projectAgentInstructionBinding",
+      "snapshotAgentInstructionBinding",
+      "snapshotAgentInstructionBindingRef",
     ]);
     expect(Object.keys(planApi).sort()).toEqual([
       "abandonPlan",

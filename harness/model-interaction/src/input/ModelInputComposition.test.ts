@@ -179,7 +179,7 @@ function section(id: string, role: "system" | "user", text: string) {
   return {
     id,
     source: { owner: "test", kind: "section", id, revision: "1" },
-    kind: id,
+    kind: id === "system" ? "agent_instruction" : id,
     role,
     necessity: "mandatory" as const,
     content: { kind: "text" as const, text },
@@ -188,6 +188,14 @@ function section(id: string, role: "system" | "user", text: string) {
 
 function lineage() {
   return {
+    instructionBinding: { owner: "agent-runtime", kind: "agent_instruction_binding", id: "binding", revision: "1" },
+    agent: { owner: "agent-core", kind: "agent_revision", id: "agent", revision: "1" },
+    instructions: { owner: "agent-core", kind: "agent_instructions", id: "instructions", revision: "1" },
+    instructionRelease: { owner: "test", kind: "agent_instruction_release", id: "release", revision: "1" },
+    instructionResolver: { owner: "test", kind: "agent_instruction_resolver", id: "resolver", revision: "1" },
+    instructionContent: { owner: "agent-core", kind: "agent_instruction_content_digest", id: "instructions", revision: "1" },
+    instructionModel: { providerId: "provider-1", model: "model-1" },
+    instructionBlocks: [{ owner: "test", kind: "section", id: "system", revision: "1" }],
     activeContext: null,
     contextProjection: null,
     projectionManifest: null,

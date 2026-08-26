@@ -1,5 +1,5 @@
 import type { Agent } from "@agent-anything/agent-core/agent";
-import { toAgentRevisionRef } from "@agent-anything/agent-core/agent";
+import { snapshotAgent, toAgentRevisionRef } from "@agent-anything/agent-core/agent";
 import type { ControllerTurnRef, InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { RunInput } from "@agent-anything/agent-core/input";
@@ -220,6 +220,11 @@ import { executeApprovalReviewer } from "./ApprovalReviewerExecution.js";
 import { createInitialRunState } from "./RunInitialization.js";
 import { createRunFinalizationContext } from "./RunFinalization.js";
 import {
+  createAgentInstructionBinding,
+  projectAgentInstructionBinding,
+  type AgentInstructionBinding,
+} from "../instructions/index.js";
+import {
   OperationSettlementTimeoutError,
   RunInterruptionCoordinator,
 } from "./RunInterruptionCoordinator.js";
@@ -305,6 +310,7 @@ interface CandidateBasis<TOutput> {
   readonly turn: ControllerTurnRef;
   readonly runRevision: number;
   readonly activeAgent: Agent<TOutput>;
+  readonly instructionBinding: AgentInstructionBinding;
   readonly projection: ContextProjection;
   readonly exposure: ToolExposureProof;
   readonly exposureOwnerBasisRevision: string;
@@ -368,6 +374,8 @@ export class RunExecution<TOutput> {
   private readonly interruptionCoordinator: RunInterruptionCoordinator;
   private readonly actionExecution: ActionExecutionCoordinator | null;
   private activeAgent: Agent<TOutput>;
+  private activeInstructionBinding: AgentInstructionBinding;
+  private readonly instructionRevisionByAgentRevision = new Map<string, string>();
   private terminalResult: RunResult<TOutput> | null = null;
   private emittedItemCount = 0;
   private nextInteractionRequest = 1;
@@ -427,6 +435,16 @@ export class RunExecution<TOutput> {
     this.startedAt = startedAt;
     this.startedAtMs = Date.parse(this.startedAt);
     this.activeAgent = agent;
+    this.activeInstructionBinding = createAgentInstructionBinding({
+      run: Object.freeze({ id: runId }),
+      agent,
+      effectiveFromRunRevision: 0,
+      supersedes: null,
+    });
+    this.instructionRevisionByAgentRevision.set(
+      agentRevisionKey(agent),
+      agent.instructions.ref.revision,
+    );
     this.traceAssembler = createRunnerTraceAssembler({
       runId,
       taskId: input.task.id,
@@ -452,6 +470,7 @@ export class RunExecution<TOutput> {
     const initial = createInitialRunState({
       runId,
       agent,
+      instructionBinding: this.activeInstructionBinding,
       input,
       config,
       startedAt: this.startedAt,
@@ -704,6 +723,9 @@ export class RunExecution<TOutput> {
       this.emit("run.started", {
         status: "running",
         activeAgentId: this.activeAgent.id,
+        activeAgentRevision: this.activeAgent.revision,
+        instructionBindingId: this.activeInstructionBinding.ref.id,
+        instructionBindingRevision: this.activeInstructionBinding.ref.revision,
       }, this.startedAt);
       this.runStartedEventEmitted = true;
       this.emitCommittedContextTransition(this.writer.getSnapshot().context);
@@ -791,6 +813,7 @@ export class RunExecution<TOutput> {
           turn: decision.turn,
           runRevision: decision.basisRevision,
           activeAgent: decision.agent,
+          instructionBinding: decision.prepared.input.instructionBinding,
           projection: decision.prepared.context,
           exposure: decision.prepared.input.toolExposure,
           exposureOwnerBasisRevision: decision.exposureOwnerBasisRevision,
@@ -1428,6 +1451,7 @@ export class RunExecution<TOutput> {
     try {
       prepared = prepareControllerOperation({
         agent: this.activeAgent,
+        instructionBinding: this.activeInstructionBinding,
         runInput: this.input,
         config: this.config,
         state,
@@ -1484,6 +1508,7 @@ export class RunExecution<TOutput> {
           turn,
           status: "interrupted",
           decisionKind: null,
+          instructionBinding: prepared.input.instructionBinding.ref,
           toolExposure: controllerToolExposureRecord(exposure, prepared.manifest.id),
           modelItems: Object.freeze([]),
           failure: null,
@@ -1508,6 +1533,7 @@ export class RunExecution<TOutput> {
         turn,
         status: "decided",
         decisionKind: decision.kind,
+        instructionBinding: prepared.input.instructionBinding.ref,
         toolExposure: controllerToolExposureRecord(exposure, prepared.manifest.id),
         modelItems: decision.modelItems,
         failure: null,
@@ -1540,6 +1566,7 @@ export class RunExecution<TOutput> {
         turn,
         status: "failed",
         decisionKind: null,
+        instructionBinding: prepared.input.instructionBinding.ref,
         toolExposure: controllerToolExposureRecord(exposure, prepared.manifest.id),
         modelItems: Object.freeze([]),
         failure: terminal.failure,
@@ -1931,7 +1958,9 @@ export class RunExecution<TOutput> {
     if (
       request.expectedRunRevision !== basis.runRevision ||
       !sameAgentRef(request.currentAgent, basis.activeAgent) ||
-      !sameAgentRef(request.currentAgent, state.activeAgent)
+      !sameAgentRef(request.currentAgent, state.activeAgent) ||
+      !sameInstructionBindingRef(basis.instructionBinding.ref, state.activeInstructionBinding) ||
+      !sameInstructionBindingRef(this.activeInstructionBinding.ref, state.activeInstructionBinding)
     ) return rejected("handoff_basis_stale");
     if (sameAgentRef(request.currentAgent, request.targetAgent)) {
       return rejected("handoff_target_unchanged");
@@ -1948,23 +1977,47 @@ export class RunExecution<TOutput> {
     ) return rejected(resolution.code ?? "handoff_agent_not_admitted");
 
     const previous = state.activeAgent;
-    const nextAgent = resolution.agent as Agent<TOutput>;
+    const previousInstructionBinding = state.activeInstructionBinding;
+    const nextAgent = snapshotAgent(resolution.agent as Agent<TOutput>);
+    const knownInstructionRevision = this.instructionRevisionByAgentRevision.get(
+      agentRevisionKey(nextAgent),
+    );
+    if (
+      knownInstructionRevision !== undefined &&
+      knownInstructionRevision !== nextAgent.instructions.ref.revision
+    ) {
+      return rejected("handoff_agent_revision_conflict");
+    }
+    const nextInstructionBinding = createAgentInstructionBinding({
+      run: state.run,
+      agent: nextAgent,
+      effectiveFromRunRevision: state.revision + 1,
+      supersedes: previousInstructionBinding,
+    });
     const nextContext = this.handoffContext(
       request.transferPolicy,
       state.context,
       basis.projection,
     );
-    this.activeAgent = nextAgent;
     this.writer.commit({
       kind: "state_transition",
       transition: "active_agent",
       previousAgent: previous,
       activeAgent: toAgentRevisionRef(nextAgent),
+      previousInstructionBinding,
+      activeInstructionBinding: nextInstructionBinding.ref,
       reason: request.reason,
     }, () => Object.freeze({
       activeAgent: toAgentRevisionRef(nextAgent),
+      activeInstructionBinding: nextInstructionBinding.ref,
       context: nextContext,
     }));
+    this.activeAgent = nextAgent;
+    this.activeInstructionBinding = nextInstructionBinding;
+    this.instructionRevisionByAgentRevision.set(
+      agentRevisionKey(nextAgent),
+      nextAgent.instructions.ref.revision,
+    );
     this.commitObservation(action, {
       kind: "handoff",
       status: "applied",
@@ -4049,6 +4102,8 @@ export class RunExecution<TOutput> {
       taskId: state.taskId,
       startingAgent: state.startingAgent,
       finalActiveAgent: state.activeAgent,
+      startingInstructionBinding: state.startingInstructionBinding,
+      finalInstructionBinding: state.activeInstructionBinding,
       startedAt: state.startedAt,
       completedAt,
       items: state.items,
@@ -4369,6 +4424,11 @@ export class RunExecution<TOutput> {
       runRevision: state.revision,
       status: state.status,
       lastRunItemSequence: state.items.at(-1)?.ref.sequence ?? 0,
+      instructionBinding: projectAgentInstructionBinding({
+        binding: this.activeInstructionBinding,
+        run: state.run,
+        agent: this.activeAgent,
+      }),
       plan: state.plan === null ? null : projectPlan(state.plan),
       progress: projectRunProgress(
         state.progress,
@@ -4560,6 +4620,10 @@ export class RunExecution<TOutput> {
     ) throw new TypeError("Runner clock must return an ISO date-time.");
     return value;
   }
+}
+
+function agentRevisionKey(agent: Pick<Agent, "id" | "revision">): string {
+  return `${agent.id}\0${agent.revision}`;
 }
 
 function terminalStatePatch<TOutput>(
@@ -5089,6 +5153,13 @@ function delegationModelUsageStatus(
 }
 
 function sameAgentRef(
+  left: { readonly id: string; readonly revision: string },
+  right: { readonly id: string; readonly revision: string },
+): boolean {
+  return left.id === right.id && left.revision === right.revision;
+}
+
+function sameInstructionBindingRef(
   left: { readonly id: string; readonly revision: string },
   right: { readonly id: string; readonly revision: string },
 ): boolean {

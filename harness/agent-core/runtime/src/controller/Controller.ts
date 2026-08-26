@@ -18,6 +18,7 @@ import type {
   InteractionSubjectRef,
 } from "@agent-anything/interaction/protocol";
 import type { PendingRunSubjectProjection } from "../run/PendingRunSubject.js";
+import type { AgentInstructionBinding } from "../instructions/index.js";
 
 export interface ControllerModelItem {
   readonly id: string;
@@ -85,6 +86,7 @@ export interface ControllerInput<TOutput = unknown> {
   readonly runId: string;
   readonly iteration: number;
   readonly agent: Agent<TOutput>;
+  readonly instructionBinding: AgentInstructionBinding;
   readonly task: AgentTask;
   readonly inputItems: readonly RunInputItem[];
   readonly toolExposure: ToolExposureProof;
@@ -95,11 +97,28 @@ export interface ControllerInput<TOutput = unknown> {
       "policy" | "estimator" | "budget" | "accounting"
   >;
   readonly plan: PlanProjection | null;
+  readonly progress: ControllerRunProgressProjection;
+  readonly validation: ControllerValidationProjection;
   readonly permission: PermissionContextProjection;
   readonly pending: readonly PendingRunSubjectProjection[];
   readonly workspace: WorkspaceSelection | null;
   readonly identity: IdentityRef;
   readonly metadata: Readonly<Record<string, unknown>>;
+}
+
+export interface ControllerRunProgressProjection {
+  readonly checkpointSequence: number;
+  readonly consecutiveNonAdvancingCheckpoints: number;
+  readonly correctionRounds: number;
+  readonly activeCorrectionRound: number | null;
+}
+
+export interface ControllerValidationProjection {
+  readonly snapshot: Readonly<{ readonly runId: string; readonly revision: number }>;
+  readonly gate: Readonly<{
+    readonly id: string;
+    readonly revision: string;
+  }> | null;
 }
 
 export type ControllerPreProjectionInput<TOutput = unknown> = Omit<

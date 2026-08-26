@@ -352,7 +352,7 @@ function section(id: string, role: "system" | "user", text: string) {
   return {
     id,
     source: { owner: "provider-test", kind: "message", id, revision: "1" },
-    kind: "message",
+    kind: id === "system" ? "agent_instruction" : "message",
     role,
     necessity: "mandatory" as const,
     content: { kind: "text" as const, text },
@@ -361,6 +361,14 @@ function section(id: string, role: "system" | "user", text: string) {
 
 function testLineage() {
   return {
+    instructionBinding: { owner: "agent-runtime", kind: "agent_instruction_binding", id: "binding", revision: "1" },
+    agent: { owner: "agent-core", kind: "agent_revision", id: "agent", revision: "1" },
+    instructions: { owner: "agent-core", kind: "agent_instructions", id: "instructions", revision: "1" },
+    instructionRelease: { owner: "provider-test", kind: "agent_instruction_release", id: "release", revision: "1" },
+    instructionResolver: { owner: "provider-test", kind: "agent_instruction_resolver", id: "resolver", revision: "1" },
+    instructionContent: { owner: "agent-core", kind: "agent_instruction_content_digest", id: "instructions", revision: "1" },
+    instructionModel: { providerId: "ollama.generate", model: "gemma3:4b" },
+    instructionBlocks: [{ owner: "provider-test", kind: "message", id: "system", revision: "1" }],
     activeContext: null,
     contextProjection: null,
     projectionManifest: null,
