@@ -1,32 +1,131 @@
-import type { ContextContribution } from "@agent-anything/context/contribution";
-import type { VerificationAssessmentVerdict, VerificationCurrentSnapshotRef } from "../assessment/index.js";
+import type { ContextContribution, ContextContributionRef } from "@agent-anything/context/contribution";
+import type {
+  VerificationAssessmentRef,
+  VerificationAssessmentVerdict,
+  VerificationCurrentSnapshotRef,
+} from "../assessment/index.js";
 import type { CompletionGateDecisionStatus, CompletionGateInvocationRef } from "../completion/index.js";
-import type { VerificationRequirementRef } from "../definition/index.js";
-import type { CheckAttemptRef, CheckResultStatus } from "../execution/index.js";
+import type {
+  VerificationCompletionDisposition,
+  VerificationNecessity,
+  VerificationRequirementRef,
+} from "../definition/index.js";
+import type {
+  CheckAttemptRef,
+  CheckDefinitionRef,
+  CheckFindingRef,
+  CheckResultRef,
+  CheckResultStatus,
+} from "../execution/index.js";
+import type { VerificationSubjectSnapshotRef } from "../subject/index.js";
 
 export interface VerificationStateCount {
   readonly state: "unassessed" | "pending" | "satisfied" | "violated" | "inconclusive" | "stale";
   readonly count: number;
 }
 
+export type VerificationRecoveryMeaning =
+  | "none"
+  | "select_admitted_check"
+  | "await_active_attempt"
+  | "refresh_subject"
+  | "repair_and_reverify"
+  | "gather_additional_evidence"
+  | "select_alternative_check_or_disclose";
+
+export type VerificationFeedbackTrigger =
+  | { readonly kind: "state_transition"; readonly snapshot: VerificationCurrentSnapshotRef }
+  | { readonly kind: "settled_result"; readonly result: CheckResultRef }
+  | { readonly kind: "completion_gate"; readonly gate: CompletionGateInvocationRef };
+
+export interface VerificationProjectedAssessment {
+  readonly ref: VerificationAssessmentRef;
+  readonly verdict: VerificationAssessmentVerdict;
+  readonly basis: string;
+  readonly limitations: readonly string[];
+}
+
+export interface VerificationProjectedFinding {
+  readonly ref: CheckFindingRef;
+  readonly claim: string;
+  readonly polarity: "supports" | "contradicts" | "limits";
+  readonly severity: "info" | "warning" | "error";
+  readonly limitations: readonly string[];
+}
+
+export interface VerificationProjectedCheckPath {
+  readonly family: string;
+  readonly definition: CheckDefinitionRef;
+}
+
+export interface VerificationProjectedSettlement {
+  readonly result: CheckResultRef;
+  readonly status: CheckResultStatus;
+  readonly failureCode: string | null;
+  readonly coverageRatio: number;
+  readonly limitations: readonly string[];
+}
+
+export interface VerificationProjectedGate {
+  readonly ref: CompletionGateInvocationRef;
+  readonly status: CompletionGateDecisionStatus;
+  readonly disposition: VerificationCompletionDisposition | null;
+  readonly reasonCodes: readonly string[];
+  readonly affectedRequirements: readonly VerificationRequirementRef[];
+}
+
 export interface VerificationRunnerFeedback {
   readonly snapshot: VerificationCurrentSnapshotRef;
   readonly requirement: VerificationRequirementRef;
+  readonly necessity: VerificationNecessity;
   readonly state: VerificationStateCount["state"];
-  readonly code: string;
-  readonly message: string;
-  readonly recoveryNeeded: boolean;
+  readonly subject: VerificationSubjectSnapshotRef | null;
+  readonly assessment: VerificationAssessmentRef | null;
+  readonly activeAttempts: readonly CheckAttemptRef[];
+  readonly waitingEligible: boolean;
+  readonly latestSettlement: VerificationProjectedSettlement | null;
+  readonly reasonCodes: readonly string[];
+  readonly recovery: VerificationRecoveryMeaning;
 }
 
 export interface VerificationRunnerProjection {
   readonly snapshot: VerificationCurrentSnapshotRef;
+  readonly trigger: VerificationFeedbackTrigger;
+  readonly affectedRequirements: readonly VerificationRequirementRef[];
   readonly feedback: readonly VerificationRunnerFeedback[];
-  readonly pendingAttempts: readonly CheckAttemptRef[];
-  readonly gate: CompletionGateInvocationRef | null;
+  readonly activeAttempts: readonly CheckAttemptRef[];
+  readonly gate: VerificationProjectedGate | null;
+  readonly safeReasonCodes: readonly string[];
+  readonly recoveryNeeded: boolean;
+  readonly contextContribution: ContextContributionRef | null;
+}
+
+export interface VerificationContextRequirementProjection {
+  readonly snapshot: VerificationCurrentSnapshotRef;
+  readonly requirement: VerificationRequirementRef;
+  readonly necessity: VerificationNecessity;
+  readonly claim: string;
+  readonly purpose: string;
+  readonly state: VerificationStateCount["state"];
+  readonly subject: VerificationSubjectSnapshotRef | null;
+  readonly assessment: VerificationProjectedAssessment | null;
+  readonly findings: readonly VerificationProjectedFinding[];
+  readonly admittedChecks: readonly VerificationProjectedCheckPath[];
+  readonly activeAttempts: readonly CheckAttemptRef[];
+  readonly waitingEligible: boolean;
+  readonly remainingAttempts: number;
+  readonly remainingDurationMs: number;
+  readonly latestSettlement: VerificationProjectedSettlement | null;
+  readonly gate: VerificationProjectedGate | null;
+  readonly reasonCodes: readonly string[];
+  readonly recovery: VerificationRecoveryMeaning;
 }
 
 export interface VerificationContextProjection {
   readonly snapshot: VerificationCurrentSnapshotRef;
+  readonly trigger: VerificationFeedbackTrigger;
+  readonly requirements: readonly VerificationContextRequirementProjection[];
+  readonly gate: VerificationProjectedGate | null;
   readonly contribution: ContextContribution | null;
 }
 
@@ -59,36 +158,45 @@ export interface VerificationEvaluationProjection {
 }
 
 export function snapshotVerificationRunnerProjection(input: VerificationRunnerProjection): VerificationRunnerProjection {
-  strictRecord(input, "VerificationRunnerProjection", ["snapshot", "feedback", "pendingAttempts", "gate"]);
+  strictRecord(input, "VerificationRunnerProjection", [
+    "snapshot", "trigger", "affectedRequirements", "feedback", "activeAttempts",
+    "gate", "safeReasonCodes", "recoveryNeeded", "contextContribution",
+  ]);
   const snapshot = snapshotRef(input.snapshot, "VerificationRunnerProjection.snapshot");
+  if (typeof input.recoveryNeeded !== "boolean") {
+    throw new TypeError("VerificationRunnerProjection.recoveryNeeded must be boolean.");
+  }
   return deepFreeze({
     snapshot,
-    feedback: input.feedback.map((item, index) => {
-      const path = `VerificationRunnerProjection.feedback[${index}]`;
-      strictRecord(item, path, ["snapshot", "requirement", "state", "code", "message", "recoveryNeeded"]);
-      if (snapshotKey(item.snapshot) !== snapshotKey(snapshot)) throw new TypeError(`${path}.snapshot must match the Projection snapshot.`);
-      if (!STATES.includes(item.state)) throw new TypeError(`${path}.state is unsupported.`);
-      if (typeof item.recoveryNeeded !== "boolean") throw new TypeError(`${path}.recoveryNeeded must be boolean.`);
-      return {
-        snapshot: snapshotRef(item.snapshot, `${path}.snapshot`),
-        requirement: revisionRef(item.requirement, `${path}.requirement`),
-        state: item.state,
-        code: token(item.code, `${path}.code`),
-        message: text(item.message, `${path}.message`),
-        recoveryNeeded: item.recoveryNeeded,
-      };
-    }),
-    pendingAttempts: input.pendingAttempts.map((item, index) => attemptRef(item, `VerificationRunnerProjection.pendingAttempts[${index}]`)),
-    gate: input.gate === null ? null : revisionRef(input.gate, "VerificationRunnerProjection.gate"),
+    trigger: feedbackTrigger(input.trigger, "VerificationRunnerProjection.trigger"),
+    affectedRequirements: uniqueRefs(input.affectedRequirements, "VerificationRunnerProjection.affectedRequirements"),
+    feedback: input.feedback.map((item, index) => runnerFeedback(item, snapshot, `VerificationRunnerProjection.feedback[${index}]`)),
+    activeAttempts: uniqueAttempts(input.activeAttempts, "VerificationRunnerProjection.activeAttempts"),
+    gate: input.gate === null ? null : projectedGate(input.gate, "VerificationRunnerProjection.gate"),
+    safeReasonCodes: tokenList(input.safeReasonCodes, "VerificationRunnerProjection.safeReasonCodes"),
+    recoveryNeeded: input.recoveryNeeded,
+    contextContribution: input.contextContribution === null
+      ? null
+      : revisionRef(input.contextContribution, "VerificationRunnerProjection.contextContribution"),
   });
 }
+
 export function snapshotVerificationContextProjection(input: VerificationContextProjection): VerificationContextProjection {
-  strictRecord(input, "VerificationContextProjection", ["snapshot", "contribution"]);
+  strictRecord(input, "VerificationContextProjection", ["snapshot", "trigger", "requirements", "gate", "contribution"]);
+  const snapshot = snapshotRef(input.snapshot, "VerificationContextProjection.snapshot");
   return deepFreeze({
-    snapshot: snapshotRef(input.snapshot, "VerificationContextProjection.snapshot"),
+    snapshot,
+    trigger: feedbackTrigger(input.trigger, "VerificationContextProjection.trigger"),
+    requirements: input.requirements.map((item, index) => contextRequirement(
+      item,
+      snapshot,
+      `VerificationContextProjection.requirements[${index}]`,
+    )),
+    gate: input.gate === null ? null : projectedGate(input.gate, "VerificationContextProjection.gate"),
     contribution: input.contribution === null ? null : clone(input.contribution),
   });
 }
+
 export function snapshotVerificationHostProjection(input: VerificationHostProjection): VerificationHostProjection {
   strictRecord(input, "VerificationHostProjection", [
     "snapshot", "counts", "activeChecks", "gateStatus", "safeReasons", "updatedAt",
@@ -98,15 +206,16 @@ export function snapshotVerificationHostProjection(input: VerificationHostProjec
     counts: unique(input.counts.map((item, index) => {
       const path = `VerificationHostProjection.counts[${index}]`;
       strictRecord(item, path, ["state", "count"]);
-      if (!STATES.includes(item.state)) throw new TypeError(`${path}.state is unsupported.`);
+      state(item.state, `${path}.state`);
       return { state: item.state, count: nonNegative(item.count, `${path}.count`) };
     }), (item) => item.state, "VerificationHostProjection.counts"),
     activeChecks: nonNegative(input.activeChecks, "VerificationHostProjection.activeChecks"),
     gateStatus: nullableGateStatus(input.gateStatus, "VerificationHostProjection.gateStatus"),
-    safeReasons: input.safeReasons.map((item, index) => text(item, `VerificationHostProjection.safeReasons[${index}]`)),
+    safeReasons: textList(input.safeReasons, "VerificationHostProjection.safeReasons"),
     updatedAt: isoDateTime(input.updatedAt, "VerificationHostProjection.updatedAt"),
   });
 }
+
 export function snapshotVerificationObservabilityProjection(input: VerificationObservabilityProjection): VerificationObservabilityProjection {
   strictRecord(input, "VerificationObservabilityProjection", [
     "snapshot", "checkStatus", "safeCode", "durationMs", "coverageRatio", "emittedAt",
@@ -120,6 +229,7 @@ export function snapshotVerificationObservabilityProjection(input: VerificationO
     emittedAt: isoDateTime(input.emittedAt, "VerificationObservabilityProjection.emittedAt"),
   });
 }
+
 export function snapshotVerificationEvaluationProjection(input: VerificationEvaluationProjection): VerificationEvaluationProjection {
   strictRecord(input, "VerificationEvaluationProjection", [
     "snapshot", "checkStatus", "assessmentVerdict", "gateStatus", "latencyMs", "costUnits", "failureOwner",
@@ -138,8 +248,148 @@ export function snapshotVerificationEvaluationProjection(input: VerificationEval
   });
 }
 
+function runnerFeedback(
+  input: VerificationRunnerFeedback,
+  snapshot: VerificationCurrentSnapshotRef,
+  path: string,
+): VerificationRunnerFeedback {
+  strictRecord(input, path, [
+    "snapshot", "requirement", "necessity", "state", "subject", "assessment", "activeAttempts",
+    "waitingEligible", "latestSettlement", "reasonCodes", "recovery",
+  ]);
+  if (snapshotKey(input.snapshot) !== snapshotKey(snapshot)) throw new TypeError(`${path}.snapshot must match the Projection snapshot.`);
+  if (input.necessity !== "mandatory" && input.necessity !== "advisory") throw new TypeError(`${path}.necessity is unsupported.`);
+  state(input.state, `${path}.state`);
+  if (typeof input.waitingEligible !== "boolean") throw new TypeError(`${path}.waitingEligible must be boolean.`);
+  return {
+    snapshot: snapshotRef(input.snapshot, `${path}.snapshot`),
+    requirement: revisionRef(input.requirement, `${path}.requirement`),
+    necessity: input.necessity,
+    state: input.state,
+    subject: input.subject === null ? null : revisionRef(input.subject, `${path}.subject`),
+    assessment: input.assessment === null ? null : revisionRef(input.assessment, `${path}.assessment`),
+    activeAttempts: uniqueAttempts(input.activeAttempts, `${path}.activeAttempts`),
+    waitingEligible: input.waitingEligible,
+    latestSettlement: input.latestSettlement === null ? null : projectedSettlement(input.latestSettlement, `${path}.latestSettlement`),
+    reasonCodes: tokenList(input.reasonCodes, `${path}.reasonCodes`),
+    recovery: recovery(input.recovery, `${path}.recovery`),
+  };
+}
+
+function contextRequirement(
+  input: VerificationContextRequirementProjection,
+  snapshot: VerificationCurrentSnapshotRef,
+  path: string,
+): VerificationContextRequirementProjection {
+  strictRecord(input, path, [
+    "snapshot", "requirement", "necessity", "claim", "purpose", "state", "subject",
+    "assessment", "findings", "admittedChecks", "activeAttempts", "waitingEligible",
+    "remainingAttempts", "remainingDurationMs", "latestSettlement", "gate", "reasonCodes", "recovery",
+  ]);
+  if (snapshotKey(input.snapshot) !== snapshotKey(snapshot)) throw new TypeError(`${path}.snapshot must match the Projection snapshot.`);
+  if (input.necessity !== "mandatory" && input.necessity !== "advisory") throw new TypeError(`${path}.necessity is unsupported.`);
+  state(input.state, `${path}.state`);
+  if (typeof input.waitingEligible !== "boolean") throw new TypeError(`${path}.waitingEligible must be boolean.`);
+  return {
+    snapshot: snapshotRef(input.snapshot, `${path}.snapshot`),
+    requirement: revisionRef(input.requirement, `${path}.requirement`),
+    necessity: input.necessity,
+    claim: text(input.claim, `${path}.claim`),
+    purpose: text(input.purpose, `${path}.purpose`),
+    state: input.state,
+    subject: input.subject === null ? null : revisionRef(input.subject, `${path}.subject`),
+    assessment: input.assessment === null ? null : projectedAssessment(input.assessment, `${path}.assessment`),
+    findings: input.findings.map((item, index) => projectedFinding(item, `${path}.findings[${index}]`)),
+    admittedChecks: unique(input.admittedChecks.map((item, index) => projectedCheckPath(item, `${path}.admittedChecks[${index}]`)),
+      (item) => `${item.definition.id}@${item.definition.revision}`, `${path}.admittedChecks`),
+    activeAttempts: uniqueAttempts(input.activeAttempts, `${path}.activeAttempts`),
+    waitingEligible: input.waitingEligible,
+    remainingAttempts: nonNegative(input.remainingAttempts, `${path}.remainingAttempts`),
+    remainingDurationMs: nonNegative(input.remainingDurationMs, `${path}.remainingDurationMs`),
+    latestSettlement: input.latestSettlement === null ? null : projectedSettlement(input.latestSettlement, `${path}.latestSettlement`),
+    gate: input.gate === null ? null : projectedGate(input.gate, `${path}.gate`),
+    reasonCodes: tokenList(input.reasonCodes, `${path}.reasonCodes`),
+    recovery: recovery(input.recovery, `${path}.recovery`),
+  };
+}
+
+function feedbackTrigger(input: VerificationFeedbackTrigger, path: string): VerificationFeedbackTrigger {
+  if (input.kind === "state_transition") {
+    strictRecord(input, path, ["kind", "snapshot"]);
+    return { kind: input.kind, snapshot: snapshotRef(input.snapshot, `${path}.snapshot`) };
+  }
+  if (input.kind === "settled_result") {
+    strictRecord(input, path, ["kind", "result"]);
+    return { kind: input.kind, result: revisionRef(input.result, `${path}.result`) };
+  }
+  if (input.kind === "completion_gate") {
+    strictRecord(input, path, ["kind", "gate"]);
+    return { kind: input.kind, gate: revisionRef(input.gate, `${path}.gate`) };
+  }
+  throw new TypeError(`${path}.kind is unsupported.`);
+}
+
+function projectedAssessment(input: VerificationProjectedAssessment, path: string): VerificationProjectedAssessment {
+  strictRecord(input, path, ["ref", "verdict", "basis", "limitations"]);
+  if (!ASSESSMENT_VERDICTS.includes(input.verdict)) throw new TypeError(`${path}.verdict is unsupported.`);
+  return {
+    ref: revisionRef(input.ref, `${path}.ref`),
+    verdict: input.verdict,
+    basis: text(input.basis, `${path}.basis`),
+    limitations: textList(input.limitations, `${path}.limitations`),
+  };
+}
+
+function projectedFinding(input: VerificationProjectedFinding, path: string): VerificationProjectedFinding {
+  strictRecord(input, path, ["ref", "claim", "polarity", "severity", "limitations"]);
+  if (!["supports", "contradicts", "limits"].includes(input.polarity)) throw new TypeError(`${path}.polarity is unsupported.`);
+  if (!["info", "warning", "error"].includes(input.severity)) throw new TypeError(`${path}.severity is unsupported.`);
+  return {
+    ref: revisionRef(input.ref, `${path}.ref`),
+    claim: text(input.claim, `${path}.claim`),
+    polarity: input.polarity,
+    severity: input.severity,
+    limitations: textList(input.limitations, `${path}.limitations`),
+  };
+}
+
+function projectedCheckPath(input: VerificationProjectedCheckPath, path: string): VerificationProjectedCheckPath {
+  strictRecord(input, path, ["family", "definition"]);
+  return { family: token(input.family, `${path}.family`), definition: revisionRef(input.definition, `${path}.definition`) };
+}
+
+function projectedSettlement(input: VerificationProjectedSettlement, path: string): VerificationProjectedSettlement {
+  strictRecord(input, path, ["result", "status", "failureCode", "coverageRatio", "limitations"]);
+  return {
+    result: revisionRef(input.result, `${path}.result`),
+    status: nullableCheckStatus(input.status, `${path}.status`)!,
+    failureCode: input.failureCode === null ? null : token(input.failureCode, `${path}.failureCode`),
+    coverageRatio: ratio(input.coverageRatio, `${path}.coverageRatio`),
+    limitations: textList(input.limitations, `${path}.limitations`),
+  };
+}
+
+function projectedGate(input: VerificationProjectedGate, path: string): VerificationProjectedGate {
+  strictRecord(input, path, ["ref", "status", "disposition", "reasonCodes", "affectedRequirements"]);
+  const status = nullableGateStatus(input.status, `${path}.status`)!;
+  if (status === "completion_eligible" && input.disposition !== null) throw new TypeError(`${path}.disposition must be null for completion eligibility.`);
+  if (status !== "completion_eligible" && input.disposition === null) throw new TypeError(`${path}.disposition is required for non-eligible gates.`);
+  if (input.disposition !== null && !DISPOSITIONS.includes(input.disposition)) throw new TypeError(`${path}.disposition is unsupported.`);
+  return {
+    ref: revisionRef(input.ref, `${path}.ref`),
+    status,
+    disposition: input.disposition,
+    reasonCodes: tokenList(input.reasonCodes, `${path}.reasonCodes`),
+    affectedRequirements: uniqueRefs(input.affectedRequirements, `${path}.affectedRequirements`),
+  };
+}
+
 const STATES: readonly VerificationStateCount["state"][] = [
   "unassessed", "pending", "satisfied", "violated", "inconclusive", "stale",
+];
+const RECOVERY: readonly VerificationRecoveryMeaning[] = [
+  "none", "select_admitted_check", "await_active_attempt", "refresh_subject",
+  "repair_and_reverify", "gather_additional_evidence", "select_alternative_check_or_disclose",
 ];
 const CHECK_STATUSES: readonly CheckResultStatus[] = [
   "invalid", "unavailable", "denied", "cancelled", "timed_out", "failed", "partial", "completed",
@@ -149,20 +399,34 @@ const GATE_STATUSES: readonly CompletionGateDecisionStatus[] = [
   "blocked_violated", "blocked_inconclusive", "invalid", "failed",
 ];
 const ASSESSMENT_VERDICTS: readonly VerificationAssessmentVerdict[] = ["satisfied", "violated", "inconclusive"];
+const DISPOSITIONS: readonly VerificationCompletionDisposition[] = ["continue", "wait", "block", "fail"];
 
+function state(input: unknown, path: string): asserts input is VerificationStateCount["state"] {
+  if (!STATES.includes(input as VerificationStateCount["state"])) throw new TypeError(`${path} is unsupported.`);
+}
+function recovery(input: unknown, path: string): VerificationRecoveryMeaning {
+  if (!RECOVERY.includes(input as VerificationRecoveryMeaning)) throw new TypeError(`${path} is unsupported.`);
+  return input as VerificationRecoveryMeaning;
+}
 function snapshotRef(input: VerificationCurrentSnapshotRef, path: string): VerificationCurrentSnapshotRef {
   strictRecord(input, path, ["runId", "revision"]);
   return { runId: token(input.runId, `${path}.runId`), revision: nonNegative(input.revision, `${path}.revision`) };
 }
 function snapshotKey(input: VerificationCurrentSnapshotRef): string { return `${input.runId}#${input.revision}`; }
-function revisionRef(input: { readonly id: string; readonly revision: string }, path: string) {
+function revisionRef<T extends { readonly id: string; readonly revision: string }>(input: T, path: string): T {
   strictRecord(input, path, ["id", "revision"]);
-  return { id: token(input.id, `${path}.id`), revision: token(input.revision, `${path}.revision`) };
+  return { id: token(input.id, `${path}.id`), revision: token(input.revision, `${path}.revision`) } as T;
 }
 function attemptRef(input: CheckAttemptRef, path: string): CheckAttemptRef {
   strictRecord(input, path, ["id", "ordinal"]);
   if (!Number.isSafeInteger(input.ordinal) || input.ordinal < 1) throw new TypeError(`${path}.ordinal must be positive.`);
   return { id: token(input.id, `${path}.id`), ordinal: input.ordinal };
+}
+function uniqueAttempts(input: readonly CheckAttemptRef[], path: string): readonly CheckAttemptRef[] {
+  return unique(input.map((item, index) => attemptRef(item, `${path}[${index}]`)), (item) => `${item.id}#${item.ordinal}`, path);
+}
+function uniqueRefs<T extends { readonly id: string; readonly revision: string }>(input: readonly T[], path: string): readonly T[] {
+  return unique(input.map((item, index) => revisionRef(item, `${path}[${index}]`)), (item) => `${item.id}@${item.revision}`, path);
 }
 function nullableCheckStatus(input: CheckResultStatus | null, path: string): CheckResultStatus | null {
   if (input !== null && !CHECK_STATUSES.includes(input)) throw new TypeError(`${path} is unsupported.`);
@@ -177,8 +441,8 @@ function nullableNonNegative(input: number | null, path: string): number | null 
   if (typeof input !== "number" || !Number.isFinite(input) || input < 0) throw new TypeError(`${path} must be non-negative.`);
   return input;
 }
-function nullableRatio(input: number | null, path: string): number | null {
-  if (input === null) return null;
+function nullableRatio(input: number | null, path: string): number | null { return input === null ? null : ratio(input, path); }
+function ratio(input: unknown, path: string): number {
   if (typeof input !== "number" || !Number.isFinite(input) || input < 0 || input > 1) throw new TypeError(`${path} must be between 0 and 1.`);
   return input;
 }
@@ -198,6 +462,12 @@ function token(input: unknown, path: string): string {
 function text(input: unknown, path: string): string {
   if (typeof input !== "string" || input.trim().length === 0) throw new TypeError(`${path} is required.`);
   return input;
+}
+function tokenList(input: readonly string[], path: string): readonly string[] {
+  return unique(input.map((item, index) => token(item, `${path}[${index}]`)), (item) => item, path);
+}
+function textList(input: readonly string[], path: string): readonly string[] {
+  return unique(input.map((item, index) => text(item, `${path}[${index}]`)), (item) => item, path);
 }
 function isoDateTime(input: unknown, path: string): string {
   if (typeof input !== "string" || Number.isNaN(Date.parse(input)) || new Date(input).toISOString() !== input) throw new TypeError(`${path} must be an ISO date-time.`);

@@ -17,11 +17,15 @@ import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
 import {
   buildHelarcToolExposureText,
 } from "../tools/HelarcToolExposurePrompt.js";
+import {
+  buildHelarcVerificationText,
+  isHelarcVerificationContextBlock,
+} from "../verification/HelarcVerificationPrompt.js";
 
-export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v4";
+export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v5";
 export { HELARC_ACTION_CONTRACT_VERSION } from "../controller/HelarcActionContract.js";
 export const HELARC_TOOL_EXPOSURE_VERSION = "trusted-tool-exposure-v1";
-export const HELARC_CONTEXT_PROJECTION_FORMAT_VERSION = "helarc-context-projection-v1";
+export const HELARC_CONTEXT_PROJECTION_FORMAT_VERSION = "helarc-context-projection-v2";
 export const HELARC_CONTEXT_SECTION_HEADER = "Context projection:";
 export const HELARC_MODEL_OUTPUT_RESERVE_BYTES = 256_000;
 
@@ -38,7 +42,7 @@ export type HelarcPromptSectionId =
   | "context_projection"
   | "current_plan"
   | "current_progress"
-  | "current_validation"
+  | "current_verification"
   | "permission_context"
   | "pending_interactions"
   | "structured_output_correction";
@@ -109,7 +113,11 @@ function assemble(
     promptSection("context_projection", "user", contextContent),
     promptSection("current_plan", "user", `Current plan:\n${JSON.stringify(input.plan)}`),
     promptSection("current_progress", "user", `Current progress:\n${JSON.stringify(input.progress)}`),
-    promptSection("current_validation", "user", `Current verification:\n${JSON.stringify(input.verification)}`),
+    promptSection("current_verification", "user", buildHelarcVerificationText({
+      context,
+      toolExposure: input.toolExposure,
+      verification: input.verification,
+    })),
     promptSection("permission_context", "user", `Permission context:\n${JSON.stringify(input.permission)}`),
     promptSection("pending_interactions", "user", `Pending interactions:\n${JSON.stringify(input.pending)}`),
     ...(correctionMessage === null
@@ -206,7 +214,7 @@ function toModelInputSection(
   section: HelarcPromptSection,
   context: ContextProjection | null,
 ): ModelInputSectionCandidate {
-  const isContext = section.id === "context_projection";
+  const isContext = section.id === "context_projection" || section.id === "current_verification";
   return Object.freeze({
     id: `helarc:model-input:${section.id}`,
     source: isContext && context !== null
@@ -225,7 +233,9 @@ function toModelInputSection(
 }
 
 function renderHelarcContextProjection(context: ContextProjection): string {
-  return HELARC_CONTEXT_SECTION_HEADER + context.blocks.map((block) =>
+  return HELARC_CONTEXT_SECTION_HEADER + context.blocks
+    .filter((block) => !isHelarcVerificationContextBlock(block))
+    .map((block) =>
     renderHelarcContextProjectionFragment({
       item: block.item,
       contribution: block.contribution,

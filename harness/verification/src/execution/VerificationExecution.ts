@@ -3,7 +3,10 @@ import type { RunRef } from "@agent-anything/agent-core/run";
 import type { RunActionRef } from "@agent-anything/agent-core/run-action";
 import type { ActionSettlementRef } from "@agent-anything/canonical-action/subject";
 import type { ActionEffectCertainty } from "@agent-anything/canonical-action/settlement";
-import type { ContextContributionLimits } from "@agent-anything/context/contribution";
+import type {
+  ContextContributionLimits,
+  ContextContributionRef,
+} from "@agent-anything/context/contribution";
 import type {
   OperationBindingRevisionRef,
   OperationInvocationRef,
@@ -327,7 +330,9 @@ export interface VerificationExecutionPort {
   readLedgerSnapshot(): Promise<VerificationLedgerSnapshot>;
   readHistory(): Promise<readonly VerificationPersistenceRecord[]>;
   readPersistenceFailures(): Promise<readonly VerificationExecutionPersistenceFailure[]>;
-  projectRunner(): Promise<VerificationRunnerProjection>;
+  projectRunner(input: {
+    readonly contextContribution: ContextContributionRef | null;
+  }): Promise<VerificationRunnerProjection>;
   projectContext(limits: ContextContributionLimits): Promise<VerificationContextProjection>;
   projectHost(): Promise<VerificationHostProjection>;
   projectObservability(): Promise<VerificationObservabilityProjection>;

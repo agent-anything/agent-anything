@@ -60,8 +60,9 @@ function verificationSummary(
     });
   }
   const verification = projection.payload.verification;
-  const states = verification.feedback.map(({ state }) => state);
-  const status = verification.pendingAttempts.length > 0 ||
+  const mandatory = verification.feedback.filter(({ necessity }) => necessity === "mandatory");
+  const states = mandatory.map(({ state }) => state);
+  const status = mandatory.some(({ activeAttempts }) => activeAttempts.length > 0) ||
       states.some((state) => state === "pending" || state === "unassessed")
     ? "pending" as const
     : states.some((state) => state === "violated")
@@ -73,14 +74,14 @@ function verificationSummary(
           : states.length === 0
             ? "not_required" as const
             : "satisfied" as const;
-  const limitationCodes = verification.feedback
+  const limitationCodes = mandatory
     .filter(({ state }) => state !== "satisfied")
-    .map(({ code }) => code)
+    .flatMap(({ reasonCodes }) => reasonCodes)
     .filter((code, index, values) => values.indexOf(code) === index);
   return Object.freeze({
     status,
     snapshotRevision: `${verification.snapshot.runId}:${verification.snapshot.revision}`,
-    mandatoryTotal: verification.feedback.length,
+    mandatoryTotal: mandatory.length,
     mandatorySatisfied: states.filter((state) => state === "satisfied").length,
     limitationCodes: Object.freeze(limitationCodes),
   });

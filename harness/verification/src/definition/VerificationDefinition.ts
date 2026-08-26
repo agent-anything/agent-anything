@@ -128,7 +128,7 @@ export function createVerificationFailure(input: VerificationFailure): Verificat
   if (!input.code.startsWith("verification_")) {
     throw new TypeError("VerificationFailure.code must use the verification_ owner prefix.");
   }
-  oneOf(input.stage, VALIDATION_FAILURE_STAGES, "VerificationFailure.stage");
+  oneOf(input.stage, VERIFICATION_FAILURE_STAGES, "VerificationFailure.stage");
   text(input.message, "VerificationFailure.message");
   if (typeof input.retryable !== "boolean") {
     throw new TypeError("VerificationFailure.retryable must be boolean.");
@@ -234,7 +234,7 @@ export function snapshotVerificationRequirement(
   });
 }
 
-const VALIDATION_FAILURE_STAGES: readonly VerificationFailureStage[] = [
+const VERIFICATION_FAILURE_STAGES: readonly VerificationFailureStage[] = [
   "admission", "subject", "check", "evidence", "assessment", "completion_gate",
   "projection", "persistence",
 ];

@@ -1113,14 +1113,20 @@ export class RunExecution<TOutput> {
     }
     const execution = this.requireVerificationExecution();
     await this.emitVerificationRecords(execution);
-    const projection = await execution.projectRunner();
     const contextProjection = await execution.projectContext({
       maxPayloadBytes: this.dependencies.contextProjection.maxContributionPayloadBytes,
+    });
+    const projection = await execution.projectRunner({
+      contextContribution: contextProjection.contribution?.ref ?? null,
     });
     const hostProjection = await execution.projectHost();
     if (projection.snapshot.runId !== this.runId ||
         contextProjection.snapshot.runId !== this.runId ||
-        contextProjection.snapshot.revision !== projection.snapshot.revision) {
+        contextProjection.snapshot.revision !== projection.snapshot.revision ||
+        !sameOptionalRevisionRef(
+          projection.contextContribution,
+          contextProjection.contribution?.ref ?? null,
+        )) {
       throw new VerificationExecutionError(createVerificationFailure({
         code: "verification_projection_mismatch",
         stage: "projection",
@@ -1151,7 +1157,7 @@ export class RunExecution<TOutput> {
           : current.status,
       verification: Object.freeze({
         snapshot: projection.snapshot,
-        gate: projection.gate,
+        gate: projection.gate?.ref ?? null,
       }),
       context: contextProjection.contribution === null
         ? current.context
@@ -1160,7 +1166,7 @@ export class RunExecution<TOutput> {
             Object.freeze([contextProjection.contribution]),
             createVerificationContextAdmissionProfile(),
             "verification_feedback",
-            projection.gate?.id ?? null,
+            projection.gate?.ref.id ?? null,
           ),
     }));
   }
@@ -5163,6 +5169,14 @@ function sameInstructionBindingRef(
   left: { readonly id: string; readonly revision: string },
   right: { readonly id: string; readonly revision: string },
 ): boolean {
+  return left.id === right.id && left.revision === right.revision;
+}
+
+function sameOptionalRevisionRef(
+  left: { readonly id: string; readonly revision: string } | null,
+  right: { readonly id: string; readonly revision: string } | null,
+): boolean {
+  if (left === null || right === null) return left === right;
   return left.id === right.id && left.revision === right.revision;
 }
 

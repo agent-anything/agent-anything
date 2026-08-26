@@ -240,7 +240,7 @@ describe("Helarc Host Run composition", () => {
     expect(result.activity.find((item) => item.metadata.controllerAction === "tool_call")?.metadata).toMatchObject({
       controllerAction: "tool_call",
       requestedToolName: "Glob",
-      promptArchitectureVersion: "helarc-prompt-v4",
+      promptArchitectureVersion: "helarc-prompt-v5",
       actionContractVersion: "helarc-model-decision-v1",
       toolExposureVersion: "trusted-tool-exposure-v1",
       exposedToolNames: [

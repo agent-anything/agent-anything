@@ -352,8 +352,8 @@ export function createVerificationContextAdmissionProfile(): ContextAdmissionPro
     audiences: ["model"],
     retention: ["current"],
     instructionRoles: ["data"],
-    necessities: ["optional"],
-    maximumPrecedence: 0,
+    necessities: ["mandatory", "optional"],
+    maximumPrecedence: 90,
   });
 }
 

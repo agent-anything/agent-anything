@@ -95,14 +95,14 @@ const PROFILE_SOURCE = Object.freeze({
   ...PROFILE_OWNER,
   sourceKind: "product_configuration" as const,
 });
-const VALIDATION_CLAIMS = Object.freeze([
+const VERIFICATION_CLAIMS = Object.freeze([
   "tests",
   "static_analysis",
   "runtime_verification",
   "security_scan",
   "performance_benchmark",
 ] as const);
-type HelarcVerificationClaim = (typeof VALIDATION_CLAIMS)[number];
+type HelarcVerificationClaim = (typeof VERIFICATION_CLAIMS)[number];
 
 export async function createHelarcVerificationComposition(
   input: CreateHelarcVerificationCompositionInput,
@@ -319,7 +319,7 @@ function commandRequirement(): VerificationRequirementTemplate {
   return Object.freeze({
     ref: COMMAND_REQUIREMENT,
     source: PROFILE_SOURCE,
-    kind: "command_validation",
+    kind: "command_verification",
     claim: "The selected engineering verification command supports its declared claim.",
     purpose: "Provide bounded command-backed engineering verification feedback.",
     necessity: "advisory",
@@ -334,7 +334,7 @@ function commandRequirement(): VerificationRequirementTemplate {
       conflictingEvidence: "inconclusive" as const,
     }),
     limits: Object.freeze({ maximumAttempts: 1, maximumDurationMs: 120_000, maximumCostUnits: null }),
-    disclosure: Object.freeze({ sensitivity: "internal" as const, audiences: Object.freeze(["verification", "product"]) }),
+    disclosure: Object.freeze({ sensitivity: "internal" as const, audiences: Object.freeze(["model", "product", "verification"]) }),
     completionHandling: continuingCompletionHandling(),
   });
 }
@@ -361,7 +361,7 @@ function exactRequirement(
       conflictingEvidence: "violated" as const,
     }),
     limits: Object.freeze({ maximumAttempts: 1, maximumDurationMs: 10_000, maximumCostUnits: null }),
-    disclosure: Object.freeze({ sensitivity: "internal" as const, audiences: Object.freeze(["verification", "product"]) }),
+    disclosure: Object.freeze({ sensitivity: "internal" as const, audiences: Object.freeze(["model", "product", "verification"]) }),
     completionHandling: input.necessity === "mandatory"
       ? Object.freeze({
           unassessed: "block" as const,
@@ -379,7 +379,7 @@ function commandCheckDefinition(): CheckDefinition {
     ref: COMMAND_DEFINITION_REF,
     owner: "helarc",
     family: COMMAND_CHECK_FAMILY,
-    requirementKinds: Object.freeze(["command_validation"]),
+    requirementKinds: Object.freeze(["command_verification"]),
     subjectKinds: Object.freeze([COMMAND_SUBJECT_KIND]),
     acceptedOrigins: Object.freeze(["controller" as const, "trusted_workflow" as const]),
     effect: Object.freeze({
@@ -690,7 +690,7 @@ function exactFileToolForOperation(
 
 function readVerificationClaim(value: unknown): HelarcVerificationClaim | null {
   if (!isRecord(value) || value.verification_claim === undefined) return null;
-  if (!VALIDATION_CLAIMS.includes(value.verification_claim as HelarcVerificationClaim)) {
+  if (!VERIFICATION_CLAIMS.includes(value.verification_claim as HelarcVerificationClaim)) {
     throw new TypeError("Shell verification_claim is not supported by the admitted Helarc profile.");
   }
   return value.verification_claim as HelarcVerificationClaim;
@@ -704,7 +704,7 @@ function claimForConfiguration(
   configuration: VerificationOwnerRef | null,
 ): HelarcVerificationClaim | null {
   if (configuration === null) return null;
-  return VALIDATION_CLAIMS.find((claim) =>
+  return VERIFICATION_CLAIMS.find((claim) =>
     sameOwnerRef(configuration, commandConfiguration(claim))) ?? null;
 }
 

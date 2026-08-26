@@ -68,13 +68,8 @@ describe("Run-scoped VerificationExecution", () => {
     expect(assessment.coverage.ratio).toBe(1);
     expect((await rig.execution.readCurrentSnapshot()).requirementStates[0]?.status).toBe("satisfied");
     const contextProjection = await rig.execution.projectContext({ maxPayloadBytes: 4_096 });
-    expect(contextProjection.contribution?.payload).toMatchObject({
-      kind: "structured",
-      value: {
-        requirements: [{ id: "requirement", status: "satisfied", pendingAttemptCount: 0 }],
-      },
-    });
-    expect(JSON.stringify(contextProjection)).not.toContain("The required check passed");
+    expect(contextProjection.requirements).toEqual([]);
+    expect(contextProjection.contribution).toBeNull();
     expect((await rig.execution.readHistory()).map((record) => record.kind)).toEqual([
       "specification", "requirement", "subject", "check_definition", "check_attempt",
       "check_finding", "check_result", "evidence", "assessment",
@@ -86,6 +81,115 @@ describe("Run-scoped VerificationExecution", () => {
       "record:check_result", "snapshot:5", "record:evidence", "snapshot:6",
       "record:assessment", "snapshot:7",
     ]);
+  });
+
+  it("projects the initial unassessed Requirement as deterministic actionable feedback", async () => {
+    const rig = createRig();
+    await bootstrap(rig);
+
+    const context = await rig.execution.projectContext({ maxPayloadBytes: 16_384 });
+    const runner = await rig.execution.projectRunner({
+      contextContribution: context.contribution?.ref ?? null,
+    });
+
+    expect(context.requirements[0]).toMatchObject({
+      requirement: ref("requirement"),
+      state: "unassessed",
+      admittedChecks: [{ family: "command_verification", definition: ref("pure-definition") }],
+      activeAttempts: [],
+      waitingEligible: false,
+      recovery: "select_admitted_check",
+    });
+    expect(runner).toMatchObject({
+      trigger: { kind: "state_transition" },
+      affectedRequirements: [ref("requirement")],
+      feedback: [{ state: "unassessed", recovery: "select_admitted_check" }],
+      recoveryNeeded: true,
+      contextContribution: context.contribution?.ref,
+    });
+    expect(await rig.execution.projectRunner({
+      contextContribution: context.contribution?.ref ?? null,
+    })).toEqual(runner);
+  });
+
+  it("projects actionable non-satisfied Requirement meaning without raw Check output", async () => {
+    const rig = createRig({
+      assess: async () => ({
+        verdict: "violated",
+        basis: "Admitted Evidence contradicts the Requirement.",
+        coverage: { ratio: 1, basis: "complete admitted evidence" },
+        limitations: [],
+      }),
+    });
+    await bootstrap(rig);
+    const result = await runCheck(rig);
+    await rig.execution.admitEvidence({
+      evidence: evidence(result, 1),
+      expectedRevision: await revision(rig),
+    }, liveInterruption());
+    await rig.execution.assessRequirement({
+      requirement: ref("requirement"),
+      subject: ref("subject"),
+      evidenceRefs: [ref("evidence")],
+      expectedRevision: await revision(rig),
+    }, liveInterruption());
+
+    const context = await rig.execution.projectContext({ maxPayloadBytes: 16_384 });
+    const runner = await rig.execution.projectRunner({
+      contextContribution: context.contribution?.ref ?? null,
+    });
+
+    expect(runner).toMatchObject({
+      trigger: { kind: "state_transition" },
+      affectedRequirements: [ref("requirement")],
+      recoveryNeeded: true,
+      contextContribution: context.contribution?.ref,
+      feedback: [{
+        requirement: ref("requirement"),
+        necessity: "mandatory",
+        state: "violated",
+        waitingEligible: false,
+        recovery: "repair_and_reverify",
+      }],
+    });
+    expect(context.requirements[0]).toMatchObject({
+      requirement: ref("requirement"),
+      necessity: "mandatory",
+      claim: "The workspace satisfies the required verification.",
+      purpose: "Protect successful completion.",
+      state: "violated",
+      assessment: {
+        verdict: "violated",
+        basis: "Admitted Evidence contradicts the Requirement.",
+      },
+      findings: [{ claim: "The required check passed.", polarity: "supports" }],
+      admittedChecks: [{ family: "command_verification", definition: ref("pure-definition") }],
+      remainingAttempts: 1,
+      recovery: "repair_and_reverify",
+    });
+    expect(context.contribution).toMatchObject({
+      handling: { instructionRole: "data", necessity: "mandatory" },
+      disclosure: { audiences: ["model"] },
+    });
+    expect(JSON.stringify(context)).not.toContain("operationResult");
+  });
+
+  it("omits bounded advisory feedback but fails closed for hidden mandatory meaning", async () => {
+    const advisory = createRig({
+      requirement: requirement({ necessity: "advisory" }),
+    });
+    await bootstrap(advisory);
+    const omitted = await advisory.execution.projectContext({ maxPayloadBytes: 1 });
+    expect(omitted).toMatchObject({ requirements: [], contribution: null });
+    expect(await advisory.execution.projectRunner({ contextContribution: null }))
+      .toMatchObject({ contextContribution: null });
+
+    const mandatory = createRig();
+    await bootstrap(mandatory);
+    await expect(mandatory.execution.projectContext({ maxPayloadBytes: 1 }))
+      .rejects.toMatchObject({
+        failure: { code: "verification_context_blocking_reason_unrepresentable" },
+      });
   });
 
   it("serializes competing subject commits through expected revision", async () => {
@@ -286,6 +390,26 @@ describe("Run-scoped VerificationExecution", () => {
       operationResult: settlement.operationResult.ref,
       actionSettlement: settlement.actionSettlement,
     });
+
+    await expect(rig.execution.interpretSettledOperationCheck({
+      check: {
+        requirement: rig.requirement.ref,
+        subject: ref("subject"),
+        definition: ref("effectful-definition"),
+        origin: "trusted_automatic",
+        runAction: { run: RUN, id: "run-action-1", sequence: 1 },
+        predecessor: null,
+        environment: null,
+        configuration: null,
+        coverageTarget: 1,
+        expectedRevision: await revision(rig),
+      },
+      settlement,
+    }, liveInterruption())).rejects.toMatchObject({
+      failure: { code: "verification_lower_settlement_duplicate" },
+    });
+    expect((await rig.execution.readHistory()).filter(({ kind }) => kind === "check_attempt"))
+      .toHaveLength(1);
   });
 
   it("rejects a settled Operation whose binding does not match the admitted Check Definition", async () => {
@@ -619,7 +743,7 @@ async function waitForState(
 }
 
 function requirement(
-  overrides: Partial<Pick<VerificationRequirement, "coverage">> = {},
+  overrides: Partial<Pick<VerificationRequirement, "coverage" | "necessity">> = {},
 ): VerificationRequirement {
   return {
     ref: ref("requirement"),
@@ -628,9 +752,9 @@ function requirement(
     kind: "test",
     claim: "The workspace satisfies the required verification.",
     purpose: "Protect successful completion.",
-    necessity: "mandatory",
+    necessity: overrides.necessity ?? "mandatory",
     subjectKinds: ["workspace_source"],
-    checkFamilies: ["command_validation"],
+    checkFamilies: ["command_verification"],
     assessmentMethod: ASSESSMENT_METHOD,
     freshness: { required: true, maximumAgeMs: 60_000 },
     coverage: overrides.coverage ?? { kind: "complete", minimumRatio: 1 },
@@ -640,7 +764,7 @@ function requirement(
       conflictingEvidence: "inconclusive",
     },
     limits: { maximumAttempts: 2, maximumDurationMs: 60_000, maximumCostUnits: null },
-    disclosure: { sensitivity: "internal", audiences: ["runner", "host"] },
+    disclosure: { sensitivity: "internal", audiences: ["host", "model", "runner"] },
     completionHandling: {
       unassessed: "continue",
       pending: "wait",
@@ -674,7 +798,7 @@ function pureDefinition(): CheckDefinition {
   return {
     ref: ref("pure-definition"),
     owner: "verification",
-    family: "command_validation",
+    family: "command_verification",
     requirementKinds: ["test"],
     subjectKinds: ["workspace_source"],
     acceptedOrigins: ["trusted_automatic"],

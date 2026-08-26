@@ -40,6 +40,11 @@ describe("Helarc instruction releases", () => {
       .toBe(true);
     expect(HELARC_INSTRUCTION_CATALOG.sources.every(({ provenance }) => provenance.license === "Apache-2.0"))
       .toBe(true);
+    expect(minimal.blocks[0]?.content).toContain(
+      "An Operation completing does not by itself prove that a Check passed",
+    );
+    expect(production.blocks.find(({ id }) => id === "verification_and_completion")?.content)
+      .toContain("refresh stale subject state");
   });
 
   it("is deterministic and changes resolved identity with model correlation", () => {

@@ -195,13 +195,31 @@ export async function createRunProgressSemanticFacts(
         null,
         "strong",
         {
+          trigger: verification.trigger.kind,
+          affectedRequirements: verification.affectedRequirements,
           feedback: verification.feedback.map((item) => ({
             requirement: item.requirement,
+            necessity: item.necessity,
             state: item.state,
-            code: item.code,
-            recoveryNeeded: item.recoveryNeeded,
+            subject: item.subject,
+            assessment: item.assessment,
+            waitingEligible: item.waitingEligible,
+            settlement: item.latestSettlement === null ? null : {
+              status: item.latestSettlement.status,
+              failureCode: item.latestSettlement.failureCode,
+              coverageRatio: item.latestSettlement.coverageRatio,
+              limitations: item.latestSettlement.limitations,
+            },
+            reasonCodes: item.reasonCodes,
+            recovery: item.recovery,
           })),
-          pendingAttempts: verification.pendingAttempts.map((item) => ({ ordinal: item.ordinal })),
+          activeAttempts: verification.activeAttempts,
+          gate: verification.gate === null ? null : {
+            status: verification.gate.status,
+            disposition: verification.gate.disposition,
+            reasonCodes: verification.gate.reasonCodes,
+            affectedRequirements: verification.gate.affectedRequirements,
+          },
         },
       );
       if (verification.gate === null) return feedback;
@@ -213,7 +231,12 @@ export async function createRunProgressSemanticFacts(
           verification.snapshot.runId,
           null,
           "strong",
-          { gateRecorded: true },
+          {
+            status: verification.gate.status,
+            disposition: verification.gate.disposition,
+            reasonCodes: verification.gate.reasonCodes,
+            affectedRequirements: verification.gate.affectedRequirements,
+          },
         )),
       ]);
     }

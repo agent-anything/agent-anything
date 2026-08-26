@@ -101,7 +101,7 @@ describe("Verification Contract foundation", () => {
     const definition = snapshotCheckDefinition({
       ref: ref("check-definition"),
       owner: "helarc",
-      family: "command_validation",
+      family: "command_verification",
       requirementKinds: ["test"],
       subjectKinds: ["workspace_source"],
       acceptedOrigins: ["controller", "trusted_automatic"],
@@ -312,7 +312,7 @@ function requirementInput(): VerificationRequirement {
     purpose: "Protect successful completion.",
     necessity: "mandatory",
     subjectKinds: ["workspace_source"],
-    checkFamilies: ["command_validation"],
+    checkFamilies: ["command_verification"],
     assessmentMethod: owner("assessment-method"),
     freshness: { required: true, maximumAgeMs: 60_000 },
     coverage: { kind: "complete", minimumRatio: 1 },

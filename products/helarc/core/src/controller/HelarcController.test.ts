@@ -53,7 +53,7 @@ describe("Helarc controller", () => {
 
     expect(request.metadata).toMatchObject({
       runId: "run-1",
-      promptArchitectureVersion: "helarc-prompt-v4",
+      promptArchitectureVersion: "helarc-prompt-v5",
       actionContractVersion: "helarc-model-decision-v1",
       toolExposureVersion: "trusted-tool-exposure-v1",
       toolSelectionRevision: "tool-selection-1",
@@ -150,6 +150,45 @@ describe("Helarc controller", () => {
       toolExposureBasis: { id: "tool-exposure-basis-1", revision: "tool-exposure-basis-1" },
       toolExposureProof: { id: "tool-exposure-1", revision: "tool-exposure-1" },
     });
+  });
+
+  it("renders admitted Verification Context once through its dedicated current-turn section", () => {
+    const controllerInput = createControllerInput();
+    const verificationBlock = {
+      id: "verification-block",
+      item: { id: "verification-item" },
+      contribution: { id: "verification-context-run-1", revision: "ledger-3" },
+      instructionRole: "data" as const,
+      payload: {
+        kind: "structured" as const,
+        value: {
+          kind: "verification_feedback",
+          snapshot: { runId: "run-1", revision: 3 },
+          requirements: [],
+          gate: null,
+        },
+      },
+      accounting: { unit: "bytes" as const, amount: 1 },
+      transformation: null,
+    };
+    const assembly = buildHelarcPromptAssembly({
+      controllerInput: {
+        ...controllerInput,
+        context: {
+          ...controllerInput.context,
+          blocks: [verificationBlock],
+          accounting: { unit: "bytes", amount: 1 },
+        },
+      },
+      correctionMessage: null,
+    });
+    const general = assembly.promptSections.find(({ id }) => id === "context_projection");
+    const verification = assembly.promptSections.find(({ id }) => id === "current_verification");
+
+    expect(general?.content).not.toContain("verification_feedback");
+    expect(verification?.content).toContain("verification_feedback");
+    expect(assembly.sections.find(({ id }) => id === "helarc:model-input:current_verification")?.source)
+      .toMatchObject({ owner: "context", id: "projection-1", revision: "1" });
   });
 
   it("keeps non-Tool decisions valid when the exact exposure is empty", () => {

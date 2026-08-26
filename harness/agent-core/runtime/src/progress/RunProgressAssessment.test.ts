@@ -386,8 +386,19 @@ function steering() {
 function verificationProjection() {
   return {
     snapshot: { runId: "run-1", revision: 1 },
+    trigger: { kind: "completion_gate" as const, gate: { id: "gate-1", revision: "1" } },
+    affectedRequirements: [],
     feedback: [],
-    pendingAttempts: [],
-    gate: { id: "gate-1", revision: "1" },
+    activeAttempts: [],
+    gate: {
+      ref: { id: "gate-1", revision: "1" },
+      status: "completion_eligible" as const,
+      disposition: null,
+      reasonCodes: [],
+      affectedRequirements: [],
+    },
+    safeReasonCodes: [],
+    recoveryNeeded: false,
+    contextContribution: null,
   };
 }

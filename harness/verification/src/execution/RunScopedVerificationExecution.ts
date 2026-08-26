@@ -1,9 +1,11 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import type { RunRef } from "@agent-anything/agent-core/run";
+import type { ContextJsonValue } from "@agent-anything/context/contract";
 import {
   measureContextPayload,
   snapshotContextContribution,
   type ContextContributionLimits,
+  type ContextContributionRef,
 } from "@agent-anything/context/contribution";
 import {
   createVerificationFailure,
@@ -53,6 +55,11 @@ import {
   type VerificationContextProjection,
   type VerificationHostProjection,
   type VerificationObservabilityProjection,
+  type VerificationContextRequirementProjection,
+  type VerificationFeedbackTrigger,
+  type VerificationProjectedGate,
+  type VerificationProjectedSettlement,
+  type VerificationRecoveryMeaning,
   type VerificationRunnerFeedback,
   type VerificationRunnerProjection,
   type VerificationStateCount,
@@ -340,6 +347,7 @@ export class VerificationExecution implements VerificationExecutionPort {
     request: VerificationSettledOperationCheckRequest,
     interruption: InvocationInterruptionContext,
   ): Promise<CheckResult> {
+    this.assertSettledOperationUnused(request.settlement);
     const { requirement, subject, definition, attempt } = await this.startAttempt(
       request.check,
       interruption,
@@ -651,45 +659,60 @@ export class VerificationExecution implements VerificationExecutionPort {
     return deepFreeze([...this.persistenceFailures]);
   }
 
-  async projectRunner(): Promise<VerificationRunnerProjection> {
-    const feedback: VerificationRunnerFeedback[] = this.current.requirementStates.map((state) => ({
-      snapshot: this.current.ref,
-      requirement: state.requirement,
-      state: state.status,
-      code: `verification_requirement_${state.status}`,
-      message: `Requirement is ${state.status}.`,
-      recoveryNeeded: state.status !== "satisfied",
-    }));
+  async projectRunner(input: {
+    readonly contextContribution: ContextContributionRef | null;
+  }): Promise<VerificationRunnerProjection> {
+    const trigger = this.projectFeedbackTrigger();
+    const gate = this.projectCurrentGate();
+    const affectedRequirements = this.projectAffectedRequirements(trigger, gate);
+    const feedback: VerificationRunnerFeedback[] = this.current.requirementStates.map((state) =>
+      this.projectRunnerFeedback(state, gate));
+    const safeReasonCodes = [...new Set(feedback.flatMap((item) => item.reasonCodes))];
+    if (input.contextContribution !== null &&
+        revisionKey(input.contextContribution) !== revisionKey(this.verificationContextContributionRef())) {
+      this.fail(
+        "verification_context_projection_mismatch",
+        "projection",
+        "Runner Projection Context contribution does not belong to the current Verification snapshot.",
+      );
+    }
     return snapshotVerificationRunnerProjection({
       snapshot: this.current.ref,
+      trigger,
+      affectedRequirements,
       feedback,
-      pendingAttempts: this.current.requirementStates.flatMap((state) => state.pendingAttempts),
-      gate: [...this.gateRecords.values()].at(-1)?.ref ?? null,
+      activeAttempts: this.current.requirementStates.flatMap((state) => state.pendingAttempts),
+      gate,
+      safeReasonCodes,
+      recoveryNeeded: feedback.some((item) => item.recovery !== "none"),
+      contextContribution: input.contextContribution,
     });
   }
 
   async projectContext(limits: ContextContributionLimits): Promise<VerificationContextProjection> {
-    const payload = {
-      kind: "structured" as const,
-      value: {
-        snapshot: {
-          runId: this.current.ref.runId,
-          revision: this.current.ref.revision,
-        },
-        requirements: this.current.requirementStates.map((state) => ({
-          id: state.requirement.id,
-          revision: state.requirement.revision,
-          status: state.status,
-          pendingAttemptCount: state.pendingAttempts.length,
-        })),
-      },
-    };
+    const trigger = this.projectFeedbackTrigger();
+    const gate = this.projectCurrentGate();
+    const blockingGate = gate !== null && gate.status !== "completion_eligible" ? gate : null;
+    const candidates = this.current.requirementStates
+      .filter((state) => state.status !== "satisfied")
+      .map((state) => this.projectContextRequirement(state, gate))
+      .filter((item) => this.requireRequirement(item.requirement).disclosure.audiences.includes("model"))
+      .sort((left, right) => this.compareContextRequirements(left, right, trigger));
+    const requirements = this.reduceContextRequirements(candidates, blockingGate, trigger, limits);
+    if (requirements.length === 0 && blockingGate === null) {
+      return snapshotVerificationContextProjection({
+        snapshot: this.current.ref,
+        trigger,
+        requirements: [],
+        gate: null,
+        contribution: null,
+      });
+    }
+    const payload = this.verificationContextPayload(requirements, blockingGate, trigger);
+    const mandatory = requirements.some((item) => item.necessity === "mandatory") || blockingGate !== null;
     try {
       const contribution = snapshotContextContribution({
-        ref: {
-          id: `verification-context-${this.run.id}`,
-          revision: `ledger-${this.current.ref.revision}`,
-        },
+        ref: this.verificationContextContributionRef(),
         source: {
           owner: "verification",
           kind: "current_snapshot",
@@ -704,9 +727,9 @@ export class VerificationExecution implements VerificationExecutionPort {
           retention: "current",
           replacementKey: `verification-current-${this.run.id}`,
           instructionRole: "data",
-          necessity: "optional",
-          precedence: 0,
-          allowedTransformations: ["redact", "reference"],
+          necessity: mandatory ? "mandatory" : "optional",
+          precedence: mandatory ? 90 : 0,
+          allowedTransformations: mandatory ? [] : ["reference"],
         },
         provenance: [{
           owner: "verification",
@@ -717,10 +740,284 @@ export class VerificationExecution implements VerificationExecutionPort {
         createdAt: this.current.createdAt,
         accounting: measureContextPayload(payload),
       }, limits);
-      return snapshotVerificationContextProjection({ snapshot: this.current.ref, contribution });
+      return snapshotVerificationContextProjection({
+        snapshot: this.current.ref,
+        trigger,
+        requirements,
+        gate: blockingGate,
+        contribution,
+      });
     } catch {
       this.fail("verification_context_projection_invalid", "projection", "Verification Context projection could not be created.");
     }
+  }
+
+  private projectRunnerFeedback(
+    state: VerificationCurrentRequirementState,
+    gate: VerificationProjectedGate | null,
+  ): VerificationRunnerFeedback {
+    const requirement = this.requireRequirement(state.requirement);
+    const settlement = this.projectLatestSettlement(state.requirement);
+    return {
+      snapshot: this.current.ref,
+      requirement: state.requirement,
+      necessity: requirement.necessity,
+      state: state.status,
+      subject: state.subject,
+      assessment: state.assessment,
+      activeAttempts: state.pendingAttempts,
+      waitingEligible: this.isWaitingEligible(state, requirement),
+      latestSettlement: settlement,
+      reasonCodes: this.projectReasonCodes(state, settlement, gate),
+      recovery: this.projectRecoveryMeaning(state, settlement),
+    };
+  }
+
+  private projectContextRequirement(
+    state: VerificationCurrentRequirementState,
+    gate: VerificationProjectedGate | null,
+  ): VerificationContextRequirementProjection {
+    const requirement = this.requireRequirement(state.requirement);
+    const assessment = state.assessment === null
+      ? null
+      : this.assessments.get(revisionKey(state.assessment)) ?? null;
+    const settlement = this.projectLatestSettlement(state.requirement);
+    const result = settlement === null ? null : this.results.get(revisionKey(settlement.result)) ?? null;
+    const attemptsUsed = [...this.attempts.values()].filter((attempt) =>
+      revisionKey(attempt.requirement) === revisionKey(state.requirement)).length;
+    const elapsedMs = Math.max(0, Date.parse(this.current.createdAt) - Date.parse(requirement.createdAt));
+    const relevantGate = gate !== null && gate.affectedRequirements.some((candidate) =>
+      revisionKey(candidate) === revisionKey(state.requirement)) ? gate : null;
+    const definitions = [...this.definitions.values()]
+      .filter((definition) => requirement.checkFamilies.includes(definition.family) &&
+        definition.requirementKinds.includes(requirement.kind) &&
+        (state.subject === null || definition.subjectKinds.includes(this.requireSubject(state.subject).kind)))
+      .sort((left, right) => revisionKey(left.ref).localeCompare(revisionKey(right.ref)))
+      .slice(0, 5);
+    return {
+      snapshot: this.current.ref,
+      requirement: state.requirement,
+      necessity: requirement.necessity,
+      claim: boundedText(requirement.claim, 512),
+      purpose: boundedText(requirement.purpose, 512),
+      state: state.status,
+      subject: state.subject,
+      assessment: assessment === null ? null : {
+        ref: assessment.ref,
+        verdict: assessment.verdict,
+        basis: boundedText(assessment.basis, 768),
+        limitations: assessment.limitations.slice(0, 5).map((item) => boundedText(item, 256)),
+      },
+      findings: (result?.findings ?? []).slice(0, 3).map((finding) => ({
+        ref: finding.ref,
+        claim: boundedText(finding.claim, 512),
+        polarity: finding.polarity,
+        severity: finding.severity,
+        limitations: finding.limitations.slice(0, 5).map((item) => boundedText(item, 256)),
+      })),
+      admittedChecks: definitions.map((definition) => ({ family: definition.family, definition: definition.ref })),
+      activeAttempts: state.pendingAttempts,
+      waitingEligible: this.isWaitingEligible(state, requirement),
+      remainingAttempts: Math.max(0, requirement.limits.maximumAttempts - attemptsUsed),
+      remainingDurationMs: Math.max(0, requirement.limits.maximumDurationMs - elapsedMs),
+      latestSettlement: settlement,
+      gate: relevantGate,
+      reasonCodes: this.projectReasonCodes(state, settlement, gate),
+      recovery: this.projectRecoveryMeaning(state, settlement),
+    };
+  }
+
+  private projectFeedbackTrigger(): VerificationFeedbackTrigger {
+    const latest = this.history.at(-1);
+    if (latest?.kind === "completion_gate") return { kind: "completion_gate", gate: latest.record.ref };
+    if (latest?.kind === "check_result") return { kind: "settled_result", result: latest.record.ref };
+    return { kind: "state_transition", snapshot: this.current.ref };
+  }
+
+  private projectAffectedRequirements(
+    trigger: VerificationFeedbackTrigger,
+    gate: VerificationProjectedGate | null,
+  ): readonly VerificationRequirementRef[] {
+    if (trigger.kind === "completion_gate") return gate?.affectedRequirements ?? [];
+    if (trigger.kind === "settled_result") {
+      const result = this.results.get(revisionKey(trigger.result));
+      const attempt = result === undefined ? undefined : this.attempts.get(attemptRefKey(result.attempt));
+      return attempt === undefined ? [] : [attempt.requirement];
+    }
+    const latest = this.history.at(-1);
+    if (latest?.kind === "assessment" || latest?.kind === "evidence" || latest?.kind === "check_attempt") {
+      return [latest.record.requirement];
+    }
+    if (latest?.kind === "requirement") return [latest.record.ref];
+    if (latest?.kind === "subject") {
+      return this.current.requirementStates
+        .filter((state) => state.subject !== null && revisionKey(state.subject) === revisionKey(latest.record.ref))
+        .map((state) => state.requirement);
+    }
+    return this.current.requirementStates.map((state) => state.requirement);
+  }
+
+  private projectCurrentGate(): VerificationProjectedGate | null {
+    const record = [...this.gateRecords.values()].at(-1);
+    if (record === undefined) return null;
+    return {
+      ref: record.ref,
+      status: record.decision.status,
+      disposition: record.decision.disposition,
+      reasonCodes: [...new Set([
+        ...record.decision.reasons.map((reason) => reason.code),
+        ...(record.decision.failure === null ? [] : [record.decision.failure.code]),
+      ])],
+      affectedRequirements: [...new Map(record.decision.reasons
+        .flatMap((reason) => reason.requirement === null ? [] : [reason.requirement])
+        .map((ref) => [revisionKey(ref), ref])).values()],
+    };
+  }
+
+  private projectLatestSettlement(
+    requirement: VerificationRequirementRef,
+  ): VerificationProjectedSettlement | null {
+    const result = [...this.results.values()].reverse().find((candidate) => {
+      const attempt = this.attempts.get(attemptRefKey(candidate.attempt));
+      return attempt !== undefined && revisionKey(attempt.requirement) === revisionKey(requirement);
+    });
+    if (result === undefined) return null;
+    return {
+      result: result.ref,
+      status: result.status,
+      failureCode: result.failure?.code ?? null,
+      coverageRatio: result.coverage.ratio,
+      limitations: result.limitations.slice(0, 5).map((item) => boundedText(item, 256)),
+    };
+  }
+
+  private projectReasonCodes(
+    state: VerificationCurrentRequirementState,
+    settlement: VerificationProjectedSettlement | null,
+    gate: VerificationProjectedGate | null,
+  ): readonly string[] {
+    const gateReasons = gate !== null && gate.affectedRequirements.some((candidate) =>
+      revisionKey(candidate) === revisionKey(state.requirement)) ? gate.reasonCodes : [];
+    return [...new Set([
+      `verification_requirement_${state.status}`,
+      ...(settlement === null ? [] : [`verification_check_${settlement.status}`]),
+      ...(settlement?.failureCode === null || settlement?.failureCode === undefined ? [] : [settlement.failureCode]),
+      ...gateReasons,
+    ])];
+  }
+
+  private projectRecoveryMeaning(
+    state: VerificationCurrentRequirementState,
+    settlement: VerificationProjectedSettlement | null,
+  ): VerificationRecoveryMeaning {
+    if (state.status === "satisfied") return "none";
+    if (state.status === "pending") return "await_active_attempt";
+    if (state.status === "stale") return "refresh_subject";
+    if (state.status === "violated") return "repair_and_reverify";
+    if (state.status === "inconclusive") return "gather_additional_evidence";
+    if (settlement !== null && settlement.status !== "completed") {
+      return "select_alternative_check_or_disclose";
+    }
+    return "select_admitted_check";
+  }
+
+  private isWaitingEligible(
+    state: VerificationCurrentRequirementState,
+    requirement: VerificationRequirement,
+  ): boolean {
+    return requirement.necessity === "mandatory" &&
+      state.status === "pending" &&
+      requirement.completionHandling.pending === "wait" &&
+      state.pendingAttempts.length > 0;
+  }
+
+  private compareContextRequirements(
+    left: VerificationContextRequirementProjection,
+    right: VerificationContextRequirementProjection,
+    trigger: VerificationFeedbackTrigger,
+  ): number {
+    if (left.necessity !== right.necessity) return left.necessity === "mandatory" ? -1 : 1;
+    const affected = new Set(this.projectAffectedRequirements(trigger, this.projectCurrentGate()).map(revisionKey));
+    const leftAffected = affected.has(revisionKey(left.requirement));
+    const rightAffected = affected.has(revisionKey(right.requirement));
+    if (leftAffected !== rightAffected) return leftAffected ? -1 : 1;
+    return revisionKey(left.requirement).localeCompare(revisionKey(right.requirement));
+  }
+
+  private reduceContextRequirements(
+    input: readonly VerificationContextRequirementProjection[],
+    gate: VerificationProjectedGate | null,
+    trigger: VerificationFeedbackTrigger,
+    limits: ContextContributionLimits,
+  ): readonly VerificationContextRequirementProjection[] {
+    let selected = [...input];
+    while (measureContextPayload(this.verificationContextPayload(selected, gate, trigger)).payloadBytes > limits.maxPayloadBytes) {
+      let advisory = -1;
+      for (let index = selected.length - 1; index >= 0; index -= 1) {
+        if (selected[index]?.necessity === "advisory") {
+          advisory = index;
+          break;
+        }
+      }
+      if (advisory >= 0) {
+        selected.splice(advisory, 1);
+        if (selected.length === 0 && gate === null) return selected;
+        continue;
+      }
+      const compact = selected.map((item) => ({
+        ...item,
+        claim: boundedText(item.claim, 160),
+        purpose: boundedText(item.purpose, 160),
+        assessment: item.assessment === null ? null : {
+          ...item.assessment,
+          basis: boundedText(item.assessment.basis, 160),
+          limitations: item.assessment.limitations.slice(0, 1),
+        },
+        findings: item.findings.slice(0, 1).map((finding) => ({
+          ...finding,
+          claim: boundedText(finding.claim, 160),
+          limitations: finding.limitations.slice(0, 1),
+        })),
+        admittedChecks: item.admittedChecks.slice(0, 1),
+        latestSettlement: item.latestSettlement === null ? null : {
+          ...item.latestSettlement,
+          limitations: item.latestSettlement.limitations.slice(0, 1),
+        },
+      }));
+      if (JSON.stringify(compact) === JSON.stringify(selected)) {
+        this.fail(
+          "verification_context_blocking_reason_unrepresentable",
+          "projection",
+          "Mandatory Verification meaning cannot be represented within the Context contribution limit.",
+        );
+      }
+      selected = compact;
+    }
+    return selected;
+  }
+
+  private verificationContextPayload(
+    requirements: readonly VerificationContextRequirementProjection[],
+    gate: VerificationProjectedGate | null,
+    trigger: VerificationFeedbackTrigger,
+  ) {
+    return {
+      kind: "structured" as const,
+      value: contextJsonValue({
+        kind: "verification_feedback",
+        snapshot: this.current.ref,
+        trigger,
+        requirements,
+        gate,
+      }),
+    };
+  }
+
+  private verificationContextContributionRef() {
+    return {
+      id: `verification-context-${this.run.id}`,
+      revision: `ledger-${this.current.ref.revision}`,
+    };
   }
 
   async projectHost(): Promise<VerificationHostProjection> {
@@ -895,6 +1192,20 @@ export class VerificationExecution implements VerificationExecutionPort {
     );
     await this.persist(records, snapshot, previousRevision);
     return { requirement, subject, definition, attempt };
+  }
+
+  private assertSettledOperationUnused(
+    settlement: VerificationLowerCheckSettlement,
+  ): void {
+    const resultKey = operationResultKey(settlement.operationResult.ref);
+    if ([...this.results.values()].some((result) =>
+      result.operationResult !== null && operationResultKey(result.operationResult) === resultKey)) {
+      this.fail(
+        "verification_lower_settlement_duplicate",
+        "check",
+        "Settled Operation Result is already interpreted by Verification.",
+      );
+    }
   }
 
   private async settleAttempt(
@@ -1399,6 +1710,12 @@ function attemptRefKey(ref: CheckAttemptRef): string {
   return `${ref.id}#${ref.ordinal}`;
 }
 
+function operationResultKey(
+  ref: { readonly invocation: { readonly id: string }; readonly id: string },
+): string {
+  return `${ref.invocation.id}:${ref.id}`;
+}
+
 function ownerKey(ref: VerificationOwnerRef): string {
   return `${ref.owner}:${ref.kind}:${ref.id}@${ref.revision}`;
 }
@@ -1411,6 +1728,23 @@ function minimumNullable(first: number | null, second: number | null): number | 
   if (first === null) return second;
   if (second === null) return first;
   return Math.min(first, second);
+}
+
+function boundedText(input: string, maximumLength: number): string {
+  const value = input.trim();
+  if (value.length <= maximumLength) return value;
+  return `${value.slice(0, Math.max(1, maximumLength - 3)).trimEnd()}...`;
+}
+
+function contextJsonValue(input: unknown): ContextJsonValue {
+  if (input === null || typeof input === "string" || typeof input === "boolean") return input;
+  if (typeof input === "number") {
+    if (!Number.isFinite(input)) throw new TypeError("Verification Context data must contain finite numbers.");
+    return input;
+  }
+  if (Array.isArray(input)) return input.map((item) => contextJsonValue(item));
+  if (typeof input !== "object") throw new TypeError("Verification Context data must be JSON-compatible.");
+  return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, contextJsonValue(value)]));
 }
 
 function snapshotRunRef(input: RunRef): RunRef {

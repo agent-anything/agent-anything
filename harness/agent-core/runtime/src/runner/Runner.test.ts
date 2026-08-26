@@ -618,9 +618,7 @@ describe("Runner semantic integration", () => {
     );
     expect(transitions.map((event) => event.payload.operationKinds)).toEqual([
       ["add"],
-      ["add"],
       ["add", "add"],
-      ["replace"],
     ]);
     expect(transitions[0]?.payload).not.toHaveProperty("contribution");
     const projections = events.filter(
