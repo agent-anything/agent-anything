@@ -287,6 +287,15 @@ export interface HelarcRunTreeSnapshot {
   readonly nodes: readonly HelarcRunTreeNodeSnapshot[];
 }
 
+export interface HelarcActiveDelegationSnapshot {
+  readonly request: Readonly<{ readonly id: string; readonly revision: string }>;
+  readonly relation: Readonly<{ readonly id: string }>;
+  readonly child: Readonly<{ readonly id: string }>;
+  readonly childRunRevision: number;
+  readonly childStatus: HelarcRunTreeNodeStatusSnapshot;
+  readonly steerable: true;
+}
+
 export interface HelarcModelContinuationSnapshot {
   readonly branchId: string;
   readonly requestId: string;
@@ -410,6 +419,7 @@ export interface HelarcRunSnapshot {
     readonly startedAt: string;
     readonly runRevision: number;
     readonly runTree: HelarcRunTreeSnapshot;
+    readonly activeDelegations: readonly HelarcActiveDelegationSnapshot[];
     readonly progress: HelarcRunProgressSnapshot;
     readonly validation: HelarcHostValidationSnapshot | null;
     readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
@@ -785,6 +795,7 @@ export interface HelarcHostRunStatusSnapshot {
     | "cancelled";
   readonly startedAt: string;
   readonly runTree: HelarcRunTreeSnapshot;
+  readonly activeDelegations: readonly HelarcActiveDelegationSnapshot[];
   readonly progress: HelarcRunProgressSnapshot;
   readonly validation: HelarcHostValidationSnapshot | null;
   readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];

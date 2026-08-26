@@ -1113,7 +1113,7 @@ describe("Runner semantic integration", () => {
       payload: expect.objectContaining({
         kind: "descendant_run",
         status: "succeeded",
-        output: { summary: "Child complete" },
+        output: expect.objectContaining({ summary: "Child complete" }),
       }),
     }));
     expect(observations(result).some(({ payload }) => payload.kind === "operation"))
@@ -1123,6 +1123,176 @@ describe("Runner semantic integration", () => {
       "run_002",
       "run_001",
     ]);
+  });
+
+  it("continues a settled delegation through a new child Run with exact predecessor Context", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    let predecessor: Readonly<{ readonly id: string; readonly revision: string }> | null = null;
+    const events: RuntimeEvent[] = [];
+    const controller = new ScriptedController([
+      (input) => advance([toolCandidate(
+        "Agent",
+        { prompt: "Inspect the contracts." },
+        input.toolExposure.controllerRequestId,
+      )], "model_tool_1"),
+      complete("Initial child result", "model_child_initial"),
+      (input) => {
+        const output = projectedObservations(input.context).at(-1)?.payload.output;
+        expect(isRecord(output)).toBe(true);
+        predecessor = Object.freeze({
+          id: (output as Record<string, unknown>).delegation_result_id as string,
+          revision: (output as Record<string, unknown>).delegation_result_revision as string,
+        });
+        return advance([toolCandidate(
+          "Agent",
+          {
+            prompt: "Continue from the accepted result.",
+            predecessor_result: predecessor,
+          },
+          input.toolExposure.controllerRequestId,
+        )], "model_tool_1");
+      },
+      (input) => {
+        expect(input.context.blocks.some((block) =>
+          block.instructionRole === "data" &&
+          block.payload.kind === "structured" &&
+          isRecord(block.payload.value) &&
+          block.payload.value.kind === "delegation_result" &&
+          isRecord(block.payload.value.result) &&
+          block.payload.value.result.id === predecessor?.id &&
+          block.payload.value.result.revision === predecessor?.revision
+        )).toBe(true);
+        return complete("Continuation child result", "model_child_continuation");
+      },
+      complete("Parent complete", "model_parent_complete"),
+    ]);
+    const operations = createOperationFixture([], [], {
+      delegation: createTestDelegation(childAgent),
+    });
+    const tools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent",
+      agent: { id: childAgent.id, revision: childAgent.revision },
+      revision: "descendant-binding-1",
+    });
+
+    const result = await createRunner(controller, operations, {
+      runtimeEventPublisher: { publish: (event) => events.push(event) },
+    }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        tools,
+        runTreeLimits: {
+          maxTotalDescendantRuns: 2,
+          maxActiveDescendantRuns: 1,
+          maxDescendantDepth: 1,
+        },
+      }),
+    );
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(controller.calls.map(({ runId }) => runId)).toEqual([
+      "run_001",
+      "run_002",
+      "run_001",
+      "run_003",
+      "run_001",
+    ]);
+    const settled = events.filter((event) => event.name === "run.descendant.settled");
+    expect(settled).toHaveLength(2);
+    expect(settled[0]?.payload.predecessorResultId).toBeNull();
+    expect(settled[1]?.payload).toMatchObject({
+      childRunId: "run_003",
+      predecessorResultId: predecessor?.id,
+      contextSourceCount: 2,
+    });
+    expect(settled[1]?.payload.requestId).not.toBe(settled[0]?.payload.requestId);
+    expect(settled[1]?.payload.resultId).not.toBe(settled[0]?.payload.resultId);
+  });
+
+  it("routes steering only through the exact active delegation relation", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const events: RuntimeEvent[] = [];
+    const controller = new ScriptedController([
+      (input) => advance([toolCandidate(
+        "Agent",
+        { prompt: "Inspect the contracts." },
+        input.toolExposure.controllerRequestId,
+      )], "model_tool_1"),
+      async () => {
+        entered.resolve();
+        await release.promise;
+        return complete("Stale child result", "model_child_stale");
+      },
+      (input) => {
+        expect(input.context.blocks.some((block) =>
+          block.instructionRole === "user" &&
+          block.payload.kind === "text" &&
+          block.payload.text === "Focus on the public contracts."
+        )).toBe(true);
+        return complete("Steered child result", "model_child_steered");
+      },
+      complete("Parent complete", "model_parent_complete"),
+    ]);
+    const operations = createOperationFixture([], [], {
+      delegation: createTestDelegation(childAgent),
+    });
+    const tools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent",
+      agent: { id: childAgent.id, revision: childAgent.revision },
+      revision: "descendant-binding-1",
+    });
+    const handle = createRunner(controller, operations, {
+      runtimeEventPublisher: { publish: (event) => events.push(event) },
+    }).start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools }),
+    );
+    await entered.promise;
+
+    const active = handle.getSnapshot().activeDelegations[0]!;
+    const route = {
+      request: active.request,
+      relation: active.relation,
+      child: active.child,
+      steering: {
+        commandId: "child-steering-1",
+        expectedRunRevision: active.childRunRevision,
+        instruction: "Focus on the public contracts.",
+        attribution: { origin: "user" as const, actorId: "user-1" },
+        submittedAt: NOW,
+      },
+    };
+    expect(handle.steerDescendant({
+      ...route,
+      relation: { id: "relation-unknown" },
+    })).toMatchObject({ status: "rejected", code: "delegation_relation_unknown" });
+    expect(handle.steerDescendant({
+      ...route,
+      request: { ...route.request, id: "request-wrong" },
+    })).toMatchObject({ status: "rejected", code: "delegation_route_mismatch" });
+    expect(handle.steerDescendant(route)).toMatchObject({
+      status: "routed",
+      submission: { status: "accepted_for_application" },
+    });
+    release.resolve();
+
+    const result = await handle.wait();
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(handle.getSnapshot().activeDelegations).toEqual([]);
+    expect(handle.steerDescendant(route)).toMatchObject({
+      status: "rejected",
+      code: "delegation_child_settled",
+    });
+    expect(events.find((event) => event.name === "run.descendant.started")?.payload)
+      .toMatchObject({
+        requestId: active.request.id,
+        childAgentId: childAgent.id,
+        contextSourceCount: 1,
+      });
   });
 
   it("omits the descendant Agent Tool when Run Tree depth capacity is exhausted", async () => {
@@ -2456,10 +2626,16 @@ function createTestDelegation(
             input.targetAgent.revision !== agent.revision) {
           throw new TypeError("Test descendant Agent is not admitted.");
         }
-        const candidate = input.toolCall.input as { readonly prompt?: unknown };
+        const candidate = input.toolCall.input as {
+          readonly prompt?: unknown;
+          readonly predecessor_result?: unknown;
+        };
         if (typeof candidate.prompt !== "string" || candidate.prompt.length === 0) {
           throw new TypeError("Test delegation requires a prompt.");
         }
+        const predecessor = candidate.predecessor_result === undefined
+          ? null
+          : testDelegationResultRef(candidate.predecessor_result);
         const limits = createDelegationLimits({
           maxControllerTurns: input.limitCeiling.maxControllerTurns,
           maxActions: input.limitCeiling.maxActions,
@@ -2529,17 +2705,34 @@ function createTestDelegation(
                 required: Object.freeze([...dimension.required]),
               }))),
             limits,
-            predecessor: null,
+            predecessor,
           }),
         });
       },
     }),
+    narrativeProjection: Object.freeze({
+      project({ finalOutput }) {
+        if (
+          finalOutput !== null &&
+          typeof finalOutput === "object" &&
+          !Array.isArray(finalOutput) &&
+          typeof (finalOutput as { readonly summary?: unknown }).summary === "string"
+        ) {
+          return (finalOutput as { readonly summary: string }).summary;
+        }
+        return null;
+      },
+    }),
     resultProjection: Object.freeze({
       project(result) {
-        return result.status === "succeeded"
+        return result.terminal.status === "succeeded"
           ? Object.freeze({
               status: "succeeded" as const,
-              output: result.finalOutput,
+              output: Object.freeze({
+                summary: result.narrative?.text ?? "",
+                delegation_result_id: result.ref.id,
+                delegation_result_revision: result.ref.revision,
+              }),
               failure: null,
             })
           : Object.freeze({
@@ -2550,6 +2743,23 @@ function createTestDelegation(
       },
     }),
   });
+}
+
+function testDelegationResultRef(
+  input: unknown,
+): Readonly<{ readonly id: string; readonly revision: string }> {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Test delegation predecessor result must be an object.");
+  }
+  const ref = input as Readonly<Record<string, unknown>>;
+  if (
+    Object.keys(ref).some((key) => key !== "id" && key !== "revision") ||
+    typeof ref.id !== "string" || ref.id.length === 0 ||
+    typeof ref.revision !== "string" || ref.revision.length === 0
+  ) {
+    throw new TypeError("Test delegation predecessor result ref is invalid.");
+  }
+  return Object.freeze({ id: ref.id, revision: ref.revision });
 }
 
 function createValidationActionExecutionFixture(

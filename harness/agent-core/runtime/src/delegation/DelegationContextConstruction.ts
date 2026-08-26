@@ -8,6 +8,7 @@ import { snapshotDelegationContextMaterial } from "./DelegationRequest.js";
 
 export interface DelegationContextConstructionAssessment {
   readonly rootPurpose: DelegationContextMaterial;
+  readonly predecessor: DelegationContextMaterial | null;
   readonly omitted: readonly DelegationContextMaterialRef[];
 }
 
@@ -15,6 +16,7 @@ export function assessDelegationContextConstruction(input: {
   readonly request: DelegationRequest;
   readonly rootTask: AgentTask;
   readonly rootPurpose: DelegationContextMaterial;
+  readonly predecessor: DelegationContextMaterial | null;
 }): DelegationContextConstructionAssessment {
   if (
     input.request.origin.root.task.id !== input.rootTask.id ||
@@ -31,8 +33,24 @@ export function assessDelegationContextConstruction(input: {
     throw new TypeError("Delegation root-purpose material is stale or invalid.");
   }
   const omitted: DelegationContextMaterialRef[] = [];
+  const predecessorEntry = input.request.contextPlan.entries.find(
+    (entry) => entry.role === "predecessor_result",
+  );
+  if (input.predecessor !== null && predecessorEntry === undefined) {
+    throw new TypeError("Delegation predecessor Context material was not requested.");
+  }
   for (const entry of input.request.contextPlan.entries) {
     if (entry.role === "root_purpose") continue;
+    if (entry.role === "predecessor_result") {
+      if (input.predecessor === null) {
+        throw new TypeError("Delegation predecessor Context material is unavailable.");
+      }
+      const predecessor = snapshotDelegationContextMaterial(input.predecessor);
+      if (!sameMaterial(predecessor.ref, entry.material)) {
+        throw new TypeError("Delegation predecessor Context material is stale or invalid.");
+      }
+      continue;
+    }
     if (entry.necessity === "mandatory") {
       throw new TypeError(
         `Mandatory delegation Context role '${entry.role}' has no admitted source owner.`,
@@ -42,6 +60,9 @@ export function assessDelegationContextConstruction(input: {
   }
   return Object.freeze({
     rootPurpose,
+    predecessor: input.predecessor === null
+      ? null
+      : snapshotDelegationContextMaterial(input.predecessor),
     omitted: Object.freeze(omitted.map((material) => Object.freeze({ ...material }))),
   });
 }

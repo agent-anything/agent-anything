@@ -87,6 +87,7 @@ export interface DelegationLimitDisposition {
   readonly actions: number;
   readonly durationMs: number;
   readonly contextBytes: number;
+  readonly resultBytes: number;
 }
 
 export interface DelegationReferenceTransfer<TRef extends string> {
@@ -538,6 +539,7 @@ function snapshotLimitDisposition(
     "actions",
     "durationMs",
     "contextBytes",
+    "resultBytes",
   ]);
   if (input.status !== "within_limits" && input.status !== "exhausted") {
     throw new TypeError("Delegation limit disposition status is unsupported.");
@@ -558,12 +560,14 @@ function snapshotLimitDisposition(
     actions: nonNegativeInteger(input.actions, "actions"),
     durationMs: nonNegativeInteger(input.durationMs, "durationMs"),
     contextBytes: nonNegativeInteger(input.contextBytes, "contextBytes"),
+    resultBytes: nonNegativeInteger(input.resultBytes, "resultBytes"),
   });
   if (snapshot.status === "within_limits" && (
     snapshot.controllerTurns > limits.maxControllerTurns ||
     snapshot.actions > limits.maxActions ||
     snapshot.durationMs > limits.maxDurationMs ||
-    snapshot.contextBytes > limits.maxContextBytes
+    snapshot.contextBytes > limits.maxContextBytes ||
+    snapshot.resultBytes > limits.maxResultBytes
   )) {
     throw new TypeError("Delegation usage exceeds limits but is marked within limits.");
   }

@@ -28,7 +28,11 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "relationId", "parentRunActionId", "childRunId", "depth", "code", "treeRevision",
   ],
   "run.descendant.settled": [
-    ...descendantFields(), "status", "code",
+    ...descendantFields(),
+    "status", "code", "resultId", "resultRevision",
+    "expectationPresentCount", "expectationUnmetCount", "evidenceCount", "artifactCount",
+    "validationStatus", "effectStatus", "uncertaintyCount", "controllerTurns", "actions",
+    "modelUsageStatus", "limitStatus", "exhaustedLimit",
   ],
   "context.transition.committed": [
     "transitionId",
@@ -173,7 +177,11 @@ export function projectRuntimeEventForHost(event: RuntimeEvent): RuntimeEvent {
 }
 
 function descendantFields(): readonly string[] {
-  return ["relationId", "parentRunActionId", "childRunId", "depth", "treeRevision"];
+  return [
+    "relationId", "parentRunActionId", "childRunId", "childAgentId", "childAgentRevision",
+    "requestId", "requestRevision", "predecessorResultId", "contextSourceCount",
+    "authorityDerivationId", "limitDerivationId", "depth", "treeRevision",
+  ];
 }
 
 function projectLineage(event: RuntimeEvent): RuntimeEvent["lineage"] {

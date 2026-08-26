@@ -78,5 +78,11 @@ export {
   createDelegationResult,
   snapshotDelegationResult,
 } from "./DelegationResult.js";
-export type { DelegationSteeringRoute } from "./DelegationControl.js";
+export type { DelegationResultConstructionInput } from "./DelegationResultConstruction.js";
+export { constructDelegationResult } from "./DelegationResultConstruction.js";
+export type {
+  DelegationSteeringReceipt,
+  DelegationSteeringRejectionCode,
+  DelegationSteeringRoute,
+} from "./DelegationControl.js";
 export { snapshotDelegationSteeringRoute } from "./DelegationControl.js";

@@ -15,6 +15,7 @@ import type {
   RunResultCode,
 } from "@agent-anything/agent-runtime/run";
 import type {
+  ActiveDelegationProjection,
   RunOperationSnapshot,
   RunRetryProjection,
   RunTreeExecutionSnapshot,
@@ -128,6 +129,8 @@ export interface HostRunTreeProjection {
   readonly nodes: readonly HostRunTreeNodeProjection[];
 }
 
+export type HostActiveDelegationProjection = ActiveDelegationProjection;
+
 export type HostEnforcementStatus =
   | "not_exercised"
   | "running"
@@ -199,6 +202,7 @@ export interface HostRunProjection {
   readonly plan: HostPlanProjection | null;
   readonly progress: HostRunProgressProjection;
   readonly pendingInteractions: readonly HostPendingInteractionProjection[];
+  readonly activeDelegations: readonly HostActiveDelegationProjection[];
   readonly retry: HostRetryProjection | null;
   readonly validation: ValidationHostProjection | null;
   readonly cancellation: HostCancellationProjection | null;
@@ -328,6 +332,7 @@ export function createHostRunProjection(
     plan: null,
     progress: createInitialHostRunProgressProjection(),
     pendingInteractions: Object.freeze([]),
+    activeDelegations: Object.freeze([]),
     retry: null,
     validation: null,
     cancellation: null,

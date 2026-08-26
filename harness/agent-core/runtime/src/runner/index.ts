@@ -8,6 +8,7 @@ export type {
 export type {
   DelegationPreparationPort,
   DelegationPreparationResult,
+  DelegationNarrativeProjectionPort,
   DelegationResultProjectionPort,
   DescendantOperationOutcome,
   OperationToolAvailabilityParticipant,
@@ -25,6 +26,7 @@ export type {
   ToolPathAvailability,
 } from "./RunnerDependencies.js";
 export type {
+  ActiveDelegationProjection,
   RunHandle,
   RunOperationListener,
   RunOperationSnapshot,

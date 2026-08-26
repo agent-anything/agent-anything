@@ -5,8 +5,8 @@ import {
   createDelegationContextMaterial,
   createDelegationLimits,
   createDelegationResultExpectation,
+  type DelegationResult,
 } from "@agent-anything/agent-runtime/delegation";
-import type { RunResult } from "@agent-anything/agent-runtime/run";
 import type { OperationFailure } from "@agent-anything/operation-catalog/result";
 import type { ToolRegistrationInput } from "@agent-anything/tools/registration";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
@@ -143,9 +143,16 @@ export function createHelarcDescendantAgentContribution(
                   required: Object.freeze([...dimension.required]),
                 }))),
               limits,
-              predecessor: null,
+              predecessor: delegated.predecessor,
             }),
           });
+        },
+      }),
+      narrativeProjection: Object.freeze({
+        project(
+          input: Parameters<RunnerDelegationComposition["narrativeProjection"]["project"]>[0],
+        ) {
+          return isHelarcOutput(input.finalOutput) ? input.finalOutput.summary : null;
         },
       }),
       resultProjection: Object.freeze({
@@ -158,65 +165,99 @@ export function createHelarcDescendantAgentContribution(
 function snapshotDelegatedInput(candidate: unknown): {
   readonly prompt: string;
   readonly description: string | null;
+  readonly predecessor: { readonly id: string; readonly revision: string } | null;
 } {
   if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
     throw new TypeError("Agent Tool input must be an object.");
   }
   const input = candidate as Record<string, unknown>;
-  if (Object.keys(input).some((key) => key !== "prompt" && key !== "description")) {
+  if (Object.keys(input).some((key) =>
+    key !== "prompt" && key !== "description" && key !== "predecessor_result")) {
     throw new TypeError("Agent Tool input contains an unsupported field.");
   }
   const prompt = boundedText(input.prompt, 64_000, "prompt");
   const description = input.description === undefined
     ? null
     : boundedText(input.description, 1_024, "description");
-  return Object.freeze({ prompt, description });
+  const predecessor = input.predecessor_result === undefined
+    ? null
+    : snapshotPredecessorResult(input.predecessor_result);
+  return Object.freeze({ prompt, description, predecessor });
 }
 
 function projectDescendantResult(
-  result: RunResult,
+  result: DelegationResult,
 ): import("@agent-anything/agent-runtime/runner").DescendantOperationOutcome {
-  const artifacts = Object.freeze(result.artifactRefs.slice(0, 64));
-  if (result.status === "succeeded") {
-    const summary = isHelarcOutput(result.finalOutput)
-      ? result.finalOutput.summary
-      : "Descendant Run completed.";
+  const artifacts = result.artifacts.refs;
+  const output = Object.freeze({
+    delegation_result_id: result.ref.id,
+    delegation_result_revision: result.ref.revision,
+    child_run_id: result.correlation.child.run.id,
+    status: result.terminal.status,
+    summary: result.narrative?.text ?? "",
+    artifact_refs: artifacts,
+    validation_status: result.validation.status,
+    effect_status: result.effects.status,
+    uncertainty: result.uncertainty,
+    failure_code: result.terminal.code,
+  });
+  const requiredMissing = result.expectationCoverage.some(
+    ({ required, disposition }) => required && disposition !== "present",
+  );
+  const uncertain = result.effects.status === "partial" ||
+    result.effects.status === "unknown" ||
+    result.limitDisposition.status === "exhausted";
+  if (result.terminal.status === "succeeded" && !requiredMissing && !uncertain) {
     return Object.freeze({
       status: "succeeded" as const,
-      output: Object.freeze({
-        child_run_id: result.runId,
-        status: "succeeded",
-        summary,
-        artifact_refs: artifacts,
-        failure_code: null,
-      }),
+      output,
       failure: null,
     });
   }
-  if (result.status === "blocked") {
+  if (result.terminal.status === "succeeded" || result.terminal.status === "blocked") {
     return Object.freeze({
       status: "partial" as const,
-      output: Object.freeze({
-        child_run_id: result.runId,
-        status: "stopped",
-        summary: "Descendant Run stopped without a safe completion path.",
-        artifact_refs: artifacts,
-        failure_code: result.code,
-      }),
-      failure: descendantFailure(result.code, "Descendant Run was blocked."),
+      output,
+      failure: descendantFailure(
+        result.terminal.code ?? "delegation_result_incomplete",
+        "Descendant result is incomplete, limited, or uncertain.",
+      ),
     });
   }
-  if (result.status === "cancelled") {
+  if (result.terminal.status === "cancelled") {
     return Object.freeze({
       status: "cancelled" as const,
       output: null,
-      failure: descendantFailure(result.code, "Descendant Run was cancelled."),
+      failure: descendantFailure(
+        result.terminal.code ?? "runtime_cancelled",
+        "Descendant Run was cancelled.",
+      ),
     });
   }
   return Object.freeze({
     status: "failed" as const,
     output: null,
-    failure: descendantFailure(result.code, "Descendant Run failed."),
+    failure: descendantFailure(
+      result.terminal.code ?? "descendant_run_failed",
+      "Descendant Run failed.",
+    ),
+  });
+}
+
+function snapshotPredecessorResult(candidate: unknown): {
+  readonly id: string;
+  readonly revision: string;
+} {
+  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+    throw new TypeError("predecessor_result must be an object.");
+  }
+  const value = candidate as Record<string, unknown>;
+  if (Object.keys(value).some((key) => key !== "id" && key !== "revision")) {
+    throw new TypeError("predecessor_result contains an unsupported field.");
+  }
+  return Object.freeze({
+    id: boundedText(value.id, 1_024, "predecessor_result.id"),
+    revision: boundedText(value.revision, 256, "predecessor_result.revision"),
   });
 }
 

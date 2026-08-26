@@ -8,6 +8,7 @@ import {
   createSucceededRunResult,
 } from "../run/index.js";
 import {
+  createDelegationContextMaterial,
   createDelegationContextPlan,
   createDelegationLimits,
   createDelegationResultExpectation,
@@ -137,7 +138,7 @@ describe("delegation request", () => {
     })).toThrow(/does not match the resolved child Agent/);
   });
 
-  it("rejects duplicate Context material and predecessor material without a predecessor", () => {
+  it("rejects duplicate Context material and Product-assigned predecessor material", () => {
     const root = material("root_purpose", "root-purpose-material", "mandatory");
     expect(() => createDelegationContextPlan({
       entries: [root, root],
@@ -151,7 +152,7 @@ describe("delegation request", () => {
           material("predecessor_result", "result-old", "optional"),
         ],
       }),
-    })).toThrow(/without a predecessor result/);
+    })).toThrow(/cannot assign trusted predecessor Context material/);
   });
 
   it("rejects request content changed after revision construction", () => {
@@ -189,11 +190,10 @@ describe("delegation request", () => {
   it("rejects a terminal predecessor from another root Run", () => {
     expect(() => request({
       preparation: preparation({
-        contextEntries: [
-          material("root_purpose", "root-purpose-material", "mandatory"),
-          material("predecessor_result", "result-old", "optional"),
-        ],
-        predecessor: {
+        predecessor: { id: "result-old", revision: "result-old-v1" },
+      }),
+      predecessor: {
+        correlation: {
           request: { id: "request-old", revision: "request-old-v1" },
           result: { id: "result-old", revision: "result-old-v1" },
           root: { id: "run-another-root" },
@@ -203,7 +203,13 @@ describe("delegation request", () => {
             agent: CHILD_AGENT,
           },
         },
-      }),
+        material: createDelegationContextMaterial({
+          owner: "agent-runtime",
+          kind: "delegation_result",
+          id: "result-old",
+          payload: Object.freeze({ summary: "Earlier result" }),
+        }),
+      },
     })).toThrow(/same root Run/);
   });
 });
@@ -356,6 +362,7 @@ describe("delegation steering route", () => {
 function request(overrides: {
   readonly toolCall?: ToolCall;
   readonly preparation?: DelegationPreparation;
+  readonly predecessor?: Parameters<typeof materializeDelegationRequest>[0]["predecessor"];
 } = {}) {
   return materializeDelegationRequest({
     requestId: "request-1",
@@ -364,6 +371,7 @@ function request(overrides: {
     preparation: overrides.preparation ?? preparation(),
     authorityDerivation: authorityDerivation(),
     limitDerivation: limitDerivation(),
+    predecessor: overrides.predecessor ?? null,
     createdAt: "2026-08-25T00:00:10.000Z",
   });
 }
@@ -597,6 +605,7 @@ function withinLimits() {
     actions: 1,
     durationMs: 60_000,
     contextBytes: 4_096,
+    resultBytes: 2_048,
   } as const;
 }
 

@@ -166,6 +166,7 @@ export class Runner {
       ordinaryConfig.config,
       null,
       null,
+      null,
       tree.rootLineage,
       tree,
       delegationResources,
@@ -205,6 +206,7 @@ export class Runner {
     let agent: Agent;
     let config: ValidatedRunConfig;
     let rootPurpose: DelegationContextMaterial;
+    let predecessor: DelegationContextMaterial | null;
     let contextBytes: number;
     let rejectionCode:
       | "delegation_request_invalid"
@@ -250,11 +252,14 @@ export class Runner {
         request,
         rootTask,
         rootPurpose: input.rootPurpose,
+        predecessor: input.predecessor,
       });
       rootPurpose = contextAssessment.rootPurpose;
+      predecessor = contextAssessment.predecessor;
       contextBytes = measureDelegationInitialContextBytes({
         rootPurpose: contextAssessment.rootPurpose,
         childTask: request.task,
+        predecessor: contextAssessment.predecessor,
       });
       if (contextBytes > request.limits.maxContextBytes) {
         throw new TypeError("Delegation initial Context exceeds its effective limit.");
@@ -354,6 +359,7 @@ export class Runner {
         rootConfig,
         request,
         rootPurpose,
+        predecessor,
         reservation.lineage,
         tree,
         delegationResources,
@@ -402,6 +408,7 @@ export class Runner {
     rootConfig: RunConfig,
     delegationRequest: DelegationRequest | null,
     delegationRootPurpose: DelegationContextMaterial | null,
+    delegationPredecessor: DelegationContextMaterial | null,
     lineage: RunLineage,
     tree: RunTreeExecution,
     delegationResources: DelegationResourceLedger,
@@ -453,6 +460,7 @@ export class Runner {
       rootConfig,
       delegationRequest,
       delegationRootPurpose,
+      delegationPredecessor,
       lineage,
       runtimeEventPublishers,
       runTraceObservers,
@@ -485,6 +493,9 @@ export class Runner {
       execution.submitInteraction(submission)
     );
     handle.bindSteering((steering) => execution.submitSteering(steering));
+    handle.bindDescendantSteering((route) =>
+      execution.submitDescendantSteering(route)
+    );
     this.activeRunIds.add(runId);
     tree.registerCancellation(runId, cancellation);
     tree.markStarted(runId, startedAt);
@@ -613,6 +624,9 @@ function snapshotRunnerDelegationComposition(
     typeof input.preparation !== "object" ||
     typeof input.preparation.assessAvailability !== "function" ||
     typeof input.preparation.prepare !== "function" ||
+    input.narrativeProjection === null ||
+    typeof input.narrativeProjection !== "object" ||
+    typeof input.narrativeProjection.project !== "function" ||
     input.resultProjection === null ||
     typeof input.resultProjection !== "object" ||
     typeof input.resultProjection.project !== "function"
@@ -624,6 +638,9 @@ function snapshotRunnerDelegationComposition(
       assessAvailability:
         input.preparation.assessAvailability.bind(input.preparation),
       prepare: input.preparation.prepare.bind(input.preparation),
+    }),
+    narrativeProjection: Object.freeze({
+      project: input.narrativeProjection.project.bind(input.narrativeProjection),
     }),
     resultProjection: Object.freeze({
       project: input.resultProjection.project.bind(input.resultProjection),

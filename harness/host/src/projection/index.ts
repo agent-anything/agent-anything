@@ -9,6 +9,7 @@ export {
   type CreateHostTerminalRunProjectionInput,
   type HostActionAttemptProjection,
   type HostActionExecutionProjectionUpdate,
+  type HostActiveDelegationProjection,
   type HostCancellationProjection,
   type HostCancellationProjectionUpdate,
   type HostEnforcementProjection,

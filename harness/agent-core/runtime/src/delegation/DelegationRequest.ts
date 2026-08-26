@@ -3,9 +3,11 @@ import {
   snapshotDelegationOriginCorrelation,
   snapshotDelegationPredecessorCorrelation,
   snapshotDelegationRequestRef,
+  snapshotDelegationResultRef,
   type DelegationOriginCorrelation,
   type DelegationPredecessorCorrelation,
   type DelegationRequestRef,
+  type DelegationResultRef,
 } from "@agent-anything/agent-core/delegation";
 import type { ContextJsonObject, ContextJsonValue } from "@agent-anything/context/contract";
 import type { ToolRevisionRef } from "@agent-anything/tools/identity";
@@ -113,7 +115,7 @@ export interface DelegationPreparation {
   readonly contextPlan: DelegationContextPlan;
   readonly requestedAuthority: readonly DelegationAuthorityDimensionInput[];
   readonly limits: DelegationLimits;
-  readonly predecessor: DelegationPredecessorCorrelation | null;
+  readonly predecessor: DelegationResultRef | null;
 }
 
 export interface DelegationToolCallCorrelation {
@@ -157,6 +159,10 @@ export function materializeDelegationRequest(input: {
   readonly preparation: DelegationPreparation;
   readonly authorityDerivation: DelegationAuthorityDerivation;
   readonly limitDerivation: DelegationLimitDerivation;
+  readonly predecessor: {
+    readonly correlation: DelegationPredecessorCorrelation;
+    readonly material: DelegationContextMaterial;
+  } | null;
   readonly createdAt: string;
 }): DelegationRequest {
   try {
@@ -167,6 +173,7 @@ export function materializeDelegationRequest(input: {
       "preparation",
       "authorityDerivation",
       "limitDerivation",
+      "predecessor",
       "createdAt",
     ]);
     const requestId = token(input.requestId, "requestId");
@@ -176,7 +183,45 @@ export function materializeDelegationRequest(input: {
     const limitDerivation = snapshotDelegationLimitDerivation(input.limitDerivation);
     const createdAt = isoDateTime(input.createdAt, "createdAt");
     const toolCall = snapshotToolCallCorrelation(input.toolCall, origin, preparation.childAgent);
-    const rootPurposeAnchor = preparation.contextPlan.entries.find(
+    const resolvedPredecessor = input.predecessor === null
+      ? null
+      : Object.freeze({
+          correlation: snapshotDelegationPredecessorCorrelation(
+            input.predecessor.correlation,
+          ),
+          material: snapshotDelegationContextMaterial(input.predecessor.material),
+        });
+    if ((preparation.predecessor === null) !== (resolvedPredecessor === null)) {
+      fail(
+        "delegation_predecessor_resolution_mismatch",
+        "Delegation predecessor proposal and trusted resolution disagree.",
+      );
+    }
+    if (
+      preparation.predecessor !== null &&
+      resolvedPredecessor !== null &&
+      (preparation.predecessor.id !== resolvedPredecessor.correlation.result.id ||
+        preparation.predecessor.revision !== resolvedPredecessor.correlation.result.revision)
+    ) {
+      fail(
+        "delegation_predecessor_result_mismatch",
+        "Delegation predecessor does not match the trusted settled result.",
+      );
+    }
+    const contextPlan = createDelegationContextPlan({
+      entries: Object.freeze([
+        ...preparation.contextPlan.entries,
+        ...(resolvedPredecessor === null
+          ? []
+          : [Object.freeze({
+              role: "predecessor_result" as const,
+              material: resolvedPredecessor.material.ref,
+              necessity: "mandatory" as const,
+            })]),
+      ]),
+      maxContextBytes: preparation.contextPlan.maxContextBytes,
+    });
+    const rootPurposeAnchor = contextPlan.entries.find(
       (entry) => entry.role === "root_purpose",
     )!.material;
 
@@ -207,7 +252,7 @@ export function materializeDelegationRequest(input: {
         "Delegation limit derivation does not contain the exact Product request ceiling.",
       );
     }
-    if (preparation.contextPlan.maxContextBytes > limitDerivation.effective.maxContextBytes) {
+    if (contextPlan.maxContextBytes > limitDerivation.effective.maxContextBytes) {
       fail(
         "delegation_context_limit_exceeded",
         "Delegation Context plan exceeds the effective attenuated Context limit.",
@@ -215,8 +260,8 @@ export function materializeDelegationRequest(input: {
     }
 
     if (
-      preparation.predecessor !== null &&
-      preparation.predecessor.root.id !== origin.root.run.id
+      resolvedPredecessor !== null &&
+      resolvedPredecessor.correlation.root.id !== origin.root.run.id
     ) {
       fail(
         "delegation_predecessor_wrong_root",
@@ -232,11 +277,11 @@ export function materializeDelegationRequest(input: {
       objective: preparation.objective,
       rootPurposeAnchor,
       expectedResult: preparation.expectedResult,
-      contextPlan: preparation.contextPlan,
+      contextPlan,
       authorityDerivation: authority.ref,
       limitDerivation: limitDerivation.ref,
       limits: limitDerivation.effective,
-      predecessor: preparation.predecessor,
+      predecessor: resolvedPredecessor?.correlation ?? null,
       createdAt,
     });
     const revision = createDelegationContractIdentity(
@@ -285,15 +330,14 @@ export function snapshotDelegationPreparation(
   const limits = snapshotDelegationLimits(input.limits);
   const predecessor = input.predecessor === null
     ? null
-    : snapshotDelegationPredecessorCorrelation(input.predecessor);
+    : snapshotDelegationResultRef(input.predecessor);
   const predecessorEntries = contextPlan.entries.filter(
     (entry) => entry.role === "predecessor_result",
   );
-  if (predecessor === null && predecessorEntries.length > 0) {
-    throw new TypeError("A Context plan cannot include predecessor material without a predecessor result.");
-  }
-  if (predecessor !== null && predecessorEntries.length !== 1) {
-    throw new TypeError("A continuation requires exactly one predecessor-result material reference.");
+  if (predecessorEntries.length > 0) {
+    throw new TypeError(
+      "Product preparation cannot assign trusted predecessor Context material.",
+    );
   }
   if (contextPlan.maxContextBytes > limits.maxContextBytes) {
     throw new TypeError("Delegation Context plan exceeds the request Context limit.");

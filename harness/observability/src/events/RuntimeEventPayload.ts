@@ -84,6 +84,14 @@ export interface RunDescendantRuntimeEventPayload {
   readonly relationId: string;
   readonly parentRunActionId: string;
   readonly childRunId: string;
+  readonly childAgentId: string;
+  readonly childAgentRevision: string;
+  readonly requestId: string;
+  readonly requestRevision: string;
+  readonly predecessorResultId: string | null;
+  readonly contextSourceCount: number;
+  readonly authorityDerivationId: string;
+  readonly limitDerivationId: string;
   readonly depth: number;
   readonly treeRevision: number;
 }
@@ -104,6 +112,8 @@ export type RuntimeDescendantRunFailureCode =
   | "delegation_authority_invalid"
   | "delegation_context_invalid"
   | "delegation_resource_limit_exceeded"
+  | "delegation_result_invalid"
+  | "delegation_result_projection_failed"
   | "descendant_run_start_failed";
 
 export interface RunDescendantRejectedRuntimeEventPayload {
@@ -119,6 +129,20 @@ export interface RunDescendantSettledRuntimeEventPayload
   extends RunDescendantRuntimeEventPayload {
   readonly status: RuntimeTerminalStatus;
   readonly code: string | null;
+  readonly resultId: string;
+  readonly resultRevision: string;
+  readonly expectationPresentCount: number;
+  readonly expectationUnmetCount: number;
+  readonly evidenceCount: number;
+  readonly artifactCount: number;
+  readonly validationStatus: string;
+  readonly effectStatus: string;
+  readonly uncertaintyCount: number;
+  readonly controllerTurns: number;
+  readonly actions: number;
+  readonly modelUsageStatus: "measured" | "partial" | "unavailable";
+  readonly limitStatus: "within_limits" | "exhausted";
+  readonly exhaustedLimit: string | null;
 }
 
 export type RuntimeContextTransitionOperationKind =

@@ -289,14 +289,26 @@ const AGENT = contract({
   inputSchema: objectSchema(["prompt"], {
     prompt: { type: "string", minLength: 1, maxLength: 64_000 },
     description: { type: "string", minLength: 1, maxLength: 1_024 },
+    predecessor_result: objectSchema(["id", "revision"], {
+      id: { type: "string", minLength: 1, maxLength: 1_024 },
+      revision: { type: "string", minLength: 1, maxLength: 256 },
+    }),
   }),
-  outputSchema: objectSchema(["child_run_id", "status", "summary", "artifact_refs", "failure_code"], {
+  outputSchema: objectSchema(["delegation_result_id", "delegation_result_revision", "child_run_id", "status", "summary", "artifact_refs", "validation_status", "effect_status", "uncertainty", "failure_code"], {
+    delegation_result_id: { type: "string", minLength: 1, maxLength: 1_024 },
+    delegation_result_revision: { type: "string", minLength: 1, maxLength: 256 },
     child_run_id: { type: "string", minLength: 1, maxLength: 1_024 },
-    status: { enum: ["succeeded", "stopped", "failed", "cancelled"] },
+    status: { enum: ["succeeded", "blocked", "failed", "cancelled"] },
     summary: { type: "string", maxLength: 64_000 },
     artifact_refs: {
       type: "array",
       items: { type: "string", minLength: 1, maxLength: 1_024 },
+    },
+    validation_status: { type: "string" },
+    effect_status: { type: "string" },
+    uncertainty: {
+      type: "array",
+      items: { type: "string", minLength: 1, maxLength: 256 },
     },
     failure_code: { anyOf: [{ type: "string" }, { type: "null" }] },
   }),

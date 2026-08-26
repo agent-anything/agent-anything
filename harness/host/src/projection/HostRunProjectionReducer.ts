@@ -84,6 +84,7 @@ export function reduceHostRunProjection(
         return applied(current, update.sequence, {
           status: update.terminal.status,
           pendingInteractions: Object.freeze([]),
+          activeDelegations: Object.freeze([]),
           cancellation: update.terminal.cancellation ?? current.cancellation,
           terminal: update.terminal,
         });
@@ -173,6 +174,14 @@ function applyRunOperation(
     plan: snapshot.plan,
     progress: projectHostRunProgress(snapshot.progress),
     pendingInteractions: Object.freeze(pendingInteractions),
+    activeDelegations: Object.freeze(snapshot.activeDelegations.map((delegation) =>
+      Object.freeze({
+        ...delegation,
+        request: Object.freeze({ ...delegation.request }),
+        relation: Object.freeze({ ...delegation.relation }),
+        child: Object.freeze({ ...delegation.child }),
+      })
+    )),
     retry: projectRetry(snapshot.retry),
     validation: snapshot.validation,
   });

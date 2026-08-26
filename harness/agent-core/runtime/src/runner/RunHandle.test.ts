@@ -93,6 +93,7 @@ describe("ActiveRunHandle", () => {
       retry: null,
       validation: null,
       pendingInteractions: [],
+      activeDelegations: [],
       result: null,
     });
 
@@ -126,6 +127,46 @@ describe("ActiveRunHandle", () => {
     expect(onSettled).toHaveBeenCalledOnce();
     expect(onSettled).toHaveBeenCalledWith(emergencyResult);
   });
+
+  it("delegates descendant steering only through its bound Runner route", () => {
+    const result = succeededResult();
+    const handle = new ActiveRunHandle(
+      "run-1",
+      cancellation(),
+      result,
+      runTree(0),
+      () => undefined,
+    );
+    const route = {
+      request: { id: "request-1", revision: "request-1-v1" },
+      relation: { id: "relation-1" },
+      child: { id: "run-child" },
+      steering: {
+        commandId: "steering-1",
+        expectedRunRevision: 2,
+        instruction: "Inspect the public contract.",
+        attribution: { origin: "user" as const, actorId: "user-1" },
+        submittedAt: NOW,
+      },
+    };
+    expect(handle.steerDescendant(route)).toMatchObject({
+      status: "rejected",
+      code: "delegation_route_invalid",
+    });
+    const routeImpl = vi.fn(() => Object.freeze({
+      status: "rejected" as const,
+      code: "delegation_child_settled" as const,
+      relation: route.relation,
+      child: route.child,
+    }));
+    handle.bindDescendantSteering(routeImpl);
+
+    expect(handle.steerDescendant(route)).toMatchObject({
+      status: "rejected",
+      code: "delegation_child_settled",
+    });
+    expect(routeImpl).toHaveBeenCalledWith(route);
+  });
 });
 
 function terminalUpdate(
@@ -139,8 +180,9 @@ function terminalUpdate(
     progress: projectRunProgress(createInitialRunProgressState(), null),
     retry: null,
     validation: null,
-    pendingInteractions: [],
-    result,
+      pendingInteractions: [],
+      activeDelegations: [],
+      result,
   };
 }
 

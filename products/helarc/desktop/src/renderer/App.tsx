@@ -613,7 +613,12 @@ export function RunTimelinePanel({
           <span>{`Model continuity: ${run.product.continuation.kind}`}</span>
         ) : null}
       </div>
-      {run !== null ? <RunTreePanel tree={run.host.runTree} /> : null}
+      {run !== null ? (
+        <RunTreePanel
+          tree={run.host.runTree}
+          activeDelegations={run.host.activeDelegations}
+        />
+      ) : null}
       {activity.length === 0 ? (
         <div className="run-waiting-state">
           <Activity size={16} aria-hidden="true" />
@@ -1173,8 +1178,10 @@ export function ClarificationPromptPanel({
 
 export function RunTreePanel({
   tree,
+  activeDelegations,
 }: {
   tree: ActiveRunProjection["host"]["runTree"];
+  activeDelegations: ActiveRunProjection["host"]["activeDelegations"];
 }) {
   return (
     <section className="run-tree" aria-label="Run hierarchy">
@@ -1184,8 +1191,12 @@ export function RunTreePanel({
         <span>{tree.activeDescendantRuns} active / {tree.totalDescendantRuns} descendants</span>
       </div>
       <div className="run-tree-list">
-        {tree.nodes.map((node) => (
-          <div
+        {tree.nodes.map((node) => {
+          const activeDelegation = activeDelegations.find(
+            ({ child }) => child.id === node.runId,
+          );
+          return (
+            <div
             className="run-tree-node"
             key={node.runId}
             style={{ "--run-indent": `${8 + Math.min(node.depth, 8) * 16}px` } as React.CSSProperties}
@@ -1197,11 +1208,17 @@ export function RunTreePanel({
               {node.parentRunActionId !== null ? (
                 <small title={node.parentRunActionId}>Created by {node.parentRunActionId}</small>
               ) : null}
+              {activeDelegation !== undefined ? (
+                <small title={activeDelegation.request.id}>
+                  Steerable at revision {activeDelegation.childRunRevision}
+                </small>
+              ) : null}
               {node.resultCode !== null ? <small>{node.resultCode}</small> : null}
             </div>
             <span className="run-tree-node-status">{node.status}</span>
-          </div>
-        ))}
+            </div>
+          );
+        })}
       </div>
       <div className="run-tree-limits">
         <span>Depth {tree.limits.maxDescendantDepth}</span>

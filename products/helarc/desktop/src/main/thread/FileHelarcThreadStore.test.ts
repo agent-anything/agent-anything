@@ -361,6 +361,7 @@ function projectionCommit(
             completedAt: null,
           }],
         },
+        activeDelegations: [],
         plan: null,
         progress: {
           checkpointSequence: 0,

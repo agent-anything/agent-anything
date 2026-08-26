@@ -28,8 +28,10 @@ describe("delegation Context construction", () => {
       request,
       rootTask,
       rootPurpose,
+      predecessor: null,
     })).toEqual({
       rootPurpose,
+      predecessor: null,
       omitted: [optional],
     });
   });
@@ -55,6 +57,7 @@ describe("delegation Context construction", () => {
       request,
       rootTask,
       rootPurpose,
+      predecessor: null,
     }))
       .toThrow("has no admitted source owner");
   });

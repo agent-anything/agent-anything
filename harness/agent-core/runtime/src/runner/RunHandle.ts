@@ -22,6 +22,10 @@ import {
 import type { RetryEvent } from "../retry/index.js";
 import type { ValidationHostProjection } from "@agent-anything/validation/projection";
 import type { RunTreeExecutionSnapshot } from "./RunTreeExecution.js";
+import type {
+  DelegationSteeringReceipt,
+  DelegationSteeringRoute,
+} from "../delegation/index.js";
 
 export interface RunPendingInteractionProjection {
   readonly envelope: SafeInteractionEnvelope<unknown>;
@@ -38,6 +42,15 @@ export interface RunRetryProjection {
   readonly recentEvents: readonly RetryEvent[];
 }
 
+export interface ActiveDelegationProjection {
+  readonly request: Readonly<{ readonly id: string; readonly revision: string }>;
+  readonly relation: Readonly<{ readonly id: string }>;
+  readonly child: Readonly<{ readonly id: string }>;
+  readonly childRunRevision: number;
+  readonly childStatus: RunLifecycleStatus;
+  readonly steerable: true;
+}
+
 export interface RunOperationSnapshot<TOutput = unknown> {
   readonly runId: string;
   readonly sequence: number;
@@ -49,6 +62,7 @@ export interface RunOperationSnapshot<TOutput = unknown> {
   readonly retry: RunRetryProjection | null;
   readonly validation: ValidationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
+  readonly activeDelegations: readonly ActiveDelegationProjection[];
   readonly runTree: RunTreeExecutionSnapshot;
   readonly result: RunResult<TOutput> | null;
 }
@@ -63,6 +77,7 @@ export interface RunHandle<TOutput = unknown> {
   subscribe(listener: RunOperationListener<TOutput>): () => void;
   cancel(input: RunCancellationRequestInput): RunCancellationReceipt;
   steer(input: RunSteeringInput): RunSteeringSubmissionReceipt;
+  steerDescendant(input: DelegationSteeringRoute): DelegationSteeringReceipt;
   submitInteraction(input: InteractionSubmissionInput): InteractionSubmissionOutcome;
   wait(): Promise<RunResult<TOutput>>;
   getResult(): RunResult<TOutput> | null;
@@ -77,6 +92,7 @@ export interface RunExecutionUpdate<TOutput> {
   readonly retry: RunRetryProjection | null;
   readonly validation: ValidationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
+  readonly activeDelegations: readonly ActiveDelegationProjection[];
   readonly result: RunResult<TOutput> | null;
 }
 
@@ -90,6 +106,8 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
   private settlementApplied = false;
   private submitInteractionImpl: ((input: InteractionSubmissionInput) => InteractionSubmissionOutcome) | null = null;
   private steerImpl: ((input: RunSteeringInput) => RunSteeringSubmissionReceipt) | null = null;
+  private steerDescendantImpl:
+    ((input: DelegationSteeringRoute) => DelegationSteeringReceipt) | null = null;
 
   constructor(
     runId: string,
@@ -110,6 +128,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       retry: null,
       validation: null,
       pendingInteractions: Object.freeze([]),
+      activeDelegations: Object.freeze([]),
       runTree: initialRunTree,
       result: null,
     });
@@ -144,6 +163,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       retry: update.retry,
       validation: update.validation,
       pendingInteractions: update.pendingInteractions,
+      activeDelegations: update.activeDelegations,
       runTree: this.snapshot.runTree,
       result: update.result,
     });
@@ -214,6 +234,27 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     return this.steerImpl(input);
   }
 
+  bindDescendantSteering(
+    steer: (input: DelegationSteeringRoute) => DelegationSteeringReceipt,
+  ): void {
+    if (this.steerDescendantImpl !== null) {
+      throw new TypeError("Descendant steering is already bound.");
+    }
+    this.steerDescendantImpl = steer;
+  }
+
+  steerDescendant(input: DelegationSteeringRoute): DelegationSteeringReceipt {
+    if (this.steerDescendantImpl === null) {
+      return Object.freeze({
+        status: "rejected" as const,
+        code: "delegation_route_invalid" as const,
+        relation: null,
+        child: null,
+      });
+    }
+    return this.steerDescendantImpl(input);
+  }
+
   bindInteractionSubmission(
     submit: (input: InteractionSubmissionInput) => InteractionSubmissionOutcome,
   ): void {
@@ -256,6 +297,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
         retry: this.snapshot.retry,
         validation: this.snapshot.validation,
         pendingInteractions: Object.freeze([]),
+        activeDelegations: Object.freeze([]),
         result,
       });
     }
@@ -317,6 +359,14 @@ function freezeSnapshot<TOutput>(
           recentEvents: Object.freeze([...snapshot.retry.recentEvents]),
         }),
     pendingInteractions: Object.freeze([...snapshot.pendingInteractions]),
+    activeDelegations: Object.freeze(snapshot.activeDelegations.map((delegation) =>
+      Object.freeze({
+        ...delegation,
+        request: Object.freeze({ ...delegation.request }),
+        relation: Object.freeze({ ...delegation.relation }),
+        child: Object.freeze({ ...delegation.child }),
+      })
+    )),
     runTree: snapshot.runTree,
   });
 }

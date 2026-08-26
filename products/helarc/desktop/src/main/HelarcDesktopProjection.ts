@@ -257,6 +257,7 @@ export function projectHelarcRunStatusQueryReceipt(
       status: receipt.projection.status,
       startedAt: receipt.projection.startedAt,
       runTree: projectRunTree(receipt.projection.runTree),
+      activeDelegations: projectActiveDelegations(receipt.projection.activeDelegations),
       progress: projectRunProgress(receipt.projection.progress),
       validation: projectHostValidation(receipt.projection.validation),
       pendingInteractions: receipt.projection.pendingInteractions.map(projectPendingInteraction),
@@ -322,6 +323,7 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
       startedAt: run.host.startedAt,
       runRevision: run.host.runRevision,
       runTree: projectRunTree(run.host.runTree),
+      activeDelegations: projectActiveDelegations(run.host.activeDelegations),
       progress: projectRunProgress(run.host.progress),
       validation: projectHostValidation(run.host.validation),
       pendingInteractions: run.host.pendingInteractions.map(projectPendingInteraction),
@@ -426,6 +428,19 @@ function projectRunTree(
       completedAt: node.completedAt,
     })),
   };
+}
+
+function projectActiveDelegations(
+  delegations: NonNullable<MainSnapshot["run"]>["host"]["activeDelegations"],
+): HelarcRunSnapshot["host"]["activeDelegations"] {
+  return delegations.map((delegation) => ({
+    request: { ...delegation.request },
+    relation: { ...delegation.relation },
+    child: { ...delegation.child },
+    childRunRevision: delegation.childRunRevision,
+    childStatus: delegation.childStatus,
+    steerable: true,
+  }));
 }
 
 function projectActivitySource(

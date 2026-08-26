@@ -57,6 +57,8 @@ import type {
   DelegationContextMaterial,
   DelegationLimits,
   DelegationPreparation,
+  DelegationRequest,
+  DelegationResult,
 } from "../delegation/index.js";
 
 export type RunnerIdentityKind =
@@ -76,6 +78,7 @@ export type RunnerIdentityKind =
   | "action"
   | "descendant_relation"
   | "delegation_request"
+  | "delegation_result"
   | "delegation_authority"
   | "delegation_limits"
   | "composite"
@@ -177,11 +180,19 @@ export interface DelegationPreparationPort {
 }
 
 export interface DelegationResultProjectionPort {
-  project(result: RunResult): DescendantOperationOutcome;
+  project(result: DelegationResult): DescendantOperationOutcome;
+}
+
+export interface DelegationNarrativeProjectionPort {
+  project(input: {
+    readonly request: DelegationRequest;
+    readonly finalOutput: unknown;
+  }): string | null;
 }
 
 export interface RunnerDelegationComposition {
   readonly preparation: DelegationPreparationPort;
+  readonly narrativeProjection: DelegationNarrativeProjectionPort;
   readonly resultProjection: DelegationResultProjectionPort;
 }
 

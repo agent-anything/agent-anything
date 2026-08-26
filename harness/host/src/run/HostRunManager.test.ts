@@ -173,6 +173,7 @@ function createFakeHandle(runId: string) {
     progress: initialProgress(),
     retry: null,
     pendingInteractions: [],
+    activeDelegations: [],
     validation: null,
     runTree: rootTree(runId),
     result: null,

@@ -60,6 +60,20 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
         code: status === "succeeded"
           ? exact(payload.code, null, "run.descendant.settled.code")
           : token(payload.code, "run.descendant.settled.code"),
+        resultId: token(payload.resultId, "run.descendant.settled.resultId"),
+        resultRevision: token(payload.resultRevision, "run.descendant.settled.resultRevision"),
+        expectationPresentCount: nonNegativeInteger(payload.expectationPresentCount, "run.descendant.settled.expectationPresentCount"),
+        expectationUnmetCount: nonNegativeInteger(payload.expectationUnmetCount, "run.descendant.settled.expectationUnmetCount"),
+        evidenceCount: nonNegativeInteger(payload.evidenceCount, "run.descendant.settled.evidenceCount"),
+        artifactCount: nonNegativeInteger(payload.artifactCount, "run.descendant.settled.artifactCount"),
+        validationStatus: token(payload.validationStatus, "run.descendant.settled.validationStatus"),
+        effectStatus: token(payload.effectStatus, "run.descendant.settled.effectStatus"),
+        uncertaintyCount: nonNegativeInteger(payload.uncertaintyCount, "run.descendant.settled.uncertaintyCount"),
+        controllerTurns: nonNegativeInteger(payload.controllerTurns, "run.descendant.settled.controllerTurns"),
+        actions: nonNegativeInteger(payload.actions, "run.descendant.settled.actions"),
+        modelUsageStatus: oneOf(payload.modelUsageStatus, ["measured", "partial", "unavailable"] as const, "run.descendant.settled.modelUsageStatus"),
+        limitStatus: oneOf(payload.limitStatus, ["within_limits", "exhausted"] as const, "run.descendant.settled.limitStatus"),
+        exhaustedLimit: nullableToken(payload.exhaustedLimit, "run.descendant.settled.exhaustedLimit"),
       }) as unknown as RuntimeEventPayloadMap[TName];
     }
     case "context.transition.committed":
@@ -202,6 +216,8 @@ const descendantFailureCodes: readonly RuntimeDescendantRunFailureCode[] = [
   "delegation_authority_invalid",
   "delegation_context_invalid",
   "delegation_resource_limit_exceeded",
+  "delegation_result_invalid",
+  "delegation_result_projection_failed",
   "descendant_run_start_failed",
 ];
 
@@ -213,6 +229,14 @@ function descendant(
     relationId: token(input.relationId, `${name}.relationId`),
     parentRunActionId: token(input.parentRunActionId, `${name}.parentRunActionId`),
     childRunId: token(input.childRunId, `${name}.childRunId`),
+    childAgentId: token(input.childAgentId, `${name}.childAgentId`),
+    childAgentRevision: token(input.childAgentRevision, `${name}.childAgentRevision`),
+    requestId: token(input.requestId, `${name}.requestId`),
+    requestRevision: token(input.requestRevision, `${name}.requestRevision`),
+    predecessorResultId: nullableToken(input.predecessorResultId, `${name}.predecessorResultId`),
+    contextSourceCount: positive(input.contextSourceCount, `${name}.contextSourceCount`),
+    authorityDerivationId: token(input.authorityDerivationId, `${name}.authorityDerivationId`),
+    limitDerivationId: token(input.limitDerivationId, `${name}.limitDerivationId`),
     depth: positive(input.depth, `${name}.depth`),
     treeRevision: nonNegativeInteger(input.treeRevision, `${name}.treeRevision`),
   });

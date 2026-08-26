@@ -72,6 +72,10 @@ export {
   HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE,
   HELARC_CURRENT_TURN_TOOL_EXPOSURE_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcCurrentTurnToolExposureBaseline.js";
+export {
+  HELARC_DELEGATION_TRANSFER_ACCEPTED_BASELINE,
+  HELARC_DELEGATION_TRANSFER_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcDelegationTransferBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export type {

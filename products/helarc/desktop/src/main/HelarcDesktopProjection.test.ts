@@ -9,6 +9,7 @@ describe("Helarc Desktop IPC projection", () => {
     const projected = projectHelarcDesktopSnapshot(snapshotWithRun([]));
 
     expect(Object.keys(projected.run?.host ?? {}).sort()).toEqual([
+      "activeDelegations",
       "pendingInteractions",
       "progress",
       "runRevision",
@@ -214,6 +215,7 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
           completedAt: null,
         }],
       },
+      activeDelegations: [],
       progress: {
         checkpointSequence: 3,
         disposition: "repeated",

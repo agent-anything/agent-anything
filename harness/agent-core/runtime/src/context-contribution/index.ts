@@ -3,6 +3,8 @@ export {
   createCurrentRunContextAdmissionProfile,
   createDelegationRootPurposeContextAdmissionProfile,
   createDelegationRootPurposeContextContribution,
+  createDelegationPredecessorContextAdmissionProfile,
+  createDelegationPredecessorContextContribution,
   measureDelegationInitialContextBytes,
   createObservationContextContribution,
   createObservationContextAdmissionProfile,

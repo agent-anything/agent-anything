@@ -334,6 +334,14 @@ describe("HostRunProjectionReducer", () => {
     projection = apply(projection, runOperationUpdate(2, {
       sequence: 1,
       runTree: treeWithChild(2),
+      activeDelegations: [{
+        request: { id: "request-1", revision: "request-1-v1" },
+        relation: { id: "relation-1" },
+        child: { id: "run-child" },
+        childRunRevision: 4,
+        childStatus: "running",
+        steerable: true,
+      }],
     }));
     expect(projection.runTree).toMatchObject({
       revision: 2,
@@ -345,6 +353,15 @@ describe("HostRunProjectionReducer", () => {
       ],
     });
     expect(JSON.stringify(projection.runTree)).not.toContain("delegated prompt");
+    expect(projection.activeDelegations).toEqual([{
+      request: { id: "request-1", revision: "request-1-v1" },
+      relation: { id: "relation-1" },
+      child: { id: "run-child" },
+      childRunRevision: 4,
+      childStatus: "running",
+      steerable: true,
+    }]);
+    expect(Object.isFrozen(projection.activeDelegations[0]?.request)).toBe(true);
 
     expect(reduceHostRunProjection(projection, runOperationUpdate(3, {
       sequence: 2,
@@ -426,6 +443,7 @@ function runOperationUpdate(
       retry: null,
       validation: null,
       pendingInteractions: [],
+      activeDelegations: [],
       runTree: rootTree(),
       result: null,
       ...overrides,

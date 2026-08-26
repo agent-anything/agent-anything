@@ -156,6 +156,14 @@ describe("Helarc workbench shell", () => {
               completedAt: "2026-07-05T01:00:02.000Z",
             }],
           },
+          activeDelegations: [{
+            request: { id: "request-1", revision: "request-1-v1" },
+            relation: { id: "relation-1" },
+            child: { id: "harness-run-2" },
+            childRunRevision: 6,
+            childStatus: "running",
+            steerable: true,
+          }],
           activity: [event("event-1", "run.completed", "Run completed", "info")],
         })}
         acceptedTask={{ id: "task-1", prompt: "Inspect code" }}
@@ -167,6 +175,7 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Descendant depth 1");
     expect(html).toContain("Descendant depth 2");
     expect(html).toContain("Created by action-1");
+    expect(html).toContain("Steerable at revision 6");
     expect(html).toContain("cancelling");
     expect(html).toContain("controller_failed");
     expect(html).not.toContain("delegatedPrompt");
@@ -426,6 +435,7 @@ function runProjection(input: {
   runtimeStatus?: "succeeded" | "blocked" | "failed" | "cancelled";
   activity?: ReturnType<typeof event>[];
   runTree?: NonNullable<HelarcMainSnapshot["run"]>["host"]["runTree"];
+  activeDelegations?: NonNullable<HelarcMainSnapshot["run"]>["host"]["activeDelegations"];
   progress?: NonNullable<HelarcMainSnapshot["run"]>["host"]["progress"];
   terminalCode?: NonNullable<
     NonNullable<HelarcMainSnapshot["run"]>["host"]["terminal"]
@@ -451,6 +461,7 @@ function runProjection(input: {
       startedAt: "2026-07-05T01:00:00.000Z",
       runRevision: 0,
       runTree: input.runTree ?? rootRunTree(),
+      activeDelegations: input.activeDelegations ?? [],
       progress: input.progress ?? {
         checkpointSequence: 0,
         disposition: null,
