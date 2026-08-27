@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   snapshotModelMessage,
   type ModelMessage,
@@ -32,6 +33,21 @@ export interface ModelTurn {
   readonly finish: ModelTurnFinish;
   readonly usage: ProviderUsage | null;
   readonly responseRef: ProviderResponseRef;
+}
+
+export function createModelTurnId(input: {
+  readonly providerId: string;
+  readonly requestId: string;
+  readonly responseId: string | null;
+}): string {
+  const identity = Object.freeze({
+    providerId: token(input.providerId, "ModelTurn.providerId"),
+    requestId: token(input.requestId, "ModelTurn.requestId"),
+    responseId: nullableToken(input.responseId, "ModelTurn.responseId"),
+  });
+  return `model-turn:sha256:${createHash("sha256")
+    .update(JSON.stringify(identity), "utf8")
+    .digest("hex")}`;
 }
 
 export function snapshotModelTurn(input: ModelTurn): ModelTurn {

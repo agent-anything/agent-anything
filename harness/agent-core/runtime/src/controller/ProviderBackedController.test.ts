@@ -1416,6 +1416,10 @@ function request(content: string): TestProviderRequest {
   return {
     messages: [{ role: "user", content: [{ kind: "text", text: content }] }],
     purpose: "agent-control",
+    correlation: {
+      controllerRequestId: "run_001:controller:1",
+      branchId: "run_001:main",
+    },
     interaction: { kind: "structured_generation", outputFormat: TEST_OUTPUT_FORMAT },
     continuation: null,
     metadata: {},

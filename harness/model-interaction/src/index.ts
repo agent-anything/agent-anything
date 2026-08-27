@@ -22,6 +22,7 @@ export type {
   ProviderCallRef,
 } from "./ModelCall.js";
 export {
+  createModelCallRef,
   modelCallRefKey,
   snapshotModelCallRef,
   snapshotModelToolCall,
@@ -57,7 +58,11 @@ export type {
   ModelTurnFinish,
   ProviderResponseRef,
 } from "./ModelTurn.js";
-export { snapshotModelTurn, snapshotModelTurnFinish } from "./ModelTurn.js";
+export {
+  createModelTurnId,
+  snapshotModelTurn,
+  snapshotModelTurnFinish,
+} from "./ModelTurn.js";
 export type {
   ModelOutputFormat,
   StructuredOutputFormat,
@@ -69,7 +74,10 @@ export {
   providerInteractionsEqual,
   snapshotProviderInteraction,
 } from "./ProviderInteraction.js";
-export type { ProviderRequest } from "./ProviderRequest.js";
+export type {
+  ProviderRequest,
+  ProviderRequestCorrelation,
+} from "./ProviderRequest.js";
 export { snapshotProviderRequest } from "./ProviderRequest.js";
 export type {
   ProviderFailure,

@@ -159,6 +159,10 @@ function createRequest(requestId: string): ProviderRequest {
   return {
     requestId,
     purpose: "tool-planning",
+    correlation: {
+      controllerRequestId: `${requestId}:controller`,
+      branchId: `${requestId}:branch`,
+    },
     messages: modelMessagesFromComposition(composition),
     interaction,
     composition,

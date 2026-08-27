@@ -1,5 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { readProviderHttpFailureMetadata } from "./ProviderHttpFailureMetadata.js";
+import {
+  classifyProviderHttpFailure,
+  readProviderHttpFailureMetadata,
+} from "./ProviderHttpFailureMetadata.js";
+
+describe("classifyProviderHttpFailure", () => {
+  it("keeps authentication, timeout, rate limit, availability, and other HTTP failures distinct", () => {
+    expect(classifyProviderHttpFailure(401)).toMatchObject({
+      category: "authentication",
+      code: "provider_authentication_failed",
+    });
+    expect(classifyProviderHttpFailure(408)).toMatchObject({
+      category: "timeout",
+      code: "provider_timeout",
+    });
+    expect(classifyProviderHttpFailure(429)).toMatchObject({
+      category: "rate_limit",
+      code: "provider_rate_limited",
+    });
+    expect(classifyProviderHttpFailure(503)).toMatchObject({
+      category: "server_error",
+      code: "provider_remote_unavailable",
+    });
+    expect(classifyProviderHttpFailure(500)).toMatchObject({
+      category: "server_error",
+      code: "provider_server_error",
+    });
+    expect(classifyProviderHttpFailure(400)).toMatchObject({
+      category: "http",
+      code: "provider_http_error",
+    });
+  });
+});
 
 describe("readProviderHttpFailureMetadata", () => {
   it("normalizes delta-seconds and an allowlisted request id", () => {

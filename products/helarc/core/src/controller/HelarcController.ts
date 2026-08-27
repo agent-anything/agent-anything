@@ -200,6 +200,10 @@ export function buildHelarcProviderRequest(
   return {
     requestId: composition.id,
     purpose: HELARC_CONTROLLER_CAPABILITY,
+    correlation: {
+      controllerRequestId: input.toolExposure.controllerRequestId,
+      branchId: `${input.runId}:main`,
+    },
     interaction,
     metadata: {
       runId: input.runId,

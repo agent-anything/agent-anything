@@ -439,6 +439,8 @@ const expectedLowerValueExports = {
     "createControllerTurnTraceOperationId",
   ],
   "@agent-anything/model-interaction": [
+    "createModelCallRef",
+    "createModelTurnId",
     "createNativeToolTurnInteraction",
     "createProviderAttemptInterruption",
     "modelCallRefKey",
@@ -1094,7 +1096,10 @@ const expectedVerificationValueExports = {
 };
 
 const expectedProviderIntegrationValueExports = {
-  "@agent-anything/provider-integrations/http": ["readProviderHttpFailureMetadata"],
+  "@agent-anything/provider-integrations/http": [
+    "classifyProviderHttpFailure",
+    "readProviderHttpFailureMetadata",
+  ],
   "@agent-anything/provider-integrations/ollama": ["OllamaProvider"],
   "@agent-anything/provider-integrations/openai-compatible": ["OpenAICompatibleProvider"],
 };

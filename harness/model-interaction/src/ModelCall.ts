@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ModelJsonValue } from "./ModelInteractionContractValidation.js";
 import {
   nonNegativeInteger,
@@ -55,6 +56,31 @@ export interface ModelToolResult {
   readonly settlement: ModelCallSettlementKind;
   readonly content: ModelJsonValue;
   readonly sourceRefs: readonly ModelCallSettlementSourceRef[];
+}
+
+export function createModelCallRef(input: {
+  readonly providerRequestId: string;
+  readonly controllerRequestId: string;
+  readonly turnId: string;
+  readonly contentBlockOrdinal: number;
+  readonly branchId: string;
+}): ModelCallRef {
+  const identity = {
+    providerRequestId: token(input.providerRequestId, "ModelCallRef.providerRequestId"),
+    controllerRequestId: token(input.controllerRequestId, "ModelCallRef.controllerRequestId"),
+    turnId: token(input.turnId, "ModelCallRef.turnId"),
+    contentBlockOrdinal: nonNegativeInteger(
+      input.contentBlockOrdinal,
+      "ModelCallRef.contentBlockOrdinal",
+    ),
+    branchId: token(input.branchId, "ModelCallRef.branchId"),
+  };
+  return snapshotModelCallRef({
+    id: `model-call:sha256:${createHash("sha256")
+      .update(JSON.stringify(identity), "utf8")
+      .digest("hex")}`,
+    ...identity,
+  });
 }
 
 export function snapshotModelCallRef(input: ModelCallRef): ModelCallRef {

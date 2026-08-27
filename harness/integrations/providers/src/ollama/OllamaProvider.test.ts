@@ -9,6 +9,11 @@ import {
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FetchLike } from "../http/ProviderHttpTransport.js";
+import {
+  createNativeProviderRequest,
+  createSettledToolResultMessage,
+  defaultMessages,
+} from "../native-tool-conformance/NativeToolInteractionTestSupport.js";
 import { OllamaProvider } from "./OllamaProvider.js";
 
 describe("OllamaProvider", () => {
@@ -53,6 +58,115 @@ describe("OllamaProvider", () => {
         usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
       },
     });
+  });
+
+  it("uses /api/chat for native Tools and replays calls and results by trusted order and name", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const provider = new OllamaProvider(config(), async (url, init) => {
+      calls.push({ url, body: JSON.parse(init.body) as Record<string, unknown> });
+      return calls.length === 1
+        ? okResponse({
+            message: {
+              role: "assistant",
+              content: "Inspecting.",
+              thinking: "must not enter normalized output",
+              tool_calls: [{
+                type: "function",
+                function: { name: "Read", arguments: { file_path: "package.json" } },
+              }],
+            },
+            done: true,
+            done_reason: "stop",
+            prompt_eval_count: 3,
+            eval_count: 4,
+          })
+        : okResponse({
+            message: { role: "assistant", content: "Done.", tool_calls: [] },
+            done: true,
+            done_reason: "stop",
+          });
+    });
+
+    const firstRequest = createNativeProviderRequest(provider);
+    const first = await provider.send(firstRequest, context());
+    if (first.kind !== "succeeded" || first.response.kind !== "native_tool_turn") {
+      throw new TypeError("Expected one native Ollama turn.");
+    }
+    const callBlock = first.response.turn.assistant.content.find(
+      (block) => block.kind === "model_tool_call",
+    );
+    if (callBlock?.kind !== "model_tool_call") throw new TypeError("Expected one Tool call.");
+    const secondMessages = [
+      ...defaultMessages(),
+      first.response.turn.assistant,
+      createSettledToolResultMessage(callBlock.call),
+    ];
+    await expect(provider.send(createNativeProviderRequest(provider, {
+      requestId: "native-request-2",
+      messages: secondMessages,
+    }), context())).resolves.toMatchObject({
+      kind: "succeeded",
+      response: {
+        kind: "native_tool_turn",
+        turn: { finish: { kind: "normal" } },
+      },
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({
+      url: "http://localhost:11434/api/chat",
+      body: {
+        model: "gemma3:4b",
+        messages: [
+          { role: "system", content: "Use the available callable when needed." },
+          { role: "user", content: "Inspect package.json." },
+        ],
+        tools: [{
+          type: "function",
+          function: {
+            name: "Read",
+            description: "Read one workspace file.",
+            parameters: expect.any(Object),
+          },
+        }, {
+          type: "function",
+          function: {
+            name: "Search",
+            description: "Search workspace text.",
+            parameters: expect.any(Object),
+          },
+        }],
+        stream: false,
+      },
+    });
+    expect(calls[0]?.body).not.toHaveProperty("format");
+    expect(calls[0]?.body).not.toHaveProperty("think");
+    expect(new TextEncoder().encode(JSON.stringify(calls[0]?.body)).byteLength)
+      .toBe(firstRequest.composition.accounting.inputAmount);
+    expect(calls[1]?.body).toMatchObject({
+      messages: [
+        expect.any(Object),
+        expect.any(Object),
+        {
+          role: "assistant",
+          content: "Inspecting.",
+          tool_calls: [{
+            type: "function",
+            function: {
+              index: 0,
+              name: "Read",
+              arguments: { file_path: "package.json" },
+            },
+          }],
+        },
+        {
+          role: "tool",
+          tool_name: "Read",
+          content: "{\"text\":\"file contents\"}",
+        },
+      ],
+    });
+    expect(JSON.stringify(first)).not.toContain("must not enter normalized output");
   });
 
   it("projects a canonical discriminated union into the Ollama schema dialect", async () => {
@@ -177,7 +291,7 @@ describe("OllamaProvider", () => {
     expect(result).toMatchObject({
       kind: "failed",
       failure: {
-        code: "provider_http_error",
+        code: "provider_server_error",
         message: "Provider request failed with HTTP 500.",
         statusCode: 500,
       },
@@ -224,6 +338,47 @@ describe("OllamaProvider", () => {
       kind: "failed",
       failure: { code: "provider_response_malformed" },
     });
+  });
+
+  it("rejects incomplete chat turns and invalid JSON response bodies", async () => {
+    const incomplete = new OllamaProvider(config(), async () => okResponse({
+      message: { role: "assistant", content: "partial", tool_calls: [] },
+      done: false,
+    }));
+    await expect(incomplete.send(createNativeProviderRequest(incomplete), context()))
+      .resolves.toMatchObject({
+        kind: "failed",
+        failure: { code: "provider_response_incomplete" },
+      });
+
+    const invalidJson = new OllamaProvider(config(), async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        throw new SyntaxError("invalid JSON");
+      },
+    }));
+    await expect(invalidJson.send(createNativeProviderRequest(invalidJson), context()))
+      .resolves.toMatchObject({
+        kind: "failed",
+        failure: { category: "response", code: "provider_response_malformed" },
+      });
+  });
+
+  it("assigns stable internal call refs for the same request and response lineage", async () => {
+    const provider = new OllamaProvider(config(), async () => okResponse({
+      message: {
+        role: "assistant",
+        content: "",
+        tool_calls: [{ function: { name: "Read", arguments: { file_path: "a.txt" } } }],
+      },
+      done: true,
+      done_reason: "stop",
+    }));
+    const nativeRequest = createNativeProviderRequest(provider);
+    const first = await provider.send(nativeRequest, context());
+    const second = await provider.send(nativeRequest, context());
+    expect(modelCallIds(first)).toEqual(modelCallIds(second));
   });
 
   it("maps timeout failures", async () => {
@@ -279,6 +434,7 @@ function config() {
     baseUrl: "http://localhost:11434/",
     model: "gemma3:4b",
     timeoutMs: 1000,
+    nativeToolInteraction: { supported: true },
     inputLimit: { maximumBytes: 1_024 * 1_024, source: "host_configured" as const },
   };
 }
@@ -341,6 +497,10 @@ function request(
   return {
     requestId: composition.id,
     purpose: "helarc.code-agent.plan",
+    correlation: {
+      controllerRequestId: "controller-request-1",
+      branchId: "branch-1",
+    },
     interaction: composition.interaction,
     continuation: null,
     messages: modelMessagesFromComposition(composition),
@@ -368,7 +528,7 @@ function testLineage() {
     instructionRelease: { owner: "provider-test", kind: "agent_instruction_release", id: "release", revision: "1" },
     instructionResolver: { owner: "provider-test", kind: "agent_instruction_resolver", id: "resolver", revision: "1" },
     instructionContent: { owner: "agent-core", kind: "agent_instruction_content_digest", id: "instructions", revision: "1" },
-    instructionModel: { providerId: "ollama.generate", model: "gemma3:4b" },
+    instructionModel: { providerId: "ollama.api", model: "gemma3:4b" },
     instructionBlocks: [{ owner: "provider-test", kind: "message", id: "system", revision: "1" }],
     activeContext: null,
     contextProjection: null,
@@ -461,4 +621,12 @@ function okResponse(value: unknown) {
       return value;
     },
   };
+}
+
+function modelCallIds(result: Awaited<ReturnType<OllamaProvider["send"]>>): string[] {
+  if (result.kind !== "succeeded" || result.response.kind !== "native_tool_turn") {
+    throw new TypeError("Expected a successful native Tool turn.");
+  }
+  return result.response.turn.assistant.content.flatMap((block) =>
+    block.kind === "model_tool_call" ? [block.call.modelCallRef.id] : []);
 }

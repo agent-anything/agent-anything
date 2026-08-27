@@ -146,6 +146,7 @@ function createProvider(input) {
       baseUrl: input.baseUrl,
       model: input.model,
       timeoutMs: input.timeoutMs,
+      nativeToolInteraction: { supported: false },
       inputLimit: {
         maximumBytes: input.maximumInputBytes,
         source: "host_configured",
@@ -158,6 +159,7 @@ function createProvider(input) {
       apiKey: process.env.HELARC_EVALUATION_API_KEY ?? "",
       model: input.model,
       timeoutMs: input.timeoutMs,
+      nativeToolInteraction: { supported: false },
       inputLimit: {
         maximumBytes: input.maximumInputBytes,
         source: "host_configured",

@@ -74,7 +74,7 @@ export function createUtf8ModelInputAccounting(
       content,
       accounting: Object.freeze({
         unit: "bytes" as const,
-        amount: utf8Length(renderSectionPayload(content)),
+        amount: modelInputContentPayloadAmount(content),
       }),
     });
   };
@@ -177,10 +177,10 @@ function snapshotContent(content: ModelInputContent): ModelInputContent {
   });
 }
 
-function renderSectionPayload(content: ModelInputContent): string {
-  if (content.kind === "text") return content.text;
-  if (content.kind === "structured") return JSON.stringify(content.value);
-  return JSON.stringify(content.message.content);
+function modelInputContentPayloadAmount(content: ModelInputContent): number {
+  if (content.kind === "text") return utf8Length(content.text);
+  if (content.kind === "structured") return utf8Length(JSON.stringify(content.value));
+  return semanticMessagePayloadAmount([content.message]);
 }
 
 function semanticMessagePayloadAmount(messages: readonly ModelMessage[]): number {

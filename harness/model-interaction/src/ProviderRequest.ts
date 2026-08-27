@@ -27,6 +27,7 @@ import {
 export interface ProviderRequest {
   readonly requestId: string;
   readonly purpose: string;
+  readonly correlation: ProviderRequestCorrelation;
   readonly messages: readonly ModelMessage[];
   readonly interaction: ProviderInteraction;
   readonly composition: ModelInputComposition;
@@ -34,9 +35,14 @@ export interface ProviderRequest {
   readonly metadata: { readonly [key: string]: ModelJsonValue };
 }
 
+export interface ProviderRequestCorrelation {
+  readonly controllerRequestId: string;
+  readonly branchId: string;
+}
+
 export function snapshotProviderRequest(input: ProviderRequest): ProviderRequest {
   strictRecord(input, "ProviderRequest", [
-    "requestId", "purpose", "messages", "interaction", "composition",
+    "requestId", "purpose", "correlation", "messages", "interaction", "composition",
     "continuation", "metadata",
   ]);
   const messages = snapshotModelMessages(input.messages);
@@ -56,6 +62,7 @@ export function snapshotProviderRequest(input: ProviderRequest): ProviderRequest
   return Object.freeze({
     requestId: token(input.requestId, "ProviderRequest.requestId"),
     purpose: token(input.purpose, "ProviderRequest.purpose"),
+    correlation: snapshotProviderRequestCorrelation(input.correlation),
     messages,
     interaction,
     composition,
@@ -63,5 +70,20 @@ export function snapshotProviderRequest(input: ProviderRequest): ProviderRequest
       ? null
       : snapshotModelContinuationRef(input.continuation),
     metadata: metadata as { readonly [key: string]: ModelJsonValue },
+  });
+}
+
+function snapshotProviderRequestCorrelation(
+  input: ProviderRequestCorrelation,
+): ProviderRequestCorrelation {
+  strictRecord(input, "ProviderRequest.correlation", [
+    "controllerRequestId", "branchId",
+  ]);
+  return Object.freeze({
+    controllerRequestId: token(
+      input.controllerRequestId,
+      "ProviderRequest.correlation.controllerRequestId",
+    ),
+    branchId: token(input.branchId, "ProviderRequest.correlation.branchId"),
   });
 }

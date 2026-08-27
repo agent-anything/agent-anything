@@ -1045,7 +1045,12 @@ function checkExecutionSourceTopology() {
     },
     {
       packagePath: "harness/integrations/providers",
-      allowedSourceEntries: ["http", "ollama", "openai-compatible"],
+      allowedSourceEntries: [
+        "http",
+        "native-tool-conformance",
+        "ollama",
+        "openai-compatible",
+      ],
       forbiddenPaths: ["src/index.ts"],
     },
     {

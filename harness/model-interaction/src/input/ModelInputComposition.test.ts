@@ -169,6 +169,62 @@ describe("complete Model Input Composition", () => {
       composition,
     })).toThrow("does not match");
   });
+
+  it("keeps model-message section accounting equal to final encoded bytes", () => {
+    const renderRequest = (messages: Parameters<typeof messageText>[0]) =>
+      JSON.stringify({ messages });
+    const accounting = createUtf8ModelInputAccounting({
+      providerId: "provider-1",
+      model: "model-1",
+      maximumInputBytes: 1_024,
+      limitSource: "host_configured",
+      estimator: { id: "test-utf8", revision: "1" },
+      framing: { id: "model-message-framing", revision: "1" },
+      renderRequest,
+    });
+    const historyMessage = {
+      role: "assistant" as const,
+      content: [{ kind: "text" as const, text: "Prior response." }],
+    };
+    const composition = composeModelInput({
+      id: "composition-history",
+      providerId: "provider-1",
+      model: "model-1",
+      accounting,
+      interaction: { kind: "text_generation" },
+      outputReserve: { unit: "bytes", amount: 0 },
+      contextBudget: { unit: "bytes", amount: 0 },
+      contextProjectedAmount: 0,
+      sections: [
+        section("system", "system", "rules"),
+        {
+          id: "history",
+          source: { owner: "test", kind: "history", id: "history", revision: "1" },
+          kind: "interaction_history",
+          role: "assistant",
+          necessity: "mandatory",
+          content: { kind: "model_message", message: historyMessage },
+        },
+      ],
+      lineage: { ...lineage(), interactionHistory: {
+        owner: "test", kind: "history", id: "history", revision: "1",
+      } },
+      composedAt: "2026-08-27T00:00:00.000Z",
+    });
+    const encodedRequest = renderRequest(composition.messages);
+
+    expect(composition.accounting.inputAmount).toBe(
+      new TextEncoder().encode(encodedRequest).byteLength,
+    );
+    expect(() => accounting.verifyEncoded({
+      providerId: "provider-1",
+      model: "model-1",
+      messages: composition.messages,
+      interaction: composition.interaction,
+      composition,
+      encodedRequest,
+    })).not.toThrow();
+  });
 });
 
 function testAccounting(maximumInputBytes: number) {

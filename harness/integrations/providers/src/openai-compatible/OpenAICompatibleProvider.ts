@@ -1,12 +1,19 @@
+import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import {
+  createModelCallRef,
+  createModelTurnId,
   createProviderAttemptInterruption,
   providerResultFromInterruption,
+  snapshotProviderResponse,
+  type ModelJsonValue,
+  type ModelMessage,
+  type ModelToolCall,
+  type ModelTurnFinish,
   type Provider,
   type ProviderCallResult,
   type ProviderDescriptor,
   type ProviderFailure,
   type ProviderInteraction,
-  type ModelMessage,
   type ProviderRequest,
   type ProviderResponse,
 } from "@agent-anything/model-interaction";
@@ -14,17 +21,23 @@ import {
   createUtf8ModelInputAccounting,
   type ProviderModelInputAccounting,
 } from "@agent-anything/model-interaction/input";
-import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import {
+  classifyProviderHttpFailure,
   readProviderHttpFailureMetadata,
 } from "../http/ProviderHttpFailureMetadata.js";
 import type { FetchLike } from "../http/ProviderHttpTransport.js";
+
+const PROVIDER_ID = "openai-compatible.chat-completions";
+const MAX_RESPONSE_TEXT_LENGTH = 64_000;
 
 export interface OpenAICompatibleProviderConfig {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly model: string;
   readonly timeoutMs: number;
+  readonly nativeToolInteraction: {
+    readonly supported: boolean;
+  };
   readonly inputLimit: {
     readonly maximumBytes: number;
     readonly source: "provider_reported" | "host_configured";
@@ -41,20 +54,29 @@ export class OpenAICompatibleProvider implements Provider {
   ) {
     this.config = snapshotConfig(config);
     this.inputAccounting = createUtf8ModelInputAccounting({
-      providerId: "openai-compatible.chat-completions",
+      providerId: PROVIDER_ID,
       model: this.config.model,
       maximumInputBytes: this.config.inputLimit.maximumBytes,
       limitSource: this.config.inputLimit.source,
       estimator: { id: "openai-compatible.utf8-content", revision: "1" },
-      framing: { id: "openai-compatible.chat-completions-framing", revision: "1" },
+      framing: { id: "openai-compatible.chat-completions-framing", revision: "2" },
       renderRequest: (messages, interaction) =>
         encodeOpenAIRequest(this.config.model, messages, interaction),
     });
     this.descriptor = Object.freeze({
-      id: "openai-compatible.chat-completions",
+      id: PROVIDER_ID,
       name: "OpenAI-compatible Chat Completions",
       capabilities: Object.freeze({
-        nativeToolInteraction: Object.freeze({ supported: false as const }),
+        nativeToolInteraction: this.config.nativeToolInteraction.supported
+          ? Object.freeze({
+              supported: true as const,
+              callableDefinitions: true as const,
+              modelCalls: true as const,
+              resultMessages: true as const,
+              multipleCalls: true,
+              callCorrelation: "provider_supplied" as const,
+            })
+          : Object.freeze({ supported: false as const }),
         structuredGeneration: Object.freeze({ supported: true as const }),
         streaming: Object.freeze({ supported: false as const }),
         modelInput: this.inputAccounting.capability,
@@ -79,67 +101,62 @@ export class OpenAICompatibleProvider implements Provider {
         "OpenAI-compatible Chat Completions does not support this continuation Contract.",
       );
     }
-    if (request.interaction.kind === "native_tool_turn") {
+    if (
+      request.interaction.kind === "native_tool_turn" &&
+      !this.config.nativeToolInteraction.supported
+    ) {
       return failed(
         "unsupported",
         "provider_native_tool_interaction_unsupported",
-        "OpenAI-compatible native Tool interaction is not enabled by this adapter revision.",
+        "The configured OpenAI-compatible endpoint and model profile does not declare native Tool interaction.",
       );
     }
-    const verificationFailure = verifyProviderRequest(this.inputAccounting, request);
-    if (verificationFailure !== null) {
-      return verificationFailure;
-    }
-    const attempt = createProviderAttemptInterruption(context, this.config.timeoutMs);
+    const encoded = prepareEncodedRequest(
+      this.inputAccounting,
+      this.config.model,
+      request,
+    );
+    if (encoded.kind === "failed") return encoded.result;
 
+    const attempt = createProviderAttemptInterruption(context, this.config.timeoutMs);
     try {
       const interruptedBeforeRequest = providerResultFromInterruption(attempt.cause);
-      if (interruptedBeforeRequest !== null) {
-        return interruptedBeforeRequest;
-      }
+      if (interruptedBeforeRequest !== null) return interruptedBeforeRequest;
 
-      const encodedRequest = encodeOpenAIRequest(
-        this.config.model,
-        request.messages,
-        request.interaction,
-      );
-      this.inputAccounting.verifyEncoded({
-        providerId: this.inputAccounting.providerId,
-        model: this.inputAccounting.model,
-        messages: request.messages,
-        interaction: request.interaction,
-        composition: request.composition,
-        encodedRequest,
-      });
       const response = await this.fetchImpl(this.endpointUrl(), {
         method: "POST",
         headers: this.headers(),
-        body: encodedRequest,
+        body: encoded.body,
         signal: attempt.signal,
       });
       const interruptedAfterResponse = providerResultFromInterruption(attempt.cause);
-      if (interruptedAfterResponse !== null) {
-        return interruptedAfterResponse;
-      }
+      if (interruptedAfterResponse !== null) return interruptedAfterResponse;
 
       if (!response.ok) {
+        const classification = classifyProviderHttpFailure(response.status);
         return failed(
-          "http",
-          "provider_http_error",
-          `Provider request failed with HTTP ${response.status}.`,
+          classification.category,
+          classification.code,
+          classification.message,
           readProviderHttpFailureMetadata(response),
         );
       }
 
-      const body = await response.json();
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch {
+        return providerResultFromInterruption(attempt.cause) ?? failed(
+          "response",
+          "provider_response_malformed",
+          "Provider response body was not valid JSON.",
+        );
+      }
       const interruptedAfterBody = providerResultFromInterruption(attempt.cause);
-      return interruptedAfterBody ?? mapChatCompletionResponse(body, request.interaction);
+      return interruptedAfterBody ?? mapChatCompletionResponse(body, request);
     } catch (error) {
       const interruption = providerResultFromInterruption(attempt.cause);
-      if (interruption !== null) {
-        return interruption;
-      }
-
+      if (interruption !== null) return interruption;
       return failed("transport", "provider_request_failed", "Provider request failed.", {
         metadata: { causeName: error instanceof Error ? error.name : null },
       });
@@ -153,22 +170,20 @@ export class OpenAICompatibleProvider implements Provider {
   }
 
   private headers(): Record<string, string> {
-    const headers: Record<string, string> = {
-      "content-type": "application/json",
-    };
-
+    const headers: Record<string, string> = { "content-type": "application/json" };
     if (this.config.apiKey.length > 0) {
       headers.authorization = `Bearer ${this.config.apiKey}`;
     }
-
     return headers;
   }
 }
 
-function verifyProviderRequest(
+function prepareEncodedRequest(
   accounting: ProviderModelInputAccounting,
+  model: string,
   request: ProviderRequest,
-): ProviderCallResult | null {
+): { readonly kind: "encoded"; readonly body: string } |
+  { readonly kind: "failed"; readonly result: ProviderCallResult } {
   try {
     accounting.verify({
       providerId: accounting.providerId,
@@ -177,14 +192,135 @@ function verifyProviderRequest(
       interaction: request.interaction,
       composition: request.composition,
     });
-    return null;
-  } catch {
-    return failed(
-      "invalid_request",
-      "provider_input_accounting_invalid",
-      "Provider request does not match its verified model-input composition.",
-    );
+  } catch (error) {
+    return Object.freeze({
+      kind: "failed",
+      result: failed(
+        "invalid_request",
+        "provider_input_accounting_invalid",
+        "Provider request does not match its verified model-input composition.",
+        { metadata: { causeName: error instanceof Error ? error.name : null } },
+      ),
+    });
   }
+  try {
+    const body = encodeOpenAIRequest(model, request.messages, request.interaction);
+    accounting.verifyEncoded({
+      providerId: accounting.providerId,
+      model: accounting.model,
+      messages: request.messages,
+      interaction: request.interaction,
+      composition: request.composition,
+      encodedRequest: body,
+    });
+    return Object.freeze({ kind: "encoded", body });
+  } catch (error) {
+    return Object.freeze({
+      kind: "failed",
+      result: failed(
+        "invalid_request",
+        "provider_input_encoding_invalid",
+        "Provider request could not be encoded from its verified model input.",
+        { metadata: { causeName: error instanceof Error ? error.name : null } },
+      ),
+    });
+  }
+}
+
+function encodeOpenAIRequest(
+  model: string,
+  messages: readonly ModelMessage[],
+  interaction: ProviderInteraction,
+): string {
+  return JSON.stringify({
+    model,
+    messages: interaction.kind === "native_tool_turn"
+      ? encodeOpenAINativeMessages(messages)
+      : messages.map((message) => ({
+          role: message.role,
+          content: renderGenerationText(message),
+        })),
+    stream: false,
+    ...(interaction.kind === "native_tool_turn"
+      ? {
+          tools: interaction.callables.map((callable) => ({
+            type: "function",
+            function: {
+              name: callable.name,
+              description: callable.description,
+              parameters: callable.inputSchema,
+            },
+          })),
+          tool_choice: "auto",
+        }
+      : interaction.kind === "structured_generation"
+        ? { response_format: openAIResponseFormat(interaction.outputFormat) }
+        : {}),
+  });
+}
+
+function encodeOpenAINativeMessages(messages: readonly ModelMessage[]): readonly unknown[] {
+  const encoded: unknown[] = [];
+  for (const message of messages) {
+    if (message.role === "system" || message.role === "user") {
+      encoded.push({ role: message.role, content: renderInputText(message) });
+      continue;
+    }
+    if (message.role === "tool") {
+      for (const { result } of message.content) {
+        if (
+          result.providerCallRef === null ||
+          result.providerCallRef.providerId !== PROVIDER_ID
+        ) {
+          throw new TypeError("OpenAI-compatible Tool results require exact Provider call correlation.");
+        }
+        encoded.push({
+          role: "tool",
+          tool_call_id: result.providerCallRef.id,
+          content: renderToolResultContent(result.content),
+        });
+      }
+      continue;
+    }
+
+    let text = "";
+    let textBlockCount = 0;
+    let sawCall = false;
+    const calls: unknown[] = [];
+    for (const block of message.content) {
+      if (block.kind === "text") {
+        if (sawCall || textBlockCount > 0) {
+          throw new TypeError(
+            "OpenAI-compatible assistant history must use at most one text block before Tool calls.",
+          );
+        }
+        textBlockCount += 1;
+        text += block.text;
+      } else {
+        sawCall = true;
+        if (
+          block.call.providerCallRef === null ||
+          block.call.providerCallRef.providerId !== PROVIDER_ID
+        ) {
+          throw new TypeError("OpenAI-compatible assistant calls require exact Provider call correlation.");
+        }
+        calls.push({
+          id: block.call.providerCallRef.id,
+          type: "function",
+          function: {
+            name: block.call.name,
+            arguments: JSON.stringify(block.call.input),
+          },
+        });
+      }
+    }
+    encoded.push({
+      role: "assistant",
+      content: text.length === 0 ? null : text,
+      ...(calls.length === 0 ? {} : { tool_calls: calls }),
+    });
+  }
+  return encoded;
 }
 
 function openAIResponseFormat(
@@ -202,80 +338,224 @@ function openAIResponseFormat(
 
 function mapChatCompletionResponse(
   value: unknown,
-  interaction: Exclude<ProviderInteraction, { readonly kind: "native_tool_turn" }>,
+  request: ProviderRequest,
 ): ProviderCallResult {
-  if (!isRecord(value)) {
-    return failed("response", "provider_response_malformed", "Provider response was malformed.");
-  }
-
-  const content = readContent(value);
-  if (content === null) {
-    return failed("response", "provider_response_malformed", "Provider response did not include message content.");
-  }
-
-  if (content.length > 64_000) {
-    return failed("response", "provider_response_too_large", "Provider response content is too large.");
-  }
-
-  return succeeded({
-    kind: interaction.kind,
-    responseId: typeof value.id === "string" ? value.id : null,
-    output: content,
-    usage: readUsage(value.usage),
-    continuation: null,
-    metadata: {},
-  });
+  return request.interaction.kind === "native_tool_turn"
+    ? mapNativeChatCompletionResponse(value, request)
+    : mapGeneratedChatCompletionResponse(value, request.interaction);
 }
 
-function readContent(value: Record<string, unknown>): string | null {
-  const choices = value.choices;
-  if (!Array.isArray(choices)) {
-    return null;
-  }
+function mapNativeChatCompletionResponse(
+  value: unknown,
+  request: ProviderRequest,
+): ProviderCallResult {
+  try {
+    const choice = readSingleChoice(value);
+    if (!isRecord(choice.message)) {
+      throw new TypeError("Chat Completion choice must contain a message.");
+    }
+    if (choice.message.role !== undefined && choice.message.role !== "assistant") {
+      throw new TypeError("Chat Completion message role is invalid.");
+    }
+    const responseId = readOptionalIdentifier(
+      isRecord(value) ? value.id : null,
+      "Chat Completion response id",
+    );
+    const content = choice.message.content;
+    if (content !== null && typeof content !== "string") {
+      throw new TypeError("Chat Completion assistant content is invalid.");
+    }
+    if (typeof content === "string" && content.length > MAX_RESPONSE_TEXT_LENGTH) {
+      return failed(
+        "response",
+        "provider_response_too_large",
+        "Provider response content is too large.",
+      );
+    }
+    const refusal = choice.message.refusal;
+    if (refusal !== undefined && refusal !== null && typeof refusal !== "string") {
+      throw new TypeError("Chat Completion refusal is invalid.");
+    }
+    const transportCalls = choice.message.tool_calls ?? [];
+    if (!Array.isArray(transportCalls)) {
+      throw new TypeError("Chat Completion Tool calls are malformed.");
+    }
+    if (typeof refusal === "string" && refusal.length > 0 && transportCalls.length > 0) {
+      throw new TypeError("A refusal cannot contain executable Tool calls.");
+    }
 
-  const first = choices[0];
-  if (!isRecord(first) || !isRecord(first.message)) {
-    return null;
-  }
+    const turnId = createModelTurnId({
+      providerId: PROVIDER_ID,
+      requestId: request.requestId,
+      responseId,
+    });
+    const assistantContent: Array<
+      | { readonly kind: "text"; readonly text: string }
+      | { readonly kind: "model_tool_call"; readonly call: ModelToolCall }
+    > = [];
+    if (typeof content === "string" && content.length > 0) {
+      assistantContent.push({ kind: "text", text: content });
+    }
+    for (const candidate of transportCalls) {
+      const ordinal = assistantContent.length;
+      assistantContent.push({
+        kind: "model_tool_call",
+        call: readOpenAIToolCall(candidate, request, turnId, ordinal),
+      });
+    }
+    if (
+      assistantContent.length === 0 &&
+      !(typeof refusal === "string" && refusal.trim().length > 0)
+    ) {
+      return failed(
+        "response",
+        "provider_response_empty",
+        "Provider returned an empty normal assistant turn.",
+      );
+    }
 
-  return typeof first.message.content === "string" ? first.message.content : null;
+    return succeeded({
+      kind: "native_tool_turn",
+      turn: {
+        turnId,
+        assistant: { role: "assistant", content: assistantContent },
+        finish: openAIFinish(
+          choice.finish_reason,
+          transportCalls.length > 0,
+          typeof refusal === "string" ? refusal : null,
+        ),
+        usage: readUsage(isRecord(value) ? value.usage : null),
+        responseRef: {
+          providerId: PROVIDER_ID,
+          requestId: request.requestId,
+          responseId,
+        },
+      },
+      continuation: null,
+      metadata: {},
+    });
+  } catch (error) {
+    return failed(
+      "response",
+      "provider_response_malformed",
+      "Provider response could not be normalized safely.",
+      { metadata: { causeName: error instanceof Error ? error.name : null } },
+    );
+  }
+}
+
+function readOpenAIToolCall(
+  value: unknown,
+  request: ProviderRequest,
+  turnId: string,
+  ordinal: number,
+): ModelToolCall {
+  if (!isRecord(value) || value.type !== "function" || !isRecord(value.function)) {
+    throw new TypeError("Chat Completion Tool call must contain a function.");
+  }
+  const providerCallId = requiredString(value.id, "Chat Completion Tool call id");
+  const name = requiredString(value.function.name, "Chat Completion Tool call name");
+  if (typeof value.function.arguments !== "string") {
+    throw new TypeError("Chat Completion Tool call arguments must be encoded JSON.");
+  }
+  const parsedArguments = JSON.parse(value.function.arguments) as unknown;
+  if (!isRecord(parsedArguments)) {
+    throw new TypeError("Chat Completion Tool call arguments must decode to a JSON object.");
+  }
+  return {
+    modelCallRef: createModelCallRef({
+      providerRequestId: request.requestId,
+      controllerRequestId: request.correlation.controllerRequestId,
+      turnId,
+      contentBlockOrdinal: ordinal,
+      branchId: request.correlation.branchId,
+    }),
+    providerCallRef: { providerId: PROVIDER_ID, id: providerCallId },
+    name,
+    input: parsedArguments as { readonly [key: string]: ModelJsonValue },
+    ordinal,
+  };
+}
+
+function openAIFinish(
+  value: unknown,
+  hasCalls: boolean,
+  refusal: string | null,
+): ModelTurnFinish {
+  if (refusal !== null && refusal.trim().length > 0) {
+    return { kind: "refusal", reason: refusal };
+  }
+  if (value === "length") return { kind: "output_limit" };
+  if (value === "content_filter") return { kind: "content_filter" };
+  if (hasCalls && (value === "tool_calls" || value === "stop")) {
+    return { kind: "normal" };
+  }
+  if (value === "stop") return { kind: "normal" };
+  return {
+    kind: "unknown",
+    safeCode: typeof value === "string" && value.trim().length > 0 && value.length <= 128
+      ? value.trim()
+      : null,
+  };
+}
+
+function mapGeneratedChatCompletionResponse(
+  value: unknown,
+  interaction: Exclude<ProviderInteraction, { readonly kind: "native_tool_turn" }>,
+): ProviderCallResult {
+  try {
+    const choice = readSingleChoice(value);
+    if (!isRecord(choice.message) || typeof choice.message.content !== "string") {
+      throw new TypeError("Chat Completion response did not contain generated content.");
+    }
+    if (choice.message.content.length > MAX_RESPONSE_TEXT_LENGTH) {
+      return failed(
+        "response",
+        "provider_response_too_large",
+        "Provider response content is too large.",
+      );
+    }
+    return succeeded({
+      kind: interaction.kind,
+      responseId: readOptionalIdentifier(
+        isRecord(value) ? value.id : null,
+        "Chat Completion response id",
+      ),
+      output: choice.message.content,
+      usage: readUsage(isRecord(value) ? value.usage : null),
+      continuation: null,
+      metadata: {},
+    });
+  } catch (error) {
+    return failed(
+      "response",
+      "provider_response_malformed",
+      "Provider response did not include generated content.",
+      { metadata: { causeName: error instanceof Error ? error.name : null } },
+    );
+  }
+}
+
+function readSingleChoice(value: unknown): Record<string, unknown> {
+  if (!isRecord(value) || !Array.isArray(value.choices) || value.choices.length !== 1) {
+    throw new TypeError("Chat Completion response must contain exactly one choice.");
+  }
+  const choice = value.choices[0];
+  if (!isRecord(choice)) throw new TypeError("Chat Completion choice is malformed.");
+  return choice;
 }
 
 function readUsage(value: unknown) {
-  if (!isRecord(value)) {
-    return null;
-  }
-
+  if (!isRecord(value)) return null;
   return {
-    inputTokens: readNumber(value.prompt_tokens) ?? null,
-    outputTokens: readNumber(value.completion_tokens) ?? null,
-    totalTokens: readNumber(value.total_tokens) ?? null,
+    inputTokens: readCount(value.prompt_tokens),
+    outputTokens: readCount(value.completion_tokens),
+    totalTokens: readCount(value.total_tokens),
     metadata: {},
   };
 }
 
-function encodeOpenAIRequest(
-  model: string,
-  messages: readonly ModelMessage[],
-  interaction: ProviderInteraction,
-): string {
-  if (interaction.kind === "native_tool_turn") {
-    throw new TypeError("This adapter revision cannot encode native Tool interaction.");
-  }
-  return JSON.stringify({
-    model,
-    messages: messages.map((message) => ({
-      role: message.role,
-      content: renderTextContent(message),
-    })),
-    stream: false,
-    ...(interaction.kind === "structured_generation"
-      ? { response_format: openAIResponseFormat(interaction.outputFormat) }
-      : {}),
-  });
-}
-
-function renderTextContent(message: ModelMessage): string {
+function renderGenerationText(message: ModelMessage): string {
   if (message.role === "tool") {
     throw new TypeError("Text and structured generation accept text-only Model Messages.");
   }
@@ -287,12 +567,31 @@ function renderTextContent(message: ModelMessage): string {
   }).join("");
 }
 
-function readNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+function renderInputText(
+  message: Extract<ModelMessage, { readonly role: "system" | "user" }>,
+): string {
+  return message.content.map((block) => block.text).join("");
+}
+
+function renderToolResultContent(value: ModelJsonValue): string {
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function readCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+function readOptionalIdentifier(value: unknown, field: string): string | null {
+  if (value === undefined || value === null) return null;
+  const result = requiredString(value, field);
+  if (result.length > 256) throw new TypeError(`${field} is too large.`);
+  return result;
 }
 
 function succeeded(response: ProviderResponse): ProviderCallResult {
-  return { kind: "succeeded", response };
+  return { kind: "succeeded", response: snapshotProviderResponse(response) };
 }
 
 function failed(
@@ -315,24 +614,37 @@ function failed(
     requestId: input.requestId,
     metadata: input.metadata ?? {},
   };
-  return {
-    kind: "failed",
-    failure,
-  };
+  return { kind: "failed", failure };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function requiredString(value: unknown, field: string, allowEmpty = false): string {
+  if (typeof value !== "string") throw new TypeError(`${field} must be a string.`);
+  const normalized = value.trim();
+  if (!allowEmpty && normalized.length === 0) throw new TypeError(`${field} is required.`);
+  return normalized;
+}
+
 function snapshotConfig(
   input: OpenAICompatibleProviderConfig,
 ): Readonly<OpenAICompatibleProviderConfig> {
+  if (
+    !isRecord(input.nativeToolInteraction) ||
+    typeof input.nativeToolInteraction.supported !== "boolean"
+  ) {
+    throw new TypeError("OpenAI-compatible native Tool interaction configuration is invalid.");
+  }
   return Object.freeze({
     baseUrl: validatedBaseUrl(input.baseUrl),
     apiKey: requiredString(input.apiKey, "OpenAI-compatible API key", true),
     model: requiredString(input.model, "OpenAI-compatible model"),
     timeoutMs: positiveTimeout(input.timeoutMs),
+    nativeToolInteraction: Object.freeze({
+      supported: input.nativeToolInteraction.supported,
+    }),
     inputLimit: snapshotInputLimit(input.inputLimit, "OpenAI-compatible"),
   });
 }
@@ -342,8 +654,7 @@ function snapshotInputLimit(
   owner: string,
 ): OpenAICompatibleProviderConfig["inputLimit"] {
   if (
-    input === null ||
-    typeof input !== "object" ||
+    !isRecord(input) ||
     !Number.isSafeInteger(input.maximumBytes) ||
     input.maximumBytes <= 0 ||
     (input.source !== "provider_reported" && input.source !== "host_configured")
@@ -362,13 +673,6 @@ function validatedBaseUrl(value: string): string {
   if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
     throw new TypeError("OpenAI-compatible base URL must be an HTTP URL without credentials.");
   }
-  return normalized;
-}
-
-function requiredString(value: string, field: string, allowEmpty = false): string {
-  if (typeof value !== "string") throw new TypeError(`${field} must be a string.`);
-  const normalized = value.trim();
-  if (!allowEmpty && normalized.length === 0) throw new TypeError(`${field} is required.`);
   return normalized;
 }
 

@@ -8,6 +8,11 @@ import {
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FetchLike } from "../http/ProviderHttpTransport.js";
+import {
+  createNativeProviderRequest,
+  createSettledToolResultMessage,
+  defaultMessages,
+} from "../native-tool-conformance/NativeToolInteractionTestSupport.js";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider.js";
 
 describe("OpenAICompatibleProvider", () => {
@@ -20,6 +25,7 @@ describe("OpenAICompatibleProvider", () => {
       apiKey: "secret-key",
       model: "model-a",
       timeoutMs: 1000,
+      nativeToolInteraction: { supported: true },
       inputLimit: testInputLimit(),
     }, async (url, init) => {
       calls.push({
@@ -71,12 +77,122 @@ describe("OpenAICompatibleProvider", () => {
     });
   });
 
+  it("encodes native functions and replays exact tool_call_id correlation", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const provider = new OpenAICompatibleProvider(config(), async (_url, init) => {
+      calls.push(JSON.parse(init.body) as Record<string, unknown>);
+      return calls.length === 1
+        ? okResponse({
+            id: "response-1",
+            choices: [{
+              index: 0,
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [{
+                  id: "call-1",
+                  type: "function",
+                  function: {
+                    name: "Read",
+                    arguments: "{\"file_path\":\"package.json\"}",
+                  },
+                }],
+              },
+              finish_reason: "tool_calls",
+            }],
+          })
+        : okResponse({
+            id: "response-2",
+            choices: [{
+              index: 0,
+              message: { role: "assistant", content: "Done." },
+              finish_reason: "stop",
+            }],
+          });
+    });
+
+    const firstRequest = createNativeProviderRequest(provider);
+    const first = await provider.send(firstRequest, context());
+    if (first.kind !== "succeeded" || first.response.kind !== "native_tool_turn") {
+      throw new TypeError("Expected one native OpenAI-compatible turn.");
+    }
+    const callBlock = first.response.turn.assistant.content.find(
+      (block) => block.kind === "model_tool_call",
+    );
+    if (callBlock?.kind !== "model_tool_call") throw new TypeError("Expected one Tool call.");
+    expect(callBlock.call.providerCallRef).toEqual({
+      providerId: "openai-compatible.chat-completions",
+      id: "call-1",
+    });
+
+    await provider.send(createNativeProviderRequest(provider, {
+      requestId: "native-request-2",
+      messages: [
+        ...defaultMessages(),
+        first.response.turn.assistant,
+        createSettledToolResultMessage(callBlock.call),
+      ],
+    }), context());
+
+    expect(calls[0]).toMatchObject({
+      model: "model-a",
+      messages: [
+        { role: "system", content: "Use the available callable when needed." },
+        { role: "user", content: "Inspect package.json." },
+      ],
+      tools: [{
+        type: "function",
+        function: {
+          name: "Read",
+          description: "Read one workspace file.",
+          parameters: expect.any(Object),
+        },
+      }, {
+        type: "function",
+        function: {
+          name: "Search",
+          description: "Search workspace text.",
+          parameters: expect.any(Object),
+        },
+      }],
+      tool_choice: "auto",
+      stream: false,
+    });
+    expect(calls[0]).not.toHaveProperty("response_format");
+    expect(new TextEncoder().encode(JSON.stringify(calls[0])).byteLength)
+      .toBe(firstRequest.composition.accounting.inputAmount);
+    expect(calls[1]).toMatchObject({
+      messages: [
+        expect.any(Object),
+        expect.any(Object),
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call-1",
+            type: "function",
+            function: {
+              name: "Read",
+              arguments: "{\"file_path\":\"package.json\"}",
+            },
+          }],
+        },
+        {
+          role: "tool",
+          tool_call_id: "call-1",
+          content: "{\"text\":\"file contents\"}",
+        },
+      ],
+    });
+  });
+
   it("maps HTTP failure without leaking credentials", async () => {
     const provider = new OpenAICompatibleProvider({
       baseUrl: "https://provider.local/v1",
       apiKey: "secret-key",
       model: "model-a",
       timeoutMs: 1000,
+      nativeToolInteraction: { supported: true },
       inputLimit: testInputLimit(),
     }, async () => ({
       ok: false,
@@ -91,8 +207,8 @@ describe("OpenAICompatibleProvider", () => {
     expect(result).toMatchObject({
       kind: "failed",
       failure: {
-        code: "provider_http_error",
-        message: "Provider request failed with HTTP 401.",
+        code: "provider_authentication_failed",
+        message: "Provider authentication failed with HTTP 401.",
         statusCode: 401,
       },
     });
@@ -148,6 +264,79 @@ describe("OpenAICompatibleProvider", () => {
       kind: "failed",
       failure: { code: "provider_response_malformed" },
     });
+  });
+
+  it("rejects missing and duplicate Provider Tool call ids", async () => {
+    for (const toolCalls of [[{
+      type: "function",
+      function: { name: "Read", arguments: "{\"file_path\":\"a.txt\"}" },
+    }], [{
+      id: "duplicate-call",
+      type: "function",
+      function: { name: "Read", arguments: "{\"file_path\":\"a.txt\"}" },
+    }, {
+      id: "duplicate-call",
+      type: "function",
+      function: { name: "Search", arguments: "{\"query\":\"x\"}" },
+    }]]) {
+      const provider = new OpenAICompatibleProvider(config(), async () => okResponse({
+        id: "response-1",
+        choices: [{
+          message: { role: "assistant", content: null, tool_calls: toolCalls },
+          finish_reason: "tool_calls",
+        }],
+      }));
+      await expect(provider.send(createNativeProviderRequest(provider), context()))
+        .resolves.toMatchObject({
+          kind: "failed",
+          failure: { code: "provider_response_malformed" },
+        });
+    }
+  });
+
+  it("normalizes an explicit refusal without treating it as completion", async () => {
+    const provider = new OpenAICompatibleProvider(config(), async () => okResponse({
+      id: "response-1",
+      choices: [{
+        message: { role: "assistant", content: null, refusal: "Request refused." },
+        finish_reason: "stop",
+      }],
+    }));
+    await expect(provider.send(createNativeProviderRequest(provider), context()))
+      .resolves.toMatchObject({
+        kind: "succeeded",
+        response: {
+          kind: "native_tool_turn",
+          turn: {
+            assistant: { role: "assistant", content: [] },
+            finish: { kind: "refusal", reason: "Request refused." },
+          },
+        },
+      });
+  });
+
+  it("returns exact cancellation when response decoding settles after cancellation", async () => {
+    const interruption = cancellableContext();
+    const provider = new OpenAICompatibleProvider(config(), async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        interruption.cancel();
+        return {
+          id: "late-response",
+          choices: [{
+            message: { role: "assistant", content: "late" },
+            finish_reason: "stop",
+          }],
+        };
+      },
+    }));
+
+    await expect(provider.send(createNativeProviderRequest(provider), interruption.context))
+      .resolves.toEqual({
+        kind: "cancelled",
+        cancellation: { runId: "run_001", requestId: "cancel_001" },
+      });
   });
 
   it("maps timeout failures", async () => {
@@ -218,6 +407,7 @@ function config() {
     apiKey: "",
     model: "model-a",
     timeoutMs: 1000,
+    nativeToolInteraction: { supported: true },
     inputLimit: testInputLimit(),
   };
 }
@@ -281,6 +471,10 @@ function request(provider: OpenAICompatibleProvider): ProviderRequest {
   return {
     requestId: composition.id,
     purpose: "helarc.code-agent.plan",
+    correlation: {
+      controllerRequestId: "controller-request-1",
+      branchId: "branch-1",
+    },
     interaction: composition.interaction,
     messages: modelMessagesFromComposition(composition),
     composition,

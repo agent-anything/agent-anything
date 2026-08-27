@@ -7,6 +7,8 @@ import * as api from "./index.js";
 describe("Model Interaction public API", () => {
   it("exposes focused Model Interaction runtime values from their owner paths", () => {
     expect(Object.keys(api).sort()).toEqual([
+      "createModelCallRef",
+      "createModelTurnId",
       "createNativeToolTurnInteraction",
       "createProviderAttemptInterruption",
       "modelCallRefKey",

@@ -6,6 +6,57 @@ export interface ProviderHttpFailureMetadata {
   readonly requestId?: string;
 }
 
+export interface ProviderHttpFailureClassification {
+  readonly category: string;
+  readonly code: string;
+  readonly message: string;
+}
+
+export function classifyProviderHttpFailure(
+  statusCode: number,
+): ProviderHttpFailureClassification {
+  if (statusCode === 401 || statusCode === 403) {
+    return Object.freeze({
+      category: "authentication",
+      code: "provider_authentication_failed",
+      message: `Provider authentication failed with HTTP ${statusCode}.`,
+    });
+  }
+  if (statusCode === 408) {
+    return Object.freeze({
+      category: "timeout",
+      code: "provider_timeout",
+      message: "Provider request timed out with HTTP 408.",
+    });
+  }
+  if (statusCode === 429) {
+    return Object.freeze({
+      category: "rate_limit",
+      code: "provider_rate_limited",
+      message: "Provider request was rate limited with HTTP 429.",
+    });
+  }
+  if (statusCode === 502 || statusCode === 503 || statusCode === 504) {
+    return Object.freeze({
+      category: "server_error",
+      code: "provider_remote_unavailable",
+      message: `Provider was unavailable with HTTP ${statusCode}.`,
+    });
+  }
+  if (statusCode >= 500 && statusCode <= 599) {
+    return Object.freeze({
+      category: "server_error",
+      code: "provider_server_error",
+      message: `Provider request failed with HTTP ${statusCode}.`,
+    });
+  }
+  return Object.freeze({
+    category: "http",
+    code: "provider_http_error",
+    message: `Provider request failed with HTTP ${statusCode}.`,
+  });
+}
+
 export function readProviderHttpFailureMetadata(
   response: {
     readonly status: number;

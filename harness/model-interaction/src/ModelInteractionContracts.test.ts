@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  createModelCallRef,
+  createModelTurnId,
   createNativeToolTurnInteraction,
   snapshotModelCallableDefinition,
   snapshotModelMessage,
@@ -33,6 +35,30 @@ const CALLABLE: ModelCallableDefinition = {
 };
 
 describe("provider-neutral Model Interaction contracts", () => {
+  it("derives stable turn and call identities from complete request lineage", () => {
+    const turnInput = {
+      providerId: "provider-1",
+      requestId: "request-1",
+      responseId: "response-1",
+    };
+    const turnId = createModelTurnId(turnInput);
+    expect(createModelTurnId(turnInput)).toBe(turnId);
+    expect(createModelTurnId({ ...turnInput, responseId: "response-2" })).not.toBe(turnId);
+
+    const callInput = {
+      providerRequestId: "request-1",
+      controllerRequestId: "controller-request-1",
+      turnId,
+      contentBlockOrdinal: 0,
+      branchId: "branch-1",
+    };
+    const callRef = createModelCallRef(callInput);
+    expect(createModelCallRef(callInput)).toEqual(callRef);
+    expect(createModelCallRef({ ...callInput, contentBlockOrdinal: 1 }).id)
+      .not.toBe(callRef.id);
+    expect(callRef).toMatchObject(callInput);
+  });
+
   it("enforces role-discriminated message content", () => {
     expect(snapshotModelMessage({
       role: "assistant",
@@ -180,12 +206,31 @@ describe("provider-neutral Model Interaction contracts", () => {
     expect(() => snapshotProviderRequest({
       requestId: composition.id,
       purpose: "test",
+      correlation: {
+        controllerRequestId: "controller-request-1",
+        branchId: "branch-1",
+      },
       messages: composition.messages,
       interaction: { kind: "text_generation" },
       composition,
       continuation: null,
       metadata: {},
     })).toThrow("does not match");
+
+    expect(() => snapshotProviderRequest({
+      requestId: composition.id,
+      purpose: "test",
+      correlation: {
+        controllerRequestId: "controller-request-1",
+      },
+      messages: composition.messages,
+      interaction: composition.interaction,
+      composition,
+      continuation: null,
+      metadata: {},
+    } as unknown as Parameters<typeof snapshotProviderRequest>[0])).toThrow(
+      "ProviderRequest.correlation.branchId",
+    );
   });
 
   it("accounts callable schemas and messages and rejects final encoding drift", () => {

@@ -13,6 +13,7 @@ export function createHelarcProvider(config: HelarcProviderConfig): Provider {
         baseUrl: config.baseUrl,
         model: config.model,
         timeoutMs: config.timeoutMs,
+        nativeToolInteraction: { supported: false },
         inputLimit,
       })
     : new OpenAICompatibleProvider({
@@ -20,6 +21,7 @@ export function createHelarcProvider(config: HelarcProviderConfig): Provider {
         apiKey: config.apiKey,
         model: config.model,
         timeoutMs: config.timeoutMs,
+        nativeToolInteraction: { supported: false },
         inputLimit,
       });
 }
