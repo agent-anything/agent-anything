@@ -45,7 +45,9 @@ export interface HelarcProductEffectivenessDiagnosticSummary {
   readonly latencyMs: number | null;
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
+  readonly estimatedCost: number | null;
   readonly toolCalls: number | null;
+  readonly retries: number | null;
   readonly humanInteractionEvents: number | null;
 }
 
@@ -232,7 +234,9 @@ function summarizeDiagnostics(
     latencyMs: averageDiagnostics(completed, "latencyMs"),
     inputTokens: averageDiagnostics(completed, "inputTokens"),
     outputTokens: averageDiagnostics(completed, "outputTokens"),
+    estimatedCost: averageDiagnostics(completed, "estimatedCost"),
     toolCalls: averageDiagnostics(completed, "toolCalls"),
+    retries: averageDiagnostics(completed, "retries"),
     humanInteractionEvents: averageDiagnostics(completed, "humanInteractionEvents"),
   });
 }
@@ -424,7 +428,9 @@ function createDiagnosticMetricSummaries(
     ["latencyMs", "efficiency"],
     ["inputTokens", "efficiency"],
     ["outputTokens", "efficiency"],
+    ["estimatedCost", "efficiency"],
     ["toolCalls", "efficiency"],
+    ["retries", "efficiency"],
     ["humanInteractionEvents", "collaboration"],
   ] as const satisfies readonly [
     keyof HelarcProductEffectivenessDiagnosticSummary,
@@ -561,7 +567,9 @@ function diagnosticData(summary: HelarcProductEffectivenessDiagnosticSummary) {
     latencyMs: summary.latencyMs,
     inputTokens: summary.inputTokens,
     outputTokens: summary.outputTokens,
+    estimatedCost: summary.estimatedCost,
     toolCalls: summary.toolCalls,
+    retries: summary.retries,
     humanInteractionEvents: summary.humanInteractionEvents,
   };
 }

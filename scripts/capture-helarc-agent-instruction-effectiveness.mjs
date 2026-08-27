@@ -1,5 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import {
   OpenAICompatibleProvider,
 } from "../harness/integrations/providers/dist/openai-compatible/index.js";
@@ -8,7 +8,8 @@ import {
 } from "../harness/integrations/providers/dist/ollama/index.js";
 import {
   captureHelarcProductEffectiveness,
-  compareHelarcAgentInstructionEffectiveness,
+  createHelarcAgentInstructionCampaignArtifact,
+  createHelarcAgentInstructionCampaignUnavailableArtifact,
   createHelarcProductEffectivenessDefinition,
   createHelarcProductEffectivenessTargetSnapshot,
   createHelarcProductEffectivenessTargetValues,
@@ -20,24 +21,33 @@ const requiredNames = [
   "HELARC_EVALUATION_MODEL",
   "HELARC_EVALUATION_BASE_URL",
   "HELARC_EVALUATION_PRODUCT_VERSION",
+  "HELARC_EVALUATION_SOURCE_REVISION",
+  "HELARC_EVALUATION_SOURCE_DIRTY_STATE",
+  "HELARC_EVALUATION_SOURCE_TREE_DIGEST",
+  "HELARC_EVALUATION_PROVIDER_REVISION",
+  "HELARC_EVALUATION_MODEL_REVISION",
   "HELARC_EVALUATION_ENVIRONMENT",
 ];
 const missing = requiredNames.filter((name) => readEnvironment(name) === null);
 if (missing.length > 0) {
-  await emit(options.output, {
-    schemaVersion: 1,
-    kind: "helarc_agent_instruction_effectiveness_capture",
-    disposition: {
-      status: "unavailable",
-      code: "evaluation_configuration_unavailable",
-      reason: "Real-Provider instruction Evaluation configuration is incomplete.",
-    },
+  await emit(options.output, createHelarcAgentInstructionCampaignUnavailableArtifact({
+    code: "evaluation_configuration_unavailable",
+    reason: "Real-Provider instruction Evaluation configuration is incomplete.",
     missingConfiguration: missing,
     createdAt: new Date().toISOString(),
-  });
+  }));
   process.exitCode = 0;
 } else {
-  await captureConfigured(options.output);
+  try {
+    await captureConfigured(options.output);
+  } catch {
+    await emit(options.output, createHelarcAgentInstructionCampaignUnavailableArtifact({
+      code: "evaluation_target_unavailable",
+      reason: "The configured real-Provider instruction Campaign could not be completed.",
+      missingConfiguration: [],
+      createdAt: new Date().toISOString(),
+    }));
+  }
 }
 
 async function captureConfigured(output) {
@@ -45,6 +55,11 @@ async function captureConfigured(output) {
   const model = requiredEnvironment("HELARC_EVALUATION_MODEL");
   const baseUrl = safeProviderBaseUrl(requiredEnvironment("HELARC_EVALUATION_BASE_URL"));
   const productVersion = requiredEnvironment("HELARC_EVALUATION_PRODUCT_VERSION");
+  const sourceRevision = requiredEnvironment("HELARC_EVALUATION_SOURCE_REVISION");
+  const sourceDirtyState = sourceDirtyStateEnvironment();
+  const sourceTreeDigest = requiredEnvironment("HELARC_EVALUATION_SOURCE_TREE_DIGEST");
+  const providerRevision = requiredEnvironment("HELARC_EVALUATION_PROVIDER_REVISION");
+  const modelRevision = requiredEnvironment("HELARC_EVALUATION_MODEL_REVISION");
   const environment = requiredEnvironment("HELARC_EVALUATION_ENVIRONMENT");
   const timeoutMs = positiveInteger(
     process.env.HELARC_EVALUATION_TIMEOUT_MS ?? "120000",
@@ -65,20 +80,24 @@ async function captureConfigured(output) {
       targetRef: { id: "helarc.product", revision: productVersion },
       objective: definition.objective,
       targetName: "helarc",
-      sourceRevision: productVersion,
+      sourceRevision,
       values: createHelarcProductEffectivenessTargetValues({
         instructionTarget,
+        sourceRevision,
+        sourceDirtyState,
+        sourceTreeDigest,
+        packageRevisions: packageRevisions(sourceRevision, sourceTreeDigest),
         productVersion,
         providerId: providerKind,
         providerKind,
-        providerRevision: productVersion,
+        providerRevision,
         providerEndpoint: baseUrl,
         providerAuthentication: providerKind === "openai-compatible" &&
             (process.env.HELARC_EVALUATION_API_KEY ?? "").length > 0
           ? "bearer"
           : "none",
         modelId: model,
-        modelRevision: productVersion,
+        modelRevision,
         environmentId: environment,
         providerTimeoutMs: timeoutMs,
         maximumInputBytes,
@@ -111,15 +130,14 @@ async function captureConfigured(output) {
   };
   const minimal = await capture("minimal");
   const production = await capture("production");
-  const comparison = compareHelarcAgentInstructionEffectiveness({ minimal, production });
-  await emit(output, {
-    schemaVersion: 1,
-    kind: "helarc_agent_instruction_effectiveness_capture",
-    disposition: comparison.disposition,
-    comparison,
-    evidence: { minimal, production },
+  const artifact = createHelarcAgentInstructionCampaignArtifact({
+    objective: definition.objective,
+    suite: definition.suite,
+    minimal,
+    production,
     createdAt,
   });
+  await emit(output, artifact);
 }
 
 function createProvider(input) {
@@ -151,6 +169,7 @@ function createProvider(input) {
 
 async function emit(output, artifact) {
   const outputPath = resolve(output);
+  await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(outputPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
   process.stdout.write(`${JSON.stringify({
     disposition: artifact.disposition,
@@ -176,6 +195,31 @@ function requiredEnvironment(name) {
   const value = readEnvironment(name);
   if (value === null) throw new TypeError(`${name} is required.`);
   return value;
+}
+
+function sourceDirtyStateEnvironment() {
+  const value = requiredEnvironment("HELARC_EVALUATION_SOURCE_DIRTY_STATE");
+  if (value !== "clean" && value !== "included") {
+    throw new TypeError(
+      "HELARC_EVALUATION_SOURCE_DIRTY_STATE must be 'clean' or 'included'.",
+    );
+  }
+  return value;
+}
+
+function packageRevisions(sourceRevision, sourceTreeDigest) {
+  const revision = `${sourceRevision}:${sourceTreeDigest}`;
+  return Object.freeze(Object.fromEntries([
+    "@agent-anything/action-execution",
+    "@agent-anything/agent-runtime",
+    "@agent-anything/evaluation",
+    "@agent-anything/helarc",
+    "@agent-anything/helarc-local-environment",
+    "@agent-anything/model-interaction",
+    "@agent-anything/test-support",
+    "@agent-anything/tools",
+    "@agent-anything/verification",
+  ].map((name) => [name, revision])));
 }
 
 function positiveInteger(value, name) {

@@ -126,6 +126,10 @@ function createTargetSnapshot(
     sourceRevision: "instruction-evaluation-target-v1",
     values: createHelarcProductEffectivenessTargetValues({
       instructionTarget,
+      sourceRevision: "instruction-evaluation-source-v1",
+      sourceDirtyState: "clean",
+      sourceTreeDigest: `sha256:${"a".repeat(64)}`,
+      packageRevisions: { "@agent-anything/helarc": "instruction-evaluation-product-v1" },
       productVersion: "instruction-evaluation-product-v1",
       providerId: "instruction-evaluation-provider",
       providerKind: "fake",

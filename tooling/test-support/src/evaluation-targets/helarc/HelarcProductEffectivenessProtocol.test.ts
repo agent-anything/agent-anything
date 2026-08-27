@@ -68,6 +68,12 @@ describe("Helarc Product-effectiveness Evaluation protocol", () => {
 
 function targetValues(targetName: "codex" | "helarc"): HelarcProductEffectivenessTargetValues {
   return {
+    source: {
+      revision: `${targetName}-source-v1`,
+      dirtyState: "clean",
+      treeDigest: `sha256:${"a".repeat(64)}`,
+    },
+    packages: { "@agent-anything/helarc": `${targetName}-v1` },
     product: { targetName, version: "1" },
     agent: { identity: `${targetName}-agent` },
     agent_instructions: {

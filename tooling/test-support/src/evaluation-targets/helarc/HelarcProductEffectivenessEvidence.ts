@@ -34,7 +34,9 @@ export interface HelarcProductEffectivenessDiagnostics {
   readonly latencyMs: number | null;
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
+  readonly estimatedCost: number | null;
   readonly toolCalls: number | null;
+  readonly retries: number | null;
   readonly humanInteractionEvents: number | null;
 }
 
@@ -280,7 +282,9 @@ function snapshotDiagnostics(
     "latencyMs",
     "inputTokens",
     "outputTokens",
+    "estimatedCost",
     "toolCalls",
+    "retries",
     "humanInteractionEvents",
   ];
   if (Object.keys(values).sort().join("|") !== [...expectedKeys].sort().join("|")) {
@@ -291,7 +295,9 @@ function snapshotDiagnostics(
   assertNullableNonNegative(values.latencyMs, false, `${path}.diagnostics.latencyMs`);
   assertNullableNonNegative(values.inputTokens, true, `${path}.diagnostics.inputTokens`);
   assertNullableNonNegative(values.outputTokens, true, `${path}.diagnostics.outputTokens`);
+  assertNullableNonNegative(values.estimatedCost, false, `${path}.diagnostics.estimatedCost`);
   assertNullableNonNegative(values.toolCalls, true, `${path}.diagnostics.toolCalls`);
+  assertNullableNonNegative(values.retries, true, `${path}.diagnostics.retries`);
   assertNullableNonNegative(
     values.humanInteractionEvents,
     true,
@@ -303,7 +309,9 @@ function snapshotDiagnostics(
     latencyMs: values.latencyMs as number | null,
     inputTokens: values.inputTokens as number | null,
     outputTokens: values.outputTokens as number | null,
+    estimatedCost: values.estimatedCost as number | null,
     toolCalls: values.toolCalls as number | null,
+    retries: values.retries as number | null,
     humanInteractionEvents: values.humanInteractionEvents as number | null,
   });
 }

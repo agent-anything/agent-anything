@@ -187,7 +187,9 @@ function createBundle(
           latencyMs: targetName === "codex" ? 1_000 : 1_200,
           inputTokens: 100,
           outputTokens: 50,
+          estimatedCost: null,
           toolCalls: 3,
+          retries: 0,
           humanInteractionEvents: profile.id === "clarification" ? 1 : 0,
         },
         exclusion: null,
@@ -248,6 +250,12 @@ function withoutSealedFields(bundle: HelarcProductEffectivenessEvidenceBundle) {
 
 function targetValues(targetName: HelarcProductEffectivenessTargetName): HelarcProductEffectivenessTargetValues {
   return {
+    source: {
+      revision: `${targetName}-source-v1`,
+      dirtyState: "clean",
+      treeDigest: `sha256:${"a".repeat(64)}`,
+    },
+    packages: { "@agent-anything/helarc": `${targetName}-v1` },
     product: { targetName, version: "v1" },
     agent: { identity: `${targetName}-agent-v1` },
     agent_instructions: {

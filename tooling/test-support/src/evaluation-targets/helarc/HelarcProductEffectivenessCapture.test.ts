@@ -27,6 +27,10 @@ describe("Helarc Product-effectiveness capture", () => {
       sourceRevision: "test-target-v1",
       values: createHelarcProductEffectivenessTargetValues({
         instructionTarget: "production",
+        sourceRevision: "test-source-v1",
+        sourceDirtyState: "clean",
+        sourceTreeDigest: `sha256:${"a".repeat(64)}`,
+        packageRevisions: { "@agent-anything/helarc": "test-product-v1" },
         productVersion: "test",
         providerId: "fake-provider",
         providerKind: "fake",

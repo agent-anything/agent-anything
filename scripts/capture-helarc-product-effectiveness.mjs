@@ -1,5 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import {
   OpenAICompatibleProvider,
 } from "../harness/integrations/providers/dist/openai-compatible/index.js";
@@ -18,6 +18,11 @@ const providerKind = requiredEnvironment("HELARC_EVALUATION_PROVIDER");
 const model = requiredEnvironment("HELARC_EVALUATION_MODEL");
 const baseUrl = safeProviderBaseUrl(requiredEnvironment("HELARC_EVALUATION_BASE_URL"));
 const productVersion = requiredEnvironment("HELARC_EVALUATION_PRODUCT_VERSION");
+const sourceRevision = requiredEnvironment("HELARC_EVALUATION_SOURCE_REVISION");
+const sourceDirtyState = sourceDirtyStateEnvironment();
+const sourceTreeDigest = requiredEnvironment("HELARC_EVALUATION_SOURCE_TREE_DIGEST");
+const providerRevision = requiredEnvironment("HELARC_EVALUATION_PROVIDER_REVISION");
+const modelRevision = requiredEnvironment("HELARC_EVALUATION_MODEL_REVISION");
 const instructionTarget = instructionTargetEnvironment();
 const environment = requiredEnvironment("HELARC_EVALUATION_ENVIRONMENT");
 const timeoutMs = positiveInteger(
@@ -38,20 +43,24 @@ const targetSnapshot = createHelarcProductEffectivenessTargetSnapshot({
   targetRef: { id: "helarc.product", revision: productVersion },
   objective: definition.objective,
   targetName: "helarc",
-  sourceRevision: productVersion,
+  sourceRevision,
   values: createHelarcProductEffectivenessTargetValues({
     instructionTarget,
+    sourceRevision,
+    sourceDirtyState,
+    sourceTreeDigest,
+    packageRevisions: packageRevisions(sourceRevision, sourceTreeDigest),
     productVersion,
     providerId: providerKind,
     providerKind,
-    providerRevision: productVersion,
+    providerRevision,
     providerEndpoint: baseUrl,
     providerAuthentication: providerKind === "openai-compatible" &&
         (process.env.HELARC_EVALUATION_API_KEY ?? "").length > 0
       ? "bearer"
       : "none",
     modelId: model,
-    modelRevision: productVersion,
+    modelRevision,
     environmentId: environment,
     providerTimeoutMs: timeoutMs,
     maximumInputBytes,
@@ -83,6 +92,7 @@ const bundle = await captureHelarcProductEffectiveness({
   createdAt,
 });
 const outputPath = resolve(options.output);
+await mkdir(dirname(outputPath), { recursive: true });
 await writeFile(outputPath, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
 process.stdout.write(`${JSON.stringify({
   status: bundle.trials.every((trial) => trial.status === "completed")
@@ -144,6 +154,31 @@ function instructionTargetEnvironment() {
     );
   }
   return value;
+}
+
+function sourceDirtyStateEnvironment() {
+  const value = requiredEnvironment("HELARC_EVALUATION_SOURCE_DIRTY_STATE");
+  if (value !== "clean" && value !== "included") {
+    throw new TypeError(
+      "HELARC_EVALUATION_SOURCE_DIRTY_STATE must be 'clean' or 'included'.",
+    );
+  }
+  return value;
+}
+
+function packageRevisions(sourceRevision, sourceTreeDigest) {
+  const revision = `${sourceRevision}:${sourceTreeDigest}`;
+  return Object.freeze(Object.fromEntries([
+    "@agent-anything/action-execution",
+    "@agent-anything/agent-runtime",
+    "@agent-anything/evaluation",
+    "@agent-anything/helarc",
+    "@agent-anything/helarc-local-environment",
+    "@agent-anything/model-interaction",
+    "@agent-anything/test-support",
+    "@agent-anything/tools",
+    "@agent-anything/verification",
+  ].map((name) => [name, revision])));
 }
 
 function positiveInteger(value, name) {

@@ -43,6 +43,8 @@ export const HELARC_PRODUCT_EFFECTIVENESS_PROTOCOL = Object.freeze({
 });
 
 export const HELARC_PRODUCT_EFFECTIVENESS_TARGET_INPUTS = Object.freeze([
+  targetInput("source", "evaluation-target"),
+  targetInput("packages", "evaluation-target"),
   targetInput("product", "helarc-product"),
   targetInput("agent", "helarc-product"),
   targetInput("agent_instructions", "helarc-product"),
@@ -77,6 +79,10 @@ export type HelarcProductEffectivenessTargetValues = Readonly<
 
 export function createHelarcProductEffectivenessTargetValues(input: {
   readonly instructionTarget: HelarcMainInstructionTarget;
+  readonly sourceRevision: string;
+  readonly sourceDirtyState: "clean" | "included";
+  readonly sourceTreeDigest: string;
+  readonly packageRevisions: Readonly<Record<string, string>>;
   readonly productVersion: string;
   readonly providerId: string;
   readonly providerKind: string;
@@ -97,6 +103,12 @@ export function createHelarcProductEffectivenessTargetValues(input: {
     modelId: input.modelId,
   });
   return Object.freeze({
+    source: Object.freeze({
+      revision: input.sourceRevision,
+      dirtyState: input.sourceDirtyState,
+      treeDigest: input.sourceTreeDigest,
+    }),
+    packages: Object.freeze({ ...input.packageRevisions }),
     product: Object.freeze({ id: "helarc", version: input.productVersion }),
     agent: Object.freeze({ id: agent.id, revision: agent.revision }),
     agent_instructions: Object.freeze({

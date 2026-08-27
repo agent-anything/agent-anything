@@ -714,7 +714,9 @@ function summarizeDiagnostics(
     latencyMs: average(completed.map((trial) => trial.diagnostics.latencyMs)),
     inputTokens: average(completed.map((trial) => trial.diagnostics.inputTokens)),
     outputTokens: average(completed.map((trial) => trial.diagnostics.outputTokens)),
+    estimatedCost: average(completed.map((trial) => trial.diagnostics.estimatedCost)),
     toolCalls: average(completed.map((trial) => trial.diagnostics.toolCalls)),
+    retries: average(completed.map((trial) => trial.diagnostics.retries)),
     humanInteractionEvents: average(
       completed.map((trial) => trial.diagnostics.humanInteractionEvents),
     ),

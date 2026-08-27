@@ -4,6 +4,7 @@ import * as api from "./index.js";
 describe("Helarc Evaluation target public API", () => {
   it("exposes the focused deterministic target and effectiveness definition surface", () => {
     expect(Object.keys(api).sort()).toEqual([
+      "HELARC_AGENT_INSTRUCTION_CAMPAIGN_REVISION",
       "HELARC_AGENT_INSTRUCTION_EVALUATION_REVISION",
       "HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE",
       "HELARC_CONTEXT_CONTINUITY_BASELINE_ACCEPTANCE",
@@ -20,6 +21,8 @@ describe("Helarc Evaluation target public API", () => {
       "HELARC_FILE_TOOLS_BASELINE_ACCEPTANCE",
       "HELARC_INCIDENT_ADMISSION_REVISION",
       "HELARC_OPERATIONAL_ABSOLUTE_GATES",
+      "HELARC_OPERATIONAL_CONFORMANCE_ACCEPTED_BASELINE",
+      "HELARC_OPERATIONAL_CONFORMANCE_BASELINE_ACCEPTANCE",
       "HELARC_OPERATIONAL_CONFORMANCE_REVISION",
       "HELARC_OPERATIONAL_EVALUATION_REVISION",
       "HELARC_OPERATIONAL_EVALUATION_TIME",
@@ -52,6 +55,8 @@ describe("Helarc Evaluation target public API", () => {
       "compareHelarcEvaluationBaseline",
       "compareHelarcOperationalInstructionTargets",
       "compareHelarcProductEffectiveness",
+      "createHelarcAgentInstructionCampaignArtifact",
+      "createHelarcAgentInstructionCampaignUnavailableArtifact",
       "createHelarcEvaluationCorpus",
       "createHelarcEvaluationIncidentCandidate",
       "createHelarcEvaluationTargetAdapter",
@@ -73,6 +78,8 @@ describe("Helarc Evaluation target public API", () => {
       "runHelarcEvaluationBaselineCandidate",
       "runHelarcOperationalConformance",
       "sealHelarcProductEffectivenessEvidenceBundle",
+      "verifyHelarcAgentInstructionCampaignArtifact",
+      "verifyHelarcOperationalConformanceAcceptedBaseline",
     ]);
   });
 });

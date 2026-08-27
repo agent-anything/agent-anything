@@ -80,6 +80,11 @@ export {
   HELARC_VERIFICATION_GUIDED_COMPLETION_ACCEPTED_BASELINE,
   HELARC_VERIFICATION_GUIDED_COMPLETION_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcVerificationGuidedCompletionBaseline.js";
+export {
+  HELARC_OPERATIONAL_CONFORMANCE_ACCEPTED_BASELINE,
+  HELARC_OPERATIONAL_CONFORMANCE_BASELINE_ACCEPTANCE,
+  verifyHelarcOperationalConformanceAcceptedBaseline,
+} from "./baseline/HelarcOperationalConformanceBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export type {
@@ -161,6 +166,20 @@ export {
   HELARC_AGENT_INSTRUCTION_EVALUATION_REVISION,
   runHelarcAgentInstructionConformance,
 } from "./HelarcAgentInstructionEvaluation.js";
+export type {
+  HelarcAgentInstructionCampaignArtifact,
+  HelarcAgentInstructionCampaignCompletedArtifact,
+  HelarcAgentInstructionCampaignUnavailableArtifact,
+  HelarcAgentInstructionComparisonReport,
+  HelarcAgentInstructionTargetReport,
+  HelarcAgentInstructionTargetReportStatus,
+} from "./HelarcAgentInstructionCampaign.js";
+export {
+  createHelarcAgentInstructionCampaignArtifact,
+  createHelarcAgentInstructionCampaignUnavailableArtifact,
+  HELARC_AGENT_INSTRUCTION_CAMPAIGN_REVISION,
+  verifyHelarcAgentInstructionCampaignArtifact,
+} from "./HelarcAgentInstructionCampaign.js";
 export type {
   HelarcEvaluationIncidentCandidate,
   HelarcIncidentAdmissionDecision,
