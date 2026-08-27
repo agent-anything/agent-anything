@@ -1,6 +1,9 @@
 import type { AgentRevisionRef } from "@agent-anything/agent-core/agent";
 import type { ControllerTurnRef } from "@agent-anything/agent-core/control";
-import type { RunActionEnvelope } from "@agent-anything/agent-core/run-action";
+import type {
+  RunActionEnvelope,
+  RunActionProvenance,
+} from "@agent-anything/agent-core/run-action";
 import type { RunItemEnvelope } from "@agent-anything/agent-core/run-item";
 import type { InteractionRequestRef } from "@agent-anything/interaction/protocol";
 import type { PlanProjection } from "../plan/index.js";
@@ -19,6 +22,7 @@ import type {
   RunProgressCorrectionFeedback,
 } from "../progress/index.js";
 import type { AgentInstructionBindingRef } from "../instructions/index.js";
+import type { ModelCallRef, ModelToolResult } from "@agent-anything/model-interaction";
 
 export interface ControllerToolExposureRecord {
   readonly proofId: string;
@@ -38,9 +42,19 @@ export type RuntimeRunActionSubject =
   | { readonly kind: "state_transition"; readonly transition: "plan_update" | "handoff" }
   | { readonly kind: "operation"; readonly invocationId: string | null; readonly requestOrigin: "automatic_stage" | "controller_protocol" | "tool_request" | "composite" | "descendant" }
   | { readonly kind: "tool"; readonly toolCallId: string }
+  | { readonly kind: "model_call_rejection"; readonly modelCallRef: ModelCallRef }
   | { readonly kind: "interaction"; readonly request: InteractionRequestRef | null };
 
-export type RuntimeRunAction = RunActionEnvelope<RuntimeRunActionSubject>;
+export type RuntimeRunActionProvenance =
+  | (Extract<RunActionProvenance, { readonly kind: "controller" }> & {
+      readonly modelCallRef: ModelCallRef;
+    })
+  | Exclude<RunActionProvenance, { readonly kind: "controller" }>;
+
+export type RuntimeRunAction = Omit<
+  RunActionEnvelope<RuntimeRunActionSubject>,
+  "provenance"
+> & { readonly provenance: RuntimeRunActionProvenance };
 
 export type RunItemPayload<TOutput = unknown> =
   | {
@@ -54,6 +68,7 @@ export type RunItemPayload<TOutput = unknown> =
       readonly failure: RunFailureCause | null;
     }
   | { readonly kind: "run_action"; readonly action: RuntimeRunAction }
+  | { readonly kind: "model_call_settlement"; readonly result: ModelToolResult }
   | { readonly kind: "observation"; readonly observation: RunObservation }
   | {
       readonly kind: "state_transition";

@@ -1,37 +1,35 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
+import { createAgentInstructions } from "@agent-anything/agent-core/agent";
 import {
+  ControllerError,
   ProviderBackedController,
-  StructuredOutputError,
   type ControllerCallContext,
   type ControllerInput,
 } from "@agent-anything/agent-runtime/controller";
+import { createAgentInstructionBinding } from "@agent-anything/agent-runtime/instructions";
 import { createSystemRetryExecutor, systemRetryClock } from "@agent-anything/agent-runtime/retry";
 import { createRunCancellationController } from "@agent-anything/agent-runtime/run";
-import type {
-  Provider,
-  ProviderCallResult,
-  ProviderRequest,
-  ProviderResponse,
+import {
+  createModelCallRef,
+  type ModelAssistantContentBlock,
+  type ModelJsonValue,
+  type ModelTurnFinish,
+  type Provider,
+  type ProviderCallResult,
+  type ProviderRequest,
+  type ProviderResponse,
 } from "@agent-anything/model-interaction";
 import { createUtf8ModelInputAccounting } from "@agent-anything/model-interaction/input";
 import { createToolCatalogSnapshot, type ToolDescriptorInput } from "@agent-anything/tools/catalog";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
 import { describe, expect, it } from "vitest";
-import { createAgentInstructions } from "@agent-anything/agent-core/agent";
-import { createAgentInstructionBinding } from "@agent-anything/agent-runtime/instructions";
+import { buildHelarcPromptAssembly } from "../prompt/index.js";
 import {
-  buildHelarcActionDecisionRulesText,
-  buildHelarcActionProtocolText,
   buildHelarcProviderRequest,
-  createHelarcActionContract,
-  HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
-  HelarcControllerParseError,
+  createHelarcModelCallableCatalog,
   parseHelarcProviderResponse,
-  parseStructuredOutput,
   type HelarcAgentOutput,
-  type HelarcControllerParseErrorCode,
 } from "./index.js";
-import { buildHelarcPromptAssembly, HELARC_ACTION_CONTRACT_VERSION } from "../prompt/index.js";
 
 const TEST_INPUT_ACCOUNTING = createUtf8ModelInputAccounting({
   providerId: "fake-provider",
@@ -43,119 +41,95 @@ const TEST_INPUT_ACCOUNTING = createUtf8ModelInputAccounting({
   renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
 });
 
-describe("Helarc controller", () => {
-  it("builds a request with the accepted decision and Tool Contracts", () => {
-    const request = buildHelarcProviderRequest(createControllerInput(), {
-      attemptNumber: 1,
-      correction: null,
-      inputAccounting: TEST_INPUT_ACCOUNTING,
-    });
+describe("Helarc native Tool controller", () => {
+  it("builds one native request from the exact Tool exposure and Product controls", () => {
+    const input = createControllerInput();
+    const request = buildHelarcProviderRequest(input, requestBuildContext());
 
+    expect(request.interaction.kind).toBe("native_tool_turn");
+    if (request.interaction.kind !== "native_tool_turn") {
+      throw new Error("Expected native Tool interaction.");
+    }
+    expect(request.interaction.callables.map(({ name }) => name)).toEqual(
+      [...request.interaction.callables.map(({ name }) => name)].sort(),
+    );
+    expect(request.interaction.callables.map(({ name }) => name)).toEqual(
+      expect.arrayContaining(["stop", "update_plan"]),
+    );
+    expect(request.interaction.callables).toHaveLength(FILE_TOOLS.length + 2);
+    expect(request.interaction.callables.every(({ name }) => /^[A-Za-z0-9_-]+$/u.test(name)))
+      .toBe(true);
+    expect(request.interaction.callables.some(({ name }) => name === "Read")).toBe(false);
     expect(request.metadata).toMatchObject({
       runId: "run-1",
-      promptArchitectureVersion: "helarc-prompt-v5",
-      actionContractVersion: "helarc-model-decision-v1",
+      promptArchitectureVersion: "helarc-prompt-v6",
       toolExposureVersion: "trusted-tool-exposure-v1",
-      toolSelectionRevision: "tool-selection-1",
-      toolExposureContentRevision: "tool-exposure-content-1",
-      toolExposureBasisRevision: "tool-exposure-basis-1",
-      toolExposureProofId: "tool-exposure-1",
-      exposedToolCount: 5,
-      omittedToolCount: 0,
-      exposedToolNames: ["Edit", "Glob", "Grep", "Read", "Write"],
-      instructionBindingId: createControllerInput().instructionBinding.ref.id,
-      agentInstructionReleaseId: "helarc.release",
-      agentInstructionBlockCount: 1,
-      agentInstructionProviderId: "fake-provider",
-      agentInstructionModelId: "helarc-controller-test-model",
+      exposedToolCount: FILE_TOOLS.length,
+      interactionMessageCount: 0,
+      controllerControlSetRevision: "helarc.controller-controls.v1",
+    });
+    expect(request.composition.lineage).toMatchObject({
+      instructionBinding: { id: input.instructionBinding.ref.id },
+      controllerControlSet: { id: "helarc.controller-controls.v1" },
+      interactionHistory: null,
+      protocol: { id: "helarc.provider-native-tool-interaction.v1" },
     });
     expect(request.composition.sections[0]).toMatchObject({
       id: "helarc:model-input:agent-instructions:behavior",
-      kind: "agent_instruction",
       role: "system",
       necessity: "mandatory",
       content: { text: "Complete the code task." },
     });
-    expect(request.composition.lineage).toMatchObject({
-      instructionBinding: {
-        id: createControllerInput().instructionBinding.ref.id,
-      },
-      instructionRelease: { id: "helarc.release", revision: "1" },
-      instructionModel: {
-        providerId: "fake-provider",
-        model: "helarc-controller-test-model",
-      },
-      instructionBlocks: [{ id: "helarc.behavior", revision: "1" }],
-    });
-    expect(JSON.stringify(request.metadata)).not.toContain("Complete the code task.");
-    expect(request.interaction).toMatchObject({
-      kind: "structured_generation",
-      outputFormat: {
-      kind: "json_schema",
-      name: "helarc_model_decision",
-      schemaId: "helarc.model-decision",
-      schemaRevision: "helarc-model-decision-v1:tool-exposure-content-1",
-      schema: {
-        oneOf: [
-          {
-            properties: {
-              toolName: { enum: ["Edit"] },
-              input: {},
-            },
-            required: ["kind", "toolName", "input"],
-          },
-          { properties: { toolName: { enum: ["Glob"] }, input: {} } },
-          { properties: { toolName: { enum: ["Grep"] }, input: {} } },
-          {
-            properties: {
-              toolName: { enum: ["Read"] },
-              input: {
-                type: "object",
-                additionalProperties: false,
-                required: ["file_path"],
-                properties: { file_path: { type: "string" } },
-              },
-            },
-          },
-          {
-            properties: {
-              toolName: { enum: ["Write"] },
-              input: {
-                type: "object",
-                additionalProperties: false,
-                required: ["file_path", "content"],
-                properties: {
-                  file_path: { type: "string" },
-                  content: { type: "string" },
-                },
-              },
-            },
-          },
-          { required: ["kind", "plan"] },
-          { required: ["kind", "summary"] },
-          { required: ["kind", "reason"] },
-        ],
-      },
-      },
-    });
-    expect(request.composition.interaction).toEqual(request.interaction);
     const prompt = messageText(request.messages);
-    expect(prompt).toContain("tool_call, plan_update, completion, stop");
-    expect(prompt).toContain("A successful Edit or Write is an Observation");
-    expect(prompt).toContain('"file_path"');
+    expect(prompt).toContain("Use only callable definitions supplied with the current model request.");
     expect(prompt).toContain("Task:\nUpdate docs");
+    expect(prompt).not.toContain("Return only JSON");
     expect(prompt).not.toContain("D:/projects/agent-anything");
-    expect(request.composition.lineage).toMatchObject({
-      contextProjection: { id: "projection-1" },
-      projectionManifest: { id: "manifest-1" },
-      toolSelection: { id: "tool-selection-1", revision: "tool-selection-1" },
-      toolExposureContent: { id: "tool-exposure-content-1", revision: "tool-exposure-content-1" },
-      toolExposureBasis: { id: "tool-exposure-basis-1", revision: "tool-exposure-basis-1" },
-      toolExposureProof: { id: "tool-exposure-1", revision: "tool-exposure-1" },
+    expect(JSON.stringify(request.metadata)).not.toContain("Complete the code task.");
+  });
+
+  it("creates a deterministic, disjoint catalog whose Tool aliases retain exact bindings", () => {
+    const input = createControllerInput();
+    const first = createHelarcModelCallableCatalog({
+      toolExposure: input.toolExposure,
+      planLimits: input.planLimits,
+    });
+    const second = createHelarcModelCallableCatalog({
+      toolExposure: input.toolExposure,
+      planLimits: input.planLimits,
+    });
+
+    expect(first).toEqual(second);
+    expect(new Set(first.bindings.map(({ callableName }) => callableName)).size)
+      .toBe(first.bindings.length);
+    expect(first.bindings.filter(({ kind }) => kind === "tool")).toHaveLength(FILE_TOOLS.length);
+    expect(first.bindings.find((binding) =>
+      binding.kind === "tool" && binding.toolName === "Read"
+    )).toMatchObject({
+      kind: "tool",
+      toolName: "Read",
+      tool: { tool: { namespace: "helarc.code-agent", name: "read" }, revision: "2" },
     });
   });
 
-  it("renders admitted Verification Context once through its dedicated current-turn section", () => {
+  it("keeps Product controls available when the Tool exposure is empty", () => {
+    const input = createControllerInput();
+    const request = buildHelarcProviderRequest({
+      ...input,
+      toolExposure: createToolExposure([]),
+    }, requestBuildContext());
+
+    expect(request.interaction).toMatchObject({ kind: "native_tool_turn" });
+    if (request.interaction.kind !== "native_tool_turn") {
+      throw new Error("Expected native Tool interaction.");
+    }
+    expect(request.interaction.callables.map(({ name }) => name)).toEqual([
+      "stop",
+      "update_plan",
+    ]);
+  });
+
+  it("renders admitted Verification Context once through its current-turn section", () => {
     const controllerInput = createControllerInput();
     const verificationBlock = {
       id: "verification-block",
@@ -183,7 +157,6 @@ describe("Helarc controller", () => {
           accounting: { unit: "bytes", amount: 1 },
         },
       },
-      correctionMessage: null,
     });
     const general = assembly.promptSections.find(({ id }) => id === "context_projection");
     const verification = assembly.promptSections.find(({ id }) => id === "current_verification");
@@ -194,31 +167,72 @@ describe("Helarc controller", () => {
       .toMatchObject({ owner: "context", id: "projection-1", revision: "1" });
   });
 
-  it("keeps non-Tool decisions valid when the exact exposure is empty", () => {
-    const input = Object.freeze({
-      ...createControllerInput(),
-      toolExposure: createToolExposure([]),
-    });
-    const request = buildHelarcProviderRequest(input, {
-      attemptNumber: 1,
-      correction: null,
-      inputAccounting: TEST_INPUT_ACCOUNTING,
-    });
-    const alternatives = request.interaction.kind === "structured_generation"
-      ? (request.interaction.outputFormat.schema as { oneOf: readonly unknown[] }).oneOf
-      : [];
+  it("places Run-owned model interaction history before current state material", () => {
+    const input = createControllerInput();
+    const request = buildHelarcProviderRequest({
+      ...input,
+      interaction: {
+        id: "run-1:model-interaction",
+        revision: "7",
+        messages: [{
+          role: "assistant",
+          content: [{ kind: "text", text: "I inspected the workspace." }],
+        }],
+        unsettledCalls: [],
+        settledCallCount: 1,
+      },
+    }, requestBuildContext());
+    const historyIndex = request.messages.findIndex((message) =>
+      message.role === "assistant" && message.content.some((block) =>
+        block.kind === "text" && block.text === "I inspected the workspace."
+      )
+    );
+    const stateIndex = request.messages.findIndex((message) =>
+      message.role === "user" && message.content.some((block) =>
+        block.kind === "text" && block.text.startsWith("Context projection:")
+      )
+    );
 
-    expect(alternatives).toHaveLength(3);
-    expect(JSON.stringify(alternatives)).not.toContain("tool_call");
-    expect(messageText(request.messages))
-      .toContain("No Tools are available for this Controller turn.");
+    expect(historyIndex).toBeGreaterThan(-1);
+    expect(stateIndex).toBeGreaterThan(historyIndex);
+    expect(request.metadata).toMatchObject({
+      interactionProjectionId: "run-1:model-interaction",
+      interactionProjectionRevision: "7",
+      interactionMessageCount: 1,
+    });
   });
 
-  it("fails the complete mandatory input instead of silently omitting exposed Tools", () => {
+  it("rejects correction attempts and unsettled calls before transport", () => {
+    expect(() => buildHelarcProviderRequest(createControllerInput(), {
+      ...requestBuildContext(),
+      attemptNumber: 2,
+      correction: {
+        previousAttemptNumber: 1,
+        failure: {
+          category: "structured_output_syntax",
+          code: "legacy_json_failure",
+          correctionFeedback: "Return JSON.",
+        },
+      },
+    })).toThrow("do not accept structured-output correction");
+
+    const input = createControllerInput();
+    const response = nativeResponse(input, [{ kind: "call", name: "unknown", input: {} }]);
+    if (response.kind !== "native_tool_turn") throw new Error("Expected native response.");
+    const unsettled = response.turn.assistant.content.flatMap((block) =>
+      block.kind === "model_tool_call" ? [block.call.modelCallRef] : []
+    );
+    expect(() => buildHelarcProviderRequest({
+      ...input,
+      interaction: { ...input.interaction, unsettledCalls: unsettled },
+    }, requestBuildContext())).toThrow("while a model call is unsettled");
+  });
+
+  it("fails complete mandatory input instead of omitting callable definitions", () => {
     const accounting = createUtf8ModelInputAccounting({
       providerId: "tiny-provider",
       model: "tiny-model",
-      maximumInputBytes: 256_100,
+      maximumInputBytes: 1_024,
       limitSource: "host_configured",
       estimator: { id: "tiny-provider.utf8-content", revision: "1" },
       framing: { id: "tiny-provider.framing", revision: "1" },
@@ -232,7 +246,7 @@ describe("Helarc controller", () => {
     })).toThrow("Complete mandatory model input exceeds the effective input limit.");
   });
 
-  it("rejects an instruction binding for a different Provider model before transport", () => {
+  it("rejects an instruction binding for a different Provider model", () => {
     expect(() => buildHelarcProviderRequest(createControllerInput(), {
       attemptNumber: 1,
       correction: null,
@@ -248,97 +262,70 @@ describe("Helarc controller", () => {
     })).toThrow("must match");
   });
 
-  it("assembles the four-decision model Contract without a proposal workflow", () => {
-    const assembly = buildHelarcPromptAssembly({
-      controllerInput: createControllerInput(),
-      correctionMessage: null,
+  it("binds native Tool calls to exact domain Tool requests and preserves order", () => {
+    const input = createControllerInput();
+    const catalog = createHelarcModelCallableCatalog({
+      toolExposure: input.toolExposure,
+      planLimits: input.planLimits,
     });
-    const contract = createHelarcActionContract(FILE_TOOLS.map(({ name }) => name));
+    const read = toolCallable(catalog, "Read");
+    const write = toolCallable(catalog, "Write");
+    const decision = parseHelarcProviderResponse(nativeResponse(input, [
+      { kind: "text", text: "I will inspect and then write." },
+      { kind: "call", name: read, input: { file_path: "src/index.ts" } },
+      { kind: "call", name: write, input: { file_path: "out.txt", content: "done" } },
+    ]), input);
 
-    expect(assembly.promptSections.filter(({ role }) => role === "system").map(({ id }) => id))
-      .toEqual([
-        "agent-instructions:behavior",
-        "output_format",
-        "action_protocol",
-        "action_decision_rules",
-        "tool_catalog",
-        "permission_safety",
-        "stop_protocol",
-        "safe_output_boundary",
-      ]);
-    expect(contract.decisions.map(({ kind }) => kind)).toEqual([
-      "tool_call",
-      "plan_update",
-      "completion",
-      "stop",
-    ]);
-    expect(buildHelarcActionProtocolText(contract))
-      .toContain("For tool_call, return kind, toolName, input, and optional reason.");
-    expect(buildHelarcActionDecisionRulesText(contract))
-      .toContain("Use plan_update only when an explicit plan improves the current work");
-  });
-
-  it("builds bounded correction diagnostics", () => {
-    const request = buildHelarcProviderRequest(createControllerInput(), {
-      attemptNumber: 2,
-      inputAccounting: TEST_INPUT_ACCOUNTING,
-      correction: {
-        previousAttemptNumber: 1,
-        failure: {
-          category: "structured_output_syntax",
-          code: "controller_output_not_json",
-          correctionFeedback: "Return one valid JSON object without markdown.",
-        },
-      },
-    });
-    expect(request.metadata).toMatchObject({
-      structuredOutputAttemptNumber: 2,
-      structuredOutputCorrectionCode: "controller_output_not_json",
-    });
-    expect(request.messages.at(-1)).toMatchObject({
-      role: "user",
-      content: [{ kind: "text", text: expect.stringContaining("Correct the previous response.") }],
-    });
-    expect(request.composition.sections.at(-1)?.source).toMatchObject({
-      owner: "helarc",
-      kind: "prompt_section",
-      id: "structured_output_correction",
-    });
-  });
-
-  it("maps one Tool decision to one model-origin Tool request", () => {
-    const decision = parseHelarcProviderResponse(response({
-      kind: "tool_call",
-      toolName: "Read",
-      input: { file_path: "src/index.ts" },
-      reason: "Inspect the current file.",
-    }), createControllerInput());
     expect(decision).toMatchObject({
       kind: "advance",
-      candidates: [{
-        kind: "tool_request",
-        tool: {
-          name: "Read",
-          input: { file_path: "src/index.ts" },
-          origin: "model",
-          controllerRequestId: "controller-request-1",
+      candidates: [
+        {
+          kind: "tool_request",
+          tool: {
+            name: "Read",
+            revision: "2",
+            input: { file_path: "src/index.ts" },
+            origin: "model",
+            controllerRequestId: "controller-request-1",
+          },
         },
-      }],
-      modelItems: [{
-        metadata: { controllerAction: "tool_call", requestedToolName: "Read" },
-      }],
+        {
+          kind: "tool_request",
+          tool: {
+            name: "Write",
+            revision: "2",
+            input: { file_path: "out.txt", content: "done" },
+          },
+        },
+      ],
     });
+    if (decision.kind !== "advance") throw new Error("Expected advance decision.");
+    expect(decision.candidates.map(({ modelCallRef }) => modelCallRef.contentBlockOrdinal))
+      .toEqual([1, 2]);
+    expect(decision.modelItems.map(({ kind }) => kind)).toEqual([
+      "assistant_text",
+      "model_tool_call",
+      "model_tool_call",
+      "model_turn_finish",
+      "model_response_correlation",
+    ]);
   });
 
-  it("maps a Plan update to one Runner-owned state transition", () => {
-    expect(parseHelarcProviderResponse(response({
-      kind: "plan_update",
-      explanation: "The task has multiple steps.",
-      plan: [
-        { step: "Inspect files", status: "in_progress" },
-        { step: "Apply exact change", status: "pending" },
-      ],
-    }), createControllerInput())).toMatchObject({
+  it("maps update_plan to a Runner-owned state transition", () => {
+    const input = createControllerInput();
+    const decision = parseHelarcProviderResponse(nativeResponse(input, [{
+      kind: "call",
+      name: "update_plan",
+      input: {
+        explanation: "The task has multiple steps.",
+        plan: [
+          { step: "Inspect files", status: "in_progress" },
+          { step: "Apply exact change", status: "pending" },
+        ],
+      },
+    }]), input);
+
+    expect(decision).toMatchObject({
       kind: "advance",
       candidates: [{
         kind: "state_transition",
@@ -354,70 +341,106 @@ describe("Helarc controller", () => {
     });
   });
 
-  it.each([
-    [
-      { kind: "completion", summary: "The task is complete." },
-      { kind: "propose_completion", output: { kind: "complete", summary: "The task is complete." } },
-    ],
-    [
-      { kind: "stop", reason: "Cannot continue safely." },
-      { kind: "propose_stop", reason: "Cannot continue safely." },
-    ],
-  ])("maps terminal provider decision %#", (output, expected) => {
-    expect(parseHelarcProviderResponse(response(output), createControllerInput()))
-      .toMatchObject(expected);
+  it("maps text completion, stop control, and refusal to terminal decisions", () => {
+    const input = createControllerInput();
+
+    expect(parseHelarcProviderResponse(nativeResponse(input, [
+      { kind: "text", text: "The task is complete." },
+    ]), input)).toMatchObject({
+      kind: "propose_completion",
+      output: { kind: "complete", summary: "The task is complete." },
+    });
+    expect(parseHelarcProviderResponse(nativeResponse(input, [{
+      kind: "call",
+      name: "stop",
+      input: { reason: "Cannot continue safely." },
+    }]), input)).toMatchObject({
+      kind: "propose_stop",
+      reason: "Cannot continue safely.",
+    });
+    expect(parseHelarcProviderResponse(nativeResponse(
+      input,
+      [{ kind: "text", text: "Policy refusal." }],
+      { kind: "refusal", reason: null },
+    ), input)).toMatchObject({
+      kind: "propose_stop",
+      reason: "Policy refusal.",
+    });
   });
 
-  it.each<[string, unknown, HelarcControllerParseErrorCode]>([
-    ["invalid JSON", "{", "controller_output_not_json"],
-    ["legacy action shape", { action: "complete", summary: "Done." }, "model_decision_field_invalid"],
-    ["unsupported decision", { kind: "propose", summary: "Change it." }, "model_decision_kind_invalid"],
-    ["missing Tool input", { kind: "tool_call", toolName: "Read" }, "model_decision_tool_input_invalid"],
-    ["non-object Tool input", { kind: "tool_call", toolName: "Read", input: [] }, "model_decision_tool_input_invalid"],
-    ["empty summary", { kind: "completion", summary: "" }, "model_decision_field_invalid"],
-  ])("rejects %s", (_label, output, code) => {
-    expectParseError(() => parseStructuredOutput(output), code);
+  it("turns unknown, malformed, and mixed stop calls into explicit rejection candidates", () => {
+    const input = createControllerInput();
+    const catalog = createHelarcModelCallableCatalog({
+      toolExposure: input.toolExposure,
+      planLimits: input.planLimits,
+    });
+    const read = toolCallable(catalog, "Read");
+
+    expect(parseHelarcProviderResponse(nativeResponse(input, [{
+      kind: "call",
+      name: "not_in_catalog",
+      input: {},
+    }]), input)).toMatchObject({
+      kind: "advance",
+      candidates: [{ kind: "model_call_rejection", code: "model_callable_unknown" }],
+    });
+    expect(parseHelarcProviderResponse(nativeResponse(input, [{
+      kind: "call",
+      name: "stop",
+      input: { reason: "" },
+    }]), input)).toMatchObject({
+      kind: "advance",
+      candidates: [{ kind: "model_call_rejection", code: "stop_input_invalid" }],
+    });
+    expect(parseHelarcProviderResponse(nativeResponse(input, [
+      { kind: "call", name: "stop", input: { reason: "Stop." } },
+      { kind: "call", name: read, input: { file_path: "README.md" } },
+    ]), input)).toMatchObject({
+      kind: "advance",
+      candidates: [
+        { kind: "model_call_rejection", code: "stop_must_be_sole_call" },
+        { kind: "tool_request", tool: { name: "Read" } },
+      ],
+    });
   });
 
-  it("classifies invalid JSON for structured-output correction", () => {
-    try {
-      parseStructuredOutput("{");
-    } catch (error) {
-      expect(error).toBeInstanceOf(StructuredOutputError);
-      expect((error as StructuredOutputError).failure.category).toBe("structured_output_syntax");
-      return;
-    }
-    throw new Error("Expected StructuredOutputError.");
+  it("rejects abnormal finishes and mismatched call correlation", () => {
+    const input = createControllerInput();
+    expectControllerFailure(
+      () => parseHelarcProviderResponse(
+        nativeResponse(input, [], { kind: "output_limit" }),
+        input,
+      ),
+      "helarc_model_finish_output_limit",
+    );
+    expectControllerFailure(
+      () => parseHelarcProviderResponse(nativeResponse(input, [{
+        kind: "call",
+        name: "update_plan",
+        input: { plan: [{ step: "Inspect", status: "in_progress" }] },
+      }], { kind: "normal" }, "wrong-branch"), input),
+      "helarc_model_call_correlation_mismatch",
+    );
   });
 
-  it("rejects Tools outside the active catalog", () => {
-    expectParseError(() => parseHelarcProviderResponse(response({
-      kind: "tool_call",
-      toolName: "RunCommand",
-      input: { command: "npm test" },
-    }), createControllerInput()), "controller_tool_name_unsupported");
-  });
-
-  it("rejects oversized string output", () => {
-    const output = JSON.stringify({ kind: "completion", summary: "done" })
-      .padEnd(HELARC_CONTROLLER_OUTPUT_MAX_LENGTH + 1, " ");
-    expectParseError(() => parseStructuredOutput(output), "controller_output_too_large");
-  });
-
-  it("drives ProviderBackedController with the accepted adapters", async () => {
-    const provider = new FakeProvider({ kind: "completion", summary: "Done." });
+  it("drives ProviderBackedController through native turns without structured correction", async () => {
+    const provider = new FakeProvider((request) => nativeTextResponseFromRequest(request, "Done."));
     const controller = new ProviderBackedController<HelarcAgentOutput>({
       provider,
       buildRequest: buildHelarcProviderRequest,
       parseResponse: parseHelarcProviderResponse,
-      structuredOutputContractId: HELARC_ACTION_CONTRACT_VERSION,
-      maxProviderOutputLength: HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
+      responseProtocol: { kind: "native_tool_turn" },
       retryExecutor: createSystemRetryExecutor(),
       retryClock: systemRetryClock,
     });
-    expect(await controller.next(createControllerInput(), controllerCallContext()))
-      .toMatchObject({ kind: "propose_completion", output: { summary: "Done." } });
+
+    await expect(controller.next(createControllerInput(), controllerCallContext()))
+      .resolves.toMatchObject({
+        kind: "propose_completion",
+        output: { kind: "complete", summary: "Done." },
+      });
     expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]?.interaction.kind).toBe("native_tool_turn");
   });
 });
 
@@ -438,7 +461,12 @@ function createControllerInput(
     revision: "1",
     name: "Helarc",
     instructions: testAgentInstructions("helarc", providerId, modelId),
-    output: { validate: (candidate: unknown) => ({ valid: true as const, output: candidate as HelarcAgentOutput }) },
+    output: {
+      validate: (candidate: unknown) => ({
+        valid: true as const,
+        output: candidate as HelarcAgentOutput,
+      }),
+    },
     metadata: {},
   };
   return {
@@ -460,6 +488,13 @@ function createControllerInput(
     },
     inputItems: [],
     toolExposure: createToolExposure(FILE_TOOLS),
+    interaction: {
+      id: "run-1:model-interaction",
+      revision: "1",
+      messages: [],
+      unsettledCalls: [],
+      settledCallCount: 0,
+    },
     context: {
       id: "projection-1",
       requestId: "projection-request-1",
@@ -482,6 +517,11 @@ function createControllerInput(
       accounting: { unit: "bytes", consideredItems: 0, projectedItems: 0, projectedAmount: 0 },
     },
     plan: null,
+    planLimits: {
+      maxSteps: 8,
+      maxStepLength: 500,
+      maxExplanationLength: 2_000,
+    },
     progress: {
       checkpointSequence: 0,
       consecutiveNonAdvancingCheckpoints: 0,
@@ -496,9 +536,20 @@ function createControllerInput(
         environmentId: "test-environment",
         enforcement: "enforced",
         workspaceRootCount: 1,
-        fileSystem: { unrestricted: false, allowsRead: true, allowsWrite: false, hasDenials: false, managed: false },
+        fileSystem: {
+          unrestricted: false,
+          allowsRead: true,
+          allowsWrite: false,
+          hasDenials: false,
+          managed: false,
+        },
         process: { unrestricted: false },
-        network: { enabled: false, profileRestricted: false, managedRestricted: false, hasDenials: false },
+        network: {
+          enabled: false,
+          profileRestricted: false,
+          managedRestricted: false,
+          hasDenials: false,
+        },
         managedConstraintSetId: "test-constraints",
         canRequestAdditionalPermissions: true,
       },
@@ -515,10 +566,23 @@ function createControllerInput(
     },
     pending: [],
     workspace: {
-      primary: { id: "workspace-1", name: "Workspace", rootRef: "workspace://root", trustState: "trusted", source: "test", policyRefs: [], metadata: {} },
+      primary: {
+        id: "workspace-1",
+        name: "Workspace",
+        rootRef: "workspace://root",
+        trustState: "trusted",
+        source: "test",
+        policyRefs: [],
+        metadata: {},
+      },
       additional: [],
     },
-    identity: { id: "identity-1", kind: "anonymous", displayName: "Test identity", metadata: {} },
+    identity: {
+      id: "identity-1",
+      kind: "anonymous",
+      displayName: "Test identity",
+      metadata: {},
+    },
     metadata: {},
   };
 }
@@ -531,7 +595,12 @@ function testAgentInstructions(agentId: string, providerId: string, modelId: str
     resolverRevision: "test-resolver.v1",
     blocks: [{
       id: "behavior",
-      source: { owner: "test", kind: "instruction_source", id: `${agentId}.behavior`, revision: "1" },
+      source: {
+        owner: "test",
+        kind: "instruction_source",
+        id: `${agentId}.behavior`,
+        revision: "1",
+      },
       content: "Complete the code task.",
     }],
   });
@@ -540,25 +609,49 @@ function testAgentInstructions(agentId: string, providerId: string, modelId: str
 function tool(name: string, readOnly: boolean): ToolDescriptorInput {
   const operationName = name.toLowerCase();
   return {
-    ref: { tool: { namespace: "helarc.code-agent", name: operationName }, revision: "2" },
+    ref: {
+      tool: { namespace: "helarc.code-agent", name: operationName },
+      revision: "2",
+    },
     name,
     description: `${name} a Workspace file.`,
     inputSchema: name === "Read"
-      ? { type: "object", additionalProperties: false, required: ["file_path"], properties: { file_path: { type: "string" } } }
+      ? {
+          type: "object",
+          additionalProperties: false,
+          required: ["file_path"],
+          properties: { file_path: { type: "string" } },
+        }
       : name === "Write"
         ? {
             type: "object",
             additionalProperties: false,
             required: ["file_path", "content"],
-            properties: { file_path: { type: "string" }, content: { type: "string" } },
+            properties: {
+              file_path: { type: "string" },
+              content: { type: "string" },
+            },
           }
         : {},
-    schemaRevisions: { dialect: "json-schema-2020-12", input: "2", output: "2", translation: "native-2" },
+    schemaRevisions: {
+      dialect: "json-schema-2020-12",
+      input: "2",
+      output: "2",
+      translation: "native-2",
+    },
     annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly },
-    source: { kind: "product", sourceId: "helarc.code-agent", sourceRevision: "2", activationEpoch: null },
+    source: {
+      kind: "product",
+      sourceId: "helarc.code-agent",
+      sourceRevision: "2",
+      activationEpoch: null,
+    },
     binding: {
       kind: "operation",
-      operation: { operation: { namespace: "helarc.code-agent.file", name: operationName }, revision: "2" },
+      operation: {
+        operation: { namespace: "helarc.code-agent.file", name: operationName },
+        revision: "2",
+      },
       revision: "2",
     },
     metadata: {},
@@ -582,39 +675,144 @@ function createToolExposure(tools: readonly ToolDescriptorInput[]): ToolExposure
   });
 }
 
+function requestBuildContext() {
+  return {
+    attemptNumber: 1,
+    correction: null,
+    inputAccounting: TEST_INPUT_ACCOUNTING,
+  };
+}
+
 function controllerCallContext(): ControllerCallContext {
   const policy = {
     maxRetries: 0,
-    delay: { kind: "exponential_jitter" as const, baseDelayMs: 0, maxDelayMs: 0, multiplier: 2 as const, jitterRatio: 0.1 as const },
+    delay: {
+      kind: "exponential_jitter" as const,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      multiplier: 2 as const,
+      jitterRatio: 0.1 as const,
+    },
     retryableCategories: [] as string[],
     serverDelay: { mode: "ignore" as const },
   };
   return {
     cancellation: createRunCancellationController({ runId: "run-1" }).context,
-    retry: { providerRequest: policy, structuredOutput: policy, deadlineAt: "2099-01-01T00:00:00.000Z", events: { emit() {} } },
+    retry: {
+      providerRequest: policy,
+      structuredOutput: policy,
+      deadlineAt: "2099-01-01T00:00:00.000Z",
+      events: { emit() {} },
+    },
   };
 }
 
-function response(output: unknown): ProviderResponse {
-  return {
-    kind: "structured_generation",
-    responseId: null,
-    output: output as never,
-    usage: null,
+type NativeBlock =
+  | { readonly kind: "text"; readonly text: string }
+  | {
+      readonly kind: "call";
+      readonly name: string;
+      readonly input: Readonly<Record<string, ModelJsonValue>>;
+    };
+
+function nativeResponse(
+  input: ControllerInput<HelarcAgentOutput>,
+  blocks: readonly NativeBlock[],
+  finish: ModelTurnFinish = { kind: "normal" },
+  branchId = `${input.runId}:main`,
+): ProviderResponse {
+  const requestId = `${input.runId}:model-input:${input.iteration}:1`;
+  const turnId = `${requestId}:turn`;
+  const content: ModelAssistantContentBlock[] = blocks.map((block, ordinal) => {
+    if (block.kind === "text") return Object.freeze(block);
+    const modelCallRef = createModelCallRef({
+      providerRequestId: requestId,
+      controllerRequestId: input.toolExposure.controllerRequestId,
+      turnId,
+      contentBlockOrdinal: ordinal,
+      branchId,
+    });
+    return Object.freeze({
+      kind: "model_tool_call" as const,
+      call: Object.freeze({
+        modelCallRef,
+        providerCallRef: Object.freeze({
+          providerId: "fake-provider",
+          id: `provider-call-${ordinal}`,
+        }),
+        name: block.name,
+        input: block.input,
+        ordinal,
+      }),
+    });
+  });
+  return Object.freeze({
+    kind: "native_tool_turn",
+    turn: Object.freeze({
+      turnId,
+      assistant: Object.freeze({ role: "assistant", content: Object.freeze(content) }),
+      finish,
+      usage: null,
+      responseRef: Object.freeze({
+        providerId: "fake-provider",
+        requestId,
+        responseId: `${requestId}:response`,
+      }),
+    }),
     continuation: null,
-    metadata: {},
-  };
+    metadata: Object.freeze({}),
+  });
 }
 
-function expectParseError(action: () => unknown, code: HelarcControllerParseErrorCode): void {
+function nativeTextResponseFromRequest(
+  request: ProviderRequest,
+  text: string,
+): ProviderResponse {
+  const turnId = `${request.requestId}:turn`;
+  return Object.freeze({
+    kind: "native_tool_turn",
+    turn: Object.freeze({
+      turnId,
+      assistant: Object.freeze({
+        role: "assistant",
+        content: Object.freeze([{ kind: "text", text }]),
+      }),
+      finish: Object.freeze({ kind: "normal" }),
+      usage: null,
+      responseRef: Object.freeze({
+        providerId: "fake-provider",
+        requestId: request.requestId,
+        responseId: `${request.requestId}:response`,
+      }),
+    }),
+    continuation: null,
+    metadata: Object.freeze({}),
+  });
+}
+
+function toolCallable(
+  catalog: ReturnType<typeof createHelarcModelCallableCatalog>,
+  toolName: string,
+): string {
+  const binding = catalog.bindings.find((candidate) =>
+    candidate.kind === "tool" && candidate.toolName === toolName
+  );
+  if (binding === undefined) throw new Error(`Missing Tool callable for ${toolName}.`);
+  return binding.callableName;
+}
+
+function expectControllerFailure(action: () => unknown, helarcCode: string): void {
   try {
     action();
   } catch (error) {
-    expect(error).toBeInstanceOf(HelarcControllerParseError);
-    expect((error as HelarcControllerParseError).code).toBe(code);
+    expect(error).toBeInstanceOf(ControllerError);
+    expect((error as ControllerError).failure.failure).toMatchObject({
+      code: "model_output_invalid",
+      metadata: { helarcCode },
+    });
     return;
   }
-  throw new Error(`Expected HelarcControllerParseError with code ${code}.`);
+  throw new Error(`Expected ControllerError '${helarcCode}'.`);
 }
 
 class FakeProvider implements Provider {
@@ -623,7 +821,14 @@ class FakeProvider implements Provider {
     id: "fake-provider",
     name: "Fake provider",
     capabilities: {
-      nativeToolInteraction: { supported: false as const },
+      nativeToolInteraction: {
+        supported: true as const,
+        callableDefinitions: true as const,
+        modelCalls: true as const,
+        resultMessages: true as const,
+        multipleCalls: true,
+        callCorrelation: "provider_supplied" as const,
+      },
       structuredGeneration: { supported: true as const },
       streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
@@ -635,11 +840,16 @@ class FakeProvider implements Provider {
   };
   readonly requests: ProviderRequest[] = [];
 
-  constructor(private readonly output: unknown) {}
+  constructor(
+    private readonly response: (request: ProviderRequest) => ProviderResponse,
+  ) {}
 
-  async send(request: ProviderRequest, _context: InvocationInterruptionContext): Promise<ProviderCallResult> {
+  async send(
+    request: ProviderRequest,
+    _context: InvocationInterruptionContext,
+  ): Promise<ProviderCallResult> {
     this.requests.push(request);
-    return { kind: "succeeded", response: response(this.output) };
+    return { kind: "succeeded", response: this.response(request) };
   }
 }
 

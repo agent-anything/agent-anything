@@ -217,6 +217,7 @@ function snapshot(
     taskTemplates: [],
     provider: {
       configured: false,
+      nativeToolInteraction: { supported: false },
       activeProfile: null,
       profiles: [],
       error: {

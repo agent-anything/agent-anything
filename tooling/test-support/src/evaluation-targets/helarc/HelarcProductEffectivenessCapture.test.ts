@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { FakeProvider } from "../../FakeProvider.js";
+import {
+  FakeNativeToolProvider,
+  fakeNativeModelOutput,
+} from "../../provider/FakeNativeToolProvider.js";
 import { captureHelarcProductEffectiveness } from "./HelarcProductEffectivenessCapture.js";
 import { createHelarcProductEffectivenessDefinition } from "./HelarcProductEffectivenessDefinition.js";
 import {
@@ -54,18 +57,11 @@ describe("Helarc Product-effectiveness capture", () => {
       suite,
       targetSnapshot,
       instructionTarget: "production",
-      providerFactory: () => new FakeProvider({
-        results: [{
-          kind: "succeeded",
-          response: {
-            kind: "structured_generation",
-            output: { kind: "completion", summary: "The timeout is 4500 ms." },
-            responseId: null,
-            continuation: null,
-            usage: null,
-            metadata: {},
-          },
-        }],
+      providerFactory: () => new FakeNativeToolProvider({
+        steps: [fakeNativeModelOutput({
+          kind: "completion",
+          summary: "The timeout is 4500 ms.",
+        })],
       }),
       productVersion: "test-product-v1",
       model: "test-model",

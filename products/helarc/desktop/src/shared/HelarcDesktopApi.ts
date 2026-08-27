@@ -70,12 +70,14 @@ export interface HelarcProviderProfileSnapshot {
 export type HelarcProviderSnapshot =
   | {
       configured: true;
+      nativeToolInteraction: { supported: true };
       activeProfile: HelarcProviderProfileSnapshot;
       profiles: HelarcProviderProfileSnapshot[];
       error: null;
     }
   | {
       configured: false;
+      nativeToolInteraction: { supported: false };
       activeProfile: null;
       profiles: HelarcProviderProfileSnapshot[];
       error: HelarcMainError;

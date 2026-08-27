@@ -9,13 +9,14 @@ import {
   allocateModelInputContext,
   type ProviderModelInputAccounting,
 } from "@agent-anything/model-interaction/input";
+import { createNativeToolTurnInteraction } from "@agent-anything/model-interaction";
 import {
   buildHelarcBasePromptAssembly,
   HELARC_CONTEXT_PROJECTION_FORMAT_VERSION,
   HELARC_MODEL_OUTPUT_RESERVE_BYTES,
   renderHelarcContextProjectionFragment,
 } from "../prompt/HelarcPromptAssembly.js";
-import { createHelarcControllerOutputFormat } from "./HelarcActionContract.js";
+import { createHelarcModelCallableCatalog } from "./HelarcModelCallableCatalog.js";
 
 const HELARC_MAXIMUM_CONTEXT_INPUT_AMOUNT = 256 * 1_024;
 
@@ -66,12 +67,13 @@ export function createHelarcContextProjectionConfiguration(
     audiences: Object.freeze(["model"]),
     maxContributionPayloadBytes: 128 * 1_024,
     allocate(input: ControllerPreProjectionInput) {
+      const callableCatalog = createHelarcModelCallableCatalog({
+        toolExposure: input.toolExposure,
+        planLimits: input.planLimits,
+      });
       const allocation = allocateModelInputContext({
         accounting,
-        interaction: {
-          kind: "structured_generation",
-          outputFormat: createHelarcControllerOutputFormat(input.toolExposure),
-        },
+        interaction: createNativeToolTurnInteraction(callableCatalog.definitions),
         outputReserve: Object.freeze({
           unit: capability.estimator.unit,
           amount: HELARC_MODEL_OUTPUT_RESERVE_BYTES,

@@ -12,6 +12,13 @@ import type {
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/model-interaction";
+import {
+  createModelCallRef,
+  createModelTurnId,
+  snapshotModelToolCall,
+  snapshotProviderResponse,
+  type ModelJsonValue,
+} from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { createUtf8ModelInputAccounting } from "@agent-anything/model-interaction/input";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
@@ -204,6 +211,7 @@ describe("Helarc Host Run composition", () => {
       "context.transition.committed",
       "run.item.appended",
       "run.item.appended",
+      "run.item.appended",
       "run.progress.assessed",
       "context.transition.committed",
       "context.projection.completed",
@@ -217,6 +225,14 @@ describe("Helarc Host Run composition", () => {
       "run.item.appended",
       "run.completed",
     ]);
+    const modelCallSettlement = result.activity.find(
+      (item) => item.kind === "run.item.appended" &&
+        item.metadata.itemKind === "model_call_settlement",
+    );
+    expect(modelCallSettlement).toBeDefined();
+    expect(modelCallSettlement!.sequence).toBeLessThan(
+      result.activity.find((item) => item.kind === "run.progress.assessed")!.sequence,
+    );
     expect(result.activity.find((item) => item.kind === "run.progress.assessed"))
       .toMatchObject({
         title: "Run progress advanced",
@@ -237,23 +253,19 @@ describe("Helarc Host Run composition", () => {
     expect(contextProjection?.metadata).not.toHaveProperty("records");
     expect(provider.requests).toHaveLength(2);
     expect(provider.lastControllerInputContexts).toEqual([0, 1]);
-    expect(result.activity.find((item) => item.metadata.controllerAction === "tool_call")?.metadata).toMatchObject({
-      controllerAction: "tool_call",
-      requestedToolName: "Glob",
-      promptArchitectureVersion: "helarc-prompt-v5",
-      actionContractVersion: "helarc-model-decision-v1",
+    expect(result.activity.find((item) => item.kind === "controller.finished")?.metadata).toMatchObject({
+      promptArchitectureVersion: "helarc-prompt-v6",
       toolExposureVersion: "trusted-tool-exposure-v1",
-      exposedToolNames: [
-        "Edit",
-        "Glob",
-        "Grep",
-        "Read",
-        "Write",
-        "Agent",
-        "AskUserQuestion",
-        nativeShellTool(),
-      ],
     });
+    expect(result.activity.find((item) => item.kind === "controller.finished")?.metadata)
+      .not.toHaveProperty("actionContractVersion");
+    expect(provider.requests[1]?.messages).toContainEqual(expect.objectContaining({
+      role: "tool",
+      content: [expect.objectContaining({
+        kind: "model_tool_result",
+        result: expect.objectContaining({ settlement: "succeeded" }),
+      })],
+    }));
   });
 
   it("asks one correlated clarification and resumes the same Run", async () => {
@@ -462,7 +474,7 @@ describe("Helarc Host Run composition", () => {
     expect(provider.requests).toHaveLength(0);
   });
 
-  it("exhausts repeated malformed output without materializing model items or Actions", async () => {
+  it("fails malformed native output without structured-output correction", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-output-exhausted-"));
     const firstInvalidOutput = "PRIVATE_INVALID_OUTPUT_1";
     const provider = new ScriptedProvider([
@@ -480,16 +492,16 @@ describe("Helarc Host Run composition", () => {
       status: "failed",
       code: "controller_failed",
       failure: {
-        kind: "model",
-        failure: { code: "model_structured_output_retry_exhausted" },
+        kind: "provider",
+        failure: { code: "provider_request_failed" },
       },
       relatedFailures: [],
     });
     expect(result.runResult.items.some((item) =>
       item.payload.kind === "run_action"
     )).toBe(false);
-    expect(provider.requests).toHaveLength(2);
-    expect(JSON.stringify(provider.requests[1])).not.toContain(firstInvalidOutput);
+    expect(provider.requests).toHaveLength(1);
+    expect(JSON.stringify(provider.requests[0])).not.toContain(firstInvalidOutput);
   });
 
   it("keeps command execution behind approval even when enforcement is disabled", async () => {
@@ -734,9 +746,10 @@ describe("Helarc Host Run composition", () => {
     expect(result.product.runActions.map(({ status }) => status)).toEqual([
       "rejected",
       "rejected",
+      "rejected",
     ]);
     expect(provider.requests).toHaveLength(4);
-    expect(provider.lastControllerInputContexts).toEqual([0, 0, 1, 2]);
+    expect(provider.lastControllerInputContexts).toEqual([0, 1, 2, 3]);
   });
 
   it("executes multiple model-origin file mutations and continues until completion", async () => {
@@ -981,8 +994,15 @@ class ScriptedProvider implements Provider {
     id: "scripted-helarc-provider",
     name: "Scripted Helarc Provider",
     capabilities: {
-      nativeToolInteraction: { supported: false as const },
-      structuredGeneration: { supported: true as const },
+      nativeToolInteraction: {
+        supported: true as const,
+        callableDefinitions: true as const,
+        modelCalls: true as const,
+        resultMessages: true as const,
+        multipleCalls: true,
+        callCorrelation: "provider_supplied" as const,
+      },
+      structuredGeneration: { supported: false as const },
       streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
@@ -1025,17 +1045,12 @@ class ScriptedProvider implements Provider {
       ? scriptedOutput(request)
       : scriptedOutput;
 
-    return {
-      kind: "succeeded",
-      response: {
-        kind: "structured_generation",
-        responseId: null,
-        output: output as never,
-        usage: null,
-        continuation: null,
-        metadata: {},
-      },
-    };
+    return scriptedNativeProviderResult(
+      request,
+      output,
+      this.descriptor.id,
+      this.requests.length,
+    );
   }
 }
 
@@ -1045,8 +1060,15 @@ class RetryThenCompleteProvider implements Provider {
     id: "retry-then-complete-provider",
     name: "Retry Then Complete Provider",
     capabilities: {
-      nativeToolInteraction: { supported: false as const },
-      structuredGeneration: { supported: true as const },
+      nativeToolInteraction: {
+        supported: true as const,
+        callableDefinitions: true as const,
+        modelCalls: true as const,
+        resultMessages: true as const,
+        multipleCalls: true,
+        callCorrelation: "provider_supplied" as const,
+      },
+      structuredGeneration: { supported: false as const },
       streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
@@ -1072,18 +1094,116 @@ class RetryThenCompleteProvider implements Provider {
       };
     }
 
-    return {
-      kind: "succeeded",
-      response: {
-        kind: "structured_generation",
-        responseId: null,
-        output: { kind: "completion", summary: "Recovered after retry." },
+    return scriptedNativeProviderResult(
+      request,
+      { kind: "completion", summary: "Recovered after retry." },
+      this.descriptor.id,
+      this.requests.length,
+    );
+  }
+}
+
+function scriptedNativeProviderResult(
+  request: ProviderRequest,
+  output: unknown,
+  providerId: string,
+  responseSequence: number,
+): ProviderCallResult {
+  if (request.interaction.kind !== "native_tool_turn") {
+    return providerTestFailure("provider_request_kind_invalid");
+  }
+  if (typeof output === "string") {
+    return providerTestFailure("model_output_invalid");
+  }
+  if (typeof output !== "object" || output === null || !("kind" in output)) {
+    return providerTestFailure("model_output_invalid");
+  }
+
+  const scripted = output as Record<string, unknown>;
+  const responseId = `${providerId}:response:${responseSequence}`;
+  const turnId = createModelTurnId({
+    providerId,
+    requestId: request.requestId,
+    responseId,
+  });
+  const content = scripted.kind === "completion"
+    ? [{ kind: "text" as const, text: String(scripted.summary) }]
+    : [Object.freeze({
+        kind: "model_tool_call" as const,
+        call: snapshotModelToolCall({
+          modelCallRef: createModelCallRef({
+            providerRequestId: request.requestId,
+            controllerRequestId: request.correlation.controllerRequestId,
+            turnId,
+            contentBlockOrdinal: 0,
+            branchId: request.correlation.branchId,
+          }),
+          providerCallRef: { providerId, id: `${responseId}:call:0` },
+          name: scriptedCallableName(request, scripted),
+          input: scriptedCallInput(scripted),
+          ordinal: 0,
+        }),
+      })];
+
+  return {
+    kind: "succeeded",
+    response: snapshotProviderResponse({
+      kind: "native_tool_turn",
+      turn: {
+        turnId,
+        assistant: { role: "assistant", content },
+        finish: { kind: "normal" },
         usage: null,
-        continuation: null,
-        metadata: {},
+        responseRef: { providerId, requestId: request.requestId, responseId },
       },
+      continuation: null,
+      metadata: {},
+    }),
+  };
+}
+
+function scriptedCallableName(
+  request: ProviderRequest,
+  scripted: Record<string, unknown>,
+): string {
+  if (scripted.kind === "plan_update") return "update_plan";
+  if (scripted.kind === "stop") return "stop";
+  if (scripted.kind !== "tool_call" || typeof scripted.toolName !== "string") {
+    return "unknown_scripted_callable";
+  }
+  const stem = scripted.toolName.replace(/[^A-Za-z0-9_-]/gu, "_").replace(/_+/gu, "_")
+    .replace(/^_+|_+$/gu, "").slice(0, 42) || "tool";
+  return request.interaction.kind === "native_tool_turn"
+    ? request.interaction.callables.find(({ name }) => name.startsWith(`tool_${stem}_`))?.name ??
+      `unknown_${stem}`
+    : `unknown_${stem}`;
+}
+
+function scriptedCallInput(scripted: Record<string, unknown>): {
+  readonly [key: string]: ModelJsonValue;
+} {
+  if (scripted.kind === "plan_update") {
+    return {
+      ...(typeof scripted.explanation === "string"
+        ? { explanation: scripted.explanation }
+        : {}),
+      plan: scripted.plan as ModelJsonValue,
     };
   }
+  if (scripted.kind === "stop") return { reason: String(scripted.reason) };
+  return scripted.input as { readonly [key: string]: ModelJsonValue };
+}
+
+function providerTestFailure(code: string): ProviderCallResult {
+  return {
+    kind: "failed",
+    failure: {
+      category: "fake",
+      code,
+      message: "Scripted provider could not create a native Model Turn.",
+      metadata: {},
+    },
+  };
 }
 
 function createHostRunTestInputAccounting(providerId: string) {

@@ -28,10 +28,11 @@ const initialSnapshot: HelarcMainSnapshot = {
   taskTemplates: [],
   provider: {
     configured: true,
-      activeProfile: {
-        id: "initial",
-        providerKind: "openai-compatible",
-        displayName: "Initial Provider",
+    nativeToolInteraction: { supported: true },
+    activeProfile: {
+      id: "initial",
+      providerKind: "openai-compatible",
+      displayName: "Initial Provider",
       endpointLabel: "provider.local",
       baseUrl: "https://provider.local/v1",
       baseUrlOrigin: "https://provider.local",

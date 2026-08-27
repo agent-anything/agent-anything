@@ -4,6 +4,7 @@ import type {
   ProviderCallResult,
   ProviderRequest,
   ProviderResponse,
+  ModelToolCall,
 } from "@agent-anything/model-interaction";
 import { providerGeneratedOutput } from "@agent-anything/model-interaction";
 import { FakeProvider } from "@agent-anything/test-support";
@@ -29,6 +30,7 @@ import {
   ProviderBackedController,
   validateControllerDecision,
 } from "./ProviderBackedController.js";
+import { createControllerModelItems } from "./ControllerModelItems.js";
 import {
   StructuredOutputError,
   type ProviderRequestBuildContext,
@@ -74,7 +76,7 @@ describe("ProviderBackedController", () => {
     expect(result).toEqual({
       kind: "propose_completion",
       output: { summary: "Done" },
-      modelItems: [modelItem("model_item_1", { summary: "Done" })],
+      modelItems: modelItems("model_item_1", { summary: "Done" }),
     });
     expect(provider.requests()).toHaveLength(1);
     expect(provider.requests()[0]).toMatchObject({
@@ -181,6 +183,8 @@ describe("ProviderBackedController", () => {
     });
     const controller = createController(provider, {
       parseResponse(_response, input) {
+        const firstCall = modelCall("model_item_1", "workspace.readFile", 0);
+        const secondCall = modelCall("model_item_2", "plan.update", 1);
         return {
           kind: "advance",
           candidates: [
@@ -193,19 +197,16 @@ describe("ProviderBackedController", () => {
                 origin: "model",
                 controllerRequestId: input.toolExposure.controllerRequestId,
               },
-              modelItemId: "model_item_1",
+              modelCallRef: firstCall.modelCallRef,
             },
             {
               kind: "state_transition",
               transition: "plan_update",
               input: { step: "Inspect README" },
-              modelItemId: "model_item_2",
+              modelCallRef: secondCall.modelCallRef,
             },
           ],
-          modelItems: [
-            modelItem("model_item_1", { tool: "workspace.readFile" }),
-            modelItem("model_item_2", { action: "plan.update" }),
-          ],
+          modelItems: modelCallItems([firstCall, secondCall]),
         };
       },
     });
@@ -220,7 +221,7 @@ describe("ProviderBackedController", () => {
       "tool_request",
       "state_transition",
     ]);
-    expect(result.candidates.map((candidate) => candidate.modelItemId)).toEqual([
+    expect(result.candidates.map((candidate) => candidate.modelCallRef.id)).toEqual([
       "model_item_1",
       "model_item_2",
     ]);
@@ -228,6 +229,7 @@ describe("ProviderBackedController", () => {
 
   it("preserves trusted workflow provenance in generic Controller validation", () => {
     const input = createControllerInput();
+    const call = modelCall("workflow_item_1", "workspace.createFile", 0);
     const result = validateControllerDecision({
       kind: "advance",
       candidates: [{
@@ -239,9 +241,9 @@ describe("ProviderBackedController", () => {
           origin: "workflow",
           controllerRequestId: null,
         },
-        modelItemId: "workflow_item_1",
+        modelCallRef: call.modelCallRef,
       }],
-      modelItems: [modelItem("workflow_item_1", { action: "create" })],
+      modelItems: modelCallItems([call]),
     }, input);
 
     expect(result).toMatchObject({
@@ -258,6 +260,7 @@ describe("ProviderBackedController", () => {
       new FakeProvider({ results: [succeededResult({ action: "create" })] }),
       {
         parseResponse() {
+          const call = modelCall("model_item_1", "workspace.createFile", 0);
           return {
             kind: "advance",
             candidates: [{
@@ -269,9 +272,9 @@ describe("ProviderBackedController", () => {
                 origin: "workflow",
                 controllerRequestId: null,
               },
-              modelItemId: "model_item_1",
+              modelCallRef: call.modelCallRef,
             }],
-            modelItems: [modelItem("model_item_1", { action: "create" })],
+            modelItems: modelCallItems([call]),
           };
         },
       },
@@ -298,7 +301,7 @@ describe("ProviderBackedController", () => {
           return {
             kind: "propose_stop",
             reason: "  No safe next action.  ",
-            modelItems: [modelItem("model_item_1", { action: "stop" })],
+            modelItems: modelItems("model_item_1", { action: "stop" }),
           };
         },
       },
@@ -1075,7 +1078,7 @@ describe("ProviderBackedController", () => {
       "duplicate model item ids",
       {
         ...finalDecision({ summary: "Done" }),
-        modelItems: [modelItem("duplicate", {}), modelItem("duplicate", {})],
+        modelItems: duplicateModelItems(),
       },
     ],
     [
@@ -1087,10 +1090,10 @@ describe("ProviderBackedController", () => {
             kind: "tool",
             name: "workspace.readFile",
             input: {},
-            modelItemId: "missing",
+            modelCallRef: modelCall("missing", "workspace.readFile", 0).modelCallRef,
           },
         ],
-        modelItems: [modelItem("model_item_1", {})],
+        modelItems: modelItems("model_item_1", {}),
       },
     ],
     [
@@ -1098,7 +1101,7 @@ describe("ProviderBackedController", () => {
       {
         kind: "actions",
         actions: [],
-        modelItems: [modelItem("model_item_1", {})],
+        modelItems: modelItems("model_item_1", {}),
       },
     ],
     [
@@ -1106,14 +1109,14 @@ describe("ProviderBackedController", () => {
       {
         kind: "stop",
         reason: " ",
-        modelItems: [modelItem("model_item_1", {})],
+        modelItems: modelItems("model_item_1", {}),
       },
     ],
     [
       "unsupported decision kind",
       {
         kind: "handoff",
-        modelItems: [modelItem("model_item_1", {})],
+        modelItems: modelItems("model_item_1", {}),
       },
     ],
   ])("rejects malformed decision: %s", async (_name, malformedDecision) => {
@@ -1217,8 +1220,11 @@ function createController(
     },
     parseResponse:
       overrides.parseResponse ?? (() => finalDecision({ summary: "Done" })),
-    structuredOutputContractId: "test-controller-output-v1",
-    maxProviderOutputLength: overrides.maxProviderOutputLength ?? 10_000,
+    responseProtocol: {
+      kind: "structured_output",
+      contractId: "test-controller-output-v1",
+      maxProviderOutputLength: overrides.maxProviderOutputLength ?? 10_000,
+    },
     retryExecutor: createSystemRetryExecutor(),
     retryClock: systemRetryClock,
     continuation: overrides.continuation,
@@ -1290,7 +1296,19 @@ function createControllerInput(): ControllerInput<TestOutput> {
         projectedAmount: 0,
       }),
     }),
+    interaction: Object.freeze({
+      id: "run_001:model-interaction",
+      revision: "0",
+      messages: Object.freeze([]),
+      unsettledCalls: Object.freeze([]),
+      settledCallCount: 0,
+    }),
     plan: null,
+    planLimits: Object.freeze({
+      maxSteps: 8,
+      maxStepLength: 200,
+      maxExplanationLength: 500,
+    }),
     progress: {
       checkpointSequence: 0,
       consecutiveNonAdvancingCheckpoints: 0,
@@ -1654,17 +1672,71 @@ function finalDecision(output: unknown): ControllerDecision<TestOutput> {
   return {
     kind: "propose_completion",
     output: output as TestOutput,
-    modelItems: [modelItem("model_item_1", output)],
+    modelItems: modelItems("model_item_1", output),
   };
 }
 
-function modelItem(id: string, content: unknown) {
-  return {
-    id,
-    kind: "assistant_message",
-    content,
-    metadata: {},
-  };
+function modelItems(id: string, content: unknown) {
+  return createControllerModelItems({
+    turnId: id,
+    assistant: {
+      role: "assistant",
+      content: [{
+        kind: "text",
+        text: typeof content === "string" ? content : JSON.stringify(content),
+      }],
+    },
+    finish: { kind: "normal" },
+    usage: null,
+    responseRef: {
+      providerId: "fake-provider",
+      requestId: "request-1",
+      responseId: id,
+    },
+  });
+}
+
+function modelCall(id: string, name: string, ordinal: number): ModelToolCall {
+  const turnId = "model-call-turn";
+  return Object.freeze({
+    modelCallRef: Object.freeze({
+      id,
+      providerRequestId: "request-1",
+      controllerRequestId: "run_001:controller:1",
+      turnId,
+      contentBlockOrdinal: ordinal,
+      branchId: "run_001:main",
+    }),
+    providerCallRef: null,
+    name,
+    input: Object.freeze({}),
+    ordinal,
+  });
+}
+
+function modelCallItems(calls: readonly ModelToolCall[]) {
+  return createControllerModelItems({
+    turnId: "model-call-turn",
+    assistant: {
+      role: "assistant",
+      content: calls.map((call) => Object.freeze({
+        kind: "model_tool_call" as const,
+        call,
+      })),
+    },
+    finish: { kind: "normal" },
+    usage: null,
+    responseRef: {
+      providerId: "fake-provider",
+      requestId: "request-1",
+      responseId: "model-call-response",
+    },
+  });
+}
+
+function duplicateModelItems() {
+  const item = modelItems("duplicate", {})[0]!;
+  return [item, item];
 }
 
 function callContext(

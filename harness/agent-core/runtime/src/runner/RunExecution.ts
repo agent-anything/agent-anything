@@ -103,6 +103,15 @@ import {
   type ToolResult,
   type ToolSettlementRef,
 } from "@agent-anything/tools/result";
+import {
+  modelCallRefKey,
+  snapshotModelJsonValue,
+  snapshotModelToolResult,
+  type ModelCallSettlementKind,
+  type ModelJsonValue,
+  type ModelToolCall,
+  type ModelToolResult,
+} from "@agent-anything/model-interaction";
 import { materializeToolCall, type ToolCall } from "@agent-anything/tools/invocation";
 import {
   ToolExposureValidationError,
@@ -321,6 +330,11 @@ interface OperationExecutionOutcome {
   readonly toolResult: ToolResult | null;
 }
 
+interface CandidateProcessingOutcome<TOutput> {
+  readonly invalidatesRemainder: boolean;
+  readonly terminal: TerminalCandidate<TOutput> | null;
+}
+
 type DescendantExecutionOutcome =
   | {
       readonly status: "settled";
@@ -394,6 +408,7 @@ export class RunExecution<TOutput> {
   }>();
   private readonly interactionActions = new Map<string, InteractionActionContext>();
   private readonly interactionSettlements: QueuedInteractionSettlement[] = [];
+  private readonly modelCallSettlementWaits = new Set<Promise<void>>();
   private readonly steeringQueue: RunSteeringCommand[] = [];
   private readonly steeringLedger = new Map<string, {
     readonly fingerprint: string;
@@ -771,12 +786,30 @@ export class RunExecution<TOutput> {
         controllerTurnCompleted = true;
         const settlementsAfterDecision = this.drainInteractionSettlements();
         if (this.config.cancellation.context.request !== null) {
+          this.settleUnprocessedModelCalls(
+            decision.decision,
+            decision.turn,
+            "cancelled",
+            "run_cancelled_before_model_calls",
+          );
           return await this.settle({ status: "cancelled" });
         }
         if (settlementsAfterDecision > 0) {
+          this.settleUnprocessedModelCalls(
+            decision.decision,
+            decision.turn,
+            "invalidated",
+            "run_basis_changed_before_model_calls",
+          );
           continue;
         }
         if (this.drainSteering("apply") > 0) {
+          this.settleUnprocessedModelCalls(
+            decision.decision,
+            decision.turn,
+            "invalidated",
+            "run_steering_invalidated_model_calls",
+          );
           continue;
         }
         if (decision.decision.kind === "propose_completion") {
@@ -806,6 +839,7 @@ export class RunExecution<TOutput> {
           continue;
         }
         if (decision.decision.kind === "propose_stop") {
+          this.settleTerminalControllerCall(decision.decision, decision.turn);
           return await this.settle({
             status: "blocked",
             code: "runtime_no_safe_path",
@@ -822,24 +856,101 @@ export class RunExecution<TOutput> {
           exposureOwnerBasisRevision: decision.exposureOwnerBasisRevision,
         };
         for (let index = 0; index < decision.decision.candidates.length; index += 1) {
-          if (this.config.cancellation.context.request !== null) break;
-          if (this.drainInteractionSettlements() > 0) break;
-          if (this.drainSteering("apply") > 0) break;
+          if (this.config.cancellation.context.request !== null) {
+            this.settleCandidateRange(
+              decision.decision.candidates,
+              index,
+              decision.turn,
+              "cancelled",
+              "run_cancelled_before_model_call",
+            );
+            break;
+          }
+          if (this.drainInteractionSettlements() > 0) {
+            this.settleCandidateRange(
+              decision.decision.candidates,
+              index,
+              decision.turn,
+              "invalidated",
+              "run_basis_changed_before_model_call",
+            );
+            break;
+          }
+          if (this.drainSteering("apply") > 0) {
+            this.settleCandidateRange(
+              decision.decision.candidates,
+              index,
+              decision.turn,
+              "invalidated",
+              "run_steering_invalidated_model_call",
+            );
+            break;
+          }
           if (index > 0) {
             const currentExposure = await this.toolExposure.resolve(decision.turn.id);
             if (currentExposure.ownerBasisRevision !== basis.exposureOwnerBasisRevision) {
+              this.settleCandidateRange(
+                decision.decision.candidates,
+                index,
+                decision.turn,
+                "invalidated",
+                "tool_exposure_basis_changed",
+              );
               break;
             }
           }
-          const invalidatesRemainder = await this.processCandidate(
-            decision.decision.candidates[index]!,
-            index,
-            basis,
-          );
-          if (this.terminalResult !== null) return this.terminalResult;
-          if (this.drainSteering("apply") > 0) break;
-          if (invalidatesRemainder) break;
+          let outcome: CandidateProcessingOutcome<TOutput>;
+          try {
+            outcome = await this.processCandidate(
+              decision.decision.candidates[index]!,
+              index,
+              basis,
+            );
+          } catch (error) {
+            const cancelled = this.config.cancellation.context.request !== null;
+            this.settleCandidateRange(
+              decision.decision.candidates,
+              index + 1,
+              decision.turn,
+              cancelled ? "cancelled" : "invalidated",
+              cancelled
+                ? "run_cancelled_after_model_call_failure"
+                : "model_call_failure_invalidated_remainder",
+            );
+            throw error;
+          }
+          if (outcome.terminal !== null) {
+            this.settleCandidateRange(
+              decision.decision.candidates,
+              index + 1,
+              decision.turn,
+              "invalidated",
+              "run_terminated_before_model_call",
+            );
+            return await this.settle(outcome.terminal);
+          }
+          if (this.drainSteering("apply") > 0) {
+            this.settleCandidateRange(
+              decision.decision.candidates,
+              index + 1,
+              decision.turn,
+              "invalidated",
+              "run_steering_invalidated_model_call",
+            );
+            break;
+          }
+          if (outcome.invalidatesRemainder) {
+            this.settleCandidateRange(
+              decision.decision.candidates,
+              index + 1,
+              decision.turn,
+              "invalidated",
+              "earlier_model_call_invalidated_remainder",
+            );
+            break;
+          }
         }
+        await this.waitForModelCallSettlements();
       }
       return this.terminalResult;
     } catch (error) {
@@ -1501,6 +1612,206 @@ export class RunExecution<TOutput> {
     return null;
   }
 
+  private commitModelCallSettlement(
+    action: RuntimeRunAction,
+    fallback: ModelCallSettlementKind | null,
+  ): void {
+    if (action.provenance.kind !== "controller") return;
+    const call = this.findModelToolCall(action.provenance.modelCallRef);
+    if (call === null) {
+      throw new TypeError("Controller RunAction model-call provenance is not recorded.");
+    }
+    if (this.hasModelCallSettlement(call)) {
+      throw new TypeError("A Model Tool Call cannot settle more than once.");
+    }
+    const observation = this.findRunActionObservation(action.ref);
+    if (observation === null && fallback === null) {
+      return;
+    }
+    const projected = observation === null
+      ? Object.freeze({
+          settlement: fallback!,
+          content: Object.freeze({
+            status: fallback!,
+            code: fallback === "cancelled"
+              ? "model_call_cancelled"
+              : "model_call_failed",
+          }) as ModelJsonValue,
+        })
+      : projectObservationSettlement(observation);
+    const sourceRefs = observation === null
+      ? Object.freeze([Object.freeze({
+          owner: "agent-runtime",
+          kind: "run_action",
+          id: action.ref.id,
+          revision: String(action.ref.sequence),
+        })])
+      : Object.freeze([
+          Object.freeze({
+            owner: "agent-runtime",
+            kind: "run_action",
+            id: action.ref.id,
+            revision: String(action.ref.sequence),
+          }),
+          Object.freeze({
+            owner: observation.owner,
+            kind: "run_observation",
+            id: observation.id,
+            revision: null,
+          }),
+        ]);
+    let result: ModelToolResult;
+    try {
+      result = snapshotModelToolResult({
+        modelCallRef: call.modelCallRef,
+        providerCallRef: call.providerCallRef,
+        name: call.name,
+        settlement: projected.settlement,
+        content: projected.content,
+        sourceRefs,
+      });
+    } catch {
+      result = snapshotModelToolResult({
+        modelCallRef: call.modelCallRef,
+        providerCallRef: call.providerCallRef,
+        name: call.name,
+        settlement: projected.settlement,
+        content: Object.freeze({
+          status: projected.settlement,
+          code: "model_result_projection_bounded",
+        }),
+        sourceRefs,
+      });
+    }
+    this.writer.commit({
+      kind: "model_call_settlement",
+      result,
+    });
+  }
+
+  private settleUnprocessedModelCalls(
+    decision: ControllerDecision<TOutput>,
+    turn: ControllerTurnRef,
+    settlement: "invalidated" | "cancelled",
+    code: string,
+  ): void {
+    if (decision.kind !== "advance") return;
+    this.settleCandidateRange(decision.candidates, 0, turn, settlement, code);
+  }
+
+  private settleCandidateRange(
+    candidates: readonly ProgressionCandidate[],
+    startIndex: number,
+    turn: ControllerTurnRef,
+    settlement: "invalidated" | "cancelled",
+    code: string,
+  ): void {
+    for (let index = startIndex; index < candidates.length; index += 1) {
+      this.commitUnadmittedModelCallSettlement(
+        candidates[index]!,
+        turn,
+        settlement,
+        code,
+      );
+    }
+  }
+
+  private commitUnadmittedModelCallSettlement(
+    candidate: ProgressionCandidate,
+    turn: ControllerTurnRef,
+    settlement: "invalidated" | "cancelled",
+    code: string,
+  ): void {
+    const call = this.findModelToolCall(candidate.modelCallRef);
+    if (call === null || this.hasModelCallSettlement(call)) return;
+    this.commitLocalModelCallResult(call, settlement, {
+      status: settlement,
+      code,
+    }, Object.freeze([Object.freeze({
+      owner: "agent-runtime",
+      kind: "controller_turn",
+      id: turn.id,
+      revision: String(turn.sequence),
+    })]));
+  }
+
+  private settleTerminalControllerCall(
+    decision: Extract<ControllerDecision<TOutput>, { readonly kind: "propose_stop" }>,
+    turn: ControllerTurnRef,
+  ): void {
+    const calls = decision.modelItems.flatMap((item) =>
+      item.kind === "model_tool_call" ? [item.call] : []
+    );
+    if (calls.length === 0) return;
+    if (calls.length !== 1 || this.hasModelCallSettlement(calls[0]!)) {
+      throw new TypeError("A terminal Controller stop must contain at most one unsettled model call.");
+    }
+    this.commitLocalModelCallResult(calls[0]!, "succeeded", {
+      status: "succeeded",
+      control: "stop",
+    }, Object.freeze([Object.freeze({
+      owner: "agent-runtime",
+      kind: "controller_turn",
+      id: turn.id,
+      revision: String(turn.sequence),
+    })]));
+  }
+
+  private commitLocalModelCallResult(
+    call: ModelToolCall,
+    settlement: ModelCallSettlementKind,
+    content: unknown,
+    sourceRefs: ModelToolResult["sourceRefs"],
+  ): void {
+    const projected = modelSettlement(settlement, content);
+    this.writer.commit({
+      kind: "model_call_settlement",
+      result: snapshotModelToolResult({
+        modelCallRef: call.modelCallRef,
+        providerCallRef: call.providerCallRef,
+        name: call.name,
+        settlement,
+        content: projected.content,
+        sourceRefs,
+      }),
+    });
+  }
+
+  private findModelToolCall(ref: import("@agent-anything/model-interaction").ModelCallRef): ModelToolCall | null {
+    const key = modelCallRefKey(ref);
+    for (const item of this.writer.getSnapshot().items) {
+      if (item.payload.kind !== "controller_turn") continue;
+      for (const modelItem of item.payload.modelItems) {
+        if (
+          modelItem.kind === "model_tool_call" &&
+          modelCallRefKey(modelItem.call.modelCallRef) === key
+        ) return modelItem.call;
+      }
+    }
+    return null;
+  }
+
+  private hasModelCallSettlement(call: ModelToolCall): boolean {
+    const key = modelCallRefKey(call.modelCallRef);
+    return this.writer.getSnapshot().items.some((item) =>
+      item.payload.kind === "model_call_settlement" &&
+      modelCallRefKey(item.payload.result.modelCallRef) === key
+    );
+  }
+
+  private findRunActionObservation(ref: RunActionRef): RunObservation | null {
+    const items = this.writer.getSnapshot().items;
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const payload = items[index]!.payload;
+      if (
+        payload.kind === "observation" &&
+        payload.observation.runAction.id === ref.id &&
+        payload.observation.runAction.sequence === ref.sequence
+      ) return payload.observation;
+    }
+    return null;
+  }
+
   private async rejectVerificationOperationCheck(
     code: `verification_${string}`,
     message: string,
@@ -1848,10 +2159,16 @@ export class RunExecution<TOutput> {
     candidate: ProgressionCandidate,
     index: number,
     basis: CandidateBasis<TOutput>,
-  ): Promise<boolean> {
+  ): Promise<CandidateProcessingOutcome<TOutput>> {
     const state = this.writer.getSnapshot();
     if (state.counters.runActions >= this.config.limits.maxActions) {
-      return true;
+      this.commitUnadmittedModelCallSettlement(
+        candidate,
+        basis.turn,
+        "invalidated",
+        "runtime_action_limit_reached",
+      );
+      return Object.freeze({ invalidatesRemainder: true, terminal: null });
     }
     const reservedId = candidate.kind === "operation_request"
       ? this.id("operation_invocation")
@@ -1859,7 +2176,7 @@ export class RunExecution<TOutput> {
         ? this.id("interaction_request", this.nextInteractionRequest++)
         : candidate.kind === "tool_request"
           ? this.id("tool_call")
-        : null;
+          : null;
     const action = this.materializeControllerRunAction(
       candidate,
       index,
@@ -1867,41 +2184,75 @@ export class RunExecution<TOutput> {
       reservedId,
     );
 
-    switch (candidate.kind) {
-      case "state_transition":
-        return candidate.transition === "plan_update"
-          ? (await this.applyPlanCandidate(action, candidate.input), false)
-          : this.applyHandoffCandidate(action, candidate.input, basis);
-      case "interaction_request":
-        return this.applyInteractionCandidate(action, candidate, reservedId!);
-      case "tool_request":
-        return this.executeToolCandidate(action, candidate, reservedId!, basis.exposure);
-      case "operation_request": {
-        const outcome = await this.executeOperationCandidate(
-          action,
-          candidate,
-          reservedId!,
-        );
-        if (outcome !== null) {
-          this.commitOperationObservation(action, outcome);
-          await this.processSettledOperationVerification(
+    let invalidatesRemainder = false;
+    let terminal: TerminalCandidate<TOutput> | null = null;
+    try {
+      switch (candidate.kind) {
+        case "state_transition":
+          invalidatesRemainder = candidate.transition === "plan_update"
+            ? (await this.applyPlanCandidate(action, candidate.input), false)
+            : await this.applyHandoffCandidate(action, candidate.input, basis);
+          break;
+        case "interaction_request":
+          invalidatesRemainder = await this.applyInteractionCandidate(
             action,
-            candidate.operation,
-            candidate.request,
-            "controller_protocol",
-            outcome.result,
+            candidate,
+            reservedId!,
           );
-          if (outcome.result.status === "unknown_effect") {
-            await this.settle({
-              status: "failed",
-              code: "unknown_effect",
-              failure: createRunFailureCause("operation", outcome.result.failure),
-            });
-            return true;
-          }
+          break;
+        case "tool_request": {
+          const outcome = await this.executeToolCandidate(
+            action,
+            candidate,
+            reservedId!,
+            basis.exposure,
+          );
+          invalidatesRemainder = outcome.invalidatesRemainder;
+          terminal = outcome.terminal;
+          break;
         }
-        return false;
+        case "model_call_rejection":
+          this.commitObservation(action, {
+            kind: "model_call_rejected",
+            code: candidate.code,
+            message: candidate.message,
+          }, [], "agent-runtime");
+          break;
+        case "operation_request": {
+          const outcome = await this.executeOperationCandidate(
+            action,
+            candidate,
+            reservedId!,
+          );
+          if (outcome !== null) {
+            this.commitOperationObservation(action, outcome);
+            await this.processSettledOperationVerification(
+              action,
+              candidate.operation,
+              candidate.request,
+              "controller_protocol",
+              outcome.result,
+            );
+            if (outcome.result.status === "unknown_effect") {
+              terminal = {
+                status: "failed",
+                code: "unknown_effect",
+                failure: createRunFailureCause("operation", outcome.result.failure),
+              };
+              invalidatesRemainder = true;
+            }
+          }
+          break;
+        }
       }
+      this.commitModelCallSettlement(action, null);
+      return Object.freeze({ invalidatesRemainder, terminal });
+    } catch (error) {
+      this.commitModelCallSettlement(
+        action,
+        this.config.cancellation.context.request === null ? "failed" : "cancelled",
+      );
+      throw error;
     }
   }
 
@@ -1934,6 +2285,11 @@ export class RunExecution<TOutput> {
               kind: "tool" as const,
               toolCallId: reservedId!,
             })
+        : candidate.kind === "model_call_rejection"
+          ? Object.freeze({
+              kind: "model_call_rejection" as const,
+              modelCallRef: candidate.modelCallRef,
+            })
         : Object.freeze({
             kind: "interaction" as const,
             request: Object.freeze({
@@ -1949,6 +2305,7 @@ export class RunExecution<TOutput> {
         kind: "controller" as const,
         turn: basis.turn,
         candidateIndex,
+        modelCallRef: candidate.modelCallRef,
       }),
       subject,
       basis: Object.freeze({
@@ -2198,7 +2555,10 @@ export class RunExecution<TOutput> {
       interactionRequestKey(opened.pending.request),
       Object.freeze({ action, toolCall: null }),
     );
-    if (candidate.blockingScope === "none") return false;
+    if (candidate.blockingScope === "none") {
+      this.trackModelCallSettlement(opened.completion);
+      return false;
+    }
     const settlement = await opened.completion;
     this.drainInteractionSettlements();
     if (this.interactionActions.delete(interactionRequestKey(opened.pending.request))) {
@@ -2212,7 +2572,7 @@ export class RunExecution<TOutput> {
     candidate: ToolRequestCandidate,
     toolCallId: string,
     exposure: ToolExposureProof,
-  ): Promise<boolean> {
+  ): Promise<CandidateProcessingOutcome<TOutput>> {
     const materialized = materializeToolCall({
       candidate: candidate.tool,
       selection: this.config.tools,
@@ -2228,7 +2588,7 @@ export class RunExecution<TOutput> {
         code: materialized.code,
         message: materialized.message,
       }, [], "tools");
-      return false;
+      return Object.freeze({ invalidatesRemainder: false, terminal: null });
     }
     const call = materialized.call;
     switch (call.binding.kind) {
@@ -2255,23 +2615,28 @@ export class RunExecution<TOutput> {
             result,
           );
           if (result.status === "unknown_effect") {
-            await this.settle({
-              status: "failed",
-              code: "unknown_effect",
-              failure: createRunFailureCause("operation", result.failure),
+            return Object.freeze({
+              invalidatesRemainder: true,
+              terminal: {
+                status: "failed" as const,
+                code: "unknown_effect" as const,
+                failure: createRunFailureCause("operation", result.failure),
+              },
             });
-            return true;
           }
         }
-        return false;
+        return Object.freeze({ invalidatesRemainder: false, terminal: null });
       }
       case "interaction":
-        return this.executeToolInteraction(action, call);
+        return Object.freeze({
+          invalidatesRemainder: await this.executeToolInteraction(action, call),
+          terminal: null,
+        });
       case "descendant_agent":
         await this.executeToolDescendant(action, call);
-        return false;
+        return Object.freeze({ invalidatesRemainder: false, terminal: null });
     }
-    return false;
+    return Object.freeze({ invalidatesRemainder: false, terminal: null });
   }
 
   private async executeToolInteraction(
@@ -2321,7 +2686,10 @@ export class RunExecution<TOutput> {
       interactionRequestKey(opened.pending.request),
       Object.freeze({ action, toolCall: call }),
     );
-    if (call.binding.blockingScope === "none") return false;
+    if (call.binding.blockingScope === "none") {
+      this.trackModelCallSettlement(opened.completion);
+      return false;
+    }
     const settlement = await opened.completion;
     this.drainInteractionSettlements();
     if (this.interactionActions.delete(interactionRequestKey(opened.pending.request))) {
@@ -3665,6 +4033,21 @@ export class RunExecution<TOutput> {
     return count;
   }
 
+  private trackModelCallSettlement(
+    completion: Promise<RuntimeInteractionSettlement>,
+  ): void {
+    let wait!: Promise<void>;
+    wait = completion.then(() => undefined).finally(() => {
+      this.modelCallSettlementWaits.delete(wait);
+    });
+    this.modelCallSettlementWaits.add(wait);
+  }
+
+  private async waitForModelCallSettlements(): Promise<void> {
+    if (this.modelCallSettlementWaits.size === 0) return;
+    await Promise.all([...this.modelCallSettlementWaits]);
+  }
+
   private drainSteering(
     disposition: "apply" | "cancelled" | "run_settled",
   ): number {
@@ -4220,9 +4603,10 @@ export class RunExecution<TOutput> {
               terminal.code,
               terminal.failure,
               terminal.relatedFailures ?? [],
-              cancellationRequest === null ? null : toRunCancellationSummary(cancellationRequest),
-            );
+             cancellationRequest === null ? null : toRunCancellationSummary(cancellationRequest),
+           );
     this.terminalResult = result;
+    this.emitCommittedRunItems(state);
     this.emitTerminal(result);
     completeRunnerTrace(this.traceAssembler, result);
     this.publishCurrentState();
@@ -4364,7 +4748,13 @@ export class RunExecution<TOutput> {
       kind: "run_action",
       run: action.ref.run,
       runAction: action.ref,
-      provenance: action.provenance,
+      provenance: action.provenance.kind === "controller"
+        ? Object.freeze({
+            kind: "controller" as const,
+            turn: action.provenance.turn,
+            candidateIndex: action.provenance.candidateIndex,
+          })
+        : action.provenance,
       materializationRevision: action.basis.runRevision,
     });
   }
@@ -4977,6 +5367,7 @@ function observationFailed(observation: RunObservation): boolean {
         observation.payload.result.status !== "partial";
     case "operation_rejected":
     case "tool_rejected":
+    case "model_call_rejected":
       return true;
     case "handoff":
       return observation.payload.status !== "applied";
@@ -5275,6 +5666,122 @@ function deriveActiveStatus(
 ): RunState["status"] {
   if (!isActiveStatus(status)) return status;
   return deriveActiveRunStatus({ pending, progressableBranchIds: Object.freeze([]) });
+}
+
+function projectObservationSettlement(observation: RunObservation): {
+  readonly settlement: ModelCallSettlementKind;
+  readonly content: ModelJsonValue;
+} {
+  const payload = observation.payload;
+  switch (payload.kind) {
+    case "plan_update":
+      return modelSettlement(
+        payload.result.status === "rejected" ? "invalid" : "succeeded",
+        { kind: payload.kind, result: payload.result },
+      );
+    case "handoff":
+      return modelSettlement(
+        payload.status === "applied" ? "succeeded" : "invalid",
+        { kind: payload.kind, status: payload.status, code: payload.code },
+      );
+    case "operation":
+      return modelSettlement(
+        operationModelSettlement(payload.result.status),
+        {
+          kind: payload.kind,
+          status: payload.result.status,
+          output: payload.result.output,
+          failure: payload.result.failure === null
+            ? null
+            : {
+                owner: payload.result.failure.owner,
+                code: payload.result.failure.code,
+                message: payload.result.failure.message,
+              },
+        },
+      );
+    case "operation_rejected":
+    case "tool_rejected":
+    case "model_call_rejected":
+      return modelSettlement("invalid", {
+        kind: payload.kind,
+        code: payload.code,
+        message: payload.message,
+      });
+    case "interaction":
+      return modelSettlement(
+        payload.status === "resolved"
+          ? "succeeded"
+          : payload.status === "cancelled"
+            ? "cancelled"
+            : payload.status === "invalidated"
+              ? "invalidated"
+              : payload.status === "failed"
+                ? "failed"
+                : "invalid",
+        {
+          kind: payload.kind,
+          owner: payload.owner,
+          status: payload.status,
+          value: payload.value,
+        },
+      );
+    case "descendant_run":
+      return modelSettlement(
+        operationModelSettlement(payload.status),
+        {
+          kind: payload.kind,
+          status: payload.status,
+          childRunId: payload.childRunId,
+          output: payload.output,
+          failure: payload.failure === null
+            ? null
+            : {
+                owner: payload.failure.owner,
+                code: payload.failure.code,
+                message: payload.failure.message,
+              },
+        },
+      );
+  }
+}
+
+function modelSettlement(
+  settlement: ModelCallSettlementKind,
+  content: unknown,
+): { readonly settlement: ModelCallSettlementKind; readonly content: ModelJsonValue } {
+  let snapshot: ModelJsonValue;
+  try {
+    snapshot = snapshotModelJsonValue(content, "ModelToolResult.content");
+  } catch {
+    snapshot = Object.freeze({
+      status: settlement,
+      code: "model_result_projection_unavailable",
+    });
+  }
+  return Object.freeze({ settlement, content: snapshot });
+}
+
+function operationModelSettlement(
+  status: "succeeded" | "partial" | "failed" | "unavailable" | "denied" |
+    "cancelled" | "timed_out" | "invalid" | "unknown_effect",
+): ModelCallSettlementKind {
+  switch (status) {
+    case "succeeded":
+    case "partial":
+      return "succeeded";
+    case "denied":
+      return "denied";
+    case "cancelled":
+      return "cancelled";
+    case "invalid":
+      return "invalid";
+    case "failed":
+    case "unavailable":
+    case "timed_out":
+    case "unknown_effect":
+      return "failed";
+  }
 }
 
 function isActiveStatus(status: RunState["status"]): boolean {

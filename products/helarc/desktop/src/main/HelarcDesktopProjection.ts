@@ -277,6 +277,7 @@ function projectProvider(snapshot: MainSnapshot["provider"]): DesktopSnapshot["p
   if (!snapshot.configured) {
     return {
       configured: false,
+      nativeToolInteraction: { supported: false },
       activeProfile: null,
       profiles: snapshot.profiles.map(projectProviderProfile),
       error: {
@@ -287,6 +288,7 @@ function projectProvider(snapshot: MainSnapshot["provider"]): DesktopSnapshot["p
   }
   return {
     configured: true,
+    nativeToolInteraction: { supported: true },
     activeProfile: projectProviderProfile(snapshot.activeProfile),
     profiles: snapshot.profiles.map(projectProviderProfile),
     error: null,

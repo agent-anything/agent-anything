@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { createEvaluationTrial } from "@agent-anything/evaluation/trial";
 import type { EvaluationDataValue, EvaluationRecordRef } from "@agent-anything/evaluation/definition";
-import {
-  providerResponseUsage,
-  snapshotModelJsonValue,
-  type ProviderCallResult,
-} from "@agent-anything/model-interaction";
+import { providerResponseUsage } from "@agent-anything/model-interaction";
 import type { CreateHelarcAgentInput } from "@agent-anything/helarc/agent";
+import {
+  fakeNativeModelOutput,
+  type FakeNativeToolProviderStep,
+} from "../../provider/FakeNativeToolProvider.js";
 
 import {
   HELARC_EVALUATION_TIME,
@@ -347,7 +347,7 @@ function scriptedCase(
     script: Object.freeze({
       ...source.script,
       ref: Object.freeze({ id: `${source.script.ref.id}.${id}`, revision: source.script.ref.revision }),
-      responses: Object.freeze(outputs.map((output, index) => scriptedSuccess(output, index + 1))),
+      steps: Object.freeze(outputs.map((output, index) => scriptedStep(output, index + 1))),
     }),
     expectedClaim: Object.freeze({
       ...source.expectedClaim,
@@ -604,22 +604,15 @@ function createTrial(
   });
 }
 
-function scriptedSuccess(output: unknown, sequence: number): ProviderCallResult {
-  return Object.freeze({
-    kind: "succeeded",
-    response: Object.freeze({
-      kind: "structured_generation" as const,
-      output: snapshotModelJsonValue(output, "scriptedProviderOutput"),
-      responseId: null,
-      continuation: null,
-      usage: Object.freeze({
-        inputTokens: 10 + sequence,
-        outputTokens: 4 + sequence,
-        totalTokens: 14 + sequence * 2,
-        metadata: Object.freeze({ source: "instruction-conformance" }),
-      }),
-      metadata: Object.freeze({ scriptSequence: sequence }),
+function scriptedStep(output: unknown, sequence: number): FakeNativeToolProviderStep {
+  return fakeNativeModelOutput(output, {
+    usage: Object.freeze({
+      inputTokens: 10 + sequence,
+      outputTokens: 4 + sequence,
+      totalTokens: 14 + sequence * 2,
+      metadata: Object.freeze({ source: "instruction-conformance" }),
     }),
+    metadata: Object.freeze({ scriptSequence: sequence }),
   });
 }
 

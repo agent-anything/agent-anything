@@ -89,6 +89,12 @@ import type {
   ControllerDecision,
   ControllerInput,
 } from "../controller/index.js";
+import { createControllerModelItems } from "../controller/index.js";
+import type {
+  ModelCallRef,
+  ModelJsonValue,
+  ModelToolCall,
+} from "@agent-anything/model-interaction";
 import type { RootRunConfig, RunConfig } from "./RunConfig.js";
 import type {
   InternalOperationHandler,
@@ -871,7 +877,6 @@ describe("Runner semantic integration", () => {
           origin: "model",
           controllerRequestId: input.toolExposure.controllerRequestId,
         },
-        modelItemId: "model_tool_1",
       }], "model_tool_1"),
       complete("Read complete", "model_complete_2"),
     ]);
@@ -1096,17 +1101,10 @@ describe("Runner semantic integration", () => {
     });
     const tools = createToolSelection(operations, operation, "codeAgent.readFile");
     const controller = new ScriptedController([
-      (input) => ({
-        kind: "advance" as const,
-        candidates: [
+      (input) => advance([
           toolCandidate("codeAgent.readFile", { path: "one.txt" }, input.toolExposure.controllerRequestId),
-          {
-            ...toolCandidate("codeAgent.readFile", { path: "two.txt" }, input.toolExposure.controllerRequestId),
-            modelItemId: "model_tool_2",
-          },
-        ],
-        modelItems: [modelItem("model_tool_1"), modelItem("model_tool_2")],
-      }),
+          toolCandidate("codeAgent.readFile", { path: "two.txt" }, input.toolExposure.controllerRequestId),
+        ], ["model_tool_1", "model_tool_2"]),
       complete("Only the first candidate executed"),
     ]);
 
@@ -1118,6 +1116,12 @@ describe("Runner semantic integration", () => {
 
     expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
     expect(handler.execute).toHaveBeenCalledTimes(1);
+    expect(result.items.flatMap(({ payload }) =>
+      payload.kind === "model_call_settlement" ? [payload.result] : []
+    )).toMatchObject([
+      { modelCallRef: { id: "model_tool_1" }, settlement: "succeeded" },
+      { modelCallRef: { id: "model_tool_2" }, settlement: "invalidated" },
+    ]);
   });
 
   it("attributes availability participant failure without requesting the Controller", async () => {
@@ -1307,7 +1311,7 @@ describe("Runner semantic integration", () => {
             predecessor_result: predecessor,
           },
           input.toolExposure.controllerRequestId,
-        )], "model_tool_1");
+        )], "model_tool_2");
       },
       (input) => {
         expect(input.context.blocks.some((block) =>
@@ -1762,7 +1766,6 @@ describe("Runner semantic integration", () => {
           origin: "workflow",
           controllerRequestId: null,
         },
-        modelItemId: "workflow_tool_1",
       }], "workflow_tool_1"),
       complete("Create complete", "model_complete_2"),
     ]);
@@ -1862,7 +1865,6 @@ describe("Runner semantic integration", () => {
           explanation: "Inspect before completing.",
           plan: [{ step: "Inspect state", status: "in_progress" }],
         },
-        modelItemId: "model_plan_1",
       }], "model_plan_1"),
       (input) => {
         expect(input.plan).toMatchObject({
@@ -1892,17 +1894,16 @@ describe("Runner semantic integration", () => {
   it("feeds back bounded correction and blocks repeated Plan churn before generic limits", async () => {
     const operations = createOperationFixture([]);
     const events: RuntimeEvent[] = [];
-    const planCandidate = (modelItemId: string) => ({
+    const planCandidate = () => ({
       kind: "state_transition" as const,
       transition: "plan_update" as const,
       input: {
         explanation: "Inspect before completing.",
         plan: [{ step: "Inspect state", status: "in_progress" }],
       },
-      modelItemId,
     });
     const controller = new ScriptedController([
-      advance([planCandidate("model_plan_1")], "model_plan_1"),
+      advance([planCandidate()], "model_plan_1"),
       (input) => {
         expect(input.context.blocks, JSON.stringify(input.context.blocks, null, 2)).toContainEqual(expect.objectContaining({
           instructionRole: "data",
@@ -1915,7 +1916,7 @@ describe("Runner semantic integration", () => {
             }),
           }),
         }));
-        return advance([planCandidate("model_plan_2")], "model_plan_2");
+        return advance([planCandidate()], "model_plan_2");
       },
     ]);
 
@@ -1992,7 +1993,6 @@ describe("Runner semantic integration", () => {
           explanation: "Start with a declaration.",
           plan: [{ step: "Inspect", status: "in_progress" }],
         },
-        modelItemId: "model_plan_1",
       }], "model_plan_1"),
       advance([operationCandidate(operation, {})], "model_operation"),
       (input) => {
@@ -2045,7 +2045,6 @@ describe("Runner semantic integration", () => {
           explanation: "Start with a declaration.",
           plan: [{ step: "Inspect", status: "in_progress" }],
         },
-        modelItemId: "model_plan_1",
       }], "model_plan_1"),
       (input, context) => new Promise<ControllerDecision<TestOutput>>((resolve) => {
         expect(input.context.blocks.some((block) =>
@@ -2094,17 +2093,16 @@ describe("Runner semantic integration", () => {
     const operations = createOperationFixture([]);
     let currentNow = NOW;
     const expiredNow = new Date(Date.parse(NOW) + 20_000).toISOString();
-    const planCandidate = (modelItemId: string) => ({
+    const planCandidate = () => ({
       kind: "state_transition" as const,
       transition: "plan_update" as const,
       input: {
         explanation: "Keep declaring the same work.",
         plan: [{ step: "Inspect", status: "in_progress" as const }],
       },
-      modelItemId,
     });
     const controller = new ScriptedController([
-      advance([planCandidate("model_plan_1")], "model_plan_1"),
+      advance([planCandidate()], "model_plan_1"),
       (input) => {
         expect(input.context.blocks.some((block) =>
           block.payload.kind === "structured" &&
@@ -2112,7 +2110,7 @@ describe("Runner semantic integration", () => {
           block.payload.value.kind === "run_progress_correction"
         )).toBe(true);
         currentNow = expiredNow;
-        return advance([planCandidate("model_plan_2")], "model_plan_2");
+        return advance([planCandidate()], "model_plan_2");
       },
     ]);
 
@@ -2170,7 +2168,6 @@ describe("Runner semantic integration", () => {
           explanation: "Start with a declaration.",
           plan: [{ step: "Inspect", status: "in_progress" }],
         },
-        modelItemId: "model_plan_1",
       }], "model_plan_1"),
       (input) => {
         expect(input.context.blocks.some((block) =>
@@ -2208,6 +2205,15 @@ describe("Runner semantic integration", () => {
     expect(result.items.some(({ payload }) =>
       payload.kind === "terminal_transition" && payload.code === "runtime_no_progress"
     )).toBe(false);
+    const settlementIndex = result.items.findIndex(({ payload }) =>
+      payload.kind === "model_call_settlement" &&
+      payload.result.modelCallRef.id === "model_operation"
+    );
+    const terminalIndex = result.items.findIndex(({ payload }) =>
+      payload.kind === "terminal_transition" && payload.code === "unknown_effect"
+    );
+    expect(settlementIndex).toBeGreaterThanOrEqual(0);
+    expect(terminalIndex).toBeGreaterThan(settlementIndex);
   });
 
   it("waits on a blocking generic Interaction and resumes the same Run", async () => {
@@ -2277,13 +2283,11 @@ describe("Runner semantic integration", () => {
     }));
   });
 
-  it("queues a non-blocking Interaction settlement and discards a stale Controller decision", async () => {
+  it("waits for a non-blocking Interaction settlement before the next Controller decision", async () => {
     const operations = createOperationFixture([]);
     const interaction = testInteractionProtocol();
-    const staleDecision = deferred<ControllerDecision<TestOutput>>();
     const controller = new ScriptedController([
       advance([interactionCandidate("none")], "model_interaction_1"),
-      () => staleDecision.promise,
       (input) => {
         expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
           kind: "interaction",
@@ -2296,7 +2300,7 @@ describe("Runner semantic integration", () => {
       interactions: interaction.registry,
     }).start(createAgent(), createRunInput(), createRunConfig(operations));
     const pending = await waitForPendingInteraction(handle);
-    await waitUntil(() => controller.calls.length === 2);
+    expect(controller.calls).toHaveLength(1);
 
     handle.submitInteraction({
       request: pending.envelope.request,
@@ -2306,14 +2310,14 @@ describe("Runner semantic integration", () => {
       receivedAt: NOW,
     });
     await Promise.resolve();
-    staleDecision.resolve(complete("Stale decision", "model_stale_2"));
+    await waitUntil(() => controller.calls.length === 2);
 
     const result = await handle.wait();
     expect(result).toMatchObject({
       status: "succeeded",
       finalOutput: { summary: "Fresh decision" },
     });
-    expect(controller.calls).toHaveLength(3);
+    expect(controller.calls).toHaveLength(2);
   });
 
   it("applies accepted steering at a safe point and discards the stale Controller decision", async () => {
@@ -2410,7 +2414,6 @@ describe("Runner semantic integration", () => {
           transferPolicy: "all_context",
           admissionEvidenceRef: "agent-admission-1",
         },
-        modelItemId: "model_handoff_1",
       }], "model_handoff_1"),
       (input) => {
         expect(input.runId).toBe("run_001");
@@ -2507,7 +2510,7 @@ describe("Runner semantic integration", () => {
       currentAgent: Agent<TestOutput>,
       targetAgent: Agent<TestOutput>,
       admissionEvidenceRef: string,
-      modelItemId: string,
+      modelCallId: string,
     ) => advance([{
       kind: "state_transition",
       transition: "handoff",
@@ -2519,12 +2522,29 @@ describe("Runner semantic integration", () => {
         transferPolicy: "all_context",
         admissionEvidenceRef,
       },
-      modelItemId,
-    }], modelItemId);
+    }], modelCallId);
     const controller = new ScriptedController([
-      handoff(3, createAgent(), specialist, "agent-admission-specialist-1", "model_handoff_1"),
-      handoff(9, specialist, bridge, "agent-admission-bridge", "model_handoff_2"),
-      handoff(15, bridge, specialist, "agent-admission-specialist-2", "model_handoff_3"),
+      (input) => handoff(
+        Number(input.interaction.revision),
+        createAgent(),
+        specialist,
+        "agent-admission-specialist-1",
+        "model_handoff_1",
+      ),
+      (input) => handoff(
+        Number(input.interaction.revision),
+        specialist,
+        bridge,
+        "agent-admission-bridge",
+        "model_handoff_2",
+      ),
+      (input) => handoff(
+        Number(input.interaction.revision),
+        bridge,
+        specialist,
+        "agent-admission-specialist-2",
+        "model_handoff_3",
+      ),
       (input) => {
         expect(input.agent).toMatchObject({ id: bridge.id, revision: bridge.revision });
         expect(input.instructionBinding.instructions).toEqual(bridge.instructions.ref);
@@ -2708,7 +2728,7 @@ describe("Runner semantic integration", () => {
     const controller = new ScriptedController([{
       kind: "propose_stop",
       reason: "No safe path remains.",
-      modelItems: [modelItem("model_stop_1")],
+      modelItems: modelTextItems("model_stop_1", "No safe path remains."),
     }]);
 
     const result = await createRunner(controller, operations).run(
@@ -3925,18 +3945,52 @@ function complete(summary: string, id = "model_complete_1"): ControllerDecision<
   return {
     kind: "propose_completion",
     output: { summary },
-    modelItems: [modelItem(id, { summary })],
+    modelItems: modelTextItems(id, summary),
   };
 }
 
 function advance(
-  candidates: Extract<ControllerDecision<TestOutput>, { readonly kind: "advance" }>["candidates"],
-  modelItemId: string,
+  candidates: readonly Readonly<Record<string, unknown>>[],
+  modelCallIds: string | readonly string[],
 ): ControllerDecision<TestOutput> {
+  const ids = typeof modelCallIds === "string" ? [modelCallIds] : [...modelCallIds];
+  if (ids.length !== candidates.length || ids.length === 0) {
+    throw new TypeError("Each scripted Controller candidate requires one Model Call id.");
+  }
+  const turnId = `${ids[0]}:turn`;
+  const providerRequestId = `${ids[0]}:request`;
+  const normalizedCandidates = candidates.map((candidate, ordinal) => ({
+    ...candidate,
+    modelCallRef: testModelCallRef(
+      ids[ordinal]!,
+      turnId,
+      providerRequestId,
+      ordinal,
+    ),
+  }));
+  const calls = normalizedCandidates.map((candidate, ordinal) =>
+    candidateModelToolCall(candidate, ordinal)
+  );
   return {
     kind: "advance",
-    candidates,
-    modelItems: [modelItem(modelItemId)],
+    candidates: normalizedCandidates as unknown as Extract<
+      ControllerDecision<TestOutput>,
+      { readonly kind: "advance" }
+    >["candidates"],
+    modelItems: createControllerModelItems({
+      turnId,
+      assistant: {
+        role: "assistant",
+        content: calls.map((call) => ({ kind: "model_tool_call" as const, call })),
+      },
+      finish: { kind: "normal" },
+      usage: null,
+      responseRef: {
+        providerId: "scripted-controller",
+        requestId: providerRequestId,
+        responseId: `${turnId}:response`,
+      },
+    }),
   };
 }
 
@@ -3946,7 +4000,6 @@ function operationCandidate(operation: OperationRevisionRef, request: unknown) {
     origin: "controller_protocol" as const,
     operation,
     request,
-    modelItemId: "model_operation",
   };
 }
 
@@ -3964,17 +4017,91 @@ function toolCandidate(
       origin: "model" as const,
       controllerRequestId,
     },
-    modelItemId: "model_tool_1",
   };
 }
 
-function modelItem(id: string, content: unknown = {}) {
-  return {
+function modelTextItems(id: string, text: string) {
+  return createControllerModelItems({
+    turnId: `${id}:turn`,
+    assistant: { role: "assistant", content: [{ kind: "text", text }] },
+    finish: { kind: "normal" },
+    usage: null,
+    responseRef: {
+      providerId: "scripted-controller",
+      requestId: `${id}:request`,
+      responseId: `${id}:response`,
+    },
+  });
+}
+
+function testModelCallRef(
+  id: string,
+  turnId: string,
+  providerRequestId: string,
+  ordinal: number,
+): ModelCallRef {
+  return Object.freeze({
     id,
-    kind: "assistant_message",
-    content,
-    metadata: {},
-  };
+    providerRequestId,
+    controllerRequestId: `${turnId}:controller`,
+    turnId,
+    contentBlockOrdinal: ordinal,
+    branchId: "run_001:main",
+  });
+}
+
+function candidateModelToolCall(
+  candidate: Readonly<Record<string, unknown>> & { readonly modelCallRef: ModelCallRef },
+  ordinal: number,
+): ModelToolCall {
+  if (candidate.kind === "tool_request" && isRecord(candidate.tool)) {
+    return scriptedModelToolCall(
+      candidate.modelCallRef,
+      String(candidate.tool.name),
+      candidate.tool.input,
+      ordinal,
+    );
+  }
+  if (candidate.kind === "operation_request") {
+    return scriptedModelToolCall(
+      candidate.modelCallRef,
+      "request_operation",
+      { request: candidate.request as ModelJsonValue },
+      ordinal,
+    );
+  }
+  if (candidate.kind === "state_transition") {
+    return scriptedModelToolCall(
+      candidate.modelCallRef,
+      candidate.transition === "plan_update" ? "update_plan" : "handoff",
+      candidate.input,
+      ordinal,
+    );
+  }
+  if (candidate.kind === "interaction_request") {
+    return scriptedModelToolCall(
+      candidate.modelCallRef,
+      "request_interaction",
+      { subject: candidate.subject as ModelJsonValue },
+      ordinal,
+    );
+  }
+  throw new TypeError("Unsupported scripted Controller candidate.");
+}
+
+function scriptedModelToolCall(
+  modelCallRef: ModelCallRef,
+  name: string,
+  input: unknown,
+  ordinal: number,
+): ModelToolCall {
+  return Object.freeze({
+    modelCallRef,
+    providerCallRef: null,
+    name,
+    input: input as ModelToolCall["input"],
+    ordinal,
+  });
 }
 
 function operationRef(name: string): OperationRevisionRef {
@@ -4049,7 +4176,6 @@ function interactionCandidate(blockingScope: "none" | "branch" | "run") {
     requestVersion: 1,
     expiresAt: null,
     blockingScope,
-    modelItemId: "model_interaction_1",
   };
 }
 

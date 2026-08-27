@@ -114,6 +114,7 @@ async function collectCommittedFacts<TOutput>(
           : [];
       case "progress_assessment":
       case "progress_correction":
+      case "model_call_settlement":
       case "cancellation_transition":
       case "terminal_transition":
         return [];
@@ -157,6 +158,8 @@ async function observationInputs(
     case "operation_rejected":
       return [{ kind: "operation_rejected", owner: payload.owner, code: payload.code }];
     case "tool_rejected":
+      return [{ kind: "tool_rejected", code: payload.code }];
+    case "model_call_rejected":
       return [{ kind: "tool_rejected", code: payload.code }];
     case "interaction":
       return [{

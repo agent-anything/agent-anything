@@ -30,7 +30,7 @@ export type RunProgressCommittedFactInput =
     }
   | {
       readonly kind: "run_action";
-      readonly actionKind: "state_transition" | "operation" | "tool" | "interaction";
+      readonly actionKind: "state_transition" | "operation" | "tool" | "interaction" | "model_call_rejection";
       readonly requestOrigin: string | null;
     }
   | { readonly kind: "plan_update"; readonly result: PlanUpdateOutcome }

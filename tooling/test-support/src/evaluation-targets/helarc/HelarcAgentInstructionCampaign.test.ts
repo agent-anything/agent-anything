@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { FakeProvider } from "../../FakeProvider.js";
+import {
+  FakeNativeToolProvider,
+  fakeNativeModelOutput,
+} from "../../provider/FakeNativeToolProvider.js";
 import {
   createHelarcAgentInstructionCampaignArtifact,
   createHelarcAgentInstructionCampaignUnavailableArtifact,
@@ -160,24 +163,18 @@ async function capture(
       createdAt: HELARC_PRODUCT_EFFECTIVENESS_TIME,
     }),
     instructionTarget,
-    providerFactory: () => new FakeProvider({
+    providerFactory: () => new FakeNativeToolProvider({
       descriptor: { id: "campaign-test-provider" },
-      results: [{
-        kind: "succeeded",
-        response: {
-          kind: "structured_generation",
-          output: { kind: "completion", summary: "The timeout is 4500 ms." },
-          responseId: null,
-          continuation: null,
-          usage: {
+      steps: [fakeNativeModelOutput(
+        { kind: "completion", summary: "The timeout is 4500 ms." },
+        { usage: {
             inputTokens: 20,
             outputTokens: 8,
             totalTokens: 28,
             metadata: {},
           },
-          metadata: {},
         },
-      }],
+      )],
     }),
     productVersion: "campaign-test-product-v1",
     model,

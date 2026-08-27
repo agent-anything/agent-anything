@@ -24,8 +24,11 @@ describe("Agent Core Runtime public API", () => {
     expectTypeOf<RunnerDependencies>().toBeObject();
     expect(Object.keys(controllerApi).sort()).toEqual([
       "ControllerError",
+      "ModelInteractionProjectionError",
       "ProviderBackedController",
       "StructuredOutputError",
+      "createControllerModelItems",
+      "projectModelInteraction",
       "validateControllerDecision",
     ]);
     expect(Object.keys(delegationApi).sort()).toEqual([

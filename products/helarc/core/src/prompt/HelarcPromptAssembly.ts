@@ -7,33 +7,20 @@ import type {
   ContextProjectionEstimationInput,
 } from "@agent-anything/context/projection";
 import type { ModelInputSectionCandidate } from "@agent-anything/model-interaction/input";
-import {
-  buildHelarcActionDecisionRulesText,
-  buildHelarcActionProtocolText,
-  createHelarcActionContract,
-  HELARC_ACTION_CONTRACT_VERSION,
-} from "../controller/HelarcActionContract.js";
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
-import {
-  buildHelarcToolExposureText,
-} from "../tools/HelarcToolExposurePrompt.js";
 import {
   buildHelarcVerificationText,
   isHelarcVerificationContextBlock,
 } from "../verification/HelarcVerificationPrompt.js";
 
-export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v5";
-export { HELARC_ACTION_CONTRACT_VERSION } from "../controller/HelarcActionContract.js";
+export const HELARC_PROMPT_ARCHITECTURE_VERSION = "helarc-prompt-v6";
 export const HELARC_TOOL_EXPOSURE_VERSION = "trusted-tool-exposure-v1";
 export const HELARC_CONTEXT_PROJECTION_FORMAT_VERSION = "helarc-context-projection-v2";
 export const HELARC_CONTEXT_SECTION_HEADER = "Context projection:";
 export const HELARC_MODEL_OUTPUT_RESERVE_BYTES = 256_000;
 
 export type HelarcPromptSectionId =
-  | "output_format"
-  | "action_protocol"
-  | "action_decision_rules"
-  | "tool_catalog"
+  | "native_tool_protocol"
   | "permission_safety"
   | "stop_protocol"
   | "safe_output_boundary"
@@ -44,8 +31,7 @@ export type HelarcPromptSectionId =
   | "current_progress"
   | "current_verification"
   | "permission_context"
-  | "pending_interactions"
-  | "structured_output_correction";
+  | "pending_interactions";
 
 export interface HelarcPromptSection {
   readonly id: string;
@@ -58,7 +44,6 @@ export interface HelarcPromptSection {
 
 export interface HelarcPromptAssemblyVersions {
   promptArchitectureVersion: typeof HELARC_PROMPT_ARCHITECTURE_VERSION;
-  actionContractVersion: typeof HELARC_ACTION_CONTRACT_VERSION;
   toolExposureVersion: typeof HELARC_TOOL_EXPOSURE_VERSION;
   contextProjectionFormatVersion: typeof HELARC_CONTEXT_PROJECTION_FORMAT_VERSION;
 }
@@ -73,18 +58,16 @@ export interface HelarcPromptAssemblyResult {
 export function buildHelarcBasePromptAssembly(
   input: ControllerPreProjectionInput,
 ): HelarcPromptAssemblyResult {
-  return assemble(input, HELARC_CONTEXT_SECTION_HEADER, null, null);
+  return assemble(input, HELARC_CONTEXT_SECTION_HEADER, null);
 }
 
 export function buildHelarcPromptAssembly(input: {
   readonly controllerInput: ControllerInput;
-  readonly correctionMessage: string | null;
 }): HelarcPromptAssemblyResult {
   return assemble(
     input.controllerInput,
     renderHelarcContextProjection(input.controllerInput.context),
     input.controllerInput.context,
-    input.correctionMessage,
   );
 }
 
@@ -102,7 +85,6 @@ function assemble(
   input: ControllerPreProjectionInput | ControllerInput,
   contextContent: string,
   context: ContextProjection | null,
-  correctionMessage: string | null,
 ): HelarcPromptAssemblyResult {
   const exposedToolNames = Object.freeze(input.toolExposure.catalog.tools.map((tool) => tool.name));
   const promptSections = Object.freeze([
@@ -110,6 +92,8 @@ function assemble(
     ...buildSystemPromptSections(input.toolExposure),
     promptSection("task", "user", `Task:\n${readHelarcTaskPrompt(input)}`),
     promptSection("run_input_items", "user", `Run input items:\n${JSON.stringify(input.inputItems)}`),
+  ]);
+  const currentStateSections = Object.freeze([
     promptSection("context_projection", "user", contextContent),
     promptSection("current_plan", "user", `Current plan:\n${JSON.stringify(input.plan)}`),
     promptSection("current_progress", "user", `Current progress:\n${JSON.stringify(input.progress)}`),
@@ -120,20 +104,19 @@ function assemble(
     })),
     promptSection("permission_context", "user", `Permission context:\n${JSON.stringify(input.permission)}`),
     promptSection("pending_interactions", "user", `Pending interactions:\n${JSON.stringify(input.pending)}`),
-    ...(correctionMessage === null
-      ? []
-      : [promptSection("structured_output_correction", "user", correctionMessage)]),
   ]);
-  const sections = Object.freeze(promptSections.map((section) =>
-    toModelInputSection(section, context),
-  ));
+  const allPromptSections = Object.freeze([...promptSections, ...currentStateSections]);
+  const sections = Object.freeze([
+    ...promptSections.map((section) => toModelInputSection(section, context)),
+    ...interactionHistorySections(input),
+    ...currentStateSections.map((section) => toModelInputSection(section, context)),
+  ]);
   return Object.freeze({
     sections,
-    promptSections,
+    promptSections: allPromptSections,
     exposedToolNames,
     versions: Object.freeze({
       promptArchitectureVersion: HELARC_PROMPT_ARCHITECTURE_VERSION,
-      actionContractVersion: HELARC_ACTION_CONTRACT_VERSION,
       toolExposureVersion: HELARC_TOOL_EXPOSURE_VERSION,
       contextProjectionFormatVersion: HELARC_CONTEXT_PROJECTION_FORMAT_VERSION,
     }),
@@ -141,16 +124,20 @@ function assemble(
 }
 
 function buildSystemPromptSections(
-  toolExposure: ControllerInput["toolExposure"],
+  _toolExposure: ControllerInput["toolExposure"],
 ): readonly HelarcPromptSection[] {
-  const actionContract = createHelarcActionContract(
-    toolExposure.catalog.tools.map(({ name }) => name),
-  );
   return Object.freeze([
-    promptSection("output_format", "system", "Return only JSON. Do not wrap it in markdown."),
-    promptSection("action_protocol", "system", buildHelarcActionProtocolText(actionContract)),
-    promptSection("action_decision_rules", "system", buildHelarcActionDecisionRulesText(actionContract)),
-    promptSection("tool_catalog", "system", buildHelarcToolExposureText(toolExposure)),
+    promptSection(
+      "native_tool_protocol",
+      "system",
+      [
+        "Use only callable definitions supplied with the current model request.",
+        "Use update_plan when an explicit plan helps the work; simple tasks may proceed without a plan.",
+        "Use stop as the only call when the task cannot be completed safely or required information is unavailable.",
+        "Return a normal assistant response with no calls only when the task is complete.",
+        "Assistant text accompanying calls describes progress and does not complete the Run.",
+      ].join("\n"),
+    ),
     promptSection(
       "permission_safety",
       "system",
@@ -159,10 +146,7 @@ function buildSystemPromptSections(
     promptSection(
       "stop_protocol",
       "system",
-      [
-        "For completion, return kind and summary.",
-        "For stop, return kind and reason.",
-      ].join("\n"),
+      "Use the stop callable with one bounded reason; refusal may also stop without a callable.",
     ),
     promptSection(
       "safe_output_boundary",
@@ -170,6 +154,25 @@ function buildSystemPromptSections(
       "Never include workspace root paths, credentials, approval decisions, original content hashes, or patch ids.",
     ),
   ]);
+}
+
+function interactionHistorySections(
+  input: ControllerPreProjectionInput | ControllerInput,
+): readonly ModelInputSectionCandidate[] {
+  if (!("interaction" in input)) return Object.freeze([]);
+  return Object.freeze(input.interaction.messages.map((message, index) => Object.freeze({
+    id: `helarc:model-input:interaction-history:${index}`,
+    source: Object.freeze({
+      owner: "agent-runtime",
+      kind: "model_interaction_projection",
+      id: input.interaction.id,
+      revision: input.interaction.revision,
+    }),
+    kind: "interaction_history",
+    role: message.role,
+    necessity: "mandatory",
+    content: Object.freeze({ kind: "model_message", message }),
+  })));
 }
 
 function buildAgentInstructionSections(

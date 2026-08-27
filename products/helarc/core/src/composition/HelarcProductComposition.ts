@@ -15,7 +15,6 @@ import type {
 } from "@agent-anything/action-execution/sandbox";
 import {
   buildHelarcProviderRequest,
-  HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
   parseHelarcProviderResponse,
   type HelarcAgentOutput,
 } from "../controller/HelarcController.js";
@@ -25,7 +24,6 @@ import {
 } from "../agent/HelarcAgent.js";
 import type { HelarcMainInstructionTarget } from "../instructions/index.js";
 import { createHelarcDescendantAgentContribution } from "../agent/HelarcDescendantAgent.js";
-import { HELARC_ACTION_CONTRACT_VERSION } from "../prompt/HelarcPromptAssembly.js";
 import {
   HelarcTracingController,
   projectHelarcControllerTraceForEvent,
@@ -194,8 +192,7 @@ export async function createHelarcProductComposition(
       provider: input.provider,
       buildRequest: buildHelarcProviderRequest,
       parseResponse: parseHelarcProviderResponse,
-      structuredOutputContractId: HELARC_ACTION_CONTRACT_VERSION,
-      maxProviderOutputLength: HELARC_CONTROLLER_OUTPUT_MAX_LENGTH,
+      responseProtocol: Object.freeze({ kind: "native_tool_turn" }),
       retryExecutor: createSystemRetryExecutor(retryClock),
       retryClock,
       continuation,

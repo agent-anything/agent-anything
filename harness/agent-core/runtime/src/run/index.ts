@@ -34,6 +34,7 @@ export type {
   RunItem,
   RunItemPayload,
   RuntimeRunAction,
+  RuntimeRunActionProvenance,
   RuntimeRunActionSubject,
 } from "./RunItem.js";
 export type {

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createEvaluationTrial } from "@agent-anything/evaluation/trial";
-import type { ProviderCallResult } from "@agent-anything/model-interaction";
-import { FakeProvider } from "../../FakeProvider.js";
+import {
+  FakeNativeToolProvider,
+  fakeNativeModelOutput,
+  fakeNativeProviderResult,
+} from "../../provider/FakeNativeToolProvider.js";
 import {
   HELARC_EVALUATION_TIME,
   adaptHelarcExternalBenchmarkManifest,
@@ -165,9 +168,9 @@ describe("Helarc deterministic Evaluation target", () => {
     const material = await executeHelarcEvaluationCase({
       trial,
       caseDefinition: recursiveCase,
-      provider: new FakeProvider({
+      provider: new FakeNativeToolProvider({
         descriptor: { id: "run-tree-conformance-provider" },
-        results: [
+        steps: [
           scriptedSuccess({
             kind: "tool_call",
             toolName: "Agent",
@@ -266,7 +269,7 @@ describe("Helarc deterministic Evaluation target", () => {
           id: `${providerFailureSource.script.ref.id}.provider-failure`,
           revision: providerFailureSource.script.ref.revision,
         }),
-        responses: Object.freeze([{
+        steps: Object.freeze([fakeNativeProviderResult({
           kind: "failed" as const,
           failure: Object.freeze({
             category: "authentication",
@@ -274,7 +277,7 @@ describe("Helarc deterministic Evaluation target", () => {
             message: `The scripted Provider rejected ${secret}.`,
             metadata: Object.freeze({}),
           }),
-        }]),
+        })]),
       }),
     });
     const providerFailure = await invokeCase(corpus, providerFailureCase);
@@ -452,21 +455,14 @@ async function invokeCase(
   }
 }
 
-function scriptedSuccess(output: unknown, sequence: number): ProviderCallResult {
-  return Object.freeze({
-    kind: "succeeded" as const,
-    response: Object.freeze({
-      kind: "structured_generation" as const,
-      output: output as never,
-      responseId: null,
-      continuation: null,
-      usage: Object.freeze({
-        inputTokens: 10 + sequence,
-        outputTokens: 4 + sequence,
-        totalTokens: 14 + (sequence * 2),
-        metadata: Object.freeze({ source: "run-tree-conformance" }),
-      }),
-      metadata: Object.freeze({ scriptSequence: sequence }),
+function scriptedSuccess(output: unknown, sequence: number) {
+  return fakeNativeModelOutput(output, {
+    usage: Object.freeze({
+      inputTokens: 10 + sequence,
+      outputTokens: 4 + sequence,
+      totalTokens: 14 + (sequence * 2),
+      metadata: Object.freeze({ source: "run-tree-conformance" }),
     }),
+    metadata: Object.freeze({ scriptSequence: sequence }),
   });
 }

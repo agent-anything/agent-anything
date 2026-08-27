@@ -92,12 +92,14 @@ export interface HelarcAcceptedTaskSnapshot {
 export type HelarcProviderSnapshot =
   | {
       configured: true;
+      nativeToolInteraction: { readonly supported: true };
       activeProfile: HelarcProviderProfile;
       profiles: HelarcProviderProfile[];
       error: null;
     }
   | {
       configured: false;
+      nativeToolInteraction: { readonly supported: false };
       activeProfile: null;
       profiles: HelarcProviderProfile[];
       error: HelarcMainError;
@@ -364,6 +366,7 @@ export class HelarcMainController {
     this.provider = input.providerConfigError
       ? {
           configured: false,
+          nativeToolInteraction: { supported: false },
           activeProfile: null,
           profiles: [],
           error: {
@@ -383,6 +386,7 @@ export class HelarcMainController {
     this.provider = input.error
       ? {
           configured: false,
+          nativeToolInteraction: { supported: false },
           activeProfile: null,
           profiles: [],
           error: input.error,
@@ -1519,6 +1523,7 @@ function createConfiguredProviderSnapshot(
   const activeProfile = profile ?? createInjectedProviderProfile();
   return {
     configured: true,
+    nativeToolInteraction: { supported: true },
     activeProfile,
     profiles: [activeProfile],
     error: null,

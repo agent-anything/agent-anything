@@ -51,6 +51,7 @@ import type {
   EvaluationTrial,
 } from "@agent-anything/evaluation/trial";
 import { createEvaluationTargetObservation } from "@agent-anything/evaluation/trial";
+import { operationRevisionKey } from "@agent-anything/operation-catalog/identity";
 import { createAllowAllActionPolicyPort } from "@agent-anything/governance";
 import type {
   ManagedPermissionConstraints,
@@ -120,7 +121,7 @@ import type {
   PermissionEnforcement,
   PermissionProfileDefinition,
 } from "@agent-anything/permission/profile";
-import { FakeProvider } from "../../FakeProvider.js";
+import { FakeNativeToolProvider } from "../../provider/FakeNativeToolProvider.js";
 import {
   HELARC_EVALUATION_TIME,
   type HelarcEvaluationCaseDefinition,
@@ -526,13 +527,13 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     identityId: runContext.identity.id,
     automaticReviewer: approval,
   });
-  const selectedProvider = options.provider ?? new FakeProvider({
+  const selectedProvider = options.provider ?? new FakeNativeToolProvider({
     descriptor: {
       id: "helarc-deterministic-scripted-provider",
       name: "Helarc deterministic scripted Provider",
       metadata: { evaluation: true },
     },
-    results: [...caseDefinition.script.responses],
+    steps: caseDefinition.script.steps,
   });
   const providerRequests: ProviderRequest[] = [];
   const providerResults: ProviderCallResult[] = [];
@@ -1028,21 +1029,23 @@ function collectObservedToolNames(
     `${selected.registration.descriptor.ref.tool.namespace}:${selected.registration.descriptor.ref.tool.name}@${selected.registration.descriptor.ref.revision}`,
     selected.registration.descriptor.name,
   ]));
-  const selectedNames = new Set(namesByTool.values());
+  const namesByOperation = new Map(selection.tools.flatMap((selected) =>
+    selected.registration.binding.kind === "operation"
+      ? [[
+          operationRevisionKey(selected.registration.binding.operation.operation.ref),
+          selected.registration.descriptor.name,
+        ] as const]
+      : []
+  ));
   const observedNames = new Set<string>();
 
   for (const item of result.items) {
-    if (item.payload.kind === "controller_turn") {
-      for (const modelItem of item.payload.modelItems) {
-        const requestedName = modelItem.metadata.requestedToolName;
-        if (typeof requestedName === "string" && selectedNames.has(requestedName)) {
-          observedNames.add(requestedName);
-        }
-      }
-      continue;
-    }
     if (item.payload.kind !== "observation") continue;
     const payload = item.payload.observation.payload;
+    if (payload.kind === "operation") {
+      const name = namesByOperation.get(operationRevisionKey(payload.result.binding.operation));
+      if (name !== undefined) observedNames.add(name);
+    }
     const toolResult = payload.kind === "operation" ||
         payload.kind === "interaction" || payload.kind === "descendant_run"
       ? payload.toolResult

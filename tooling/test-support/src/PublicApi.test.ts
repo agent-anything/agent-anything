@@ -7,11 +7,14 @@ describe("Test Support public API", () => {
       "FakeApprovalReviewer",
       "FakeAuditPort",
       "FakeEvidencePersistencePort",
+      "FakeNativeToolProvider",
       "FakeProvider",
       "FakeRuntimeEventPublisher",
       "FakeTelemetryPort",
       "createTestContextProjection",
       "createTestVerificationExecutionFactory",
+      "fakeNativeModelOutput",
+      "fakeNativeProviderResult",
     ]);
   });
 });

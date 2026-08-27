@@ -1,11 +1,22 @@
 import type {
+  ModelCallRef,
+  ModelAssistantContentBlock,
+  ModelToolCall,
+  ModelTurnFinish,
   Provider,
   ProviderCallResult,
   ProviderFailure,
   ProviderRequest,
   ProviderResponse,
+  ProviderUsage,
 } from "@agent-anything/model-interaction";
-import { snapshotProviderRequest } from "@agent-anything/model-interaction";
+import {
+  modelCallRefKey,
+  snapshotModelCallRef,
+  snapshotModelToolCall,
+  snapshotModelTurn,
+  snapshotProviderRequest,
+} from "@agent-anything/model-interaction";
 import {
   ModelContinuationLifecycle,
   type ModelContinuationPreparation,
@@ -77,8 +88,13 @@ export interface ProviderBackedControllerInput<TOutput = unknown> {
   readonly provider: Provider;
   readonly buildRequest: BuildProviderRequest<TOutput>;
   readonly parseResponse: ParseProviderResponse<TOutput>;
-  readonly structuredOutputContractId: string;
-  readonly maxProviderOutputLength: number;
+  readonly responseProtocol:
+    | {
+        readonly kind: "structured_output";
+        readonly contractId: string;
+        readonly maxProviderOutputLength: number;
+      }
+    | { readonly kind: "native_tool_turn" };
   readonly retryExecutor: RetryExecutor;
   readonly retryClock: RetryClock;
   readonly continuation?: ModelContinuationLifecycle;
@@ -136,25 +152,27 @@ export class ProviderBackedController<TOutput = unknown>
 
   constructor(private readonly input: ProviderBackedControllerInput<TOutput>) {
     this.continuation = input.continuation ?? new ModelContinuationLifecycle();
-    if (
-      !Number.isInteger(input.maxProviderOutputLength) ||
-      input.maxProviderOutputLength <= 0
-    ) {
-      throw new TypeError("maxProviderOutputLength must be a positive integer.");
-    }
     if (typeof input.retryExecutor?.execute !== "function") {
       throw new TypeError("ProviderBackedController requires a RetryExecutor.");
     }
     if (typeof input.retryClock?.now !== "function") {
       throw new TypeError("ProviderBackedController requires a RetryClock.");
     }
-    if (
-      typeof input.structuredOutputContractId !== "string" ||
-      input.structuredOutputContractId.trim().length === 0
-    ) {
-      throw new TypeError(
-        "ProviderBackedController requires a structuredOutputContractId.",
-      );
+    if (input.responseProtocol.kind === "structured_output") {
+      if (
+        !Number.isInteger(input.responseProtocol.maxProviderOutputLength) ||
+        input.responseProtocol.maxProviderOutputLength <= 0
+      ) {
+        throw new TypeError("maxProviderOutputLength must be a positive integer.");
+      }
+      if (
+        typeof input.responseProtocol.contractId !== "string" ||
+        input.responseProtocol.contractId.trim().length === 0
+      ) {
+        throw new TypeError(
+          "ProviderBackedController requires a structured-output contract id.",
+        );
+      }
     }
     if (input.provider.descriptor.requestRetryScheduler?.kind !== "harness") {
       throw new TypeError(
@@ -168,11 +186,39 @@ export class ProviderBackedController<TOutput = unknown>
     callContext: ControllerCallContext,
   ): Promise<ControllerDecision<TOutput>> {
     throwIfCancelled(callContext);
-    const decision = await this.executeStructuredOutput(
+    const decision = this.input.responseProtocol.kind === "native_tool_turn"
+      ? await this.executeNativeToolTurn(controllerInput, callContext)
+      : await this.executeStructuredOutput(controllerInput, callContext);
+    throwIfCancelled(callContext);
+    return decision;
+  }
+
+  private async executeNativeToolTurn(
+    controllerInput: ControllerInput<TOutput>,
+    callContext: ControllerCallContext,
+  ): Promise<ControllerDecision<TOutput>> {
+    const request = await this.buildRequest(controllerInput, Object.freeze({
+      attemptNumber: 1,
+      correction: null,
+      inputAccounting: this.input.provider.inputAccounting,
+    }));
+    const response = await this.sendRequest(
+      request,
       controllerInput,
       callContext,
+      () => 1,
     );
-    throwIfCancelled(callContext);
+    if (response.kind !== "native_tool_turn") {
+      throw invalidOutput(
+        "Provider returned a response kind that does not match native Tool interaction.",
+      );
+    }
+    const parsed = await this.parseResponse(response, controllerInput);
+    const decision = validateControllerDecision(parsed, controllerInput);
+    assertProviderBackedDecisionProvenance(
+      decision,
+      controllerInput.toolExposure.controllerRequestId,
+    );
     return decision;
   }
 
@@ -182,7 +228,7 @@ export class ProviderBackedController<TOutput = unknown>
   ): Promise<ControllerDecision<TOutput>> {
     const operation = createStructuredOutputRetryOperation(
       controllerInput,
-      this.input.structuredOutputContractId,
+      this.requireStructuredOutputProtocol().contractId,
       callContext.retry.deadlineAt,
       this.input.retryClock,
     );
@@ -681,13 +727,23 @@ export class ProviderBackedController<TOutput = unknown>
       );
     }
 
-    if (serialized.length > this.input.maxProviderOutputLength) {
+    if (serialized.length > this.requireStructuredOutputProtocol().maxProviderOutputLength) {
       throw structuredOutputError(
         "structured_output_size",
         "structured_output_too_large",
         "Return a shorter structured output within the configured output limit.",
       );
     }
+  }
+
+  private requireStructuredOutputProtocol(): Extract<
+    ProviderBackedControllerInput<TOutput>["responseProtocol"],
+    { readonly kind: "structured_output" }
+  > {
+    if (this.input.responseProtocol.kind !== "structured_output") {
+      throw new TypeError("Structured-output processing requires its explicit response protocol.");
+    }
+    return this.input.responseProtocol;
   }
 
   private async parseResponse(
@@ -718,10 +774,17 @@ export function validateControllerDecision<TOutput>(
   }
 
   const modelItems = validateModelItems(candidate.modelItems);
-  const modelItemIds = new Set(modelItems.map((item) => item.id));
+  const modelCalls = new Map(modelItems.flatMap((item) =>
+    item.kind === "model_tool_call"
+      ? [[modelCallRefKey(item.call.modelCallRef), item.call] as const]
+      : []
+  ));
 
   switch (candidate.kind) {
     case "propose_completion": {
+      if (modelCalls.size !== 0) {
+        throw decisionContractError("controller_completion_with_model_calls");
+      }
       let validation;
       try {
         validation = input.agent.output.validate(candidate.output);
@@ -750,11 +813,14 @@ export function validateControllerDecision<TOutput>(
     case "advance":
       return Object.freeze({
         kind: "advance",
-        candidates: validateCandidates(candidate.candidates, modelItemIds),
+        candidates: validateCandidates(candidate.candidates, modelCalls),
         modelItems,
       });
 
     case "propose_stop":
+      if (modelCalls.size > 1) {
+        throw decisionContractError("controller_stop_model_calls_invalid");
+      }
       return Object.freeze({
         kind: "propose_stop",
         reason: nonEmptyDecisionText(candidate.reason),
@@ -772,7 +838,7 @@ function validateModelItems(candidate: unknown): readonly ControllerModelItem[] 
   }
 
   const ids = new Set<string>();
-  const items = candidate.map((item) => {
+  const items = candidate.map((item): ControllerModelItem => {
     if (!isRecord(item)) {
       throw decisionContractError("controller_model_item_invalid");
     }
@@ -787,20 +853,104 @@ function validateModelItems(candidate: unknown): readonly ControllerModelItem[] 
       throw decisionContractError("controller_model_item_metadata_invalid");
     }
 
-    return Object.freeze({
-      id,
-      kind: nonEmptyDecisionText(item.kind),
-      content: item.content,
-      metadata: Object.freeze({ ...item.metadata }),
-    });
+    const metadata = Object.freeze({ ...item.metadata });
+    switch (item.kind) {
+      case "assistant_text":
+        return Object.freeze({
+          id,
+          kind: "assistant_text",
+          turnId: nonEmptyDecisionText(item.turnId),
+          contentBlockOrdinal: nonNegativeSafeInteger(
+            item.contentBlockOrdinal,
+            "controller_model_content_ordinal_invalid",
+          ),
+          text: boundedDecisionText(item.text, 131_072),
+          metadata,
+        });
+      case "model_tool_call":
+        return Object.freeze({
+          id,
+          kind: "model_tool_call",
+          call: snapshotModelToolCall(item.call as ModelToolCall),
+          metadata,
+        });
+      case "model_turn_finish":
+        return Object.freeze({
+          id,
+          kind: "model_turn_finish",
+          turnId: nonEmptyDecisionText(item.turnId),
+          finish: item.finish as ModelTurnFinish,
+          metadata,
+        }) as ControllerModelItem;
+      case "model_response_correlation": {
+        if (!isRecord(item.response)) {
+          throw decisionContractError("controller_model_response_correlation_invalid");
+        }
+        return Object.freeze({
+          id,
+          kind: "model_response_correlation",
+          turnId: nonEmptyDecisionText(item.turnId),
+          response: Object.freeze({
+            providerId: nonEmptyDecisionText(item.response.providerId),
+            requestId: nonEmptyDecisionText(item.response.requestId),
+            responseId: item.response.responseId === null
+              ? null
+              : nonEmptyDecisionText(item.response.responseId),
+          }),
+          usage: item.usage as ProviderUsage | null,
+          metadata,
+        }) as ControllerModelItem;
+      }
+      default:
+        throw decisionContractError("controller_model_item_kind_invalid");
+    }
   });
-
-  return Object.freeze(items);
+  const finishItems = items.filter((item) => item.kind === "model_turn_finish");
+  const correlationItems = items.filter((item) =>
+    item.kind === "model_response_correlation"
+  );
+  if (finishItems.length !== 1 || correlationItems.length !== 1) {
+    throw decisionContractError("controller_model_turn_incomplete");
+  }
+  const finish = finishItems[0]!;
+  const correlation = correlationItems[0]!;
+  const content: ModelAssistantContentBlock[] = [];
+  for (const item of items) {
+    if (item.kind === "assistant_text") {
+      if (item.contentBlockOrdinal !== content.length) {
+        throw decisionContractError("controller_model_content_order_invalid");
+      }
+      content.push(Object.freeze({ kind: "text", text: item.text }));
+    }
+    if (item.kind === "model_tool_call") {
+      content.push(Object.freeze({ kind: "model_tool_call", call: item.call }));
+    }
+  }
+  const turn = snapshotModelTurn({
+    turnId: finish.turnId,
+    assistant: { role: "assistant", content },
+    finish: finish.finish,
+    usage: correlation.usage,
+    responseRef: correlation.response,
+  });
+  return Object.freeze(items.map((item): ControllerModelItem => {
+    if (item.kind === "model_turn_finish") {
+      return Object.freeze({ ...item, finish: turn.finish });
+    }
+    if (item.kind === "model_response_correlation") {
+      return Object.freeze({
+        ...item,
+        response: turn.responseRef,
+        usage: turn.usage,
+      });
+    }
+    return item;
+  }));
 }
 
 function validateCandidates(
   candidate: unknown,
-  modelItemIds: ReadonlySet<string>,
+  modelCalls: ReadonlyMap<string, ModelToolCall>,
 ): readonly [ProgressionCandidate, ...ProgressionCandidate[]] {
   if (!Array.isArray(candidate) || candidate.length === 0) {
     throw decisionContractError("controller_candidates_required");
@@ -811,12 +961,20 @@ function validateCandidates(
       throw decisionContractError("controller_candidate_invalid");
     }
 
-    const modelItemId = nonEmptyDecisionText(progression.modelItemId);
-    if (!modelItemIds.has(modelItemId)) {
+    const modelCallRef = snapshotModelCallRef(progression.modelCallRef as ModelCallRef);
+    if (!modelCalls.has(modelCallRefKey(modelCallRef))) {
       throw decisionContractError("controller_candidate_provenance_invalid");
     }
-    return validateProgressionCandidate(progression, modelItemId);
+    return validateProgressionCandidate(progression, modelCallRef);
   });
+
+  const candidateCallKeys = candidates.map((item) => modelCallRefKey(item.modelCallRef));
+  if (
+    new Set(candidateCallKeys).size !== candidateCallKeys.length ||
+    candidateCallKeys.length !== modelCalls.size
+  ) {
+    throw decisionContractError("controller_candidate_call_coverage_invalid");
+  }
 
   validateCandidateOrdering(candidates);
   return Object.freeze(candidates) as unknown as readonly [
@@ -827,7 +985,7 @@ function validateCandidates(
 
 function validateProgressionCandidate(
   candidate: Record<string, unknown>,
-  modelItemId: string,
+  modelCallRef: ModelCallRef,
 ): ProgressionCandidate {
   if (candidate.kind === "state_transition") {
     if (candidate.transition === "plan_update") {
@@ -835,7 +993,7 @@ function validateProgressionCandidate(
         kind: "state_transition" as const,
         transition: "plan_update" as const,
         input: candidate.input,
-        modelItemId,
+        modelCallRef,
       });
     }
     if (candidate.transition === "handoff" && isRecord(candidate.input)) {
@@ -862,7 +1020,7 @@ function validateProgressionCandidate(
           transferPolicy,
           admissionEvidenceRef: nonEmptyDecisionText(candidate.input.admissionEvidenceRef),
         }),
-        modelItemId,
+        modelCallRef,
       });
     }
     throw decisionContractError("controller_state_transition_invalid");
@@ -874,7 +1032,7 @@ function validateProgressionCandidate(
         origin: "controller_protocol" as const,
         operation: validateOperationRevisionRef(candidate.operation),
         request: candidate.request,
-        modelItemId,
+        modelCallRef,
       });
     }
     throw decisionContractError("controller_operation_request_invalid");
@@ -907,7 +1065,7 @@ function validateProgressionCandidate(
             ? nonEmptyDecisionText(controllerRequestId)
             : null,
         }),
-        modelItemId,
+        modelCallRef,
       });
   }
   if (candidate.kind === "interaction_request") {
@@ -932,7 +1090,16 @@ function validateProgressionCandidate(
       blockingScope: blockingScope as "none" | "branch" | "run",
       requestVersion: requestVersion as number,
       expiresAt: expiresAt as string | null,
-      modelItemId,
+      modelCallRef,
+    });
+  }
+  if (candidate.kind === "model_call_rejection") {
+    return Object.freeze({
+      kind: "model_call_rejection" as const,
+      name: nonEmptyDecisionText(candidate.name),
+      code: nonEmptyDecisionText(candidate.code),
+      message: nonEmptyDecisionText(candidate.message),
+      modelCallRef,
     });
   }
   throw decisionContractError("controller_candidate_kind_invalid");
@@ -1014,6 +1181,20 @@ function nonEmptyDecisionText(candidate: unknown): string {
   }
 
   return candidate.trim();
+}
+
+function boundedDecisionText(candidate: unknown, maximumLength: number): string {
+  if (typeof candidate !== "string" || candidate.length > maximumLength) {
+    throw decisionContractError("controller_text_field_invalid");
+  }
+  return candidate;
+}
+
+function nonNegativeSafeInteger(candidate: unknown, code: string): number {
+  if (!Number.isSafeInteger(candidate) || (candidate as number) < 0) {
+    throw decisionContractError(code);
+  }
+  return candidate as number;
 }
 
 function throwIfCancelled(context: ControllerCallContext): void {

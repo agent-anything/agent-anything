@@ -30,12 +30,13 @@ import {
   createEvaluationCampaign,
   type EvaluationCampaign,
 } from "@agent-anything/evaluation/campaign";
-import {
-  snapshotModelJsonValue,
-  type ProviderCallResult,
-} from "@agent-anything/model-interaction";
 import type { HelarcExactTargetVerificationRequirement } from "@agent-anything/helarc/verification";
 import { createHelarcAgent } from "@agent-anything/helarc/agent";
+import {
+  fakeNativeModelOutput,
+  fakeNativeProviderResult,
+  type FakeNativeToolProviderStep,
+} from "../../provider/FakeNativeToolProvider.js";
 
 export const HELARC_EVALUATION_TIME = "2026-08-12T00:00:00.000Z";
 export const HELARC_EVALUATION_CORPUS_REVISION =
@@ -73,7 +74,7 @@ export interface HelarcEvaluationFixture {
 
 export interface HelarcEvaluationScript {
   readonly ref: EvaluationRecordRef;
-  readonly responses: readonly ProviderCallResult[];
+  readonly steps: readonly FakeNativeToolProviderStep[];
   readonly permissionPreset: HelarcEvaluationPermissionPreset;
 }
 
@@ -544,12 +545,21 @@ function createCases(): HelarcEvaluationCaseDefinition[] {
         "status.txt": "ready\n",
       },
       outputs: [
-        "{ malformed structured output",
-        { kind: "completion", summary: "Recovered from malformed structured output." },
+        fakeNativeProviderResult({
+          kind: "failed",
+          failure: {
+            category: "transport",
+            code: "provider_response_interrupted",
+            message: "The response stream ended before a complete native Model Turn arrived.",
+            retryAfterMs: 0,
+            metadata: {},
+          },
+        }),
+        { kind: "completion", summary: "Recovered from an interrupted Provider response." },
       ],
       productStatus: "completed",
       runStatus: "succeeded",
-      agentSummary: "Recovered from malformed structured output.",
+      agentSummary: "Recovered from an interrupted Provider response.",
       expectedAddedFiles: {},
       requiredActionNames: [],
       retryCount: 1,
@@ -772,8 +782,8 @@ function caseDefinition(input: {
   );
   const script: HelarcEvaluationScript = Object.freeze({
     ref: scriptRef,
-    responses: Object.freeze(input.outputs.map((output, index) =>
-      scriptedSuccess(output, index + 1))),
+    steps: Object.freeze(input.outputs.map((output, index) =>
+      scriptedStep(output, index + 1))),
     permissionPreset: input.permissionPreset,
   });
   const expectedClaim: HelarcEvaluationExpectedClaim = Object.freeze({
@@ -1111,25 +1121,24 @@ function fileRecords(
     .sort((left, right) => left.path.localeCompare(right.path)));
 }
 
-function scriptedSuccess(output: unknown, sequence: number): ProviderCallResult {
+function scriptedStep(output: unknown, sequence: number): FakeNativeToolProviderStep {
+  if (isFakeNativeToolProviderStep(output)) return output;
   const inputTokens = 10 + sequence;
   const outputTokens = 4 + sequence;
-  return deepFreeze({
-    kind: "succeeded" as const,
-    response: {
-      kind: "structured_generation" as const,
-      output: snapshotModelJsonValue(output, "scriptedProviderOutput"),
-      responseId: null,
-      continuation: null,
-      usage: {
-        inputTokens,
-        outputTokens,
-        totalTokens: inputTokens + outputTokens,
-        metadata: { source: "phase26-script" },
-      },
-      metadata: { scriptSequence: sequence },
+  return fakeNativeModelOutput(output, {
+    usage: {
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      metadata: { source: "deterministic-script" },
     },
+    metadata: { scriptSequence: sequence },
   });
+}
+
+function isFakeNativeToolProviderStep(value: unknown): value is FakeNativeToolProviderStep {
+  return typeof value === "object" && value !== null && "kind" in value &&
+    (value.kind === "model_output" || value.kind === "provider_result");
 }
 
 function corpusProvenance() {

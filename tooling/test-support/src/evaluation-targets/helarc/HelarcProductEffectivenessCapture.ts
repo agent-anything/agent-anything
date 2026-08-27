@@ -245,7 +245,7 @@ function executableCase(
         id: `helarc.product-effectiveness.provider.${profile.id}`,
         revision: "real-provider-v1",
       },
-      responses: Object.freeze([]),
+      steps: Object.freeze([]),
       permissionPreset: "full_access" as const,
     }),
     expectedClaim: Object.freeze({

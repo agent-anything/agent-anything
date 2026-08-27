@@ -26,6 +26,7 @@ import type {
   ControllerDecision,
   ControllerInput,
 } from "@agent-anything/agent-runtime/controller";
+import { createControllerModelItems } from "@agent-anything/agent-runtime/controller";
 import {
   Runner,
   type RunConfig,
@@ -349,15 +350,21 @@ function completionDecision(
   input: ControllerInput<TestOutput>,
   summary: string,
 ): ControllerDecision<TestOutput> {
+  const turnId = `${input.runId}:scripted-model-turn:${input.iteration}`;
   return {
     kind: "propose_completion",
     output: { summary },
-    modelItems: [{
-      id: `${input.runId}:model:${input.iteration}`,
-      kind: "assistant_message",
-      content: { summary },
-      metadata: {},
-    }],
+    modelItems: createControllerModelItems({
+      turnId,
+      assistant: { role: "assistant", content: [{ kind: "text", text: summary }] },
+      finish: { kind: "normal" },
+      usage: null,
+      responseRef: {
+        providerId: "host-conformance-scripted-provider",
+        requestId: `${turnId}:request`,
+        responseId: `${turnId}:response`,
+      },
+    }, { source: "host-conformance-scripted-controller" }),
   };
 }
 

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { FakeProvider } from "../../FakeProvider.js";
+import {
+  FakeNativeToolProvider,
+  fakeNativeModelOutput,
+} from "../../provider/FakeNativeToolProvider.js";
 import {
   compareHelarcAgentInstructionEffectiveness,
   runHelarcAgentInstructionConformance,
@@ -75,24 +78,18 @@ describe("Helarc Agent Instruction Evaluation", () => {
         suite,
         targetSnapshot: createTargetSnapshot(definition, instructionTarget),
         instructionTarget,
-        providerFactory: () => new FakeProvider({
+        providerFactory: () => new FakeNativeToolProvider({
           descriptor: { id: "instruction-evaluation-provider" },
-          results: [{
-            kind: "succeeded",
-            response: {
-              kind: "structured_generation",
-              output: { kind: "completion", summary: "The timeout is 4500 ms." },
-              responseId: null,
-              continuation: null,
-              usage: {
+          steps: [fakeNativeModelOutput(
+            { kind: "completion", summary: "The timeout is 4500 ms." },
+            { usage: {
                 inputTokens: 20,
                 outputTokens: 8,
                 totalTokens: 28,
                 metadata: {},
               },
-              metadata: {},
             },
-          }],
+          )],
         }),
         productVersion: "instruction-evaluation-product-v1",
         model: "fake-model",

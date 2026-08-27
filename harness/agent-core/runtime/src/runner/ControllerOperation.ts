@@ -8,6 +8,7 @@ import {
 } from "@agent-anything/context/projection";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
 import {
+  projectModelInteraction,
   type ControllerDecision,
   type ControllerInput,
 } from "../controller/index.js";
@@ -93,7 +94,13 @@ export function prepareControllerOperation<TOutput>(
     task: input.runInput.task,
     inputItems: input.runInput.items,
     toolExposure: input.exposure,
+    interaction: projectModelInteraction({
+      runId: input.state.run.id,
+      runRevision: input.state.revision,
+      items: input.state.items,
+    }),
     plan: input.state.plan === null ? null : projectPlan(input.state.plan),
+    planLimits: input.config.limits.plan,
     progress: Object.freeze({
       checkpointSequence: input.state.progress.checkpointSequence,
       consecutiveNonAdvancingCheckpoints:

@@ -206,7 +206,7 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
   }
 }
 
-const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "observation", "state_transition", "pending_transition", "cancellation_transition", "verification_feedback", "progress_assessment", "progress_correction", "terminal_transition"];
+const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "model_call_settlement", "observation", "state_transition", "pending_transition", "cancellation_transition", "verification_feedback", "progress_assessment", "progress_correction", "terminal_transition"];
 const terminalStatuses: readonly RuntimeTerminalStatus[] = ["succeeded", "blocked", "failed", "cancelled"];
 const bindingKinds: readonly RuntimeOperationBindingKind[] = ["internal", "direct", "hosted", "composite", "descendant_agent"];
 const correlationKinds: readonly RuntimeOperationCorrelationKind[] = ["run_action", "run_request", "owner_operation", "evaluation_trial"];

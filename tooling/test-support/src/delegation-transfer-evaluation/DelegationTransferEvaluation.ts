@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
-import {
-  providerGeneratedOutput,
-  type ModelJsonValue,
-  type Provider,
-  type ProviderCallResult,
-} from "@agent-anything/model-interaction";
+import type { Provider } from "@agent-anything/model-interaction";
 import { createEvaluationTrial } from "@agent-anything/evaluation/trial";
-import { FakeProvider } from "../FakeProvider.js";
+import {
+  FakeNativeToolProvider,
+  fakeNativeModelOutput,
+  type FakeNativeToolProviderStep,
+} from "../provider/FakeNativeToolProvider.js";
 import {
   HELARC_EVALUATION_TIME,
   createHelarcEvaluationCorpus,
@@ -80,9 +79,9 @@ export type DelegationTransferModelDiagnostic =
 export async function runDelegationTransferDeterministicEvaluation(): Promise<
   DelegationTransferEvaluationReport
 > {
-  const material = await executeRecursiveCase(new FakeProvider({
+  const material = await executeRecursiveCase(new FakeNativeToolProvider({
     descriptor: { id: "delegation-transfer-deterministic-provider" },
-    results: [...scriptedRecursiveResults()],
+    steps: scriptedRecursiveSteps(),
   }));
   const metrics = projectMetrics(material);
   const invariants = projectInvariants(material, metrics);
@@ -187,7 +186,7 @@ async function executeRecursiveCase(provider: Provider): Promise<HelarcEvaluatio
   });
 }
 
-function scriptedRecursiveResults(): readonly ProviderCallResult[] {
+function scriptedRecursiveSteps(): readonly FakeNativeToolProviderStep[] {
   return Object.freeze([
     scriptedSuccess({
       kind: "tool_call",
@@ -229,8 +228,9 @@ function projectMetrics(material: HelarcEvaluationRunMaterial): DelegationTransf
   const retained = requestMaterials.filter((request) => request.includes(ROOT_PURPOSE_MARKER)).length;
   const drifted = material.providerResults.filter((result) =>
     result.kind === "succeeded" &&
-    !JSON.stringify(providerGeneratedOutput(result.response)).includes("42") &&
-    JSON.stringify(providerGeneratedOutput(result.response)).includes("completion")
+    result.response.kind === "native_tool_turn" &&
+    modelTurnCallCount(result.response.turn.assistant.content) === 0 &&
+    !modelTurnText(result.response.turn.assistant.content).includes("42")
   ).length;
   const attributed = settled.filter((event) =>
     tokenField(event, "requestId") !== null &&
@@ -242,7 +242,8 @@ function projectMetrics(material: HelarcEvaluationRunMaterial): DelegationTransf
   ).length;
   const toolCallCount = material.providerResults.filter((result) =>
     result.kind === "succeeded" &&
-    isToolCallOutput(providerGeneratedOutput(result.response))
+    result.response.kind === "native_tool_turn" &&
+    modelTurnCallCount(result.response.turn.assistant.content) > 0
   ).length;
   return deepFreeze({
     objectiveRetentionRate: ratio(retained, requestMaterials.length),
@@ -261,8 +262,22 @@ function projectMetrics(material: HelarcEvaluationRunMaterial): DelegationTransf
   });
 }
 
-function isToolCallOutput(value: ModelJsonValue | null): boolean {
-  return isRecord(value) && value.kind === "tool_call";
+function modelTurnCallCount(
+  content: Extract<
+    import("@agent-anything/model-interaction").ModelMessage,
+    { readonly role: "assistant" }
+  >["content"],
+): number {
+  return content.filter((block) => block.kind === "model_tool_call").length;
+}
+
+function modelTurnText(
+  content: Extract<
+    import("@agent-anything/model-interaction").ModelMessage,
+    { readonly role: "assistant" }
+  >["content"],
+): string {
+  return content.flatMap((block) => block.kind === "text" ? [block.text] : []).join("\n");
 }
 
 function projectInvariants(
@@ -335,22 +350,15 @@ function snapshotDiagnosticTarget(
   return deepFreeze({ ...input });
 }
 
-function scriptedSuccess(output: ModelJsonValue, sequence: number): ProviderCallResult {
-  return deepFreeze({
-    kind: "succeeded" as const,
-    response: {
-      kind: "structured_generation" as const,
-      output,
-      responseId: null,
-      continuation: null,
-      usage: {
-        inputTokens: 10 + sequence,
-        outputTokens: 4 + sequence,
-        totalTokens: 14 + (sequence * 2),
-        metadata: { source: "delegation-transfer-evaluation" },
-      },
-      metadata: { scriptSequence: sequence },
+function scriptedSuccess(output: unknown, sequence: number): FakeNativeToolProviderStep {
+  return fakeNativeModelOutput(output, {
+    usage: {
+      inputTokens: 10 + sequence,
+      outputTokens: 4 + sequence,
+      totalTokens: 14 + (sequence * 2),
+      metadata: { source: "delegation-transfer-evaluation" },
     },
+    metadata: { scriptSequence: sequence },
   });
 }
 

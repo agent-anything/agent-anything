@@ -30,6 +30,13 @@ import type {
   ControllerInput,
 } from "@agent-anything/agent-runtime/controller";
 import {
+  createControllerModelItems,
+} from "@agent-anything/agent-runtime/controller";
+import type {
+  ModelCallRef,
+  ModelToolCall,
+} from "@agent-anything/model-interaction";
+import {
   assessRunProgress,
   createInitialRunProgressState,
   createRunProgressBasis,
@@ -445,7 +452,7 @@ function planCandidate(modelItemId: string, version: number) {
       explanation: `Volatile declaration ${version}`,
       plan: [{ step: `Inspect state ${version}`, status: "in_progress" as const }],
     },
-    modelItemId,
+    modelCallRef: modelCallRef(modelItemId),
   };
 }
 
@@ -453,16 +460,53 @@ function advance(
   candidates: Extract<ControllerDecision<TestOutput>, { readonly kind: "advance" }>["candidates"],
   modelItemId: string,
 ): ControllerDecision<TestOutput> {
+  const candidate = candidates[0];
+  const call = modelToolCall(
+    modelItemId,
+    candidate.kind === "state_transition" ? candidate.input : {},
+  );
   return deepFreeze({
     kind: "advance",
     candidates,
-    modelItems: [{
-      id: modelItemId,
-      kind: "assistant_message",
-      content: {},
-      metadata: {},
-    }],
+    modelItems: createControllerModelItems({
+      turnId: call.modelCallRef.turnId,
+      assistant: {
+        role: "assistant",
+        content: [{ kind: "model_tool_call", call }],
+      },
+      finish: { kind: "normal" },
+      usage: null,
+      responseRef: {
+        providerId: "deterministic-evaluation",
+        requestId: call.modelCallRef.providerRequestId,
+        responseId: `${modelItemId}:response`,
+      },
+    }),
   });
+}
+
+function modelCallRef(id: string): ModelCallRef {
+  return Object.freeze({
+    id,
+    providerRequestId: `${id}:request`,
+    controllerRequestId: `${id}:controller`,
+    turnId: `${id}:turn`,
+    contentBlockOrdinal: 0,
+    branchId: "progress-evaluation-run:main",
+  });
+}
+
+function modelToolCall(
+  id: string,
+  input: unknown,
+): ModelToolCall {
+  return Object.freeze({
+    modelCallRef: modelCallRef(id),
+    providerCallRef: null,
+    name: "update_plan",
+    input: input as ModelToolCall["input"],
+    ordinal: 0,
+  }) as ModelToolCall;
 }
 
 function emptyVerificationConfig(): RootRunConfig["verification"] {

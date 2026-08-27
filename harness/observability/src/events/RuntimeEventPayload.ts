@@ -1,6 +1,7 @@
 export type RuntimeRunItemKind =
   | "controller_turn"
   | "run_action"
+  | "model_call_settlement"
   | "observation"
   | "state_transition"
   | "pending_transition"

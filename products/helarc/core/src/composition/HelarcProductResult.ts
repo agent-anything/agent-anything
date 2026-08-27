@@ -87,7 +87,7 @@ export type HelarcRunActionSettlementStatus =
 export interface HelarcRunActionSummary {
   readonly runActionId: string;
   readonly sequence: number;
-  readonly subjectKind: "state_transition" | "operation" | "tool" | "interaction";
+  readonly subjectKind: "state_transition" | "operation" | "tool" | "interaction" | "model_call_rejection";
   readonly operationInvocationId: string | null;
   readonly interactionRequestId: string | null;
   readonly status: HelarcRunActionSettlementStatus;
@@ -601,6 +601,7 @@ function runActionStatus(
     case "operation": return observation.payload.result.status;
     case "operation_rejected": return "rejected";
     case "tool_rejected": return "rejected";
+    case "model_call_rejected": return "rejected";
     case "interaction": return observation.payload.status;
     case "descendant_run": return observation.payload.status;
     case "plan_update": return observation.payload.result.status;

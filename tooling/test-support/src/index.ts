@@ -1,5 +1,12 @@
 export { FakeProvider, type FakeProviderInput } from "./FakeProvider.js";
 export {
+  FakeNativeToolProvider,
+  fakeNativeModelOutput,
+  fakeNativeProviderResult,
+  type FakeNativeToolProviderInput,
+  type FakeNativeToolProviderStep,
+} from "./provider/FakeNativeToolProvider.js";
+export {
   FakeApprovalReviewer,
   type FakeApprovalReviewerHandler,
   type FakeApprovalReviewerInput,

@@ -4,9 +4,17 @@ import type {
   ApprovalDecisionSubmission,
 } from "@agent-anything/permission";
 import type {
+  ModelJsonValue,
   Provider,
   ProviderCallResult,
   ProviderRequest,
+} from "@agent-anything/model-interaction";
+import {
+  createModelCallRef,
+  createModelTurnId,
+  snapshotModelJsonValue,
+  snapshotModelToolCall,
+  snapshotProviderResponse,
 } from "@agent-anything/model-interaction";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { createUtf8ModelInputAccounting } from "@agent-anything/model-interaction/input";
@@ -163,6 +171,7 @@ describe("HelarcMainController", () => {
           isActive: true,
         },
       ],
+      nativeToolInteraction: { supported: true },
       error: null,
     });
     expect(JSON.stringify(snapshot)).not.toContain("secret");
@@ -1401,8 +1410,8 @@ class CompleteProvider implements Provider {
     id: "complete-provider",
     name: "Complete Provider",
     capabilities: {
-      nativeToolInteraction: { supported: false as const },
-      structuredGeneration: { supported: true as const },
+      nativeToolInteraction: desktopNativeToolInteractionCapability(),
+      structuredGeneration: { supported: false as const },
       streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
@@ -1413,23 +1422,15 @@ class CompleteProvider implements Provider {
   };
 
   async send(
-    _request: ProviderRequest,
+    request: ProviderRequest,
     _context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
-    return {
-      kind: "succeeded",
-      response: {
-        kind: "structured_generation",
-        responseId: null,
-        output: {
-          kind: "completion",
-          summary: "No changes needed.",
-        },
-        usage: null,
-        continuation: null,
-        metadata: {},
-      },
-    };
+    return createDesktopNativeResult(
+      request,
+      { kind: "completion", summary: "No changes needed." },
+      this.descriptor.id,
+      1,
+    );
   }
 }
 
@@ -1461,6 +1462,7 @@ class DeferredCompleteProvider extends CompleteProvider {
   callCount = 0;
   private readonly result: Promise<ProviderCallResult>;
   private settle!: (result: ProviderCallResult) => void;
+  private request: ProviderRequest | null = null;
 
   constructor() {
     super();
@@ -1470,28 +1472,24 @@ class DeferredCompleteProvider extends CompleteProvider {
   }
 
   override async send(
-    _request: ProviderRequest,
+    request: ProviderRequest,
     _context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
     this.callCount += 1;
+    this.request = request;
     return this.result;
   }
 
   complete(): void {
-    this.settle({
-      kind: "succeeded",
-      response: {
-        kind: "structured_generation",
-        responseId: null,
-        output: {
-          kind: "completion",
-          summary: "No changes needed.",
-        },
-        usage: null,
-        continuation: null,
-        metadata: {},
-      },
-    });
+    if (this.request === null) {
+      throw new Error("Deferred Provider cannot complete before receiving a request.");
+    }
+    this.settle(createDesktopNativeResult(
+      this.request,
+      { kind: "completion", summary: "No changes needed." },
+      this.descriptor.id,
+      this.callCount,
+    ));
   }
 }
 
@@ -1501,8 +1499,8 @@ class SecretFailingProvider implements Provider {
     id: "secret-failing-provider",
     name: "Secret failing Provider",
     capabilities: {
-      nativeToolInteraction: { supported: false as const },
-      structuredGeneration: { supported: true as const },
+      nativeToolInteraction: desktopNativeToolInteractionCapability(),
+      structuredGeneration: { supported: false as const },
       streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
@@ -1536,8 +1534,8 @@ class ScriptedProvider implements Provider {
     id: "scripted-provider",
     name: "Scripted Provider",
     capabilities: {
-      nativeToolInteraction: { supported: false as const },
-      structuredGeneration: { supported: true as const },
+      nativeToolInteraction: desktopNativeToolInteractionCapability(),
+      structuredGeneration: { supported: false as const },
       streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
@@ -1546,11 +1544,12 @@ class ScriptedProvider implements Provider {
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
   };
+  private responseSequence = 0;
 
   constructor(private readonly outputs: unknown[]) {}
 
   async send(
-    _request: ProviderRequest,
+    request: ProviderRequest,
     _context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
     const output = this.outputs.shift();
@@ -1566,18 +1565,134 @@ class ScriptedProvider implements Provider {
       };
     }
 
-    return {
-      kind: "succeeded",
-      response: {
-        kind: "structured_generation",
-        responseId: null,
-        output: output as never,
-        usage: null,
-        continuation: null,
-        metadata: {},
-      },
-    };
+    this.responseSequence += 1;
+    return createDesktopNativeResult(
+      request,
+      output,
+      this.descriptor.id,
+      this.responseSequence,
+    );
   }
+}
+
+function desktopNativeToolInteractionCapability() {
+  return Object.freeze({
+    supported: true as const,
+    callableDefinitions: true as const,
+    modelCalls: true as const,
+    resultMessages: true as const,
+    multipleCalls: true,
+    callCorrelation: "provider_supplied" as const,
+  });
+}
+
+function createDesktopNativeResult(
+  request: ProviderRequest,
+  output: unknown,
+  providerId: string,
+  sequence: number,
+): ProviderCallResult {
+  if (request.interaction.kind !== "native_tool_turn") {
+    return desktopProviderFailure("desktop_native_request_kind_invalid", "invalid_request");
+  }
+  if (!isDesktopRecord(output) || typeof output.kind !== "string") {
+    return desktopProviderFailure("provider_response_malformed", "response");
+  }
+  const responseId = `${providerId}:response:${sequence}`;
+  const turnId = createModelTurnId({ providerId, requestId: request.requestId, responseId });
+  const content = output.kind === "completion"
+    ? [Object.freeze({
+        kind: "text" as const,
+        text: typeof output.summary === "string" ? output.summary : "",
+      })]
+    : [Object.freeze({
+        kind: "model_tool_call" as const,
+        call: snapshotModelToolCall({
+          modelCallRef: createModelCallRef({
+            providerRequestId: request.requestId,
+            controllerRequestId: request.correlation.controllerRequestId,
+            turnId,
+            contentBlockOrdinal: 0,
+            branchId: request.correlation.branchId,
+          }),
+          providerCallRef: { providerId, id: `${responseId}:call:0` },
+          name: desktopCallableName(request, output),
+          input: desktopCallableInput(output),
+          ordinal: 0,
+        }),
+      })];
+  return Object.freeze({
+    kind: "succeeded" as const,
+    response: snapshotProviderResponse({
+      kind: "native_tool_turn",
+      turn: {
+        turnId,
+        assistant: { role: "assistant", content },
+        finish: { kind: "normal" },
+        usage: null,
+        responseRef: { providerId, requestId: request.requestId, responseId },
+      },
+      continuation: null,
+      metadata: {},
+    }),
+  });
+}
+
+function desktopCallableName(
+  request: ProviderRequest,
+  output: Readonly<Record<string, unknown>>,
+): string {
+  if (output.kind === "plan_update") return "update_plan";
+  if (output.kind === "stop") return "stop";
+  if (output.kind !== "tool_call" || typeof output.toolName !== "string") {
+    return "unknown_scripted_callable";
+  }
+  const stem = output.toolName.replace(/[^A-Za-z0-9_-]/gu, "_").replace(/_+/gu, "_")
+    .replace(/^_+|_+$/gu, "").slice(0, 42) || "tool";
+  if (request.interaction.kind !== "native_tool_turn") {
+    return `unknown_${stem}`;
+  }
+  return request.interaction.callables.find(({ name }) => name.startsWith(`tool_${stem}_`))?.name ??
+    `unknown_${stem}`;
+}
+
+function desktopCallableInput(
+  output: Readonly<Record<string, unknown>>,
+): { readonly [key: string]: ModelJsonValue } {
+  if (output.kind === "plan_update") {
+    return snapshotDesktopObject({
+      ...(typeof output.explanation === "string" ? { explanation: output.explanation } : {}),
+      plan: output.plan,
+    });
+  }
+  if (output.kind === "stop") {
+    return Object.freeze({ reason: String(output.reason) });
+  }
+  return snapshotDesktopObject(output.input);
+}
+
+function snapshotDesktopObject(value: unknown): { readonly [key: string]: ModelJsonValue } {
+  const snapshot = snapshotModelJsonValue(value, "HelarcMainController.test.value");
+  if (snapshot === null || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    throw new TypeError("Desktop native Provider output must contain a JSON object.");
+  }
+  return snapshot as { readonly [key: string]: ModelJsonValue };
+}
+
+function desktopProviderFailure(code: string, category: string): ProviderCallResult {
+  return Object.freeze({
+    kind: "failed" as const,
+    failure: Object.freeze({
+      category,
+      code,
+      message: "Desktop native Provider could not produce a Model Turn.",
+      metadata: Object.freeze({}),
+    }),
+  });
+}
+
+function isDesktopRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function createDesktopTestInputAccounting(providerId: string) {

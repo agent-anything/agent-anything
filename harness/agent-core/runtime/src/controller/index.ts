@@ -7,6 +7,8 @@ export type {
   ControllerVerificationProjection,
   ControllerPreProjectionInput,
   ControllerModelItem,
+  ModelCallRejectionCandidate,
+  ModelInteractionProjection,
   ControllerRetryContext,
   InteractionRequestCandidate,
   OperationRequestCandidate,
@@ -37,3 +39,8 @@ export {
   StructuredOutputError,
 } from "./StructuredOutput.js";
 export type { ModelFailure } from "./ModelFailure.js";
+export {
+  ModelInteractionProjectionError,
+  projectModelInteraction,
+} from "./ModelInteractionProjection.js";
+export { createControllerModelItems } from "./ControllerModelItems.js";

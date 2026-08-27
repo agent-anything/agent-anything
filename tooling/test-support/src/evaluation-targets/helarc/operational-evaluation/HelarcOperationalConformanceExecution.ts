@@ -63,7 +63,7 @@ import {
   type Provider,
 } from "@agent-anything/model-interaction";
 
-import { FakeProvider } from "../../../FakeProvider.js";
+import { FakeNativeToolProvider } from "../../../provider/FakeNativeToolProvider.js";
 import {
   runCurrentTurnToolExposureDeterministicEvaluation,
 } from "../../../current-turn-tool-exposure-evaluation/CurrentTurnToolExposureEvaluation.js";
@@ -901,9 +901,9 @@ async function runCancellationProbe(signal: AbortSignal): Promise<HelarcOperatio
     createdAt: HELARC_EVALUATION_TIME,
     metadata: {},
   });
-  const fallback = new FakeProvider({
+  const fallback = new FakeNativeToolProvider({
     descriptor: { id: "operational-cancellation-provider" },
-    results: [],
+    steps: [],
   });
   let started!: () => void;
   const providerStarted = new Promise<void>((resolve) => { started = resolve; });
