@@ -1,15 +1,48 @@
 import type { RunItem } from "@agent-anything/agent-runtime/run";
 import { createFailedRunResult } from "@agent-anything/agent-runtime/run";
+import {
+  RUNTIME_EVENT_SCHEMA_VERSION,
+  type RuntimeEvent,
+} from "@agent-anything/observability/events";
 import { createOperationResult } from "@agent-anything/operation-catalog/result";
 import { describe, expect, it } from "vitest";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import { createHelarcTask } from "../task/index.js";
-import { projectHelarcProductResult } from "./HelarcProductResult.js";
+import {
+  mapRuntimeEventToHelarcActivity,
+  projectHelarcProductResult,
+} from "./HelarcProductResult.js";
 
 const STARTED_AT = "2026-08-13T00:00:00.000Z";
 const COMPLETED_AT = "2026-08-13T00:00:01.000Z";
 
 describe("HelarcProductResult", () => {
+  it("uses the current Controller decision kind in activity details", () => {
+    const event = Object.freeze({
+      schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
+      id: "event-controller-finished-1",
+      runId: "run-1",
+      taskId: "task-1",
+      lineage: Object.freeze({
+        kind: "root" as const,
+        root: Object.freeze({ id: "run-1" }),
+        depth: 0 as const,
+      }),
+      sequence: 1,
+      name: "controller.finished",
+      occurredAt: STARTED_AT,
+      payload: Object.freeze({
+        turnId: "controller-turn-1",
+        iteration: 1,
+        status: "decided",
+        code: null,
+        decisionKind: "advance",
+      }),
+    }) as RuntimeEvent;
+
+    expect(mapRuntimeEventToHelarcActivity(event, 1).detail).toBe("advance");
+  });
+
   it("preserves failed lower truth, unresolved child work, and still-started Run Actions", () => {
     const task = createHelarcTask({ taskId: "task-1", prompt: "Change the file." });
     if (!task.ok) throw new Error(task.error.message);

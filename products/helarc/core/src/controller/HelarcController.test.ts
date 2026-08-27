@@ -88,7 +88,7 @@ describe("Helarc native Tool controller", () => {
     expect(JSON.stringify(request.metadata)).not.toContain("Complete the code task.");
   });
 
-  it("creates a deterministic, disjoint catalog whose Tool aliases retain exact bindings", () => {
+  it("creates a deterministic, disjoint catalog whose callable names retain exact bindings", () => {
     const input = createControllerInput();
     const first = createHelarcModelCallableCatalog({
       toolExposure: input.toolExposure,
@@ -107,6 +107,7 @@ describe("Helarc native Tool controller", () => {
       binding.kind === "tool" && binding.toolName === "Read"
     )).toMatchObject({
       kind: "tool",
+      callableName: expect.stringMatching(/^Read_[0-9a-f]{12}$/u),
       toolName: "Read",
       tool: { tool: { namespace: "helarc.code-agent", name: "read" }, revision: "2" },
     });

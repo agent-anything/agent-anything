@@ -61,7 +61,6 @@ describe("Helarc Desktop IPC projection", () => {
       .not.toHaveProperty("storedCredential");
     expect(projected.run?.product.activity[0]?.metadata).toEqual({
       status: "running",
-      controllerAction: "tool_call",
       exposedToolNames: ["Read", "Glob", "Grep", "Edit", "Write"],
     });
     expect(JSON.stringify(projected)).not.toContain(SECRET);

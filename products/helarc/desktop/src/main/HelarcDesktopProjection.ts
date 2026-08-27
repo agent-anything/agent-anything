@@ -517,10 +517,13 @@ function projectActivityMetadata(
   const projected: Record<string, unknown> = {};
   const stringKeys = [
     "status",
-    "controllerAction",
-    "requestedToolName",
+    "controllerProtocol",
     "promptArchitectureVersion",
-    "actionContractVersion",
+    "modelCallableCatalogRevision",
+    "controllerControlSetRevision",
+    "modelTurnId",
+    "modelFinishKind",
+    "modelResponseId",
     "toolExposureVersion",
     "toolSelectionRevision",
     "toolExposureContentRevision",

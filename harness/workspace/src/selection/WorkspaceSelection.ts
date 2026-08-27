@@ -1,6 +1,6 @@
 import type { WorkspaceIdentity } from "../identity/index.js";
 import { snapshotWorkspaceIdentity } from "../identity/index.js";
-import { assertDenseArray, assertStrictRecord } from "../internal/validation.js";
+import { assertDenseArray, assertStrictRecord } from "../contract/WorkspaceContractValidation.js";
 
 export interface WorkspaceSelection {
   readonly primary: WorkspaceIdentity;

@@ -10,7 +10,7 @@ import {
   type InteractionTerminalRecord,
   type InteractionTransportReceipt,
 } from "../records/index.js";
-import { dateTime, fail, token } from "../internal/validation.js";
+import { dateTime, fail, token } from "../contract/InteractionContractValidation.js";
 import {
   snapshotPendingInteractionRef,
   type PendingInteractionRef,

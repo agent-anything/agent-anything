@@ -2,7 +2,7 @@ import {
   snapshotInteractionRequestRef,
   type InteractionRequestRef,
 } from "../protocol/index.js";
-import { dateTime, fail, strictRecord, token } from "../internal/validation.js";
+import { dateTime, fail, strictRecord, token } from "../contract/InteractionContractValidation.js";
 
 export interface InteractionSubmissionRecordRef {
   readonly request: InteractionRequestRef;

@@ -189,8 +189,9 @@ describe("Helarc workbench shell", () => {
             event("event-1", "tool.proposed", "Tool call proposed", "info", {
               controllerAction: "tool_call",
               requestedToolName: "Read",
-              promptArchitectureVersion: "helarc-prompt-v4",
-              actionContractVersion: "helarc-model-decision-v1",
+              controllerProtocol: "provider_native_tool_interaction",
+              promptArchitectureVersion: "helarc-prompt-v6",
+              controllerControlSetRevision: "helarc.controller-controls.v1",
               toolExposureVersion: "trusted-tool-exposure-v1",
               exposedToolNames: [
                 "Read",
@@ -206,9 +207,8 @@ describe("Helarc workbench shell", () => {
       />,
     );
 
-    expect(html).toContain("action tool_call");
-    expect(html).toContain("tool Read");
-    expect(html).toContain("versions helarc-prompt-v4, helarc-model-decision-v1, trusted-tool-exposure-v1");
+    expect(html).toContain("protocol provider_native_tool_interaction");
+    expect(html).toContain("versions helarc-prompt-v6, helarc.controller-controls.v1, trusted-tool-exposure-v1");
     expect(html).toContain("tools Read, Glob, Grep, Edit, Write");
   });
 

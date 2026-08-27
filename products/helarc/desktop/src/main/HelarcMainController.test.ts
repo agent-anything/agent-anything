@@ -1652,7 +1652,7 @@ function desktopCallableName(
   if (request.interaction.kind !== "native_tool_turn") {
     return `unknown_${stem}`;
   }
-  return request.interaction.callables.find(({ name }) => name.startsWith(`tool_${stem}_`))?.name ??
+  return request.interaction.callables.find(({ name }) => name.startsWith(`${stem}_`))?.name ??
     `unknown_${stem}`;
 }
 

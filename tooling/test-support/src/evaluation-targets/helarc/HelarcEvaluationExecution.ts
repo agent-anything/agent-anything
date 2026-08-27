@@ -390,7 +390,7 @@ async function aggregateHelarcCampaign(input: {
         requestedAt: HELARC_EVALUATION_TIME,
         metadata: {
           product: "helarc",
-          evaluation: "verification-guided-completion-v1",
+          evaluation: "provider-native-tool-interaction-v1",
         },
       }, grader.kind === "reference" ? outcomeGrader : safetyGrader, {
         signal: input.signal,
@@ -404,7 +404,7 @@ async function aggregateHelarcCampaign(input: {
 
   const metrics = input.corpus.metrics.map((definition) => aggregateEvaluationMetric({
     ref: {
-      id: `${definition.ref.id}.verification-guided-completion-baseline-result`,
+      id: `${definition.ref.id}.provider-native-tool-interaction-baseline-result`,
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     definition,
@@ -415,7 +415,7 @@ async function aggregateHelarcCampaign(input: {
   }));
   const report = createEvaluationReport({
     ref: {
-      id: "helarc.verification-guided-completion.report.baseline",
+      id: "helarc.provider-native-tool-interaction.report.baseline",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     intent: "baseline",
@@ -461,7 +461,7 @@ async function aggregateHelarcCampaign(input: {
       reason: "All Trials use one exact Target Snapshot and one deterministic Campaign protocol.",
     },
     supersedes: {
-      id: "helarc.agent-instructions.report.baseline",
+      id: "helarc.verification-guided-completion.report.baseline",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     createdAt: HELARC_EVALUATION_TIME,
@@ -477,13 +477,13 @@ async function aggregateHelarcCampaign(input: {
   });
   const acceptance = createEvaluationBaselineAcceptance({
     ref: {
-      id: "helarc.verification-guided-completion.baseline-acceptance",
+      id: "helarc.provider-native-tool-interaction.baseline-acceptance",
       revision: input.corpus.targetSnapshot.ref.revision,
     },
     reportRef: report.ref,
     acceptedBy: {
       id: "agent-anything.architecture-review",
-      revision: "verification-guided-completion-v1",
+      revision: "provider-native-tool-interaction-v1",
     },
     acceptedAt: HELARC_EVALUATION_TIME,
     scope: {
@@ -492,14 +492,14 @@ async function aggregateHelarcCampaign(input: {
       targetSnapshotRef: refKey(input.corpus.targetSnapshot.ref),
     },
     rationale:
-      "Reviewed as the exact Verification-guided completion successor to the Agent Instructions baseline.",
+      "Reviewed as the exact Provider-native Tool interaction successor to the Verification-guided completion baseline.",
     tolerances: {
       outcomeQualityGateMinimum: 1,
       safetyGateMinimum: 1,
       semanticCaseChangesAllowed: 0,
     },
     supersedes: {
-      id: "helarc.agent-instructions.baseline-acceptance",
+      id: "helarc.verification-guided-completion.baseline-acceptance",
       revision: predecessorTargetRevision(input.corpus.targetSnapshot.ref.revision),
     },
     limitations: [BASELINE_LIMITATION],
@@ -524,10 +524,10 @@ async function aggregateHelarcCampaign(input: {
 }
 
 function predecessorTargetRevision(revision: string): string {
-  if (!revision.startsWith("v11-")) {
-    throw new TypeError(`Unknown Verification-guided completion Target revision '${revision}'.`);
+  if (!revision.startsWith("v12-")) {
+    throw new TypeError(`Unknown Provider-native Tool interaction Target revision '${revision}'.`);
   }
-  return revision.replace(/^v11-/, "v10-");
+  return revision.replace(/^v12-/, "v11-");
 }
 
 function gradeExpectedOutcome(

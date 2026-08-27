@@ -8,5 +8,5 @@ export type {
   RegisteredOperation,
 } from "./OperationCatalog.js";
 export { createOperationCatalogSnapshot, findRegisteredOperation } from "./OperationCatalog.js";
-export { OperationContractValidationError } from "../internal/validation.js";
-export type { OperationContractValidationCode } from "../internal/validation.js";
+export { OperationContractValidationError } from "../contract/OperationContractValidation.js";
+export type { OperationContractValidationCode } from "../contract/OperationContractValidation.js";

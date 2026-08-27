@@ -12,7 +12,7 @@ import {
   snapshotOperationCorrelation,
   snapshotOperationInvocationRef,
 } from "../identity/index.js";
-import { fail, strictRecord, token } from "../internal/validation.js";
+import { fail, strictRecord, token } from "../contract/OperationContractValidation.js";
 
 export type OperationBindingKind =
   | "internal"

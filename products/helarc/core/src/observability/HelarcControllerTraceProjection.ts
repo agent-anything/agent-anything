@@ -8,19 +8,21 @@ export interface HelarcControllerTraceProjection {
   readonly operationId: string;
   readonly iteration: number;
   readonly source: string | null;
-  readonly controllerAction: string | null;
+  readonly controllerProtocol: string | null;
   readonly promptArchitectureVersion: string | null;
-  readonly actionContractVersion: string | null;
   readonly toolExposureVersion: string | null;
   readonly toolSelectionRevision: string | null;
   readonly toolExposureContentRevision: string | null;
   readonly toolExposureBasisRevision: string | null;
   readonly toolExposureProofId: string | null;
+  readonly modelCallableCatalogRevision: string | null;
+  readonly controllerControlSetRevision: string | null;
+  readonly modelTurnId: string | null;
+  readonly modelFinishKind: string | null;
+  readonly modelResponseId: string | null;
   readonly exposedToolCount: number | null;
   readonly omittedToolCount: number | null;
   readonly toolExposureOmissionReasons: readonly string[];
-  readonly exposedToolNames: readonly string[];
-  readonly requestedToolName: string | null;
   readonly instructionBindingId: string | null;
   readonly instructionBindingRevision: string | null;
   readonly instructionBindingEffectiveFromRunRevision: number | null;
@@ -95,21 +97,23 @@ function createHelarcControllerTraceProjection(
     operationId,
     iteration,
     source: readTraceString(source.source),
-    controllerAction: readTraceString(source.controllerAction),
+    controllerProtocol: readTraceString(source.controllerProtocol),
     promptArchitectureVersion: readTraceString(source.promptArchitectureVersion),
-    actionContractVersion: readTraceString(source.actionContractVersion),
     toolExposureVersion: readTraceString(source.toolExposureVersion),
     toolSelectionRevision: readTraceString(source.toolSelectionRevision),
     toolExposureContentRevision: readTraceString(source.toolExposureContentRevision),
     toolExposureBasisRevision: readTraceString(source.toolExposureBasisRevision),
     toolExposureProofId: readTraceString(source.toolExposureProofId),
+    modelCallableCatalogRevision: readTraceString(source.modelCallableCatalogRevision),
+    controllerControlSetRevision: readTraceString(source.controllerControlSetRevision),
+    modelTurnId: readTraceString(source.modelTurnId),
+    modelFinishKind: readTraceString(source.modelFinishKind),
+    modelResponseId: readTraceString(source.modelResponseId),
     exposedToolCount: readTraceNonNegativeInteger(source.exposedToolCount),
     omittedToolCount: readTraceNonNegativeInteger(source.omittedToolCount),
     toolExposureOmissionReasons: Object.freeze(
       readTraceStringArray(source.toolExposureOmissionReasons),
     ),
-    exposedToolNames: Object.freeze(readTraceStringArray(source.exposedToolNames)),
-    requestedToolName: readTraceString(source.requestedToolName),
     instructionBindingId: readTraceString(source.instructionBindingId),
     instructionBindingRevision: readTraceString(source.instructionBindingRevision),
     instructionBindingEffectiveFromRunRevision: readTraceNonNegativeInteger(

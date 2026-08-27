@@ -6,7 +6,7 @@ import {
   type InteractionRequest,
   type InteractionRequestRef,
 } from "../protocol/index.js";
-import { denseArray, fail, strictRecord, token } from "../internal/validation.js";
+import { denseArray, fail, strictRecord, token } from "../contract/InteractionContractValidation.js";
 
 export type PendingInteractionLifecycle =
   | "pending"

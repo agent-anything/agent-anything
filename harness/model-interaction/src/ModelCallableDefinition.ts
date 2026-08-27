@@ -58,7 +58,7 @@ export function snapshotModelCallableDefinitions(
   }
   const definitions = input
     .map(snapshotModelCallableDefinition)
-    .sort((left, right) => left.name.localeCompare(right.name));
+    .sort((left, right) => comparePortableNames(left.name, right.name));
   if (new Set(definitions.map((definition) => definition.name)).size !== definitions.length) {
     throw new TypeError("Model callable definition names must be unique.");
   }
@@ -76,4 +76,8 @@ export function modelCallableDefinitionsContentDigest(
 
 function utf8Length(value: string): number {
   return new TextEncoder().encode(value).byteLength;
+}
+
+function comparePortableNames(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }

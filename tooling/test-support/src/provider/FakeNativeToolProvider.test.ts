@@ -48,7 +48,7 @@ describe("FakeNativeToolProvider", () => {
                   providerId: "fake-native-tool-provider",
                   id: "fake-native-tool-provider:response:1:call:0",
                 },
-                name: "tool_Read_1234",
+                name: "Read_1234",
                 input: { file_path: "package.json" },
                 ordinal: 0,
               },
@@ -108,7 +108,7 @@ describe("FakeNativeToolProvider", () => {
 
 function createRequest(requestId: string): ProviderRequest {
   const interaction = createNativeToolTurnInteraction([{
-    name: "tool_Read_1234",
+    name: "Read_1234",
     description: "Read one workspace file.",
     inputSchema: {
       type: "object",

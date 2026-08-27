@@ -9,7 +9,7 @@ import {
   positiveInteger,
   strictRecord,
   token,
-} from "../internal/validation.js";
+} from "../contract/InteractionContractValidation.js";
 
 export interface InteractionProtocolRef<TKind extends string = string> {
   readonly owner: string;

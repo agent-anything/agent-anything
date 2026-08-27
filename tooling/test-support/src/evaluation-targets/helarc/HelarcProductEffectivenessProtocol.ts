@@ -126,8 +126,9 @@ export function createHelarcProductEffectivenessTargetValues(input: {
       fullTextExcluded: true,
     }),
     product_protocol: Object.freeze({
-      promptArchitectureRevision: "helarc-prompt-v4",
-      actionContractRevision: "helarc-model-decision-v1",
+      promptArchitectureRevision: "helarc-prompt-v6",
+      controllerProtocolRevision: "helarc.provider-native-tool-interaction.v1",
+      controllerControlSetRevision: "helarc.controller-controls.v1",
     }),
     model: Object.freeze({ id: input.modelId, revision: input.modelRevision }),
     provider: Object.freeze({

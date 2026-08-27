@@ -1174,7 +1174,7 @@ function scriptedCallableName(
   const stem = scripted.toolName.replace(/[^A-Za-z0-9_-]/gu, "_").replace(/_+/gu, "_")
     .replace(/^_+|_+$/gu, "").slice(0, 42) || "tool";
   return request.interaction.kind === "native_tool_turn"
-    ? request.interaction.callables.find(({ name }) => name.startsWith(`tool_${stem}_`))?.name ??
+    ? request.interaction.callables.find(({ name }) => name.startsWith(`${stem}_`))?.name ??
       `unknown_${stem}`
     : `unknown_${stem}`;
 }

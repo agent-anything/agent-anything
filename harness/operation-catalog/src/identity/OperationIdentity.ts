@@ -1,7 +1,7 @@
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import type { RunRef } from "@agent-anything/agent-core/run";
 import type { RunActionProvenance, RunActionRef } from "@agent-anything/agent-core/run-action";
-import { fail, strictRecord, token } from "../internal/validation.js";
+import { fail, strictRecord, token } from "../contract/OperationContractValidation.js";
 
 export interface OperationKey {
   readonly namespace: string;

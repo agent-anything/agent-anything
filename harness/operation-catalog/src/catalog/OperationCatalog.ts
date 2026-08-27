@@ -6,7 +6,7 @@ import {
   type OperationBindingRevisionRef,
   type OperationRevisionRef,
 } from "../identity/index.js";
-import { dateTime, denseArray, fail, strictRecord, token, uniqueSorted } from "../internal/validation.js";
+import { dateTime, denseArray, fail, strictRecord, token, uniqueSorted } from "../contract/OperationContractValidation.js";
 
 export type OperationRequestOrigin =
   | "automatic_stage"

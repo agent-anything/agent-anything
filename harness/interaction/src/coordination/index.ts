@@ -9,8 +9,8 @@ export {
   createInteractionProtocolRegistrySnapshot,
   snapshotPendingInteractionRef,
 } from "./InteractionCoordination.js";
-export { InteractionContractError } from "../internal/validation.js";
-export type { InteractionContractErrorCode } from "../internal/validation.js";
+export { InteractionContractError } from "../contract/InteractionContractValidation.js";
+export type { InteractionContractErrorCode } from "../contract/InteractionContractValidation.js";
 export * from "./InteractionExecution.js";
 export type {
   InteractionAppliedOutcome,

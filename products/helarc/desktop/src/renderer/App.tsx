@@ -1269,23 +1269,18 @@ function formatTimestamp(timestamp: string): string {
 }
 
 function formatTraceMetadata(metadata: Record<string, unknown>): string | null {
-  const action = readMetadataString(metadata, "controllerAction");
-  if (!action) {
+  const protocol = readMetadataString(metadata, "controllerProtocol");
+  if (!protocol) {
     return null;
   }
 
-  const parts = [`action ${action}`];
-  const requestedToolName = readMetadataString(metadata, "requestedToolName");
+  const parts = [`protocol ${protocol}`];
   const versions = [
     readMetadataString(metadata, "promptArchitectureVersion"),
-    readMetadataString(metadata, "actionContractVersion"),
+    readMetadataString(metadata, "controllerControlSetRevision"),
     readMetadataString(metadata, "toolExposureVersion"),
   ].filter((item): item is string => Boolean(item));
   const exposedToolNames = readMetadataStringArray(metadata, "exposedToolNames");
-
-  if (requestedToolName) {
-    parts.push(`tool ${requestedToolName}`);
-  }
 
   if (versions.length > 0) {
     parts.push(`versions ${versions.join(", ")}`);

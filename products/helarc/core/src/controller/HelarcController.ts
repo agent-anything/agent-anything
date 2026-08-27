@@ -26,6 +26,7 @@ import {
 import {
   createHelarcModelCallableCatalog,
   findHelarcModelCallableBinding,
+  HELARC_CONTROLLER_CONTROL_SET_REVISION,
   HELARC_STOP_REASON_MAX_LENGTH,
 } from "./HelarcModelCallableCatalog.js";
 
@@ -323,6 +324,7 @@ function createControllerTraceMetadata(
     toolExposureBasisRevision: input.toolExposure.basisRevision,
     toolExposureProofId: input.toolExposure.id,
     modelCallableCatalogRevision: callableCatalogRevision,
+    controllerControlSetRevision: HELARC_CONTROLLER_CONTROL_SET_REVISION,
     modelTurnId: response.turn.turnId,
     modelFinishKind: response.turn.finish.kind,
     modelResponseId: response.turn.responseRef.responseId,

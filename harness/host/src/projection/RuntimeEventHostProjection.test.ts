@@ -24,7 +24,7 @@ describe("Host RuntimeEvent projection", () => {
         decisionKind: "advance",
         controllerAction: "call_tool",
         promptArchitectureVersion: "helarc-prompt-v1",
-        actionContractVersion: "helarc-action-v1",
+        controllerProtocol: "provider_native_tool_interaction",
         toolExposureVersion: "helarc-tool-exposure-v1",
         exposedToolNames: ["codeAgent.readFile"],
         requestedToolName: "codeAgent.readFile",
@@ -44,6 +44,7 @@ describe("Host RuntimeEvent projection", () => {
       decisionKind: "advance",
     });
     expect(projected.payload).not.toHaveProperty("controllerAction");
+    expect(projected.payload).not.toHaveProperty("controllerProtocol");
     expect(projected.payload).not.toHaveProperty("promptArchitectureVersion");
     expect(projected.payload).not.toHaveProperty("toolExposureVersion");
     expect(projected.payload).not.toHaveProperty("requestedToolName");

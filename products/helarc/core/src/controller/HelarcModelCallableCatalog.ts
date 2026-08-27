@@ -60,7 +60,11 @@ export function createHelarcModelCallableCatalog(input: {
     }),
   ]);
   const bindings = Object.freeze([...toolBindings, ...controlBindings].sort((left, right) =>
-    left.callableName.localeCompare(right.callableName)
+    left.callableName < right.callableName
+      ? -1
+      : left.callableName > right.callableName
+      ? 1
+      : 0
   ));
   if (new Set(bindings.map((binding) => binding.callableName)).size !== bindings.length) {
     throw new TypeError("Helarc model-callable names must be disjoint.");
@@ -184,5 +188,5 @@ function portableToolCallableName(name: string, fingerprint: string): string {
     .update(`${name}\u0000${fingerprint}`, "utf8")
     .digest("hex")
     .slice(0, 12);
-  return `tool_${stem}_${digest}`;
+  return `${stem}_${digest}`;
 }

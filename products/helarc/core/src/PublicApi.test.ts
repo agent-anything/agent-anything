@@ -58,8 +58,11 @@ describe("Helarc public API", () => {
       "projectHelarcProductResult",
       "validateHelarcToolInput",
     ]);
-    expect(controllerApi).toHaveProperty("parseHelarcModelDecision");
-    expect(controllerApi).toHaveProperty("HelarcModelDecisionError");
+    expect(controllerApi).toHaveProperty("buildHelarcProviderRequest");
+    expect(controllerApi).toHaveProperty("parseHelarcProviderResponse");
+    expect(controllerApi).toHaveProperty("createHelarcModelCallableCatalog");
+    expect(controllerApi).not.toHaveProperty("parseHelarcModelDecision");
+    expect(controllerApi).not.toHaveProperty("createHelarcActionContract");
     expect(toolsApi).toHaveProperty("createHelarcBaselineToolContracts");
     expect(toolsApi).toHaveProperty("HELARC_BASELINE_TOOL_CONTRACTS");
   });

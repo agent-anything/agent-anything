@@ -3,7 +3,7 @@ import {
   assertNonEmpty,
   assertStrictRecord,
   snapshotData,
-} from "../internal/validation.js";
+} from "../contract/WorkspaceContractValidation.js";
 
 export type WorkspaceTrustState = "trusted" | "restricted" | "unknown";
 

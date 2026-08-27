@@ -331,15 +331,25 @@ function controllerTraceMetadata(
   if (trace === null) return {};
   return {
     ...(trace.source === null ? {} : { source: trace.source }),
-    ...(trace.controllerAction === null
+    ...(trace.controllerProtocol === null
       ? {}
-      : { controllerAction: trace.controllerAction }),
+      : { controllerProtocol: trace.controllerProtocol }),
     ...(trace.promptArchitectureVersion === null
       ? {}
       : { promptArchitectureVersion: trace.promptArchitectureVersion }),
-    ...(trace.actionContractVersion === null
+    ...(trace.modelCallableCatalogRevision === null
       ? {}
-      : { actionContractVersion: trace.actionContractVersion }),
+      : { modelCallableCatalogRevision: trace.modelCallableCatalogRevision }),
+    ...(trace.controllerControlSetRevision === null
+      ? {}
+      : { controllerControlSetRevision: trace.controllerControlSetRevision }),
+    ...(trace.modelTurnId === null ? {} : { modelTurnId: trace.modelTurnId }),
+    ...(trace.modelFinishKind === null
+      ? {}
+      : { modelFinishKind: trace.modelFinishKind }),
+    ...(trace.modelResponseId === null
+      ? {}
+      : { modelResponseId: trace.modelResponseId }),
     ...(trace.toolExposureVersion === null
       ? {}
       : { toolExposureVersion: trace.toolExposureVersion }),
@@ -364,12 +374,6 @@ function controllerTraceMetadata(
     ...(trace.toolExposureOmissionReasons.length === 0
       ? {}
       : { toolExposureOmissionReasons: trace.toolExposureOmissionReasons }),
-    ...(trace.exposedToolNames.length === 0
-      ? {}
-      : { exposedToolNames: trace.exposedToolNames }),
-    ...(trace.requestedToolName === null
-      ? {}
-      : { requestedToolName: trace.requestedToolName }),
   };
 }
 
@@ -735,7 +739,7 @@ function detailForEvent(name: string, payload: Readonly<Record<string, unknown>>
       : typeof payload.attemptId === "string" ? payload.attemptId : null;
   }
   if (name === "controller.finished") {
-    return typeof payload.controllerAction === "string" ? payload.controllerAction : null;
+    return typeof payload.decisionKind === "string" ? payload.decisionKind : null;
   }
   if (name === "context.projection.completed") {
     return typeof payload.manifestId === "string" ? payload.manifestId : null;
