@@ -8,7 +8,7 @@ import type {
   EvaluationTargetSnapshot,
 } from "@agent-anything/evaluation/definition";
 import { createEvaluationTrial } from "@agent-anything/evaluation/trial";
-import type { Provider } from "@agent-anything/model-interaction";
+import { providerResponseUsage, type Provider } from "@agent-anything/model-interaction";
 import type { CreateHelarcAgentInput } from "@agent-anything/helarc/agent";
 
 import type {
@@ -363,7 +363,9 @@ function diagnostics(
   material: HelarcEvaluationRunMaterial<HelarcEvaluationExecutableCase>,
 ): HelarcProductEffectivenessDiagnostics {
   const usage = material.providerResults.reduce((totals, result) => {
-    const value = result.kind === "succeeded" ? result.response.usage : null;
+    const value = result.kind === "succeeded"
+      ? providerResponseUsage(result.response)
+      : null;
     return {
       input: totals.input + (value?.inputTokens ?? 0),
       output: totals.output + (value?.outputTokens ?? 0),

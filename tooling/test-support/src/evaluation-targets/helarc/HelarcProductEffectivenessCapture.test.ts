@@ -58,7 +58,10 @@ describe("Helarc Product-effectiveness capture", () => {
         results: [{
           kind: "succeeded",
           response: {
+            kind: "structured_generation",
             output: { kind: "completion", summary: "The timeout is 4500 ms." },
+            responseId: null,
+            continuation: null,
             usage: null,
             metadata: {},
           },

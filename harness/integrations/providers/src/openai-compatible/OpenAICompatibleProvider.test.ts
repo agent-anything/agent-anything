@@ -3,7 +3,7 @@ import type {
 } from "@agent-anything/model-interaction";
 import {
   composeModelInput,
-  providerMessagesFromComposition,
+  modelMessagesFromComposition,
 } from "@agent-anything/model-interaction/input";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -267,7 +267,7 @@ function request(provider: OpenAICompatibleProvider): ProviderRequest {
     providerId: provider.inputAccounting.providerId,
     model: provider.inputAccounting.model,
     accounting: provider.inputAccounting,
-    outputFormat: TEST_OUTPUT_FORMAT,
+    interaction: { kind: "structured_generation", outputFormat: TEST_OUTPUT_FORMAT },
     outputReserve: { unit: "bytes", amount: 0 },
     contextBudget: { unit: "bytes", amount: 0 },
     contextProjectedAmount: 0,
@@ -279,9 +279,10 @@ function request(provider: OpenAICompatibleProvider): ProviderRequest {
     composedAt: "2026-08-17T00:00:00.000Z",
   });
   return {
-    capability: "helarc.code-agent.plan",
-    outputFormat: TEST_OUTPUT_FORMAT,
-    messages: providerMessagesFromComposition(composition.sections),
+    requestId: composition.id,
+    purpose: "helarc.code-agent.plan",
+    interaction: composition.interaction,
+    messages: modelMessagesFromComposition(composition),
     composition,
     continuation: null,
     metadata: {},
@@ -316,6 +317,8 @@ function testLineage() {
     toolExposureContent: null,
     toolExposureBasis: null,
     toolExposureProof: null,
+    controllerControlSet: null,
+    interactionHistory: null,
     protocol: { owner: "provider-test", kind: "protocol", id: "test", revision: "1" },
     policy: { owner: "provider-test", kind: "policy", id: "test", revision: "1" },
   };

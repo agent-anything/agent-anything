@@ -209,16 +209,16 @@ export function evaluateSourceOwnershipRules({
       );
     }
 
-    const isModelInputContractSource =
-      /^harness\/model-interaction\/src\/(?:input|continuation)\//.test(path) ||
-      path === "harness/model-interaction/src/ModelInteractionContractValidation.ts";
+    const isModelInteractionContractSource =
+      /^harness\/model-interaction\/src\//.test(path) &&
+      !/\.test\.[cm]?[jt]s$/u.test(path);
     if (
-      isModelInputContractSource &&
+      isModelInteractionContractSource &&
       /@agent-anything\/(?:context|agent-runtime|provider-integrations|helarc)/.test(text)
     ) {
       reject(
         "model_interaction_contract_dependency_direction",
-        "Model Interaction input and continuation Contracts cannot depend on Context state, Runtime, Product, or Provider adapter implementations.",
+        "Model Interaction Contracts cannot depend on Context state, Runtime, Product, or Provider adapter implementations.",
       );
     }
 

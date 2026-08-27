@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { createEvaluationTrial } from "@agent-anything/evaluation/trial";
 import type { EvaluationDataValue, EvaluationRecordRef } from "@agent-anything/evaluation/definition";
-import type { ProviderCallResult } from "@agent-anything/model-interaction";
+import {
+  providerResponseUsage,
+  snapshotModelJsonValue,
+  type ProviderCallResult,
+} from "@agent-anything/model-interaction";
 import type { CreateHelarcAgentInput } from "@agent-anything/helarc/agent";
 
 import {
@@ -423,7 +427,9 @@ function trialMetrics(
   const items = material.runResult.items;
   const actionNames = material.actionNames;
   const usage = material.providerResults.reduce((result, current) => {
-    const usageValue = current.kind === "succeeded" ? current.response.usage : null;
+    const usageValue = current.kind === "succeeded"
+      ? providerResponseUsage(current.response)
+      : null;
     return {
       inputTokens: result.inputTokens + (usageValue?.inputTokens ?? 0),
       outputTokens: result.outputTokens + (usageValue?.outputTokens ?? 0),
@@ -487,8 +493,8 @@ function nonInstructionRequestFingerprint(
   material: HelarcEvaluationRunMaterial<HelarcEvaluationExecutableCase>,
 ): string {
   const nonInstructionMaterial = material.providerRequests.map((request) => ({
-    capability: request.capability,
-    outputFormat: request.outputFormat,
+    purpose: request.purpose,
+    interaction: request.interaction,
     sections: request.composition.sections
       .filter((section) => section.kind !== "agent_instruction")
       .map((section) => ({
@@ -602,7 +608,8 @@ function scriptedSuccess(output: unknown, sequence: number): ProviderCallResult 
   return Object.freeze({
     kind: "succeeded",
     response: Object.freeze({
-      output,
+      kind: "structured_generation" as const,
+      output: snapshotModelJsonValue(output, "scriptedProviderOutput"),
       responseId: null,
       continuation: null,
       usage: Object.freeze({

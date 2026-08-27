@@ -5,10 +5,10 @@ import type {
   ProgressionCandidate,
 } from "@agent-anything/agent-runtime/controller";
 import { StructuredOutputError, type ProviderRequestBuildContext, type StructuredOutputFailure } from "@agent-anything/agent-runtime/controller";
-import type { ProviderRequest, ProviderResponse } from "@agent-anything/model-interaction";
+import type { ProviderInteraction, ProviderRequest, ProviderResponse } from "@agent-anything/model-interaction";
 import {
   composeModelInput,
-  providerMessagesFromComposition,
+  modelMessagesFromComposition,
 } from "@agent-anything/model-interaction/input";
 
 import {
@@ -61,6 +61,10 @@ export function buildHelarcProviderRequest(
 ): ProviderRequest {
   assertInstructionModelIdentity(input, context);
   const outputFormat = createHelarcControllerOutputFormat(input.toolExposure);
+  const interaction: ProviderInteraction = Object.freeze({
+    kind: "structured_generation",
+    outputFormat,
+  });
   const correctionMessage = context.correction === null
     ? null
     : buildHelarcCorrectionMessage(context.correction.failure);
@@ -73,7 +77,7 @@ export function buildHelarcProviderRequest(
     providerId: context.inputAccounting.providerId,
     model: context.inputAccounting.model,
     accounting: context.inputAccounting,
-    outputFormat,
+    interaction,
     outputReserve: Object.freeze({
       unit: input.contextManifest.budget.unit,
       amount: HELARC_MODEL_OUTPUT_RESERVE_BYTES,
@@ -175,6 +179,8 @@ export function buildHelarcProviderRequest(
         id: input.toolExposure.id,
         revision: input.toolExposure.id,
       }),
+      controllerControlSet: null,
+      interactionHistory: null,
       protocol: Object.freeze({
         owner: "helarc",
         kind: "action_contract",
@@ -192,8 +198,9 @@ export function buildHelarcProviderRequest(
   });
 
   return {
-    capability: HELARC_CONTROLLER_CAPABILITY,
-    outputFormat,
+    requestId: composition.id,
+    purpose: HELARC_CONTROLLER_CAPABILITY,
+    interaction,
     metadata: {
       runId: input.runId,
       controllerIteration: input.iteration,
@@ -238,17 +245,7 @@ export function buildHelarcProviderRequest(
         structuredOutputCorrectionCode: context.correction.failure.code,
       }),
     },
-    messages: providerMessagesFromComposition(composition.sections).map((message) =>
-      message.metadata.modelInputSectionId === "helarc:model-input:structured_output_correction"
-        ? Object.freeze({
-            ...message,
-            metadata: Object.freeze({
-              ...message.metadata,
-              kind: "structured-output-correction",
-            }),
-          })
-        : message
-    ),
+    messages: modelMessagesFromComposition(composition),
     composition,
     continuation: null,
   };
@@ -314,6 +311,9 @@ export function parseHelarcProviderResponse(
   response: ProviderResponse,
   input: ControllerInput<HelarcAgentOutput>,
 ): ControllerDecision<HelarcAgentOutput> {
+  if (response.kind !== "structured_generation") {
+    throw new HelarcControllerParseError("controller_output_invalid");
+  }
   const output = parseStructuredOutput(response.output);
   const modelItem = createModelItem(output, input);
   const modelItems = Object.freeze([modelItem]) as readonly [ControllerModelItem];

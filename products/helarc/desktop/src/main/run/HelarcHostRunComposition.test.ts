@@ -981,11 +981,12 @@ class ScriptedProvider implements Provider {
     id: "scripted-helarc-provider",
     name: "Scripted Helarc Provider",
     capabilities: {
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: false,
+      nativeToolInteraction: { supported: false as const },
+      structuredGeneration: { supported: true as const },
+      streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
+      compaction: { supported: false as const },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -1027,8 +1028,9 @@ class ScriptedProvider implements Provider {
     return {
       kind: "succeeded",
       response: {
+        kind: "structured_generation",
         responseId: null,
-        output,
+        output: output as never,
         usage: null,
         continuation: null,
         metadata: {},
@@ -1043,11 +1045,12 @@ class RetryThenCompleteProvider implements Provider {
     id: "retry-then-complete-provider",
     name: "Retry Then Complete Provider",
     capabilities: {
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: false,
+      nativeToolInteraction: { supported: false as const },
+      structuredGeneration: { supported: true as const },
+      streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
+      compaction: { supported: false as const },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -1072,6 +1075,7 @@ class RetryThenCompleteProvider implements Provider {
     return {
       kind: "succeeded",
       response: {
+        kind: "structured_generation",
         responseId: null,
         output: { kind: "completion", summary: "Recovered after retry." },
         usage: null,
@@ -1090,9 +1094,7 @@ function createHostRunTestInputAccounting(providerId: string) {
     limitSource: "host_configured",
     estimator: { id: `${providerId}.utf8-content`, revision: "1" },
     framing: { id: `${providerId}.framing`, revision: "1" },
-    renderFraming: (sections) => JSON.stringify({
-      roles: sections.map((section) => section.role),
-    }),
+    renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
   });
 }
 
@@ -1127,13 +1129,13 @@ function createTask(workspaceRoot: string) {
 function readObservationCount(request: ProviderRequest): number {
   const marker = "Context projection:";
   const content = request.messages.find((message) =>
-    message.content.startsWith(marker)
-  )?.content;
+    modelMessageText(message).startsWith(marker)
+  );
   if (content === undefined) {
     return 0;
   }
 
-  return content.slice(marker.length).split("\n")
+  return modelMessageText(content).slice(marker.length).split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
     .map((line) => {
@@ -1160,14 +1162,14 @@ function readObservationCount(request: ProviderRequest): number {
 function readCurrentPlan(request: ProviderRequest): unknown {
   const marker = "Current plan:";
   const content = request.messages.find((message) =>
-    message.content.startsWith(marker)
-  )?.content;
+    modelMessageText(message).startsWith(marker)
+  );
   if (content === undefined) {
     return null;
   }
 
   try {
-    return JSON.parse(content.slice(marker.length).trim()) as unknown;
+    return JSON.parse(modelMessageText(content).slice(marker.length).trim()) as unknown;
   } catch {
     return null;
   }
@@ -1175,12 +1177,18 @@ function readCurrentPlan(request: ProviderRequest): unknown {
 
 function readBackgroundTaskId(request: ProviderRequest): string {
   const match = /\"task_id\"\s*:\s*\"([^\"]+)\"/.exec(
-    request.messages.map((message) => message.content).join("\n"),
+    request.messages.map(modelMessageText).join("\n"),
   );
   if (match?.[1] === undefined) {
     throw new Error("The background task observation did not contain task_id.");
   }
   return match[1];
+}
+
+function modelMessageText(message: ProviderRequest["messages"][number]): string {
+  return message.content
+    .map((block) => block.kind === "text" ? block.text : JSON.stringify(block))
+    .join("");
 }
 
 function createShellInput(markerPath: string) {

@@ -107,6 +107,7 @@ import type {
   ProviderCallResult,
   ProviderRequest,
 } from "@agent-anything/model-interaction";
+import { providerResponseUsage } from "@agent-anything/model-interaction";
 import type { RuntimeEvent, RuntimeEventPublisher } from "@agent-anything/observability/events";
 import type { RunTrace } from "@agent-anything/observability/tracing";
 import type { ToolSelectionRevision } from "@agent-anything/tools/selection";
@@ -1094,7 +1095,9 @@ function captureHelarcMaterial(
   const retryCount = material.retryCount;
   const totalUsage = material.providerResults
     .reduce((totals, result) => {
-      const usage = result.kind === "succeeded" ? result.response.usage : null;
+      const usage = result.kind === "succeeded"
+        ? providerResponseUsage(result.response)
+        : null;
       return {
         input: totals.input + (usage?.inputTokens ?? 0),
         output: totals.output + (usage?.outputTokens ?? 0),

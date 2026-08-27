@@ -4,10 +4,10 @@ import type { ProviderRequest } from "./ProviderRequest.js";
 import type { ProviderFailure, ProviderResponse } from "./ProviderResponse.js";
 import type { ProviderModelInputAccounting } from "./input/index.js";
 
-export type ProviderCallResult<TOutput = unknown> =
+export type ProviderCallResult =
   | {
       readonly kind: "succeeded";
-      readonly response: ProviderResponse<TOutput>;
+      readonly response: ProviderResponse;
     }
   | {
       readonly kind: "failed";

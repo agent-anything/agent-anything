@@ -1,5 +1,14 @@
 import type { ModelJsonValue } from "../ModelInteractionContractValidation.js";
 import {
+  modelMessagesEqual,
+  snapshotModelMessages,
+  type ModelMessage,
+} from "../ModelMessage.js";
+import {
+  snapshotProviderInteraction,
+  type ProviderInteraction,
+} from "../ProviderInteraction.js";
+import {
   isoDateTime,
   nonNegativeInteger,
   nullableToken,
@@ -42,16 +51,6 @@ export interface ModelOutputReserve {
   readonly amount: number;
 }
 
-export type ModelOutputFormat =
-  | { readonly kind: "text" }
-  | {
-      readonly kind: "json_schema";
-      readonly name: string;
-      readonly schemaId: string;
-      readonly schemaRevision: string;
-      readonly schema: { readonly [key: string]: ModelJsonValue };
-    };
-
 export interface ModelInputFraming {
   readonly ref: {
     readonly id: string;
@@ -78,9 +77,15 @@ export interface ModelInputStructuredContent {
   readonly value: ModelJsonValue;
 }
 
+export interface ModelInputMessageContent {
+  readonly kind: "model_message";
+  readonly message: ModelMessage;
+}
+
 export type ModelInputContent =
   | ModelInputTextContent
-  | ModelInputStructuredContent;
+  | ModelInputStructuredContent
+  | ModelInputMessageContent;
 
 export type ModelInputSectionRole = "system" | "user" | "assistant" | "tool";
 
@@ -116,6 +121,8 @@ export interface ModelInputLineage {
   readonly toolExposureContent: ModelInputSourceRef | null;
   readonly toolExposureBasis: ModelInputSourceRef | null;
   readonly toolExposureProof: ModelInputSourceRef | null;
+  readonly controllerControlSet: ModelInputSourceRef | null;
+  readonly interactionHistory: ModelInputSourceRef | null;
   readonly protocol: ModelInputSourceRef;
   readonly policy: ModelInputSourceRef;
 }
@@ -136,13 +143,14 @@ export interface ModelInputComposition {
   readonly estimator: ModelInputEstimatorRef;
   readonly limit: ModelInputLimit;
   readonly outputReserve: ModelOutputReserve;
-  readonly outputFormat: ModelOutputFormat;
+  readonly interaction: ProviderInteraction;
   readonly framing: ModelInputFraming;
   readonly contextBudget: {
     readonly unit: ModelInputUnit;
     readonly amount: number;
   };
   readonly sections: readonly ModelInputSection[];
+  readonly messages: readonly ModelMessage[];
   readonly lineage: ModelInputLineage;
   readonly accounting: ModelInputAccounting;
   readonly composedAt: string;
@@ -182,8 +190,8 @@ export function snapshotModelInputComposition(
   input: ModelInputComposition,
 ): ModelInputComposition {
   strictRecord(input, "ModelInputComposition", [
-    "id", "providerId", "model", "estimator", "limit", "outputReserve", "outputFormat",
-    "framing", "contextBudget", "sections", "lineage", "accounting",
+    "id", "providerId", "model", "estimator", "limit", "outputReserve", "interaction",
+    "framing", "contextBudget", "sections", "messages", "lineage", "accounting",
     "composedAt",
   ]);
   const estimator = snapshotEstimator(
@@ -196,7 +204,7 @@ export function snapshotModelInputComposition(
     "ModelInputComposition.outputReserve",
     "amount",
   );
-  const outputFormat = snapshotModelOutputFormat(input.outputFormat);
+  const interaction = snapshotProviderInteraction(input.interaction);
   const framing = snapshotFraming(input.framing);
   const contextBudget = snapshotAmount(
     input.contextBudget,
@@ -221,6 +229,10 @@ export function snapshotModelInputComposition(
   );
   if (new Set(sections.map((section) => section.id)).size !== sections.length) {
     throw new TypeError("ModelInputComposition section identities must be unique.");
+  }
+  const messages = snapshotModelMessages(input.messages);
+  if (!modelMessagesEqual(messages, modelMessagesFromSections(sections))) {
+    throw new TypeError("ModelInputComposition messages diverge from its sections.");
   }
   const sectionAmount = sections.reduce(
     (total, section) => total + section.accounting.amount,
@@ -259,10 +271,11 @@ export function snapshotModelInputComposition(
     estimator,
     limit,
     outputReserve,
-    outputFormat,
+    interaction,
     framing,
     contextBudget,
     sections: Object.freeze(sections),
+    messages,
     lineage,
     accounting: Object.freeze({
       unit: estimator.unit,
@@ -315,33 +328,6 @@ function sameSource(left: ModelInputSourceRef, right: ModelInputSourceRef): bool
     left.kind === right.kind &&
     left.id === right.id &&
     left.revision === right.revision;
-}
-
-export function snapshotModelOutputFormat(input: ModelOutputFormat): ModelOutputFormat {
-  strictRecord(input, "ModelOutputFormat", [
-    "kind", "name", "schemaId", "schemaRevision", "schema",
-  ]);
-  if (input.kind === "text") {
-    strictRecord(input, "ModelOutputFormat", ["kind"]);
-    return Object.freeze({ kind: "text" });
-  }
-  if (input.kind !== "json_schema") {
-    throw new TypeError("ModelOutputFormat.kind is unsupported.");
-  }
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(input.name)) {
-    throw new TypeError("ModelOutputFormat.name must be a portable schema name.");
-  }
-  const schema = snapshotJsonValue(input.schema, "ModelOutputFormat.schema");
-  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
-    throw new TypeError("ModelOutputFormat.schema must be a JSON object.");
-  }
-  return Object.freeze({
-    kind: "json_schema",
-    name: input.name,
-    schemaId: token(input.schemaId, "ModelOutputFormat.schemaId"),
-    schemaRevision: token(input.schemaRevision, "ModelOutputFormat.schemaRevision"),
-    schema: schema as { readonly [key: string]: ModelJsonValue },
-  });
 }
 
 function snapshotEstimator(
@@ -433,7 +419,7 @@ function snapshotSection(
 }
 
 function snapshotContent(input: ModelInputContent, path: string): ModelInputContent {
-  strictRecord(input, path, ["kind", "text", "value"]);
+  strictRecord(input, path, ["kind", "text", "value", "message"]);
   if (input.kind === "text") {
     strictRecord(input, path, ["kind", "text"]);
     if (typeof input.text !== "string") throw new TypeError(`${path}.text must be a string.`);
@@ -446,6 +432,13 @@ function snapshotContent(input: ModelInputContent, path: string): ModelInputCont
       value: snapshotJsonValue(input.value, `${path}.value`),
     });
   }
+  if (input.kind === "model_message") {
+    strictRecord(input, path, ["kind", "message"]);
+    return Object.freeze({
+      kind: "model_message",
+      message: snapshotModelMessages([input.message])[0]!,
+    });
+  }
   throw new TypeError(`${path}.kind is invalid.`);
 }
 
@@ -454,7 +447,8 @@ function snapshotLineage(input: ModelInputLineage): ModelInputLineage {
     "instructionBinding", "agent", "instructions", "instructionRelease",
     "instructionResolver", "instructionContent", "instructionModel", "instructionBlocks",
     "activeContext", "contextProjection", "projectionManifest", "toolSelection",
-    "toolExposureContent", "toolExposureBasis", "toolExposureProof", "protocol", "policy",
+    "toolExposureContent", "toolExposureBasis", "toolExposureProof",
+    "controllerControlSet", "interactionHistory", "protocol", "policy",
   ]);
   return Object.freeze({
     instructionBinding: snapshotSource(input.instructionBinding, "ModelInputComposition.lineage.instructionBinding"),
@@ -475,6 +469,8 @@ function snapshotLineage(input: ModelInputLineage): ModelInputLineage {
     toolExposureContent: snapshotNullableSource(input.toolExposureContent, "ModelInputComposition.lineage.toolExposureContent"),
     toolExposureBasis: snapshotNullableSource(input.toolExposureBasis, "ModelInputComposition.lineage.toolExposureBasis"),
     toolExposureProof: snapshotNullableSource(input.toolExposureProof, "ModelInputComposition.lineage.toolExposureProof"),
+    controllerControlSet: snapshotNullableSource(input.controllerControlSet, "ModelInputComposition.lineage.controllerControlSet"),
+    interactionHistory: snapshotNullableSource(input.interactionHistory, "ModelInputComposition.lineage.interactionHistory"),
     protocol: snapshotSource(input.protocol, "ModelInputComposition.lineage.protocol"),
     policy: snapshotSource(input.policy, "ModelInputComposition.lineage.policy"),
   });
@@ -520,4 +516,27 @@ function isUnit(value: unknown): value is ModelInputUnit {
 
 function isRole(value: unknown): value is ModelInputSectionRole {
   return value === "system" || value === "user" || value === "assistant" || value === "tool";
+}
+
+export function modelMessagesFromSections(
+  sections: readonly ModelInputSection[],
+): readonly ModelMessage[] {
+  return Object.freeze(sections.map((section) => {
+    if (section.content.kind === "model_message") {
+      if (section.content.message.role !== section.role) {
+        throw new TypeError("Model input message content role must match its section role.");
+      }
+      return section.content.message;
+    }
+    if (section.role === "tool") {
+      throw new TypeError("Tool model-input sections require correlated result blocks.");
+    }
+    const text = section.content.kind === "text"
+      ? section.content.text
+      : JSON.stringify(section.content.value);
+    return snapshotModelMessages([{
+      role: section.role,
+      content: [{ kind: "text", text }],
+    } as ModelMessage])[0]!;
+  }));
 }

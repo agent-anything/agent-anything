@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import type { Provider, ProviderCallResult } from "@agent-anything/model-interaction";
+import {
+  providerGeneratedOutput,
+  type ModelJsonValue,
+  type Provider,
+  type ProviderCallResult,
+} from "@agent-anything/model-interaction";
 import { createEvaluationTrial } from "@agent-anything/evaluation/trial";
 import { FakeProvider } from "../FakeProvider.js";
 import {
@@ -223,8 +228,9 @@ function projectMetrics(material: HelarcEvaluationRunMaterial): DelegationTransf
   const requestMaterials = material.providerRequests.map((request) => JSON.stringify(request));
   const retained = requestMaterials.filter((request) => request.includes(ROOT_PURPOSE_MARKER)).length;
   const drifted = material.providerResults.filter((result) =>
-    result.kind === "succeeded" && !JSON.stringify(result.response.output).includes("42") &&
-    JSON.stringify(result.response.output).includes("completion")
+    result.kind === "succeeded" &&
+    !JSON.stringify(providerGeneratedOutput(result.response)).includes("42") &&
+    JSON.stringify(providerGeneratedOutput(result.response)).includes("completion")
   ).length;
   const attributed = settled.filter((event) =>
     tokenField(event, "requestId") !== null &&
@@ -236,8 +242,7 @@ function projectMetrics(material: HelarcEvaluationRunMaterial): DelegationTransf
   ).length;
   const toolCallCount = material.providerResults.filter((result) =>
     result.kind === "succeeded" &&
-    isRecord(result.response.output) &&
-    result.response.output.kind === "tool_call"
+    isToolCallOutput(providerGeneratedOutput(result.response))
   ).length;
   return deepFreeze({
     objectiveRetentionRate: ratio(retained, requestMaterials.length),
@@ -254,6 +259,10 @@ function projectMetrics(material: HelarcEvaluationRunMaterial): DelegationTransf
     humanInteractionEvents: material.interactionSubmissionCount,
     terminalOutcome: material.runResult.status,
   });
+}
+
+function isToolCallOutput(value: ModelJsonValue | null): boolean {
+  return isRecord(value) && value.kind === "tool_call";
 }
 
 function projectInvariants(
@@ -326,10 +335,11 @@ function snapshotDiagnosticTarget(
   return deepFreeze({ ...input });
 }
 
-function scriptedSuccess(output: unknown, sequence: number): ProviderCallResult {
+function scriptedSuccess(output: ModelJsonValue, sequence: number): ProviderCallResult {
   return deepFreeze({
     kind: "succeeded" as const,
     response: {
+      kind: "structured_generation" as const,
       output,
       responseId: null,
       continuation: null,

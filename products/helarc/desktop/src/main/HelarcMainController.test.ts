@@ -1338,7 +1338,7 @@ describe("HelarcMainController", () => {
     expect(provider.requests).toHaveLength(2);
     const continuedPrompt = provider.requests[1]?.messages
       .filter((message) => message.role === "user")
-      .map((message) => message.content)
+      .map(modelMessageText)
       .join("\n") ?? "";
     expect(continuedPrompt).toContain("Inspect the current implementation");
     expect(continuedPrompt).toContain("No changes needed.");
@@ -1401,11 +1401,12 @@ class CompleteProvider implements Provider {
     id: "complete-provider",
     name: "Complete Provider",
     capabilities: {
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: false,
+      nativeToolInteraction: { supported: false as const },
+      structuredGeneration: { supported: true as const },
+      streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
+      compaction: { supported: false as const },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -1418,6 +1419,7 @@ class CompleteProvider implements Provider {
     return {
       kind: "succeeded",
       response: {
+        kind: "structured_generation",
         responseId: null,
         output: {
           kind: "completion",
@@ -1479,6 +1481,7 @@ class DeferredCompleteProvider extends CompleteProvider {
     this.settle({
       kind: "succeeded",
       response: {
+        kind: "structured_generation",
         responseId: null,
         output: {
           kind: "completion",
@@ -1498,11 +1501,12 @@ class SecretFailingProvider implements Provider {
     id: "secret-failing-provider",
     name: "Secret failing Provider",
     capabilities: {
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: false,
+      nativeToolInteraction: { supported: false as const },
+      structuredGeneration: { supported: true as const },
+      streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
+      compaction: { supported: false as const },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -1532,11 +1536,12 @@ class ScriptedProvider implements Provider {
     id: "scripted-provider",
     name: "Scripted Provider",
     capabilities: {
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: false,
+      nativeToolInteraction: { supported: false as const },
+      structuredGeneration: { supported: true as const },
+      streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
+      compaction: { supported: false as const },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -1564,8 +1569,9 @@ class ScriptedProvider implements Provider {
     return {
       kind: "succeeded",
       response: {
+        kind: "structured_generation",
         responseId: null,
-        output,
+        output: output as never,
         usage: null,
         continuation: null,
         metadata: {},
@@ -1582,10 +1588,14 @@ function createDesktopTestInputAccounting(providerId: string) {
     limitSource: "host_configured",
     estimator: { id: `${providerId}.utf8-content`, revision: "1" },
     framing: { id: `${providerId}.framing`, revision: "1" },
-    renderFraming: (sections) => JSON.stringify({
-      roles: sections.map((section) => section.role),
-    }),
+    renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
   });
+}
+
+function modelMessageText(message: ProviderRequest["messages"][number]): string {
+  return message.content
+    .map((block) => block.kind === "text" ? block.text : JSON.stringify(block))
+    .join("");
 }
 
 function commandToolCall(

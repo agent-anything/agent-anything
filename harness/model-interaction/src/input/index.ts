@@ -7,6 +7,7 @@ export type {
   ModelInputFraming,
   ModelInputLimit,
   ModelInputLineage,
+  ModelInputMessageContent,
   ModelInputSection,
   ModelInputSectionRole,
   ModelInputSourceRef,
@@ -14,18 +15,23 @@ export type {
   ModelInputTextContent,
   ModelInputUnit,
   ModelOutputReserve,
-  ModelOutputFormat,
 } from "./ModelInput.js";
 export {
+  modelMessagesFromSections,
   snapshotModelInputCapability,
   snapshotModelInputComposition,
-  snapshotModelOutputFormat,
 } from "./ModelInput.js";
+export type {
+  ModelOutputFormat,
+  StructuredOutputFormat,
+} from "../ModelOutputFormat.js";
+export { snapshotModelOutputFormat } from "../ModelOutputFormat.js";
 export type {
   ModelInputCompositionFailure,
   ModelInputCompositionFailureCode,
   ModelInputContextAllocation,
   ModelInputSectionCandidate,
+  ProviderEncodedModelInputVerificationInput,
   ProviderModelInputAccounting,
   ProviderModelInputVerificationInput,
 } from "./ModelInputComposition.js";
@@ -37,5 +43,5 @@ export {
 export type { CreateUtf8ModelInputAccountingInput } from "./Utf8ModelInputAccounting.js";
 export {
   createUtf8ModelInputAccounting,
-  providerMessagesFromComposition,
+  modelMessagesFromComposition,
 } from "./Utf8ModelInputAccounting.js";

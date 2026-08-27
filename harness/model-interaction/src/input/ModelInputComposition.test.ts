@@ -11,7 +11,7 @@ describe("complete Model Input Composition", () => {
     const accounting = testAccounting(100);
     const allocation = allocateModelInputContext({
       accounting,
-      outputFormat: { kind: "text" },
+      interaction: { kind: "text_generation" },
       outputReserve: { unit: "bytes", amount: 10 },
       baseSections: [section("system", "system", "12345")],
       maximumContextAmount: 80,
@@ -32,7 +32,7 @@ describe("complete Model Input Composition", () => {
       providerId: "provider-1",
       model: "model-1",
       accounting,
-      outputFormat: { kind: "text" },
+      interaction: { kind: "text_generation" },
       outputReserve: { unit: "bytes", amount: 10 },
       contextBudget: { unit: "bytes", amount: 40 },
       contextProjectedAmount: 12,
@@ -57,11 +57,14 @@ describe("complete Model Input Composition", () => {
       model: "model-1",
       messages: composition.sections.map((section) => ({
         role: section.role,
-        content: section.content.kind === "text"
-          ? section.content.text
-          : JSON.stringify(section.content.value),
+        content: [{
+          kind: "text" as const,
+          text: section.content.kind === "text"
+            ? section.content.text
+            : JSON.stringify(section.content.value),
+        }],
       })),
-      outputFormat: composition.outputFormat,
+      interaction: composition.interaction,
       composition,
     })).not.toThrow();
   });
@@ -73,8 +76,9 @@ describe("complete Model Input Composition", () => {
         estimateSection() { throw new Error("not called"); },
         estimateFraming() { throw new Error("not called"); },
         verify() { throw new Error("not called"); },
+        verifyEncoded() { throw new Error("not called"); },
       },
-      outputFormat: { kind: "text" },
+      interaction: { kind: "text_generation" },
       outputReserve: { unit: "bytes", amount: 1 },
       baseSections: [section("system", "system", "rules")],
       maximumContextAmount: 1,
@@ -85,7 +89,7 @@ describe("complete Model Input Composition", () => {
       providerId: "provider-1",
       model: "model-1",
       accounting: testAccounting(20),
-      outputFormat: { kind: "text" },
+      interaction: { kind: "text_generation" },
       outputReserve: { unit: "bytes", amount: 10 },
       contextBudget: { unit: "bytes", amount: 0 },
       contextProjectedAmount: 0,
@@ -102,7 +106,7 @@ describe("complete Model Input Composition", () => {
       providerId: "provider-1",
       model: "model-1",
       accounting,
-      outputFormat: { kind: "text" },
+      interaction: { kind: "text_generation" },
       outputReserve: { unit: "bytes", amount: 10 },
       contextBudget: { unit: "bytes", amount: 0 },
       contextProjectedAmount: 0,
@@ -114,10 +118,10 @@ describe("complete Model Input Composition", () => {
     expect(() => accounting.verify({
       providerId: "provider-1",
       model: "model-1",
-      messages: [{ role: "system", content: "changed" }],
-      outputFormat: composition.outputFormat,
+      messages: [{ role: "system", content: [{ kind: "text", text: "changed" }] }],
+      interaction: composition.interaction,
       composition,
-    })).toThrow("diverge");
+    })).toThrow("does not match its accounting capability");
   });
 
   it("accounts and verifies the exact Provider-native output format", () => {
@@ -128,7 +132,8 @@ describe("complete Model Input Composition", () => {
       limitSource: "host_configured",
       estimator: { id: "test-utf8", revision: "1" },
       framing: { id: "format-aware-framing", revision: "1" },
-      renderFraming: (_sections, outputFormat) => JSON.stringify(outputFormat),
+      renderRequest: (messages, interaction) =>
+        `${messageText(messages)}${JSON.stringify(interaction)}`,
     });
     const outputFormat = {
       kind: "json_schema" as const,
@@ -142,7 +147,7 @@ describe("complete Model Input Composition", () => {
       providerId: "provider-1",
       model: "model-1",
       accounting,
-      outputFormat,
+      interaction: { kind: "structured_generation", outputFormat },
       outputReserve: { unit: "bytes", amount: 10 },
       contextBudget: { unit: "bytes", amount: 0 },
       contextProjectedAmount: 0,
@@ -151,13 +156,16 @@ describe("complete Model Input Composition", () => {
       composedAt: "2026-08-16T00:00:00.000Z",
     });
 
-    expect(composition.outputFormat).toEqual(outputFormat);
+    expect(composition.interaction).toEqual({
+      kind: "structured_generation",
+      outputFormat,
+    });
     expect(composition.framing.amount).toBeGreaterThan(0);
     expect(() => accounting.verify({
       providerId: "provider-1",
       model: "model-1",
-      messages: [{ role: "system", content: "rules" }],
-      outputFormat: { kind: "text" },
+      messages: [{ role: "system", content: [{ kind: "text", text: "rules" }] }],
+      interaction: { kind: "text_generation" },
       composition,
     })).toThrow("does not match");
   });
@@ -171,7 +179,7 @@ function testAccounting(maximumInputBytes: number) {
     limitSource: "host_configured",
     estimator: { id: "test-utf8", revision: "1" },
     framing: { id: "test-framing", revision: "1" },
-    renderFraming: () => "1234567",
+    renderRequest: (messages) => `${messageText(messages)}1234567`,
   });
 }
 
@@ -203,7 +211,15 @@ function lineage() {
     toolExposureContent: null,
     toolExposureBasis: null,
     toolExposureProof: null,
+    controllerControlSet: null,
+    interactionHistory: null,
     protocol: { owner: "test", kind: "protocol", id: "protocol", revision: "1" },
     policy: { owner: "test", kind: "policy", id: "policy", revision: "1" },
   };
+}
+
+function messageText(messages: readonly { readonly content: readonly { readonly kind: string; readonly text?: string }[] }[]): string {
+  return messages.flatMap((message) => message.content)
+    .map((block) => block.kind === "text" ? block.text ?? "" : JSON.stringify(block))
+    .join("");
 }

@@ -1,6 +1,6 @@
 import {
   snapshotModelOutputFormat,
-  type ModelOutputFormat,
+  type StructuredOutputFormat,
 } from "@agent-anything/model-interaction/input";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
 
@@ -39,12 +39,12 @@ export const HELARC_ACTION_CONTRACT_VERSION = "helarc-model-decision-v1";
 
 export function createHelarcControllerOutputFormat(
   exposure: Pick<ToolExposureProof, "contentRevision" | "catalog">,
-): ModelOutputFormat {
+): StructuredOutputFormat {
   const toolNames = exposure.catalog.tools.map(({ name }) => name);
   if (new Set(toolNames).size !== toolNames.length) {
     throw new TypeError("Helarc Controller output format requires unique exposed Tool names.");
   }
-  return snapshotModelOutputFormat({
+  const outputFormat = snapshotModelOutputFormat({
     kind: "json_schema",
     name: "helarc_model_decision",
     schemaId: "helarc.model-decision",
@@ -109,6 +109,10 @@ export function createHelarcControllerOutputFormat(
       ],
     },
   });
+  if (outputFormat.kind !== "json_schema") {
+    throw new TypeError("Helarc Controller requires structured generation.");
+  }
+  return outputFormat;
 }
 
 const HELARC_DECISION_DESCRIPTIONS: HelarcControllerDecisionDescription[] = [

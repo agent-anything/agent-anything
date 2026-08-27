@@ -370,10 +370,10 @@ class UnusedProvider implements Provider {
     limitSource: "host_configured",
     estimator: { id: "unused-provider.utf8-content", revision: "1" },
     framing: { id: "unused-provider.test-framing", revision: "1" },
-    renderFraming(sections, outputFormat) {
+    renderRequest(messages, interaction) {
       return JSON.stringify({
-        messages: sections.map(({ role, content }) => ({ role, content: content.text })),
-        outputFormat,
+        messages,
+        interaction,
       });
     },
   });
@@ -382,11 +382,12 @@ class UnusedProvider implements Provider {
     id: "unused-provider",
     name: "Unused provider",
     capabilities: {
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: false,
+      nativeToolInteraction: { supported: false as const },
+      structuredGeneration: { supported: true as const },
+      streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
+      compaction: { supported: false as const },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},

@@ -30,7 +30,10 @@ import {
   createEvaluationCampaign,
   type EvaluationCampaign,
 } from "@agent-anything/evaluation/campaign";
-import type { ProviderCallResult } from "@agent-anything/model-interaction";
+import {
+  snapshotModelJsonValue,
+  type ProviderCallResult,
+} from "@agent-anything/model-interaction";
 import type { HelarcExactTargetVerificationRequirement } from "@agent-anything/helarc/verification";
 import { createHelarcAgent } from "@agent-anything/helarc/agent";
 
@@ -1114,7 +1117,8 @@ function scriptedSuccess(output: unknown, sequence: number): ProviderCallResult 
   return deepFreeze({
     kind: "succeeded" as const,
     response: {
-      output,
+      kind: "structured_generation" as const,
+      output: snapshotModelJsonValue(output, "scriptedProviderOutput"),
       responseId: null,
       continuation: null,
       usage: {

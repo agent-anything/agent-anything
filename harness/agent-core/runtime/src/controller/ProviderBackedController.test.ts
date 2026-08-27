@@ -5,11 +5,12 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/model-interaction";
+import { providerGeneratedOutput } from "@agent-anything/model-interaction";
 import { FakeProvider } from "@agent-anything/test-support";
 import {
   composeModelInput,
   createUtf8ModelInputAccounting,
-  providerMessagesFromComposition,
+  modelMessagesFromComposition,
 } from "@agent-anything/model-interaction/input";
 import {
   createInMemoryModelContinuationStore,
@@ -42,9 +43,15 @@ interface TestOutput {
   readonly summary: string;
 }
 
-type TestProviderRequest = Omit<ProviderRequest, "composition">;
+type TestProviderRequest = Omit<ProviderRequest, "requestId" | "composition">;
 
-const TEST_OUTPUT_FORMAT = Object.freeze({ kind: "text" as const });
+const TEST_OUTPUT_FORMAT = Object.freeze({
+  kind: "json_schema" as const,
+  name: "test_controller_decision",
+  schemaId: "test.controller-decision",
+  schemaRevision: "1",
+  schema: Object.freeze({ type: "object" }),
+});
 
 describe("ProviderBackedController", () => {
   afterEach(() => vi.useRealTimers());
@@ -58,7 +65,7 @@ describe("ProviderBackedController", () => {
         return request(`Run ${input.runId} for task ${input.task.id}.`);
       },
       parseResponse(response) {
-        return finalDecision(response.output);
+        return finalDecision(providerGeneratedOutput(response));
       },
     });
 
@@ -71,10 +78,11 @@ describe("ProviderBackedController", () => {
     });
     expect(provider.requests()).toHaveLength(1);
     expect(provider.requests()[0]).toMatchObject({
-      capability: "agent-control",
+      purpose: "agent-control",
+      interaction: { kind: "structured_generation" },
       messages: [
-        { role: "system", content: "Complete the test task." },
-        { role: "user", content: "Run run_001 for task task_001." },
+        { role: "system", content: [{ kind: "text", text: "Complete the test task." }] },
+        { role: "user", content: [{ kind: "text", text: "Run run_001 for task task_001." }] },
       ],
       composition: { providerId: "fake-provider", model: "fake-model" },
     });
@@ -99,7 +107,7 @@ describe("ProviderBackedController", () => {
     };
     const controller = createController(provider, {
       continuation: new ModelContinuationLifecycle({ store }),
-      parseResponse: (response) => finalDecision(response.output),
+      parseResponse: (response) => finalDecision(providerGeneratedOutput(response)),
     });
 
     await controller.next(createControllerInput(), callContext());
@@ -150,7 +158,7 @@ describe("ProviderBackedController", () => {
     };
     const controller = createController(provider, {
       continuation: new ModelContinuationLifecycle({ store }),
-      parseResponse: (response) => finalDecision(response.output),
+      parseResponse: (response) => finalDecision(providerGeneratedOutput(response)),
     });
 
     await controller.next(createControllerInput(), callContext());
@@ -378,7 +386,8 @@ describe("ProviderBackedController", () => {
       async send(candidate) {
         requests.push(candidate);
         if (requests.length === 1) {
-          candidate.messages[0].content = "mutated by first attempt";
+          expect(Object.isFrozen(candidate.messages)).toBe(true);
+          expect(Object.isFrozen(candidate.messages[0]?.content)).toBe(true);
           return failedResult("transport", "network_unavailable");
         }
         return succeededResult({ summary: "Recovered" });
@@ -386,7 +395,7 @@ describe("ProviderBackedController", () => {
     };
     const controller = createController(provider, {
       buildRequest,
-      parseResponse: (response) => finalDecision(response.output),
+      parseResponse: (response) => finalDecision(providerGeneratedOutput(response)),
     });
 
     const result = await controller.next(
@@ -402,7 +411,9 @@ describe("ProviderBackedController", () => {
     expect(buildRequest).toHaveBeenCalledTimes(1);
     expect(requests).toHaveLength(2);
     expect(requests[0]).not.toBe(requests[1]);
-    expect(requests[1].messages[1]?.content).toBe("original request");
+    expect(requests[1].messages[1]?.content).toEqual([
+      { kind: "text", text: "original request" },
+    ]);
     const providerEvents = events.filter((event) => event.owner === "provider_request");
     expect(providerEvents.map((event) => event.type)).toEqual([
       "retry_attempt_started",
@@ -757,7 +768,7 @@ describe("ProviderBackedController", () => {
       new FakeProvider({ results: [succeededResult({ summary: 42 })] }),
       {
         parseResponse(response) {
-          return finalDecision(response.output);
+          return finalDecision(providerGeneratedOutput(response));
         },
       },
     );
@@ -801,14 +812,14 @@ describe("ProviderBackedController", () => {
           : `Correction: ${context.correction.failure.correctionFeedback}`);
       },
       parseResponse(response) {
-        if (response.output === rawInvalidOutput) {
+        if (providerGeneratedOutput(response) === rawInvalidOutput) {
           throw correctionError(
             "structured_output_syntax",
             "test_output_not_json",
             "Return one valid structured object.",
           );
         }
-        return finalDecision(response.output);
+        return finalDecision(providerGeneratedOutput(response));
       },
     });
 
@@ -870,7 +881,7 @@ describe("ProviderBackedController", () => {
     });
     const controller = createController(provider, {
       parseResponse(response) {
-        return finalDecision(response.output);
+        return finalDecision(providerGeneratedOutput(response));
       },
     });
 
@@ -1403,9 +1414,9 @@ function createTask(): AgentTask {
 
 function request(content: string): TestProviderRequest {
   return {
-    messages: [{ role: "user", content, metadata: {} }],
-    capability: "agent-control",
-    outputFormat: TEST_OUTPUT_FORMAT,
+    messages: [{ role: "user", content: [{ kind: "text", text: content }] }],
+    purpose: "agent-control",
+    interaction: { kind: "structured_generation", outputFormat: TEST_OUTPUT_FORMAT },
     continuation: null,
     metadata: {},
   };
@@ -1422,9 +1433,7 @@ function ensureTestProviderAccounting(provider: Provider): Provider {
     limitSource: "host_configured",
     estimator: { id: `${provider.descriptor.id}.utf8-content`, revision: "1" },
     framing: { id: `${provider.descriptor.id}.framing`, revision: "1" },
-    renderFraming: (sections) => JSON.stringify({
-      roles: sections.map((section) => section.role),
-    }),
+    renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
   });
   return {
     descriptor: {
@@ -1464,7 +1473,7 @@ function accountTestRequest(
     kind: "test_message",
     role: message.role,
     necessity: "mandatory" as const,
-    content: Object.freeze({ kind: "text" as const, text: message.content }),
+    content: Object.freeze({ kind: "model_message" as const, message }),
   }));
   const sections = Object.freeze([...instructionSections, ...requestSections]);
   const composition = composeModelInput({
@@ -1472,7 +1481,7 @@ function accountTestRequest(
     providerId: provider.inputAccounting.providerId,
     model: provider.inputAccounting.model,
     accounting: provider.inputAccounting,
-    outputFormat: request.outputFormat,
+    interaction: request.interaction,
     outputReserve: Object.freeze({ unit: "bytes", amount: 0 }),
     contextBudget: Object.freeze({ unit: "bytes", amount: 0 }),
     contextProjectedAmount: 0,
@@ -1548,6 +1557,8 @@ function accountTestRequest(
         id: input.toolExposure.id,
         revision: input.toolExposure.id,
       }),
+      controllerControlSet: null,
+      interactionHistory: null,
       protocol: Object.freeze({
         owner: "agent-runtime-test",
         kind: "controller_contract",
@@ -1565,7 +1576,8 @@ function accountTestRequest(
   });
   return Object.freeze({
     ...request,
-    messages: providerMessagesFromComposition(composition.sections),
+    requestId: composition.id,
+    messages: modelMessagesFromComposition(composition),
     composition,
   });
 }
@@ -1574,7 +1586,8 @@ function succeededResult(output: unknown): ProviderCallResult {
   return {
     kind: "succeeded",
     response: {
-      output,
+      kind: "structured_generation",
+      output: output as never,
       responseId: null,
       continuation: null,
       usage: null,
@@ -1591,7 +1604,8 @@ function continuationSucceededResult(
   return {
     kind: "succeeded",
     response: {
-      output,
+      kind: "structured_generation",
+      output: output as never,
       responseId,
       continuation: {
         kind: "opaque_provider_state",
@@ -1734,10 +1748,12 @@ function providerDescriptor(id: string) {
     id,
     name: id,
     capabilities: {
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: false,
+      nativeToolInteraction: { supported: false as const },
+      structuredGeneration: { supported: true as const },
+      streaming: { supported: false as const },
+      modelInput: { supported: false as const },
       continuation: { supported: false as const },
+      compaction: { supported: false as const },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},

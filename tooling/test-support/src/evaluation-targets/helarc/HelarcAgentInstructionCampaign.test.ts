@@ -165,7 +165,10 @@ async function capture(
       results: [{
         kind: "succeeded",
         response: {
+          kind: "structured_generation",
           output: { kind: "completion", summary: "The timeout is 4500 ms." },
+          responseId: null,
+          continuation: null,
           usage: {
             inputTokens: 20,
             outputTokens: 8,

@@ -5,11 +5,7 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "@agent-anything/model-interaction";
-import {
-  snapshotModelInputComposition,
-  snapshotModelOutputFormat,
-} from "@agent-anything/model-interaction/input";
-import { snapshotModelContinuationRef } from "@agent-anything/model-interaction/continuation";
+import { snapshotProviderRequest } from "@agent-anything/model-interaction";
 import {
   ModelContinuationLifecycle,
   type ModelContinuationPreparation,
@@ -379,7 +375,7 @@ export class ProviderBackedController<TOutput = unknown>
         providerId: this.input.provider.descriptor.id,
         model: request.composition.model,
         messages: request.messages,
-        outputFormat: request.outputFormat,
+        interaction: request.interaction,
         composition: request.composition,
       });
       return request;
@@ -610,7 +606,10 @@ export class ProviderBackedController<TOutput = unknown>
       }
       return;
     }
-    if (response.responseId === null || response.continuation === null) {
+    const responseId = response.kind === "native_tool_turn"
+      ? response.turn.responseRef.responseId
+      : response.responseId;
+    if (responseId === null || response.continuation === null) {
       await this.continuation.failed(
         preparation,
         "continuation_result_missing",
@@ -621,7 +620,7 @@ export class ProviderBackedController<TOutput = unknown>
     await this.continuation.advance({
       preparation,
       mechanism: capability.mechanism,
-      responseId: response.responseId,
+      responseId,
       state: response.continuation,
     });
   }
@@ -646,6 +645,13 @@ export class ProviderBackedController<TOutput = unknown>
   }
 
   private assertOutputLength(response: ProviderResponse): void {
+    if (response.kind !== "structured_generation") {
+      throw structuredOutputError(
+        "structured_output_schema",
+        "structured_output_response_kind_invalid",
+        "Return one structured output value that satisfies the active contract.",
+      );
+    }
     if (response.output === null || response.output === undefined) {
       throw structuredOutputError(
         "structured_output_schema",
@@ -1622,70 +1628,15 @@ function errorMetadata(error: unknown): Readonly<Record<string, unknown>> {
   };
 }
 
-function snapshotProviderRequest(request: ProviderRequest): ProviderRequest {
-  if (!isRecord(request) || !Array.isArray(request.messages)) {
-    throw new TypeError("Provider request must include a messages array.");
-  }
-  if (typeof request.capability !== "string" || request.capability.trim().length === 0) {
-    throw new TypeError("Provider request capability must be a non-empty string.");
-  }
-  if (!isRecord(request.metadata)) {
-    throw new TypeError("Provider request metadata must be an object.");
-  }
-  const outputFormat = snapshotModelOutputFormat(request.outputFormat);
-  const composition = snapshotModelInputComposition(request.composition);
-  const continuation = request.continuation === null
-    ? null
-    : snapshotModelContinuationRef(request.continuation);
-  const messages = request.messages.map((message, index) => {
-    if (!isRecord(message)) {
-      throw new TypeError(`Provider message ${index} must be an object.`);
-    }
-    if (!["system", "user", "assistant", "tool"].includes(message.role as string)) {
-      throw new TypeError(`Provider message ${index} role is unsupported.`);
-    }
-    if (typeof message.content !== "string") {
-      throw new TypeError(`Provider message ${index} content must be a string.`);
-    }
-    if (!isRecord(message.metadata)) {
-      throw new TypeError(`Provider message ${index} metadata must be an object.`);
-    }
-    return Object.freeze({
-      role: message.role as "system" | "user" | "assistant" | "tool",
-      content: message.content,
-      metadata: Object.freeze({ ...message.metadata }),
-    });
-  });
-  return Object.freeze({
-    messages: Object.freeze(messages) as unknown as ProviderRequest["messages"],
-    capability: request.capability,
-    outputFormat,
-    composition,
-    continuation,
-    metadata: Object.freeze({ ...request.metadata }),
-  });
-}
-
 function recreateProviderRequest(request: ProviderRequest): ProviderRequest {
-  return {
-    messages: request.messages.map((message) => ({
-      role: message.role,
-      content: message.content,
-      metadata: { ...message.metadata },
-    })),
-    capability: request.capability,
-    outputFormat: request.outputFormat,
-    composition: request.composition,
-    continuation: request.continuation,
-    metadata: { ...request.metadata },
-  };
+  return snapshotProviderRequest(request);
 }
 
 function withContinuation(
   request: ProviderRequest,
   continuation: ProviderRequest["continuation"],
 ): ProviderRequest {
-  return Object.freeze({
+  return snapshotProviderRequest({
     ...request,
     continuation,
   });

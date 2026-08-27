@@ -58,6 +58,7 @@ import {
 } from "@agent-anything/evaluation/trial";
 import {
   createProviderAttemptInterruption,
+  providerResponseUsage,
   providerResultFromInterruption,
   type Provider,
 } from "@agent-anything/model-interaction";
@@ -1172,7 +1173,9 @@ function usage(
   key: "inputTokens" | "outputTokens",
 ): number {
   return material.providerResults.reduce((total, result) =>
-    total + (result.kind === "succeeded" ? result.response.usage?.[key] ?? 0 : 0), 0);
+    total + (result.kind === "succeeded"
+      ? providerResponseUsage(result.response)?.[key] ?? 0
+      : 0), 0);
 }
 
 function failure(

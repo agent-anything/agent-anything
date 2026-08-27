@@ -456,7 +456,8 @@ function scriptedSuccess(output: unknown, sequence: number): ProviderCallResult 
   return Object.freeze({
     kind: "succeeded" as const,
     response: Object.freeze({
-      output,
+      kind: "structured_generation" as const,
+      output: output as never,
       responseId: null,
       continuation: null,
       usage: Object.freeze({

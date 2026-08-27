@@ -5,6 +5,8 @@ import {
   type ProviderCallResult,
   type ProviderDescriptor,
   type ProviderFailure,
+  type ProviderInteraction,
+  type ModelMessage,
   type ProviderRequest,
   type ProviderResponse,
 } from "@agent-anything/model-interaction";
@@ -45,25 +47,19 @@ export class OpenAICompatibleProvider implements Provider {
       limitSource: this.config.inputLimit.source,
       estimator: { id: "openai-compatible.utf8-content", revision: "1" },
       framing: { id: "openai-compatible.chat-completions-framing", revision: "1" },
-      renderFraming: (sections, outputFormat) => JSON.stringify({
-        protocol: "chat-completions",
-        model: this.config.model,
-        roles: sections.map((section) => section.role),
-        stream: false,
-        ...(outputFormat.kind === "json_schema"
-          ? { response_format: openAIResponseFormat(outputFormat) }
-          : {}),
-      }),
+      renderRequest: (messages, interaction) =>
+        encodeOpenAIRequest(this.config.model, messages, interaction),
     });
     this.descriptor = Object.freeze({
       id: "openai-compatible.chat-completions",
       name: "OpenAI-compatible Chat Completions",
       capabilities: Object.freeze({
-        supportsToolPlanning: true,
-        supportsStructuredOutput: true,
-        supportsStreaming: false,
+        nativeToolInteraction: Object.freeze({ supported: false as const }),
+        structuredGeneration: Object.freeze({ supported: true as const }),
+        streaming: Object.freeze({ supported: false as const }),
         modelInput: this.inputAccounting.capability,
         continuation: Object.freeze({ supported: false as const }),
+        compaction: Object.freeze({ supported: false as const }),
       }),
       requestRetryScheduler: Object.freeze({ kind: "harness" as const }),
       metadata: Object.freeze({}),
@@ -83,6 +79,13 @@ export class OpenAICompatibleProvider implements Provider {
         "OpenAI-compatible Chat Completions does not support this continuation Contract.",
       );
     }
+    if (request.interaction.kind === "native_tool_turn") {
+      return failed(
+        "unsupported",
+        "provider_native_tool_interaction_unsupported",
+        "OpenAI-compatible native Tool interaction is not enabled by this adapter revision.",
+      );
+    }
     const verificationFailure = verifyProviderRequest(this.inputAccounting, request);
     if (verificationFailure !== null) {
       return verificationFailure;
@@ -95,20 +98,23 @@ export class OpenAICompatibleProvider implements Provider {
         return interruptedBeforeRequest;
       }
 
+      const encodedRequest = encodeOpenAIRequest(
+        this.config.model,
+        request.messages,
+        request.interaction,
+      );
+      this.inputAccounting.verifyEncoded({
+        providerId: this.inputAccounting.providerId,
+        model: this.inputAccounting.model,
+        messages: request.messages,
+        interaction: request.interaction,
+        composition: request.composition,
+        encodedRequest,
+      });
       const response = await this.fetchImpl(this.endpointUrl(), {
         method: "POST",
         headers: this.headers(),
-        body: JSON.stringify({
-          model: this.config.model,
-          messages: request.messages.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
-          stream: false,
-          ...(request.outputFormat.kind === "json_schema"
-            ? { response_format: openAIResponseFormat(request.outputFormat) }
-            : {}),
-        }),
+        body: encodedRequest,
         signal: attempt.signal,
       });
       const interruptedAfterResponse = providerResultFromInterruption(attempt.cause);
@@ -127,7 +133,7 @@ export class OpenAICompatibleProvider implements Provider {
 
       const body = await response.json();
       const interruptedAfterBody = providerResultFromInterruption(attempt.cause);
-      return interruptedAfterBody ?? mapChatCompletionResponse(body);
+      return interruptedAfterBody ?? mapChatCompletionResponse(body, request.interaction);
     } catch (error) {
       const interruption = providerResultFromInterruption(attempt.cause);
       if (interruption !== null) {
@@ -168,7 +174,7 @@ function verifyProviderRequest(
       providerId: accounting.providerId,
       model: accounting.model,
       messages: request.messages,
-      outputFormat: request.outputFormat,
+      interaction: request.interaction,
       composition: request.composition,
     });
     return null;
@@ -182,7 +188,7 @@ function verifyProviderRequest(
 }
 
 function openAIResponseFormat(
-  outputFormat: Extract<ProviderRequest["outputFormat"], { readonly kind: "json_schema" }>,
+  outputFormat: Extract<ProviderInteraction, { readonly kind: "structured_generation" }>["outputFormat"],
 ) {
   return {
     type: "json_schema",
@@ -194,7 +200,10 @@ function openAIResponseFormat(
   };
 }
 
-function mapChatCompletionResponse(value: unknown): ProviderCallResult {
+function mapChatCompletionResponse(
+  value: unknown,
+  interaction: Exclude<ProviderInteraction, { readonly kind: "native_tool_turn" }>,
+): ProviderCallResult {
   if (!isRecord(value)) {
     return failed("response", "provider_response_malformed", "Provider response was malformed.");
   }
@@ -209,6 +218,7 @@ function mapChatCompletionResponse(value: unknown): ProviderCallResult {
   }
 
   return succeeded({
+    kind: interaction.kind,
     responseId: typeof value.id === "string" ? value.id : null,
     output: content,
     usage: readUsage(value.usage),
@@ -231,17 +241,50 @@ function readContent(value: Record<string, unknown>): string | null {
   return typeof first.message.content === "string" ? first.message.content : null;
 }
 
-function readUsage(value: unknown): ProviderResponse["usage"] {
+function readUsage(value: unknown) {
   if (!isRecord(value)) {
     return null;
   }
 
   return {
-    inputTokens: readNumber(value.prompt_tokens),
-    outputTokens: readNumber(value.completion_tokens),
-    totalTokens: readNumber(value.total_tokens),
+    inputTokens: readNumber(value.prompt_tokens) ?? null,
+    outputTokens: readNumber(value.completion_tokens) ?? null,
+    totalTokens: readNumber(value.total_tokens) ?? null,
     metadata: {},
   };
+}
+
+function encodeOpenAIRequest(
+  model: string,
+  messages: readonly ModelMessage[],
+  interaction: ProviderInteraction,
+): string {
+  if (interaction.kind === "native_tool_turn") {
+    throw new TypeError("This adapter revision cannot encode native Tool interaction.");
+  }
+  return JSON.stringify({
+    model,
+    messages: messages.map((message) => ({
+      role: message.role,
+      content: renderTextContent(message),
+    })),
+    stream: false,
+    ...(interaction.kind === "structured_generation"
+      ? { response_format: openAIResponseFormat(interaction.outputFormat) }
+      : {}),
+  });
+}
+
+function renderTextContent(message: ModelMessage): string {
+  if (message.role === "tool") {
+    throw new TypeError("Text and structured generation accept text-only Model Messages.");
+  }
+  return message.content.map((block) => {
+    if (block.kind !== "text") {
+      throw new TypeError("Text and structured generation accept text-only Model Messages.");
+    }
+    return block.text;
+  }).join("");
 }
 
 function readNumber(value: unknown): number | undefined {

@@ -3,7 +3,7 @@ import type {
 } from "@agent-anything/model-interaction";
 import {
   composeModelInput,
-  providerMessagesFromComposition,
+  modelMessagesFromComposition,
   type ModelOutputFormat,
 } from "@agent-anything/model-interaction/input";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
@@ -265,7 +265,7 @@ describe("OllamaProvider", () => {
 
     await expect(provider.send({
       ...request(provider),
-      outputFormat: { kind: "text" },
+      interaction: { kind: "text_generation" },
     }, context())).resolves.toMatchObject({
       kind: "failed",
       failure: { code: "provider_input_accounting_invalid" },
@@ -327,7 +327,7 @@ function request(
     providerId: provider.inputAccounting.providerId,
     model: provider.inputAccounting.model,
     accounting: provider.inputAccounting,
-    outputFormat,
+    interaction: { kind: "structured_generation", outputFormat },
     outputReserve: { unit: "bytes", amount: 0 },
     contextBudget: { unit: "bytes", amount: 0 },
     contextProjectedAmount: 0,
@@ -339,10 +339,11 @@ function request(
     composedAt: "2026-08-17T00:00:00.000Z",
   });
   return {
-    capability: "helarc.code-agent.plan",
-    outputFormat,
+    requestId: composition.id,
+    purpose: "helarc.code-agent.plan",
+    interaction: composition.interaction,
     continuation: null,
-    messages: providerMessagesFromComposition(composition.sections),
+    messages: modelMessagesFromComposition(composition),
     composition,
     metadata: {},
   };
@@ -376,6 +377,8 @@ function testLineage() {
     toolExposureContent: null,
     toolExposureBasis: null,
     toolExposureProof: null,
+    controllerControlSet: null,
+    interactionHistory: null,
     protocol: { owner: "provider-test", kind: "protocol", id: "test", revision: "1" },
     policy: { owner: "provider-test", kind: "policy", id: "test", revision: "1" },
   };

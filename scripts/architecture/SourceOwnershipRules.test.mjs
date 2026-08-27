@@ -123,6 +123,7 @@ test("rejects semantic processors and generic metadata in final Context Contract
 test("rejects Context, Runtime, Product, and adapter ownership in Model Interaction Contracts", () => {
   for (const sourcePath of [
     "harness/model-interaction/src/continuation/ModelContinuation.ts",
+    "harness/model-interaction/src/ModelMessage.ts",
     "harness/model-interaction/src/ModelInteractionContractValidation.ts",
   ]) {
     const violations = evaluateSourceOwnershipRules({

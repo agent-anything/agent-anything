@@ -520,7 +520,7 @@ function composeCompleteInput(contextFragments: readonly string[]): ContextConti
     providerId: "provider-neutral",
     model: "deterministic-model",
     accounting,
-    outputFormat: { kind: "text" },
+    interaction: { kind: "text_generation" },
     outputReserve: { unit: "bytes", amount: 32 },
     contextBudget: { unit: "bytes", amount: 512 },
     contextProjectedAmount: contextFragments.reduce((sum, value) =>
@@ -550,7 +550,7 @@ function composeForReconstruction() {
     providerId: "provider-neutral",
     model: "deterministic-model",
     accounting: modelInputAccounting(),
-    outputFormat: { kind: "text" },
+    interaction: { kind: "text_generation" },
     outputReserve: { unit: "bytes", amount: 32 },
     contextBudget: { unit: "bytes", amount: 128 },
     contextProjectedAmount: 12,
@@ -572,7 +572,7 @@ function modelInputAccounting() {
     limitSource: "host_configured",
     estimator: { id: "utf8-bytes", revision: ESTIMATOR_REVISION },
     framing: { id: "deterministic-framing", revision: "1" },
-    renderFraming: () => "frame",
+    renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
   });
 }
 
@@ -657,6 +657,8 @@ function modelInputLineage() {
     toolExposureContent: { owner: "tools", kind: "exposure_content", id: "tools", revision: TOOL_EXPOSURE_REVISION },
     toolExposureBasis: { owner: "tools", kind: "exposure_basis", id: "basis", revision: "1" },
     toolExposureProof: { owner: "tools", kind: "exposure_proof", id: "proof", revision: "proof" },
+    controllerControlSet: null,
+    interactionHistory: null,
     protocol: { owner: "helarc", kind: "protocol", id: "protocol", revision: PROTOCOL_REVISION },
     policy: { owner: "governance", kind: "policy", id: "policy", revision: POLICY_REVISION },
   };

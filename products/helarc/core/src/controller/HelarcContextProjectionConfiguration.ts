@@ -68,7 +68,10 @@ export function createHelarcContextProjectionConfiguration(
     allocate(input: ControllerPreProjectionInput) {
       const allocation = allocateModelInputContext({
         accounting,
-        outputFormat: createHelarcControllerOutputFormat(input.toolExposure),
+        interaction: {
+          kind: "structured_generation",
+          outputFormat: createHelarcControllerOutputFormat(input.toolExposure),
+        },
         outputReserve: Object.freeze({
           unit: capability.estimator.unit,
           amount: HELARC_MODEL_OUTPUT_RESERVE_BYTES,

@@ -40,7 +40,7 @@ const TEST_INPUT_ACCOUNTING = createUtf8ModelInputAccounting({
   limitSource: "host_configured",
   estimator: { id: "fake-provider.utf8-content", revision: "1" },
   framing: { id: "fake-provider.framing", revision: "1" },
-  renderFraming: (sections) => JSON.stringify({ roles: sections.map(({ role }) => role) }),
+  renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
 });
 
 describe("Helarc controller", () => {
@@ -88,7 +88,9 @@ describe("Helarc controller", () => {
       instructionBlocks: [{ id: "helarc.behavior", revision: "1" }],
     });
     expect(JSON.stringify(request.metadata)).not.toContain("Complete the code task.");
-    expect(request.outputFormat).toMatchObject({
+    expect(request.interaction).toMatchObject({
+      kind: "structured_generation",
+      outputFormat: {
       kind: "json_schema",
       name: "helarc_model_decision",
       schemaId: "helarc.model-decision",
@@ -134,9 +136,10 @@ describe("Helarc controller", () => {
           { required: ["kind", "reason"] },
         ],
       },
+      },
     });
-    expect(request.composition.outputFormat).toEqual(request.outputFormat);
-    const prompt = request.messages.map(({ content }) => content).join("\n");
+    expect(request.composition.interaction).toEqual(request.interaction);
+    const prompt = messageText(request.messages);
     expect(prompt).toContain("tool_call, plan_update, completion, stop");
     expect(prompt).toContain("A successful Edit or Write is an Observation");
     expect(prompt).toContain('"file_path"');
@@ -201,13 +204,13 @@ describe("Helarc controller", () => {
       correction: null,
       inputAccounting: TEST_INPUT_ACCOUNTING,
     });
-    const alternatives = request.outputFormat.kind === "json_schema"
-      ? (request.outputFormat.schema as { oneOf: readonly unknown[] }).oneOf
+    const alternatives = request.interaction.kind === "structured_generation"
+      ? (request.interaction.outputFormat.schema as { oneOf: readonly unknown[] }).oneOf
       : [];
 
     expect(alternatives).toHaveLength(3);
     expect(JSON.stringify(alternatives)).not.toContain("tool_call");
-    expect(request.messages.map(({ content }) => content).join("\n"))
+    expect(messageText(request.messages))
       .toContain("No Tools are available for this Controller turn.");
   });
 
@@ -219,7 +222,7 @@ describe("Helarc controller", () => {
       limitSource: "host_configured",
       estimator: { id: "tiny-provider.utf8-content", revision: "1" },
       framing: { id: "tiny-provider.framing", revision: "1" },
-      renderFraming: (_sections, outputFormat) => JSON.stringify(outputFormat),
+      renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
     });
 
     expect(() => buildHelarcProviderRequest(createControllerInput("tiny-provider", "tiny-model"), {
@@ -240,7 +243,7 @@ describe("Helarc controller", () => {
         limitSource: "host_configured",
         estimator: { id: "other.utf8", revision: "1" },
         framing: { id: "other.framing", revision: "1" },
-        renderFraming: () => "",
+        renderRequest: (messages) => messageText(messages),
       }),
     })).toThrow("must match");
   });
@@ -294,7 +297,12 @@ describe("Helarc controller", () => {
     });
     expect(request.messages.at(-1)).toMatchObject({
       role: "user",
-      metadata: { kind: "structured-output-correction" },
+      content: [{ kind: "text", text: expect.stringContaining("Correct the previous response.") }],
+    });
+    expect(request.composition.sections.at(-1)?.source).toMatchObject({
+      owner: "helarc",
+      kind: "prompt_section",
+      id: "structured_output_correction",
     });
   });
 
@@ -588,7 +596,14 @@ function controllerCallContext(): ControllerCallContext {
 }
 
 function response(output: unknown): ProviderResponse {
-  return { output, usage: null, metadata: {} };
+  return {
+    kind: "structured_generation",
+    responseId: null,
+    output: output as never,
+    usage: null,
+    continuation: null,
+    metadata: {},
+  };
 }
 
 function expectParseError(action: () => unknown, code: HelarcControllerParseErrorCode): void {
@@ -608,11 +623,12 @@ class FakeProvider implements Provider {
     id: "fake-provider",
     name: "Fake provider",
     capabilities: {
-      supportsToolPlanning: true,
-      supportsStructuredOutput: true,
-      supportsStreaming: false,
+      nativeToolInteraction: { supported: false as const },
+      structuredGeneration: { supported: true as const },
+      streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
+      compaction: { supported: false as const },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -625,4 +641,10 @@ class FakeProvider implements Provider {
     this.requests.push(request);
     return { kind: "succeeded", response: response(this.output) };
   }
+}
+
+function messageText(messages: ProviderRequest["messages"]): string {
+  return messages.flatMap((message) => message.content)
+    .map((block) => block.kind === "text" ? block.text : JSON.stringify(block))
+    .join("\n");
 }

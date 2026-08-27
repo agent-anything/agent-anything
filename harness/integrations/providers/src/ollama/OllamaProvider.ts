@@ -5,6 +5,8 @@ import {
   type ProviderCallResult,
   type ProviderDescriptor,
   type ProviderFailure,
+  type ProviderInteraction,
+  type ModelMessage,
   type ProviderRequest,
   type ProviderResponse,
 } from "@agent-anything/model-interaction";
@@ -43,24 +45,19 @@ export class OllamaProvider implements Provider {
       limitSource: this.config.inputLimit.source,
       estimator: { id: "ollama.generate.utf8-content", revision: "1" },
       framing: { id: "ollama.generate-framing", revision: "2" },
-      renderFraming: (sections, outputFormat) => JSON.stringify({
-        protocol: "ollama-generate",
-        model: this.config.model,
-        roles: sections.map((section) => section.role),
-        separators: Math.max(0, sections.length - 1),
-        stream: false,
-        ...ollamaFormatField(outputFormat),
-      }),
+      renderRequest: (messages, interaction) =>
+        encodeOllamaGenerateRequest(this.config.model, messages, interaction),
     });
     this.descriptor = Object.freeze({
       id: "ollama.generate",
       name: "Ollama Generate",
       capabilities: Object.freeze({
-        supportsToolPlanning: true,
-        supportsStructuredOutput: true,
-        supportsStreaming: false,
+        nativeToolInteraction: Object.freeze({ supported: false as const }),
+        structuredGeneration: Object.freeze({ supported: true as const }),
+        streaming: Object.freeze({ supported: false as const }),
         modelInput: this.inputAccounting.capability,
         continuation: Object.freeze({ supported: false as const }),
+        compaction: Object.freeze({ supported: false as const }),
       }),
       requestRetryScheduler: Object.freeze({ kind: "harness" as const }),
       metadata: Object.freeze({}),
@@ -80,6 +77,13 @@ export class OllamaProvider implements Provider {
         "The selected Ollama Generate endpoint does not support this continuation Contract.",
       );
     }
+    if (request.interaction.kind === "native_tool_turn") {
+      return failed(
+        "unsupported",
+        "provider_native_tool_interaction_unsupported",
+        "Ollama native Tool interaction is not enabled by this adapter revision.",
+      );
+    }
     const verificationFailure = verifyProviderRequest(this.inputAccounting, request);
     if (verificationFailure !== null) {
       return verificationFailure;
@@ -92,15 +96,23 @@ export class OllamaProvider implements Provider {
         return interruptedBeforeRequest;
       }
 
+      const encodedRequest = encodeOllamaGenerateRequest(
+        this.config.model,
+        request.messages,
+        request.interaction,
+      );
+      this.inputAccounting.verifyEncoded({
+        providerId: this.inputAccounting.providerId,
+        model: this.inputAccounting.model,
+        messages: request.messages,
+        interaction: request.interaction,
+        composition: request.composition,
+        encodedRequest,
+      });
       const response = await this.fetchImpl(this.endpointUrl(), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          model: this.config.model,
-          prompt: renderPrompt(request),
-          stream: false,
-          ...ollamaFormatField(request.outputFormat),
-        }),
+        body: encodedRequest,
         signal: attempt.signal,
       });
       const interruptedAfterResponse = providerResultFromInterruption(attempt.cause);
@@ -119,7 +131,7 @@ export class OllamaProvider implements Provider {
 
       const body = await response.json();
       const interruptedAfterBody = providerResultFromInterruption(attempt.cause);
-      return interruptedAfterBody ?? mapOllamaGenerateResponse(body);
+      return interruptedAfterBody ?? mapOllamaGenerateResponse(body, request.interaction);
     } catch (error) {
       const interruption = providerResultFromInterruption(attempt.cause);
       if (interruption !== null) {
@@ -148,7 +160,7 @@ function verifyProviderRequest(
       providerId: accounting.providerId,
       model: accounting.model,
       messages: request.messages,
-      outputFormat: request.outputFormat,
+      interaction: request.interaction,
       composition: request.composition,
     });
     return null;
@@ -161,20 +173,21 @@ function verifyProviderRequest(
   }
 }
 
-function renderPrompt(request: ProviderRequest): string {
-  return request.messages
-    .map((message) => `${message.role}: ${message.content}`)
-    .join("\n\n");
-}
-
 function ollamaFormatField(
-  outputFormat: ProviderRequest["outputFormat"],
+  interaction: Exclude<ProviderInteraction, { readonly kind: "native_tool_turn" }>,
 ): { readonly format?: ReturnType<typeof projectOllamaOutputFormat> } {
-  const format = projectOllamaOutputFormat(outputFormat);
+  const format = projectOllamaOutputFormat(
+    interaction.kind === "structured_generation"
+      ? interaction.outputFormat
+      : { kind: "text" },
+  );
   return format === null ? {} : { format };
 }
 
-function mapOllamaGenerateResponse(value: unknown): ProviderCallResult {
+function mapOllamaGenerateResponse(
+  value: unknown,
+  interaction: Exclude<ProviderInteraction, { readonly kind: "native_tool_turn" }>,
+): ProviderCallResult {
   if (!isRecord(value) || typeof value.response !== "string") {
     return failed("response", "provider_response_malformed", "Provider response did not include generated content.");
   }
@@ -184,17 +197,48 @@ function mapOllamaGenerateResponse(value: unknown): ProviderCallResult {
   }
 
   return succeeded({
+    kind: interaction.kind,
     responseId: null,
     output: value.response,
     usage: {
-      inputTokens: readNumber(value.prompt_eval_count),
-      outputTokens: readNumber(value.eval_count),
-      totalTokens: readTotalTokens(value),
+      inputTokens: readNumber(value.prompt_eval_count) ?? null,
+      outputTokens: readNumber(value.eval_count) ?? null,
+      totalTokens: readTotalTokens(value) ?? null,
       metadata: {},
     },
     continuation: null,
     metadata: {},
   });
+}
+
+function encodeOllamaGenerateRequest(
+  model: string,
+  messages: readonly ModelMessage[],
+  interaction: ProviderInteraction,
+): string {
+  if (interaction.kind === "native_tool_turn") {
+    throw new TypeError("This adapter revision cannot encode native Tool interaction.");
+  }
+  return JSON.stringify({
+    model,
+    prompt: messages
+      .map((message) => `${message.role}: ${renderTextContent(message)}`)
+      .join("\n\n"),
+    stream: false,
+    ...ollamaFormatField(interaction),
+  });
+}
+
+function renderTextContent(message: ModelMessage): string {
+  if (message.role === "tool") {
+    throw new TypeError("Text and structured generation accept text-only Model Messages.");
+  }
+  return message.content.map((block) => {
+    if (block.kind !== "text") {
+      throw new TypeError("Text and structured generation accept text-only Model Messages.");
+    }
+    return block.text;
+  }).join("");
 }
 
 function readTotalTokens(value: Record<string, unknown>): number | undefined {

@@ -33,8 +33,9 @@ export class FakeProvider implements Provider {
       limitSource: "host_configured",
       estimator: { id: "fake-provider.utf8-content", revision: "1" },
       framing: { id: "fake-provider.framing", revision: "1" },
-      renderFraming: (sections) => JSON.stringify({
-        roles: sections.map((section) => section.role),
+      renderRequest: (messages, interaction) => JSON.stringify({
+        messages,
+        interaction,
       }),
     });
     this.descriptor = {
@@ -42,11 +43,12 @@ export class FakeProvider implements Provider {
       name: input.descriptor?.name ?? "Fake Provider",
       metadata: input.descriptor?.metadata ?? {},
       capabilities: {
-        supportsToolPlanning: true,
-        supportsStructuredOutput: true,
-        supportsStreaming: false,
+        nativeToolInteraction: { supported: false },
+        structuredGeneration: { supported: true },
+        streaming: { supported: false },
         modelInput: this.inputAccounting.capability,
         continuation: { supported: false },
+        compaction: { supported: false },
         ...input.descriptor?.capabilities,
       },
       requestRetryScheduler: input.descriptor?.requestRetryScheduler ?? {

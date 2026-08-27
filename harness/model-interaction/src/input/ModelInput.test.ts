@@ -77,7 +77,7 @@ function validComposition(): ModelInputComposition {
     },
     limit: { unit: "tokens", maximum: 1000, source: "provider_reported" },
     outputReserve: { unit: "tokens", amount: 100 },
-    outputFormat: { kind: "text" },
+    interaction: { kind: "text_generation" },
     framing: {
       ref: { id: "chat-framing", revision: "1" },
       unit: "tokens",
@@ -111,6 +111,13 @@ function validComposition(): ModelInputComposition {
       content: { kind: "structured", value: { blocks: 2 } },
       accounting: { unit: "tokens", amount: 30 },
     }],
+    messages: [{
+      role: "system",
+      content: [{ kind: "text", text: "Follow the product protocol." }],
+    }, {
+      role: "user",
+      content: [{ kind: "text", text: JSON.stringify({ blocks: 2 }) }],
+    }],
     lineage: {
       instructionBinding: { owner: "agent-runtime", kind: "agent_instruction_binding", id: "binding-1", revision: "1" },
       agent: { owner: "agent-core", kind: "agent_revision", id: "agent-1", revision: "1" },
@@ -142,6 +149,8 @@ function validComposition(): ModelInputComposition {
       toolExposureContent: { owner: "tools", kind: "tool_exposure_content", id: "content-1", revision: "1" },
       toolExposureBasis: { owner: "tools", kind: "tool_exposure_basis", id: "basis-1", revision: "1" },
       toolExposureProof: { owner: "tools", kind: "tool_exposure_proof", id: "proof-1", revision: "proof-1" },
+      controllerControlSet: null,
+      interactionHistory: null,
       protocol: {
         owner: "helarc",
         kind: "protocol",
