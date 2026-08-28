@@ -28,6 +28,7 @@ import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "@agent-anything/helarc/task";
+import { createHelarcProviderProfile } from "@agent-anything/helarc/configuration";
 import {
   prepareHelarcHostRun,
   type PrepareHelarcHostRunInput,
@@ -43,6 +44,7 @@ type RunHelarcTestInput = Omit<
   | "workspaceSelection"
   | "identityResolver"
   | "identitySelection"
+  | "providerProfile"
 > & {
   readonly workspace: WorkspaceSelection;
   readonly workspaceResolver?: HostWorkspaceResolver;
@@ -54,6 +56,7 @@ type RunHelarcTestInput = Omit<
   readonly enableShell?: boolean;
   readonly permissionPreset?: PrepareHelarcHostRunInput["permissionPreset"];
   readonly inputItems?: PrepareHelarcHostRunInput["inputItems"];
+  readonly providerProfile?: PrepareHelarcHostRunInput["providerProfile"];
 };
 
 async function executeTestHostRun(input: RunHelarcTestInput) {
@@ -73,6 +76,7 @@ async function prepareTestHostRun(input: RunHelarcTestInput) {
     identitySelection,
     enableShell,
     inputItems,
+    providerProfile,
     ...hostInput
   } = input;
   return prepareHelarcHostRun({
@@ -95,7 +99,28 @@ async function prepareTestHostRun(input: RunHelarcTestInput) {
     sessionId: input.sessionId ?? productRunId,
     inputItems: inputItems ?? [],
     permissionPreset,
+    providerProfile: providerProfile ?? createTestProviderProfile(input.provider),
   });
+}
+
+function createTestProviderProfile(
+  provider: Provider,
+): PrepareHelarcHostRunInput["providerProfile"] {
+  const result = createHelarcProviderProfile({
+    id: "test-provider",
+    providerKind: provider.descriptor.id === "ollama.api"
+      ? "ollama"
+      : "openai-compatible",
+    displayName: "Test Provider",
+    baseUrl: "https://provider.local/v1",
+    model: provider.inputAccounting.model,
+    timeoutMs: 30_000,
+    credentialStatus: "empty_allowed",
+    qualificationPolicy: "allow_experimental",
+    isActive: true,
+  });
+  if (!result.ok) throw new TypeError("Test Provider profile is invalid.");
+  return result.profile;
 }
 
 function executeReadOnlyTestHostRun(

@@ -4,6 +4,7 @@ import {
   type HelarcProviderProfile,
   type HelarcProviderProfileError,
 } from "@agent-anything/helarc/configuration";
+import type { HelarcModelUsePolicy } from "@agent-anything/helarc/configuration";
 import {
   SerializedAtomicFile,
   type AtomicFileTransaction,
@@ -23,6 +24,7 @@ export interface SaveHelarcProviderProfileInput {
   baseUrl: string;
   model: string;
   timeoutMs: number;
+  qualificationPolicy?: HelarcModelUsePolicy;
   apiKeyUpdate: "keep" | "set" | "clear";
   apiKey: string;
 }
@@ -34,11 +36,12 @@ export interface PersistedHelarcProviderProfile {
   readonly baseUrl: string;
   readonly model: string;
   readonly timeoutMs: number;
+  readonly qualificationPolicy: HelarcModelUsePolicy;
   readonly updatedAt: string;
 }
 
-export interface HelarcProviderProfileStoreDocumentV1 {
-  readonly formatVersion: 1;
+export interface HelarcProviderProfileStoreDocumentV2 {
+  readonly formatVersion: 2;
   readonly activeProfile: PersistedHelarcProviderProfile;
 }
 
@@ -140,9 +143,9 @@ export class FileHelarcProviderProfileStore {
 
       try {
         await file.replaceText(`${JSON.stringify({
-          formatVersion: 1,
+          formatVersion: 2,
           activeProfile: completed.persisted,
-        } satisfies HelarcProviderProfileStoreDocumentV1, null, 2)}\n`);
+        } satisfies HelarcProviderProfileStoreDocumentV2, null, 2)}\n`);
       } catch {
         return {
           ok: false,
@@ -158,7 +161,7 @@ export class FileHelarcProviderProfileStore {
 
   private async readDocument(
     file: AtomicFileTransaction,
-  ): Promise<HelarcProviderProfileStoreDocumentV1 | null> {
+  ): Promise<HelarcProviderProfileStoreDocumentV2 | null> {
     const contents = await file.readText();
     if (contents === null) {
       return null;
@@ -180,7 +183,7 @@ export class FileHelarcProviderProfileStore {
     }
 
     return Object.freeze({
-      formatVersion: 1,
+      formatVersion: 2,
       activeProfile: parseStoredProfile(parsed.activeProfile),
     });
   }
@@ -255,6 +258,7 @@ function createStoredProfile(
     model: input.model,
     timeoutMs: input.timeoutMs,
     credentialStatus,
+    qualificationPolicy: input.qualificationPolicy ?? "require_qualified",
     isActive: true,
   });
   if (!profileResult.ok) {
@@ -268,6 +272,7 @@ function createStoredProfile(
     baseUrl: profileResult.profile.baseUrl,
     model: profileResult.profile.model,
     timeoutMs: profileResult.profile.timeoutMs,
+    qualificationPolicy: profileResult.profile.qualificationPolicy,
     updatedAt,
   };
   return {
@@ -298,6 +303,7 @@ function createResolvedProfile(
     baseUrl: persisted.baseUrl,
     model: persisted.model,
     timeoutMs: persisted.timeoutMs,
+    qualificationPolicy: persisted.qualificationPolicy,
     apiKeyUpdate: "keep",
     apiKey: "",
   }, credentialStatus, apiKey, persisted.updatedAt);
@@ -312,6 +318,7 @@ function parseStoredProfile(value: unknown): PersistedHelarcProviderProfile {
     "baseUrl",
     "model",
     "timeoutMs",
+    "qualificationPolicy",
     "updatedAt",
   ])) {
     throw invalidStoredProfile();
@@ -324,6 +331,7 @@ function parseStoredProfile(value: unknown): PersistedHelarcProviderProfile {
     typeof value.model !== "string" ||
     !Number.isSafeInteger(value.timeoutMs) ||
     (value.timeoutMs as number) <= 0 ||
+    !isQualificationPolicy(value.qualificationPolicy) ||
     typeof value.updatedAt !== "string" ||
     !isCanonicalIsoTimestamp(value.updatedAt)
   ) {
@@ -337,6 +345,7 @@ function parseStoredProfile(value: unknown): PersistedHelarcProviderProfile {
     baseUrl: value.baseUrl,
     model: value.model,
     timeoutMs: value.timeoutMs as number,
+    qualificationPolicy: value.qualificationPolicy,
     updatedAt: value.updatedAt,
   };
   const resolved = createResolvedProfile(candidate, "missing", "");
@@ -347,7 +356,8 @@ function parseStoredProfile(value: unknown): PersistedHelarcProviderProfile {
     resolved.profile.displayName !== candidate.displayName ||
     resolved.profile.baseUrl !== candidate.baseUrl ||
     resolved.profile.model !== candidate.model ||
-    resolved.profile.timeoutMs !== candidate.timeoutMs
+    resolved.profile.timeoutMs !== candidate.timeoutMs ||
+    resolved.profile.qualificationPolicy !== candidate.qualificationPolicy
   ) {
     throw invalidStoredProfile();
   }
@@ -361,12 +371,18 @@ function invalidStoredProfile(): HelarcProviderProfileStoreCorruptionError {
 }
 
 function isStoreDocument(value: unknown): value is {
-  readonly formatVersion: 1;
+  readonly formatVersion: 2;
   readonly activeProfile: unknown;
 } {
   return isRecord(value) &&
     hasExactKeys(value, ["formatVersion", "activeProfile"]) &&
-    value.formatVersion === 1;
+    value.formatVersion === 2;
+}
+
+function isQualificationPolicy(
+  value: unknown,
+): value is HelarcModelUsePolicy {
+  return value === "require_qualified" || value === "allow_experimental";
 }
 
 function isProviderKind(value: unknown): value is HelarcProviderKind {

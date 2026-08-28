@@ -1,4 +1,5 @@
 import { createHelarcProviderProfile, type HelarcProviderKind, type HelarcProviderProfile } from "@agent-anything/helarc/configuration";
+import type { HelarcModelUsePolicy } from "@agent-anything/helarc/configuration";
 
 export interface HelarcProviderConfig {
   providerKind: HelarcProviderKind;
@@ -46,6 +47,17 @@ export function resolveHelarcProviderConfig(
   const apiKey = readEnv(env, "HELARC_PROVIDER_API_KEY") ?? "";
   const timeoutMs = readTimeoutMs(env);
   const providerKind = readProviderKind(env);
+  const qualificationPolicy = readQualificationPolicy(env);
+  if (qualificationPolicy === null) {
+    return {
+      ok: false,
+      error: {
+        code: "provider_config_invalid",
+        message: "Provider configuration is invalid.",
+        missingKeys: [],
+      },
+    };
+  }
   const profileResult = createHelarcProviderProfile({
     id: "env-provider",
     providerKind,
@@ -54,6 +66,7 @@ export function resolveHelarcProviderConfig(
     model,
     timeoutMs,
     credentialStatus: apiKey.length > 0 ? "present" : "empty_allowed",
+    qualificationPolicy,
     isActive: true,
   });
 
@@ -79,6 +92,14 @@ export function resolveHelarcProviderConfig(
     },
     profile: profileResult.profile,
   };
+}
+
+function readQualificationPolicy(
+  env: NodeJS.ProcessEnv,
+): HelarcModelUsePolicy | null {
+  const value = readEnv(env, "HELARC_MODEL_QUALIFICATION_POLICY");
+  if (value === undefined || value === "require_qualified") return "require_qualified";
+  return value === "allow_experimental" ? value : null;
 }
 
 function readProviderKind(env: NodeJS.ProcessEnv): HelarcProviderKind {

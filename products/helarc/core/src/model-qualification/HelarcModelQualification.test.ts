@@ -166,8 +166,14 @@ describe("Helarc model qualification", () => {
       policy: "require_qualified",
     });
     const projection = projectHelarcModelQualificationSafe({
+      catalog,
       target: exactTarget,
       disposition,
+      toolGuidance: {
+        releaseId: "helarc.product-tool-guidance",
+        releaseRevision: `sha256:${"f".repeat(64)}`,
+        profileRevision: "helarc.product-tool-guidance-profile.v1",
+      },
     });
     const serialized = JSON.stringify(projection);
 
@@ -175,9 +181,15 @@ describe("Helarc model qualification", () => {
       providerKind: "ollama",
       modelId: "gemma4:e4b",
       status: "qualified",
+      experimentalUseSelected: false,
+      scopes: [{
+        scope: "agent_loop",
+        decidedAt: DATE,
+      }],
     });
     expect(serialized).not.toContain(DIGEST);
-    expect(serialized).not.toContain("evidence");
+    expect(serialized).not.toContain("evidenceRef");
+    expect(serialized).not.toContain("evidenceRefs");
     expect(serialized).not.toContain("binding");
   });
 

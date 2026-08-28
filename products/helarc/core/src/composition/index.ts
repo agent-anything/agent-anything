@@ -3,6 +3,7 @@ export type {
   HelarcProductComposition,
 } from "./HelarcProductComposition.js";
 export { createHelarcProductComposition } from "./HelarcProductComposition.js";
+export * from "./HelarcModelUseAdmission.js";
 export type {
   CreateHelarcActionCompositionInput,
   HelarcActionComposition,

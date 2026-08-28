@@ -923,6 +923,7 @@ const expectedValueExports = {
     "resolveHelarcToolGuidance",
   ],
   "@agent-anything/helarc/model-qualification": [
+    "HELARC_MODEL_QUALIFICATION_CATALOG",
     "HELARC_MODEL_QUALIFICATION_PROTOCOL_REVISION",
     "HELARC_MODEL_QUALIFICATION_SCOPES",
     "HelarcModelQualificationError",
@@ -972,10 +973,15 @@ const expectedValueExports = {
     "reduceHelarcRunProjection",
   ],
   "@agent-anything/helarc/composition": [
+    "HELARC_OPERATING_PROFILE_REVISION",
+    "HELARC_PRODUCT_REVISION",
+    "HelarcModelUseAdmissionError",
+    "admitHelarcModelUse",
     "createHelarcActionComposition",
     "createHelarcProductComposition",
     "mapRuntimeEventToHelarcActivity",
     "projectHelarcProductResult",
+    "resolveHelarcModelQualification",
     "validateHelarcToolInput",
   ],
   "@agent-anything/helarc/observability": [

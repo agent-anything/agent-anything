@@ -53,10 +53,15 @@ describe("Helarc public API", () => {
       "reduceHelarcRunProjection",
     ]);
     expect(Object.keys(compositionApi).sort()).toEqual([
+      "HELARC_OPERATING_PROFILE_REVISION",
+      "HELARC_PRODUCT_REVISION",
+      "HelarcModelUseAdmissionError",
+      "admitHelarcModelUse",
       "createHelarcActionComposition",
       "createHelarcProductComposition",
       "mapRuntimeEventToHelarcActivity",
       "projectHelarcProductResult",
+      "resolveHelarcModelQualification",
       "validateHelarcToolInput",
     ]);
     expect(controllerApi).toHaveProperty("buildHelarcProviderRequest");
@@ -71,6 +76,8 @@ describe("Helarc public API", () => {
     expect(toolsApi).toHaveProperty("admitHelarcSelectedTools");
     expect(modelQualificationApi).toHaveProperty("createHelarcModelQualificationTarget");
     expect(modelQualificationApi).toHaveProperty("createHelarcModelQualificationDecision");
+    expect(compositionApi).toHaveProperty("resolveHelarcModelQualification");
+    expect(compositionApi).toHaveProperty("admitHelarcModelUse");
     expect(modelQualificationApi).toHaveProperty("deriveHelarcModelUseDisposition");
   });
 

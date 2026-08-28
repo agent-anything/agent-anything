@@ -17,6 +17,7 @@ import * as React from "react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type {
   HelarcMainSnapshot,
+  HelarcModelUsePolicy,
   HelarcProviderKind,
   HelarcStartRunResult,
 } from "../shared/HelarcDesktopApi.js";
@@ -39,6 +40,7 @@ const initialSnapshot: HelarcMainSnapshot = {
       model: "initial",
       timeoutMs: 30_000,
       credentialStatus: "missing",
+      qualificationPolicy: "require_qualified",
       isActive: true,
     },
     profiles: [],
@@ -610,6 +612,9 @@ export function RunTimelinePanel({
       <div className="run-summary">
         <strong>{acceptedTask?.prompt ?? run?.host.taskId ?? "Run"}</strong>
         <span>{runStatusLabel(run?.display.status ?? "running")}</span>
+        {run ? (
+          <span>{`Model use: ${run.product.qualification.status}`}</span>
+        ) : null}
         {run?.product.continuation ? (
           <span>{`Model continuity: ${run.product.continuation.kind}`}</span>
         ) : null}
@@ -689,6 +694,10 @@ export function RunTerminalPanel({
             <dd>{verificationLabel(verification)}</dd>
           </div>
         ) : null}
+        <div>
+          <dt>Model use</dt>
+          <dd>{run.product.qualification.status}</dd>
+        </div>
         {run.host.progress.disposition ? (
           <div>
             <dt>Progress</dt>
@@ -872,7 +881,7 @@ function SettingsPanel({
   const provider = snapshot.provider.configured ? snapshot.provider.activeProfile : null;
   const [isSaving, setIsSaving] = useState(false);
   const formKey = provider
-    ? `${provider.id}:${provider.providerKind}:${provider.displayName}:${provider.baseUrl}:${provider.model}:${provider.timeoutMs}:${provider.credentialStatus}`
+    ? `${provider.id}:${provider.providerKind}:${provider.displayName}:${provider.baseUrl}:${provider.model}:${provider.timeoutMs}:${provider.credentialStatus}:${provider.qualificationPolicy}`
     : "unconfigured-provider";
 
   async function saveProviderConfig(event: FormEvent<HTMLFormElement>) {
@@ -888,6 +897,10 @@ function SettingsPanel({
     const submittedBaseUrl = readFormString(formData, "baseUrl");
     const submittedModel = readFormString(formData, "model");
     const submittedTimeoutMs = readFormNumber(formData, "timeoutMs", provider?.timeoutMs ?? 30_000);
+    const submittedQualificationPolicy = readQualificationPolicy(
+      formData,
+      provider?.qualificationPolicy ?? "require_qualified",
+    );
     const submittedApiKey = readFormString(formData, "apiKey");
 
     setIsSaving(true);
@@ -899,6 +912,7 @@ function SettingsPanel({
         baseUrl: submittedBaseUrl,
         model: submittedModel,
         timeoutMs: submittedTimeoutMs,
+        qualificationPolicy: submittedQualificationPolicy,
         apiKeyUpdate: submittedApiKey.trim().length > 0
           ? "set"
           : provider?.credentialStatus === "present"
@@ -968,6 +982,17 @@ function SettingsPanel({
         />
       </label>
       <label>
+        <span>Model qualification</span>
+        <select
+          name="qualificationPolicy"
+          defaultValue={provider?.qualificationPolicy ?? "require_qualified"}
+          disabled={isSaving}
+        >
+          <option value="require_qualified">Require qualified</option>
+          <option value="allow_experimental">Allow experimental</option>
+        </select>
+      </label>
+      <label>
         <span>API key</span>
         <input
           name="apiKey"
@@ -981,6 +1006,10 @@ function SettingsPanel({
       <div className="settings-status">
         <span>Credential</span>
         <strong>{provider?.credentialStatus ?? "missing"}</strong>
+      </div>
+      <div className="settings-status">
+        <span>Qualification policy</span>
+        <strong>{provider?.qualificationPolicy ?? "require_qualified"}</strong>
       </div>
       {snapshot.provider.configured ? null : <p className="settings-error">{snapshot.provider.error.message}</p>}
       <button className="primary-button compact" type="submit" disabled={isSaving}>
@@ -1077,6 +1106,16 @@ function runStatusLabel(status: ActiveRunProjection["display"]["status"]): strin
 
 function threadMessageRoleLabel(role: NonNullable<HelarcMainSnapshot["activeThread"]>["messages"][number]["role"]): string {
   return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
+function readQualificationPolicy(
+  formData: FormData,
+  fallback: HelarcModelUsePolicy,
+): HelarcModelUsePolicy {
+  const value = formData.get("qualificationPolicy");
+  return value === "require_qualified" || value === "allow_experimental"
+    ? value
+    : fallback;
 }
 
 export function ClarificationPromptPanel({

@@ -34,6 +34,15 @@ import {
   type HelarcControllerTraceProjection,
 } from "../observability/index.js";
 import type { HelarcTaskInput } from "../task/HelarcTaskInput.js";
+import type { HelarcProviderProfile } from "../configuration/index.js";
+import {
+  type HelarcModelQualificationCatalog,
+  type HelarcModelQualificationResolution,
+} from "../model-qualification/index.js";
+import {
+  admitHelarcModelUse,
+  resolveHelarcModelQualification,
+} from "./HelarcModelUseAdmission.js";
 import type { Provider } from "@agent-anything/model-interaction";
 import {
   createHelarcVerificationComposition,
@@ -81,6 +90,8 @@ export interface CreateHelarcProductCompositionInput {
   readonly task: AgentTask<HelarcTaskInput>;
   readonly workspace: WorkspaceSelection;
   readonly provider: Provider;
+  readonly providerProfile: HelarcProviderProfile;
+  readonly qualificationCatalog?: HelarcModelQualificationCatalog;
   readonly instructionTarget: HelarcMainInstructionTarget;
   readonly codeSource: CodeSourcePort;
   readonly fileActions: HelarcFileActionContribution;
@@ -95,6 +106,7 @@ export interface HelarcProductComposition {
   readonly delegatedAgent: Agent<HelarcAgentOutput>;
   readonly controller: Controller<HelarcAgentOutput>;
   readonly controllerProtocol: HelarcControllerProtocolComposition;
+  readonly qualification: HelarcModelQualificationResolution;
   readonly actions: Awaited<ReturnType<typeof createHelarcActionComposition>>;
   readonly interactions: InteractionProtocolRegistrySnapshot;
   readonly delegation: RunnerDelegationComposition;
@@ -152,6 +164,14 @@ export async function createHelarcProductComposition(
     tools: actions.toolSelection.tools.map(({ registration }) => registration),
   });
   const rootToolGuidanceBinding = controllerProtocol.bindRun(input.runId);
+  const qualification = resolveHelarcModelQualification({
+    provider: input.provider,
+    providerProfile: input.providerProfile,
+    agent,
+    controllerProtocol,
+    catalog: input.qualificationCatalog,
+  });
+  admitHelarcModelUse(qualification);
   const interactions = createInteractionProtocolRegistrySnapshot(
     "helarc.interactions.v3",
     [clarification.protocol],
@@ -161,7 +181,10 @@ export async function createHelarcProductComposition(
     string,
     HelarcControllerTraceProjection
   >();
-  let productProjection = createHelarcProductRunProjection(input.runId);
+  let productProjection = createHelarcProductRunProjection(
+    input.runId,
+    qualification.safeProjection,
+  );
   let productSequence = 0;
   let activitySequence = 0;
   let activityRootRunId: string | null = null;
@@ -203,9 +226,19 @@ export async function createHelarcProductComposition(
     new ProviderBackedController<HelarcAgentOutput>({
       provider: input.provider,
       buildRequest: (controllerInput, context) =>
-        buildHelarcProviderRequest(controllerInput, context, controllerProtocol),
+        buildHelarcProviderRequest(
+          controllerInput,
+          context,
+          controllerProtocol,
+          qualification,
+        ),
       parseResponse: (response, controllerInput) =>
-        parseHelarcProviderResponse(response, controllerInput, controllerProtocol),
+        parseHelarcProviderResponse(
+          response,
+          controllerInput,
+          controllerProtocol,
+          qualification,
+        ),
       responseProtocol: Object.freeze({ kind: "native_tool_turn" }),
       retryExecutor: createSystemRetryExecutor(retryClock),
       retryClock,
@@ -223,6 +256,12 @@ export async function createHelarcProductComposition(
     toolGuidanceProfileRevision: rootToolGuidanceBinding.guidanceProfileRevision,
     toolGuidanceContentDigest: rootToolGuidanceBinding.contentDigest,
     controllerControlGuidanceRevision: controllerProtocol.controlGuidance.revision,
+    modelQualificationTargetId: qualification.target.id,
+    modelUseDispositionId: qualification.disposition.id,
+    modelUseDispositionStatus: qualification.disposition.status,
+    modelQualificationPolicy: qualification.disposition.policy,
+    modelQualificationScopes: qualification.requiredScopes,
+    modelQualificationReasons: qualification.disposition.reasons,
   });
 
   return Object.freeze({
@@ -230,6 +269,7 @@ export async function createHelarcProductComposition(
     delegatedAgent,
     controller: providerController,
     controllerProtocol,
+    qualification,
     actions,
     interactions,
     delegation: descendant.delegation,
@@ -281,6 +321,7 @@ export async function createHelarcProductComposition(
         runResult,
         selectedEnforcement,
         verificationProjection,
+        qualification.safeProjection,
       );
       publishProductUpdate({ kind: "result_settled", result });
       return result;

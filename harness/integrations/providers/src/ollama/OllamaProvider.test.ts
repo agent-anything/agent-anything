@@ -540,6 +540,7 @@ function testLineage() {
     toolGuidance: null,
     controllerControlGuidance: null,
     callableDefinitions: null,
+    modelQualification: null,
     interactionHistory: null,
     protocol: { owner: "provider-test", kind: "protocol", id: "test", revision: "1" },
     policy: { owner: "provider-test", kind: "policy", id: "test", revision: "1" },

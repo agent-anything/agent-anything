@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { HelarcModelUsePolicy } from "../configuration/HelarcProviderProfile.js";
 
 export const HELARC_MODEL_QUALIFICATION_PROTOCOL_REVISION =
   "helarc.model-qualification.v1";
@@ -24,10 +25,6 @@ export type HelarcModelQualificationApplicabilityStatus =
   | "current"
   | "stale"
   | "absent";
-
-export type HelarcModelQualificationPolicy =
-  | "require_qualified"
-  | "allow_experimental";
 
 export type HelarcModelUseDispositionStatus =
   | "qualified"
@@ -104,10 +101,24 @@ export interface HelarcModelUseScopeDisposition {
   readonly decision: HelarcModelQualificationDecisionRef | null;
 }
 
+export interface HelarcModelQualificationSafeScopeProjection {
+  readonly scope: HelarcModelQualificationScope;
+  readonly applicability: HelarcModelQualificationApplicabilityStatus;
+  readonly outcome: HelarcModelQualificationOutcome | null;
+  readonly decidedAt: string | null;
+  readonly limitations: readonly string[];
+}
+
+export interface HelarcModelUseToolGuidanceProjection {
+  readonly releaseId: string;
+  readonly releaseRevision: string;
+  readonly profileRevision: string;
+}
+
 export interface HelarcModelUseDisposition {
   readonly id: string;
   readonly status: HelarcModelUseDispositionStatus;
-  readonly policy: HelarcModelQualificationPolicy;
+  readonly policy: HelarcModelUsePolicy;
   readonly targetId: string;
   readonly nativeToolInteractionSupported: boolean;
   readonly scopes: readonly HelarcModelUseScopeDisposition[];
@@ -119,9 +130,18 @@ export interface HelarcModelQualificationSafeProjection {
   readonly modelId: string;
   readonly modelIdentityStrength: HelarcModelIdentityStrength;
   readonly status: HelarcModelUseDispositionStatus;
-  readonly policy: HelarcModelQualificationPolicy;
-  readonly scopes: readonly HelarcModelUseScopeDisposition[];
+  readonly policy: HelarcModelUsePolicy;
+  readonly experimentalUseSelected: boolean;
+  readonly scopes: readonly HelarcModelQualificationSafeScopeProjection[];
   readonly reasons: readonly string[];
+  readonly toolGuidance: HelarcModelUseToolGuidanceProjection;
+}
+
+export interface HelarcModelQualificationResolution {
+  readonly target: HelarcModelQualificationTarget;
+  readonly disposition: HelarcModelUseDisposition;
+  readonly safeProjection: HelarcModelQualificationSafeProjection;
+  readonly requiredScopes: readonly HelarcModelQualificationScope[];
 }
 
 export type HelarcModelQualificationErrorCode =
@@ -400,7 +420,7 @@ export function deriveHelarcModelUseDisposition(input: {
   readonly target: HelarcModelQualificationTarget;
   readonly nativeToolInteractionSupported: boolean;
   readonly requiredScopes: readonly HelarcModelQualificationScope[];
-  readonly policy: HelarcModelQualificationPolicy;
+  readonly policy: HelarcModelUsePolicy;
 }): HelarcModelUseDisposition {
   const target = snapshotTarget(input.target);
   const policy = qualificationPolicy(input.policy);
@@ -478,8 +498,10 @@ export function deriveHelarcModelUseDisposition(input: {
 }
 
 export function projectHelarcModelQualificationSafe(input: {
+  readonly catalog: HelarcModelQualificationCatalog;
   readonly target: HelarcModelQualificationTarget;
   readonly disposition: HelarcModelUseDisposition;
+  readonly toolGuidance: HelarcModelUseToolGuidanceProjection;
 }): HelarcModelQualificationSafeProjection {
   const target = snapshotTarget(input.target);
   if (input.disposition.targetId !== target.id) {
@@ -488,14 +510,45 @@ export function projectHelarcModelQualificationSafe(input: {
       "Model-use disposition targets a different qualification target.",
     );
   }
+  const scopes = input.disposition.scopes.map((scope) => {
+    const decision = scope.decision === null
+      ? null
+      : input.catalog.decisions.find(({ ref }) =>
+          decisionRefKey(ref) === decisionRefKey(scope.decision!)
+        ) ?? qualificationError(
+          "model_qualification_catalog_corrupt",
+          "Model-use disposition references a decision outside its qualification catalog.",
+        );
+    return {
+      scope: scope.scope,
+      applicability: scope.applicability,
+      outcome: scope.outcome,
+      decidedAt: decision?.decidedAt ?? null,
+      limitations: Object.freeze((decision?.limitations ?? [])
+        .slice(0, 8)
+        .map((limitation) => limitation.slice(0, 500))),
+    };
+  });
   return deepFreeze({
     providerKind: target.providerKind,
     modelId: target.modelId,
     modelIdentityStrength: target.modelIdentityStrength,
     status: input.disposition.status,
     policy: input.disposition.policy,
-    scopes: input.disposition.scopes,
+    experimentalUseSelected: input.disposition.policy === "allow_experimental",
+    scopes,
     reasons: input.disposition.reasons,
+    toolGuidance: {
+      releaseId: token(input.toolGuidance.releaseId, "toolGuidance.releaseId"),
+      releaseRevision: digestRef(
+        input.toolGuidance.releaseRevision,
+        "toolGuidance.releaseRevision",
+      ),
+      profileRevision: token(
+        input.toolGuidance.profileRevision,
+        "toolGuidance.profileRevision",
+      ),
+    },
   });
 }
 
@@ -689,7 +742,7 @@ function qualificationOutcome(input: unknown): HelarcModelQualificationOutcome {
   return input;
 }
 
-function qualificationPolicy(input: unknown): HelarcModelQualificationPolicy {
+function qualificationPolicy(input: unknown): HelarcModelUsePolicy {
   if (input !== "require_qualified" && input !== "allow_experimental") {
     return qualificationError(
       "model_qualification_policy_invalid",

@@ -5,12 +5,16 @@ import {
 import { describe, expect, it } from "vitest";
 import type { HelarcActivityItem, HelarcProductResult } from "../composition/index.js";
 import {
-  createHelarcProductRunProjection,
+  createHelarcProductRunProjection as createProductRunProjection,
   createHelarcRunProjection,
   reduceHelarcProductRunProjection,
   reduceHelarcRunProjection,
   type HelarcProductRunProjection,
 } from "./HelarcRunProjection.js";
+
+function createHelarcProductRunProjection(runId: string) {
+  return createProductRunProjection(runId, qualification());
+}
 
 describe("Helarc product Run projection", () => {
   it("reduces ordered activity and terminal result updates", () => {
@@ -264,6 +268,7 @@ function activity(sequence: number): HelarcActivityItem {
 function productResult(status: HelarcProductResult["status"]): HelarcProductResult {
   return {
     status,
+    qualification: qualification(),
     runResult: {
       runId: "harness-run-1",
       status: status === "cancelled" ? "cancelled" : "succeeded",
@@ -302,6 +307,30 @@ function productResult(status: HelarcProductResult["status"]): HelarcProductResu
     nextActions: [],
     artifactRefs: [],
   };
+}
+
+function qualification() {
+  return Object.freeze({
+    providerKind: "openai-compatible",
+    modelId: "test-model",
+    modelIdentityStrength: "unknown" as const,
+    status: "experimental" as const,
+    policy: "allow_experimental" as const,
+    experimentalUseSelected: true,
+    scopes: Object.freeze([Object.freeze({
+      scope: "agent_loop" as const,
+      applicability: "absent" as const,
+      outcome: null,
+      decidedAt: null,
+      limitations: Object.freeze([]),
+    })]),
+    reasons: Object.freeze(["scope_absent:agent_loop"]),
+    toolGuidance: Object.freeze({
+      releaseId: "test-guidance",
+      releaseRevision: `sha256:${"0".repeat(64)}`,
+      profileRevision: "test-profile.v1",
+    }),
+  });
 }
 
 function pendingApproval(): HostRunProjection["pendingInteractions"][number] {

@@ -308,6 +308,7 @@ function projectProviderProfile(
     model: profile.model,
     timeoutMs: profile.timeoutMs,
     credentialStatus: profile.credentialStatus,
+    qualificationPolicy: profile.qualificationPolicy,
     isActive: profile.isActive,
   };
 }
@@ -341,6 +342,7 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
     },
     product: {
       phase: projectProductPhase(run.product.phase),
+      qualification: projectModelQualification(run.product.qualification),
       continuation: run.product.continuation === null
         ? null
         : {
@@ -364,6 +366,9 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
         ? null
         : {
             status: run.product.result.status,
+            qualification: projectModelQualification(
+              run.product.result.qualification,
+            ),
             verification: {
               status: run.product.result.verification.status,
               snapshotRevision: run.product.result.verification.snapshotRevision,
@@ -395,6 +400,28 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
             },
           },
     },
+  };
+}
+
+function projectModelQualification(
+  qualification: NonNullable<MainSnapshot["run"]>["product"]["qualification"],
+): import("../shared/HelarcDesktopApi.js").HelarcModelUseSnapshot {
+  return {
+    providerKind: qualification.providerKind,
+    modelId: qualification.modelId,
+    modelIdentityStrength: qualification.modelIdentityStrength,
+    status: qualification.status,
+    policy: qualification.policy,
+    experimentalUseSelected: qualification.experimentalUseSelected,
+    scopes: qualification.scopes.map((scope) => ({
+      scope: scope.scope,
+      applicability: scope.applicability,
+      outcome: scope.outcome,
+      decidedAt: scope.decidedAt,
+      limitations: [...scope.limitations],
+    })),
+    reasons: [...qualification.reasons],
+    toolGuidance: { ...qualification.toolGuidance },
   };
 }
 
@@ -524,6 +551,8 @@ function projectActivityMetadata(
     "toolGuidanceId",
     "toolGuidanceContentDigest",
     "controllerControlGuidanceRevision",
+    "modelUseDispositionStatus",
+    "modelQualificationPolicy",
     "modelTurnId",
     "modelFinishKind",
     "modelResponseId",
@@ -580,6 +609,8 @@ function projectActivityMetadata(
     "exposedToolNames",
     "omissionReasons",
     "toolExposureOmissionReasons",
+    "modelQualificationScopes",
+    "modelQualificationReasons",
   ] as const) {
     if (Array.isArray(metadata[key]) && metadata[key].every((item) => typeof item === "string")) {
       projected[key] = [...metadata[key]];

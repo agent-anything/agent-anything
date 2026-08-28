@@ -34,6 +34,10 @@ import {
   type HelarcAgentOutput,
 } from "./index.js";
 import type { ResolvedHelarcToolGuidance } from "../tools/guidance/index.js";
+import { createHelarcProviderProfile } from "../configuration/index.js";
+import {
+  resolveHelarcModelQualification,
+} from "../composition/HelarcModelUseAdmission.js";
 
 const TEST_INPUT_ACCOUNTING = createUtf8ModelInputAccounting({
   providerId: "fake-provider",
@@ -49,14 +53,90 @@ function buildHelarcProviderRequest(
   input: ControllerInput<HelarcAgentOutput>,
   context: ReturnType<typeof requestBuildContext>,
 ) {
-  return buildProviderRequest(input, context, createTestControllerProtocol(input));
+  const protocol = createTestControllerProtocol(input);
+  return buildProviderRequest(
+    input,
+    context,
+    protocol,
+    createTestQualification(input, protocol),
+  );
 }
 
 function parseHelarcProviderResponse(
   response: ProviderResponse,
   input: ControllerInput<HelarcAgentOutput>,
 ) {
-  return parseProviderResponse(response, input, createTestControllerProtocol(input));
+  const protocol = createTestControllerProtocol(input);
+  return parseProviderResponse(
+    response,
+    input,
+    protocol,
+    createTestQualification(input, protocol),
+  );
+}
+
+function createTestQualification(
+  input: ControllerInput<HelarcAgentOutput>,
+  protocol: ReturnType<typeof createTestControllerProtocol>,
+) {
+  const profile = createHelarcProviderProfile({
+    id: "test-provider",
+    displayName: "Test Provider",
+    baseUrl: "https://provider.local/v1",
+    model: input.agent.instructions.model.modelId,
+    timeoutMs: 30_000,
+    credentialStatus: "empty_allowed",
+    qualificationPolicy: "allow_experimental",
+    isActive: true,
+  });
+  if (!profile.ok) throw new TypeError("Test Provider profile is invalid.");
+  return resolveHelarcModelQualification({
+    provider: testQualificationProvider(input),
+    providerProfile: profile.profile,
+    agent: input.agent,
+    controllerProtocol: protocol,
+  });
+}
+
+function testQualificationProvider(
+  input: ControllerInput<HelarcAgentOutput>,
+): Provider {
+  const accounting = createUtf8ModelInputAccounting({
+    providerId: input.agent.instructions.model.providerId,
+    model: input.agent.instructions.model.modelId,
+    maximumInputBytes: 4 * 1_024 * 1_024,
+    limitSource: "host_configured",
+    estimator: { id: "qualification-test.utf8", revision: "1" },
+    framing: { id: "qualification-test.framing", revision: "1" },
+    renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
+  });
+  return Object.freeze({
+    descriptor: Object.freeze({
+      id: input.agent.instructions.model.providerId,
+      name: "Test Provider",
+      capabilities: Object.freeze({
+        nativeToolInteraction: Object.freeze({
+          supported: true as const,
+          callableDefinitions: true as const,
+          modelCalls: true as const,
+          resultMessages: true as const,
+          multipleCalls: true,
+          callCorrelation: "provider_supplied" as const,
+        }),
+        structuredGeneration: Object.freeze({ supported: true as const }),
+        streaming: Object.freeze({ supported: false as const }),
+        modelInput: accounting.capability,
+        continuation: Object.freeze({ supported: false as const }),
+        compaction: Object.freeze({ supported: false as const }),
+      }),
+      requestRetryScheduler: Object.freeze({ kind: "harness" as const }),
+      metadata: Object.freeze({}),
+    }),
+    inputAccounting: accounting,
+    async send() {
+      throw new Error("Test qualification Provider does not send requests.");
+    },
+  });
 }
 
 function createHelarcModelCallableCatalog(input: {
@@ -177,7 +257,7 @@ describe("Helarc native Tool controller", () => {
     const request = buildProviderRequest(input, {
       ...requestBuildContext(),
       inputAccounting: accounting,
-    }, protocol);
+    }, protocol, createTestQualification(input, protocol));
 
     expect(observedInteractions[0]).toEqual(request.interaction);
     expect(request.metadata.modelCallableCatalogRevision).toBe(

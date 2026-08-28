@@ -7,6 +7,10 @@ export type HelarcProviderKind =
   | "openai-compatible"
   | "ollama";
 
+export type HelarcModelUsePolicy =
+  | "require_qualified"
+  | "allow_experimental";
+
 export interface CreateHelarcProviderProfileInput {
   id: string;
   providerKind?: HelarcProviderKind;
@@ -15,6 +19,7 @@ export interface CreateHelarcProviderProfileInput {
   model: string;
   timeoutMs: number;
   credentialStatus: HelarcProviderCredentialStatus;
+  qualificationPolicy?: HelarcModelUsePolicy;
   isActive?: boolean;
 }
 
@@ -28,6 +33,7 @@ export interface HelarcProviderProfile {
   model: string;
   timeoutMs: number;
   credentialStatus: HelarcProviderCredentialStatus;
+  qualificationPolicy: HelarcModelUsePolicy;
   isActive: boolean;
 }
 
@@ -39,6 +45,7 @@ export type HelarcProviderProfileErrorCode =
   | "provider_profile_model_required"
   | "provider_profile_timeout_invalid"
   | "provider_profile_credential_status_invalid"
+  | "provider_profile_qualification_policy_invalid"
   | "provider_profile_kind_invalid"
   | "provider_profile_not_found";
 
@@ -103,6 +110,14 @@ export function createHelarcProviderProfile(
     );
   }
 
+  const qualificationPolicy = input.qualificationPolicy ?? "require_qualified";
+  if (!isQualificationPolicy(qualificationPolicy)) {
+    return reject(
+      "provider_profile_qualification_policy_invalid",
+      "Provider profile model qualification policy is invalid.",
+    );
+  }
+
   return {
     ok: true,
     profile: {
@@ -115,9 +130,16 @@ export function createHelarcProviderProfile(
       model,
       timeoutMs: input.timeoutMs,
       credentialStatus: input.credentialStatus,
+      qualificationPolicy,
       isActive: input.isActive ?? false,
     },
   };
+}
+
+function isQualificationPolicy(
+  value: unknown,
+): value is HelarcModelUsePolicy {
+  return value === "require_qualified" || value === "allow_experimental";
 }
 
 export function selectHelarcProviderProfile(

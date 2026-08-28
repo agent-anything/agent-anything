@@ -54,6 +54,10 @@ export type HelarcProviderKind =
   | "openai-compatible"
   | "ollama";
 
+export type HelarcModelUsePolicy =
+  | "require_qualified"
+  | "allow_experimental";
+
 export interface HelarcProviderProfileSnapshot {
   id: string;
   providerKind: HelarcProviderKind;
@@ -64,13 +68,14 @@ export interface HelarcProviderProfileSnapshot {
   model: string;
   timeoutMs: number;
   credentialStatus: HelarcProviderCredentialStatus;
+  qualificationPolicy: HelarcModelUsePolicy;
   isActive: boolean;
 }
 
 export type HelarcProviderSnapshot =
   | {
       configured: true;
-      nativeToolInteraction: { supported: true };
+      nativeToolInteraction: { supported: boolean };
       activeProfile: HelarcProviderProfileSnapshot;
       profiles: HelarcProviderProfileSnapshot[];
       error: null;
@@ -363,6 +368,34 @@ export interface HelarcProductVerificationSnapshot {
   readonly updatedAt: string | null;
 }
 
+export interface HelarcModelUseSnapshot {
+  readonly providerKind: string;
+  readonly modelId: string;
+  readonly modelIdentityStrength: "immutable" | "mutable_alias" | "unknown";
+  readonly status: "qualified" | "experimental" | "blocked";
+  readonly policy: HelarcModelUsePolicy;
+  readonly experimentalUseSelected: boolean;
+  readonly scopes: readonly {
+    readonly scope:
+      | "agent_loop"
+      | "workspace_observation"
+      | "workspace_mutation"
+      | "process_execution"
+      | "user_interaction"
+      | "delegation";
+    readonly applicability: "current" | "stale" | "absent";
+    readonly outcome: "qualified" | "not_qualified" | "inconclusive" | null;
+    readonly decidedAt: string | null;
+    readonly limitations: readonly string[];
+  }[];
+  readonly reasons: readonly string[];
+  readonly toolGuidance: {
+    readonly releaseId: string;
+    readonly releaseRevision: string;
+    readonly profileRevision: string;
+  };
+}
+
 export interface HelarcRunProgressSnapshot {
   readonly checkpointSequence: number;
   readonly disposition: "advanced" | "unchanged" | "repeated" | "deferred" | null;
@@ -395,6 +428,7 @@ export interface HelarcInstructionBindingSnapshot {
 
 export interface HelarcRunProductResultSnapshot {
   readonly status: "completed" | "rejected" | "failed" | "blocked" | "cancelled";
+  readonly qualification: HelarcModelUseSnapshot;
   readonly verification: HelarcProductVerificationSnapshot;
   readonly output: {
     readonly taskId: string;
@@ -451,6 +485,7 @@ export interface HelarcRunSnapshot {
   };
   readonly product: {
     readonly phase: HelarcProductPhaseSnapshot;
+    readonly qualification: HelarcModelUseSnapshot;
     readonly activity: readonly HelarcRunActivitySnapshot[];
     readonly continuation: HelarcModelContinuationSnapshot | null;
     readonly result: HelarcRunProductResultSnapshot | null;
@@ -605,6 +640,7 @@ export interface HelarcSaveProviderConfigInput {
   baseUrl: string;
   model: string;
   timeoutMs: number;
+  qualificationPolicy: HelarcModelUsePolicy;
   apiKeyUpdate: "keep" | "set" | "clear";
   apiKey: string;
 }
@@ -824,7 +860,7 @@ export interface HelarcHostRunStatusSnapshot {
 }
 
 export interface HelarcDesktopApi {
-  readonly bridgeVersion: 8;
+  readonly bridgeVersion: 9;
   readonly productId: "helarc";
   chooseWorkspace(
     input: HelarcChooseWorkspaceInput,

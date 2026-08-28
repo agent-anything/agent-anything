@@ -124,6 +124,7 @@ export interface ModelInputLineage {
   readonly toolGuidance: ModelInputSourceRef | null;
   readonly controllerControlGuidance: ModelInputSourceRef | null;
   readonly callableDefinitions: ModelInputSourceRef | null;
+  readonly modelQualification: ModelInputSourceRef | null;
   readonly interactionHistory: ModelInputSourceRef | null;
   readonly protocol: ModelInputSourceRef;
   readonly policy: ModelInputSourceRef;
@@ -450,7 +451,8 @@ function snapshotLineage(input: ModelInputLineage): ModelInputLineage {
     "instructionResolver", "instructionContent", "instructionModel", "instructionBlocks",
     "activeContext", "contextProjection", "projectionManifest", "toolSelection",
     "toolExposureContent", "toolExposureBasis", "toolExposureProof", "toolGuidance",
-    "controllerControlGuidance", "callableDefinitions", "interactionHistory",
+    "controllerControlGuidance", "callableDefinitions", "modelQualification",
+    "interactionHistory",
     "protocol", "policy",
   ]);
   return Object.freeze({
@@ -475,6 +477,7 @@ function snapshotLineage(input: ModelInputLineage): ModelInputLineage {
     toolGuidance: snapshotNullableSource(input.toolGuidance, "ModelInputComposition.lineage.toolGuidance"),
     controllerControlGuidance: snapshotNullableSource(input.controllerControlGuidance, "ModelInputComposition.lineage.controllerControlGuidance"),
     callableDefinitions: snapshotNullableSource(input.callableDefinitions, "ModelInputComposition.lineage.callableDefinitions"),
+    modelQualification: snapshotNullableSource(input.modelQualification, "ModelInputComposition.lineage.modelQualification"),
     interactionHistory: snapshotNullableSource(input.interactionHistory, "ModelInputComposition.lineage.interactionHistory"),
     protocol: snapshotSource(input.protocol, "ModelInputComposition.lineage.protocol"),
     policy: snapshotSource(input.policy, "ModelInputComposition.lineage.policy"),

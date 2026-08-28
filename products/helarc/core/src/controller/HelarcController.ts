@@ -29,6 +29,9 @@ import {
 } from "./HelarcModelCallableCatalog.js";
 import { HELARC_STOP_REASON_MAX_LENGTH } from "./HelarcControllerControlGuidance.js";
 import type { HelarcControllerProtocolComposition } from "./HelarcControllerProtocolComposition.js";
+import type {
+  HelarcModelQualificationResolution,
+} from "../model-qualification/index.js";
 
 export const HELARC_CONTROLLER_CAPABILITY = "helarc.code-agent.turn";
 export const HELARC_NATIVE_TOOL_PROTOCOL_REVISION =
@@ -48,6 +51,7 @@ export function buildHelarcProviderRequest(
   input: ControllerInput<HelarcAgentOutput>,
   context: ProviderRequestBuildContext,
   protocol: HelarcControllerProtocolComposition,
+  qualification: HelarcModelQualificationResolution,
 ): ProviderRequest {
   assertInstructionModelIdentity(input, context);
   if (context.correction !== null) {
@@ -103,6 +107,12 @@ export function buildHelarcProviderRequest(
       toolGuidance: source("helarc", "tool_guidance_binding", toolGuidanceBinding.id, toolGuidanceBinding.contentDigest),
       controllerControlGuidance: source("helarc", "controller_control_guidance", protocol.controlGuidance.id, protocol.controlGuidance.revision),
       callableDefinitions: source("helarc", "model_callable_definitions", callableCatalog.revision, callableCatalog.definitionsDigest),
+      modelQualification: source(
+        "helarc",
+        "model_qualification_disposition",
+        qualification.target.id,
+        qualification.disposition.id,
+      ),
       interactionHistory: input.interaction.messages.length === 0
         ? null
         : source("agent-runtime", "model_interaction_projection", input.interaction.id, input.interaction.revision),
@@ -141,6 +151,12 @@ export function buildHelarcProviderRequest(
       toolGuidanceProfileRevision: toolGuidanceBinding.guidanceProfileRevision,
       toolGuidanceContentDigest: toolGuidanceBinding.contentDigest,
       controllerControlGuidanceRevision: callableCatalog.controlGuidanceRevision,
+      modelQualificationTargetId: qualification.target.id,
+      modelUseDispositionId: qualification.disposition.id,
+      modelUseDispositionStatus: qualification.disposition.status,
+      modelQualificationPolicy: qualification.disposition.policy,
+      modelQualificationScopes: qualification.requiredScopes,
+      modelQualificationReasons: qualification.disposition.reasons,
       interactionProjectionId: input.interaction.id,
       interactionProjectionRevision: input.interaction.revision,
       interactionMessageCount: input.interaction.messages.length,
@@ -162,6 +178,7 @@ export function parseHelarcProviderResponse(
   response: ProviderResponse,
   input: ControllerInput<HelarcAgentOutput>,
   protocol: HelarcControllerProtocolComposition,
+  qualification: HelarcModelQualificationResolution,
 ): ControllerDecision<HelarcAgentOutput> {
   if (response.kind !== "native_tool_turn") {
     return nativeTurnFailure("helarc_native_response_kind_invalid");
@@ -170,7 +187,7 @@ export function parseHelarcProviderResponse(
   assertTurnCorrelation(response, input);
   const modelItems = createControllerModelItems(
     response.turn,
-    createControllerTraceMetadata(response, input, catalog),
+    createControllerTraceMetadata(response, input, catalog, qualification),
   );
   const calls = response.turn.assistant.content.flatMap((block) =>
     block.kind === "model_tool_call" ? [block.call] : []
@@ -321,6 +338,7 @@ function createControllerTraceMetadata(
   response: Extract<ProviderResponse, { readonly kind: "native_tool_turn" }>,
   input: ControllerInput<HelarcAgentOutput>,
   callableCatalog: HelarcModelCallableCatalog,
+  qualification: HelarcModelQualificationResolution,
 ): Readonly<Record<string, unknown>> {
   return Object.freeze({
     source: "helarc-controller",
@@ -336,6 +354,10 @@ function createControllerTraceMetadata(
     toolGuidanceId: callableCatalog.toolGuidanceId,
     toolGuidanceContentDigest: callableCatalog.toolGuidanceContentDigest,
     controllerControlGuidanceRevision: callableCatalog.controlGuidanceRevision,
+    modelUseDispositionStatus: qualification.disposition.status,
+    modelQualificationPolicy: qualification.disposition.policy,
+    modelQualificationScopes: qualification.requiredScopes,
+    modelQualificationReasons: qualification.disposition.reasons,
     modelTurnId: response.turn.turnId,
     modelFinishKind: response.turn.finish.kind,
     modelResponseId: response.turn.responseRef.responseId,

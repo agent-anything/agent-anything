@@ -20,6 +20,10 @@ export interface HelarcControllerTraceProjection {
   readonly toolGuidanceId: string | null;
   readonly toolGuidanceContentDigest: string | null;
   readonly controllerControlGuidanceRevision: string | null;
+  readonly modelUseDispositionStatus: string | null;
+  readonly modelQualificationPolicy: string | null;
+  readonly modelQualificationScopes: readonly string[];
+  readonly modelQualificationReasons: readonly string[];
   readonly modelTurnId: string | null;
   readonly modelFinishKind: string | null;
   readonly modelResponseId: string | null;
@@ -113,6 +117,14 @@ function createHelarcControllerTraceProjection(
     toolGuidanceContentDigest: readTraceString(source.toolGuidanceContentDigest),
     controllerControlGuidanceRevision: readTraceString(
       source.controllerControlGuidanceRevision,
+    ),
+    modelUseDispositionStatus: readTraceString(source.modelUseDispositionStatus),
+    modelQualificationPolicy: readTraceString(source.modelQualificationPolicy),
+    modelQualificationScopes: Object.freeze(
+      readTraceStringArray(source.modelQualificationScopes),
+    ),
+    modelQualificationReasons: Object.freeze(
+      readTraceStringArray(source.modelQualificationReasons),
     ),
     modelTurnId: readTraceString(source.modelTurnId),
     modelFinishKind: readTraceString(source.modelFinishKind),

@@ -163,6 +163,7 @@ function createRequest(requestId: string): ProviderRequest {
       toolGuidance: source("tool-guidance"),
       controllerControlGuidance: source("controller-control-guidance"),
       callableDefinitions: source("callable-definitions"),
+      modelQualification: null,
       interactionHistory: null,
       protocol: source("protocol"),
       policy: source("policy"),

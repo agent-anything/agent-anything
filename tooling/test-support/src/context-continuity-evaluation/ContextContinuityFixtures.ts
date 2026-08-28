@@ -660,6 +660,7 @@ function modelInputLineage() {
     toolGuidance: null,
     controllerControlGuidance: null,
     callableDefinitions: null,
+    modelQualification: null,
     interactionHistory: null,
     protocol: { owner: "helarc", kind: "protocol", id: "protocol", revision: PROTOCOL_REVISION },
     policy: { owner: "governance", kind: "policy", id: "policy", revision: POLICY_REVISION },

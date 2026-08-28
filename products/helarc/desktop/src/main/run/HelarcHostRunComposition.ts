@@ -74,6 +74,8 @@ import {
 } from "@agent-anything/helarc-local-environment/filesystem";
 import { createHelarcLocalSandboxGateway } from "@agent-anything/helarc-local-environment/sandbox";
 import type { Provider } from "@agent-anything/model-interaction";
+import type { HelarcProviderProfile } from "@agent-anything/helarc/configuration";
+import type { HelarcModelQualificationCatalog } from "@agent-anything/helarc/model-qualification";
 import type { ModelContinuationStore } from "@agent-anything/model-interaction/continuation";
 import type { RuntimeEvent, RuntimeEventPublisher } from "@agent-anything/observability/events";
 import type { SessionAuthorityPort } from "@agent-anything/permission";
@@ -139,6 +141,8 @@ export interface PrepareHelarcHostRunInput {
   readonly identityResolver: HostIdentityResolver;
   readonly identitySelection: HostIdentitySelection;
   readonly provider: Provider;
+  readonly providerProfile: HelarcProviderProfile;
+  readonly qualificationCatalog?: HelarcModelQualificationCatalog;
   readonly modelContinuationStore?: ModelContinuationStore;
   readonly contextManifestPersistence?: ContextManifestPersistencePort;
   readonly permissionPreset: HelarcPermissionPreset;
@@ -253,6 +257,8 @@ export async function prepareHelarcHostRun(
     task: input.task,
     workspace: runWorkspace,
     provider: input.provider,
+    providerProfile: input.providerProfile,
+    qualificationCatalog: input.qualificationCatalog,
     instructionTarget: "production",
     modelContinuationStore: input.modelContinuationStore,
     codeSource: createLocalCodeSourcePort(now),

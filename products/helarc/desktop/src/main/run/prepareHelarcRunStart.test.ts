@@ -197,6 +197,7 @@ function input() {
         model: "model-a",
         timeoutMs: 1000,
         credentialStatus: "present" as const,
+        qualificationPolicy: "allow_experimental" as const,
         isActive: true,
       },
     ],

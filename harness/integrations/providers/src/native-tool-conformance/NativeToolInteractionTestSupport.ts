@@ -86,6 +86,7 @@ export function createNativeProviderRequest(
       toolGuidance: source("tool-guidance"),
       controllerControlGuidance: source("controller-control-guidance"),
       callableDefinitions: source("callable-definitions"),
+      modelQualification: null,
       interactionHistory: messages.length > 2 ? source("interaction-history") : null,
       protocol: source("native-tool-protocol"),
       policy: source("native-tool-policy"),

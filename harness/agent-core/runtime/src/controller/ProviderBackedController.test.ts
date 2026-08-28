@@ -1587,6 +1587,7 @@ function accountTestRequest(
         id: "test-callable-definitions",
         revision: "1",
       }),
+      modelQualification: null,
       interactionHistory: null,
       protocol: Object.freeze({
         owner: "agent-runtime-test",

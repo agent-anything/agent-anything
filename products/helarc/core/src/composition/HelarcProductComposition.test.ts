@@ -30,7 +30,11 @@ import {
 } from "@agent-anything/observability/events";
 import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "../task/index.js";
-import { createHelarcProductComposition } from "./HelarcProductComposition.js";
+import { createHelarcProviderProfile } from "../configuration/index.js";
+import {
+  createHelarcProductComposition as createProductComposition,
+  type CreateHelarcProductCompositionInput,
+} from "./HelarcProductComposition.js";
 import { createHelarcBaselineToolGuidance } from "../tools/guidance/index.js";
 import {
   HELARC_SHELL_BINDING,
@@ -38,8 +42,144 @@ import {
   HELARC_TASK_STOP_BINDING,
   HELARC_TASK_STOP_OPERATION,
 } from "../tools/HelarcCommandOperation.js";
+import {
+  createHelarcModelQualificationCatalog,
+  createHelarcModelQualificationDecision,
+} from "../model-qualification/index.js";
+
+async function createHelarcProductComposition(
+  input: Omit<CreateHelarcProductCompositionInput, "providerProfile"> & {
+    readonly providerProfile?: CreateHelarcProductCompositionInput["providerProfile"];
+  },
+) {
+  const profile = input.providerProfile ?? createTestProviderProfile(input.provider);
+  return createProductComposition({ ...input, providerProfile: profile });
+}
+
+function createTestProviderProfile(
+  provider: Provider,
+  qualificationPolicy: "require_qualified" | "allow_experimental" = "allow_experimental",
+): CreateHelarcProductCompositionInput["providerProfile"] {
+  const result = createHelarcProviderProfile({
+    id: "test-provider",
+    displayName: "Test Provider",
+    baseUrl: "https://provider.local/v1",
+    model: provider.inputAccounting.model,
+    timeoutMs: 30_000,
+    credentialStatus: "empty_allowed",
+    qualificationPolicy,
+    isActive: true,
+  });
+  if (!result.ok) throw new TypeError("Test Provider profile is invalid.");
+  return result.profile;
+}
 
 describe("HelarcProductComposition", () => {
+  it("fails closed before Run composition when exact qualification is absent", async () => {
+    const provider = new UnusedProvider();
+
+    await expect(createProductComposition({
+      runId: "strict-run",
+      ...createTask("D:/workspace"),
+      provider,
+      providerProfile: createTestProviderProfile(provider, "require_qualified"),
+      ...createLocalContributions(),
+      now: fixedNow,
+    })).rejects.toMatchObject({
+      code: "model_qualification_required",
+      qualification: {
+        status: "blocked",
+        policy: "require_qualified",
+      },
+    });
+  });
+
+  it("admits explicit experimental use without granting execution authority", async () => {
+    const composition = await createHelarcProductComposition({
+      runId: "experimental-run",
+      ...createTask("D:/workspace"),
+      provider: new UnusedProvider(),
+      ...createLocalContributions(),
+      now: fixedNow,
+    });
+
+    expect(composition.qualification.safeProjection).toMatchObject({
+      status: "experimental",
+      policy: "allow_experimental",
+      experimentalUseSelected: true,
+    });
+    expect(composition.qualification.requiredScopes).toEqual([
+      "agent_loop",
+      "workspace_observation",
+      "workspace_mutation",
+      "process_execution",
+      "user_interaction",
+      "delegation",
+    ]);
+    expect(composition.qualification.disposition).not.toHaveProperty("permission");
+    expect(composition.qualification.disposition).not.toHaveProperty("execute");
+    expect(composition.actions.toolSelection).toBeDefined();
+  });
+
+  it("blocks a Provider without native Tool interaction before policy admission", async () => {
+    const provider = new UnusedProvider(false);
+
+    await expect(createProductComposition({
+      runId: "unsupported-run",
+      ...createTask("D:/workspace"),
+      provider,
+      providerProfile: createTestProviderProfile(provider, "allow_experimental"),
+      ...createLocalContributions(),
+      now: fixedNow,
+    })).rejects.toMatchObject({
+      code: "model_native_tool_interaction_unsupported",
+      qualification: {
+        status: "blocked",
+        policy: "allow_experimental",
+      },
+    });
+  });
+
+  it("admits exact qualified evidence and blocks a current not-qualified scope", async () => {
+    const provider = new UnusedProvider();
+    const seed = await createHelarcProductComposition({
+      runId: "qualification-seed",
+      ...createTask("D:/workspace"),
+      provider,
+      ...createLocalContributions(),
+      now: fixedNow,
+    });
+    const qualifiedCatalog = qualificationCatalog(seed, () => "qualified");
+    const qualified = await createProductComposition({
+      runId: "qualified-run",
+      ...createTask("D:/workspace"),
+      provider,
+      providerProfile: createTestProviderProfile(provider, "require_qualified"),
+      qualificationCatalog: qualifiedCatalog,
+      ...createLocalContributions(),
+      now: fixedNow,
+    });
+
+    expect(qualified.qualification.target.id).toBe(seed.qualification.target.id);
+    expect(qualified.qualification.safeProjection.status).toBe("qualified");
+
+    const notQualifiedCatalog = qualificationCatalog(seed, (scope) =>
+      scope === "workspace_mutation" ? "not_qualified" : "qualified"
+    );
+    await expect(createProductComposition({
+      runId: "not-qualified-run",
+      ...createTask("D:/workspace"),
+      provider,
+      providerProfile: createTestProviderProfile(provider, "allow_experimental"),
+      qualificationCatalog: notQualifiedCatalog,
+      ...createLocalContributions(),
+      now: fixedNow,
+    })).rejects.toMatchObject({
+      code: "model_qualification_not_qualified",
+      qualification: { status: "blocked" },
+    });
+  });
+
   it("defines one invocation's product behavior without exposing an execution entry point", async () => {
     const composition = await createHelarcProductComposition({
       runId: "run-1",
@@ -398,20 +538,26 @@ class UnusedProvider implements Provider {
     },
   });
 
-  readonly descriptor = {
-    id: "unused-provider",
-    name: "Unused provider",
-    capabilities: {
-      nativeToolInteraction: { supported: false as const },
-      structuredGeneration: { supported: true as const },
-      streaming: { supported: false as const },
-      modelInput: this.inputAccounting.capability,
-      continuation: { supported: false as const },
-      compaction: { supported: false as const },
-    },
-    requestRetryScheduler: { kind: "harness" as const },
-    metadata: {},
-  };
+  readonly descriptor: Provider["descriptor"];
+
+  constructor(nativeToolInteractionSupported = true) {
+    this.descriptor = {
+      id: "unused-provider",
+      name: "Unused provider",
+      capabilities: {
+        nativeToolInteraction: nativeToolInteractionSupported
+          ? { supported: true as const }
+          : { supported: false as const },
+        structuredGeneration: { supported: true as const },
+        streaming: { supported: false as const },
+        modelInput: this.inputAccounting.capability,
+        continuation: { supported: false as const },
+        compaction: { supported: false as const },
+      },
+      requestRetryScheduler: { kind: "harness" as const },
+      metadata: {},
+    };
+  }
 
   async send(
     _request: ProviderRequest,
@@ -419,4 +565,35 @@ class UnusedProvider implements Provider {
   ): Promise<ProviderCallResult> {
     throw new Error("Provider must not be called while composing Helarc product behavior.");
   }
+}
+
+function fixedNow(): string {
+  return "2026-08-28T00:00:00.000Z";
+}
+
+function qualificationCatalog(
+  composition: Awaited<ReturnType<typeof createHelarcProductComposition>>,
+  outcomeFor: (
+    scope: typeof composition.qualification.requiredScopes[number],
+  ) => "qualified" | "not_qualified" | "inconclusive",
+) {
+  return createHelarcModelQualificationCatalog({
+    decisions: composition.qualification.requiredScopes.map((scope) =>
+      createHelarcModelQualificationDecision({
+        id: `decision-${scope}`,
+        target: composition.qualification.target,
+        scope,
+        outcome: outcomeFor(scope),
+        evidenceRefs: [{
+          owner: "helarc.manual-qualification",
+          kind: "bounded-exercise",
+          id: `evidence-${scope}`,
+          revision: "1",
+        }],
+        limitations: ["Exact target and scope only."],
+        decidedAt: fixedNow(),
+        decidedBy: "helarc-reviewer",
+      })
+    ),
+  });
 }

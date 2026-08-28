@@ -79,6 +79,7 @@ import {
 import type { CreateHelarcAgentInput } from "@agent-anything/helarc/agent";
 import type { HelarcProductRunProjection } from "@agent-anything/helarc/run";
 import {
+  createHelarcProviderProfile,
   resolveHelarcPermissionPreset,
   type HelarcPermissionPreset,
 } from "@agent-anything/helarc/configuration";
@@ -563,12 +564,29 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     taskStopBinding: HELARC_TASK_STOP_BINDING,
     now: clock.now,
   });
+  const providerProfile = createHelarcProviderProfile({
+    id: "helarc-evaluation-provider",
+    providerKind: selectedProvider.descriptor.id === "ollama.api"
+      ? "ollama"
+      : "openai-compatible",
+    displayName: "Helarc Evaluation Provider",
+    baseUrl: "https://evaluation-provider.local/v1",
+    model: provider.inputAccounting.model,
+    timeoutMs: 30_000,
+    credentialStatus: "empty_allowed",
+    qualificationPolicy: "allow_experimental",
+    isActive: true,
+  });
+  if (!providerProfile.ok) {
+    throw new TypeError("Helarc Evaluation Provider profile is invalid.");
+  }
   const product = await createHelarcProductComposition({
     instructionTarget: options.instructionTarget ?? "production",
     runId: productRunId,
     task: taskResult.task,
     workspace: runContext.workspace,
     provider,
+    providerProfile: providerProfile.profile,
     codeSource: createLocalCodeSourcePort(clock.now),
     fileActions,
     commandActions,

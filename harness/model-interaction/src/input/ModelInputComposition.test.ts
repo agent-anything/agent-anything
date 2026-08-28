@@ -270,6 +270,7 @@ function lineage() {
     toolGuidance: null,
     controllerControlGuidance: null,
     callableDefinitions: null,
+    modelQualification: null,
     interactionHistory: null,
     protocol: { owner: "test", kind: "protocol", id: "protocol", revision: "1" },
     policy: { owner: "test", kind: "policy", id: "policy", revision: "1" },

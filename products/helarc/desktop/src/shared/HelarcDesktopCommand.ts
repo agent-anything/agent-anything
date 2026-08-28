@@ -26,6 +26,7 @@ export interface HelarcProductCommandPayloadMap {
     readonly baseUrl: string;
     readonly model: string;
     readonly timeoutMs: number;
+    readonly qualificationPolicy: "require_qualified" | "allow_experimental";
     readonly apiKeyUpdate: "keep" | "set" | "clear";
     readonly apiKey: string;
   };

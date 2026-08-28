@@ -47,14 +47,14 @@ describe("HelarcMainController", () => {
     expect(snapshot.provider).toMatchObject({
       configured: true,
       activeProfile: {
-        id: "test-provider",
-        displayName: "Injected Test Provider",
+        id: "complete-provider",
+        displayName: "Complete Provider",
         credentialStatus: "empty_allowed",
         isActive: true,
       },
       profiles: [
         {
-          id: "test-provider",
+          id: "complete-provider",
           isActive: true,
         },
       ],
@@ -134,9 +134,10 @@ describe("HelarcMainController", () => {
         endpointLabel: "provider.local",
         baseUrl: "https://provider.local/v1",
         baseUrlOrigin: "https://provider.local",
-        model: "model-a",
+        model: "desktop-test-model",
         timeoutMs: 1500,
         credentialStatus: "present",
+        qualificationPolicy: "allow_experimental",
         isActive: true,
       },
     });
@@ -152,9 +153,10 @@ describe("HelarcMainController", () => {
         endpointLabel: "provider.local",
         baseUrl: "https://provider.local/v1",
         baseUrlOrigin: "https://provider.local",
-        model: "model-a",
+        model: "desktop-test-model",
         timeoutMs: 1500,
         credentialStatus: "present",
+        qualificationPolicy: "allow_experimental",
         isActive: true,
       },
       profiles: [
@@ -165,9 +167,10 @@ describe("HelarcMainController", () => {
           endpointLabel: "provider.local",
           baseUrl: "https://provider.local/v1",
           baseUrlOrigin: "https://provider.local",
-          model: "model-a",
+          model: "desktop-test-model",
           timeoutMs: 1500,
           credentialStatus: "present",
+          qualificationPolicy: "allow_experimental",
           isActive: true,
         },
       ],
@@ -294,6 +297,68 @@ describe("HelarcMainController", () => {
     });
   });
 
+  it("fails strict model qualification before Provider transport", async () => {
+    const provider = new CountingCompleteProvider();
+    const controller = new HelarcMainController({
+      provider,
+      providerProfile: desktopProviderProfile("require_qualified"),
+    });
+    controller.selectWorkspacePath("D:/projects/agent-anything");
+
+    const result = await controller.startRun({
+      taskText: "Inspect the workspace",
+      target: { kind: "new_thread" },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "model_qualification_required",
+        message: "The configured model lacks current qualification for the requested Helarc Tool profile.",
+      },
+    });
+    expect(provider.callCount).toBe(0);
+    expect(controller.getSnapshot().run).toBeNull();
+  });
+
+  it("keeps active Run qualification immutable when later settings change", async () => {
+    const provider = new DeferredCompleteProvider();
+    const controller = new HelarcMainController({
+      provider,
+      providerProfile: desktopProviderProfile("allow_experimental"),
+    });
+    controller.selectWorkspacePath("D:/projects/agent-anything");
+
+    const started = await controller.startRun({
+      taskText: "Inspect the workspace",
+      target: { kind: "new_thread" },
+    });
+    expect(started).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(provider.callCount).toBe(1));
+    const activeQualification = controller.getSnapshot().run?.product.qualification;
+    expect(activeQualification).toMatchObject({
+      status: "experimental",
+      policy: "allow_experimental",
+    });
+
+    controller.configureProvider({
+      provider: new CompleteProvider(),
+      profile: desktopProviderProfile("require_qualified"),
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      provider: { activeProfile: { qualificationPolicy: "require_qualified" } },
+      run: { product: { qualification: activeQualification } },
+    });
+
+    const completed = waitForSnapshot(
+      controller,
+      (snapshot) => snapshot.status === "completed" && snapshot.run?.product.result !== null,
+    );
+    provider.complete();
+    const terminal = await completed;
+    expect(terminal.run?.product.result?.qualification).toEqual(activeQualification);
+  });
+
   it("persists completed Runs in Thread work context for history review", async () => {
     const storePath = await threadFilePath();
     const threadStore = new FileHelarcThreadStore(storePath);
@@ -306,9 +371,10 @@ describe("HelarcMainController", () => {
         endpointLabel: "provider.local",
         baseUrl: "https://provider.local/v1",
         baseUrlOrigin: "https://provider.local",
-        model: "model-a",
+        model: "desktop-test-model",
         timeoutMs: 1000,
         credentialStatus: "present",
+        qualificationPolicy: "allow_experimental",
         isActive: true,
       },
       threadStore,
@@ -519,9 +585,10 @@ describe("HelarcMainController", () => {
         endpointLabel: "provider.local",
         baseUrl: "https://provider.local/v1",
         baseUrlOrigin: "https://provider.local",
-        model: "model-a",
+        model: "desktop-test-model",
         timeoutMs: 1000,
         credentialStatus: "present",
+        qualificationPolicy: "allow_experimental",
         isActive: true,
       },
       threadStore,
@@ -593,7 +660,7 @@ describe("HelarcMainController", () => {
           provider: {
             profileId: "provider-a",
             displayName: "Provider A",
-            model: "model-a",
+            model: "desktop-test-model",
           },
         },
       ],
@@ -1705,6 +1772,24 @@ function createDesktopTestInputAccounting(providerId: string) {
     framing: { id: `${providerId}.framing`, revision: "1" },
     renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
   });
+}
+
+function desktopProviderProfile(
+  qualificationPolicy: "require_qualified" | "allow_experimental",
+) {
+  return {
+    id: "desktop-test-provider",
+    providerKind: "openai-compatible" as const,
+    displayName: "Desktop Test Provider",
+    endpointLabel: "provider.local",
+    baseUrl: "https://provider.local/v1",
+    baseUrlOrigin: "https://provider.local",
+    model: "desktop-test-model",
+    timeoutMs: 30_000,
+    credentialStatus: "empty_allowed" as const,
+    qualificationPolicy,
+    isActive: true,
+  };
 }
 
 function modelMessageText(message: ProviderRequest["messages"][number]): string {

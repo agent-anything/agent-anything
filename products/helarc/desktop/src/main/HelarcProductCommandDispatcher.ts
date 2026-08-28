@@ -204,6 +204,7 @@ function snapshotProviderSave(
       "baseUrl",
       "model",
       "timeoutMs",
+      "qualificationPolicy",
       "apiKeyUpdate",
       "apiKey",
     ],
@@ -225,12 +226,19 @@ function snapshotProviderSave(
   if (!Number.isSafeInteger(candidate.timeoutMs) || (candidate.timeoutMs as number) < 1_000) {
     invalid("Provider timeout must be a safe integer of at least 1000 milliseconds.");
   }
+  if (
+    candidate.qualificationPolicy !== "require_qualified" &&
+    candidate.qualificationPolicy !== "allow_experimental"
+  ) {
+    invalid("Provider model qualification policy is invalid.");
+  }
   return Object.freeze({
     providerKind: candidate.providerKind,
     displayName: boundedText(candidate.displayName, "Provider display name", DISPLAY_NAME_MAX_LENGTH),
     baseUrl: boundedText(candidate.baseUrl, "Provider base URL", BASE_URL_MAX_LENGTH),
     model: boundedText(candidate.model, "Provider model", MODEL_MAX_LENGTH),
     timeoutMs: candidate.timeoutMs as number,
+    qualificationPolicy: candidate.qualificationPolicy,
     apiKeyUpdate: candidate.apiKeyUpdate,
     apiKey: boundedString(candidate.apiKey, "Provider API key", API_KEY_MAX_LENGTH),
   });

@@ -24,6 +24,7 @@ describe("FileHelarcProviderProfileStore", () => {
       baseUrl: "https://api.deepseek.com/v1",
       model: "deepseek-chat",
       timeoutMs: 45_000,
+      qualificationPolicy: "allow_experimental",
       apiKeyUpdate: "set",
       apiKey: " secret-key ",
     }, credentialStore);
@@ -42,15 +43,17 @@ describe("FileHelarcProviderProfileStore", () => {
         displayName: "DeepSeek",
         baseUrl: "https://api.deepseek.com/v1",
         credentialStatus: "present",
+        qualificationPolicy: "allow_experimental",
       },
     });
     const persisted = await readFile(profilePath, "utf8");
     expect(persisted).not.toContain("secret-key");
     expect(JSON.parse(persisted)).toMatchObject({
-      formatVersion: 1,
+      formatVersion: 2,
       activeProfile: {
         id: "desktop-provider",
         providerKind: "openai-compatible",
+        qualificationPolicy: "allow_experimental",
       },
     });
 
@@ -64,6 +67,7 @@ describe("FileHelarcProviderProfileStore", () => {
       },
       profile: {
         credentialStatus: "present",
+        qualificationPolicy: "allow_experimental",
       },
     });
   });
@@ -230,7 +234,7 @@ describe("FileHelarcProviderProfileStore", () => {
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
     expect(JSON.parse(await readFile(profilePath, "utf8"))).toMatchObject({
-      formatVersion: 1,
+      formatVersion: 2,
       activeProfile: {
         displayName: "Second",
         baseUrl: "https://second.provider/v1",
@@ -322,6 +326,22 @@ describe("FileHelarcProviderProfileStore", () => {
     await writeFile(profilePath, JSON.stringify({
       formatVersion: 2,
       activeProfile: {},
+    }), "utf8");
+    await expect(store.resolveActiveProfile(credentialStore)).rejects
+      .toBeInstanceOf(HelarcProviderProfileStoreCorruptionError);
+
+    await writeFile(profilePath, JSON.stringify({
+      formatVersion: 2,
+      activeProfile: {
+        id: "desktop-provider",
+        providerKind: "openai-compatible",
+        displayName: "Invalid policy",
+        baseUrl: "https://provider.local/v1",
+        model: "model-a",
+        timeoutMs: 30_000,
+        qualificationPolicy: "permissive",
+        updatedAt: "2026-08-28T00:00:00.000Z",
+      },
     }), "utf8");
     await expect(store.resolveActiveProfile(credentialStore)).rejects
       .toBeInstanceOf(HelarcProviderProfileStoreCorruptionError);

@@ -49,7 +49,14 @@ import {
   type HelarcRunProjectionUpdate,
   type HelarcRunProviderRef,
 } from "@agent-anything/helarc/run";
-import type { HelarcProductResult } from "@agent-anything/helarc/composition";
+import {
+  HelarcModelUseAdmissionError,
+  type HelarcModelUseAdmissionErrorCode,
+  type HelarcProductResult,
+} from "@agent-anything/helarc/composition";
+import type {
+  HelarcModelQualificationCatalog,
+} from "@agent-anything/helarc/model-qualification";
 import {
   createBuiltInHelarcTaskTemplates,
   type HelarcTaskTemplate,
@@ -92,7 +99,7 @@ export interface HelarcAcceptedTaskSnapshot {
 export type HelarcProviderSnapshot =
   | {
       configured: true;
-      nativeToolInteraction: { readonly supported: true };
+      nativeToolInteraction: { readonly supported: boolean };
       activeProfile: HelarcProviderProfile;
       profiles: HelarcProviderProfile[];
       error: null;
@@ -212,8 +219,10 @@ export type HelarcMainErrorCode =
   | "provider_profile_model_required"
   | "provider_profile_timeout_invalid"
   | "provider_profile_credential_status_invalid"
+  | "provider_profile_qualification_policy_invalid"
   | "provider_profile_kind_invalid"
   | "provider_profile_not_found"
+  | HelarcModelUseAdmissionErrorCode
   | HelarcTaskInputError["code"];
 
 export interface HelarcMainError {
@@ -278,6 +287,7 @@ export interface HelarcMainControllerInput {
   threadStore?: HelarcThreadStore;
   modelContinuationStore?: ModelContinuationStore;
   contextManifestPersistence?: ContextManifestPersistencePort;
+  qualificationCatalog?: HelarcModelQualificationCatalog;
 }
 
 type DesktopActiveRunSlot =
@@ -314,6 +324,7 @@ export class HelarcMainController {
   private readonly contextManifestPersistence:
     | ContextManifestPersistencePort
     | undefined;
+  private readonly qualificationCatalog: HelarcModelQualificationCatalog | undefined;
   private provider: HelarcProviderSnapshot;
   private providerInstance: Provider | null;
   private inactiveStatus: "idle" | "workspace_selected" = "idle";
@@ -363,6 +374,7 @@ export class HelarcMainController {
     this.threadStore = input.threadStore ?? new InMemoryHelarcThreadStore();
     this.modelContinuationStore = input.modelContinuationStore;
     this.contextManifestPersistence = input.contextManifestPersistence;
+    this.qualificationCatalog = input.qualificationCatalog;
     this.provider = input.providerConfigError
       ? {
           configured: false,
@@ -374,7 +386,7 @@ export class HelarcMainController {
             message: input.providerConfigError.message,
           },
         }
-      : createConfiguredProviderSnapshot(input.providerProfile);
+      : createConfiguredProviderSnapshot(input.providerProfile, this.providerInstance);
   }
 
   configureProvider(input: {
@@ -391,7 +403,7 @@ export class HelarcMainController {
           profiles: [],
           error: input.error,
         }
-      : createConfiguredProviderSnapshot(input.profile);
+      : createConfiguredProviderSnapshot(input.profile, input.provider);
     this.lastError = null;
     return this.publishSnapshot();
   }
@@ -582,6 +594,8 @@ export class HelarcMainController {
         productRunId: runId,
         sessionId: threadId,
         provider: providerInstance,
+        providerProfile: this.provider.activeProfile,
+        qualificationCatalog: this.qualificationCatalog,
         modelContinuationStore: this.modelContinuationStore,
         contextManifestPersistence: this.contextManifestPersistence,
         inputItems,
@@ -649,10 +663,19 @@ export class HelarcMainController {
       }
       this.releaseActiveRunSlot(token);
       const persistenceFailure = cause instanceof HelarcDesktopPersistenceError;
+      const admissionFailure = cause instanceof HelarcModelUseAdmissionError
+        ? cause
+        : null;
       const error = this.setError(
-        persistenceFailure ? "run_persistence_failed" : "run_execution_failed",
+        persistenceFailure
+          ? "run_persistence_failed"
+          : admissionFailure !== null
+            ? admissionFailure.code
+            : "run_execution_failed",
         persistenceFailure
           ? "Helarc could not persist the Run start."
+          : admissionFailure !== null
+            ? admissionFailure.message
           : "Helarc could not start the Run.",
       );
       this.publishSnapshot();
@@ -1519,11 +1542,15 @@ function createThreadTitle(taskText: string): string {
 
 function createConfiguredProviderSnapshot(
   profile: HelarcProviderProfile | null | undefined,
+  provider: Provider | null,
 ): HelarcProviderSnapshot {
-  const activeProfile = profile ?? createInjectedProviderProfile();
+  const activeProfile = profile ?? createInjectedProviderProfile(provider);
   return {
     configured: true,
-    nativeToolInteraction: { supported: true },
+    nativeToolInteraction: {
+      supported:
+        provider?.descriptor.capabilities.nativeToolInteraction.supported ?? true,
+    },
     activeProfile,
     profiles: [activeProfile],
     error: null,
@@ -1542,14 +1569,17 @@ function resolveNextTaskNumber(summaries: readonly HelarcThreadSummary[]): numbe
   return maximum + 1;
 }
 
-function createInjectedProviderProfile(): HelarcProviderProfile {
+function createInjectedProviderProfile(provider: Provider | null): HelarcProviderProfile {
+  const providerId = provider?.descriptor.id ?? "injected-provider";
   const result = createHelarcProviderProfile({
-    id: "test-provider",
-    displayName: "Injected Test Provider",
+    id: providerId,
+    providerKind: providerId === "ollama.api" ? "ollama" : "openai-compatible",
+    displayName: provider?.descriptor.name ?? "Injected Provider",
     baseUrl: "https://provider.local/v1",
-    model: "test-model",
+    model: provider?.inputAccounting.model ?? "injected-model",
     timeoutMs: 30_000,
     credentialStatus: "empty_allowed",
+    qualificationPolicy: "allow_experimental",
     isActive: true,
   });
 

@@ -451,7 +451,8 @@ function runProjection(input: {
       ? "runtime_no_safe_path" as const
       : status === "cancelled"
         ? "runtime_cancelled" as const
-        : "runtime_limit_exceeded" as const);
+         : "runtime_limit_exceeded" as const);
+  const qualification = modelQualificationSnapshot();
   return {
     productRunId: "product-run-1",
     harnessRunId: "harness-run-1",
@@ -483,11 +484,13 @@ function runProjection(input: {
     },
     product: {
       phase: { kind: "none" },
+      qualification,
       activity,
       continuation: null,
       result: terminal
         ? {
             status: status === "completed" ? "completed" : status,
+            qualification,
             verification: {
               status: "not_required",
               snapshotRevision: 1,
@@ -543,6 +546,32 @@ function event(
     detail: null,
     severity,
     metadata,
+  };
+}
+
+function modelQualificationSnapshot(): NonNullable<HelarcMainSnapshot["run"]>["product"]["qualification"] {
+  return {
+    providerKind: "ollama",
+    modelId: "gemma4:e4b",
+    modelIdentityStrength: "mutable_alias",
+    status: "experimental",
+    policy: "allow_experimental",
+    experimentalUseSelected: true,
+    scopes: [
+      {
+        scope: "agent_loop",
+        applicability: "absent",
+        outcome: null,
+        decidedAt: null,
+        limitations: [],
+      },
+    ],
+    reasons: ["No current qualification decision covers the required scope."],
+    toolGuidance: {
+      releaseId: "helarc.tool-guidance",
+      releaseRevision: "helarc.tool-guidance.v1",
+      profileRevision: "helarc.tool-profile.v1",
+    },
   };
 }
 

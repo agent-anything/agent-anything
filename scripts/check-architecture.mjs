@@ -210,6 +210,7 @@ const focusedPublicSubpaths = new Map([
       "@agent-anything/helarc/configuration",
       "@agent-anything/helarc/controller",
       "@agent-anything/helarc/interaction",
+      "@agent-anything/helarc/model-qualification",
       "@agent-anything/helarc/observability",
       "@agent-anything/helarc/prompt",
       "@agent-anything/helarc/result",

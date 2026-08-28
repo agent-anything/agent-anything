@@ -11,6 +11,9 @@ import { projectRuntimeEventForHost } from "@agent-anything/host/projection";
 import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import type { HelarcControllerTraceProjection } from "../observability/index.js";
 import type { VerificationHostProjection, VerificationStateCount } from "@agent-anything/verification/projection";
+import type {
+  HelarcModelQualificationSafeProjection,
+} from "../model-qualification/index.js";
 
 export type HelarcProductStatus =
   | "completed"
@@ -157,6 +160,7 @@ export interface HelarcEnforcementSummary {
 
 export interface HelarcProductResult {
   readonly status: HelarcProductStatus;
+  readonly qualification: HelarcModelQualificationSafeProjection;
   readonly runResult: HelarcRunResultSummary;
   readonly output: HelarcProductOutput;
   readonly runActions: readonly HelarcRunActionSummary[];
@@ -179,6 +183,7 @@ export function projectHelarcProductResult(
   runResult: RunResult<HelarcAgentOutput>,
   selectedEnforcement: SandboxEnforcement,
   verification: VerificationHostProjection | null,
+  qualification: HelarcModelQualificationSafeProjection,
 ): HelarcProductResult {
   const agentOutput = runResult.status === "succeeded" ? runResult.finalOutput : null;
   const safeErrors = collectSafeRunErrors(runResult);
@@ -193,6 +198,7 @@ export function projectHelarcProductResult(
 
   return Object.freeze({
     status: mapRunStatus(runResult.status),
+    qualification,
     runResult: Object.freeze({
       runId: runResult.runId,
       status: runResult.status,

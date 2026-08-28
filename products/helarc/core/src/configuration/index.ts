@@ -3,6 +3,7 @@ export type {
   CreateHelarcProviderProfileResult,
   HelarcProviderCredentialStatus,
   HelarcProviderKind,
+  HelarcModelUsePolicy,
   HelarcProviderProfile,
   HelarcProviderProfileError,
   HelarcProviderProfileErrorCode,

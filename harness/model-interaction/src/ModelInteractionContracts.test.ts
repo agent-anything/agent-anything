@@ -317,6 +317,7 @@ function nativeComposition() {
       toolGuidance: source("product", "tool_guidance", "guidance"),
       controllerControlGuidance: source("product", "controller_control_guidance", "controls"),
       callableDefinitions: source("product", "callable_definitions", "callables"),
+      modelQualification: source("product", "model_qualification", "qualification"),
       interactionHistory: null,
       protocol: source("test", "protocol", "native-tool-turn"),
       policy: source("test", "policy", "default"),

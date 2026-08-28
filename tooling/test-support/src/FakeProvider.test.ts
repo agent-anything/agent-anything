@@ -152,6 +152,7 @@ function createRequest(requestId: string): ProviderRequest {
       toolGuidance: null,
       controllerControlGuidance: null,
       callableDefinitions: null,
+      modelQualification: null,
       interactionHistory: null,
       protocol: source("protocol"),
       policy: source("policy"),

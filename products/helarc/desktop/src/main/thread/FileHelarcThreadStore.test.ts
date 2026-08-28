@@ -389,6 +389,7 @@ function projectionCommit(
         runId: "run-1",
         sequence,
         phase: { kind: "none" },
+        qualification: qualificationProjection(),
         activity: [],
         continuation: null,
         result: null,
@@ -424,6 +425,7 @@ function terminalCommit(): HelarcRunTerminalCommit {
       },
       product: {
         status: "completed",
+        qualification: qualificationProjection(),
         runResult: {
           runId: "run-1",
           status: "succeeded",
@@ -505,6 +507,30 @@ function terminalCommit(): HelarcRunTerminalCommit {
       limitations: [],
       createdAt: COMPLETED_AT,
     }],
+  };
+}
+
+function qualificationProjection() {
+  return {
+    providerKind: "openai-compatible",
+    modelId: "test-model",
+    modelIdentityStrength: "unknown" as const,
+    status: "experimental" as const,
+    policy: "allow_experimental" as const,
+    experimentalUseSelected: true,
+    scopes: [{
+      scope: "agent_loop" as const,
+      applicability: "absent" as const,
+      outcome: null,
+      decidedAt: null,
+      limitations: [],
+    }],
+    reasons: ["scope_absent:agent_loop"],
+    toolGuidance: {
+      releaseId: "test-guidance",
+      releaseRevision: `sha256:${"0".repeat(64)}`,
+      profileRevision: "test-profile.v1",
+    },
   };
 }
 

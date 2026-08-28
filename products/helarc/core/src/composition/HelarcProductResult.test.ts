@@ -186,6 +186,7 @@ describe("HelarcProductResult", () => {
         safeReasons: ["mandatory_verification_violated"],
         updatedAt: COMPLETED_AT,
       },
+      testQualification(),
     );
 
     expect(projected.status).toBe("failed");
@@ -244,6 +245,30 @@ describe("HelarcProductResult", () => {
     ]));
   });
 });
+
+function testQualification() {
+  return Object.freeze({
+    providerKind: "openai-compatible",
+    modelId: "test-model",
+    modelIdentityStrength: "unknown" as const,
+    status: "experimental" as const,
+    policy: "allow_experimental" as const,
+    experimentalUseSelected: true,
+    scopes: Object.freeze([Object.freeze({
+      scope: "agent_loop" as const,
+      applicability: "absent" as const,
+      outcome: null,
+      decidedAt: null,
+      limitations: Object.freeze([]),
+    })]),
+    reasons: Object.freeze(["scope_absent:agent_loop"]),
+    toolGuidance: Object.freeze({
+      releaseId: "test-guidance",
+      releaseRevision: `sha256:${"0".repeat(64)}`,
+      profileRevision: "test-profile.v1",
+    }),
+  });
+}
 
 function testInstructionBinding(runId: string) {
   return Object.freeze({

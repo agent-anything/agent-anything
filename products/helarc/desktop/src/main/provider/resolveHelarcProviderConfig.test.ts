@@ -29,6 +29,7 @@ describe("resolveHelarcProviderConfig", () => {
         model: "model-a",
         timeoutMs: 1500,
         credentialStatus: "present",
+        qualificationPolicy: "require_qualified",
         isActive: true,
       },
     });
@@ -90,6 +91,39 @@ describe("resolveHelarcProviderConfig", () => {
         baseUrl: "http://localhost:11434/",
         baseUrlOrigin: "http://localhost:11434",
         credentialStatus: "empty_allowed",
+      },
+    });
+  });
+
+  it("requires explicit environment selection for experimental model use", () => {
+    const result = resolveHelarcProviderConfig({
+      HELARC_PROVIDER_KIND: "ollama",
+      HELARC_PROVIDER_BASE_URL: "http://localhost:11434",
+      HELARC_PROVIDER_MODEL: "gemma4:e4b",
+      HELARC_MODEL_QUALIFICATION_POLICY: "allow_experimental",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      profile: {
+        qualificationPolicy: "allow_experimental",
+      },
+    });
+  });
+
+  it("rejects an unknown model qualification policy instead of defaulting", () => {
+    const result = resolveHelarcProviderConfig({
+      HELARC_PROVIDER_BASE_URL: "https://provider.local/v1",
+      HELARC_PROVIDER_MODEL: "model-a",
+      HELARC_MODEL_QUALIFICATION_POLICY: "permissive",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "provider_config_invalid",
+        message: "Provider configuration is invalid.",
+        missingKeys: [],
       },
     });
   });

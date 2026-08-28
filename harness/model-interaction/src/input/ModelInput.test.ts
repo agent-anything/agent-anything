@@ -152,6 +152,7 @@ function validComposition(): ModelInputComposition {
       toolGuidance: null,
       controllerControlGuidance: null,
       callableDefinitions: null,
+      modelQualification: null,
       interactionHistory: null,
       protocol: {
         owner: "helarc",

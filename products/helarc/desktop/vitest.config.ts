@@ -21,6 +21,7 @@ export default defineConfig({
       "@agent-anything/helarc/prompt": resolve(currentDir, "../core/src/prompt/index.ts"),
       "@agent-anything/helarc/tools": resolve(currentDir, "../core/src/tools/index.ts"),
       "@agent-anything/helarc/verification": resolve(currentDir, "../core/src/verification/index.ts"),
+      "@agent-anything/helarc/model-qualification": resolve(currentDir, "../core/src/model-qualification/index.ts"),
       "@agent-anything/helarc": resolve(currentDir, "../core/src/index.ts"),
       "@agent-anything/helarc-code-agent/workspace": resolve(currentDir, "../code-agent/src/workspace/index.ts"),
       "@agent-anything/helarc-code-agent/source": resolve(currentDir, "../code-agent/src/source/index.ts"),
