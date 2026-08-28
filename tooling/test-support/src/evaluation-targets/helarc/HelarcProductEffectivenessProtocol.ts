@@ -10,6 +10,14 @@ import {
   createHelarcAgent,
   type CreateHelarcAgentInput,
 } from "@agent-anything/helarc/agent";
+import {
+  HELARC_CONTROLLER_CONTROL_GUIDANCE,
+  HELARC_NATIVE_TOOL_PROTOCOL_REVISION,
+} from "@agent-anything/helarc/controller";
+import {
+  HELARC_BASELINE_TOOL_GUIDANCE_PROFILE_REVISION,
+  HELARC_BASELINE_TOOL_GUIDANCE_RELEASE_ID,
+} from "@agent-anything/helarc/tools";
 
 type HelarcMainInstructionTarget = CreateHelarcAgentInput["target"];
 
@@ -127,8 +135,10 @@ export function createHelarcProductEffectivenessTargetValues(input: {
     }),
     product_protocol: Object.freeze({
       promptArchitectureRevision: "helarc-prompt-v6",
-      controllerProtocolRevision: "helarc.provider-native-tool-interaction.v1",
-      controllerControlSetRevision: "helarc.controller-controls.v1",
+      controllerProtocolRevision: HELARC_NATIVE_TOOL_PROTOCOL_REVISION,
+      controllerControlGuidanceRevision: HELARC_CONTROLLER_CONTROL_GUIDANCE.revision,
+      toolGuidanceReleaseId: HELARC_BASELINE_TOOL_GUIDANCE_RELEASE_ID,
+      toolGuidanceProfileRevision: HELARC_BASELINE_TOOL_GUIDANCE_PROFILE_REVISION,
     }),
     model: Object.freeze({ id: input.modelId, revision: input.modelRevision }),
     provider: Object.freeze({

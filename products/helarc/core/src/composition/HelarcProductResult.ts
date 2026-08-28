@@ -340,9 +340,18 @@ function controllerTraceMetadata(
     ...(trace.modelCallableCatalogRevision === null
       ? {}
       : { modelCallableCatalogRevision: trace.modelCallableCatalogRevision }),
-    ...(trace.controllerControlSetRevision === null
+    ...(trace.modelCallableDefinitionsDigest === null
       ? {}
-      : { controllerControlSetRevision: trace.controllerControlSetRevision }),
+      : { modelCallableDefinitionsDigest: trace.modelCallableDefinitionsDigest }),
+    ...(trace.toolGuidanceId === null
+      ? {}
+      : { toolGuidanceId: trace.toolGuidanceId }),
+    ...(trace.toolGuidanceContentDigest === null
+      ? {}
+      : { toolGuidanceContentDigest: trace.toolGuidanceContentDigest }),
+    ...(trace.controllerControlGuidanceRevision === null
+      ? {}
+      : { controllerControlGuidanceRevision: trace.controllerControlGuidanceRevision }),
     ...(trace.modelTurnId === null ? {} : { modelTurnId: trace.modelTurnId }),
     ...(trace.modelFinishKind === null
       ? {}

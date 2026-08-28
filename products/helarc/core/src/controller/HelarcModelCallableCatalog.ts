@@ -6,12 +6,13 @@ import {
   type ModelJsonSchema,
 } from "@agent-anything/model-interaction";
 import type { PlanLimits } from "@agent-anything/agent-runtime/plan";
-import type { ToolRevisionRef } from "@agent-anything/tools/identity";
+import { toolRevisionKey, type ToolRevisionRef } from "@agent-anything/tools/identity";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
-
-export const HELARC_CONTROLLER_CONTROL_SET_REVISION =
-  "helarc.controller-controls.v1";
-export const HELARC_STOP_REASON_MAX_LENGTH = 4_096;
+import type { ResolvedHelarcToolGuidance } from "../tools/guidance/index.js";
+import {
+  createHelarcControllerControlDefinitions,
+  type HelarcControllerControlGuidance,
+} from "./HelarcControllerControlGuidance.js";
 
 export type HelarcModelCallableBinding =
   | {
@@ -28,17 +29,28 @@ export type HelarcModelCallableBinding =
 
 export interface HelarcModelCallableCatalog {
   readonly revision: string;
+  readonly definitionsDigest: string;
   readonly toolExposureProofId: string;
   readonly toolExposureContentRevision: string;
-  readonly controlSetRevision: typeof HELARC_CONTROLLER_CONTROL_SET_REVISION;
+  readonly toolGuidanceId: string;
+  readonly toolGuidanceContentDigest: string;
+  readonly controlGuidanceRevision: string;
   readonly definitions: readonly ModelCallableDefinition[];
   readonly bindings: readonly HelarcModelCallableBinding[];
 }
 
 export function createHelarcModelCallableCatalog(input: {
   readonly toolExposure: ToolExposureProof;
+  readonly toolGuidance: ResolvedHelarcToolGuidance;
+  readonly controlGuidance: HelarcControllerControlGuidance;
   readonly planLimits: PlanLimits;
 }): HelarcModelCallableCatalog {
+  if (
+    input.toolExposure.selectionRevision !==
+      input.toolGuidance.toolSelection.toolSelectionRevision
+  ) {
+    throw new TypeError("Helarc Tool Exposure and Tool Guidance target different Tool Selections.");
+  }
   const toolBindings: HelarcModelCallableBinding[] = input.toolExposure.catalog.tools.map(
     (tool) => Object.freeze({
       kind: "tool" as const,
@@ -70,25 +82,40 @@ export function createHelarcModelCallableCatalog(input: {
     throw new TypeError("Helarc model-callable names must be disjoint.");
   }
 
-  const definitions = snapshotModelCallableDefinitions(bindings.map((binding) =>
-    binding.kind === "tool"
-      ? toolDefinition(binding, input.toolExposure)
-      : controlDefinition(binding.control, input.planLimits)
-  ));
+  const controlDefinitions = new Map(
+    createHelarcControllerControlDefinitions(input.controlGuidance, input.planLimits)
+      .map((definition) => [definition.name, definition]),
+  );
+  const definitions = snapshotModelCallableDefinitions(bindings.map((binding) => {
+    if (binding.kind === "tool") {
+      return toolDefinition(binding, input.toolExposure, input.toolGuidance);
+    }
+    const definition = controlDefinitions.get(binding.control);
+    if (definition === undefined) {
+      throw new TypeError(`Helarc Controller Control Guidance is missing '${binding.control}'.`);
+    }
+    return definition;
+  }));
+  const definitionsDigest = modelCallableDefinitionsContentDigest(definitions);
   const identity = Object.freeze({
     toolExposureProofId: input.toolExposure.id,
     toolExposureContentRevision: input.toolExposure.contentRevision,
-    controlSetRevision: HELARC_CONTROLLER_CONTROL_SET_REVISION,
-    definitionsDigest: modelCallableDefinitionsContentDigest(definitions),
+    toolGuidanceId: input.toolGuidance.id,
+    toolGuidanceContentDigest: input.toolGuidance.contentDigest,
+    controlGuidanceRevision: input.controlGuidance.revision,
+    definitionsDigest,
     bindings,
   });
   return Object.freeze({
     revision: `sha256:${createHash("sha256")
       .update(JSON.stringify(identity), "utf8")
       .digest("hex")}`,
+    definitionsDigest,
     toolExposureProofId: input.toolExposure.id,
     toolExposureContentRevision: input.toolExposure.contentRevision,
-    controlSetRevision: HELARC_CONTROLLER_CONTROL_SET_REVISION,
+    toolGuidanceId: input.toolGuidance.id,
+    toolGuidanceContentDigest: input.toolGuidance.contentDigest,
+    controlGuidanceRevision: input.controlGuidance.revision,
     definitions,
     bindings,
   });
@@ -104,80 +131,30 @@ export function findHelarcModelCallableBinding(
 function toolDefinition(
   binding: Extract<HelarcModelCallableBinding, { readonly kind: "tool" }>,
   exposure: ToolExposureProof,
+  guidance: ResolvedHelarcToolGuidance,
 ): ModelCallableDefinition {
   const descriptor = exposure.catalog.tools.find((tool) =>
-    tool.name === binding.toolName &&
-    tool.ref.revision === binding.tool.revision &&
-    tool.ref.tool.namespace === binding.tool.tool.namespace &&
-    tool.ref.tool.name === binding.tool.tool.name
+    tool.name === binding.toolName && toolRevisionKey(tool.ref) === toolRevisionKey(binding.tool)
   );
   if (descriptor === undefined) {
     throw new TypeError("Helarc callable binding does not match current Tool Exposure.");
   }
-  return Object.freeze({
-    name: binding.callableName,
-    description: descriptor.description ?? `Invoke the exposed ${descriptor.name} Tool.`,
-    inputSchema: descriptor.inputSchema as ModelJsonSchema,
-  });
-}
-
-function controlDefinition(
-  control: "update_plan" | "stop",
-  limits: PlanLimits,
-): ModelCallableDefinition {
-  if (control === "stop") {
-    return Object.freeze({
-      name: "stop",
-      description: "Stop when the task cannot be completed safely or requires unavailable information.",
-      inputSchema: Object.freeze({
-        type: "object",
-        properties: Object.freeze({
-          reason: Object.freeze({
-            type: "string",
-            minLength: 1,
-            maxLength: HELARC_STOP_REASON_MAX_LENGTH,
-          }),
-        }),
-        required: Object.freeze(["reason"]),
-        additionalProperties: false,
-      }),
-    });
+  const entry = guidance.entries.find(({ tool }) =>
+    toolRevisionKey(tool) === toolRevisionKey(descriptor.ref)
+  );
+  if (entry === undefined) {
+    throw new TypeError(`Helarc Tool Guidance is missing '${toolRevisionKey(descriptor.ref)}'.`);
+  }
+  if (
+    entry.name !== descriptor.name ||
+    entry.descriptorFingerprint !== descriptor.fingerprint
+  ) {
+    throw new TypeError(`Helarc Tool Guidance does not match '${toolRevisionKey(descriptor.ref)}'.`);
   }
   return Object.freeze({
-    name: "update_plan",
-    description: "Create or revise the current Run plan when an explicit plan helps the work.",
-    inputSchema: Object.freeze({
-      type: "object",
-      properties: Object.freeze({
-        explanation: Object.freeze({
-          type: "string",
-          maxLength: limits.maxExplanationLength,
-        }),
-        plan: Object.freeze({
-          type: "array",
-          minItems: 1,
-          maxItems: limits.maxSteps,
-          items: Object.freeze({
-            type: "object",
-            properties: Object.freeze({
-              step: Object.freeze({
-                type: "string",
-                minLength: 1,
-                maxLength: limits.maxStepLength,
-              }),
-              status: Object.freeze({
-                type: "string",
-                enum: Object.freeze(["pending", "in_progress", "completed"]),
-              }),
-            }),
-            required: Object.freeze(["step", "status"]),
-            additionalProperties: false,
-          }),
-        }),
-      }),
-      required: Object.freeze(["plan"]),
-      additionalProperties: false,
-    }),
+    name: binding.callableName,
+    description: entry.modelDescription,
+    inputSchema: entry.inputSchema as ModelJsonSchema,
   });
 }
 

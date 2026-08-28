@@ -8,9 +8,9 @@ export type {
 export {
   createHelarcModelCallableCatalog,
   findHelarcModelCallableBinding,
-  HELARC_CONTROLLER_CONTROL_SET_REVISION,
-  HELARC_STOP_REASON_MAX_LENGTH,
 } from "./HelarcModelCallableCatalog.js";
+export * from "./HelarcControllerControlGuidance.js";
+export * from "./HelarcControllerProtocolComposition.js";
 export {
   buildHelarcProviderRequest,
   HELARC_CONTROLLER_CAPABILITY,

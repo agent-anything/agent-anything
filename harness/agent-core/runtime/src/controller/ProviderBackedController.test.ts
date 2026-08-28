@@ -1579,7 +1579,14 @@ function accountTestRequest(
         id: input.toolExposure.id,
         revision: input.toolExposure.id,
       }),
-      controllerControlSet: null,
+      toolGuidance: null,
+      controllerControlGuidance: null,
+      callableDefinitions: Object.freeze({
+        owner: "agent-runtime-test",
+        kind: "model_callable_definitions",
+        id: "test-callable-definitions",
+        revision: "1",
+      }),
       interactionHistory: null,
       protocol: Object.freeze({
         owner: "agent-runtime-test",

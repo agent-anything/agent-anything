@@ -24,11 +24,11 @@ import {
   HELARC_TOOL_EXPOSURE_VERSION,
 } from "../prompt/HelarcPromptAssembly.js";
 import {
-  createHelarcModelCallableCatalog,
   findHelarcModelCallableBinding,
-  HELARC_CONTROLLER_CONTROL_SET_REVISION,
-  HELARC_STOP_REASON_MAX_LENGTH,
+  type HelarcModelCallableCatalog,
 } from "./HelarcModelCallableCatalog.js";
+import { HELARC_STOP_REASON_MAX_LENGTH } from "./HelarcControllerControlGuidance.js";
+import type { HelarcControllerProtocolComposition } from "./HelarcControllerProtocolComposition.js";
 
 export const HELARC_CONTROLLER_CAPABILITY = "helarc.code-agent.turn";
 export const HELARC_NATIVE_TOOL_PROTOCOL_REVISION =
@@ -47,6 +47,7 @@ class HelarcInstructionModelMismatchError extends TypeError {
 export function buildHelarcProviderRequest(
   input: ControllerInput<HelarcAgentOutput>,
   context: ProviderRequestBuildContext,
+  protocol: HelarcControllerProtocolComposition,
 ): ProviderRequest {
   assertInstructionModelIdentity(input, context);
   if (context.correction !== null) {
@@ -55,10 +56,11 @@ export function buildHelarcProviderRequest(
   if (input.interaction.unsettledCalls.length > 0) {
     throw new TypeError("Helarc cannot request another Model Turn while a model call is unsettled.");
   }
-  const callableCatalog = createHelarcModelCallableCatalog({
-    toolExposure: input.toolExposure,
-    planLimits: input.planLimits,
-  });
+  const callableCatalog = protocol.createCallableCatalog(
+    input.toolExposure,
+    input.planLimits,
+  );
+  const toolGuidanceBinding = protocol.bindRun(input.runId);
   const interaction = createNativeToolTurnInteraction(callableCatalog.definitions);
   const promptAssembly = buildHelarcPromptAssembly({ controllerInput: input });
   const composition = composeModelInput({
@@ -98,7 +100,9 @@ export function buildHelarcProviderRequest(
       toolExposureContent: source("tools", "tool_exposure_content", input.toolExposure.contentRevision, input.toolExposure.contentRevision),
       toolExposureBasis: source("tools", "tool_exposure_basis", input.toolExposure.basisRevision, input.toolExposure.basisRevision),
       toolExposureProof: source("tools", "tool_exposure_proof", input.toolExposure.id, input.toolExposure.id),
-      controllerControlSet: source("helarc", "controller_control_set", callableCatalog.controlSetRevision, callableCatalog.controlSetRevision),
+      toolGuidance: source("helarc", "tool_guidance_binding", toolGuidanceBinding.id, toolGuidanceBinding.contentDigest),
+      controllerControlGuidance: source("helarc", "controller_control_guidance", protocol.controlGuidance.id, protocol.controlGuidance.revision),
+      callableDefinitions: source("helarc", "model_callable_definitions", callableCatalog.revision, callableCatalog.definitionsDigest),
       interactionHistory: input.interaction.messages.length === 0
         ? null
         : source("agent-runtime", "model_interaction_projection", input.interaction.id, input.interaction.revision),
@@ -130,7 +134,13 @@ export function buildHelarcProviderRequest(
       exposedToolCount: input.toolExposure.exposedTools.length,
       omittedToolCount: input.toolExposure.omittedToolCount,
       modelCallableCatalogRevision: callableCatalog.revision,
-      controllerControlSetRevision: callableCatalog.controlSetRevision,
+      modelCallableDefinitionsDigest: callableCatalog.definitionsDigest,
+      toolGuidanceBindingId: toolGuidanceBinding.id,
+      toolGuidanceReleaseId: toolGuidanceBinding.release.id,
+      toolGuidanceReleaseRevision: toolGuidanceBinding.release.revision,
+      toolGuidanceProfileRevision: toolGuidanceBinding.guidanceProfileRevision,
+      toolGuidanceContentDigest: toolGuidanceBinding.contentDigest,
+      controllerControlGuidanceRevision: callableCatalog.controlGuidanceRevision,
       interactionProjectionId: input.interaction.id,
       interactionProjectionRevision: input.interaction.revision,
       interactionMessageCount: input.interaction.messages.length,
@@ -151,18 +161,16 @@ export function buildHelarcProviderRequest(
 export function parseHelarcProviderResponse(
   response: ProviderResponse,
   input: ControllerInput<HelarcAgentOutput>,
+  protocol: HelarcControllerProtocolComposition,
 ): ControllerDecision<HelarcAgentOutput> {
   if (response.kind !== "native_tool_turn") {
     return nativeTurnFailure("helarc_native_response_kind_invalid");
   }
-  const catalog = createHelarcModelCallableCatalog({
-    toolExposure: input.toolExposure,
-    planLimits: input.planLimits,
-  });
+  const catalog = protocol.createCallableCatalog(input.toolExposure, input.planLimits);
   assertTurnCorrelation(response, input);
   const modelItems = createControllerModelItems(
     response.turn,
-    createControllerTraceMetadata(response, input, catalog.revision),
+    createControllerTraceMetadata(response, input, catalog),
   );
   const calls = response.turn.assistant.content.flatMap((block) =>
     block.kind === "model_tool_call" ? [block.call] : []
@@ -215,7 +223,7 @@ export function parseHelarcProviderResponse(
 function bindModelCall(
   call: ModelToolCall,
   callCount: number,
-  catalog: ReturnType<typeof createHelarcModelCallableCatalog>,
+  catalog: HelarcModelCallableCatalog,
   input: ControllerInput<HelarcAgentOutput>,
 ): ProgressionCandidate {
   const binding = findHelarcModelCallableBinding(catalog, call.name);
@@ -312,7 +320,7 @@ function assertInstructionModelIdentity(
 function createControllerTraceMetadata(
   response: Extract<ProviderResponse, { readonly kind: "native_tool_turn" }>,
   input: ControllerInput<HelarcAgentOutput>,
-  callableCatalogRevision: string,
+  callableCatalog: HelarcModelCallableCatalog,
 ): Readonly<Record<string, unknown>> {
   return Object.freeze({
     source: "helarc-controller",
@@ -323,8 +331,11 @@ function createControllerTraceMetadata(
     toolExposureContentRevision: input.toolExposure.contentRevision,
     toolExposureBasisRevision: input.toolExposure.basisRevision,
     toolExposureProofId: input.toolExposure.id,
-    modelCallableCatalogRevision: callableCatalogRevision,
-    controllerControlSetRevision: HELARC_CONTROLLER_CONTROL_SET_REVISION,
+    modelCallableCatalogRevision: callableCatalog.revision,
+    modelCallableDefinitionsDigest: callableCatalog.definitionsDigest,
+    toolGuidanceId: callableCatalog.toolGuidanceId,
+    toolGuidanceContentDigest: callableCatalog.toolGuidanceContentDigest,
+    controllerControlGuidanceRevision: callableCatalog.controlGuidanceRevision,
     modelTurnId: response.turn.turnId,
     modelFinishKind: response.turn.finish.kind,
     modelResponseId: response.turn.responseRef.responseId,

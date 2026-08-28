@@ -16,12 +16,13 @@ import {
   HELARC_MODEL_OUTPUT_RESERVE_BYTES,
   renderHelarcContextProjectionFragment,
 } from "../prompt/HelarcPromptAssembly.js";
-import { createHelarcModelCallableCatalog } from "./HelarcModelCallableCatalog.js";
+import type { HelarcControllerProtocolComposition } from "./HelarcControllerProtocolComposition.js";
 
 const HELARC_MAXIMUM_CONTEXT_INPUT_AMOUNT = 256 * 1_024;
 
 export function createHelarcContextProjectionConfiguration(
   accounting: ProviderModelInputAccounting,
+  protocol: HelarcControllerProtocolComposition,
 ): RunnerContextProjection {
   const capability = requireSupportedAccounting(accounting);
   const estimator: ContextProjectionEstimator = Object.freeze({
@@ -67,10 +68,10 @@ export function createHelarcContextProjectionConfiguration(
     audiences: Object.freeze(["model"]),
     maxContributionPayloadBytes: 128 * 1_024,
     allocate(input: ControllerPreProjectionInput) {
-      const callableCatalog = createHelarcModelCallableCatalog({
-        toolExposure: input.toolExposure,
-        planLimits: input.planLimits,
-      });
+      const callableCatalog = protocol.createCallableCatalog(
+        input.toolExposure,
+        input.planLimits,
+      );
       const allocation = allocateModelInputContext({
         accounting,
         interaction: createNativeToolTurnInteraction(callableCatalog.definitions),

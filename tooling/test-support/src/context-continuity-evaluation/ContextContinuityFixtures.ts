@@ -657,7 +657,9 @@ function modelInputLineage() {
     toolExposureContent: { owner: "tools", kind: "exposure_content", id: "tools", revision: TOOL_EXPOSURE_REVISION },
     toolExposureBasis: { owner: "tools", kind: "exposure_basis", id: "basis", revision: "1" },
     toolExposureProof: { owner: "tools", kind: "exposure_proof", id: "proof", revision: "proof" },
-    controllerControlSet: null,
+    toolGuidance: null,
+    controllerControlGuidance: null,
+    callableDefinitions: null,
     interactionHistory: null,
     protocol: { owner: "helarc", kind: "protocol", id: "protocol", revision: PROTOCOL_REVISION },
     policy: { owner: "governance", kind: "policy", id: "policy", revision: POLICY_REVISION },
@@ -673,6 +675,7 @@ function continuationLineage(requestId: string): ModelContinuationRequestLineage
     activeContext: { id: CONTEXT_ID, runId: RUN_ID, version: 1 },
     protocol: { id: "protocol", revision: PROTOCOL_REVISION },
     toolExposureContent: { id: "tools", revision: TOOL_EXPOSURE_REVISION },
+    callableDefinitions: { id: "callables", revision: "1" },
     policy: { id: "policy", revision: POLICY_REVISION },
   };
 }

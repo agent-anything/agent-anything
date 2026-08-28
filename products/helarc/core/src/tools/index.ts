@@ -1,4 +1,3 @@
-export { buildHelarcToolExposureText } from "./HelarcToolExposurePrompt.js";
 export * from "./HelarcCommandOperation.js";
 export type {
   HelarcBaselineToolContract,

@@ -16,7 +16,10 @@ export interface HelarcControllerTraceProjection {
   readonly toolExposureBasisRevision: string | null;
   readonly toolExposureProofId: string | null;
   readonly modelCallableCatalogRevision: string | null;
-  readonly controllerControlSetRevision: string | null;
+  readonly modelCallableDefinitionsDigest: string | null;
+  readonly toolGuidanceId: string | null;
+  readonly toolGuidanceContentDigest: string | null;
+  readonly controllerControlGuidanceRevision: string | null;
   readonly modelTurnId: string | null;
   readonly modelFinishKind: string | null;
   readonly modelResponseId: string | null;
@@ -105,7 +108,12 @@ function createHelarcControllerTraceProjection(
     toolExposureBasisRevision: readTraceString(source.toolExposureBasisRevision),
     toolExposureProofId: readTraceString(source.toolExposureProofId),
     modelCallableCatalogRevision: readTraceString(source.modelCallableCatalogRevision),
-    controllerControlSetRevision: readTraceString(source.controllerControlSetRevision),
+    modelCallableDefinitionsDigest: readTraceString(source.modelCallableDefinitionsDigest),
+    toolGuidanceId: readTraceString(source.toolGuidanceId),
+    toolGuidanceContentDigest: readTraceString(source.toolGuidanceContentDigest),
+    controllerControlGuidanceRevision: readTraceString(
+      source.controllerControlGuidanceRevision,
+    ),
     modelTurnId: readTraceString(source.modelTurnId),
     modelFinishKind: readTraceString(source.modelFinishKind),
     modelResponseId: readTraceString(source.modelResponseId),

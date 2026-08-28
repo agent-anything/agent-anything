@@ -607,6 +607,7 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
     controller: product.controller,
     contextProjection: createHelarcContextProjectionConfiguration(
       provider.inputAccounting,
+      product.controllerProtocol,
     ),
     operations: {
       catalog: product.actions.operationCatalog,

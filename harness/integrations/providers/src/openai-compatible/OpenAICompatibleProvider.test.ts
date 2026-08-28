@@ -511,7 +511,9 @@ function testLineage() {
     toolExposureContent: null,
     toolExposureBasis: null,
     toolExposureProof: null,
-    controllerControlSet: null,
+    toolGuidance: null,
+    controllerControlGuidance: null,
+    callableDefinitions: null,
     interactionHistory: null,
     protocol: { owner: "provider-test", kind: "protocol", id: "test", revision: "1" },
     policy: { owner: "provider-test", kind: "policy", id: "test", revision: "1" },
@@ -544,6 +546,7 @@ function continuationRef(): ProviderRequest["continuation"] & object {
     activeContext: { id: "context-1", runId: "run-1", version: 1 },
     protocol: { id: "protocol-1", revision: "1" },
     toolExposureContent: { id: "tools-1", revision: "1" },
+    callableDefinitions: { id: "callables-1", revision: "1" },
     policy: { id: "policy-1", revision: "1" },
     state: {
       kind: "opaque_provider_state",

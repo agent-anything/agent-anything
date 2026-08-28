@@ -68,6 +68,7 @@ function validContinuation(): ModelContinuationRef {
     activeContext: { id: "context-1", runId: "run-1", version: 4 },
     protocol: { id: "helarc-controller", revision: "5" },
     toolExposureContent: { id: "tools-1", revision: "2" },
+    callableDefinitions: { id: "callables-1", revision: "3" },
     policy: { id: "model-input-policy", revision: "7" },
     state: {
       kind: "opaque_provider_state",

@@ -31,6 +31,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { createHelarcTask } from "../task/index.js";
 import { createHelarcProductComposition } from "./HelarcProductComposition.js";
+import { createHelarcBaselineToolGuidance } from "../tools/guidance/index.js";
 import {
   HELARC_SHELL_BINDING,
   HELARC_SHELL_OPERATION,
@@ -100,6 +101,25 @@ describe("HelarcProductComposition", () => {
     });
     expect(composition.actions.registrations.registrations.map(({ operation }) => operation.operation.name))
       .toEqual(expect.arrayContaining(["edit", "glob", "grep", "read", "write", "shell-execute", "task-stop"]));
+    const selectedRegistrations = composition.actions.toolSelection.tools.map(
+      ({ registration }) => registration,
+    );
+    const baselineGuidance = createHelarcBaselineToolGuidance(selectedRegistrations);
+    expect(baselineGuidance.release.tools).toHaveLength(10);
+    expect(baselineGuidance.release.sources).toHaveLength(10);
+    expect(composition.controllerProtocol.toolGuidance.entries).toHaveLength(9);
+    expect(composition.controllerProtocol.toolGuidance.entries.map(({ name }) => name))
+      .toEqual(expect.arrayContaining([
+        "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "TaskStop",
+        "AskUserQuestion", "Agent",
+      ]));
+    expect(composition.runMetadata).toMatchObject({
+      controllerProtocolRevision: composition.controllerProtocol.revision,
+      toolGuidanceReleaseId: baselineGuidance.release.ref.id,
+      toolGuidanceProfileRevision: baselineGuidance.release.guidanceProfileRevision,
+      controllerControlGuidanceRevision:
+        composition.controllerProtocol.controlGuidance.revision,
+    });
   });
 
   it("projects trusted failures into bounded product messages without leaking raw data", async () => {

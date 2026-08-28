@@ -19,6 +19,10 @@ import {
   type HelarcAgentOutput,
 } from "../controller/HelarcController.js";
 import {
+  createHelarcBaselineControllerProtocolComposition,
+  type HelarcControllerProtocolComposition,
+} from "../controller/HelarcControllerProtocolComposition.js";
+import {
   createHelarcAgent,
   createHelarcDelegatedWorkerAgent,
 } from "../agent/HelarcAgent.js";
@@ -90,6 +94,7 @@ export interface HelarcProductComposition {
   readonly agent: Agent<HelarcAgentOutput>;
   readonly delegatedAgent: Agent<HelarcAgentOutput>;
   readonly controller: Controller<HelarcAgentOutput>;
+  readonly controllerProtocol: HelarcControllerProtocolComposition;
   readonly actions: Awaited<ReturnType<typeof createHelarcActionComposition>>;
   readonly interactions: InteractionProtocolRegistrySnapshot;
   readonly delegation: RunnerDelegationComposition;
@@ -140,6 +145,13 @@ export async function createHelarcProductComposition(
     command: input.commandActions,
     semanticTools: Object.freeze([clarification.tool, descendant.tool]),
   });
+  const controllerProtocol = createHelarcBaselineControllerProtocolComposition({
+    providerId,
+    modelId,
+    toolSelectionRevision: actions.toolSelection.revision,
+    tools: actions.toolSelection.tools.map(({ registration }) => registration),
+  });
+  const rootToolGuidanceBinding = controllerProtocol.bindRun(input.runId);
   const interactions = createInteractionProtocolRegistrySnapshot(
     "helarc.interactions.v3",
     [clarification.protocol],
@@ -190,8 +202,10 @@ export async function createHelarcProductComposition(
   const providerController = new HelarcTracingController(
     new ProviderBackedController<HelarcAgentOutput>({
       provider: input.provider,
-      buildRequest: buildHelarcProviderRequest,
-      parseResponse: parseHelarcProviderResponse,
+      buildRequest: (controllerInput, context) =>
+        buildHelarcProviderRequest(controllerInput, context, controllerProtocol),
+      parseResponse: (response, controllerInput) =>
+        parseHelarcProviderResponse(response, controllerInput, controllerProtocol),
       responseProtocol: Object.freeze({ kind: "native_tool_turn" }),
       retryExecutor: createSystemRetryExecutor(retryClock),
       retryClock,
@@ -202,12 +216,20 @@ export async function createHelarcProductComposition(
   const runMetadata = Object.freeze({
     product: "helarc",
     instructionTarget: input.instructionTarget,
+    controllerProtocolRevision: controllerProtocol.revision,
+    toolGuidanceBindingId: rootToolGuidanceBinding.id,
+    toolGuidanceReleaseId: rootToolGuidanceBinding.release.id,
+    toolGuidanceReleaseRevision: rootToolGuidanceBinding.release.revision,
+    toolGuidanceProfileRevision: rootToolGuidanceBinding.guidanceProfileRevision,
+    toolGuidanceContentDigest: rootToolGuidanceBinding.contentDigest,
+    controllerControlGuidanceRevision: controllerProtocol.controlGuidance.revision,
   });
 
   return Object.freeze({
     agent,
     delegatedAgent,
     controller: providerController,
+    controllerProtocol,
     actions,
     interactions,
     delegation: descendant.delegation,

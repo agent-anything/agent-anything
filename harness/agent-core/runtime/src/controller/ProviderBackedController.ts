@@ -1828,8 +1828,12 @@ function continuationLineage<TOutput>(
   input: ControllerInput<TOutput>,
 ): ModelContinuationRequestLineage {
   const lineage = request.composition.lineage;
-  if (lineage.toolExposureContent === null || lineage.toolExposureProof === null) {
-    throw new TypeError("Provider continuation requires exact Tool exposure lineage.");
+  if (
+    lineage.toolExposureContent === null ||
+    lineage.toolExposureProof === null ||
+    lineage.callableDefinitions === null
+  ) {
+    throw new TypeError("Provider continuation requires exact Tool exposure and callable-definition lineage.");
   }
   return Object.freeze({
     providerId: request.composition.providerId,
@@ -1845,6 +1849,10 @@ function continuationLineage<TOutput>(
     toolExposureContent: continuationRevision(
       lineage.toolExposureContent,
       "toolExposureContent",
+    ),
+    callableDefinitions: continuationRevision(
+      lineage.callableDefinitions,
+      "callableDefinitions",
     ),
     policy: continuationRevision(lineage.policy, "policy"),
   });

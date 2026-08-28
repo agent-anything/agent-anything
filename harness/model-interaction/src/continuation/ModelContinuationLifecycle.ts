@@ -23,6 +23,7 @@ export interface ModelContinuationRequestLineage {
   readonly activeContext: ModelContinuationActiveContextRef;
   readonly protocol: ModelContinuationRevisionRef;
   readonly toolExposureContent: ModelContinuationRevisionRef;
+  readonly callableDefinitions: ModelContinuationRevisionRef;
   readonly policy: ModelContinuationRevisionRef;
 }
 
@@ -203,6 +204,7 @@ export class ModelContinuationLifecycle {
       activeContext: lineage.activeContext,
       protocol: lineage.protocol,
       toolExposureContent: lineage.toolExposureContent,
+      callableDefinitions: lineage.callableDefinitions,
       policy: lineage.policy,
       state: input.state,
       createdAt: this.timestamp(),
@@ -473,6 +475,8 @@ export function checkModelContinuationCompatibility(
       : !sameRevision(current.protocol, lineage.protocol) ? "protocol_changed"
       : !sameRevision(current.toolExposureContent, lineage.toolExposureContent)
       ? "tool_exposure_content_changed"
+      : !sameRevision(current.callableDefinitions, lineage.callableDefinitions)
+      ? "callable_definitions_changed"
       : !sameRevision(current.policy, lineage.policy) ? "policy_changed"
       : null;
   return reason === null
@@ -529,6 +533,7 @@ function snapshotLineage(
     activeContext,
     protocol: revision(input.protocol, "protocol"),
     toolExposureContent: revision(input.toolExposureContent, "toolExposureContent"),
+    callableDefinitions: revision(input.callableDefinitions, "callableDefinitions"),
     policy: revision(input.policy, "policy"),
   });
 }

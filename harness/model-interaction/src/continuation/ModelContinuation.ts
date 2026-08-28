@@ -50,6 +50,7 @@ export interface ModelContinuationRef {
   readonly activeContext: ModelContinuationActiveContextRef;
   readonly protocol: ModelContinuationRevisionRef;
   readonly toolExposureContent: ModelContinuationRevisionRef;
+  readonly callableDefinitions: ModelContinuationRevisionRef;
   readonly policy: ModelContinuationRevisionRef;
   readonly state: ModelOpaqueContinuationState;
   readonly createdAt: string;
@@ -63,6 +64,7 @@ export type ModelContinuationIncompatibilityReason =
   | "active_context_changed"
   | "protocol_changed"
   | "tool_exposure_content_changed"
+  | "callable_definitions_changed"
   | "policy_changed";
 
 export type ModelContinuationCompatibility =
@@ -153,7 +155,7 @@ export function snapshotModelContinuationRef(
   strictRecord(input, "ModelContinuationRef", [
     "id", "providerId", "model", "mechanism", "predecessor", "branchId",
     "requestId", "responseId", "activeContext", "protocol", "toolExposureContent",
-    "policy", "state", "createdAt",
+    "callableDefinitions", "policy", "state", "createdAt",
   ]);
   if (!isMechanism(input.mechanism)) {
     throw new TypeError("ModelContinuationRef.mechanism is invalid.");
@@ -174,6 +176,10 @@ export function snapshotModelContinuationRef(
     toolExposureContent: snapshotRevisionRef(
       input.toolExposureContent,
       "ModelContinuationRef.toolExposureContent",
+    ),
+    callableDefinitions: snapshotRevisionRef(
+      input.callableDefinitions,
+      "ModelContinuationRef.callableDefinitions",
     ),
     policy: snapshotRevisionRef(input.policy, "ModelContinuationRef.policy"),
     state: snapshotOpaqueState(input.state, "ModelContinuationRef.state"),
@@ -370,5 +376,6 @@ function isIncompatibilityReason(
     value === "mechanism_changed" ||
     value === "branch_changed" ||
     value === "active_context_changed" || value === "protocol_changed" ||
-    value === "tool_exposure_content_changed" || value === "policy_changed";
+    value === "tool_exposure_content_changed" ||
+    value === "callable_definitions_changed" || value === "policy_changed";
 }

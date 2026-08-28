@@ -4,3 +4,4 @@ export type {
 } from "./HelarcToolGuidanceError.js";
 export * from "./HelarcToolGuidance.js";
 export * from "./HelarcToolGuidanceSchema.js";
+export * from "./HelarcBaselineToolGuidance.js";

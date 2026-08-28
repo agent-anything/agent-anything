@@ -121,7 +121,9 @@ export interface ModelInputLineage {
   readonly toolExposureContent: ModelInputSourceRef | null;
   readonly toolExposureBasis: ModelInputSourceRef | null;
   readonly toolExposureProof: ModelInputSourceRef | null;
-  readonly controllerControlSet: ModelInputSourceRef | null;
+  readonly toolGuidance: ModelInputSourceRef | null;
+  readonly controllerControlGuidance: ModelInputSourceRef | null;
+  readonly callableDefinitions: ModelInputSourceRef | null;
   readonly interactionHistory: ModelInputSourceRef | null;
   readonly protocol: ModelInputSourceRef;
   readonly policy: ModelInputSourceRef;
@@ -447,8 +449,9 @@ function snapshotLineage(input: ModelInputLineage): ModelInputLineage {
     "instructionBinding", "agent", "instructions", "instructionRelease",
     "instructionResolver", "instructionContent", "instructionModel", "instructionBlocks",
     "activeContext", "contextProjection", "projectionManifest", "toolSelection",
-    "toolExposureContent", "toolExposureBasis", "toolExposureProof",
-    "controllerControlSet", "interactionHistory", "protocol", "policy",
+    "toolExposureContent", "toolExposureBasis", "toolExposureProof", "toolGuidance",
+    "controllerControlGuidance", "callableDefinitions", "interactionHistory",
+    "protocol", "policy",
   ]);
   return Object.freeze({
     instructionBinding: snapshotSource(input.instructionBinding, "ModelInputComposition.lineage.instructionBinding"),
@@ -469,7 +472,9 @@ function snapshotLineage(input: ModelInputLineage): ModelInputLineage {
     toolExposureContent: snapshotNullableSource(input.toolExposureContent, "ModelInputComposition.lineage.toolExposureContent"),
     toolExposureBasis: snapshotNullableSource(input.toolExposureBasis, "ModelInputComposition.lineage.toolExposureBasis"),
     toolExposureProof: snapshotNullableSource(input.toolExposureProof, "ModelInputComposition.lineage.toolExposureProof"),
-    controllerControlSet: snapshotNullableSource(input.controllerControlSet, "ModelInputComposition.lineage.controllerControlSet"),
+    toolGuidance: snapshotNullableSource(input.toolGuidance, "ModelInputComposition.lineage.toolGuidance"),
+    controllerControlGuidance: snapshotNullableSource(input.controllerControlGuidance, "ModelInputComposition.lineage.controllerControlGuidance"),
+    callableDefinitions: snapshotNullableSource(input.callableDefinitions, "ModelInputComposition.lineage.callableDefinitions"),
     interactionHistory: snapshotNullableSource(input.interactionHistory, "ModelInputComposition.lineage.interactionHistory"),
     protocol: snapshotSource(input.protocol, "ModelInputComposition.lineage.protocol"),
     policy: snapshotSource(input.policy, "ModelInputComposition.lineage.policy"),

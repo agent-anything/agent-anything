@@ -309,6 +309,7 @@ export async function prepareHelarcHostRun(
   });
   const baseContextProjection = createHelarcContextProjectionConfiguration(
     input.provider.inputAccounting,
+    product.controllerProtocol,
   );
   const contextProjection = input.contextManifestPersistence === undefined
     ? baseContextProjection
