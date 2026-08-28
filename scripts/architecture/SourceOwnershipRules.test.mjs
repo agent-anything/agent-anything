@@ -196,6 +196,43 @@ test("protects the Helarc model decision and Tool Contract authority boundary", 
   );
 });
 
+test("protects Product Tool Guidance and model qualification semantic owners", () => {
+  const guidanceDependency = evaluateSourceOwnershipRules({
+    sourcePath: "products/helarc/core/src/tools/guidance/InvalidGuidance.ts",
+    text: 'import type { Runner } from "@agent-anything/agent-runtime/runner";',
+  });
+  const guidanceAllowedDependency = evaluateSourceOwnershipRules({
+    sourcePath: "products/helarc/core/src/tools/guidance/ValidGuidance.ts",
+    text: 'import type { ToolRevisionRef } from "@agent-anything/tools/identity";',
+  });
+  const guidanceOwner = evaluateSourceOwnershipRules({
+    sourcePath: "products/helarc/core/src/controller/InvalidGuidance.ts",
+    text: "export interface HelarcToolGuidanceRelease {}",
+  });
+  const qualificationDependency = evaluateSourceOwnershipRules({
+    sourcePath: "products/helarc/core/src/model-qualification/InvalidQualification.ts",
+    text: 'import type { ModelInputComposition } from "@agent-anything/model-interaction";',
+  });
+  const qualificationOwner = evaluateSourceOwnershipRules({
+    sourcePath: "products/helarc/core/src/configuration/InvalidQualification.ts",
+    text: "export interface HelarcModelQualificationDecision {}",
+  });
+
+  assert.deepEqual(guidanceDependency.map(({ rule }) => rule), [
+    "helarc_tool_guidance_dependency_direction",
+  ]);
+  assert.deepEqual(guidanceAllowedDependency, []);
+  assert.deepEqual(guidanceOwner.map(({ rule }) => rule), [
+    "helarc_tool_guidance_owner",
+  ]);
+  assert.deepEqual(qualificationDependency.map(({ rule }) => rule), [
+    "helarc_model_qualification_dependency_direction",
+  ]);
+  assert.deepEqual(qualificationOwner.map(({ rule }) => rule), [
+    "helarc_model_qualification_owner",
+  ]);
+});
+
 test("requires complete Provider composition and Controller verification", () => {
   const request = evaluateSourceOwnershipRules({
     sourcePath: "harness/model-interaction/src/ProviderRequest.ts",

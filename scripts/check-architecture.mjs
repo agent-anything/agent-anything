@@ -1087,6 +1087,7 @@ function checkExecutionSourceTopology() {
         "index.ts",
         "interaction",
         "instructions",
+        "model-qualification",
         "observability",
         "prompt",
         "result",

@@ -114,6 +114,48 @@ export function evaluateSourceOwnershipRules({
       );
     }
 
+    const isHelarcToolGuidanceOwner =
+      path.startsWith("products/helarc/core/src/tools/guidance/");
+    if (
+      isHelarcToolGuidanceOwner &&
+      /@agent-anything\/(?!tools(?:[/'"]|$)|operation-catalog(?:[/'"]|$))/.test(text)
+    ) {
+      reject(
+        "helarc_tool_guidance_dependency_direction",
+        "Product Tool Guidance may depend only on exact Tool and Operation Contracts from Harness packages.",
+      );
+    }
+    if (
+      !isHelarcToolGuidanceOwner &&
+      /export\s+(?:interface|class|type)\s+(?:HelarcToolGuidance|ResolvedHelarcToolGuidance|HelarcSelectedTool)\w*\b/.test(text)
+    ) {
+      reject(
+        "helarc_tool_guidance_owner",
+        "Helarc Product Tool Guidance Contracts belong to products/helarc/core/src/tools/guidance.",
+      );
+    }
+
+    const isHelarcModelQualificationOwner =
+      path.startsWith("products/helarc/core/src/model-qualification/");
+    if (
+      isHelarcModelQualificationOwner &&
+      /@agent-anything\//.test(text)
+    ) {
+      reject(
+        "helarc_model_qualification_dependency_direction",
+        "Helarc model qualification owns Product behavior claims and cannot depend on Harness packages.",
+      );
+    }
+    if (
+      !isHelarcModelQualificationOwner &&
+      /export\s+(?:interface|class|type)\s+(?:HelarcModelQualification|HelarcModelUseDisposition)\w*\b/.test(text)
+    ) {
+      reject(
+        "helarc_model_qualification_owner",
+        "Helarc model qualification Contracts belong to products/helarc/core/src/model-qualification.",
+      );
+    }
+
     if (
       path === "harness/model-interaction/src/ProviderRequest.ts" &&
       !/readonly\s+composition\s*:\s*ModelInputComposition\s*;/.test(text)

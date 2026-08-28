@@ -21,7 +21,8 @@
     "./artifacts": { "types": "./src/artifacts/index.ts", "import": "./dist/artifacts/index.js" },
     "./composition": { "types": "./src/composition/index.ts", "import": "./dist/composition/index.js" },
     "./observability": { "types": "./src/observability/index.ts", "import": "./dist/observability/index.js" },
-    "./verification": { "types": "./src/verification/index.ts", "import": "./dist/verification/index.js" }
+    "./verification": { "types": "./src/verification/index.ts", "import": "./dist/verification/index.js" },
+    "./model-qualification": { "types": "./src/model-qualification/index.ts", "import": "./dist/model-qualification/index.js" }
   },
   "files": ["dist"],
   "scripts": {
