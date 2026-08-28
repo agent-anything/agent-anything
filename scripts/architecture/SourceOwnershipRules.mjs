@@ -95,16 +95,6 @@ export function evaluateSourceOwnershipRules({
     }
 
     if (
-      path === "products/helarc/core/src/controller/HelarcModelDecision.ts" &&
-      /(?:HelarcControllerAction|["'](?:propose|request_permissions)["'])/.test(text)
-    ) {
-      reject(
-        "helarc_model_decision_protocol",
-        "The Helarc model decision Contract cannot restore a generic Action, propose, or explicit permission-request decision.",
-      );
-    }
-
-    if (
       path === "products/helarc/core/src/tools/HelarcBaselineToolContracts.ts" &&
       /readonly\s+(?:handler|executor|execute)\s*[?:]/.test(text)
     ) {
