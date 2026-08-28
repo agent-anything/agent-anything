@@ -45,12 +45,18 @@ describe("CurrentVerificationCompletionGate", () => {
 
   it("fails closed for an unsatisfied required condition", async () => {
     const decision = await new CurrentVerificationCompletionGate(() => NOW).evaluate(input({
-      conditions: [{ ...owner("host-condition"), required: true, satisfied: false }],
+      conditions: [{
+        ...owner("host-condition"),
+        required: true,
+        satisfied: false,
+        disposition: "continue",
+        reason: { code: "host_condition_unsatisfied", message: "Host condition is incomplete." },
+      }],
     }), interruption);
     expect(decision).toMatchObject({
       status: "blocked_unassessed",
-      disposition: "block",
-      reasons: [{ code: "verification_gate_condition_unsatisfied" }],
+      disposition: "continue",
+      reasons: [{ code: "host_condition_unsatisfied", message: "Host condition is incomplete." }],
     });
   });
 

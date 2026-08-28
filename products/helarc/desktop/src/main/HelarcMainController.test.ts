@@ -136,6 +136,7 @@ describe("HelarcMainController", () => {
         baseUrlOrigin: "https://provider.local",
         model: "desktop-test-model",
         timeoutMs: 1500,
+        ollamaRuntime: null,
         credentialStatus: "present",
         qualificationPolicy: "allow_experimental",
         isActive: true,
@@ -155,6 +156,7 @@ describe("HelarcMainController", () => {
         baseUrlOrigin: "https://provider.local",
         model: "desktop-test-model",
         timeoutMs: 1500,
+        ollamaRuntime: null,
         credentialStatus: "present",
         qualificationPolicy: "allow_experimental",
         isActive: true,
@@ -169,6 +171,7 @@ describe("HelarcMainController", () => {
           baseUrlOrigin: "https://provider.local",
           model: "desktop-test-model",
           timeoutMs: 1500,
+          ollamaRuntime: null,
           credentialStatus: "present",
           qualificationPolicy: "allow_experimental",
           isActive: true,
@@ -373,6 +376,7 @@ describe("HelarcMainController", () => {
         baseUrlOrigin: "https://provider.local",
         model: "desktop-test-model",
         timeoutMs: 1000,
+        ollamaRuntime: null,
         credentialStatus: "present",
         qualificationPolicy: "allow_experimental",
         isActive: true,
@@ -587,6 +591,7 @@ describe("HelarcMainController", () => {
         baseUrlOrigin: "https://provider.local",
         model: "desktop-test-model",
         timeoutMs: 1000,
+        ollamaRuntime: null,
         credentialStatus: "present",
         qualificationPolicy: "allow_experimental",
         isActive: true,
@@ -1478,7 +1483,7 @@ class CompleteProvider implements Provider {
     name: "Complete Provider",
     capabilities: {
       nativeToolInteraction: desktopNativeToolInteractionCapability(),
-      structuredGeneration: { supported: false as const },
+      structuredGeneration: { supported: true as const },
       streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
@@ -1492,6 +1497,9 @@ class CompleteProvider implements Provider {
     request: ProviderRequest,
     _context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
+    if (request.purpose === "helarc.task-fulfillment") {
+      return createDesktopTaskFulfillmentResult(request, this.descriptor.id);
+    }
     return createDesktopNativeResult(
       request,
       { kind: "completion", summary: "No changes needed." },
@@ -1508,7 +1516,7 @@ class CountingCompleteProvider extends CompleteProvider {
     request: ProviderRequest,
     context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
-    this.callCount += 1;
+    if (request.purpose !== "helarc.task-fulfillment") this.callCount += 1;
     return super.send(request, context);
   }
 }
@@ -1520,7 +1528,7 @@ class RecordingCompleteProvider extends CompleteProvider {
     request: ProviderRequest,
     context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
-    this.requests.push(request);
+    if (request.purpose !== "helarc.task-fulfillment") this.requests.push(request);
     return super.send(request, context);
   }
 }
@@ -1542,6 +1550,9 @@ class DeferredCompleteProvider extends CompleteProvider {
     request: ProviderRequest,
     _context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
+    if (request.purpose === "helarc.task-fulfillment") {
+      return createDesktopTaskFulfillmentResult(request, this.descriptor.id);
+    }
     this.callCount += 1;
     this.request = request;
     return this.result;
@@ -1567,7 +1578,7 @@ class SecretFailingProvider implements Provider {
     name: "Secret failing Provider",
     capabilities: {
       nativeToolInteraction: desktopNativeToolInteractionCapability(),
-      structuredGeneration: { supported: false as const },
+      structuredGeneration: { supported: true as const },
       streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
@@ -1602,7 +1613,7 @@ class ScriptedProvider implements Provider {
     name: "Scripted Provider",
     capabilities: {
       nativeToolInteraction: desktopNativeToolInteractionCapability(),
-      structuredGeneration: { supported: false as const },
+      structuredGeneration: { supported: true as const },
       streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
@@ -1619,6 +1630,9 @@ class ScriptedProvider implements Provider {
     request: ProviderRequest,
     _context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
+    if (request.purpose === "helarc.task-fulfillment") {
+      return createDesktopTaskFulfillmentResult(request, this.descriptor.id);
+    }
     const output = this.outputs.shift();
     if (!output) {
       return {
@@ -1640,6 +1654,39 @@ class ScriptedProvider implements Provider {
       this.responseSequence,
     );
   }
+}
+
+function createDesktopTaskFulfillmentResult(
+  request: ProviderRequest,
+  providerId: string,
+): ProviderCallResult {
+  if (request.interaction.kind !== "structured_generation") {
+    return {
+      kind: "failed",
+      failure: {
+        category: "fake",
+        code: "task_fulfillment_request_kind_invalid",
+        message: "Task Fulfillment requires structured generation.",
+        metadata: {},
+      },
+    };
+  }
+  return Object.freeze({
+    kind: "succeeded" as const,
+    response: snapshotProviderResponse({
+      kind: "structured_generation",
+      output: Object.freeze({
+        status: "fulfilled",
+        rationale: "The scripted Desktop fixture accepts the settled trajectory.",
+        missingOutcomes: Object.freeze([]),
+        unsupportedClaims: Object.freeze([]),
+      }),
+      responseId: `${providerId}:task-fulfillment`,
+      continuation: null,
+      usage: null,
+      metadata: Object.freeze({ fixture: true }),
+    }),
+  });
 }
 
 function desktopNativeToolInteractionCapability() {
@@ -1770,7 +1817,8 @@ function createDesktopTestInputAccounting(providerId: string) {
     limitSource: "host_configured",
     estimator: { id: `${providerId}.utf8-content`, revision: "1" },
     framing: { id: `${providerId}.framing`, revision: "1" },
-    renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
+    renderRequest: (instructions, messages, interaction) =>
+      JSON.stringify({ instructions, messages, interaction }),
   });
 }
 
@@ -1786,6 +1834,7 @@ function desktopProviderProfile(
     baseUrlOrigin: "https://provider.local",
     model: "desktop-test-model",
     timeoutMs: 30_000,
+    ollamaRuntime: null,
     credentialStatus: "empty_allowed" as const,
     qualificationPolicy,
     isActive: true,

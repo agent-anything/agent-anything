@@ -8,20 +8,25 @@ export function createHelarcProvider(config: HelarcProviderConfig): Provider {
     maximumBytes: 512 * 1_024,
     source: "host_configured" as const,
   });
-  return config.providerKind === "ollama"
-    ? new OllamaProvider({
-        baseUrl: config.baseUrl,
-        model: config.model,
-        timeoutMs: config.timeoutMs,
-        nativeToolInteraction: { supported: true },
-        inputLimit,
-      })
-    : new OpenAICompatibleProvider({
-        baseUrl: config.baseUrl,
-        apiKey: config.apiKey,
-        model: config.model,
-        timeoutMs: config.timeoutMs,
-        nativeToolInteraction: { supported: true },
-        inputLimit,
-      });
+  if (config.providerKind === "ollama") {
+    if (config.ollamaRuntime === null) {
+      throw new TypeError("Ollama Provider configuration requires runtime limits.");
+    }
+    return new OllamaProvider({
+      baseUrl: config.baseUrl,
+      model: config.model,
+      timeoutMs: config.timeoutMs,
+      runtime: config.ollamaRuntime,
+      nativeToolInteraction: { supported: true },
+      inputLimit,
+    });
+  }
+  return new OpenAICompatibleProvider({
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    model: config.model,
+    timeoutMs: config.timeoutMs,
+    nativeToolInteraction: { supported: true },
+    inputLimit,
+  });
 }

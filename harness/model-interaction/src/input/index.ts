@@ -17,7 +17,7 @@ export type {
   ModelOutputReserve,
 } from "./ModelInput.js";
 export {
-  modelMessagesFromSections,
+  modelInputFromSections,
   snapshotModelInputCapability,
   snapshotModelInputComposition,
 } from "./ModelInput.js";
@@ -43,5 +43,5 @@ export {
 export type { CreateUtf8ModelInputAccountingInput } from "./Utf8ModelInputAccounting.js";
 export {
   createUtf8ModelInputAccounting,
-  modelMessagesFromComposition,
+  modelInputFromComposition,
 } from "./Utf8ModelInputAccounting.js";

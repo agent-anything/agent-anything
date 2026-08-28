@@ -11,7 +11,7 @@ import { FakeProvider } from "@agent-anything/test-support";
 import {
   composeModelInput,
   createUtf8ModelInputAccounting,
-  modelMessagesFromComposition,
+  modelInputFromComposition,
 } from "@agent-anything/model-interaction/input";
 import {
   createInMemoryModelContinuationStore,
@@ -45,7 +45,10 @@ interface TestOutput {
   readonly summary: string;
 }
 
-type TestProviderRequest = Omit<ProviderRequest, "requestId" | "composition">;
+type TestProviderRequest = Omit<
+  ProviderRequest,
+  "requestId" | "instructions" | "composition"
+>;
 
 const TEST_OUTPUT_FORMAT = Object.freeze({
   kind: "json_schema" as const,
@@ -82,8 +85,10 @@ describe("ProviderBackedController", () => {
     expect(provider.requests()[0]).toMatchObject({
       purpose: "agent-control",
       interaction: { kind: "structured_generation" },
+      instructions: {
+        content: [{ kind: "text", text: "Complete the test task." }],
+      },
       messages: [
-        { role: "system", content: [{ kind: "text", text: "Complete the test task." }] },
         { role: "user", content: [{ kind: "text", text: "Run run_001 for task task_001." }] },
       ],
       composition: { providerId: "fake-provider", model: "fake-model" },
@@ -414,7 +419,7 @@ describe("ProviderBackedController", () => {
     expect(buildRequest).toHaveBeenCalledTimes(1);
     expect(requests).toHaveLength(2);
     expect(requests[0]).not.toBe(requests[1]);
-    expect(requests[1].messages[1]?.content).toEqual([
+    expect(requests[1].messages[0]?.content).toEqual([
       { kind: "text", text: "original request" },
     ]);
     const providerEvents = events.filter((event) => event.owner === "provider_request");
@@ -1455,7 +1460,8 @@ function ensureTestProviderAccounting(provider: Provider): Provider {
     limitSource: "host_configured",
     estimator: { id: `${provider.descriptor.id}.utf8-content`, revision: "1" },
     framing: { id: `${provider.descriptor.id}.framing`, revision: "1" },
-    renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
+    renderRequest: (instructions, messages, interaction) =>
+      JSON.stringify({ instructions, messages, interaction }),
   });
   return {
     descriptor: {
@@ -1480,7 +1486,7 @@ function accountTestRequest(
     id: `test:model-input:instruction:${index}`,
     source: Object.freeze({ ...block.source }),
     kind: "agent_instruction",
-    role: "system" as const,
+    role: "instruction" as const,
     necessity: "mandatory" as const,
     content: Object.freeze({ kind: "text" as const, text: block.content }),
   }));
@@ -1604,10 +1610,12 @@ function accountTestRequest(
     }),
     composedAt: input.task.createdAt,
   });
+  const modelInput = modelInputFromComposition(composition);
   return Object.freeze({
     ...request,
     requestId: composition.id,
-    messages: modelMessagesFromComposition(composition),
+    instructions: modelInput.instructions,
+    messages: modelInput.messages,
     composition,
   });
 }

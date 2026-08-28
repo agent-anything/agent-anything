@@ -46,7 +46,8 @@ const TEST_INPUT_ACCOUNTING = createUtf8ModelInputAccounting({
   limitSource: "host_configured",
   estimator: { id: "fake-provider.utf8-content", revision: "1" },
   framing: { id: "fake-provider.framing", revision: "1" },
-  renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
+  renderRequest: (instructions, messages, interaction) =>
+    JSON.stringify({ instructions, messages, interaction }),
 });
 
 function buildHelarcProviderRequest(
@@ -108,7 +109,8 @@ function testQualificationProvider(
     limitSource: "host_configured",
     estimator: { id: "qualification-test.utf8", revision: "1" },
     framing: { id: "qualification-test.framing", revision: "1" },
-    renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
+    renderRequest: (instructions, messages, interaction) =>
+      JSON.stringify({ instructions, messages, interaction }),
   });
   return Object.freeze({
     descriptor: Object.freeze({
@@ -202,11 +204,11 @@ describe("Helarc native Tool controller", () => {
     expect(readDefinition?.description).not.toBe("Read a Workspace file.");
     expect(request.composition.sections[0]).toMatchObject({
       id: "helarc:model-input:agent-instructions:behavior",
-      role: "system",
+      role: "instruction",
       necessity: "mandatory",
       content: { text: "Complete the code task." },
     });
-    const prompt = messageText(request.messages);
+    const prompt = requestText(request);
     expect(prompt).toContain("Use only callable definitions supplied with the current model request.");
     expect(prompt).toContain("Task:\nUpdate docs");
     expect(prompt).not.toContain("Return only JSON");
@@ -245,9 +247,13 @@ describe("Helarc native Tool controller", () => {
     const observedInteractions: unknown[] = [];
     const accounting = Object.freeze({
       ...TEST_INPUT_ACCOUNTING,
-      estimateFraming(messages: Parameters<typeof TEST_INPUT_ACCOUNTING.estimateFraming>[0], interaction: Parameters<typeof TEST_INPUT_ACCOUNTING.estimateFraming>[1]) {
+      estimateFraming(
+        instructions: Parameters<typeof TEST_INPUT_ACCOUNTING.estimateFraming>[0],
+        messages: Parameters<typeof TEST_INPUT_ACCOUNTING.estimateFraming>[1],
+        interaction: Parameters<typeof TEST_INPUT_ACCOUNTING.estimateFraming>[2],
+      ) {
         observedInteractions.push(interaction);
-        return TEST_INPUT_ACCOUNTING.estimateFraming(messages, interaction);
+        return TEST_INPUT_ACCOUNTING.estimateFraming(instructions, messages, interaction);
       },
     });
     const configuration = createHelarcContextProjectionConfiguration(accounting, protocol);
@@ -365,6 +371,24 @@ describe("Helarc native Tool controller", () => {
       .toMatchObject({ owner: "context", id: "projection-1", revision: "1" });
   });
 
+  it("projects the initial Task and Run state as one logical user message", () => {
+    const request = buildHelarcProviderRequest(
+      createControllerInput(),
+      requestBuildContext(),
+    );
+
+    expect(request.instructions.content.length).toBeGreaterThan(0);
+    expect(request.messages.map(({ role }) => role)).toEqual(["user"]);
+    const userMessage = request.messages[0];
+    expect(userMessage?.role).toBe("user");
+    if (userMessage?.role !== "user") throw new TypeError("Expected one user message.");
+    expect(userMessage.content.map(({ text }) => text)).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^Task:\n/),
+      expect.stringMatching(/^Current progress:\n/),
+      "Pending interactions:\n[]",
+    ]));
+  });
+
   it("places Run-owned model interaction history before current state material", () => {
     const input = createControllerInput();
     const request = buildHelarcProviderRequest({
@@ -434,7 +458,8 @@ describe("Helarc native Tool controller", () => {
       limitSource: "host_configured",
       estimator: { id: "tiny-provider.utf8-content", revision: "1" },
       framing: { id: "tiny-provider.framing", revision: "1" },
-      renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
+      renderRequest: (instructions, messages, interaction) =>
+        JSON.stringify({ instructions, messages, interaction }),
     });
 
     expect(() => buildHelarcProviderRequest(createControllerInput("tiny-provider", "tiny-model"), {
@@ -455,7 +480,9 @@ describe("Helarc native Tool controller", () => {
         limitSource: "host_configured",
         estimator: { id: "other.utf8", revision: "1" },
         framing: { id: "other.framing", revision: "1" },
-        renderRequest: (messages) => messageText(messages),
+        renderRequest: (instructions, messages) =>
+          instructions.content.map((block) => block.text).join("\n") +
+          messageText(messages),
       }),
     })).toThrow("must match");
   });
@@ -1185,4 +1212,11 @@ function messageText(messages: ProviderRequest["messages"]): string {
   return messages.flatMap((message) => message.content)
     .map((block) => block.kind === "text" ? block.text : JSON.stringify(block))
     .join("\n");
+}
+
+function requestText(request: ProviderRequest): string {
+  return [
+    ...request.instructions.content.map((block) => block.text),
+    messageText(request.messages),
+  ].join("\n");
 }

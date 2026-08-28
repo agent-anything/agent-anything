@@ -572,11 +572,12 @@ function modelInputAccounting() {
     limitSource: "host_configured",
     estimator: { id: "utf8-bytes", revision: ESTIMATOR_REVISION },
     framing: { id: "deterministic-framing", revision: "1" },
-    renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
+    renderRequest: (instructions, messages, interaction) =>
+      JSON.stringify({ instructions, messages, interaction }),
   });
 }
 
-function modelSection(id: string, role: "system" | "user", text: string) {
+function modelSection(id: string, role: "instruction" | "user", text: string) {
   return {
     id,
     source: { owner: "test-support", kind: "evaluation_fixture", id, revision: "1" },
@@ -592,7 +593,7 @@ function instructionSection() {
     id: "agent-instruction",
     source: instructionBlockSource(),
     kind: "agent_instruction",
-    role: "system" as const,
+    role: "instruction" as const,
     necessity: "mandatory" as const,
     content: { kind: "text" as const, text: "Product rules." },
   };

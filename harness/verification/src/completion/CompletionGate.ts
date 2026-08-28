@@ -41,6 +41,11 @@ export interface CompletionGatePolicyRef extends VerificationOwnerRef {}
 export interface CompletionGateConditionRef extends VerificationOwnerRef {
   readonly required: boolean;
   readonly satisfied: boolean;
+  readonly disposition: VerificationCompletionDisposition | null;
+  readonly reason: {
+    readonly code: string;
+    readonly message: string;
+  } | null;
 }
 
 export interface CompletionGateConfiguration {
@@ -140,14 +145,9 @@ export function snapshotCompletionGateConfiguration(
   return deepFreeze({
     policy: ownerRef(input.policy, "CompletionGateConfiguration.policy"),
     outputContract: ownerRef(input.outputContract, "CompletionGateConfiguration.outputContract"),
-    conditions: unique(input.conditions.map((condition, index) => {
-      const path = `CompletionGateConfiguration.conditions[${index}]`;
-      strictRecord(condition, path, ["owner", "kind", "id", "revision", "required", "satisfied"]);
-      if (typeof condition.required !== "boolean" || typeof condition.satisfied !== "boolean") {
-        throw new TypeError(`${path} flags must be boolean.`);
-      }
-      return { ...ownerRefFields(condition, path), required: condition.required, satisfied: condition.satisfied };
-    }), ownerKey, "CompletionGateConfiguration.conditions"),
+    conditions: unique(input.conditions.map((condition, index) =>
+      snapshotCondition(condition, `CompletionGateConfiguration.conditions[${index}]`)
+    ), ownerKey, "CompletionGateConfiguration.conditions"),
     maximumDurationMs: positiveInteger(input.maximumDurationMs, "CompletionGateConfiguration.maximumDurationMs"),
   });
 }
@@ -202,16 +202,9 @@ export function snapshotCompletionGateInput(input: CompletionGateInput): Complet
       "CompletionGateInput.mandatoryStates"),
     pendingWork: unique(input.pendingWork.map((item, index) => ownerRef(item, `CompletionGateInput.pendingWork[${index}]`)),
       ownerKey, "CompletionGateInput.pendingWork"),
-    conditions: unique(input.conditions.map((condition, index) => {
-      strictRecord(condition, `CompletionGateInput.conditions[${index}]`, [
-        "owner", "kind", "id", "revision", "required", "satisfied",
-      ]);
-      if (typeof condition.required !== "boolean" || typeof condition.satisfied !== "boolean") {
-        throw new TypeError("CompletionGateInput condition flags must be boolean.");
-      }
-      return { ...ownerRefFields(condition, `CompletionGateInput.conditions[${index}]`),
-        required: condition.required, satisfied: condition.satisfied };
-    }), ownerKey, "CompletionGateInput.conditions"),
+    conditions: unique(input.conditions.map((condition, index) =>
+      snapshotCondition(condition, `CompletionGateInput.conditions[${index}]`)
+    ), ownerKey, "CompletionGateInput.conditions"),
     lifecycle: {
       ...input.lifecycle,
       runRevision: nonNegativeInteger(input.lifecycle.runRevision, "CompletionGateInput.lifecycle.runRevision"),
@@ -268,6 +261,37 @@ function snapshotReason(input: CompletionGateReason, path: string): CompletionGa
     message: nonEmpty(input.message, `${path}.message`),
     requirement: input.requirement === null ? null : revisionRef(input.requirement, `${path}.requirement`),
   };
+}
+function snapshotCondition(input: CompletionGateConditionRef, path: string): CompletionGateConditionRef {
+  strictRecord(input, path, [
+    "owner", "kind", "id", "revision", "required", "satisfied", "disposition", "reason",
+  ]);
+  if (typeof input.required !== "boolean" || typeof input.satisfied !== "boolean") {
+    throw new TypeError(`${path} flags must be boolean.`);
+  }
+  if (input.satisfied) {
+    if (input.disposition !== null || input.reason !== null) {
+      throw new TypeError(`${path} satisfied state cannot carry disposition or reason.`);
+    }
+  } else if (input.required) {
+    disposition(input.disposition, `${path}.disposition`);
+    if (input.reason === null) throw new TypeError(`${path}.reason is required.`);
+  }
+  let reason: CompletionGateConditionRef["reason"] = null;
+  if (input.reason !== null) {
+    strictRecord(input.reason, `${path}.reason`, ["code", "message"]);
+    reason = Object.freeze({
+      code: token(input.reason.code, `${path}.reason.code`),
+      message: nonEmpty(input.reason.message, `${path}.reason.message`),
+    });
+  }
+  return Object.freeze({
+    ...ownerRefFields(input, path),
+    required: input.required,
+    satisfied: input.satisfied,
+    disposition: input.disposition,
+    reason,
+  });
 }
 function ownerRef(input: VerificationOwnerRef, path: string): VerificationOwnerRef {
   strictRecord(input, path, ["owner", "kind", "id", "revision"]);

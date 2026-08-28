@@ -6,7 +6,7 @@ import type {
 import {
   composeModelInput,
   createUtf8ModelInputAccounting,
-  modelMessagesFromComposition,
+  modelInputFromComposition,
 } from "@agent-anything/model-interaction/input";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { describe, expect, it } from "vitest";
@@ -43,8 +43,10 @@ describe("FakeProvider", () => {
         requestId: "request_001",
         purpose: "tool-planning",
         interaction: { kind: "text_generation" },
+        instructions: {
+          content: [{ kind: "text", text: "Follow test instructions." }],
+        },
         messages: [
-          { role: "system", content: [{ kind: "text", text: "Follow test instructions." }] },
           { role: "user", content: [{ kind: "text", text: "Plan next diagnostic step." }] },
         ],
         continuation: null,
@@ -106,7 +108,8 @@ function createRequest(requestId: string): ProviderRequest {
     limitSource: "host_configured",
     estimator: { id: "fake-provider.utf8-content", revision: "1" },
     framing: { id: "fake-provider.framing", revision: "1" },
-    renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
+    renderRequest: (instructions, messages, interaction) =>
+      JSON.stringify({ instructions, messages, interaction }),
   });
   const interaction = { kind: "text_generation" as const };
   const composition = composeModelInput({
@@ -122,7 +125,7 @@ function createRequest(requestId: string): ProviderRequest {
       id: "instructions",
       source: source("instructions"),
       kind: "agent_instruction",
-      role: "system",
+      role: "instruction",
       necessity: "mandatory",
       content: { kind: "text", text: "Follow test instructions." },
     }, {
@@ -159,6 +162,7 @@ function createRequest(requestId: string): ProviderRequest {
     },
     composedAt: "2026-08-27T00:00:00.000Z",
   });
+  const modelInput = modelInputFromComposition(composition);
   return {
     requestId,
     purpose: "tool-planning",
@@ -166,7 +170,8 @@ function createRequest(requestId: string): ProviderRequest {
       controllerRequestId: `${requestId}:controller`,
       branchId: `${requestId}:branch`,
     },
-    messages: modelMessagesFromComposition(composition),
+    instructions: modelInput.instructions,
+    messages: modelInput.messages,
     interaction,
     composition,
     continuation: null,

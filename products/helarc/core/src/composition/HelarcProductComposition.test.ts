@@ -287,14 +287,23 @@ describe("HelarcProductComposition", () => {
         category: "transport",
         code: "provider_request_failed",
         message: `Provider failed with ${secret}.`,
-        metadata: { apiKey: secret },
+        metadata: {
+          apiKey: secret,
+          providerErrorCode: "provider_response_empty",
+        },
       },
     }), "disabled", null);
 
-    expect(result.output.safeErrors).toEqual([{
-      code: "provider_request_failed",
-      message: "The model request could not be completed.",
-    }]);
+    expect(result.output.safeErrors).toEqual([
+      {
+        code: "provider_response_empty",
+        message: "The model returned no usable response.",
+      },
+      {
+        code: "provider_request_failed",
+        message: "The model request could not be completed.",
+      },
+    ]);
     expect(JSON.stringify(result)).not.toContain(secret);
     expect(JSON.stringify(result)).not.toContain("rawProvider");
     expect(JSON.stringify(result)).not.toContain("apiKey");

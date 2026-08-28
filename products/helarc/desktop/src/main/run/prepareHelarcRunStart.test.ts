@@ -196,6 +196,7 @@ function input() {
         baseUrlOrigin: "https://provider.local",
         model: "model-a",
         timeoutMs: 1000,
+        ollamaRuntime: null,
         credentialStatus: "present" as const,
         qualificationPolicy: "allow_experimental" as const,
         isActive: true,

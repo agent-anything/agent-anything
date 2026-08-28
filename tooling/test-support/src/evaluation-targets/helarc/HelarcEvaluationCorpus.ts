@@ -40,9 +40,9 @@ import {
 
 export const HELARC_EVALUATION_TIME = "2026-08-12T00:00:00.000Z";
 export const HELARC_EVALUATION_CORPUS_REVISION =
-  "helarc-provider-native-tool-interaction-corpus-v1";
+  "helarc-task-fulfillment-gated-completion-corpus-v1";
 export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION =
-  "helarc-provider-native-tool-interaction-target-v1";
+  "helarc-task-fulfillment-gated-completion-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
@@ -146,7 +146,7 @@ const REFS = Object.freeze({
   latencyMetric: ref("helarc.phase26.metric.latency"),
   retryMetric: ref("helarc.phase26.metric.retry-count"),
   environmentProtocol: ref("helarc.phase26.environment-protocol"),
-  campaign: ref("helarc.phase26.campaign", "v3"),
+  campaign: ref("helarc.phase26.campaign", "v4"),
 });
 
 export function createHelarcEvaluationCorpus(): HelarcEvaluationCorpus {
@@ -283,6 +283,9 @@ function createObjective(): EvaluationObjective {
     requirement("controller-control-set.revision", "helarc.code-agent"),
     requirement("model-interaction.protocol.revision", "model-interaction"),
     requirement("run-interaction-records.revision", "agent-runtime"),
+    requirement("task-fulfillment-contract.revision", "agent-core"),
+    requirement("task-fulfillment-evaluator.revision", "helarc.product"),
+    requirement("completion-gate.revision", "agent-runtime"),
     requirement("target-adapter.revision", "evaluation.target"),
     requirement("source.revision", "repository"),
     requirement("source.dirty-state", "repository", false),
@@ -333,7 +336,7 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v12-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v13-${process.platform}-${process.arch}-node${nodeMajor}`;
   const agent = createHelarcAgent({
     target: "production",
     providerId: "helarc-deterministic-scripted-provider",
@@ -344,7 +347,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-provider-native-tool-interaction-v1",
+    "product.revision": "helarc-product-task-fulfillment-gated-completion-v1",
     "agent.revision": agent.revision,
     "agent.instructions.release": `${agent.instructions.release.id}@${agent.instructions.release.revision}`,
     "agent.instructions.resolver": agent.instructions.resolverRevision,
@@ -354,8 +357,11 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "controller-control-set.revision": "helarc.controller-controls.v1",
     "model-interaction.protocol.revision": "provider-native-tool-interaction.v1",
     "run-interaction-records.revision": "model-turn-and-settlement.v1",
+    "task-fulfillment-contract.revision": "agent-core.task-fulfillment.v1",
+    "task-fulfillment-evaluator.revision": "helarc.task-fulfillment-evaluator.v1",
+    "completion-gate.revision": "task-fulfillment-before-verification.v1",
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-provider-native-tool-interaction-v1",
+    "source.revision": "helarc-task-fulfillment-gated-completion-v1",
     "provider.revision": "scripted-native-tool-provider-v1",
     "model.revision": "scripted-native-tool-turn-v1",
     "tool-profile.revision": "delegation-transfer-v1",
@@ -381,7 +387,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
         key: item.key,
         owner: item.owner,
         required: item.required,
-        sourceRevision: "helarc-provider-native-tool-interaction-v1",
+        sourceRevision: "helarc-task-fulfillment-gated-completion-v1",
         schemaRef: item.schemaRef,
         status: "unavailable" as const,
         representation: null,

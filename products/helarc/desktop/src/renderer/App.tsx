@@ -21,6 +21,7 @@ import type {
   HelarcProviderKind,
   HelarcStartRunResult,
 } from "../shared/HelarcDesktopApi.js";
+import { HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE } from "../shared/HelarcDesktopApi.js";
 
 const initialSnapshot: HelarcMainSnapshot = {
   status: "idle",
@@ -39,6 +40,7 @@ const initialSnapshot: HelarcMainSnapshot = {
       baseUrlOrigin: "https://provider.local",
       model: "initial",
       timeoutMs: 30_000,
+      ollamaRuntime: null,
       credentialStatus: "missing",
       qualificationPolicy: "require_qualified",
       isActive: true,
@@ -880,8 +882,11 @@ function SettingsPanel({
 }) {
   const provider = snapshot.provider.configured ? snapshot.provider.activeProfile : null;
   const [isSaving, setIsSaving] = useState(false);
+  const [selectedProviderKind, setSelectedProviderKind] = useState<HelarcProviderKind>(
+    provider?.providerKind ?? "openai-compatible",
+  );
   const formKey = provider
-    ? `${provider.id}:${provider.providerKind}:${provider.displayName}:${provider.baseUrl}:${provider.model}:${provider.timeoutMs}:${provider.credentialStatus}:${provider.qualificationPolicy}`
+    ? `${provider.id}:${provider.providerKind}:${provider.displayName}:${provider.baseUrl}:${provider.model}:${provider.timeoutMs}:${provider.ollamaRuntime?.contextWindowTokens ?? "managed"}:${provider.ollamaRuntime?.maximumOutputTokens ?? "managed"}:${provider.credentialStatus}:${provider.qualificationPolicy}`
     : "unconfigured-provider";
 
   async function saveProviderConfig(event: FormEvent<HTMLFormElement>) {
@@ -897,6 +902,22 @@ function SettingsPanel({
     const submittedBaseUrl = readFormString(formData, "baseUrl");
     const submittedModel = readFormString(formData, "model");
     const submittedTimeoutMs = readFormNumber(formData, "timeoutMs", provider?.timeoutMs ?? 30_000);
+    const submittedOllamaRuntime = submittedProviderKind === "ollama"
+      ? {
+          contextWindowTokens: readFormNumber(
+            formData,
+            "ollamaContextWindowTokens",
+            provider?.ollamaRuntime?.contextWindowTokens ??
+              HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE.contextWindowTokens,
+          ),
+          maximumOutputTokens: readFormNumber(
+            formData,
+            "ollamaMaximumOutputTokens",
+            provider?.ollamaRuntime?.maximumOutputTokens ??
+              HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE.maximumOutputTokens,
+          ),
+        }
+      : null;
     const submittedQualificationPolicy = readQualificationPolicy(
       formData,
       provider?.qualificationPolicy ?? "require_qualified",
@@ -912,6 +933,7 @@ function SettingsPanel({
         baseUrl: submittedBaseUrl,
         model: submittedModel,
         timeoutMs: submittedTimeoutMs,
+        ollamaRuntime: submittedOllamaRuntime,
         qualificationPolicy: submittedQualificationPolicy,
         apiKeyUpdate: submittedApiKey.trim().length > 0
           ? "set"
@@ -936,6 +958,7 @@ function SettingsPanel({
         <select
           name="providerKind"
           defaultValue={provider?.providerKind ?? "openai-compatible"}
+          onChange={(event) => setSelectedProviderKind(readProviderKindValue(event.target.value))}
           disabled={isSaving}
         >
           <option value="openai-compatible">OpenAI-compatible</option>
@@ -981,6 +1004,36 @@ function SettingsPanel({
           disabled={isSaving}
         />
       </label>
+      {selectedProviderKind === "ollama" ? (
+        <>
+          <label>
+            <span>Context window</span>
+            <input
+              name="ollamaContextWindowTokens"
+              type="number"
+              min="4096"
+              step="1024"
+              defaultValue={(provider?.ollamaRuntime?.contextWindowTokens ??
+                HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE.contextWindowTokens).toString()}
+              autoComplete="off"
+              disabled={isSaving}
+            />
+          </label>
+          <label>
+            <span>Maximum output</span>
+            <input
+              name="ollamaMaximumOutputTokens"
+              type="number"
+              min="256"
+              step="256"
+              defaultValue={(provider?.ollamaRuntime?.maximumOutputTokens ??
+                HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE.maximumOutputTokens).toString()}
+              autoComplete="off"
+              disabled={isSaving}
+            />
+          </label>
+        </>
+      ) : null}
       <label>
         <span>Model qualification</span>
         <select
@@ -1084,6 +1137,10 @@ function readFormNumber(formData: FormData, key: string, fallback: number): numb
 function readProviderKind(formData: FormData, fallback: HelarcProviderKind): HelarcProviderKind {
   const value = readFormString(formData, "providerKind");
   return value === "openai-compatible" || value === "ollama" ? value : fallback;
+}
+
+function readProviderKindValue(value: string): HelarcProviderKind {
+  return value === "ollama" ? "ollama" : "openai-compatible";
 }
 
 function isRunActive(status: HelarcMainSnapshot["status"]): boolean {

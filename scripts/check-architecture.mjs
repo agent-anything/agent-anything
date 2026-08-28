@@ -1050,6 +1050,7 @@ function checkExecutionSourceTopology() {
         "native-tool-conformance",
         "ollama",
         "openai-compatible",
+        "structured-generation",
       ],
       forbiddenPaths: ["src/index.ts"],
     },
@@ -1057,6 +1058,7 @@ function checkExecutionSourceTopology() {
       packagePath: "harness/agent-core/runtime",
       allowedSourceEntries: [
         "PublicApi.test.ts",
+        "completion",
         "context-contribution",
         "controller",
         "delegation",
@@ -1094,6 +1096,7 @@ function checkExecutionSourceTopology() {
         "result",
         "run",
         "task",
+        "task-fulfillment",
         "thread",
         "tools",
         "verification",

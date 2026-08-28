@@ -9,6 +9,7 @@
     ".": { "types": "./src/index.ts", "import": "./dist/index.js" },
     "./agent": { "types": "./src/agent/index.ts", "import": "./dist/agent/index.js" },
     "./task": { "types": "./src/task/index.ts", "import": "./dist/task/index.js" },
+    "./task-fulfillment": { "types": "./src/task-fulfillment/index.ts", "import": "./dist/task-fulfillment/index.js" },
     "./configuration": { "types": "./src/configuration/index.ts", "import": "./dist/configuration/index.js" },
     "./work-context": { "types": "./src/work-context/index.ts", "import": "./dist/work-context/index.js" },
     "./thread": { "types": "./src/thread/index.ts", "import": "./dist/thread/index.js" },

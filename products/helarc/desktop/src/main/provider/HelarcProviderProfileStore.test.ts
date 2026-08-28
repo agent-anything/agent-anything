@@ -24,6 +24,7 @@ describe("FileHelarcProviderProfileStore", () => {
       baseUrl: "https://api.deepseek.com/v1",
       model: "deepseek-chat",
       timeoutMs: 45_000,
+      ollamaRuntime: null,
       qualificationPolicy: "allow_experimental",
       apiKeyUpdate: "set",
       apiKey: " secret-key ",
@@ -37,11 +38,13 @@ describe("FileHelarcProviderProfileStore", () => {
         apiKey: "secret-key",
         model: "deepseek-chat",
         timeoutMs: 45_000,
+        ollamaRuntime: null,
       },
       profile: {
         providerKind: "openai-compatible",
         displayName: "DeepSeek",
         baseUrl: "https://api.deepseek.com/v1",
+        ollamaRuntime: null,
         credentialStatus: "present",
         qualificationPolicy: "allow_experimental",
       },
@@ -49,11 +52,12 @@ describe("FileHelarcProviderProfileStore", () => {
     const persisted = await readFile(profilePath, "utf8");
     expect(persisted).not.toContain("secret-key");
     expect(JSON.parse(persisted)).toMatchObject({
-      formatVersion: 2,
+      formatVersion: 3,
       activeProfile: {
         id: "desktop-provider",
         providerKind: "openai-compatible",
         qualificationPolicy: "allow_experimental",
+        ollamaRuntime: null,
       },
     });
 
@@ -87,6 +91,7 @@ describe("FileHelarcProviderProfileStore", () => {
       baseUrl: "http://localhost:11434/v1",
       model: "gemma3:4b",
       timeoutMs: 30_000,
+      ollamaRuntime: null,
       apiKeyUpdate: "clear",
       apiKey: "",
     }, credentialStore);
@@ -97,6 +102,7 @@ describe("FileHelarcProviderProfileStore", () => {
       baseUrl: "http://127.0.0.1:11434/v1",
       model: "gemma3:4b",
       timeoutMs: 30_000,
+      ollamaRuntime: null,
       apiKeyUpdate: "clear",
       apiKey: "",
     }, credentialStore);
@@ -144,6 +150,7 @@ describe("FileHelarcProviderProfileStore", () => {
       baseUrl: "https://first.provider/v1",
       model: "model-a",
       timeoutMs: 30_000,
+      ollamaRuntime: null,
       apiKeyUpdate: "set",
       apiKey: "secret-key",
     }, credentialStore);
@@ -154,6 +161,7 @@ describe("FileHelarcProviderProfileStore", () => {
       baseUrl: "https://second.provider/v1",
       model: "model-a",
       timeoutMs: 30_000,
+      ollamaRuntime: null,
       apiKeyUpdate: "keep",
       apiKey: "",
     }, credentialStore);
@@ -190,6 +198,10 @@ describe("FileHelarcProviderProfileStore", () => {
       baseUrl: "http://localhost:11434",
       model: "gemma3:4b",
       timeoutMs: 30_000,
+      ollamaRuntime: {
+        contextWindowTokens: 16_384,
+        maximumOutputTokens: 2_048,
+      },
       apiKeyUpdate: "clear",
       apiKey: "",
     }, credentialStore);
@@ -200,10 +212,18 @@ describe("FileHelarcProviderProfileStore", () => {
         providerKind: "ollama",
         baseUrl: "http://localhost:11434/",
         apiKey: "",
+        ollamaRuntime: {
+          contextWindowTokens: 16_384,
+          maximumOutputTokens: 2_048,
+        },
       },
       profile: {
         providerKind: "ollama",
         baseUrl: "http://localhost:11434/",
+        ollamaRuntime: {
+          contextWindowTokens: 16_384,
+          maximumOutputTokens: 2_048,
+        },
         credentialStatus: "empty_allowed",
       },
     });
@@ -234,7 +254,7 @@ describe("FileHelarcProviderProfileStore", () => {
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
     expect(JSON.parse(await readFile(profilePath, "utf8"))).toMatchObject({
-      formatVersion: 2,
+      formatVersion: 3,
       activeProfile: {
         displayName: "Second",
         baseUrl: "https://second.provider/v1",
@@ -331,7 +351,7 @@ describe("FileHelarcProviderProfileStore", () => {
       .toBeInstanceOf(HelarcProviderProfileStoreCorruptionError);
 
     await writeFile(profilePath, JSON.stringify({
-      formatVersion: 2,
+      formatVersion: 3,
       activeProfile: {
         id: "desktop-provider",
         providerKind: "openai-compatible",
@@ -339,6 +359,7 @@ describe("FileHelarcProviderProfileStore", () => {
         baseUrl: "https://provider.local/v1",
         model: "model-a",
         timeoutMs: 30_000,
+        ollamaRuntime: null,
         qualificationPolicy: "permissive",
         updatedAt: "2026-08-28T00:00:00.000Z",
       },
@@ -389,6 +410,10 @@ function providerInput(overrides: Partial<{
   baseUrl: string;
   model: string;
   timeoutMs: number;
+  ollamaRuntime: {
+    contextWindowTokens: number;
+    maximumOutputTokens: number;
+  } | null;
   apiKeyUpdate: "keep" | "set" | "clear";
   apiKey: string;
 }> = {}) {
@@ -398,6 +423,7 @@ function providerInput(overrides: Partial<{
     baseUrl: "https://provider.local/v1",
     model: "model-a",
     timeoutMs: 30_000,
+    ollamaRuntime: null,
     apiKeyUpdate: "set" as const,
     apiKey: "secret-key",
     ...overrides,

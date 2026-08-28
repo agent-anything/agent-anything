@@ -54,6 +54,14 @@ export {
   snapshotModelMessages,
 } from "./ModelMessage.js";
 export type {
+  ModelInstructionContentBlock,
+  ModelInstructions,
+} from "./ModelInstructions.js";
+export {
+  modelInstructionsEqual,
+  snapshotModelInstructions,
+} from "./ModelInstructions.js";
+export type {
   ModelTurn,
   ModelTurnFinish,
   ProviderResponseRef,

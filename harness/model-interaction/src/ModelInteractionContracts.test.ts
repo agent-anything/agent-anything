@@ -20,7 +20,7 @@ import {
 import {
   composeModelInput,
   createUtf8ModelInputAccounting,
-  modelMessagesFromComposition,
+  modelInputFromComposition,
 } from "./input/index.js";
 
 const CALLABLE: ModelCallableDefinition = {
@@ -66,7 +66,7 @@ describe("provider-neutral Model Interaction contracts", () => {
     })).toMatchObject({ role: "assistant" });
 
     expect(() => snapshotModelMessage({
-      role: "system",
+      role: "user",
       content: [toolCallBlock(0)],
     } as unknown as ModelMessage)).toThrow("unsupported field 'call'");
     expect(() => snapshotModelMessage({ role: "tool", content: [] })).toThrow(
@@ -210,6 +210,22 @@ describe("provider-neutral Model Interaction contracts", () => {
         controllerRequestId: "controller-request-1",
         branchId: "branch-1",
       },
+      instructions: { content: [{ kind: "text", text: "Changed instructions." }] },
+      messages: composition.messages,
+      interaction: composition.interaction,
+      composition,
+      continuation: null,
+      metadata: {},
+    })).toThrow("does not match");
+
+    expect(() => snapshotProviderRequest({
+      requestId: composition.id,
+      purpose: "test",
+      correlation: {
+        controllerRequestId: "controller-request-1",
+        branchId: "branch-1",
+      },
+      instructions: composition.instructions,
       messages: composition.messages,
       interaction: { kind: "text_generation" },
       composition,
@@ -223,6 +239,7 @@ describe("provider-neutral Model Interaction contracts", () => {
       correlation: {
         controllerRequestId: "controller-request-1",
       },
+      instructions: composition.instructions,
       messages: composition.messages,
       interaction: composition.interaction,
       composition,
@@ -235,10 +252,12 @@ describe("provider-neutral Model Interaction contracts", () => {
 
   it("accounts callable schemas and messages and rejects final encoding drift", () => {
     const { accounting, composition, encodedRequest } = nativeComposition();
+    const modelInput = modelInputFromComposition(composition);
     const verification = {
       providerId: composition.providerId,
       model: composition.model,
-      messages: modelMessagesFromComposition(composition),
+      instructions: modelInput.instructions,
+      messages: modelInput.messages,
       interaction: composition.interaction,
       composition,
     };
@@ -262,9 +281,10 @@ describe("provider-neutral Model Interaction contracts", () => {
 function nativeComposition() {
   const interaction = createNativeToolTurnInteraction([CALLABLE]);
   const renderRequest = (
+    instructions: import("./index.js").ModelInstructions,
     messages: readonly ModelMessage[],
     providerInteraction: ProviderInteraction,
-  ) => JSON.stringify({ messages, interaction: providerInteraction });
+  ) => JSON.stringify({ instructions, messages, interaction: providerInteraction });
   const accounting = createUtf8ModelInputAccounting({
     providerId: "provider-1",
     model: "model-1",
@@ -287,7 +307,7 @@ function nativeComposition() {
       id: "instructions",
       source: { owner: "test", kind: "instructions", id: "instructions", revision: "1" },
       kind: "agent_instruction",
-      role: "system",
+      role: "instruction",
       necessity: "mandatory",
       content: { kind: "text", text: "Use the available callable." },
     }, {
@@ -324,10 +344,15 @@ function nativeComposition() {
     },
     composedAt: "2026-08-27T00:00:00.000Z",
   });
+  const modelInput = modelInputFromComposition(composition);
   return {
     accounting,
     composition,
-    encodedRequest: renderRequest(composition.messages, composition.interaction),
+    encodedRequest: renderRequest(
+      modelInput.instructions,
+      modelInput.messages,
+      composition.interaction,
+    ),
   };
 }
 

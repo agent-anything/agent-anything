@@ -7,6 +7,7 @@ export type RuntimeRunItemKind =
   | "pending_transition"
   | "cancellation_transition"
   | "verification_feedback"
+  | "task_fulfillment_assessment"
   | "progress_assessment"
   | "progress_correction"
   | "terminal_transition";
@@ -54,6 +55,7 @@ export type RuntimeRunProgressFactKind =
   | "interaction_settlement"
   | "descendant_settlement"
   | "verification_feedback"
+  | "task_fulfillment_assessment"
   | "completion_gate"
   | "evidence_ref"
   | "artifact_ref"

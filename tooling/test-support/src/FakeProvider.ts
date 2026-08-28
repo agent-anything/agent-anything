@@ -33,7 +33,8 @@ export class FakeProvider implements Provider {
       limitSource: "host_configured",
       estimator: { id: "fake-provider.utf8-content", revision: "1" },
       framing: { id: "fake-provider.framing", revision: "1" },
-      renderRequest: (messages, interaction) => JSON.stringify({
+      renderRequest: (instructions, messages, interaction) => JSON.stringify({
+        instructions,
         messages,
         interaction,
       }),

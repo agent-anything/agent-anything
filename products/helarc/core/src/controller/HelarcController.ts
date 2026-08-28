@@ -8,7 +8,7 @@ import {
 } from "@agent-anything/agent-runtime/controller";
 import {
   composeModelInput,
-  modelMessagesFromComposition,
+  modelInputFromComposition,
 } from "@agent-anything/model-interaction/input";
 import {
   createNativeToolTurnInteraction,
@@ -122,6 +122,7 @@ export function buildHelarcProviderRequest(
     composedAt: input.context.createdAt,
   });
 
+  const modelInput = modelInputFromComposition(composition);
   return {
     requestId: composition.id,
     purpose: HELARC_CONTROLLER_CAPABILITY,
@@ -168,7 +169,8 @@ export function buildHelarcProviderRequest(
       contextProjectionId: input.context.id,
       contextManifestId: input.contextManifest.id,
     },
-    messages: modelMessagesFromComposition(composition),
+    instructions: modelInput.instructions,
+    messages: modelInput.messages,
     composition,
     continuation: null,
   };

@@ -1,5 +1,11 @@
-import { createHelarcProviderProfile, type HelarcProviderKind, type HelarcProviderProfile } from "@agent-anything/helarc/configuration";
+import {
+  createHelarcProviderProfile,
+  type HelarcOllamaRuntimeProfile,
+  type HelarcProviderKind,
+  type HelarcProviderProfile,
+} from "@agent-anything/helarc/configuration";
 import type { HelarcModelUsePolicy } from "@agent-anything/helarc/configuration";
+import { HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE } from "../../shared/HelarcDesktopApi.js";
 
 export interface HelarcProviderConfig {
   providerKind: HelarcProviderKind;
@@ -7,6 +13,7 @@ export interface HelarcProviderConfig {
   apiKey: string;
   model: string;
   timeoutMs: number;
+  ollamaRuntime: Readonly<HelarcOllamaRuntimeProfile> | null;
 }
 
 export type HelarcProviderConfigErrorCode =
@@ -47,8 +54,9 @@ export function resolveHelarcProviderConfig(
   const apiKey = readEnv(env, "HELARC_PROVIDER_API_KEY") ?? "";
   const timeoutMs = readTimeoutMs(env);
   const providerKind = readProviderKind(env);
+  const ollamaRuntime = readOllamaRuntime(env, providerKind);
   const qualificationPolicy = readQualificationPolicy(env);
-  if (qualificationPolicy === null) {
+  if (qualificationPolicy === null || (providerKind === "ollama" && ollamaRuntime === null)) {
     return {
       ok: false,
       error: {
@@ -65,6 +73,7 @@ export function resolveHelarcProviderConfig(
     baseUrl,
     model,
     timeoutMs,
+    ollamaRuntime,
     credentialStatus: apiKey.length > 0 ? "present" : "empty_allowed",
     qualificationPolicy,
     isActive: true,
@@ -89,9 +98,42 @@ export function resolveHelarcProviderConfig(
       apiKey,
       model,
       timeoutMs,
+      ollamaRuntime,
     },
     profile: profileResult.profile,
   };
+}
+
+function readOllamaRuntime(
+  env: NodeJS.ProcessEnv,
+  providerKind: HelarcProviderKind,
+): Readonly<HelarcOllamaRuntimeProfile> | null {
+  if (providerKind !== "ollama") return null;
+  const contextWindowTokens = readPositiveInteger(
+    env,
+    "HELARC_OLLAMA_CONTEXT_WINDOW_TOKENS",
+    HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE.contextWindowTokens,
+  );
+  const maximumOutputTokens = readPositiveInteger(
+    env,
+    "HELARC_OLLAMA_MAXIMUM_OUTPUT_TOKENS",
+    HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE.maximumOutputTokens,
+  );
+  return contextWindowTokens === null || maximumOutputTokens === null ||
+      maximumOutputTokens >= contextWindowTokens
+    ? null
+    : Object.freeze({ contextWindowTokens, maximumOutputTokens });
+}
+
+function readPositiveInteger(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  defaultValue: number,
+): number | null {
+  const raw = readEnv(env, key);
+  if (raw === undefined) return defaultValue;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function readQualificationPolicy(

@@ -244,6 +244,7 @@ describe("Helarc Host Run composition", () => {
       "run.item.appended",
       "controller.tool_exposure.resolved",
       "controller.finished",
+      "run.item.appended",
       "verification.gate.evaluated",
       "context.transition.committed",
       "run.item.appended",
@@ -257,6 +258,14 @@ describe("Helarc Host Run composition", () => {
     expect(modelCallSettlement).toBeDefined();
     expect(modelCallSettlement!.sequence).toBeLessThan(
       result.activity.find((item) => item.kind === "run.progress.assessed")!.sequence,
+    );
+    const fulfillmentAssessment = result.activity.find(
+      (item) => item.kind === "run.item.appended" &&
+        item.metadata.itemKind === "task_fulfillment_assessment",
+    );
+    expect(fulfillmentAssessment).toBeDefined();
+    expect(fulfillmentAssessment!.sequence).toBeLessThan(
+      result.activity.find((item) => item.kind === "verification.gate.evaluated")!.sequence,
     );
     expect(result.activity.find((item) => item.kind === "run.progress.assessed"))
       .toMatchObject({
@@ -1027,7 +1036,7 @@ class ScriptedProvider implements Provider {
         multipleCalls: true,
         callCorrelation: "provider_supplied" as const,
       },
-      structuredGeneration: { supported: false as const },
+      structuredGeneration: { supported: true as const },
       streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
@@ -1049,6 +1058,9 @@ class ScriptedProvider implements Provider {
     request: ProviderRequest,
     _context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
+    if (request.purpose === "helarc.task-fulfillment") {
+      return scriptedTaskFulfillmentResult(request, this.descriptor.id);
+    }
     this.requests.push(request);
     this.lastControllerInputContexts.push(readObservationCount(request));
     this.lastControllerInputPlans.push(readCurrentPlan(request));
@@ -1093,7 +1105,7 @@ class RetryThenCompleteProvider implements Provider {
         multipleCalls: true,
         callCorrelation: "provider_supplied" as const,
       },
-      structuredGeneration: { supported: false as const },
+      structuredGeneration: { supported: true as const },
       streaming: { supported: false as const },
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
@@ -1105,6 +1117,9 @@ class RetryThenCompleteProvider implements Provider {
   readonly requests: ProviderRequest[] = [];
 
   async send(request: ProviderRequest): Promise<ProviderCallResult> {
+    if (request.purpose === "helarc.task-fulfillment") {
+      return scriptedTaskFulfillmentResult(request, this.descriptor.id);
+    }
     this.requests.push(request);
     if (this.requests.length === 1) {
       return {
@@ -1126,6 +1141,31 @@ class RetryThenCompleteProvider implements Provider {
       this.requests.length,
     );
   }
+}
+
+function scriptedTaskFulfillmentResult(
+  request: ProviderRequest,
+  providerId: string,
+): ProviderCallResult {
+  if (request.interaction.kind !== "structured_generation") {
+    return providerTestFailure("task_fulfillment_request_kind_invalid");
+  }
+  return Object.freeze({
+    kind: "succeeded" as const,
+    response: snapshotProviderResponse({
+      kind: "structured_generation",
+      output: Object.freeze({
+        status: "fulfilled",
+        rationale: "The scripted Host Run fixture accepts the settled trajectory.",
+        missingOutcomes: Object.freeze([]),
+        unsupportedClaims: Object.freeze([]),
+      }),
+      responseId: `${providerId}:task-fulfillment`,
+      continuation: null,
+      usage: null,
+      metadata: Object.freeze({ fixture: true }),
+    }),
+  });
 }
 
 function scriptedNativeProviderResult(
@@ -1239,7 +1279,8 @@ function createHostRunTestInputAccounting(providerId: string) {
     limitSource: "host_configured",
     estimator: { id: `${providerId}.utf8-content`, revision: "1" },
     framing: { id: `${providerId}.framing`, revision: "1" },
-    renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
+    renderRequest: (instructions, messages, interaction) =>
+      JSON.stringify({ instructions, messages, interaction }),
   });
 }
 
@@ -1273,14 +1314,12 @@ function createTask(workspaceRoot: string) {
 
 function readObservationCount(request: ProviderRequest): number {
   const marker = "Context projection:";
-  const content = request.messages.find((message) =>
-    modelMessageText(message).startsWith(marker)
-  );
+  const content = findTextBlock(request, marker);
   if (content === undefined) {
     return 0;
   }
 
-  return modelMessageText(content).slice(marker.length).split("\n")
+  return content.slice(marker.length).split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
     .map((line) => {
@@ -1306,18 +1345,25 @@ function readObservationCount(request: ProviderRequest): number {
 
 function readCurrentPlan(request: ProviderRequest): unknown {
   const marker = "Current plan:";
-  const content = request.messages.find((message) =>
-    modelMessageText(message).startsWith(marker)
-  );
+  const content = findTextBlock(request, marker);
   if (content === undefined) {
     return null;
   }
 
   try {
-    return JSON.parse(modelMessageText(content).slice(marker.length).trim()) as unknown;
+    return JSON.parse(content.slice(marker.length).trim()) as unknown;
   } catch {
     return null;
   }
+}
+
+function findTextBlock(request: ProviderRequest, marker: string): string | undefined {
+  for (const message of request.messages) {
+    for (const block of message.content) {
+      if (block.kind === "text" && block.text.startsWith(marker)) return block.text;
+    }
+  }
+  return undefined;
 }
 
 function readBackgroundTaskId(request: ProviderRequest): string {

@@ -58,6 +58,18 @@ export type HelarcModelUsePolicy =
   | "require_qualified"
   | "allow_experimental";
 
+export interface HelarcOllamaRuntimeProfileSnapshot {
+  contextWindowTokens: number;
+  maximumOutputTokens: number;
+}
+
+export const HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE: Readonly<
+  HelarcOllamaRuntimeProfileSnapshot
+> = Object.freeze({
+  contextWindowTokens: 16_384,
+  maximumOutputTokens: 2_048,
+});
+
 export interface HelarcProviderProfileSnapshot {
   id: string;
   providerKind: HelarcProviderKind;
@@ -67,6 +79,7 @@ export interface HelarcProviderProfileSnapshot {
   baseUrlOrigin: string;
   model: string;
   timeoutMs: number;
+  ollamaRuntime: HelarcOllamaRuntimeProfileSnapshot | null;
   credentialStatus: HelarcProviderCredentialStatus;
   qualificationPolicy: HelarcModelUsePolicy;
   isActive: boolean;
@@ -640,6 +653,7 @@ export interface HelarcSaveProviderConfigInput {
   baseUrl: string;
   model: string;
   timeoutMs: number;
+  ollamaRuntime: HelarcOllamaRuntimeProfileSnapshot | null;
   qualificationPolicy: HelarcModelUsePolicy;
   apiKeyUpdate: "keep" | "set" | "clear";
   apiKey: string;

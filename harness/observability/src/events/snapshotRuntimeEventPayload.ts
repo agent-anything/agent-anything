@@ -206,13 +206,13 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
   }
 }
 
-const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "model_call_settlement", "observation", "state_transition", "pending_transition", "cancellation_transition", "verification_feedback", "progress_assessment", "progress_correction", "terminal_transition"];
+const runItemKinds: readonly RuntimeRunItemKind[] = ["controller_turn", "run_action", "model_call_settlement", "observation", "state_transition", "pending_transition", "cancellation_transition", "verification_feedback", "task_fulfillment_assessment", "progress_assessment", "progress_correction", "terminal_transition"];
 const terminalStatuses: readonly RuntimeTerminalStatus[] = ["succeeded", "blocked", "failed", "cancelled"];
 const bindingKinds: readonly RuntimeOperationBindingKind[] = ["internal", "direct", "hosted", "composite", "descendant_agent"];
 const correlationKinds: readonly RuntimeOperationCorrelationKind[] = ["run_action", "run_request", "owner_operation", "evaluation_trial"];
 const operationStatuses: readonly RuntimeOperationStatus[] = ["succeeded", "partial", "failed", "unavailable", "denied", "cancelled", "timed_out", "invalid", "unknown_effect"];
 const progressReasonCodes: readonly RuntimeRunProgressReasonCode[] = ["new_trusted_fact", "equivalent_fact_repeated", "activity_without_structural_change", "plan_declaration_only", "progression_basis_changed", "required_work_pending", "no_committed_facts"];
-const progressFactKinds: readonly RuntimeRunProgressFactKind[] = ["controller_turn", "run_action", "plan_update", "active_agent", "steering", "operation_result", "operation_rejected", "tool_rejected", "interaction_settlement", "descendant_settlement", "verification_feedback", "completion_gate", "evidence_ref", "artifact_ref", "required_pending", "unsupported_committed_fact"];
+const progressFactKinds: readonly RuntimeRunProgressFactKind[] = ["controller_turn", "run_action", "plan_update", "active_agent", "steering", "operation_result", "operation_rejected", "tool_rejected", "interaction_settlement", "descendant_settlement", "verification_feedback", "task_fulfillment_assessment", "completion_gate", "evidence_ref", "artifact_ref", "required_pending", "unsupported_committed_fact"];
 const contextTransitionOperationKinds: readonly RuntimeContextTransitionOperationKind[] = ["add", "replace", "invalidate", "remove"];
 const descendantFailureCodes: readonly RuntimeDescendantRunFailureCode[] = [
   "descendant_run_start_cancelled",

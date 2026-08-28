@@ -3,7 +3,7 @@ import type {
 } from "@agent-anything/model-interaction";
 import {
   composeModelInput,
-  modelMessagesFromComposition,
+  modelInputFromComposition,
   type ModelOutputFormat,
 } from "@agent-anything/model-interaction/input";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
@@ -46,16 +46,35 @@ describe("OllamaProvider", () => {
         model: "gemma3:4b",
         prompt: "system: You are concise.\n\nuser: hello",
         stream: false,
+        truncate: false,
+        options: {
+          num_ctx: 16_384,
+          num_predict: 2_048,
+        },
         format: TEST_OUTPUT_FORMAT.schema,
       },
     });
     expect(result).toMatchObject({
       kind: "succeeded",
       response: {
-        output: "{\"action\":\"complete\",\"summary\":\"done\"}",
+        output: { action: "complete", summary: "done" },
         responseId: null,
         continuation: null,
         usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+      },
+    });
+  });
+
+  it("rejects malformed structured-generation JSON", async () => {
+    const provider = new OllamaProvider(config(), async () => okResponse({
+      response: "not-json",
+    }));
+
+    await expect(provider.send(request(provider), context())).resolves.toMatchObject({
+      kind: "failed",
+      failure: {
+        category: "response",
+        code: "provider_structured_output_malformed",
       },
     });
   });
@@ -87,7 +106,21 @@ describe("OllamaProvider", () => {
           });
     });
 
-    const firstRequest = createNativeProviderRequest(provider);
+    const firstRequest = createNativeProviderRequest(provider, {
+      instructions: {
+        content: [
+          { kind: "text", text: "Use the available callable when needed." },
+          { kind: "text", text: "Follow the active protocol." },
+        ],
+      },
+      messages: [{
+        role: "user",
+        content: [
+          { kind: "text", text: "Task: Inspect package.json." },
+          { kind: "text", text: "Current state: no prior work." },
+        ],
+      }],
+    });
     const first = await provider.send(firstRequest, context());
     if (first.kind !== "succeeded" || first.response.kind !== "native_tool_turn") {
       throw new TypeError("Expected one native Ollama turn.");
@@ -118,8 +151,14 @@ describe("OllamaProvider", () => {
       body: {
         model: "gemma3:4b",
         messages: [
-          { role: "system", content: "Use the available callable when needed." },
-          { role: "user", content: "Inspect package.json." },
+          {
+            role: "system",
+            content: "Use the available callable when needed.\n\nFollow the active protocol.",
+          },
+          {
+            role: "user",
+            content: "Task: Inspect package.json.\n\nCurrent state: no prior work.",
+          },
         ],
         tools: [{
           type: "function",
@@ -137,6 +176,11 @@ describe("OllamaProvider", () => {
           },
         }],
         stream: false,
+        truncate: false,
+        options: {
+          num_ctx: 16_384,
+          num_predict: 2_048,
+        },
       },
     });
     expect(calls[0]?.body).not.toHaveProperty("format");
@@ -434,6 +478,10 @@ function config() {
     baseUrl: "http://localhost:11434/",
     model: "gemma3:4b",
     timeoutMs: 1000,
+    runtime: {
+      contextWindowTokens: 16_384,
+      maximumOutputTokens: 2_048,
+    },
     nativeToolInteraction: { supported: true },
     inputLimit: { maximumBytes: 1_024 * 1_024, source: "host_configured" as const },
   };
@@ -488,12 +536,13 @@ function request(
     contextBudget: { unit: "bytes", amount: 0 },
     contextProjectedAmount: 0,
     sections: [
-      section("system", "system", "You are concise."),
+      section("instruction", "instruction", "You are concise."),
       section("user", "user", "hello"),
     ],
     lineage: testLineage(),
     composedAt: "2026-08-17T00:00:00.000Z",
   });
+  const modelInput = modelInputFromComposition(composition);
   return {
     requestId: composition.id,
     purpose: "helarc.code-agent.plan",
@@ -503,17 +552,18 @@ function request(
     },
     interaction: composition.interaction,
     continuation: null,
-    messages: modelMessagesFromComposition(composition),
+    instructions: modelInput.instructions,
+    messages: modelInput.messages,
     composition,
     metadata: {},
   };
 }
 
-function section(id: string, role: "system" | "user", text: string) {
+function section(id: string, role: "instruction" | "user", text: string) {
   return {
     id,
     source: { owner: "provider-test", kind: "message", id, revision: "1" },
-    kind: id === "system" ? "agent_instruction" : "message",
+    kind: id === "instruction" ? "agent_instruction" : "message",
     role,
     necessity: "mandatory" as const,
     content: { kind: "text" as const, text },
@@ -529,7 +579,7 @@ function testLineage() {
     instructionResolver: { owner: "provider-test", kind: "agent_instruction_resolver", id: "resolver", revision: "1" },
     instructionContent: { owner: "agent-core", kind: "agent_instruction_content_digest", id: "instructions", revision: "1" },
     instructionModel: { providerId: "ollama.api", model: "gemma3:4b" },
-    instructionBlocks: [{ owner: "provider-test", kind: "message", id: "system", revision: "1" }],
+    instructionBlocks: [{ owner: "provider-test", kind: "message", id: "instruction", revision: "1" }],
     activeContext: null,
     contextProjection: null,
     projectionManifest: null,

@@ -27,6 +27,7 @@ describe("createHelarcProviderProfile", () => {
         baseUrlOrigin: "https://provider.local",
         model: "model-a",
         timeoutMs: 1500,
+        ollamaRuntime: null,
         credentialStatus: "present",
         qualificationPolicy: "require_qualified",
         isActive: true,
@@ -43,6 +44,10 @@ describe("createHelarcProviderProfile", () => {
       baseUrl: "http://localhost:11434",
       model: "local-model",
       timeoutMs: 30_000,
+      ollamaRuntime: {
+        contextWindowTokens: 16_384,
+        maximumOutputTokens: 2_048,
+      },
       credentialStatus: "empty_allowed",
     });
 
@@ -52,6 +57,10 @@ describe("createHelarcProviderProfile", () => {
         providerKind: "ollama",
         baseUrl: "http://localhost:11434/",
         baseUrlOrigin: "http://localhost:11434",
+        ollamaRuntime: {
+          contextWindowTokens: 16_384,
+          maximumOutputTokens: 2_048,
+        },
         credentialStatus: "empty_allowed",
         isActive: false,
       },
@@ -66,6 +75,10 @@ describe("createHelarcProviderProfile", () => {
       baseUrl: "http://localhost:11434",
       model: "gemma4:e4b",
       timeoutMs: 30_000,
+      ollamaRuntime: {
+        contextWindowTokens: 16_384,
+        maximumOutputTokens: 2_048,
+      },
       credentialStatus: "empty_allowed",
       qualificationPolicy: "permissive" as never,
       isActive: true,
@@ -77,6 +90,40 @@ describe("createHelarcProviderProfile", () => {
         code: "provider_profile_qualification_policy_invalid",
         message: "Provider profile model qualification policy is invalid.",
       },
+    });
+  });
+
+  it("requires valid Ollama runtime limits", () => {
+    const missing = createHelarcProviderProfile({
+      id: "local",
+      providerKind: "ollama",
+      displayName: "Local Model",
+      baseUrl: "http://localhost:11434",
+      model: "gemma4:e4b",
+      timeoutMs: 30_000,
+      credentialStatus: "empty_allowed",
+    });
+    const invalid = createHelarcProviderProfile({
+      id: "local",
+      providerKind: "ollama",
+      displayName: "Local Model",
+      baseUrl: "http://localhost:11434",
+      model: "gemma4:e4b",
+      timeoutMs: 30_000,
+      ollamaRuntime: {
+        contextWindowTokens: 2_048,
+        maximumOutputTokens: 2_048,
+      },
+      credentialStatus: "empty_allowed",
+    });
+
+    expect(missing).toMatchObject({
+      ok: false,
+      error: { code: "provider_profile_ollama_runtime_invalid" },
+    });
+    expect(invalid).toMatchObject({
+      ok: false,
+      error: { code: "provider_profile_ollama_runtime_invalid" },
     });
   });
 

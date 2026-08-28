@@ -81,6 +81,26 @@ describe("RunResult", () => {
     )).toThrow("failure must be a valid RunFailureCause");
   });
 
+  it("accepts a Product-owned Task Fulfillment failure", () => {
+    expect(createFailedRunResult(
+      base(),
+      "task_fulfillment_failed",
+      {
+        kind: "task_fulfillment",
+        failure: {
+          code: "task_fulfillment_provider_failed",
+          message: "The Product evaluator failed.",
+          retryable: true,
+          metadata: {},
+        },
+      },
+    )).toMatchObject({
+      status: "failed",
+      code: "task_fulfillment_failed",
+      failure: { kind: "task_fulfillment" },
+    });
+  });
+
   it("rejects RunItems from a different Run", () => {
     const mismatchedItem = {
       ref: {

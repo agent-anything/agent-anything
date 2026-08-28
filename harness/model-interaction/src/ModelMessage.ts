@@ -33,7 +33,7 @@ export type ModelToolResultBlock = ModelToolResultContentBlock;
 
 export type ModelMessage =
   | {
-      readonly role: "system" | "user";
+      readonly role: "user";
       readonly content: readonly ModelInputContentBlock[];
     }
   | {
@@ -52,14 +52,14 @@ export function snapshotModelMessage(input: ModelMessage): ModelMessage {
   if (!Array.isArray(input.content) || input.content.length > MAX_MESSAGE_BLOCK_COUNT) {
     throw new TypeError("ModelMessage.content must be a bounded array.");
   }
-  if (input.role === "system" || input.role === "user") {
+  if (input.role === "user") {
     if (input.content.length === 0) {
-      throw new TypeError("System and user Model Messages must contain text.");
+      throw new TypeError("User Model Messages must contain text.");
     }
     return Object.freeze({
       role: input.role,
       content: Object.freeze(input.content.map((block, index) =>
-        snapshotTextBlock(block, `ModelMessage.content[${index}]`))),
+        snapshotModelTextContentBlock(block, `ModelMessage.content[${index}]`))),
     });
   }
   if (input.role === "assistant") {
@@ -68,7 +68,7 @@ export function snapshotModelMessage(input: ModelMessage): ModelMessage {
     const content = input.content.map((block, index) => {
       strictRecord(block as unknown, `ModelMessage.content[${index}]`, ["kind", "text", "call"]);
       if (block.kind === "text") {
-        return snapshotTextBlock(block, `ModelMessage.content[${index}]`);
+        return snapshotModelTextContentBlock(block, `ModelMessage.content[${index}]`);
       }
       if (block.kind !== "model_tool_call") {
         throw new TypeError("Assistant Model Message content is unsupported.");
@@ -131,7 +131,7 @@ export function modelMessagesEqual(
     JSON.stringify(snapshotModelMessages(right));
 }
 
-function snapshotTextBlock(
+export function snapshotModelTextContentBlock(
   input: ModelTextContentBlock,
   path: string,
 ): ModelTextContentBlock {

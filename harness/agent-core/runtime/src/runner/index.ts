@@ -13,6 +13,7 @@ export type {
   DescendantOperationOutcome,
   OperationToolAvailabilityParticipant,
   RunnerContextProjection,
+  RunnerCompletionComposition,
   RunInvocationOptions,
   RunnerAutomaticEffectfulVerificationCheckPort,
   RunnerAutomaticEffectfulVerificationCheckRequest,

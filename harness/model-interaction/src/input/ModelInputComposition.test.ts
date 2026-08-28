@@ -13,14 +13,17 @@ describe("complete Model Input Composition", () => {
       accounting,
       interaction: { kind: "text_generation" },
       outputReserve: { unit: "bytes", amount: 10 },
-      baseSections: [section("system", "system", "12345")],
+      baseSections: [
+        section("instruction", "instruction", "12345"),
+        section("user", "user", "x"),
+      ],
       maximumContextAmount: 80,
     });
 
     expect(allocation).toMatchObject({
       unit: "bytes",
-      amount: 78,
-      remainingAmount: 78,
+      amount: 77,
+      remainingAmount: 77,
       framing: { amount: 7 },
     });
   });
@@ -37,7 +40,7 @@ describe("complete Model Input Composition", () => {
       contextBudget: { unit: "bytes", amount: 40 },
       contextProjectedAmount: 12,
       sections: [
-        section("system", "system", "rules"),
+        section("instruction", "instruction", "rules"),
         section("user", "user", "task and context"),
       ],
       lineage: lineage(),
@@ -55,15 +58,8 @@ describe("complete Model Input Composition", () => {
     expect(() => accounting.verify({
       providerId: "provider-1",
       model: "model-1",
-      messages: composition.sections.map((section) => ({
-        role: section.role,
-        content: [{
-          kind: "text" as const,
-          text: section.content.kind === "text"
-            ? section.content.text
-            : JSON.stringify(section.content.value),
-        }],
-      })),
+      instructions: composition.instructions,
+      messages: composition.messages,
       interaction: composition.interaction,
       composition,
     })).not.toThrow();
@@ -80,7 +76,7 @@ describe("complete Model Input Composition", () => {
       },
       interaction: { kind: "text_generation" },
       outputReserve: { unit: "bytes", amount: 1 },
-      baseSections: [section("system", "system", "rules")],
+      baseSections: [section("instruction", "instruction", "rules")],
       maximumContextAmount: 1,
     })).toThrow(ModelInputCompositionError);
 
@@ -93,7 +89,10 @@ describe("complete Model Input Composition", () => {
       outputReserve: { unit: "bytes", amount: 10 },
       contextBudget: { unit: "bytes", amount: 0 },
       contextProjectedAmount: 0,
-      sections: [section("system", "system", "this is too large")],
+      sections: [
+        section("instruction", "instruction", "this is too large"),
+        section("user", "user", "task"),
+      ],
       lineage: lineage(),
       composedAt: "2026-08-16T00:00:00.000Z",
     })).toThrow("exceeds the effective input limit");
@@ -110,7 +109,10 @@ describe("complete Model Input Composition", () => {
       outputReserve: { unit: "bytes", amount: 10 },
       contextBudget: { unit: "bytes", amount: 0 },
       contextProjectedAmount: 0,
-      sections: [section("system", "system", "rules")],
+      sections: [
+        section("instruction", "instruction", "rules"),
+        section("user", "user", "task"),
+      ],
       lineage: lineage(),
       composedAt: "2026-08-16T00:00:00.000Z",
     });
@@ -118,7 +120,8 @@ describe("complete Model Input Composition", () => {
     expect(() => accounting.verify({
       providerId: "provider-1",
       model: "model-1",
-      messages: [{ role: "system", content: [{ kind: "text", text: "changed" }] }],
+      instructions: { content: [{ kind: "text", text: "changed" }] },
+      messages: composition.messages,
       interaction: composition.interaction,
       composition,
     })).toThrow("does not match its accounting capability");
@@ -132,8 +135,8 @@ describe("complete Model Input Composition", () => {
       limitSource: "host_configured",
       estimator: { id: "test-utf8", revision: "1" },
       framing: { id: "format-aware-framing", revision: "1" },
-      renderRequest: (messages, interaction) =>
-        `${messageText(messages)}${JSON.stringify(interaction)}`,
+      renderRequest: (instructions, messages, interaction) =>
+        `${inputText(instructions, messages)}${JSON.stringify(interaction)}`,
     });
     const outputFormat = {
       kind: "json_schema" as const,
@@ -151,7 +154,10 @@ describe("complete Model Input Composition", () => {
       outputReserve: { unit: "bytes", amount: 10 },
       contextBudget: { unit: "bytes", amount: 0 },
       contextProjectedAmount: 0,
-      sections: [section("system", "system", "rules")],
+      sections: [
+        section("instruction", "instruction", "rules"),
+        section("user", "user", "task"),
+      ],
       lineage: lineage(),
       composedAt: "2026-08-16T00:00:00.000Z",
     });
@@ -164,15 +170,18 @@ describe("complete Model Input Composition", () => {
     expect(() => accounting.verify({
       providerId: "provider-1",
       model: "model-1",
-      messages: [{ role: "system", content: [{ kind: "text", text: "rules" }] }],
+      instructions: composition.instructions,
+      messages: composition.messages,
       interaction: { kind: "text_generation" },
       composition,
     })).toThrow("does not match");
   });
 
   it("keeps model-message section accounting equal to final encoded bytes", () => {
-    const renderRequest = (messages: Parameters<typeof messageText>[0]) =>
-      JSON.stringify({ messages });
+    const renderRequest = (
+      instructions: Parameters<typeof inputText>[0],
+      messages: Parameters<typeof inputText>[1],
+    ) => JSON.stringify({ instructions, messages });
     const accounting = createUtf8ModelInputAccounting({
       providerId: "provider-1",
       model: "model-1",
@@ -196,7 +205,7 @@ describe("complete Model Input Composition", () => {
       contextBudget: { unit: "bytes", amount: 0 },
       contextProjectedAmount: 0,
       sections: [
-        section("system", "system", "rules"),
+        section("instruction", "instruction", "rules"),
         {
           id: "history",
           source: { owner: "test", kind: "history", id: "history", revision: "1" },
@@ -211,7 +220,7 @@ describe("complete Model Input Composition", () => {
       } },
       composedAt: "2026-08-27T00:00:00.000Z",
     });
-    const encodedRequest = renderRequest(composition.messages);
+    const encodedRequest = renderRequest(composition.instructions, composition.messages);
 
     expect(composition.accounting.inputAmount).toBe(
       new TextEncoder().encode(encodedRequest).byteLength,
@@ -219,6 +228,7 @@ describe("complete Model Input Composition", () => {
     expect(() => accounting.verifyEncoded({
       providerId: "provider-1",
       model: "model-1",
+      instructions: composition.instructions,
       messages: composition.messages,
       interaction: composition.interaction,
       composition,
@@ -235,15 +245,15 @@ function testAccounting(maximumInputBytes: number) {
     limitSource: "host_configured",
     estimator: { id: "test-utf8", revision: "1" },
     framing: { id: "test-framing", revision: "1" },
-    renderRequest: (messages) => `${messageText(messages)}1234567`,
+    renderRequest: (instructions, messages) => `${inputText(instructions, messages)}1234567`,
   });
 }
 
-function section(id: string, role: "system" | "user", text: string) {
+function section(id: string, role: "instruction" | "user", text: string) {
   return {
     id,
     source: { owner: "test", kind: "section", id, revision: "1" },
-    kind: id === "system" ? "agent_instruction" : id,
+    kind: id === "instruction" ? "agent_instruction" : id,
     role,
     necessity: "mandatory" as const,
     content: { kind: "text" as const, text },
@@ -259,7 +269,7 @@ function lineage() {
     instructionResolver: { owner: "test", kind: "agent_instruction_resolver", id: "resolver", revision: "1" },
     instructionContent: { owner: "agent-core", kind: "agent_instruction_content_digest", id: "instructions", revision: "1" },
     instructionModel: { providerId: "provider-1", model: "model-1" },
-    instructionBlocks: [{ owner: "test", kind: "section", id: "system", revision: "1" }],
+    instructionBlocks: [{ owner: "test", kind: "section", id: "instruction", revision: "1" }],
     activeContext: null,
     contextProjection: null,
     projectionManifest: null,
@@ -281,4 +291,11 @@ function messageText(messages: readonly { readonly content: readonly { readonly 
   return messages.flatMap((message) => message.content)
     .map((block) => block.kind === "text" ? block.text ?? "" : JSON.stringify(block))
     .join("");
+}
+
+function inputText(
+  instructions: { readonly content: readonly { readonly text: string }[] },
+  messages: Parameters<typeof messageText>[0],
+): string {
+  return instructions.content.map((block) => block.text).join("") + messageText(messages);
 }

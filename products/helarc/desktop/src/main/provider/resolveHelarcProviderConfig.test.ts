@@ -18,6 +18,7 @@ describe("resolveHelarcProviderConfig", () => {
         apiKey: "secret-key",
         model: "model-a",
         timeoutMs: 1500,
+        ollamaRuntime: null,
       },
       profile: {
         id: "env-provider",
@@ -28,6 +29,7 @@ describe("resolveHelarcProviderConfig", () => {
         baseUrlOrigin: "https://provider.local",
         model: "model-a",
         timeoutMs: 1500,
+        ollamaRuntime: null,
         credentialStatus: "present",
         qualificationPolicy: "require_qualified",
         isActive: true,
@@ -85,12 +87,59 @@ describe("resolveHelarcProviderConfig", () => {
         baseUrl: "http://localhost:11434",
         apiKey: "",
         model: "gemma3:4b",
+        ollamaRuntime: {
+          contextWindowTokens: 16_384,
+          maximumOutputTokens: 2_048,
+        },
       },
       profile: {
         providerKind: "ollama",
         baseUrl: "http://localhost:11434/",
         baseUrlOrigin: "http://localhost:11434",
         credentialStatus: "empty_allowed",
+        ollamaRuntime: {
+          contextWindowTokens: 16_384,
+          maximumOutputTokens: 2_048,
+        },
+      },
+    });
+  });
+
+  it("resolves explicit Ollama runtime limits from environment", () => {
+    const result = resolveHelarcProviderConfig({
+      HELARC_PROVIDER_KIND: "ollama",
+      HELARC_PROVIDER_BASE_URL: "http://localhost:11434",
+      HELARC_PROVIDER_MODEL: "gemma4:e4b",
+      HELARC_OLLAMA_CONTEXT_WINDOW_TOKENS: "32768",
+      HELARC_OLLAMA_MAXIMUM_OUTPUT_TOKENS: "4096",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      config: {
+        ollamaRuntime: {
+          contextWindowTokens: 32_768,
+          maximumOutputTokens: 4_096,
+        },
+      },
+    });
+  });
+
+  it("rejects invalid Ollama runtime limits instead of using server defaults", () => {
+    const result = resolveHelarcProviderConfig({
+      HELARC_PROVIDER_KIND: "ollama",
+      HELARC_PROVIDER_BASE_URL: "http://localhost:11434",
+      HELARC_PROVIDER_MODEL: "gemma4:e4b",
+      HELARC_OLLAMA_CONTEXT_WINDOW_TOKENS: "4096",
+      HELARC_OLLAMA_MAXIMUM_OUTPUT_TOKENS: "4096",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "provider_config_invalid",
+        message: "Provider configuration is invalid.",
+        missingKeys: [],
       },
     });
   });

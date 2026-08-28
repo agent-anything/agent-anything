@@ -5,6 +5,7 @@ import type { EvidenceRef } from "@agent-anything/context/evidence";
 import type { OperationResult } from "@agent-anything/operation-catalog/result";
 import type { ToolResult } from "@agent-anything/tools/result";
 import type { VerificationRunnerProjection } from "@agent-anything/verification/projection";
+import type { TaskFulfillmentAssessment } from "../completion/index.js";
 import type { PlanUpdateOutcome } from "../plan/index.js";
 import type {
   PendingRunSubjectProjection,
@@ -69,6 +70,7 @@ export type RunProgressCommittedFactInput =
       readonly toolResult: ToolResult;
     }
   | { readonly kind: "verification_feedback"; readonly verification: VerificationRunnerProjection }
+  | { readonly kind: "task_fulfillment_assessment"; readonly assessment: TaskFulfillmentAssessment }
   | { readonly kind: "evidence_ref"; readonly ref: EvidenceRef }
   | { readonly kind: "artifact_ref"; readonly ref: ArtifactRef }
   | { readonly kind: "required_pending"; readonly pending: PendingRunSubjectProjection };
@@ -240,6 +242,23 @@ export async function createRunProgressSemanticFacts(
         )),
       ]);
     }
+    case "task_fulfillment_assessment":
+      return one(
+        input.kind,
+        input.assessment.evaluator.owner,
+        input.assessment.objective.id,
+        input.assessment.evaluator.revision,
+        input.assessment.status === "fulfilled" ? "strong" : "declaration",
+        {
+          objectiveRevision: input.assessment.objective.revision,
+          proposalRevision: input.assessment.proposal.revision,
+          status: input.assessment.status,
+          findings: input.assessment.findings.map((finding) => ({
+            kind: finding.kind,
+            code: finding.code,
+          })),
+        },
+      );
     case "evidence_ref":
       return one(input.kind, "context", input.ref, null, "strong", { ref: input.ref });
     case "artifact_ref":

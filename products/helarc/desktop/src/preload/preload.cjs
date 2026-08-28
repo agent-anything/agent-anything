@@ -38,6 +38,12 @@ contextBridge.exposeInMainWorld("helarc", Object.freeze({
       baseUrl: input?.baseUrl,
       model: input?.model,
       timeoutMs: input?.timeoutMs,
+      ollamaRuntime: input?.ollamaRuntime == null
+        ? input?.ollamaRuntime
+        : {
+            contextWindowTokens: input.ollamaRuntime.contextWindowTokens,
+            maximumOutputTokens: input.ollamaRuntime.maximumOutputTokens,
+          },
       qualificationPolicy: input?.qualificationPolicy,
       apiKeyUpdate: input?.apiKeyUpdate,
       apiKey: input?.apiKey,

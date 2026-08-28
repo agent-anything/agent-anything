@@ -51,7 +51,8 @@ export class FakeNativeToolProvider implements Provider {
       limitSource: "host_configured",
       estimator: { id: `${providerId}.utf8-content`, revision: "1" },
       framing: { id: `${providerId}.framing`, revision: "1" },
-      renderRequest: (messages, interaction) => JSON.stringify({ messages, interaction }),
+      renderRequest: (instructions, messages, interaction) =>
+        JSON.stringify({ instructions, messages, interaction }),
     });
     this.descriptor = Object.freeze({
       id: providerId,
@@ -66,7 +67,7 @@ export class FakeNativeToolProvider implements Provider {
           multipleCalls: true,
           callCorrelation: "provider_supplied" as const,
         }),
-        structuredGeneration: Object.freeze({ supported: false as const }),
+        structuredGeneration: Object.freeze({ supported: true as const }),
         streaming: Object.freeze({ supported: false as const }),
         modelInput: this.inputAccounting.capability,
         continuation: Object.freeze({ supported: false as const }),
@@ -83,6 +84,9 @@ export class FakeNativeToolProvider implements Provider {
     _context: InvocationInterruptionContext,
   ): Promise<ProviderCallResult> {
     this.recordedRequests.push(request);
+    if (request.purpose === "helarc.task-fulfillment") {
+      return createTaskFulfillmentResult(request, this.descriptor.id, this.recordedRequests.length);
+    }
     const step = this.steps.shift();
     if (step === undefined) {
       return providerFailure("fake_native_provider_exhausted", "provider");
@@ -101,6 +105,32 @@ export class FakeNativeToolProvider implements Provider {
   requests(): readonly ProviderRequest[] {
     return Object.freeze([...this.recordedRequests]);
   }
+}
+
+function createTaskFulfillmentResult(
+  request: ProviderRequest,
+  providerId: string,
+  sequence: number,
+): ProviderCallResult {
+  if (request.interaction.kind !== "structured_generation") {
+    return providerFailure("fake_task_fulfillment_request_kind_invalid", "invalid_request");
+  }
+  return Object.freeze({
+    kind: "succeeded" as const,
+    response: snapshotProviderResponse({
+      kind: "structured_generation",
+      output: Object.freeze({
+        status: "fulfilled",
+        rationale: "The scripted product fixture accepts the settled completion trajectory.",
+        missingOutcomes: Object.freeze([]),
+        unsupportedClaims: Object.freeze([]),
+      }),
+      responseId: `${providerId}:task-fulfillment:${sequence}`,
+      continuation: null,
+      usage: null,
+      metadata: Object.freeze({ fixture: true }),
+    }),
+  });
 }
 
 export function fakeNativeModelOutput(

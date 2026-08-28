@@ -13,6 +13,7 @@ export type RunFailureCode =
   | "operation_failed"
   | "interaction_failed"
   | "required_finalization_failed"
+  | "task_fulfillment_failed"
   | "verification_failed"
   | "unknown_effect";
 export type RunCancelledCode = "runtime_cancelled";

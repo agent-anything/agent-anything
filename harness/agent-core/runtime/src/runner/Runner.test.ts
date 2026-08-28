@@ -110,6 +110,10 @@ import {
 } from "../delegation/index.js";
 import { Runner } from "./Runner.js";
 import { createStaticOperationToolAvailabilityParticipant } from "./RunToolExposureCoordinator.js";
+import type {
+  TaskFulfillmentEvaluationInput,
+  TaskFulfillmentEvaluatorPort,
+} from "../completion/index.js";
 
 interface TestOutput {
   readonly summary: string;
@@ -163,10 +167,11 @@ describe("Runner semantic integration", () => {
     expect(result.items.map(({ payload }) => payload.kind)).toEqual([
       "verification_feedback",
       "controller_turn",
+      "task_fulfillment_assessment",
       "verification_feedback",
       "terminal_transition",
     ]);
-    expect(result.items.map(({ ref }) => ref.sequence)).toEqual([1, 2, 3, 4]);
+    expect(result.items.map(({ ref }) => ref.sequence)).toEqual([1, 2, 3, 4, 5]);
     expect(controller.calls).toHaveLength(1);
     expect(controller.calls[0]?.instructionBinding).toMatchObject({
       run: { id: "run_001" },
@@ -197,6 +202,107 @@ describe("Runner semantic integration", () => {
     ]));
     expect(events.findIndex(({ name }) => name === "controller.tool_exposure.resolved"))
       .toBeGreaterThan(events.findIndex(({ name }) => name === "run.item.appended"));
+  });
+
+  it("continues from a non-fulfilled completion and succeeds only after reassessment", async () => {
+    const operations = createOperationFixture([]);
+    const controller = new ScriptedController([
+      complete("Explained what should be done", "model_complete_1"),
+      complete("Performed the requested work", "model_complete_2"),
+    ]);
+    const ref = Object.freeze({ owner: "test-product", id: "task-fulfillment", revision: "1" });
+    let assessmentCount = 0;
+    const evaluator: TaskFulfillmentEvaluatorPort = Object.freeze({
+      ref,
+      async evaluate(input: TaskFulfillmentEvaluationInput) {
+        assessmentCount += 1;
+        return createTaskAssessmentResult(
+          input,
+          ref,
+          assessmentCount === 1 ? "incomplete" : "fulfilled",
+        );
+      },
+    });
+
+    const result = await createRunner(controller, operations, {
+      completion: { taskFulfillment: evaluator, maximumDurationMs: 5_000 },
+    }).run(createAgent(), createRunInput(), createRunConfig(operations));
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      finalOutput: { summary: "Performed the requested work" },
+    });
+    expect(controller.calls).toHaveLength(2);
+    expect(result.items.filter(({ payload }) =>
+      payload.kind === "task_fulfillment_assessment"
+    ).map(({ payload }) => payload.kind === "task_fulfillment_assessment"
+      ? payload.assessment.status
+      : null)).toEqual(["incomplete", "fulfilled"]);
+    expect(result.items.some(({ payload }) =>
+      payload.kind === "verification_feedback" &&
+      payload.verification.gate !== null
+    )).toBe(true);
+  });
+
+  it("fails closed when Task Fulfillment evaluation fails", async () => {
+    const operations = createOperationFixture([]);
+    const evaluator: TaskFulfillmentEvaluatorPort = Object.freeze({
+      ref: Object.freeze({ owner: "test-product", id: "task-fulfillment", revision: "1" }),
+      async evaluate() {
+        return Object.freeze({
+          kind: "failed" as const,
+          failure: Object.freeze({
+            code: "task_fulfillment_provider_failed",
+            message: "The evaluator could not assess the original Task.",
+            retryable: true,
+            metadata: Object.freeze({}),
+          }),
+        });
+      },
+    });
+
+    const result = await createRunner(
+      new ScriptedController([complete("Done")]),
+      operations,
+      { completion: { taskFulfillment: evaluator, maximumDurationMs: 5_000 } },
+    ).run(createAgent(), createRunInput(), createRunConfig(operations));
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "task_fulfillment_failed",
+      failure: {
+        kind: "task_fulfillment",
+        failure: { code: "task_fulfillment_provider_failed" },
+      },
+    });
+  });
+
+  it("rejects evaluator cancellation that is not backed by accepted Run cancellation", async () => {
+    const operations = createOperationFixture([]);
+    const evaluator: TaskFulfillmentEvaluatorPort = Object.freeze({
+      ref: Object.freeze({ owner: "test-product", id: "task-fulfillment", revision: "1" }),
+      async evaluate(input) {
+        return Object.freeze({
+          kind: "cancelled" as const,
+          cancellation: Object.freeze({ runId: input.run.id, requestId: "unattributed" }),
+        });
+      },
+    });
+
+    const result = await createRunner(
+      new ScriptedController([complete("Done")]),
+      operations,
+      { completion: { taskFulfillment: evaluator, maximumDurationMs: 5_000 } },
+    ).run(createAgent(), createRunInput(), createRunConfig(operations));
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "task_fulfillment_failed",
+      failure: {
+        kind: "task_fulfillment",
+        failure: { code: "task_fulfillment_cancellation_unattributed" },
+      },
+    });
   });
 
   it("finalizes required Run-owned resources before terminal settlement", async () => {
@@ -3349,11 +3455,59 @@ function createRunner(
     controller,
     contextProjection: createTestContextProjection(),
     operations,
+    completion: {
+      taskFulfillment: createFulfilledTaskEvaluator(),
+      maximumDurationMs: 5_000,
+    },
     verification: createTestVerificationComposition(),
     interactions: createInteractionProtocolRegistrySnapshot("interaction-registry-1", []),
     now: () => NOW,
     createRunId: () => `run_${String(++runSequence).padStart(3, "0")}`,
     ...overrides,
+  });
+}
+
+function createFulfilledTaskEvaluator(): TaskFulfillmentEvaluatorPort {
+  const ref = Object.freeze({ owner: "test-product", id: "test-task-fulfillment", revision: "1" });
+  return Object.freeze({
+    ref,
+    async evaluate(input: TaskFulfillmentEvaluationInput) {
+      return createTaskAssessmentResult(input, ref, "fulfilled");
+    },
+  });
+}
+
+function createTaskAssessmentResult(
+  input: TaskFulfillmentEvaluationInput,
+  evaluator: TaskFulfillmentEvaluatorPort["ref"],
+  status: "fulfilled" | "incomplete" | "uncertain",
+) {
+  const fulfilled = status === "fulfilled";
+  return Object.freeze({
+    kind: "assessed" as const,
+    assessment: Object.freeze({
+      ref: input.assessment,
+      evaluator,
+      run: input.run,
+      turn: input.turn,
+      objective: input.objective,
+      proposal: input.proposal,
+      status,
+      rationale: fulfilled
+        ? "The scripted test evaluator accepts the completion proposal."
+        : "The scripted test evaluator found a requested outcome missing.",
+      findings: fulfilled
+        ? Object.freeze([])
+        : Object.freeze([Object.freeze({
+            kind: status === "incomplete" ? "missing_outcome" as const : "uncertainty" as const,
+            code: status === "incomplete" ? "task_outcome_missing" : "task_fulfillment_uncertain",
+            message: "Continue from the original Task objective.",
+          })]),
+      feedback: fulfilled
+        ? null
+        : "The original Task is not yet fulfilled. Continue from its requested outcomes.",
+      assessedAt: NOW,
+    }),
   });
 }
 

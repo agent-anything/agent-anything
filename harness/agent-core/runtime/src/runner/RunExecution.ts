@@ -61,6 +61,7 @@ import {
   snapshotCompletionGateDecision,
   snapshotCompletionGateInput,
   type CompletionGateDecision,
+  type CompletionGateConditionRef,
   type CompletionGateInput,
 } from "@agent-anything/verification/completion";
 import {
@@ -121,12 +122,22 @@ import {
   ControllerError,
   validateControllerDecision,
   type ControllerDecision,
+  type ModelInteractionProjection,
   type InteractionRequestCandidate,
   type OperationRequestCandidate,
   type ProgressionCandidate,
   type SameRunHandoffRequest,
   type ToolRequestCandidate,
 } from "../controller/index.js";
+import {
+  createTaskFulfillmentFailure,
+  snapshotTaskFulfillmentAssessment,
+  snapshotTaskFulfillmentEvaluationInput,
+  type TaskFulfillmentAssessment,
+  type TaskFulfillmentEvaluationInput,
+  type TaskFulfillmentEvaluationResult,
+  type TaskFulfillmentFailure,
+} from "../completion/index.js";
 import {
   abandonPlan,
   applyPlanUpdate,
@@ -816,6 +827,7 @@ export class RunExecution<TOutput> {
           const completion = await this.evaluateCompletionGate(
             decision.turn,
             decision.decision.output,
+            decision.prepared.input.interaction,
           );
           if (completion.kind === "succeeded") {
             return await this.settle({ status: "succeeded", output: decision.decision.output });
@@ -826,8 +838,12 @@ export class RunExecution<TOutput> {
           if (completion.kind === "failed") {
             return await this.settle({
               status: "failed",
-              code: "verification_failed",
-              failure: createRunFailureCause("verification", completion.failure),
+              code: completion.owner === "verification"
+                ? "verification_failed"
+                : "task_fulfillment_failed",
+              failure: completion.owner === "verification"
+                ? createRunFailureCause("verification", completion.failure)
+                : createRunFailureCause("task_fulfillment", completion.failure),
             });
           }
           if (completion.kind === "cancelled") {
@@ -1016,6 +1032,7 @@ export class RunExecution<TOutput> {
   private async evaluateCompletionGate(
     turn: ControllerTurnRef,
     output: TOutput,
+    interaction: ModelInteractionProjection,
   ): Promise<
     | { readonly kind: "succeeded" | "continue" | "cancelled" | "blocked" }
     | {
@@ -1028,10 +1045,11 @@ export class RunExecution<TOutput> {
           readonly requirementRevision: string;
         }[];
       }
-    | { readonly kind: "failed"; readonly failure: VerificationFailure }
+    | { readonly kind: "failed"; readonly owner: "verification"; readonly failure: VerificationFailure }
+    | { readonly kind: "failed"; readonly owner: "task_fulfillment"; readonly failure: TaskFulfillmentFailure }
   > {
     const execution = this.requireVerificationExecution();
-    const runState = this.writer.getSnapshot();
+    let runState = this.writer.getSnapshot();
     if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
     if (runState.status !== "running" && runState.status !== "waiting") {
       return { kind: "continue" };
@@ -1046,6 +1064,106 @@ export class RunExecution<TOutput> {
       id: this.id("verification_proposal"),
       revision: outputDigest,
     });
+    const objectiveRevision = await createCanonicalSha256Digest(
+      "agent-anything.task-objective.v1",
+      this.input.task,
+    );
+    const fulfillmentRequestedAt = this.now();
+    const fulfillmentConfiguredDeadline = Date.parse(fulfillmentRequestedAt) +
+      this.dependencies.completion.maximumDurationMs;
+    const fulfillmentDeadlineAt = new Date(Math.min(
+      Date.parse(runState.deadlineAt),
+      fulfillmentConfiguredDeadline,
+    )).toISOString();
+    const fulfillmentInput = snapshotTaskFulfillmentEvaluationInput({
+      assessment: Object.freeze({
+        id: this.id("task_fulfillment_assessment"),
+        revision: "1",
+      }),
+      run: runState.run,
+      turn,
+      objective: Object.freeze({
+        id: this.input.task.id,
+        kind: this.input.task.kind,
+        revision: objectiveRevision,
+      }),
+      task: this.input.task,
+      proposal,
+      output,
+      interaction,
+      verification: Object.freeze({
+        snapshot: current.ref,
+        gate: runState.verification.gate,
+      }),
+      requestedAt: fulfillmentRequestedAt,
+      deadlineAt: fulfillmentDeadlineAt,
+    });
+    const fulfillmentBasisRevision = runState.revision;
+    const fulfillmentSteeringEpoch = this.steeringEpoch;
+    const fulfillmentResult = await this.invokeTaskFulfillment(fulfillmentInput);
+    if (this.config.cancellation.context.request !== null) {
+      return { kind: "cancelled" };
+    }
+    if (fulfillmentResult.kind === "cancelled") {
+      return {
+        kind: "failed",
+        owner: "task_fulfillment",
+        failure: createTaskFulfillmentFailure({
+          code: "task_fulfillment_cancellation_unattributed",
+          message: "Task Fulfillment evaluation returned cancellation without an accepted Run cancellation.",
+          retryable: false,
+          metadata: Object.freeze({
+            evaluatorId: this.dependencies.completion.taskFulfillment.ref.id,
+            cancellationRequestId: fulfillmentResult.cancellation.requestId,
+            cancellationRunId: fulfillmentResult.cancellation.runId,
+          }),
+        }),
+      };
+    }
+    if (fulfillmentResult.kind === "failed") {
+      return {
+        kind: "failed",
+        owner: "task_fulfillment",
+        failure: fulfillmentResult.failure,
+      };
+    }
+    let fulfillment: TaskFulfillmentAssessment;
+    try {
+      fulfillment = snapshotTaskFulfillmentAssessment(fulfillmentResult.assessment);
+      this.assertCurrentTaskFulfillmentAssessment(fulfillmentInput, fulfillment);
+    } catch (error) {
+      return {
+        kind: "failed",
+        owner: "task_fulfillment",
+        failure: createTaskFulfillmentFailure({
+          code: "task_fulfillment_assessment_invalid",
+          message: error instanceof Error ? error.message : "Task Fulfillment Assessment is invalid.",
+          retryable: false,
+          metadata: Object.freeze({ evaluatorId: this.dependencies.completion.taskFulfillment.ref.id }),
+        }),
+      };
+    }
+    const currentAfterFulfillment = await execution.readCurrentSnapshot();
+    if (this.writer.getSnapshot().revision !== fulfillmentBasisRevision ||
+        this.steeringEpoch !== fulfillmentSteeringEpoch ||
+        currentAfterFulfillment.ref.revision !== current.ref.revision) {
+      return { kind: "continue" };
+    }
+    this.writer.commit({
+      kind: "task_fulfillment_assessment",
+      assessment: fulfillment,
+    });
+    runState = this.writer.getSnapshot();
+    if (runState.status !== "running" && runState.status !== "waiting") {
+      return { kind: "continue" };
+    }
+    const gateRequestedAt = this.now();
+    const gateConfiguredDeadline = Date.parse(gateRequestedAt) +
+      this.config.verification.completion.maximumDurationMs;
+    const gateDeadlineAt = new Date(Math.min(
+      Date.parse(runState.deadlineAt),
+      gateConfiguredDeadline,
+    )).toISOString();
     const invocation = Object.freeze({
       id: this.id("verification_gate"),
       revision: "1",
@@ -1062,13 +1180,6 @@ export class RunExecution<TOutput> {
           : requirement.completionHandling[state.status],
       })];
     });
-    const requestedAt = this.now();
-    const configuredDeadline = Date.parse(requestedAt) +
-      this.config.verification.completion.maximumDurationMs;
-    const deadlineAt = new Date(Math.min(
-      Date.parse(runState.deadlineAt),
-      configuredDeadline,
-    )).toISOString();
     const gateInput = snapshotCompletionGateInput({
       invocation,
       run: runState.run,
@@ -1086,16 +1197,19 @@ export class RunExecution<TOutput> {
           id: attempt.id,
           revision: String(attempt.ordinal),
         }))),
-      conditions: this.config.verification.completion.conditions,
+      conditions: Object.freeze([
+        ...this.config.verification.completion.conditions,
+        this.taskFulfillmentCondition(fulfillment),
+      ]),
       lifecycle: {
         runRevision: runState.revision,
         status: runState.status,
         cancellationRevision: this.config.cancellation.context.request === null ? 0 : 1,
-        deadlineAt,
+        deadlineAt: gateDeadlineAt,
       },
       policy: this.config.verification.completion.policy,
       correlation: this.config.verification.profile.ref,
-      requestedAt,
+      requestedAt: gateRequestedAt,
     });
 
     let decision: CompletionGateDecision;
@@ -1105,6 +1219,7 @@ export class RunExecution<TOutput> {
       if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
       return {
         kind: "failed",
+        owner: "verification",
         failure: error instanceof VerificationExecutionError
           ? error.failure
           : createVerificationFailure({
@@ -1144,11 +1259,12 @@ export class RunExecution<TOutput> {
 
     if (decision.status === "completion_eligible") return { kind: "succeeded" };
     if (decision.status === "invalid" || decision.status === "failed") {
-      return { kind: "failed", failure: decision.failure };
+      return { kind: "failed", owner: "verification", failure: decision.failure };
     }
     if (decision.disposition === "fail") {
       return {
         kind: "failed",
+        owner: "verification",
         failure: createVerificationFailure({
           code: "verification_completion_policy_failed",
           stage: "completion_gate",
@@ -1162,6 +1278,7 @@ export class RunExecution<TOutput> {
     if (decision.disposition === "wait" && gateInput.pendingWork.length === 0) {
       return {
         kind: "failed",
+        owner: "verification",
         failure: createVerificationFailure({
           code: "verification_gate_wait_without_pending_work",
           stage: "completion_gate",
@@ -1248,6 +1365,110 @@ export class RunExecution<TOutput> {
       for (const pending of pendingSubjects) this.removePending(pending, transition, null);
       this.publishCurrentState();
     }
+  }
+
+  private async invokeTaskFulfillment(
+    input: TaskFulfillmentEvaluationInput,
+  ): Promise<TaskFulfillmentEvaluationResult> {
+    const delay = Math.max(
+      1,
+      Math.min(
+        this.dependencies.completion.maximumDurationMs,
+        Date.parse(input.deadlineAt) - Date.parse(input.requestedAt),
+      ),
+    );
+    const runInterruption = this.invocationInterruption();
+    const local = new AbortController();
+    const abortForRun = () => local.abort();
+    if (runInterruption.signal.aborted) local.abort();
+    else runInterruption.signal.addEventListener("abort", abortForRun, { once: true });
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<TaskFulfillmentEvaluationResult>((resolve) => {
+      timeout = setTimeout(() => {
+        local.abort();
+        resolve(Object.freeze({
+          kind: "failed" as const,
+          failure: createTaskFulfillmentFailure({
+            code: "task_fulfillment_evaluation_timed_out",
+            message: "Task Fulfillment evaluation exceeded its deadline.",
+            retryable: true,
+            metadata: Object.freeze({ evaluatorId: this.dependencies.completion.taskFulfillment.ref.id }),
+          }),
+        }));
+      }, delay);
+    });
+    try {
+      return await Promise.race([
+        this.dependencies.completion.taskFulfillment.evaluate(
+          input,
+          Object.freeze({
+            signal: local.signal,
+            interruption: runInterruption.interruption,
+          }),
+        ),
+        timedOut,
+      ]);
+    } catch (error) {
+      return Object.freeze({
+        kind: "failed" as const,
+        failure: createTaskFulfillmentFailure({
+          code: "task_fulfillment_evaluation_failed",
+          message: error instanceof Error ? error.message : "Task Fulfillment evaluation failed.",
+          retryable: false,
+          metadata: Object.freeze({ evaluatorId: this.dependencies.completion.taskFulfillment.ref.id }),
+        }),
+      });
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+      runInterruption.signal.removeEventListener("abort", abortForRun);
+    }
+  }
+
+  private assertCurrentTaskFulfillmentAssessment(
+    input: TaskFulfillmentEvaluationInput,
+    assessment: TaskFulfillmentAssessment,
+  ): void {
+    const evaluator = this.dependencies.completion.taskFulfillment.ref;
+    if (
+      assessment.ref.id !== input.assessment.id ||
+      assessment.ref.revision !== input.assessment.revision ||
+      assessment.evaluator.owner !== evaluator.owner ||
+      assessment.evaluator.id !== evaluator.id ||
+      assessment.evaluator.revision !== evaluator.revision ||
+      assessment.run.id !== input.run.id ||
+      assessment.turn.id !== input.turn.id ||
+      assessment.turn.sequence !== input.turn.sequence ||
+      assessment.objective.id !== input.objective.id ||
+      assessment.objective.kind !== input.objective.kind ||
+      assessment.objective.revision !== input.objective.revision ||
+      assessment.proposal.id !== input.proposal.id ||
+      assessment.proposal.revision !== input.proposal.revision
+    ) {
+      throw new TypeError("Task Fulfillment Assessment does not match its exact evaluation input.");
+    }
+  }
+
+  private taskFulfillmentCondition(
+    assessment: TaskFulfillmentAssessment,
+  ): CompletionGateConditionRef {
+    const satisfied = assessment.status === "fulfilled";
+    return Object.freeze({
+      owner: assessment.evaluator.owner,
+      kind: "task_fulfillment",
+      id: assessment.ref.id,
+      revision: assessment.ref.revision,
+      required: true,
+      satisfied,
+      disposition: satisfied ? null : "continue",
+      reason: satisfied
+        ? null
+        : Object.freeze({
+            code: assessment.status === "incomplete"
+              ? "task_fulfillment_incomplete"
+              : "task_fulfillment_uncertain",
+            message: assessment.feedback!,
+          }),
+    });
   }
 
   private async invokeCompletionGate(input: CompletionGateInput): Promise<CompletionGateDecision> {

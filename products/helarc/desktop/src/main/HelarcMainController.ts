@@ -218,6 +218,7 @@ export type HelarcMainErrorCode =
   | "provider_profile_base_url_invalid"
   | "provider_profile_model_required"
   | "provider_profile_timeout_invalid"
+  | "provider_profile_ollama_runtime_invalid"
   | "provider_profile_credential_status_invalid"
   | "provider_profile_qualification_policy_invalid"
   | "provider_profile_kind_invalid"

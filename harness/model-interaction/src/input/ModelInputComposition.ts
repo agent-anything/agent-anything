@@ -10,11 +10,12 @@ import type {
   ModelOutputReserve,
 } from "./ModelInput.js";
 import {
-  modelMessagesFromSections,
+  modelInputFromSections,
   snapshotModelInputCapability,
   snapshotModelInputComposition,
 } from "./ModelInput.js";
 import type { ModelMessage } from "../ModelMessage.js";
+import type { ModelInstructions } from "../ModelInstructions.js";
 import {
   snapshotProviderInteraction,
   type ProviderInteraction,
@@ -32,6 +33,7 @@ export interface ModelInputSectionCandidate {
 export interface ProviderModelInputVerificationInput {
   readonly providerId: string;
   readonly model: string;
+  readonly instructions: ModelInstructions;
   readonly messages: readonly ModelMessage[];
   readonly interaction: ProviderInteraction;
   readonly composition: ModelInputComposition;
@@ -48,6 +50,7 @@ export interface ProviderModelInputAccounting {
   readonly capability: ModelInputCapability;
   estimateSection(candidate: ModelInputSectionCandidate): ModelInputSection;
   estimateFraming(
+    instructions: ModelInstructions,
     messages: readonly ModelMessage[],
     interaction: ProviderInteraction,
   ): ModelInputFraming;
@@ -101,8 +104,10 @@ export function allocateModelInputContext(input: {
     );
   }
   const baseSections = estimateSections(input.accounting, input.baseSections);
+  const baseInput = modelInputFromSections(baseSections);
   const framing = input.accounting.estimateFraming(
-    modelMessagesFromSections(baseSections),
+    baseInput.instructions,
+    baseInput.messages,
     interaction,
   );
   assertFraming(framing, capability.estimator.unit);
@@ -159,8 +164,12 @@ export function composeModelInput(input: {
     );
   }
   const sections = estimateSections(input.accounting, input.sections);
-  const messages = modelMessagesFromSections(sections);
-  const framing = input.accounting.estimateFraming(messages, interaction);
+  const projectedInput = modelInputFromSections(sections);
+  const framing = input.accounting.estimateFraming(
+    projectedInput.instructions,
+    projectedInput.messages,
+    interaction,
+  );
   assertFraming(framing, capability.estimator.unit);
   const sectionAmount = sumSections(sections);
   const inputAmount = sectionAmount + framing.amount;
@@ -183,7 +192,8 @@ export function composeModelInput(input: {
     framing,
     contextBudget: input.contextBudget,
     sections,
-    messages,
+    instructions: projectedInput.instructions,
+    messages: projectedInput.messages,
     lineage: input.lineage,
     accounting: {
       unit: capability.estimator.unit,

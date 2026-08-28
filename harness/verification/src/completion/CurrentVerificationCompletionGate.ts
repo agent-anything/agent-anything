@@ -44,10 +44,10 @@ export class CurrentVerificationCompletionGate implements CompletionGatePort {
     const unsatisfiedCondition = input.conditions.find((condition) =>
       condition.required && !condition.satisfied);
     if (unsatisfiedCondition !== undefined) {
-      return this.blocked(input, "blocked_unassessed", "block", [{
+      return this.blocked(input, "blocked_unassessed", unsatisfiedCondition.disposition!, [{
         owner: unsatisfiedCondition.owner,
-        code: "verification_gate_condition_unsatisfied",
-        message: "A required completion condition is not satisfied.",
+        code: unsatisfiedCondition.reason!.code,
+        message: unsatisfiedCondition.reason!.message,
         requirement: null,
       }]);
     }

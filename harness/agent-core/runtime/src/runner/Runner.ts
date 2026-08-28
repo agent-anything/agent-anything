@@ -66,6 +66,7 @@ import {
   snapshotRootRunConfig,
   snapshotRunInput,
 } from "./RunnerValidation.js";
+import { snapshotTaskFulfillmentEvaluatorRef } from "../completion/index.js";
 
 export class Runner {
   private readonly dependencies: ResolvedRunnerDependencies;
@@ -80,16 +81,24 @@ export class Runner {
         typeof dependencies.verification.completionGate?.evaluate !== "function") {
       throw new TypeError("Runner requires explicit Verification execution and Completion Gate dependencies.");
     }
+    if (!dependencies.completion ||
+        typeof dependencies.completion.taskFulfillment?.evaluate !== "function" ||
+        !Number.isSafeInteger(dependencies.completion.maximumDurationMs) ||
+        dependencies.completion.maximumDurationMs < 1) {
+      throw new TypeError("Runner requires an explicit bounded Task Fulfillment evaluator.");
+    }
 
     const now = dependencies.now ?? (() => new Date().toISOString());
     const contextProjection = snapshotRunnerContextProjection(
       dependencies.contextProjection,
     );
     const operations = snapshotRunnerOperationComposition(dependencies.operations);
+    const completion = snapshotRunnerCompletionComposition(dependencies.completion);
     this.dependencies = Object.freeze({
       ...dependencies,
       contextProjection,
       operations,
+      completion,
       now,
       createRunId: dependencies.createRunId ?? createDefaultRunIdentity,
       createId: dependencies.createId ?? createDefaultIdentity,
@@ -505,6 +514,20 @@ export class Runner {
     handle.start(() => execution.run());
     return handle;
   }
+}
+
+function snapshotRunnerCompletionComposition(
+  input: RunnerDependencies["completion"],
+): RunnerDependencies["completion"] {
+  const evaluator = input.taskFulfillment;
+  const ref = snapshotTaskFulfillmentEvaluatorRef(evaluator.ref);
+  return Object.freeze({
+    taskFulfillment: Object.freeze({
+      ref,
+      evaluate: evaluator.evaluate.bind(evaluator),
+    }),
+    maximumDurationMs: input.maximumDurationMs,
+  });
 }
 
 function snapshotRunnerContextProjection(

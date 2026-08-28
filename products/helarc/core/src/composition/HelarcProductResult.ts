@@ -1,6 +1,10 @@
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
-import type { RunResult, RunResultStatus } from "@agent-anything/agent-runtime/run";
+import type {
+  RunFailureCause,
+  RunResult,
+  RunResultStatus,
+} from "@agent-anything/agent-runtime/run";
 import type { AgentTask } from "@agent-anything/agent-core/task";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { OperationResult } from "@agent-anything/operation-catalog/result";
@@ -425,10 +429,10 @@ function collectSafeRunErrors(
 ): Array<{ code: string; message: string }> {
   const errors: Array<{ code: string; message: string }> = [];
   if (runResult.failure !== null) {
-    appendSafeError(errors, runResult.failure.failure.code);
+    appendSafeRunFailure(errors, runResult.failure);
   }
   for (const failure of runResult.relatedFailures) {
-    appendSafeError(errors, failure.failure.code);
+    appendSafeRunFailure(errors, failure);
   }
   for (const item of runResult.items) {
     if (item.payload.kind !== "observation") continue;
@@ -439,6 +443,23 @@ function collectSafeRunErrors(
     }
   }
   return errors;
+}
+
+function appendSafeRunFailure(
+  errors: Array<{ code: string; message: string }>,
+  failure: RunFailureCause,
+): void {
+  if (failure.kind === "provider") {
+    const providerErrorCode = failure.failure.metadata.providerErrorCode;
+    if (isSafeProviderErrorCode(providerErrorCode)) {
+      appendSafeError(errors, providerErrorCode);
+    }
+  }
+  appendSafeError(errors, failure.failure.code);
+}
+
+function isSafeProviderErrorCode(value: unknown): value is string {
+  return typeof value === "string" && /^provider_[a-z0-9_]{1,119}$/.test(value);
 }
 
 function appendSafeError(
@@ -651,6 +672,15 @@ function sanitizeMessage(message: string, fallback: string): string {
 }
 
 function safeProductErrorMessage(code: string): string {
+  if (code === "provider_response_empty") {
+    return "The model returned no usable response.";
+  }
+  if (
+    code === "provider_response_malformed" ||
+    code === "provider_structured_output_malformed"
+  ) {
+    return "The model returned a response that could not be understood.";
+  }
   if (code.startsWith("model_") || code.startsWith("provider_")) {
     return "The model request could not be completed.";
   }

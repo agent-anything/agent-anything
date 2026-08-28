@@ -35,6 +35,7 @@ export type RunProgressFactKind =
   | "interaction_settlement"
   | "descendant_settlement"
   | "verification_feedback"
+  | "task_fulfillment_assessment"
   | "completion_gate"
   | "evidence_ref"
   | "artifact_ref"

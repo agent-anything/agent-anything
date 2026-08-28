@@ -4,6 +4,7 @@ export type {
   HelarcProviderCredentialStatus,
   HelarcProviderKind,
   HelarcModelUsePolicy,
+  HelarcOllamaRuntimeProfile,
   HelarcProviderProfile,
   HelarcProviderProfileError,
   HelarcProviderProfileErrorCode,

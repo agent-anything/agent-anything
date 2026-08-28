@@ -205,7 +205,7 @@ function assertRunFailureCause(value: RunFailureCause, field: string): void {
   const kinds = new Set([
     "runtime", "model", "provider", "operation", "interaction", "approval",
     "permission", "policy", "action_execution", "sandbox", "tool", "composite",
-    "descendant", "context", "audit", "telemetry", "verification",
+    "descendant", "context", "audit", "telemetry", "task_fulfillment", "verification",
   ]);
   if (!isRecord(value) || !kinds.has(String(value.kind)) || !isRecord(value.failure)) {
     throw new TypeError(`${field} must be a valid RunFailureCause.`);
@@ -238,7 +238,8 @@ function assertFailureCode(code: RunFailureCode): void {
   if (![
     "runtime_execution_failed", "runtime_limit_exceeded", "runtime_deadline_exceeded",
     "context_projection_failed", "controller_failed", "operation_failed",
-    "interaction_failed", "required_finalization_failed", "verification_failed",
+    "interaction_failed", "required_finalization_failed", "task_fulfillment_failed",
+    "verification_failed",
     "tool_exposure_failed",
     "unknown_effect",
   ].includes(code)) {

@@ -1,6 +1,7 @@
 import {
   createNativeToolTurnInteraction,
   type ModelCallableDefinition,
+  type ModelInstructions,
   type ModelMessage,
   type ModelToolCall,
   type Provider,
@@ -8,7 +9,7 @@ import {
 } from "@agent-anything/model-interaction";
 import {
   composeModelInput,
-  modelMessagesFromComposition,
+  modelInputFromComposition,
 } from "@agent-anything/model-interaction/input";
 
 export const NATIVE_TEST_CALLABLES: readonly ModelCallableDefinition[] = Object.freeze([
@@ -38,22 +39,32 @@ export function createNativeProviderRequest(
   provider: Provider,
   input: {
     readonly requestId?: string;
+    readonly instructions?: ModelInstructions;
     readonly messages?: readonly ModelMessage[];
   } = {},
 ): ProviderRequest {
   const requestId = input.requestId ?? "native-request-1";
+  const instructions = input.instructions ?? defaultInstructions();
   const messages = input.messages ?? defaultMessages();
   const interaction = createNativeToolTurnInteraction(NATIVE_TEST_CALLABLES);
-  const sections = messages.map((message, index) => ({
+  const sections = [
+    ...instructions.content.map((block, index) => ({
+      id: `native-instruction-${index}`,
+      source: source(`native-instruction-${index}`),
+      kind: "agent_instruction" as const,
+      role: "instruction" as const,
+      necessity: "mandatory" as const,
+      content: { kind: "text" as const, text: block.text },
+    })),
+    ...messages.map((message, index) => ({
     id: `native-message-${index}`,
     source: source(`native-message-${index}`),
-    kind: index === 0 && message.role === "system"
-      ? "agent_instruction"
-      : "interaction_history",
+    kind: "interaction_history" as const,
     role: message.role,
     necessity: "mandatory" as const,
     content: { kind: "model_message" as const, message },
-  }));
+    })),
+  ];
   const composition = composeModelInput({
     id: requestId,
     providerId: provider.inputAccounting.providerId,
@@ -75,7 +86,9 @@ export function createNativeProviderRequest(
         providerId: provider.inputAccounting.providerId,
         model: provider.inputAccounting.model,
       },
-      instructionBlocks: [source("native-message-0")],
+      instructionBlocks: instructions.content.map((_, index) =>
+        source(`native-instruction-${index}`)
+      ),
       activeContext: source("active-context"),
       contextProjection: source("context-projection"),
       projectionManifest: source("projection-manifest"),
@@ -93,6 +106,7 @@ export function createNativeProviderRequest(
     },
     composedAt: "2026-08-27T00:00:00.000Z",
   });
+  const modelInput = modelInputFromComposition(composition);
   return {
     requestId: composition.id,
     purpose: "native-tool-conformance",
@@ -100,7 +114,8 @@ export function createNativeProviderRequest(
       controllerRequestId: "controller-request-1",
       branchId: "run-1:main",
     },
-    messages: modelMessagesFromComposition(composition),
+    instructions: modelInput.instructions,
+    messages: modelInput.messages,
     interaction: composition.interaction,
     composition,
     continuation: null,
@@ -134,12 +149,15 @@ export function createSettledToolResultMessage(
 
 export function defaultMessages(): readonly ModelMessage[] {
   return [{
-    role: "system",
-    content: [{ kind: "text", text: "Use the available callable when needed." }],
-  }, {
     role: "user",
     content: [{ kind: "text", text: "Inspect package.json." }],
   }];
+}
+
+export function defaultInstructions(): ModelInstructions {
+  return {
+    content: [{ kind: "text", text: "Use the available callable when needed." }],
+  };
 }
 
 function source(id: string) {

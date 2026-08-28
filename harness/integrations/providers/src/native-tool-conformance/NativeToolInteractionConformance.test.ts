@@ -33,6 +33,7 @@ const ADAPTERS: readonly AdapterCase[] = [{
       baseUrl: "http://localhost:11434",
       model: "model-a",
       timeoutMs: 1_000,
+      runtime: { contextWindowTokens: 16_384, maximumOutputTokens: 2_048 },
       nativeToolInteraction: { supported },
       inputLimit: { maximumBytes: 1_000_000, source: "host_configured" },
     }, async () => okResponse(response));
@@ -199,6 +200,7 @@ for (const adapter of ADAPTERS) {
             baseUrl: "http://localhost:11434",
             model: "model-a",
             timeoutMs: 1_000,
+            runtime: { contextWindowTokens: 16_384, maximumOutputTokens: 2_048 },
             nativeToolInteraction: { supported: false },
             inputLimit: { maximumBytes: 1_000_000, source: "host_configured" },
           }, fetchImpl)

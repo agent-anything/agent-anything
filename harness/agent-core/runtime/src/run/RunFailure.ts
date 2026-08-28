@@ -10,6 +10,7 @@ import type { InteractionFailure } from "@agent-anything/interaction/protocol";
 import type { CompositeFailure } from "@agent-anything/operation-composition/result";
 import type { ModelFailure } from "../controller/ModelFailure.js";
 import type { VerificationFailure } from "@agent-anything/verification/definition";
+import type { TaskFulfillmentFailure } from "../completion/index.js";
 
 export interface RuntimeFailure {
   readonly code: string;
@@ -43,6 +44,7 @@ export type RunFailureCause =
   | { readonly kind: "context"; readonly failure: RunContextFailure }
   | { readonly kind: "audit"; readonly failure: AuditFailure }
   | { readonly kind: "telemetry"; readonly failure: TelemetryFailure }
+  | { readonly kind: "task_fulfillment"; readonly failure: TaskFulfillmentFailure }
   | { readonly kind: "verification"; readonly failure: VerificationFailure };
 
 export type RunFailureKind = RunFailureCause["kind"];

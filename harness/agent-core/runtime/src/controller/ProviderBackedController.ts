@@ -420,6 +420,7 @@ export class ProviderBackedController<TOutput = unknown>
       this.input.provider.inputAccounting.verify({
         providerId: this.input.provider.descriptor.id,
         model: request.composition.model,
+        instructions: request.instructions,
         messages: request.messages,
         interaction: request.interaction,
         composition: request.composition,

@@ -4,6 +4,11 @@ import {
   type ModelContinuationRef,
 } from "./continuation/index.js";
 import {
+  modelInstructionsEqual,
+  snapshotModelInstructions,
+  type ModelInstructions,
+} from "./ModelInstructions.js";
+import {
   modelMessagesEqual,
   snapshotModelMessages,
   type ModelMessage,
@@ -28,6 +33,7 @@ export interface ProviderRequest {
   readonly requestId: string;
   readonly purpose: string;
   readonly correlation: ProviderRequestCorrelation;
+  readonly instructions: ModelInstructions;
   readonly messages: readonly ModelMessage[];
   readonly interaction: ProviderInteraction;
   readonly composition: ModelInputComposition;
@@ -42,14 +48,16 @@ export interface ProviderRequestCorrelation {
 
 export function snapshotProviderRequest(input: ProviderRequest): ProviderRequest {
   strictRecord(input, "ProviderRequest", [
-    "requestId", "purpose", "correlation", "messages", "interaction", "composition",
+    "requestId", "purpose", "correlation", "instructions", "messages", "interaction", "composition",
     "continuation", "metadata",
   ]);
+  const instructions = snapshotModelInstructions(input.instructions);
   const messages = snapshotModelMessages(input.messages);
   const interaction = snapshotProviderInteraction(input.interaction);
   const composition = snapshotModelInputComposition(input.composition);
   if (
     input.requestId !== composition.id ||
+    !modelInstructionsEqual(instructions, composition.instructions) ||
     !modelMessagesEqual(messages, composition.messages) ||
     !providerInteractionsEqual(interaction, composition.interaction)
   ) {
@@ -63,6 +71,7 @@ export function snapshotProviderRequest(input: ProviderRequest): ProviderRequest
     requestId: token(input.requestId, "ProviderRequest.requestId"),
     purpose: token(input.purpose, "ProviderRequest.purpose"),
     correlation: snapshotProviderRequestCorrelation(input.correlation),
+    instructions,
     messages,
     interaction,
     composition,

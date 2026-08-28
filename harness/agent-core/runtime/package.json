@@ -4,6 +4,10 @@
   "description": "Authoritative Run lifecycle, Agent Loop, Controller, planning, progress, cancellation, retry, and termination for Agent Harness.",
   "type": "module",
   "exports": {
+    "./completion": {
+      "types": "./src/completion/index.ts",
+      "import": "./dist/completion/index.js"
+    },
     "./controller": {
       "types": "./src/controller/index.ts",
       "import": "./dist/controller/index.js"

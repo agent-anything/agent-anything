@@ -627,6 +627,10 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
       provider.inputAccounting,
       product.controllerProtocol,
     ),
+    completion: {
+      taskFulfillment: product.taskFulfillment,
+      maximumDurationMs: 15_000,
+    },
     operations: {
       catalog: product.actions.operationCatalog,
       bindings: product.actions.operationBindings,

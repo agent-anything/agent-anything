@@ -23,6 +23,7 @@ import type {
 } from "../progress/index.js";
 import type { AgentInstructionBindingRef } from "../instructions/index.js";
 import type { ModelCallRef, ModelToolResult } from "@agent-anything/model-interaction";
+import type { TaskFulfillmentAssessment } from "../completion/index.js";
 
 export interface ControllerToolExposureRecord {
   readonly proofId: string;
@@ -100,6 +101,10 @@ export type RunItemPayload<TOutput = unknown> =
   | {
       readonly kind: "verification_feedback";
       readonly verification: VerificationRunnerProjection;
+    }
+  | {
+      readonly kind: "task_fulfillment_assessment";
+      readonly assessment: TaskFulfillmentAssessment;
     }
   | {
       readonly kind: "progress_assessment";

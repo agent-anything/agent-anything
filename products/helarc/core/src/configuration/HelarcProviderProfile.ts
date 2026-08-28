@@ -11,6 +11,11 @@ export type HelarcModelUsePolicy =
   | "require_qualified"
   | "allow_experimental";
 
+export interface HelarcOllamaRuntimeProfile {
+  contextWindowTokens: number;
+  maximumOutputTokens: number;
+}
+
 export interface CreateHelarcProviderProfileInput {
   id: string;
   providerKind?: HelarcProviderKind;
@@ -18,6 +23,7 @@ export interface CreateHelarcProviderProfileInput {
   baseUrl: string;
   model: string;
   timeoutMs: number;
+  ollamaRuntime?: HelarcOllamaRuntimeProfile | null;
   credentialStatus: HelarcProviderCredentialStatus;
   qualificationPolicy?: HelarcModelUsePolicy;
   isActive?: boolean;
@@ -32,6 +38,7 @@ export interface HelarcProviderProfile {
   baseUrlOrigin: string;
   model: string;
   timeoutMs: number;
+  ollamaRuntime: Readonly<HelarcOllamaRuntimeProfile> | null;
   credentialStatus: HelarcProviderCredentialStatus;
   qualificationPolicy: HelarcModelUsePolicy;
   isActive: boolean;
@@ -44,6 +51,7 @@ export type HelarcProviderProfileErrorCode =
   | "provider_profile_base_url_invalid"
   | "provider_profile_model_required"
   | "provider_profile_timeout_invalid"
+  | "provider_profile_ollama_runtime_invalid"
   | "provider_profile_credential_status_invalid"
   | "provider_profile_qualification_policy_invalid"
   | "provider_profile_kind_invalid"
@@ -103,6 +111,14 @@ export function createHelarcProviderProfile(
     );
   }
 
+  const ollamaRuntimeResult = normalizeOllamaRuntime(
+    providerKind,
+    input.ollamaRuntime,
+  );
+  if (!ollamaRuntimeResult.ok) {
+    return ollamaRuntimeResult;
+  }
+
   if (!isCredentialStatus(input.credentialStatus)) {
     return reject(
       "provider_profile_credential_status_invalid",
@@ -129,10 +145,48 @@ export function createHelarcProviderProfile(
       baseUrlOrigin: urlResult.url.origin,
       model,
       timeoutMs: input.timeoutMs,
+      ollamaRuntime: ollamaRuntimeResult.runtime,
       credentialStatus: input.credentialStatus,
       qualificationPolicy,
       isActive: input.isActive ?? false,
     },
+  };
+}
+
+function normalizeOllamaRuntime(
+  providerKind: HelarcProviderKind,
+  value: HelarcOllamaRuntimeProfile | null | undefined,
+):
+  | { ok: true; runtime: Readonly<HelarcOllamaRuntimeProfile> | null }
+  | { ok: false; error: HelarcProviderProfileError } {
+  if (providerKind !== "ollama") {
+    return value === undefined || value === null
+      ? { ok: true, runtime: null }
+      : reject(
+          "provider_profile_ollama_runtime_invalid",
+          "Ollama runtime settings are only valid for an Ollama profile.",
+        );
+  }
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !Number.isSafeInteger(value.contextWindowTokens) ||
+    value.contextWindowTokens <= 0 ||
+    !Number.isSafeInteger(value.maximumOutputTokens) ||
+    value.maximumOutputTokens <= 0 ||
+    value.maximumOutputTokens >= value.contextWindowTokens
+  ) {
+    return reject(
+      "provider_profile_ollama_runtime_invalid",
+      "Ollama runtime settings must contain a positive context window and a smaller positive output limit.",
+    );
+  }
+  return {
+    ok: true,
+    runtime: Object.freeze({
+      contextWindowTokens: value.contextWindowTokens,
+      maximumOutputTokens: value.maximumOutputTokens,
+    }),
   };
 }
 

@@ -6,6 +6,7 @@ import {
   providerResultFromInterruption,
   snapshotProviderResponse,
   type ModelJsonValue,
+  type ModelInstructions,
   type ModelMessage,
   type ModelToolCall,
   type ModelTurnFinish,
@@ -26,6 +27,7 @@ import {
   readProviderHttpFailureMetadata,
 } from "../http/ProviderHttpFailureMetadata.js";
 import type { FetchLike } from "../http/ProviderHttpTransport.js";
+import { decodeStructuredGenerationOutput } from "../structured-generation/StructuredGenerationResponse.js";
 
 const PROVIDER_ID = "openai-compatible.chat-completions";
 const MAX_RESPONSE_TEXT_LENGTH = 64_000;
@@ -59,9 +61,9 @@ export class OpenAICompatibleProvider implements Provider {
       maximumInputBytes: this.config.inputLimit.maximumBytes,
       limitSource: this.config.inputLimit.source,
       estimator: { id: "openai-compatible.utf8-content", revision: "1" },
-      framing: { id: "openai-compatible.chat-completions-framing", revision: "2" },
-      renderRequest: (messages, interaction) =>
-        encodeOpenAIRequest(this.config.model, messages, interaction),
+      framing: { id: "openai-compatible.chat-completions-framing", revision: "3" },
+      renderRequest: (instructions, messages, interaction) =>
+        encodeOpenAIRequest(this.config.model, instructions, messages, interaction),
     });
     this.descriptor = Object.freeze({
       id: PROVIDER_ID,
@@ -188,6 +190,7 @@ function prepareEncodedRequest(
     accounting.verify({
       providerId: accounting.providerId,
       model: accounting.model,
+      instructions: request.instructions,
       messages: request.messages,
       interaction: request.interaction,
       composition: request.composition,
@@ -204,10 +207,16 @@ function prepareEncodedRequest(
     });
   }
   try {
-    const body = encodeOpenAIRequest(model, request.messages, request.interaction);
+    const body = encodeOpenAIRequest(
+      model,
+      request.instructions,
+      request.messages,
+      request.interaction,
+    );
     accounting.verifyEncoded({
       providerId: accounting.providerId,
       model: accounting.model,
+      instructions: request.instructions,
       messages: request.messages,
       interaction: request.interaction,
       composition: request.composition,
@@ -229,17 +238,21 @@ function prepareEncodedRequest(
 
 function encodeOpenAIRequest(
   model: string,
+  instructions: ModelInstructions,
   messages: readonly ModelMessage[],
   interaction: ProviderInteraction,
 ): string {
   return JSON.stringify({
     model,
     messages: interaction.kind === "native_tool_turn"
-      ? encodeOpenAINativeMessages(messages)
-      : messages.map((message) => ({
+      ? encodeOpenAINativeMessages(instructions, messages)
+      : [
+          { role: "system", content: renderInstructions(instructions) },
+          ...messages.map((message) => ({
           role: message.role,
           content: renderGenerationText(message),
-        })),
+          })),
+        ],
     stream: false,
     ...(interaction.kind === "native_tool_turn"
       ? {
@@ -259,11 +272,17 @@ function encodeOpenAIRequest(
   });
 }
 
-function encodeOpenAINativeMessages(messages: readonly ModelMessage[]): readonly unknown[] {
-  const encoded: unknown[] = [];
+function encodeOpenAINativeMessages(
+  instructions: ModelInstructions,
+  messages: readonly ModelMessage[],
+): readonly unknown[] {
+  const encoded: unknown[] = [{
+    role: "system",
+    content: renderInstructions(instructions),
+  }];
   for (const message of messages) {
-    if (message.role === "system" || message.role === "user") {
-      encoded.push({ role: message.role, content: renderInputText(message) });
+    if (message.role === "user") {
+      encoded.push({ role: "user", content: renderInputText(message) });
       continue;
     }
     if (message.role === "tool") {
@@ -515,8 +534,30 @@ function mapGeneratedChatCompletionResponse(
         "Provider response content is too large.",
       );
     }
+    if (interaction.kind === "structured_generation") {
+      const decoded = decodeStructuredGenerationOutput(choice.message.content);
+      if (decoded.kind === "failed") {
+        return failed(
+          "response",
+          "provider_structured_output_malformed",
+          "Provider structured output was not valid JSON.",
+          { metadata: { causeName: decoded.causeName } },
+        );
+      }
+      return succeeded({
+        kind: "structured_generation",
+        responseId: readOptionalIdentifier(
+          isRecord(value) ? value.id : null,
+          "Chat Completion response id",
+        ),
+        output: decoded.output,
+        usage: readUsage(isRecord(value) ? value.usage : null),
+        continuation: null,
+        metadata: {},
+      });
+    }
     return succeeded({
-      kind: interaction.kind,
+      kind: "text_generation",
       responseId: readOptionalIdentifier(
         isRecord(value) ? value.id : null,
         "Chat Completion response id",
@@ -564,13 +605,17 @@ function renderGenerationText(message: ModelMessage): string {
       throw new TypeError("Text and structured generation accept text-only Model Messages.");
     }
     return block.text;
-  }).join("");
+  }).join("\n\n");
 }
 
 function renderInputText(
-  message: Extract<ModelMessage, { readonly role: "system" | "user" }>,
+  message: Extract<ModelMessage, { readonly role: "user" }>,
 ): string {
-  return message.content.map((block) => block.text).join("");
+  return message.content.map((block) => block.text).join("\n\n");
+}
+
+function renderInstructions(instructions: ModelInstructions): string {
+  return instructions.content.map((block) => block.text).join("\n\n");
 }
 
 function renderToolResultContent(value: ModelJsonValue): string {

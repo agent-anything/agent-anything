@@ -204,6 +204,7 @@ function snapshotProviderSave(
       "baseUrl",
       "model",
       "timeoutMs",
+      "ollamaRuntime",
       "qualificationPolicy",
       "apiKeyUpdate",
       "apiKey",
@@ -226,6 +227,10 @@ function snapshotProviderSave(
   if (!Number.isSafeInteger(candidate.timeoutMs) || (candidate.timeoutMs as number) < 1_000) {
     invalid("Provider timeout must be a safe integer of at least 1000 milliseconds.");
   }
+  const ollamaRuntime = snapshotOllamaRuntime(
+    candidate.providerKind,
+    candidate.ollamaRuntime,
+  );
   if (
     candidate.qualificationPolicy !== "require_qualified" &&
     candidate.qualificationPolicy !== "allow_experimental"
@@ -238,9 +243,39 @@ function snapshotProviderSave(
     baseUrl: boundedText(candidate.baseUrl, "Provider base URL", BASE_URL_MAX_LENGTH),
     model: boundedText(candidate.model, "Provider model", MODEL_MAX_LENGTH),
     timeoutMs: candidate.timeoutMs as number,
+    ollamaRuntime,
     qualificationPolicy: candidate.qualificationPolicy,
     apiKeyUpdate: candidate.apiKeyUpdate,
     apiKey: boundedString(candidate.apiKey, "Provider API key", API_KEY_MAX_LENGTH),
+  });
+}
+
+function snapshotOllamaRuntime(
+  providerKind: "openai-compatible" | "ollama",
+  candidate: unknown,
+): HelarcProductCommandPayloadMap["provider.save"]["ollamaRuntime"] {
+  if (providerKind !== "ollama") {
+    if (candidate !== null) invalid("Ollama runtime settings require an Ollama Provider.");
+    return null;
+  }
+  assertRecord(candidate, "Ollama runtime settings");
+  assertExactKeys(
+    candidate,
+    ["contextWindowTokens", "maximumOutputTokens"],
+    "Ollama runtime settings",
+  );
+  if (
+    !Number.isSafeInteger(candidate.contextWindowTokens) ||
+    (candidate.contextWindowTokens as number) <= 0 ||
+    !Number.isSafeInteger(candidate.maximumOutputTokens) ||
+    (candidate.maximumOutputTokens as number) <= 0 ||
+    (candidate.maximumOutputTokens as number) >= (candidate.contextWindowTokens as number)
+  ) {
+    invalid("Ollama runtime limits are invalid.");
+  }
+  return Object.freeze({
+    contextWindowTokens: candidate.contextWindowTokens as number,
+    maximumOutputTokens: candidate.maximumOutputTokens as number,
   });
 }
 

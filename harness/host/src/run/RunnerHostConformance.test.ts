@@ -32,6 +32,10 @@ import {
   type RunConfig,
   type RunnerOperationComposition,
 } from "@agent-anything/agent-runtime/runner";
+import type {
+  TaskFulfillmentEvaluationInput,
+  TaskFulfillmentEvaluatorPort,
+} from "@agent-anything/agent-runtime/completion";
 import {
   createTestContextProjection,
   createTestVerificationExecutionFactory,
@@ -108,12 +112,41 @@ function createManager(controller: Controller<TestOutput>) {
     controller,
     contextProjection: createTestContextProjection(),
     operations: emptyOperations(),
+    completion: {
+      taskFulfillment: fulfilledEvaluator(),
+      maximumDurationMs: 5_000,
+    },
     verification: createTestVerificationComposition(),
     interactions: createInteractionProtocolRegistrySnapshot("interaction-registry-1", []),
     createRunId: () => "run-host-conformance",
     now: () => NOW,
   });
   return createHostRunManager({ runner, now: () => NOW });
+}
+
+function fulfilledEvaluator(): TaskFulfillmentEvaluatorPort {
+  const ref = Object.freeze({ owner: "test-product", id: "host-task-fulfillment", revision: "1" });
+  return Object.freeze({
+    ref,
+    async evaluate(input: TaskFulfillmentEvaluationInput) {
+      return Object.freeze({
+        kind: "assessed" as const,
+        assessment: Object.freeze({
+          ref: input.assessment,
+          evaluator: ref,
+          run: input.run,
+          turn: input.turn,
+          objective: input.objective,
+          proposal: input.proposal,
+          status: "fulfilled" as const,
+          rationale: "Host conformance uses an explicitly fulfilled test Task.",
+          findings: Object.freeze([]),
+          feedback: null,
+          assessedAt: NOW,
+        }),
+      });
+    },
+  });
 }
 
 function emptyOperations(): RunnerOperationComposition {

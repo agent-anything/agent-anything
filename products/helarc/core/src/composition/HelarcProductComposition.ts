@@ -77,6 +77,8 @@ import {
   type HelarcProductRunProjectionListener,
   type HelarcProductRunProjectionUpdate,
 } from "../run/HelarcRunProjection.js";
+import { HelarcTaskFulfillmentEvaluator } from "../task-fulfillment/index.js";
+import type { TaskFulfillmentEvaluatorPort } from "@agent-anything/agent-runtime/completion";
 
 type HelarcProductProjectionUpdatePayload =
   HelarcProductRunProjectionUpdate extends infer TUpdate
@@ -111,6 +113,7 @@ export interface HelarcProductComposition {
   readonly interactions: InteractionProtocolRegistrySnapshot;
   readonly delegation: RunnerDelegationComposition;
   readonly verification: HelarcVerificationComposition;
+  readonly taskFulfillment: TaskFulfillmentEvaluatorPort;
   readonly runMetadata: Readonly<Record<string, unknown>>;
   getProductProjection(): HelarcProductRunProjection;
   subscribeProductProjection(listener: HelarcProductRunProjectionListener): () => void;
@@ -151,6 +154,7 @@ export async function createHelarcProductComposition(
     admittedAt,
     now,
   });
+  const taskFulfillment = new HelarcTaskFulfillmentEvaluator(input.provider, now);
   const actions = createHelarcActionComposition({
     admittedAt,
     file: input.fileActions,
@@ -274,6 +278,7 @@ export async function createHelarcProductComposition(
     interactions,
     delegation: descendant.delegation,
     verification,
+    taskFulfillment,
     runMetadata,
     getProductProjection(): HelarcProductRunProjection {
       return productProjection;

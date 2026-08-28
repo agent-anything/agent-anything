@@ -1,4 +1,9 @@
 import {
+  modelInstructionsEqual,
+  snapshotModelInstructions,
+  type ModelInstructions,
+} from "../ModelInstructions.js";
+import {
   modelMessagesEqual,
   snapshotModelMessage,
   snapshotModelMessages,
@@ -16,7 +21,7 @@ import type {
   ModelInputSection,
 } from "./ModelInput.js";
 import {
-  modelMessagesFromSections,
+  modelInputFromSections,
   snapshotModelInputCapability,
   snapshotModelInputComposition,
 } from "./ModelInput.js";
@@ -35,6 +40,7 @@ export interface CreateUtf8ModelInputAccountingInput {
   readonly estimator: { readonly id: string; readonly revision: string };
   readonly framing: { readonly id: string; readonly revision: string };
   renderRequest(
+    instructions: ModelInstructions,
     messages: readonly ModelMessage[],
     interaction: ProviderInteraction,
   ): string;
@@ -80,13 +86,20 @@ export function createUtf8ModelInputAccounting(
   };
 
   const estimateFraming = (
+    instructions: ModelInstructions,
     messages: readonly ModelMessage[],
     interaction: ProviderInteraction,
   ) => {
+    const instructionSnapshot = snapshotModelInstructions(instructions);
     const messageSnapshot = snapshotModelMessages(messages);
     const interactionSnapshot = snapshotProviderInteraction(interaction);
-    const encodedAmount = utf8Length(input.renderRequest(messageSnapshot, interactionSnapshot));
-    const payloadAmount = semanticMessagePayloadAmount(messageSnapshot);
+    const encodedAmount = utf8Length(input.renderRequest(
+      instructionSnapshot,
+      messageSnapshot,
+      interactionSnapshot,
+    ));
+    const payloadAmount = semanticInstructionPayloadAmount(instructionSnapshot) +
+      semanticMessagePayloadAmount(messageSnapshot);
     if (encodedAmount < payloadAmount) {
       throw new TypeError("Provider request framing cannot be smaller than message payload.");
     }
@@ -102,26 +115,32 @@ export function createUtf8ModelInputAccounting(
       throw new TypeError("Provider request identity does not match Model Input Accounting.");
     }
     const composition = snapshotModelInputComposition(value.composition);
+    const instructions = snapshotModelInstructions(value.instructions);
     const messages = snapshotModelMessages(value.messages);
     const interaction = snapshotProviderInteraction(value.interaction);
     if (
       composition.providerId !== input.providerId ||
       composition.model !== input.model ||
       !sameCapability(composition, capability) ||
+      !modelInstructionsEqual(instructions, composition.instructions) ||
       !modelMessagesEqual(messages, composition.messages) ||
       !providerInteractionsEqual(interaction, composition.interaction)
     ) {
       throw new TypeError("Provider request composition does not match its accounting capability.");
     }
-    if (!modelMessagesEqual(messages, modelMessagesFromSections(composition.sections))) {
-      throw new TypeError("Provider messages diverge from model-input sections.");
+    const projectedInput = modelInputFromSections(composition.sections);
+    if (
+      !modelInstructionsEqual(instructions, projectedInput.instructions) ||
+      !modelMessagesEqual(messages, projectedInput.messages)
+    ) {
+      throw new TypeError("Provider input diverges from model-input sections.");
     }
     const measuredSections = composition.sections.map((section) => estimateSection(section));
     const sectionAmount = measuredSections.reduce(
       (total, section) => total + section.accounting.amount,
       0,
     );
-    const framing = estimateFraming(messages, interaction);
+    const framing = estimateFraming(instructions, messages, interaction);
     if (
       framing.ref.id !== composition.framing.ref.id ||
       framing.ref.revision !== composition.framing.ref.revision ||
@@ -145,6 +164,7 @@ export function createUtf8ModelInputAccounting(
     verifyEncoded(value: ProviderEncodedModelInputVerificationInput) {
       verify(value);
       const expected = input.renderRequest(
+        snapshotModelInstructions(value.instructions),
         snapshotModelMessages(value.messages),
         snapshotProviderInteraction(value.interaction),
       );
@@ -155,10 +175,19 @@ export function createUtf8ModelInputAccounting(
   });
 }
 
-export function modelMessagesFromComposition(
-  composition: Pick<ReturnType<typeof snapshotModelInputComposition>, "messages">,
-): readonly ModelMessage[] {
-  return snapshotModelMessages(composition.messages);
+export function modelInputFromComposition(
+  composition: Pick<
+    ReturnType<typeof snapshotModelInputComposition>,
+    "instructions" | "messages"
+  >,
+): {
+  readonly instructions: ModelInstructions;
+  readonly messages: readonly ModelMessage[];
+} {
+  return Object.freeze({
+    instructions: snapshotModelInstructions(composition.instructions),
+    messages: snapshotModelMessages(composition.messages),
+  });
 }
 
 function snapshotContent(content: ModelInputContent): ModelInputContent {
@@ -199,6 +228,13 @@ function semanticMessagePayloadAmount(messages: readonly ModelMessage[]): number
         content: block.result.content,
       }));
     }, 0), 0);
+}
+
+function semanticInstructionPayloadAmount(instructions: ModelInstructions): number {
+  return instructions.content.reduce(
+    (total, block) => total + utf8Length(block.text),
+    0,
+  );
 }
 
 function sameCapability(

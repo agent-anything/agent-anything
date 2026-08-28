@@ -307,6 +307,12 @@ function projectProviderProfile(
     baseUrlOrigin: profile.baseUrlOrigin,
     model: profile.model,
     timeoutMs: profile.timeoutMs,
+    ollamaRuntime: profile.ollamaRuntime === null
+      ? null
+      : {
+          contextWindowTokens: profile.ollamaRuntime.contextWindowTokens,
+          maximumOutputTokens: profile.ollamaRuntime.maximumOutputTokens,
+        },
     credentialStatus: profile.credentialStatus,
     qualificationPolicy: profile.qualificationPolicy,
     isActive: profile.isActive,

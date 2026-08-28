@@ -1,5 +1,10 @@
 import type { ModelJsonValue } from "../ModelInteractionContractValidation.js";
 import {
+  modelInstructionsEqual,
+  snapshotModelInstructions,
+  type ModelInstructions,
+} from "../ModelInstructions.js";
+import {
   modelMessagesEqual,
   snapshotModelMessages,
   type ModelMessage,
@@ -87,7 +92,7 @@ export type ModelInputContent =
   | ModelInputStructuredContent
   | ModelInputMessageContent;
 
-export type ModelInputSectionRole = "system" | "user" | "assistant" | "tool";
+export type ModelInputSectionRole = "instruction" | "user" | "assistant" | "tool";
 
 export interface ModelInputSection {
   readonly id: string;
@@ -153,6 +158,7 @@ export interface ModelInputComposition {
     readonly amount: number;
   };
   readonly sections: readonly ModelInputSection[];
+  readonly instructions: ModelInstructions;
   readonly messages: readonly ModelMessage[];
   readonly lineage: ModelInputLineage;
   readonly accounting: ModelInputAccounting;
@@ -194,7 +200,7 @@ export function snapshotModelInputComposition(
 ): ModelInputComposition {
   strictRecord(input, "ModelInputComposition", [
     "id", "providerId", "model", "estimator", "limit", "outputReserve", "interaction",
-    "framing", "contextBudget", "sections", "messages", "lineage", "accounting",
+    "framing", "contextBudget", "sections", "instructions", "messages", "lineage", "accounting",
     "composedAt",
   ]);
   const estimator = snapshotEstimator(
@@ -233,9 +239,14 @@ export function snapshotModelInputComposition(
   if (new Set(sections.map((section) => section.id)).size !== sections.length) {
     throw new TypeError("ModelInputComposition section identities must be unique.");
   }
+  const projectedInput = modelInputFromSections(sections);
+  const instructions = snapshotModelInstructions(input.instructions);
   const messages = snapshotModelMessages(input.messages);
-  if (!modelMessagesEqual(messages, modelMessagesFromSections(sections))) {
-    throw new TypeError("ModelInputComposition messages diverge from its sections.");
+  if (
+    !modelInstructionsEqual(instructions, projectedInput.instructions) ||
+    !modelMessagesEqual(messages, projectedInput.messages)
+  ) {
+    throw new TypeError("ModelInputComposition input diverges from its sections.");
   }
   const sectionAmount = sections.reduce(
     (total, section) => total + section.accounting.amount,
@@ -278,6 +289,7 @@ export function snapshotModelInputComposition(
     framing,
     contextBudget,
     sections: Object.freeze(sections),
+    instructions,
     messages,
     lineage,
     accounting: Object.freeze({
@@ -315,12 +327,12 @@ function assertInstructionLineage(input: {
     const source = input.lineage.instructionBlocks[index]!;
     if (
       input.sections[index] !== section ||
-      section.role !== "system" ||
+      section.role !== "instruction" ||
       section.necessity !== "mandatory" ||
       !sameSource(section.source, source)
     ) {
       throw new TypeError(
-        "Agent instruction sections must be the leading ordered mandatory system sections.",
+        "Agent instruction sections must be the leading ordered mandatory instruction sections.",
       );
     }
   }
@@ -523,18 +535,57 @@ function isUnit(value: unknown): value is ModelInputUnit {
 }
 
 function isRole(value: unknown): value is ModelInputSectionRole {
-  return value === "system" || value === "user" || value === "assistant" || value === "tool";
+  return value === "instruction" || value === "user" || value === "assistant" || value === "tool";
 }
 
-export function modelMessagesFromSections(
+export function modelInputFromSections(
   sections: readonly ModelInputSection[],
-): readonly ModelMessage[] {
-  return Object.freeze(sections.map((section) => {
+): {
+  readonly instructions: ModelInstructions;
+  readonly messages: readonly ModelMessage[];
+} {
+  const instructionContent: Array<{ kind: "text"; text: string }> = [];
+  const messages: ModelMessage[] = [];
+  let userContent: Array<{ kind: "text"; text: string }> = [];
+  let conversationStarted = false;
+
+  const flushUser = (): void => {
+    if (userContent.length === 0) return;
+    messages.push({
+      role: "user",
+      content: userContent,
+    });
+    userContent = [];
+  };
+
+  for (const section of sections) {
+    if (section.role === "instruction") {
+      if (conversationStarted) {
+        throw new TypeError("Model input instruction sections must precede conversation sections.");
+      }
+      if (section.content.kind === "model_message") {
+        throw new TypeError("Model input instructions cannot contain Conversation Messages.");
+      }
+      instructionContent.push({
+        kind: "text",
+        text: section.content.kind === "text"
+          ? section.content.text
+          : JSON.stringify(section.content.value),
+      });
+      continue;
+    }
+    conversationStarted = true;
     if (section.content.kind === "model_message") {
       if (section.content.message.role !== section.role) {
         throw new TypeError("Model input message content role must match its section role.");
       }
-      return section.content.message;
+      if (section.content.message.role === "user") {
+        userContent.push(...section.content.message.content);
+        continue;
+      }
+      flushUser();
+      messages.push(section.content.message);
+      continue;
     }
     if (section.role === "tool") {
       throw new TypeError("Tool model-input sections require correlated result blocks.");
@@ -542,9 +593,19 @@ export function modelMessagesFromSections(
     const text = section.content.kind === "text"
       ? section.content.text
       : JSON.stringify(section.content.value);
-    return snapshotModelMessages([{
-      role: section.role,
+    if (section.role === "user") {
+      userContent.push({ kind: "text", text });
+      continue;
+    }
+    flushUser();
+    messages.push({
+      role: "assistant",
       content: [{ kind: "text", text }],
-    } as ModelMessage])[0]!;
-  }));
+    });
+  }
+  flushUser();
+  return Object.freeze({
+    instructions: snapshotModelInstructions({ content: instructionContent }),
+    messages: snapshotModelMessages(messages),
+  });
 }

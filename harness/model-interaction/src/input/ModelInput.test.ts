@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { ModelInputComposition } from "./ModelInput.js";
+import type { ModelInputComposition, ModelInputSection } from "./ModelInput.js";
 import {
+  modelInputFromSections,
   snapshotModelInputCapability,
   snapshotModelInputComposition,
 } from "./ModelInput.js";
@@ -62,7 +63,80 @@ describe("ModelInputComposition contract", () => {
       },
     })).toThrow("exceeds the model input limit");
   });
+
+  it("separates instructions and normalizes adjacent user material", () => {
+    const input = modelInputFromSections([
+      section("instruction", "instruction", "Instruction"),
+      section("protocol", "instruction", "Protocol"),
+      section("task", "user", "Task"),
+      section("initial-state", "user", "Initial state"),
+      section("history-user", "user", {
+        kind: "model_message",
+        message: { role: "user", content: [{ kind: "text", text: "Additional request" }] },
+      }),
+      section("history", "assistant", {
+        kind: "model_message",
+        message: { role: "assistant", content: [{ kind: "text", text: "Earlier turn" }] },
+      }),
+      section("history-continued", "assistant", {
+        kind: "model_message",
+        message: { role: "assistant", content: [{ kind: "text", text: "Separate turn" }] },
+      }),
+      section("current-state", "user", "Current state"),
+      section("pending", "user", "Pending interactions: []"),
+    ]);
+
+    expect(input.instructions).toEqual({
+      content: [
+        { kind: "text", text: "Instruction" },
+        { kind: "text", text: "Protocol" },
+      ],
+    });
+    expect(input.messages).toEqual([{
+      role: "user",
+      content: [
+        { kind: "text", text: "Task" },
+        { kind: "text", text: "Initial state" },
+        { kind: "text", text: "Additional request" },
+      ],
+    }, {
+      role: "assistant",
+      content: [{ kind: "text", text: "Earlier turn" }],
+    }, {
+      role: "assistant",
+      content: [{ kind: "text", text: "Separate turn" }],
+    }, {
+      role: "user",
+      content: [
+        { kind: "text", text: "Current state" },
+        { kind: "text", text: "Pending interactions: []" },
+      ],
+    }]);
+  });
+
+  it("rejects instruction material after conversation input has started", () => {
+    expect(() => modelInputFromSections([
+      section("task", "user", "Task"),
+      section("late-instruction", "instruction", "Too late"),
+    ])).toThrow("must precede conversation sections");
+  });
 });
+
+function section(
+  id: string,
+  role: ModelInputSection["role"],
+  content: string | ModelInputSection["content"],
+): ModelInputSection {
+  return {
+    id,
+    source: { owner: "test", kind: "fixture", id, revision: "1" },
+    kind: "fixture",
+    role,
+    necessity: "mandatory",
+    content: typeof content === "string" ? { kind: "text", text: content } : content,
+    accounting: { unit: "tokens", amount: 1 },
+  };
+}
 
 function validComposition(): ModelInputComposition {
   return {
@@ -93,7 +167,7 @@ function validComposition(): ModelInputComposition {
         revision: "3",
       },
       kind: "agent_instruction",
-      role: "system",
+      role: "instruction",
       necessity: "mandatory",
       content: { kind: "text", text: "Follow the product protocol." },
       accounting: { unit: "tokens", amount: 40 },
@@ -111,10 +185,10 @@ function validComposition(): ModelInputComposition {
       content: { kind: "structured", value: { blocks: 2 } },
       accounting: { unit: "tokens", amount: 30 },
     }],
-    messages: [{
-      role: "system",
+    instructions: {
       content: [{ kind: "text", text: "Follow the product protocol." }],
-    }, {
+    },
+    messages: [{
       role: "user",
       content: [{ kind: "text", text: JSON.stringify({ blocks: 2 }) }],
     }],

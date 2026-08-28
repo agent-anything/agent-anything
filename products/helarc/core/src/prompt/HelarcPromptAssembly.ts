@@ -129,7 +129,7 @@ function buildSystemPromptSections(
   return Object.freeze([
     promptSection(
       "native_tool_protocol",
-      "system",
+      "instruction",
       [
         "Use only callable definitions supplied with the current model request.",
         "Use update_plan when an explicit plan helps the work; simple tasks may proceed without a plan.",
@@ -140,17 +140,17 @@ function buildSystemPromptSections(
     ),
     promptSection(
       "permission_safety",
-      "system",
+      "instruction",
       "Use only the active Tool catalog. Permission, approval, policy, and sandbox decisions are enforced by the host from the exact requested action.",
     ),
     promptSection(
       "stop_protocol",
-      "system",
+      "instruction",
       "Use the stop callable with one bounded reason; refusal may also stop without a callable.",
     ),
     promptSection(
       "safe_output_boundary",
-      "system",
+      "instruction",
       "Never include workspace root paths, credentials, approval decisions, original content hashes, or patch ids.",
     ),
   ]);
@@ -187,7 +187,7 @@ function buildAgentInstructionSections(
       revision: block.source.revision,
     }),
     kind: "agent_instruction" as const,
-    role: "system" as const,
+    role: "instruction" as const,
     necessity: "mandatory" as const,
     content: block.content,
   })));
@@ -206,7 +206,7 @@ function promptSection(
       id,
       revision: HELARC_PROMPT_ARCHITECTURE_VERSION,
     }),
-    kind: role === "system" ? "product_protocol" as const : "run_material" as const,
+    kind: role === "instruction" ? "product_protocol" as const : "run_material" as const,
     role,
     necessity: "mandatory" as const,
     content,

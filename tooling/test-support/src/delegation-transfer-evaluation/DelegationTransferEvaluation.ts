@@ -43,7 +43,7 @@ export interface DelegationTransferInvariantSummary {
 }
 
 export interface DelegationTransferEvaluationReport {
-  readonly revision: "delegation-transfer-deterministic-evaluation-v2";
+  readonly revision: "delegation-transfer-deterministic-evaluation-v3";
   readonly metrics: DelegationTransferMetrics;
   readonly invariants: DelegationTransferInvariantSummary;
   readonly descendantRunCount: number;
@@ -88,7 +88,7 @@ export async function runDelegationTransferDeterministicEvaluation(): Promise<
   const started = descendantEvents(material, "run.descendant.started");
   const settled = descendantEvents(material, "run.descendant.settled");
   const materialized = deepFreeze({
-    revision: "delegation-transfer-deterministic-evaluation-v2" as const,
+    revision: "delegation-transfer-deterministic-evaluation-v3" as const,
     metrics,
     invariants,
     descendantRunCount: started.length,
@@ -224,8 +224,11 @@ function scriptedRecursiveSteps(): readonly FakeNativeToolProviderStep[] {
 function projectMetrics(material: HelarcEvaluationRunMaterial): DelegationTransferMetrics {
   const started = descendantEvents(material, "run.descendant.started");
   const settled = descendantEvents(material, "run.descendant.settled");
-  const requestMaterials = material.providerRequests.map((request) => JSON.stringify(request));
-  const retained = requestMaterials.filter((request) => request.includes(ROOT_PURPOSE_MARKER)).length;
+  const controllerRequestMaterials = material.providerRequests
+    .filter((request) => request.purpose !== "helarc.task-fulfillment")
+    .map((request) => JSON.stringify(request));
+  const retained = controllerRequestMaterials
+    .filter((request) => request.includes(ROOT_PURPOSE_MARKER)).length;
   const drifted = material.providerResults.filter((result) =>
     result.kind === "succeeded" &&
     result.response.kind === "native_tool_turn" &&
@@ -246,7 +249,7 @@ function projectMetrics(material: HelarcEvaluationRunMaterial): DelegationTransf
     modelTurnCallCount(result.response.turn.assistant.content) > 0
   ).length;
   return deepFreeze({
-    objectiveRetentionRate: ratio(retained, requestMaterials.length),
+    objectiveRetentionRate: ratio(retained, controllerRequestMaterials.length),
     unnecessaryDelegationCount: Math.max(0, started.length - EXPECTED_DESCENDANTS),
     semanticDriftCount: drifted,
     resultAttributionRate: ratio(attributed, settled.length),

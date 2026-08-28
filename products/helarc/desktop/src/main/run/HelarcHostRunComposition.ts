@@ -326,6 +326,10 @@ export async function prepareHelarcHostRun(
   const runner = new Runner({
     controller: product.controller,
     contextProjection,
+    completion: {
+      taskFulfillment: product.taskFulfillment,
+      maximumDurationMs: 15_000,
+    },
     operations: {
       catalog: product.actions.operationCatalog,
       bindings: product.actions.operationBindings,

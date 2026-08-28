@@ -57,6 +57,10 @@ import {
   type RootRunConfig,
   type RunnerDependencies,
 } from "@agent-anything/agent-runtime/runner";
+import type {
+  TaskFulfillmentEvaluationInput,
+  TaskFulfillmentEvaluatorPort,
+} from "@agent-anything/agent-runtime/completion";
 import { createTestContextProjection } from "../TestContextProjectionConfiguration.js";
 import { createTestVerificationExecutionFactory } from "../TestVerificationExecutionFactory.js";
 
@@ -259,6 +263,10 @@ async function runBoundedPlanChurnProbe(): Promise<RunProgressRuntimeProbe> {
     controller,
     contextProjection: createTestContextProjection(),
     operations,
+    completion: {
+      taskFulfillment: fulfilledEvaluator(),
+      maximumDurationMs: 5_000,
+    },
     verification: {
       executionFactory: createTestVerificationExecutionFactory({ now: () => NOW }),
       completionGate: new CurrentVerificationCompletionGate(() => NOW),
@@ -307,6 +315,31 @@ class ScriptedController implements Controller<TestOutput> {
     if (step === undefined) throw new Error("Progress Evaluation Controller exhausted its script.");
     return typeof step === "function" ? step(input, context) : step;
   }
+}
+
+function fulfilledEvaluator(): TaskFulfillmentEvaluatorPort {
+  const ref = Object.freeze({ owner: "evaluation", id: "run-progress-task-fulfillment", revision: "1" });
+  return Object.freeze({
+    ref,
+    async evaluate(input: TaskFulfillmentEvaluationInput) {
+      return Object.freeze({
+        kind: "assessed" as const,
+        assessment: Object.freeze({
+          ref: input.assessment,
+          evaluator: ref,
+          run: input.run,
+          turn: input.turn,
+          objective: input.objective,
+          proposal: input.proposal,
+          status: "fulfilled" as const,
+          rationale: "The deterministic progress probe accepts its scripted completion.",
+          findings: Object.freeze([]),
+          feedback: null,
+          assessedAt: NOW,
+        }),
+      });
+    },
+  });
 }
 
 function emptyOperations(): RunnerOperationComposition {

@@ -195,6 +195,7 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
     baseUrlOrigin: "https://provider.local",
     model: "model-1",
     timeoutMs: 30_000,
+    ollamaRuntime: null,
     credentialStatus: "present" as const,
     qualificationPolicy: "allow_experimental" as const,
     isActive: true,

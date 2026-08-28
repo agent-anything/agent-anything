@@ -6,6 +6,7 @@ import {
   providerResultFromInterruption,
   snapshotProviderResponse,
   type ModelJsonValue,
+  type ModelInstructions,
   type ModelMessage,
   type ModelToolCall,
   type ModelTurnFinish,
@@ -26,6 +27,7 @@ import {
   classifyProviderHttpFailure,
   readProviderHttpFailureMetadata,
 } from "../http/ProviderHttpFailureMetadata.js";
+import { decodeStructuredGenerationOutput } from "../structured-generation/StructuredGenerationResponse.js";
 import { projectOllamaOutputFormat } from "./OllamaJsonSchemaDialect.js";
 
 const PROVIDER_ID = "ollama.api";
@@ -35,6 +37,10 @@ export interface OllamaProviderConfig {
   readonly baseUrl: string;
   readonly model: string;
   readonly timeoutMs: number;
+  readonly runtime: {
+    readonly contextWindowTokens: number;
+    readonly maximumOutputTokens: number;
+  };
   readonly nativeToolInteraction: {
     readonly supported: boolean;
   };
@@ -59,9 +65,9 @@ export class OllamaProvider implements Provider {
       maximumInputBytes: this.config.inputLimit.maximumBytes,
       limitSource: this.config.inputLimit.source,
       estimator: { id: "ollama.api.utf8-content", revision: "1" },
-      framing: { id: "ollama.api-request-framing", revision: "1" },
-      renderRequest: (messages, interaction) =>
-        encodeOllamaRequest(this.config.model, messages, interaction),
+      framing: { id: "ollama.api-request-framing", revision: "2" },
+      renderRequest: (instructions, messages, interaction) =>
+        encodeOllamaRequest(this.config, instructions, messages, interaction),
     });
     this.descriptor = Object.freeze({
       id: PROVIDER_ID,
@@ -113,9 +119,9 @@ export class OllamaProvider implements Provider {
     }
     const encoded = prepareEncodedRequest(
       this.inputAccounting,
-      this.config.model,
       request,
-      encodeOllamaRequest,
+      (instructions, messages, interaction) =>
+        encodeOllamaRequest(this.config, instructions, messages, interaction),
     );
     if (encoded.kind === "failed") return encoded.result;
 
@@ -174,10 +180,9 @@ export class OllamaProvider implements Provider {
 
 function prepareEncodedRequest(
   accounting: ProviderModelInputAccounting,
-  model: string,
   request: ProviderRequest,
   encode: (
-    model: string,
+    instructions: ModelInstructions,
     messages: readonly ModelMessage[],
     interaction: ProviderInteraction,
   ) => string,
@@ -187,6 +192,7 @@ function prepareEncodedRequest(
     accounting.verify({
       providerId: accounting.providerId,
       model: accounting.model,
+      instructions: request.instructions,
       messages: request.messages,
       interaction: request.interaction,
       composition: request.composition,
@@ -203,10 +209,15 @@ function prepareEncodedRequest(
     });
   }
   try {
-    const body = encode(model, request.messages, request.interaction);
+    const body = encode(
+      request.instructions,
+      request.messages,
+      request.interaction,
+    );
     accounting.verifyEncoded({
       providerId: accounting.providerId,
       model: accounting.model,
+      instructions: request.instructions,
       messages: request.messages,
       interaction: request.interaction,
       composition: request.composition,
@@ -227,14 +238,15 @@ function prepareEncodedRequest(
 }
 
 function encodeOllamaRequest(
-  model: string,
+  config: Readonly<OllamaProviderConfig>,
+  instructions: ModelInstructions,
   messages: readonly ModelMessage[],
   interaction: ProviderInteraction,
 ): string {
   if (interaction.kind === "native_tool_turn") {
     return JSON.stringify({
-      model,
-      messages: encodeOllamaChatMessages(messages),
+      model: config.model,
+      messages: encodeOllamaChatMessages(instructions, messages),
       tools: interaction.callables.map((callable) => ({
         type: "function",
         function: {
@@ -244,23 +256,43 @@ function encodeOllamaRequest(
         },
       })),
       stream: false,
+      truncate: false,
+      options: ollamaRuntimeOptions(config),
     });
   }
   return JSON.stringify({
-    model,
-    prompt: messages
-      .map((message) => `${message.role}: ${renderGenerationText(message)}`)
-      .join("\n\n"),
+    model: config.model,
+    prompt: [
+      `system: ${renderInstructions(instructions)}`,
+      ...messages.map((message) => `${message.role}: ${renderGenerationText(message)}`),
+    ].join("\n\n"),
     stream: false,
+    truncate: false,
+    options: ollamaRuntimeOptions(config),
     ...ollamaFormatField(interaction),
   });
 }
 
-function encodeOllamaChatMessages(messages: readonly ModelMessage[]): readonly unknown[] {
-  const encoded: unknown[] = [];
+function ollamaRuntimeOptions(
+  config: Readonly<OllamaProviderConfig>,
+): Readonly<{ num_ctx: number; num_predict: number }> {
+  return Object.freeze({
+    num_ctx: config.runtime.contextWindowTokens,
+    num_predict: config.runtime.maximumOutputTokens,
+  });
+}
+
+function encodeOllamaChatMessages(
+  instructions: ModelInstructions,
+  messages: readonly ModelMessage[],
+): readonly unknown[] {
+  const encoded: unknown[] = [{
+    role: "system",
+    content: renderInstructions(instructions),
+  }];
   for (const message of messages) {
-    if (message.role === "system" || message.role === "user") {
-      encoded.push({ role: message.role, content: renderInputText(message) });
+    if (message.role === "user") {
+      encoded.push({ role: "user", content: renderInputText(message) });
       continue;
     }
     if (message.role === "tool") {
@@ -502,8 +534,27 @@ function mapOllamaGenerateResponse(
       "Provider response content is too large.",
     );
   }
+  if (interaction.kind === "structured_generation") {
+    const decoded = decodeStructuredGenerationOutput(value.response);
+    if (decoded.kind === "failed") {
+      return failed(
+        "response",
+        "provider_structured_output_malformed",
+        "Provider structured output was not valid JSON.",
+        { metadata: { causeName: decoded.causeName } },
+      );
+    }
+    return succeeded({
+      kind: "structured_generation",
+      responseId: null,
+      output: decoded.output,
+      usage: readOllamaUsage(value),
+      continuation: null,
+      metadata: {},
+    });
+  }
   return succeeded({
-    kind: interaction.kind,
+    kind: "text_generation",
     responseId: null,
     output: value.response,
     usage: readOllamaUsage(value),
@@ -521,13 +572,17 @@ function renderGenerationText(message: ModelMessage): string {
       throw new TypeError("Text and structured generation accept text-only Model Messages.");
     }
     return block.text;
-  }).join("");
+  }).join("\n\n");
 }
 
 function renderInputText(
-  message: Extract<ModelMessage, { readonly role: "system" | "user" }>,
+  message: Extract<ModelMessage, { readonly role: "user" }>,
 ): string {
-  return message.content.map((block) => block.text).join("");
+  return message.content.map((block) => block.text).join("\n\n");
+}
+
+function renderInstructions(instructions: ModelInstructions): string {
+  return instructions.content.map((block) => block.text).join("\n\n");
 }
 
 function renderToolResultContent(value: ModelJsonValue): string {
@@ -589,6 +644,16 @@ function snapshotConfig(input: OllamaProviderConfig): Readonly<OllamaProviderCon
     throw new TypeError("Ollama timeout must be a positive integer.");
   }
   if (
+    !isRecord(input.runtime) ||
+    !Number.isSafeInteger(input.runtime.contextWindowTokens) ||
+    input.runtime.contextWindowTokens <= 0 ||
+    !Number.isSafeInteger(input.runtime.maximumOutputTokens) ||
+    input.runtime.maximumOutputTokens <= 0 ||
+    input.runtime.maximumOutputTokens >= input.runtime.contextWindowTokens
+  ) {
+    throw new TypeError("Ollama runtime limits are invalid.");
+  }
+  if (
     !isRecord(input.nativeToolInteraction) ||
     typeof input.nativeToolInteraction.supported !== "boolean"
   ) {
@@ -607,6 +672,10 @@ function snapshotConfig(input: OllamaProviderConfig): Readonly<OllamaProviderCon
     baseUrl,
     model,
     timeoutMs: input.timeoutMs,
+    runtime: Object.freeze({
+      contextWindowTokens: input.runtime.contextWindowTokens,
+      maximumOutputTokens: input.runtime.maximumOutputTokens,
+    }),
     nativeToolInteraction: Object.freeze({
       supported: input.nativeToolInteraction.supported,
     }),

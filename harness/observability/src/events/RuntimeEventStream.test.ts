@@ -118,6 +118,23 @@ describe("RuntimeEventStream", () => {
     });
   });
 
+  it("publishes the bounded Task Fulfillment assessment Run Item kind", () => {
+    const events: RuntimeEvent[] = [];
+    const stream = createStream([{ publish: (event) => events.push(event) }]);
+
+    stream.emit("run.item.appended", {
+      itemId: "run-1:run-item:1",
+      itemKind: "task_fulfillment_assessment",
+      itemSequence: 1,
+    });
+
+    expect(events[0]?.payload).toEqual({
+      itemId: "run-1:run-item:1",
+      itemKind: "task_fulfillment_assessment",
+      itemSequence: 1,
+    });
+  });
+
   it("publishes only bounded Controller Tool exposure lineage and counts", () => {
     const events: RuntimeEvent[] = [];
     const stream = createStream([{ publish: (event) => events.push(event) }]);

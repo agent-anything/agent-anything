@@ -7,7 +7,7 @@ import {
 import {
   composeModelInput,
   createUtf8ModelInputAccounting,
-  modelMessagesFromComposition,
+  modelInputFromComposition,
 } from "@agent-anything/model-interaction/input";
 import { describe, expect, it } from "vitest";
 import {
@@ -94,6 +94,38 @@ describe("FakeNativeToolProvider", () => {
     await expect(provider.send(createRequest("request-3"), context())).resolves.toBe(failure);
   });
 
+  it("provides a product-fulfillment result without consuming Controller steps", async () => {
+    const provider = new FakeNativeToolProvider({
+      steps: [fakeNativeModelOutput({ kind: "completion", summary: "Done." })],
+    });
+    const fulfillmentRequest = Object.freeze({
+      ...createRequest("fulfillment-request"),
+      purpose: "helarc.task-fulfillment",
+      interaction: Object.freeze({
+        kind: "structured_generation" as const,
+        outputFormat: Object.freeze({
+          kind: "json_schema" as const,
+          name: "task_fulfillment",
+          schemaId: "task-fulfillment",
+          schemaRevision: "1",
+          schema: Object.freeze({ type: "object" }),
+        }),
+      }),
+    });
+
+    await expect(provider.send(fulfillmentRequest, context())).resolves.toMatchObject({
+      kind: "succeeded",
+      response: {
+        kind: "structured_generation",
+        output: { status: "fulfilled", missingOutcomes: [], unsupportedClaims: [] },
+      },
+    });
+    await expect(provider.send(createRequest("controller-request"), context())).resolves.toMatchObject({
+      kind: "succeeded",
+      response: { kind: "native_tool_turn" },
+    });
+  });
+
   it("fails malformed scripted output without inventing a native turn", async () => {
     const provider = new FakeNativeToolProvider({
       steps: [fakeNativeModelOutput("not-a-model-output")],
@@ -124,8 +156,8 @@ function createRequest(requestId: string): ProviderRequest {
     limitSource: "host_configured",
     estimator: { id: "fake-native.utf8", revision: "1" },
     framing: { id: "fake-native.framing", revision: "1" },
-    renderRequest: (messages, requestInteraction) =>
-      JSON.stringify({ messages, interaction: requestInteraction }),
+    renderRequest: (instructions, messages, requestInteraction) =>
+      JSON.stringify({ instructions, messages, interaction: requestInteraction }),
   });
   const composition = composeModelInput({
     id: requestId,
@@ -140,9 +172,16 @@ function createRequest(requestId: string): ProviderRequest {
       id: "instructions",
       source: source("instructions"),
       kind: "agent_instruction",
-      role: "system",
+      role: "instruction",
       necessity: "mandatory",
       content: { kind: "text", text: "Use the available callable." },
+    }, {
+      id: "request",
+      source: source("request"),
+      kind: "task",
+      role: "user",
+      necessity: "mandatory",
+      content: { kind: "text", text: "Inspect package.json." },
     }],
     lineage: {
       instructionBinding: source("instruction-binding"),
@@ -170,6 +209,7 @@ function createRequest(requestId: string): ProviderRequest {
     },
     composedAt: "2026-08-27T00:00:00.000Z",
   });
+  const modelInput = modelInputFromComposition(composition);
   return Object.freeze({
     requestId,
     purpose: "test-native-tool-turn",
@@ -177,7 +217,8 @@ function createRequest(requestId: string): ProviderRequest {
       controllerRequestId: "controller-request-1",
       branchId: "branch-1",
     },
-    messages: modelMessagesFromComposition(composition),
+    instructions: modelInput.instructions,
+    messages: modelInput.messages,
     interaction,
     composition,
     continuation: null,

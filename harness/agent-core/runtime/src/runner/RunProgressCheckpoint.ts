@@ -108,6 +108,8 @@ async function collectCommittedFacts<TOutput>(
         return [];
       case "verification_feedback":
         return [{ kind: "verification_feedback", verification: payload.verification }];
+      case "task_fulfillment_assessment":
+        return [{ kind: "task_fulfillment_assessment", assessment: payload.assessment }];
       case "pending_transition":
         return payload.transition === "opened" && payload.pending.required
           ? [{ kind: "required_pending", pending: projectPendingRunSubject(payload.pending) }]

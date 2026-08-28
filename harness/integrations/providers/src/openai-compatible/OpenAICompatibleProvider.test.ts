@@ -3,7 +3,7 @@ import type {
 } from "@agent-anything/model-interaction";
 import {
   composeModelInput,
-  modelMessagesFromComposition,
+  modelInputFromComposition,
 } from "@agent-anything/model-interaction/input";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -69,10 +69,25 @@ describe("OpenAICompatibleProvider", () => {
     expect(result).toMatchObject({
       kind: "succeeded",
       response: {
-        output: "{\"action\":\"complete\",\"summary\":\"done\"}",
+        output: { action: "complete", summary: "done" },
         responseId: "response-1",
         continuation: null,
         usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+      },
+    });
+  });
+
+  it("rejects malformed structured-generation JSON", async () => {
+    const provider = new OpenAICompatibleProvider(config(), async () => okResponse({
+      id: "response-1",
+      choices: [{ message: { content: "not-json" } }],
+    }));
+
+    await expect(provider.send(request(provider), context())).resolves.toMatchObject({
+      kind: "failed",
+      failure: {
+        category: "response",
+        code: "provider_structured_output_malformed",
       },
     });
   });
@@ -111,7 +126,21 @@ describe("OpenAICompatibleProvider", () => {
           });
     });
 
-    const firstRequest = createNativeProviderRequest(provider);
+    const firstRequest = createNativeProviderRequest(provider, {
+      instructions: {
+        content: [
+          { kind: "text", text: "Use the available callable when needed." },
+          { kind: "text", text: "Follow the active protocol." },
+        ],
+      },
+      messages: [{
+        role: "user",
+        content: [
+          { kind: "text", text: "Task: Inspect package.json." },
+          { kind: "text", text: "Current state: no prior work." },
+        ],
+      }],
+    });
     const first = await provider.send(firstRequest, context());
     if (first.kind !== "succeeded" || first.response.kind !== "native_tool_turn") {
       throw new TypeError("Expected one native OpenAI-compatible turn.");
@@ -137,8 +166,14 @@ describe("OpenAICompatibleProvider", () => {
     expect(calls[0]).toMatchObject({
       model: "model-a",
       messages: [
-        { role: "system", content: "Use the available callable when needed." },
-        { role: "user", content: "Inspect package.json." },
+        {
+          role: "system",
+          content: "Use the available callable when needed.\n\nFollow the active protocol.",
+        },
+        {
+          role: "user",
+          content: "Task: Inspect package.json.\n\nCurrent state: no prior work.",
+        },
       ],
       tools: [{
         type: "function",
@@ -462,12 +497,13 @@ function request(provider: OpenAICompatibleProvider): ProviderRequest {
     contextBudget: { unit: "bytes", amount: 0 },
     contextProjectedAmount: 0,
     sections: [
-      section("instructions", "system", "Follow the test instructions."),
+      section("instructions", "instruction", "Follow the test instructions."),
       section("user", "user", "hello"),
     ],
     lineage: testLineage(),
     composedAt: "2026-08-17T00:00:00.000Z",
   });
+  const modelInput = modelInputFromComposition(composition);
   return {
     requestId: composition.id,
     purpose: "helarc.code-agent.plan",
@@ -476,14 +512,15 @@ function request(provider: OpenAICompatibleProvider): ProviderRequest {
       branchId: "branch-1",
     },
     interaction: composition.interaction,
-    messages: modelMessagesFromComposition(composition),
+    instructions: modelInput.instructions,
+    messages: modelInput.messages,
     composition,
     continuation: null,
     metadata: {},
   };
 }
 
-function section(id: string, role: "system" | "user", text: string) {
+function section(id: string, role: "instruction" | "user", text: string) {
   return {
     id,
     source: { owner: "provider-test", kind: "message", id, revision: "1" },

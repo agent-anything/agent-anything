@@ -60,6 +60,7 @@ import type {
   DelegationRequest,
   DelegationResult,
 } from "../delegation/index.js";
+import type { TaskFulfillmentEvaluatorPort } from "../completion/index.js";
 
 export type RunnerIdentityKind =
   | "run_cancellation_request"
@@ -93,7 +94,8 @@ export type RunnerIdentityKind =
   | "context_contribution"
   | "context_refresh"
   | "verification_gate"
-  | "verification_proposal";
+  | "verification_proposal"
+  | "task_fulfillment_assessment";
 
 export interface CreateRunnerIdentityInput {
   readonly kind: RunnerIdentityKind;
@@ -240,6 +242,11 @@ export interface RunnerVerificationComposition {
   readonly checkResults: RunnerVerificationCheckResultProcessorPort | null;
 }
 
+export interface RunnerCompletionComposition {
+  readonly taskFulfillment: TaskFulfillmentEvaluatorPort;
+  readonly maximumDurationMs: number;
+}
+
 export interface RunnerVerificationPreparationPort {
   prepare(
     input: {
@@ -302,6 +309,7 @@ export interface RunnerDependencies {
   readonly controller: import("../controller/index.js").Controller<unknown>;
   readonly contextProjection: RunnerContextProjection;
   readonly operations: RunnerOperationComposition;
+  readonly completion: RunnerCompletionComposition;
   readonly verification: RunnerVerificationComposition;
   readonly interactions: InteractionProtocolRegistrySnapshot;
   readonly agents?: AgentResolverPort;
@@ -325,4 +333,6 @@ export interface RunInvocationOptions {
 export type ResolvedRunnerDependencies = Required<Pick<
   RunnerDependencies,
   "controller" | "contextProjection" | "operations" | "verification" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor"
->> & Omit<RunnerDependencies, "controller" | "contextProjection" | "operations" | "verification" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor">;
+>> & Omit<RunnerDependencies, "controller" | "contextProjection" | "operations" | "completion" | "verification" | "interactions" | "now" | "createRunId" | "createId" | "retryExecutor"> & {
+  readonly completion: RunnerCompletionComposition;
+};

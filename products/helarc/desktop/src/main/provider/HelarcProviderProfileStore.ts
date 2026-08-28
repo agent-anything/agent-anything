@@ -1,6 +1,7 @@
 import {
   createHelarcProviderProfile,
   type HelarcProviderKind,
+  type HelarcOllamaRuntimeProfile,
   type HelarcProviderProfile,
   type HelarcProviderProfileError,
 } from "@agent-anything/helarc/configuration";
@@ -24,6 +25,7 @@ export interface SaveHelarcProviderProfileInput {
   baseUrl: string;
   model: string;
   timeoutMs: number;
+  ollamaRuntime: HelarcOllamaRuntimeProfile | null;
   qualificationPolicy?: HelarcModelUsePolicy;
   apiKeyUpdate: "keep" | "set" | "clear";
   apiKey: string;
@@ -36,12 +38,13 @@ export interface PersistedHelarcProviderProfile {
   readonly baseUrl: string;
   readonly model: string;
   readonly timeoutMs: number;
+  readonly ollamaRuntime: Readonly<HelarcOllamaRuntimeProfile> | null;
   readonly qualificationPolicy: HelarcModelUsePolicy;
   readonly updatedAt: string;
 }
 
-export interface HelarcProviderProfileStoreDocumentV2 {
-  readonly formatVersion: 2;
+export interface HelarcProviderProfileStoreDocumentV3 {
+  readonly formatVersion: 3;
   readonly activeProfile: PersistedHelarcProviderProfile;
 }
 
@@ -143,9 +146,9 @@ export class FileHelarcProviderProfileStore {
 
       try {
         await file.replaceText(`${JSON.stringify({
-          formatVersion: 2,
+          formatVersion: 3,
           activeProfile: completed.persisted,
-        } satisfies HelarcProviderProfileStoreDocumentV2, null, 2)}\n`);
+        } satisfies HelarcProviderProfileStoreDocumentV3, null, 2)}\n`);
       } catch {
         return {
           ok: false,
@@ -161,7 +164,7 @@ export class FileHelarcProviderProfileStore {
 
   private async readDocument(
     file: AtomicFileTransaction,
-  ): Promise<HelarcProviderProfileStoreDocumentV2 | null> {
+  ): Promise<HelarcProviderProfileStoreDocumentV3 | null> {
     const contents = await file.readText();
     if (contents === null) {
       return null;
@@ -183,7 +186,7 @@ export class FileHelarcProviderProfileStore {
     }
 
     return Object.freeze({
-      formatVersion: 2,
+      formatVersion: 3,
       activeProfile: parseStoredProfile(parsed.activeProfile),
     });
   }
@@ -257,6 +260,7 @@ function createStoredProfile(
     baseUrl: input.baseUrl,
     model: input.model,
     timeoutMs: input.timeoutMs,
+    ollamaRuntime: input.ollamaRuntime,
     credentialStatus,
     qualificationPolicy: input.qualificationPolicy ?? "require_qualified",
     isActive: true,
@@ -272,6 +276,7 @@ function createStoredProfile(
     baseUrl: profileResult.profile.baseUrl,
     model: profileResult.profile.model,
     timeoutMs: profileResult.profile.timeoutMs,
+    ollamaRuntime: profileResult.profile.ollamaRuntime,
     qualificationPolicy: profileResult.profile.qualificationPolicy,
     updatedAt,
   };
@@ -286,6 +291,7 @@ function createStoredProfile(
         apiKey,
         model: persisted.model,
         timeoutMs: persisted.timeoutMs,
+        ollamaRuntime: persisted.ollamaRuntime,
       },
       profile: profileResult.profile,
     },
@@ -303,6 +309,7 @@ function createResolvedProfile(
     baseUrl: persisted.baseUrl,
     model: persisted.model,
     timeoutMs: persisted.timeoutMs,
+    ollamaRuntime: persisted.ollamaRuntime,
     qualificationPolicy: persisted.qualificationPolicy,
     apiKeyUpdate: "keep",
     apiKey: "",
@@ -318,6 +325,7 @@ function parseStoredProfile(value: unknown): PersistedHelarcProviderProfile {
     "baseUrl",
     "model",
     "timeoutMs",
+    "ollamaRuntime",
     "qualificationPolicy",
     "updatedAt",
   ])) {
@@ -331,6 +339,7 @@ function parseStoredProfile(value: unknown): PersistedHelarcProviderProfile {
     typeof value.model !== "string" ||
     !Number.isSafeInteger(value.timeoutMs) ||
     (value.timeoutMs as number) <= 0 ||
+    !isPersistedOllamaRuntime(value.ollamaRuntime) ||
     !isQualificationPolicy(value.qualificationPolicy) ||
     typeof value.updatedAt !== "string" ||
     !isCanonicalIsoTimestamp(value.updatedAt)
@@ -345,6 +354,12 @@ function parseStoredProfile(value: unknown): PersistedHelarcProviderProfile {
     baseUrl: value.baseUrl,
     model: value.model,
     timeoutMs: value.timeoutMs as number,
+    ollamaRuntime: value.ollamaRuntime === null
+      ? null
+      : Object.freeze({
+          contextWindowTokens: value.ollamaRuntime.contextWindowTokens,
+          maximumOutputTokens: value.ollamaRuntime.maximumOutputTokens,
+        }),
     qualificationPolicy: value.qualificationPolicy,
     updatedAt: value.updatedAt,
   };
@@ -357,6 +372,7 @@ function parseStoredProfile(value: unknown): PersistedHelarcProviderProfile {
     resolved.profile.baseUrl !== candidate.baseUrl ||
     resolved.profile.model !== candidate.model ||
     resolved.profile.timeoutMs !== candidate.timeoutMs ||
+    !sameOllamaRuntime(resolved.profile.ollamaRuntime, candidate.ollamaRuntime) ||
     resolved.profile.qualificationPolicy !== candidate.qualificationPolicy
   ) {
     throw invalidStoredProfile();
@@ -371,12 +387,36 @@ function invalidStoredProfile(): HelarcProviderProfileStoreCorruptionError {
 }
 
 function isStoreDocument(value: unknown): value is {
-  readonly formatVersion: 2;
+  readonly formatVersion: 3;
   readonly activeProfile: unknown;
 } {
   return isRecord(value) &&
     hasExactKeys(value, ["formatVersion", "activeProfile"]) &&
-    value.formatVersion === 2;
+    value.formatVersion === 3;
+}
+
+function isPersistedOllamaRuntime(
+  value: unknown,
+): value is Readonly<HelarcOllamaRuntimeProfile> | null {
+  return value === null || (
+    isRecord(value) &&
+    hasExactKeys(value, ["contextWindowTokens", "maximumOutputTokens"]) &&
+    Number.isSafeInteger(value.contextWindowTokens) &&
+    (value.contextWindowTokens as number) > 0 &&
+    Number.isSafeInteger(value.maximumOutputTokens) &&
+    (value.maximumOutputTokens as number) > 0 &&
+    (value.maximumOutputTokens as number) < (value.contextWindowTokens as number)
+  );
+}
+
+function sameOllamaRuntime(
+  left: Readonly<HelarcOllamaRuntimeProfile> | null,
+  right: Readonly<HelarcOllamaRuntimeProfile> | null,
+): boolean {
+  return left === null || right === null
+    ? left === right
+    : left.contextWindowTokens === right.contextWindowTokens &&
+      left.maximumOutputTokens === right.maximumOutputTokens;
 }
 
 function isQualificationPolicy(
