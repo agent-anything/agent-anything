@@ -337,6 +337,31 @@ const SHELL_INPUT = objectSchema(["command"], {
   },
 });
 
+const SHELL_STREAM_OUTPUT = objectSchema(
+  [
+    "text",
+    "encoding",
+    "encoding_source",
+    "integrity",
+    "replacement_count",
+    "truncated",
+    "overflow_file",
+  ],
+  {
+    text: { type: "string" },
+    encoding: { anyOf: [{ type: "string" }, { type: "null" }] },
+    encoding_source: {
+      enum: ["utf8", "bom", "detected", "fallback", "none"],
+    },
+    integrity: {
+      enum: ["exact", "inferred", "lossy", "unavailable"],
+    },
+    replacement_count: { type: "integer", minimum: 0 },
+    truncated: { type: "boolean" },
+    overflow_file: { anyOf: [PATH, { type: "null" }] },
+  },
+);
+
 const SHELL_OUTPUT = Object.freeze({
   oneOf: [
     objectSchema(
@@ -347,22 +372,14 @@ const SHELL_OUTPUT = Object.freeze({
         "duration_ms",
         "stdout",
         "stderr",
-        "stdout_truncated",
-        "stderr_truncated",
-        "stdout_overflow_file",
-        "stderr_overflow_file",
       ],
       {
         mode: { const: "foreground" },
         exit_code: { anyOf: [{ type: "integer" }, { type: "null" }] },
         signal: { anyOf: [{ type: "string" }, { type: "null" }] },
         duration_ms: { type: "integer", minimum: 0 },
-        stdout: { type: "string" },
-        stderr: { type: "string" },
-        stdout_truncated: { type: "boolean" },
-        stderr_truncated: { type: "boolean" },
-        stdout_overflow_file: { anyOf: [PATH, { type: "null" }] },
-        stderr_overflow_file: { anyOf: [PATH, { type: "null" }] },
+        stdout: SHELL_STREAM_OUTPUT,
+        stderr: SHELL_STREAM_OUTPUT,
       },
     ),
     objectSchema(["mode", "task_id", "status", "output_file"], {

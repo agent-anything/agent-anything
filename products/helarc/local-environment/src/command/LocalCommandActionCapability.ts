@@ -1,4 +1,7 @@
-import { basename } from "node:path";
+import { open, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { TextDecoder } from "node:util";
 import { createHash } from "node:crypto";
 import {
   createPreparedAction,
@@ -54,6 +57,11 @@ import {
   type ShellExecutionSessionSnapshot,
 } from "./ShellExecutionSession.js";
 import { interpretShellCommandOutcome } from "./ShellCommandOutcome.js";
+import type {
+  ProcessTextEncodingSource,
+  ProcessTextIntegrity,
+  ProcessTextProjection,
+} from "./ProcessOutputText.js";
 import {
   inspectPreparedFileSystemTarget,
   prepareFileSystemTarget,
@@ -65,11 +73,13 @@ import {
 export const HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID = "helarc.local.shell.adapter";
 export const HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID = "helarc.local.task-stop.adapter";
 
-const SHELL_ADAPTER = Object.freeze({ id: HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID, version: "2", requestSchemaRevision: "1" });
+const SHELL_ADAPTER = Object.freeze({ id: HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID, version: "3", requestSchemaRevision: "1" });
 const STOP_ADAPTER = Object.freeze({ id: HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID, version: "1", requestSchemaRevision: "1" });
-const SHELL_EXECUTOR = Object.freeze({ id: "helarc.local.shell.executor", version: "1", invocationContractVersion: "1", physicalPayloadSchemaRevision: "1" });
+const SHELL_EXECUTOR = Object.freeze({ id: "helarc.local.shell.executor", version: "2", invocationContractVersion: "2", physicalPayloadSchemaRevision: "2" });
 const STOP_EXECUTOR = Object.freeze({ id: "helarc.local.task-stop.executor", version: "1", invocationContractVersion: "1", physicalPayloadSchemaRevision: "1" });
 const DEFAULT_TERMINATION: ProcessTerminationLimits = Object.freeze({ gracePeriodMs: 500, forceKillTimeoutMs: 2_000 });
+const MAX_CWD_CONTROL_BYTES = 32_768;
+const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
 
 export interface CreateHelarcLocalCommandActionCapabilityInput {
   readonly workspace: WorkspaceSelection;
@@ -102,11 +112,12 @@ export interface HelarcLocalCommandActionCapability {
 
 interface ShellPayload {
   readonly runId: string;
+  readonly executableCommand: string;
   readonly executablePath: string;
   readonly executableBaseline: FileBaseline;
   readonly args: readonly string[];
   readonly command: string;
-  readonly cwdMarker: string;
+  readonly cwdControlPath: string | null;
   readonly sessionRevision: number;
   readonly rootName: string;
   readonly workspaceId: string;
@@ -145,11 +156,15 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
   const limits = resolveCommandLimits(input.limits);
   const termination = resolveTermination(input.termination);
   const environment = await createCommandEnvironmentPolicy({ id: input.environmentPolicyId ?? "helarc.local.shell.environment.default", overrides: input.environment });
-  const shell = selectNativeShell(input.platform);
   const processTasks = new RunProcessTaskRegistry(limits.maxActiveTasks, limits.maxSettledTasks);
   const shellSession = await ShellExecutionSession.create(input.workspace, input.platform);
+  const shell = await selectNativeShell({
+    platform: input.platform,
+    cwd: shellSession.snapshot().canonicalPath,
+    environment: environment.environment,
+  });
   const registrations = createActionRegistrationSnapshot([
-    registration("helarc.local.shell.registration.v2", input.shellOperation, input.shellBinding, SHELL_ADAPTER, SHELL_EXECUTOR, ["process", "filesystem"]),
+    registration("helarc.local.shell.registration.v3", input.shellOperation, input.shellBinding, SHELL_ADAPTER, SHELL_EXECUTOR, ["process", "filesystem"]),
     registration("helarc.local.task-stop.registration.v1", input.taskStopOperation, input.taskStopBinding, STOP_ADAPTER, STOP_EXECUTOR, ["process"]),
   ]);
   const now = input.now ?? (() => new Date().toISOString());
@@ -193,7 +208,7 @@ function registration(
 function createShellAdapter(
   workspace: WorkspaceSelection,
   session: ShellExecutionSession,
-  shell: ReturnType<typeof selectNativeShell>,
+  shell: Awaited<ReturnType<typeof selectNativeShell>>,
   limits: CodeAgentCommandLimits,
   termination: ProcessTerminationLimits,
   environment: CommandEnvironmentPolicySnapshot,
@@ -219,14 +234,21 @@ function createShellAdapter(
         const outputPath = `.helarc-process-${digestToken(context.action.id)}.log`;
         const output = await prepareFileSystemTarget({ workspace, workspaceRoots: context.workspace.roots, platform: context.environment.platform, path: outputPath, operation: "write" });
         const executable = await resolveCommandExecutable({ command: shell.command, cwd: cwd.canonicalTarget, platform: context.environment.platform, environment: environment.environment });
-        const cwdMarker = `__HELARC_FINAL_CWD_${digestToken(context.action.id)}__=`;
+        const cwdControlPath = parsed.runInBackground
+          ? null
+          : join(tmpdir(), `helarc-cwd-${digestToken(context.action.id)}.txt`);
         const args = Object.freeze([
           ...shell.argumentsBeforeCommand,
-          commandWithFinalWorkingDirectory(shell.toolName, parsed.command, cwdMarker),
+          commandWithFinalWorkingDirectory(
+            shell.toolName,
+            parsed.command,
+            cwdControlPath,
+          ),
         ]);
         const payload: ShellPayload = Object.freeze({
-          runId, executablePath: executable.canonicalPath, executableBaseline: executable.identity.baseline,
-          args, command: parsed.command, cwdMarker, sessionRevision: sessionSnapshot.revision,
+          runId, executableCommand: shell.command, executablePath: executable.canonicalPath,
+          executableBaseline: executable.identity.baseline,
+          args, command: parsed.command, cwdControlPath, sessionRevision: sessionSnapshot.revision,
           rootName: cwd.rootName, workspaceId: cwd.workspaceId,
           workspaceRoot: cwd.workspaceRoot, canonicalRoot: cwd.canonicalRoot, cwdPath: cwd.pathIdentity.path,
           cwd: cwd.canonicalTarget, cwdDisplay: `${cwd.rootName}:${cwd.relativePath}`, cwdBaseline: cwd.baseline,
@@ -259,7 +281,7 @@ function createShellAdapter(
         if (executableAssertion === undefined || cwdAssertions === null || outputAssertions === null) return invalidated("shell_assertion_missing");
         const cwd = await inspectTarget(payload, cwdAssertions, "directory", payload.cwd, payload.cwdBaseline);
         const output = await inspectTarget(payload, outputAssertions, "write", payload.outputAbsolutePath, payload.outputBaseline);
-        const executable = await revalidateCommandExecutable({ originalCommand: basename(payload.executablePath), expectedPath: payload.executablePath, cwd: payload.cwd, platform: context.environment.platform });
+        const executable = await revalidateCommandExecutable({ originalCommand: payload.executableCommand, expectedPath: payload.executablePath, cwd: payload.cwd, platform: context.environment.platform });
         const actualExecutable = createCanonicalExecutableIdentity(executable.identity);
         if (!sameCanonicalPathIdentity(cwd.pathIdentity, cwdAssertions.path.expected) ||
             !sameCanonicalPathIdentity(output.pathIdentity, outputAssertions.path.expected) ||
@@ -305,7 +327,7 @@ async function shellPreparedData(
     ],
     approval: approval(runtimeEnvironment.environmentId, applicability, description ?? "Execute one native shell command.", [payload.executablePath, ...payload.args], commandDisplay, payload.cwd, payload.cwdDisplay, "Spawn one native shell process", createdAt),
     safeSummary: { kind: "process", headline: payload.runInBackground ? "Start background shell task" : "Run shell command", commandDisplay, cwdDisplay: payload.cwdDisplay },
-    preparedInvocation: { contractVersion: "1", executorId: SHELL_EXECUTOR.id, executorVersion: SHELL_EXECUTOR.version, payload: payload as unknown as SerializableValue },
+    preparedInvocation: { contractVersion: "2", executorId: SHELL_EXECUTOR.id, executorVersion: SHELL_EXECUTOR.version, payload: payload as unknown as SerializableValue },
     replayBasis: "none", semanticBasis: {
       shell,
       command: payload.command,
@@ -331,11 +353,13 @@ function createShellExecutor(
       const startedAt = now();
       const startedMs = nowMs();
       let dispatched = false;
+      let cwdControlPath: string | null = null;
       try {
         const payload = readShellPayload(invocation);
+        cwdControlPath = payload.cwdControlPath;
         if (context.interruption.signal.aborted) return interrupted("none", "shell_interrupted_before_dispatch");
         if (payload.environmentPolicyId !== environment.id || payload.environmentDigest !== environment.digest) return failed("none", "shell_environment_changed", "Shell environment changed before dispatch.");
-        const executable = await revalidateCommandExecutable({ originalCommand: basename(payload.executablePath), expectedPath: payload.executablePath, cwd: payload.cwd, platform: payload.runtimeEnvironmentPlatform });
+        const executable = await revalidateCommandExecutable({ originalCommand: payload.executableCommand, expectedPath: payload.executablePath, cwd: payload.cwd, platform: payload.runtimeEnvironmentPlatform });
         if (!sameFileBaseline(executable.identity.baseline, payload.executableBaseline)) return failed("none", "shell_executable_changed", "Shell executable changed before dispatch.");
         dispatched = true;
         if (payload.runInBackground) {
@@ -348,6 +372,7 @@ function createShellExecutor(
           });
           return completed({ mode: "background", task_id: task.taskId, status: "running", output_file: task.outputFile }, startedAt, now());
         }
+        await removeCwdControlFile(cwdControlPath);
         const outcome = await executeProcess({
           command: payload.executablePath, args: payload.args, cwd: payload.cwd,
           environment: environment.environment, replaceEnvironment: true, timeoutMs: payload.timeoutMs,
@@ -355,21 +380,19 @@ function createShellExecutor(
           outputFile: { absolutePath: payload.outputAbsolutePath, relativePath: payload.outputPath, maximumBytes: payload.maxOutputFileBytes },
           interruption: context.interruption, termination: payload.termination, startedMs, nowMs,
         });
-        if (outcome.kind !== "completed") return processOutcome(outcome, startedAt, now(), null);
-        const captured = extractFinalWorkingDirectory(outcome.stdout, payload.cwdMarker);
-        const committed = captured.path === null
+        const finalWorkingDirectory = await consumeFinalWorkingDirectory(
+          cwdControlPath,
+        );
+        cwdControlPath = null;
+        const committed = finalWorkingDirectory === null
           ? null
           : await session.commitFinalWorkingDirectory({
               expectedRevision: payload.sessionRevision,
-              path: captured.path,
+              path: finalWorkingDirectory,
             });
-        return processOutcome(
-          Object.freeze({ ...outcome, stdout: captured.stdout }),
-          startedAt,
-          now(),
-          committed,
-        );
+        return processOutcome(outcome, startedAt, now(), committed);
       } catch (error) {
+        await removeCwdControlFile(cwdControlPath);
         return failed(dispatched ? "unknown" : "none", error instanceof ProcessTaskRegistryError ? error.code : dispatched ? "shell_settlement_unknown" : "shell_execution_failed", safeMessage(error, "Shell execution failed."));
       }
     },
@@ -454,12 +477,34 @@ function foregroundOutput(
 ) {
   return Object.freeze({
     mode: "foreground" as const, exit_code: output.exitCode, signal: output.signal, duration_ms: output.durationMs,
-    stdout: output.stdout, stderr: output.stderr, stdout_truncated: output.stdoutTruncated,
-    stderr_truncated: output.stderrTruncated,
-    stdout_overflow_file: output.stdoutTruncated ? output.outputFile : null,
-    stderr_overflow_file: output.stderrTruncated ? output.outputFile : null,
+    stdout: shellStreamOutput(
+      output.stdout,
+      output.stdoutTruncated,
+      output.stdoutTruncated ? output.outputFile : null,
+    ),
+    stderr: shellStreamOutput(
+      output.stderr,
+      output.stderrTruncated,
+      output.stderrTruncated ? output.outputFile : null,
+    ),
     final_working_directory: session?.canonicalPath ?? null,
     shell_session_revision: session?.revision ?? null,
+  });
+}
+
+function shellStreamOutput(
+  projection: ProcessTextProjection,
+  truncated: boolean,
+  overflowFile: string | null,
+): ForegroundShellStream {
+  return Object.freeze({
+    text: projection.text,
+    encoding: projection.encoding,
+    encoding_source: projection.encodingSource,
+    integrity: projection.integrity,
+    replacement_count: projection.replacementCount,
+    truncated,
+    overflow_file: overflowFile,
   });
 }
 
@@ -487,10 +532,8 @@ function settleShell(prepared: PreparedAction<ShellBasis>, settlement: Canonical
     command: prepared.semanticBasis.command,
     exitCode: physical.output.exit_code,
     signal: physical.output.signal,
-    stdout: physical.output.stdout,
-    stderr: physical.output.stderr,
-    stdoutTruncated: physical.output.stdout_truncated,
-    stderrTruncated: physical.output.stderr_truncated,
+    stdout: processTextProjection(physical.output.stdout),
+    stderr: processTextProjection(physical.output.stderr),
   });
   if (outcome.status === "failed") {
     return semanticFailure(settlement, outcome.code, outcome.message);
@@ -539,22 +582,53 @@ function semanticFailure(
   });
 }
 
+interface ForegroundShellStream {
+  readonly text: string;
+  readonly encoding: string | null;
+  readonly encoding_source: ProcessTextEncodingSource;
+  readonly integrity: ProcessTextIntegrity;
+  readonly replacement_count: number;
+  readonly truncated: boolean;
+  readonly overflow_file: string | null;
+}
+
 function isForegroundShellOutput(value: Record<string, any>): value is Record<string, any> & {
   readonly mode: "foreground";
   readonly exit_code: number | null;
   readonly signal: string | null;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly stdout_truncated: boolean;
-  readonly stderr_truncated: boolean;
+  readonly stdout: ForegroundShellStream;
+  readonly stderr: ForegroundShellStream;
 } {
   return value.mode === "foreground" &&
     (value.exit_code === null || Number.isSafeInteger(value.exit_code)) &&
     (value.signal === null || typeof value.signal === "string") &&
-    typeof value.stdout === "string" &&
-    typeof value.stderr === "string" &&
-    typeof value.stdout_truncated === "boolean" &&
-    typeof value.stderr_truncated === "boolean";
+    isForegroundShellStream(value.stdout) &&
+    isForegroundShellStream(value.stderr);
+}
+
+function isForegroundShellStream(value: unknown): value is ForegroundShellStream {
+  if (!isRecord(value)) return false;
+  return typeof value.text === "string" &&
+    (value.encoding === null || typeof value.encoding === "string") &&
+    isEncodingSource(value.encoding_source) &&
+    isTextIntegrity(value.integrity) &&
+    Number.isSafeInteger(value.replacement_count) &&
+    value.replacement_count >= 0 &&
+    typeof value.truncated === "boolean" &&
+    (value.overflow_file === null || typeof value.overflow_file === "string");
+}
+
+function processTextProjection(
+  value: ForegroundShellStream,
+): ProcessTextProjection & { readonly truncated: boolean } {
+  return Object.freeze({
+    text: value.text,
+    encoding: value.encoding,
+    encodingSource: value.encoding_source,
+    integrity: value.integrity,
+    replacementCount: value.replacement_count,
+    truncated: value.truncated,
+  });
 }
 
 function pathAssertions(assertions: readonly TargetStateAssertion[], path: string) {
@@ -582,9 +656,10 @@ function readShellPayload(invocation: PreparedActionInvocation): ShellPayload {
   const value = invocation.payload as Record<string, any>;
   if (!Array.isArray(value.args) || !value.args.every((entry) => typeof entry === "string") || !isBaseline(value.executableBaseline) || !isBaseline(value.cwdBaseline) || !isBaseline(value.outputBaseline) || !isRecord(value.termination)) throw new TypeError("Prepared shell payload is invalid.");
   return Object.freeze({
-    runId: text(value.runId), executablePath: text(value.executablePath), executableBaseline: value.executableBaseline,
+    runId: text(value.runId), executableCommand: text(value.executableCommand),
+    executablePath: text(value.executablePath), executableBaseline: value.executableBaseline,
     args: Object.freeze([...(value.args as string[])]), command: text(value.command),
-    cwdMarker: text(value.cwdMarker), sessionRevision: nonNegativeInteger(value.sessionRevision),
+    cwdControlPath: nullableText(value.cwdControlPath), sessionRevision: nonNegativeInteger(value.sessionRevision),
     rootName: text(value.rootName),
     workspaceId: text(value.workspaceId), workspaceRoot: text(value.workspaceRoot), canonicalRoot: text(value.canonicalRoot),
     cwdPath: text(value.cwdPath), cwd: text(value.cwd), cwdDisplay: text(value.cwdDisplay), cwdBaseline: value.cwdBaseline,
@@ -639,6 +714,7 @@ function text(value: unknown): string { if (typeof value !== "string" || value.l
 function integer(value: unknown): number { if (!Number.isSafeInteger(value) || (value as number) < 1) throw new TypeError("Prepared integer is invalid."); return value as number; }
 function nonNegativeInteger(value: unknown): number { if (!Number.isSafeInteger(value) || (value as number) < 0) throw new TypeError("Prepared non-negative integer is invalid."); return value as number; }
 function boolean(value: unknown): boolean { if (typeof value !== "boolean") throw new TypeError("Prepared boolean is invalid."); return value; }
+function nullableText(value: unknown): string | null { if (value === null) return null; return text(value); }
 function platform(value: unknown): "win32" | "posix" { if (value !== "win32" && value !== "posix") throw new TypeError("Prepared platform is invalid."); return value; }
 function samePath(left: string, right: string): boolean {
   return process.platform === "win32"
@@ -647,33 +723,71 @@ function samePath(left: string, right: string): boolean {
 }
 function safeMessage(error: unknown, fallback: string): string { return error instanceof Error ? error.message : fallback; }
 function digestToken(value: string): string { return createHash("sha256").update(value).digest("hex").slice(0, 24); }
-function commandWithFinalWorkingDirectory(
+export function commandWithFinalWorkingDirectory(
   shell: "Bash" | "PowerShell",
   command: string,
-  marker: string,
+  controlPath: string | null,
 ): string {
   if (shell === "PowerShell") {
-    return `& { ${command} }; $__helarc_exit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }; [Console]::Out.WriteLine("\`n${marker}" + (Get-Location).ProviderPath); exit $__helarc_exit`;
+    const utf8 = "$__helarc_utf8 = [System.Text.UTF8Encoding]::new($false); [Console]::InputEncoding = $__helarc_utf8; [Console]::OutputEncoding = $__helarc_utf8; $OutputEncoding = $__helarc_utf8";
+    const capture = controlPath === null
+      ? ""
+      : `; (Get-Location).ProviderPath | Out-File -LiteralPath '${powerShellLiteral(controlPath)}' -Encoding utf8 -NoNewline`;
+    return `${utf8}; & { ${command} }; $__helarc_exit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }${capture}; exit $__helarc_exit`;
   }
-  return `{ ${command}; }; __helarc_exit=$?; printf '\\n%s%s\\n' '${marker}' "$PWD"; exit "$__helarc_exit"`;
+  const capture = controlPath === null
+    ? ""
+    : `; printf '%s' "$PWD" > '${bashLiteral(controlPath)}'`;
+  return `{ ${command}; }; __helarc_exit=$?${capture}; exit "$__helarc_exit"`;
 }
-function extractFinalWorkingDirectory(
-  stdout: string,
-  marker: string,
-): { readonly stdout: string; readonly path: string | null } {
-  const markerIndex = stdout.lastIndexOf(marker);
-  if (markerIndex < 0) return Object.freeze({ stdout, path: null });
-  const lineEnd = stdout.indexOf("\n", markerIndex);
-  const path = stdout.slice(
-    markerIndex + marker.length,
-    lineEnd < 0 ? stdout.length : lineEnd,
-  ).replace(/\r$/u, "").trim();
-  const lineStart = stdout.lastIndexOf("\n", markerIndex - 1) + 1;
-  const suffixStart = lineEnd < 0 ? stdout.length : lineEnd + 1;
-  return Object.freeze({
-    stdout: `${stdout.slice(0, lineStart)}${stdout.slice(suffixStart)}`,
-    path: path.length === 0 ? null : path,
-  });
+
+export async function consumeFinalWorkingDirectory(
+  controlPath: string | null,
+): Promise<string | null> {
+  if (controlPath === null) return null;
+  try {
+    const handle = await open(controlPath, "r");
+    try {
+      const stats = await handle.stat();
+      if (!stats.isFile() || stats.size < 1 || stats.size > MAX_CWD_CONTROL_BYTES) {
+        return null;
+      }
+      const bytes = Buffer.alloc(stats.size);
+      const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+      if (bytesRead !== bytes.length) return null;
+      const value = STRICT_UTF8.decode(bytes).trim();
+      return value.length === 0 ? null : value;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return null;
+  } finally {
+    await removeCwdControlFile(controlPath);
+  }
+}
+
+async function removeCwdControlFile(controlPath: string | null): Promise<void> {
+  if (controlPath === null) return;
+  await rm(controlPath, { force: true }).catch(() => undefined);
+}
+
+function powerShellLiteral(value: string): string {
+  return value.replaceAll("'", "''");
+}
+
+function bashLiteral(value: string): string {
+  return value.replaceAll("'", "'\\''");
+}
+
+function isEncodingSource(value: unknown): value is ProcessTextEncodingSource {
+  return value === "utf8" || value === "bom" || value === "detected" ||
+    value === "fallback" || value === "none";
+}
+
+function isTextIntegrity(value: unknown): value is ProcessTextIntegrity {
+  return value === "exact" || value === "inferred" || value === "lossy" ||
+    value === "unavailable";
 }
 function rootIdentityInput(root: CanonicalWorkspaceRootIdentity) {
   if (root.resolvedPath === null) throw new TypeError("Canonical Workspace root requires a resolved path.");

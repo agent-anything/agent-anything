@@ -63,5 +63,9 @@ describe("Helarc baseline Tool Contracts", () => {
     expect(findHelarcBaselineToolContract("Read").outputSchema).toHaveProperty(
       "properties.file_path",
     );
+    expect(findHelarcBaselineToolContract("PowerShell").outputSchema).toHaveProperty(
+      "oneOf.0.properties.stdout.properties.integrity.enum",
+      ["exact", "inferred", "lossy", "unavailable"],
+    );
   });
 });

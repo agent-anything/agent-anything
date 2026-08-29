@@ -32,8 +32,4 @@ export class BoundedOutput {
   toBuffer(): Buffer {
     return Buffer.concat(this.chunks, this.retainedBytes);
   }
-
-  toString(): string {
-    return this.toBuffer().toString("utf8");
-  }
 }

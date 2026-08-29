@@ -181,12 +181,8 @@ function shellSettlement(
         exit_code: exitCode,
         signal: null,
         duration_ms: 10,
-        stdout: "",
-        stderr,
-        stdout_truncated: false,
-        stderr_truncated: false,
-        stdout_overflow_file: null,
-        stderr_overflow_file: null,
+        stdout: stream(""),
+        stderr: stream(stderr),
         final_working_directory: null,
         shell_session_revision: null,
       },
@@ -197,5 +193,17 @@ function shellSettlement(
     causeRef: null,
     reconciliationRequired: false,
     settledAt: NOW,
+  };
+}
+
+function stream(text: string) {
+  return {
+    text,
+    encoding: "utf-8",
+    encoding_source: "utf8",
+    integrity: "exact",
+    replacement_count: 0,
+    truncated: false,
+    overflow_file: null,
   };
 }

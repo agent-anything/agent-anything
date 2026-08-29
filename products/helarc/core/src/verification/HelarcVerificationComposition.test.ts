@@ -112,6 +112,33 @@ describe("Helarc Verification composition", () => {
       .toMatchObject({ status: expected });
   });
 
+  it("preserves inferred command text as a limitation without rewriting exact exit facts", async () => {
+    const composition = await createComposition(mutableCodeSource(absentSnapshot()).port);
+    const execution = await prepare(composition);
+    const processor = composition.runner.settledOperationResults;
+    if (processor === null) throw new Error("Expected settled command Verification processing.");
+    const runAction = Object.freeze({ run: RUN, id: "run-action-inferred", sequence: 1 });
+
+    await processor.process({
+      run: RUN,
+      execution,
+      runAction,
+      operation: HELARC_SHELL_OPERATION,
+      request: shellCommandRequest(),
+      requestOrigin: "tool_request",
+      settlement: commandSettlement(0, runAction.id, "inferred", "inferred"),
+    }, liveInterruption());
+
+    expect((await execution.readCurrentSnapshot()).requirementStates[0])
+      .toMatchObject({ status: "satisfied" });
+    const result = (await execution.readHistory()).find(({ kind }) => kind === "check_result");
+    expect(result).toMatchObject({
+      record: {
+        limitations: ["command_stdout_inferred"],
+      },
+    });
+  });
+
   it("replaces failed command feedback with a later current successful Assessment", async () => {
     const composition = await createComposition(mutableCodeSource(absentSnapshot()).port);
     const execution = await prepare(composition);
@@ -206,6 +233,7 @@ function commandSettlement(
   exitCode: number,
   runActionId: string,
   suffix: string,
+  stdoutIntegrity: "exact" | "inferred" = "exact",
 ): VerificationLowerCheckSettlement {
   const invocation = Object.freeze({
     id: `command-operation-invocation-${suffix}`,
@@ -223,12 +251,8 @@ function commandSettlement(
         exit_code: exitCode,
         signal: null,
         duration_ms: 10,
-        stdout: "",
-        stderr: "",
-        stdout_truncated: false,
-        stderr_truncated: false,
-        stdout_overflow_file: null,
-        stderr_overflow_file: null,
+        stdout: commandStream(stdoutIntegrity),
+        stderr: commandStream(),
       },
       failure: null,
       startedAt: NOW,
@@ -243,6 +267,18 @@ function commandSettlement(
     effectCertainty: "confirmed",
     costUnits: 1,
   });
+}
+
+function commandStream(integrity: "exact" | "inferred" = "exact") {
+  return {
+    text: "",
+    encoding: integrity === "exact" ? "utf-8" : "windows-1251",
+    encoding_source: integrity === "exact" ? "utf8" : "detected",
+    integrity,
+    replacement_count: 0,
+    truncated: false,
+    overflow_file: null,
+  };
 }
 
 function fileSettlement(

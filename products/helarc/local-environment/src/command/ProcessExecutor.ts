@@ -7,6 +7,10 @@ import { writeFile } from "node:fs/promises";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
 import { BoundedOutput } from "./BoundedOutput.js";
 import type { ProcessTerminationLimits } from "./ProcessContracts.js";
+import {
+  projectProcessOutputText,
+  type ProcessTextProjection,
+} from "./ProcessOutputText.js";
 
 export interface ProcessExecutionInput {
   readonly command: string;
@@ -29,8 +33,8 @@ export interface ProcessExecutionInput {
 }
 
 export interface CapturedProcessOutput {
-  readonly stdout: string;
-  readonly stderr: string;
+  readonly stdout: ProcessTextProjection;
+  readonly stderr: ProcessTextProjection;
   readonly durationMs: number;
   readonly stdoutTruncated: boolean;
   readonly stderrTruncated: boolean;
@@ -132,8 +136,8 @@ export async function executeProcess(
     const captured = (): CapturedProcessOutput => {
       const needsOverflowFile = stdout.truncated || stderr.truncated;
       return {
-        stdout: stdout.toString(),
-        stderr: stderr.toString(),
+        stdout: projectProcessOutputText(stdout.toBuffer()),
+        stderr: projectProcessOutputText(stderr.toBuffer()),
         durationMs: Math.max(0, input.nowMs() - input.startedMs),
         stdoutTruncated: stdout.truncated,
         stderrTruncated: stderr.truncated,

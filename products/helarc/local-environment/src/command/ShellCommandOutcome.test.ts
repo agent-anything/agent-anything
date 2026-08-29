@@ -75,6 +75,27 @@ describe("interpretShellCommandOutcome", () => {
       expect(outcome.message).toContain("capture truncated");
     }
   });
+
+  it("labels inferred diagnostics without changing exit semantics", () => {
+    const outcome = interpretShellCommandOutcome({
+      shell: "PowerShell",
+      command: "dotnet run",
+      exitCode: 1,
+      signal: null,
+      stdout: stream("", false),
+      stderr: {
+        ...stream("localized diagnostic", false),
+        encoding: "windows-1251",
+        encodingSource: "detected",
+        integrity: "inferred",
+      },
+    });
+
+    expect(outcome.status).toBe("failed");
+    if (outcome.status === "failed") {
+      expect(outcome.message).toContain("text encoding inferred as windows-1251");
+    }
+  });
 });
 
 function interpret(
@@ -89,9 +110,18 @@ function interpret(
     command,
     exitCode,
     signal: null,
-    stdout: "",
-    stderr,
-    stdoutTruncated: false,
-    stderrTruncated,
+    stdout: stream("", false),
+    stderr: stream(stderr, stderrTruncated),
   });
+}
+
+function stream(text: string, truncated: boolean) {
+  return {
+    text,
+    encoding: "utf-8",
+    encodingSource: "utf8" as const,
+    integrity: "exact" as const,
+    replacementCount: 0,
+    truncated,
+  };
 }

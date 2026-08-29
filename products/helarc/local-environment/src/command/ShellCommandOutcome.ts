@@ -1,5 +1,10 @@
+import type {
+  ProcessTextIntegrity,
+  ProcessTextProjection,
+} from "./ProcessOutputText.js";
+
 export const HELARC_SHELL_COMMAND_OUTCOME_REVISION =
-  "helarc.shell-command-outcome.v1";
+  "helarc.shell-command-outcome.v2";
 
 const MAX_DIAGNOSTIC_CHARACTERS = 16_384;
 const MAX_STREAM_CHARACTERS = 7_500;
@@ -9,10 +14,8 @@ export interface ShellCommandOutcomeInput {
   readonly command: string;
   readonly exitCode: number | null;
   readonly signal: string | null;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly stdoutTruncated: boolean;
-  readonly stderrTruncated: boolean;
+  readonly stdout: ProcessTextProjection & { readonly truncated: boolean };
+  readonly stderr: ProcessTextProjection & { readonly truncated: boolean };
 }
 
 export type ShellCommandOutcome =
@@ -165,13 +168,11 @@ function commandFailureMessage(
     sections,
     "stdout",
     input.stdout,
-    input.stdoutTruncated,
   );
   appendStream(
     sections,
     "stderr",
     input.stderr,
-    input.stderrTruncated,
   );
   return boundedText(sections.join("\n\n"), MAX_DIAGNOSTIC_CHARACTERS);
 }
@@ -179,13 +180,38 @@ function commandFailureMessage(
 function appendStream(
   sections: string[],
   name: "stdout" | "stderr",
-  value: string,
-  captureTruncated: boolean,
+  stream: ProcessTextProjection & { readonly truncated: boolean },
 ): void {
-  if (value.length === 0 && !captureTruncated) return;
-  const body = boundedText(value, MAX_STREAM_CHARACTERS);
-  const suffix = captureTruncated ? "\n[capture truncated]" : "";
+  if (stream.text.length === 0 && stream.integrity === "exact" &&
+      !stream.truncated) return;
+  const body = boundedText(stream.text, MAX_STREAM_CHARACTERS);
+  const limitations = streamLimitations(stream);
+  const suffix = limitations.length === 0
+    ? ""
+    : `\n[${limitations.join("; ")}]`;
   sections.push(`${name}:\n${body}${suffix}`);
+}
+
+function streamLimitations(
+  stream: ProcessTextProjection & { readonly truncated: boolean },
+): readonly string[] {
+  return Object.freeze([
+    ...(stream.integrity === "exact"
+      ? []
+      : [integrityLimitation(stream.integrity, stream.encoding)]),
+    ...(stream.truncated ? ["capture truncated"] : []),
+  ]);
+}
+
+function integrityLimitation(
+  integrity: Exclude<ProcessTextIntegrity, "exact">,
+  encoding: string | null,
+): string {
+  if (integrity === "inferred") {
+    return `text encoding inferred as ${encoding ?? "unknown"}`;
+  }
+  if (integrity === "lossy") return "text decoding was lossy";
+  return "text projection unavailable";
 }
 
 function boundedText(value: string, maximum: number): string {

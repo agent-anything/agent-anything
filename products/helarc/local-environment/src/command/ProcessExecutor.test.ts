@@ -92,7 +92,11 @@ describe("executeProcess", () => {
     await expect(pending).resolves.toMatchObject({
       kind: "completed",
       exitCode: 0,
-      stdout: "done",
+      stdout: {
+        text: "done",
+        integrity: "exact",
+        encodingSource: "utf8",
+      },
     });
     expect(terminations).toEqual([]);
   });
@@ -145,7 +149,10 @@ describe("executeProcess", () => {
 
       await expect(pending).resolves.toMatchObject({
         kind: "completed",
-        stdout: "done",
+        stdout: {
+          text: "done",
+          integrity: "exact",
+        },
         stdoutTruncated: false,
         outputFile: null,
       });
@@ -176,7 +183,10 @@ describe("executeProcess", () => {
 
       await expect(pending).resolves.toMatchObject({
         kind: "completed",
-        stdout: "abcd",
+        stdout: {
+          text: "abcd",
+          integrity: "exact",
+        },
         stdoutTruncated: true,
         outputFile: "output.log",
       });
@@ -184,6 +194,28 @@ describe("executeProcess", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it("keeps process completion separate from inferred text decoding", async () => {
+    const child = createChildProcess();
+    const cancellation = createInterruptionContext();
+    const pending = executeProcess(
+      createInput(cancellation.context),
+      { spawnProcess: () => child },
+    );
+
+    child.stderr?.write(Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]));
+    child.emit("close", 0, null);
+
+    await expect(pending).resolves.toMatchObject({
+      kind: "completed",
+      exitCode: 0,
+      stderr: {
+        text: "\u041f\u0440\u0438\u0432\u0435\u0442",
+        integrity: "inferred",
+        encodingSource: "detected",
+      },
+    });
   });
 });
 

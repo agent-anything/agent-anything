@@ -493,8 +493,8 @@ function createCommandInterpreter(): VerificationCheckInterpreterPort {
       if ((typeof output.exit_code !== "number" && output.exit_code !== null) ||
           (typeof output.signal !== "string" && output.signal !== null) ||
           typeof output.duration_ms !== "number" ||
-          typeof output.stdout_truncated !== "boolean" ||
-          typeof output.stderr_truncated !== "boolean") {
+          !isCommandStreamOutput(output.stdout) ||
+          !isCommandStreamOutput(output.stderr)) {
         return invalidInterpretation(
           "verification_command_result_invalid",
           "Verification command result is structurally invalid.",
@@ -502,8 +502,8 @@ function createCommandInterpreter(): VerificationCheckInterpreterPort {
       }
       const passed = output.exit_code === 0 && output.signal === null;
       const limitations = Object.freeze([
-        ...(output.stdout_truncated === true ? ["command_stdout_truncated"] : []),
-        ...(output.stderr_truncated === true ? ["command_stderr_truncated"] : []),
+        ...commandStreamLimitations("stdout", output.stdout),
+        ...commandStreamLimitations("stderr", output.stderr),
       ]);
       return Object.freeze({
         status: "completed" as const,
@@ -525,6 +525,40 @@ function createCommandInterpreter(): VerificationCheckInterpreterPort {
       });
     },
   } satisfies VerificationCheckInterpreterPort);
+}
+
+function isCommandStreamOutput(value: unknown): value is {
+  readonly text: string;
+  readonly encoding: string | null;
+  readonly encoding_source: "utf8" | "bom" | "detected" | "fallback" | "none";
+  readonly integrity: "exact" | "inferred" | "lossy" | "unavailable";
+  readonly replacement_count: number;
+  readonly truncated: boolean;
+  readonly overflow_file: string | null;
+} {
+  if (!isRecord(value)) return false;
+  return typeof value.text === "string" &&
+    (value.encoding === null || typeof value.encoding === "string") &&
+    typeof value.encoding_source === "string" &&
+    ["utf8", "bom", "detected", "fallback", "none"].includes(value.encoding_source) &&
+    typeof value.integrity === "string" &&
+    ["exact", "inferred", "lossy", "unavailable"].includes(value.integrity) &&
+    typeof value.replacement_count === "number" &&
+    Number.isSafeInteger(value.replacement_count) && value.replacement_count >= 0 &&
+    typeof value.truncated === "boolean" &&
+    (value.overflow_file === null || typeof value.overflow_file === "string");
+}
+
+function commandStreamLimitations(
+  name: "stdout" | "stderr",
+  stream: { readonly integrity: string; readonly truncated: boolean },
+): readonly string[] {
+  return Object.freeze([
+    ...(stream.integrity === "exact"
+      ? []
+      : [`command_${name}_${stream.integrity}`]),
+    ...(stream.truncated ? [`command_${name}_truncated`] : []),
+  ]);
 }
 
 function createFindingAssessmentMethod(): VerificationAssessmentMethodPort {

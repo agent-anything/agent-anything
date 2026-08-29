@@ -30,7 +30,8 @@
     "@agent-anything/canonical-action": "workspace:*",
     "@agent-anything/helarc-code-agent": "workspace:*",
     "@agent-anything/operation-catalog": "workspace:*",
-    "@agent-anything/workspace": "workspace:*"
+    "@agent-anything/workspace": "workspace:*",
+    "chardet": "2.2.0"
   },
   "devDependencies": { "@types/node": "^25.9.1" }
 }

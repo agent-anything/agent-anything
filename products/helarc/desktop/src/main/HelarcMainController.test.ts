@@ -727,6 +727,88 @@ describe("HelarcMainController", () => {
     expect(commitKinds.slice(1, -1).every((kind) => kind === "run_projection")).toBe(true);
   });
 
+  it("preserves recovered command failures without creating a terminal error report", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-recovered-command-"));
+    const markerPath = join(workspaceRoot, "marker.txt");
+    const threadStore = new FileHelarcThreadStore(await threadFilePath());
+    const controller = new HelarcMainController({
+      provider: new ScriptedProvider([
+        shellToolCall(
+          process.platform === "win32"
+            ? "Write-Error 'expected failure'; exit 7"
+            : "printf 'expected failure\\n' >&2; exit 7",
+          "Exercise one recoverable command failure.",
+        ),
+        commandToolCall(markerPath, "Recover by creating the marker file."),
+        {
+          kind: "completion",
+          summary: "Recovered from the failed attempt and created the marker file.",
+        },
+      ]),
+      threadStore,
+    });
+    controller.selectWorkspacePath(workspaceRoot);
+
+    const firstApprovalPromise = waitForPendingApproval(controller);
+    const completedPromise = waitForSnapshot(
+      controller,
+      (snapshot) => snapshot.run?.product.result?.status === "completed" &&
+        snapshot.threadSummaries.some(
+          (thread) => thread.latestRun?.status === "completed",
+        ),
+    );
+    void controller.startRun({
+      taskText: "Recover from one failed command and create a marker file",
+      target: { kind: "new_thread" },
+    });
+
+    const firstApprovalSnapshot = await firstApprovalPromise;
+    const firstRequestId = pendingApproval(firstApprovalSnapshot).request.id;
+    expect(dispatchApprovalCommand(
+      controller,
+      approvalSubmission(firstApprovalSnapshot, "accept", {
+        submissionId: "desktop-recovered-command-1",
+      }),
+    )).toMatchObject({ status: "handled" });
+
+    const secondApprovalSnapshot = await waitForSnapshot(
+      controller,
+      (snapshot) => snapshot.run?.host.pendingInteractions.some(
+        (candidate) => candidate.request.protocol.kind === "approval" &&
+          candidate.request.id !== firstRequestId,
+      ) === true,
+    );
+    expect(dispatchApprovalCommand(
+      controller,
+      approvalSubmission(secondApprovalSnapshot, "accept", {
+        submissionId: "desktop-recovered-command-2",
+      }),
+    )).toMatchObject({ status: "handled" });
+
+    const completed = await completedPromise;
+    expect(completed.run?.product.result).toMatchObject({
+      status: "completed",
+      output: {
+        safeErrors: [{
+          code: "command_exit_nonzero",
+          message: "A command exited with a non-zero status.",
+        }],
+      },
+      effects: expect.arrayContaining([
+        expect.objectContaining({ status: "failed" }),
+        expect.objectContaining({ status: "succeeded" }),
+      ]),
+    });
+
+    const record = await threadStore.loadThread(completed.activeThread?.id ?? "");
+    expect(record).not.toBeNull();
+    expect(record?.runs[0]?.artifactIds).toEqual([
+      "helarc-run-1-artifact-final-output",
+    ]);
+    expect(record?.artifacts.map(({ kind }) => kind)).toEqual(["final-output"]);
+    await expect(access(markerPath)).resolves.toBeUndefined();
+  }, 15_000);
+
   it("correlates versioned approval submissions and preserves a decline", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-"));
     const markerPath = join(workspaceRoot, "marker.txt");
@@ -1851,14 +1933,21 @@ function commandToolCall(
   markerPath: string,
   reason = "Create a governed marker file.",
 ) {
+  return shellToolCall(
+    process.platform === "win32"
+      ? `[System.IO.File]::WriteAllText('${markerPath.replaceAll("'", "''")}', 'ran')`
+      : `printf 'ran' > '${markerPath.replaceAll("'", "'\\''")}'`,
+    reason,
+  );
+}
+
+function shellToolCall(command: string, reason: string) {
   return {
     kind: "tool_call",
     reason,
     toolName: process.platform === "win32" ? "PowerShell" : "Bash",
     input: {
-      command: process.platform === "win32"
-        ? `[System.IO.File]::WriteAllText('${markerPath.replaceAll("'", "''")}', 'ran')`
-        : `printf 'ran' > '${markerPath.replaceAll("'", "'\\''")}'`,
+      command,
       timeout_ms: 5_000,
       description: reason,
     },

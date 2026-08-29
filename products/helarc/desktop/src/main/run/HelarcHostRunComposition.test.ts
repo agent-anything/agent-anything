@@ -642,7 +642,13 @@ describe("Helarc Host Run composition", () => {
     expect(commandResults).toHaveLength(1);
     expect(commandResults[0]).toMatchObject({
       status: "succeeded",
-      output: { mode: "foreground", exit_code: 0, signal: null, stderr: "" },
+      output: {
+        mode: "foreground",
+        exit_code: 0,
+        signal: null,
+        stdout: { integrity: "exact", truncated: false },
+        stderr: { text: "", integrity: "exact", truncated: false },
+      },
     });
     await expect(access(markerPath)).resolves.toBeUndefined();
     expect(result.product.output.enforcement).toEqual({

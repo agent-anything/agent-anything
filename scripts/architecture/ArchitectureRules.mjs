@@ -131,6 +131,7 @@ export const PRODUCT_PRODUCTION_DEPENDENCIES = Object.freeze({
     "@agent-anything/helarc-code-agent",
     "@agent-anything/operation-catalog",
     "@agent-anything/workspace",
+    "chardet",
   ],
   "@agent-anything/helarc-desktop": [
     "@agent-anything/action-execution",

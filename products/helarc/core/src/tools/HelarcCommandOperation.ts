@@ -14,9 +14,9 @@ export interface HelarcCommandOperationContribution {
 }
 
 export const HELARC_SHELL_OPERATION: OperationRevisionRef = Object.freeze({
-  operation: Object.freeze({ namespace: "helarc", name: "shell-execute" }), revision: "1",
+  operation: Object.freeze({ namespace: "helarc", name: "shell-execute" }), revision: "2",
 });
-export const HELARC_SHELL_BINDING: OperationBindingRevisionRef = Object.freeze({ operation: HELARC_SHELL_OPERATION, revision: "1" });
+export const HELARC_SHELL_BINDING: OperationBindingRevisionRef = Object.freeze({ operation: HELARC_SHELL_OPERATION, revision: "2" });
 export const HELARC_TASK_STOP_OPERATION: OperationRevisionRef = Object.freeze({
   operation: Object.freeze({ namespace: "helarc", name: "task-stop" }), revision: "1",
 });
@@ -30,7 +30,7 @@ export function createHelarcCommandOperationContribution(input: {
 }): HelarcCommandOperationContribution {
   return Object.freeze({
     operations: Object.freeze([
-      operation("helarc.shell.admission.v1", input.admittedAt, HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, "helarc.shell.direct", "code-agent.shell"),
+      operation("helarc.shell.admission.v2", input.admittedAt, HELARC_SHELL_OPERATION, HELARC_SHELL_BINDING, "helarc.shell.direct", "code-agent.shell"),
       operation("helarc.task-stop.admission.v1", input.admittedAt, HELARC_TASK_STOP_OPERATION, HELARC_TASK_STOP_BINDING, "helarc.task-stop.direct", "code-agent.task-stop"),
     ]),
     bindings: Object.freeze([
@@ -38,7 +38,7 @@ export function createHelarcCommandOperationContribution(input: {
       binding("helarc.task-stop.direct", HELARC_TASK_STOP_BINDING, input.taskStopActionAdapterId),
     ]),
     tools: Object.freeze([
-      tool("helarc.tool.shell.admission.v1", findHelarcBaselineToolContract(input.shellTool), HELARC_SHELL_BINDING, input.admittedAt),
+      tool("helarc.tool.shell.admission.v2", findHelarcBaselineToolContract(input.shellTool), HELARC_SHELL_BINDING, input.admittedAt),
       tool("helarc.tool.task-stop.admission.v1", findHelarcBaselineToolContract("TaskStop"), HELARC_TASK_STOP_BINDING, input.admittedAt),
     ]),
   });
@@ -48,25 +48,25 @@ function operation(admissionId: string, admittedAt: string, ref: OperationRevisi
   return {
     admissionId,
     operation: {
-      ref, semanticOwner: "helarc", requestSchemaRevision: "1", resultSchemaRevision: "1",
+      ref, semanticOwner: "helarc", requestSchemaRevision: "1", resultSchemaRevision: ref.revision,
       roles: { requestOrigins: ["tool_request"], exposure: "eager_tool", runControl: "direct", trust: "canonical_external_effect", participation: "semantic_owner", domainPurpose },
     },
-    binding: { ref: bindingRef, kind: "direct", resolverId, resolverRevision: "1" },
-    sourceRevision: "1", allowedRequestOrigins: ["tool_request"], admittedAt, retirement: null,
+    binding: { ref: bindingRef, kind: "direct", resolverId, resolverRevision: bindingRef.revision },
+    sourceRevision: ref.revision, allowedRequestOrigins: ["tool_request"], admittedAt, retirement: null,
   };
 }
 
 function binding(resolverId: string, bindingRef: OperationBindingRevisionRef, actionAdapterId: string): OperationBindingResolverRegistration {
   return {
     resolver: Object.freeze({
-      id: resolverId, revision: "1",
+      id: resolverId, revision: bindingRef.revision,
       async resolve(request: OperationBindingResolutionInput<unknown, unknown>) {
         return Object.freeze({
           status: "resolved" as const,
           binding: snapshotResolvedOperationBinding({
             kind: "direct", invocation: request.context.invocation, correlation: request.context.correlation,
             parentInvocation: request.context.parentInvocation, binding: bindingRef, request: request.request,
-            resolverRevision: "1", resolutionFingerprint: `${request.context.invocation.id}:direct:${actionAdapterId}`, actionAdapterId,
+            resolverRevision: bindingRef.revision, resolutionFingerprint: `${request.context.invocation.id}:direct:${actionAdapterId}`, actionAdapterId,
           }, snapshotRequest),
         });
       },
@@ -75,14 +75,15 @@ function binding(resolverId: string, bindingRef: OperationBindingRevisionRef, ac
 }
 
 function tool(admissionId: string, contract: ReturnType<typeof findHelarcBaselineToolContract>, operationBinding: OperationBindingRevisionRef, admittedAt: string): ToolRegistrationInput {
+  const revision = operationBinding.operation.revision;
   return {
     admissionId,
     descriptor: {
-      ref: { tool: { namespace: "helarc", name: contract.name.toLowerCase() }, revision: "1" },
+      ref: { tool: { namespace: "helarc", name: contract.name.toLowerCase() }, revision },
       name: contract.name, description: contract.description, inputSchema: contract.inputSchema,
-      schemaRevisions: { dialect: "json-schema-2020-12", input: "1", output: "1", translation: "native-1" },
+      schemaRevisions: { dialect: "json-schema-2020-12", input: "1", output: revision, translation: `native-${revision}` },
       annotations: contract.annotations,
-      source: { kind: "product", sourceId: "helarc", sourceRevision: "1", activationEpoch: null },
+      source: { kind: "product", sourceId: "helarc", sourceRevision: revision, activationEpoch: null },
       binding: { kind: "operation", ...operationBinding }, retirement: null, metadata: { profile: "code-agent" },
     },
     allowedOrigins: ["model"], admittedAt,

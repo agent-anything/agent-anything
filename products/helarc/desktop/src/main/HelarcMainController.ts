@@ -1301,7 +1301,7 @@ function createTerminalArtifacts(
     }
   }
 
-  if (safeOutput.safeErrors.length > 0) {
+  if (product.status !== "completed" && safeOutput.safeErrors.length > 0) {
     const artifact = createArtifact({
       id: `${run.id}-artifact-error-report`,
       threadId: record.thread.id,

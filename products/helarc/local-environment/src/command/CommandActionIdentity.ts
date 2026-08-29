@@ -34,18 +34,37 @@ export interface NativeShellSelection {
   readonly argumentsBeforeCommand: readonly string[];
 }
 
-export function selectNativeShell(platform: FileSystemPlatform): NativeShellSelection {
-  return platform === "win32"
-    ? Object.freeze({
+export async function selectNativeShell(input: {
+  readonly platform: FileSystemPlatform;
+  readonly cwd: string;
+  readonly environment: Readonly<Record<string, string>>;
+}): Promise<NativeShellSelection> {
+  if (input.platform !== "win32") {
+    return Object.freeze({
+      toolName: "Bash" as const,
+      command: "bash",
+      argumentsBeforeCommand: Object.freeze(["-lc"]),
+    });
+  }
+
+  for (const command of ["pwsh", "powershell"] as const) {
+    try {
+      await findExecutableCandidate({ ...input, command });
+      return Object.freeze({
         toolName: "PowerShell" as const,
-        command: "powershell.exe",
-        argumentsBeforeCommand: Object.freeze(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]),
-      })
-    : Object.freeze({
-        toolName: "Bash" as const,
-        command: "bash",
-        argumentsBeforeCommand: Object.freeze(["-lc"]),
+        command,
+        argumentsBeforeCommand: Object.freeze([
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+        ]),
       });
+    } catch {
+      // PowerShell 7 is preferred; Windows PowerShell is the explicit fallback.
+    }
+  }
+  throw new TypeError("No supported PowerShell executable could be resolved.");
 }
 
 export async function createCommandEnvironmentPolicy(input: {

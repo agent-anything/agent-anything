@@ -697,6 +697,12 @@ function safeProductErrorMessage(code: string): string {
   ) {
     return "The requested file operation could not be completed.";
   }
+  if (code === "command_exit_nonzero") {
+    return "A command exited with a non-zero status.";
+  }
+  if (code.startsWith("command_")) {
+    return "A command attempt could not be completed.";
+  }
   if (code.startsWith("sandbox_") || code.startsWith("tool_")) {
     return "The requested action could not be completed.";
   }

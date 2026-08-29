@@ -105,7 +105,7 @@ function alternateShellRef(name: HelarcBaselineToolName): ToolRevisionRef {
   }
   return Object.freeze({
     tool: Object.freeze({ namespace: "helarc", name: name.toLowerCase() }),
-    revision: "1",
+    revision: "2",
   });
 }
 
