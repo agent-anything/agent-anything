@@ -18,7 +18,7 @@ import type {
 import { modelInputFromComposition, composeModelInput } from "@agent-anything/model-interaction/input";
 
 export const HELARC_TASK_FULFILLMENT_EVALUATOR_REVISION =
-  "helarc.task-fulfillment-evaluator.v1";
+  "helarc.task-fulfillment-evaluator.v2";
 
 const evaluatorRef = Object.freeze({
   owner: "helarc",
@@ -68,6 +68,9 @@ const instructions = Object.freeze({
       "Judge the original objective, not a reduced or substituted objective.",
       "An explanation of how to perform requested work is not fulfillment when the task requested actual action.",
       "Use only settled trajectory material as evidence that actions occurred.",
+      "Only successful or explicitly usable partial semantic outcomes are positive fulfillment evidence.",
+      "A failed, denied, cancelled, timed-out, invalid, unavailable, or unknown-effect Tool or Operation result is not evidence that its requested outcome succeeded.",
+      "A later attributable successful result may recover an earlier failure; the earlier failure itself must never be reported as success.",
       "Return fulfilled only when every material requested outcome is covered.",
       "Return incomplete when outcomes are missing or the proposal answers a different objective.",
       "Return uncertain when the available material cannot support either conclusion.",

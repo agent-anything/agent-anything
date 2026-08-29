@@ -43,6 +43,12 @@ describe("HelarcTaskFulfillmentEvaluator", () => {
     expect(JSON.stringify(provider.requests[0]?.messages)).toContain(
       "Create a console application and run it once.",
     );
+    expect(JSON.stringify(provider.requests[0]?.instructions)).toContain(
+      "failed, denied, cancelled, timed-out, invalid, unavailable, or unknown-effect",
+    );
+    expect(JSON.stringify(provider.requests[0]?.instructions)).toContain(
+      "the earlier failure itself must never be reported as success",
+    );
   });
 
   it("turns missing outcomes into bounded continuation feedback", async () => {

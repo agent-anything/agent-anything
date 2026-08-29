@@ -32,6 +32,8 @@ import {
 } from "@agent-anything/evaluation/campaign";
 import type { HelarcExactTargetVerificationRequirement } from "@agent-anything/helarc/verification";
 import { createHelarcAgent } from "@agent-anything/helarc/agent";
+import { HELARC_TASK_FULFILLMENT_EVALUATOR_REVISION } from "@agent-anything/helarc/task-fulfillment";
+import { HELARC_SHELL_COMMAND_OUTCOME_REVISION } from "@agent-anything/helarc-local-environment/command";
 import {
   fakeNativeModelOutput,
   fakeNativeProviderResult,
@@ -289,6 +291,7 @@ function createObjective(): EvaluationObjective {
     requirement("run-stop-review.revision", "agent-runtime"),
     requirement("activity-accounting.revision", "agent-runtime"),
     requirement("shell-execution-session.revision", "helarc.local-environment"),
+    requirement("shell-command-outcome.revision", "helarc.local-environment"),
     requirement("target-adapter.revision", "evaluation.target"),
     requirement("source.revision", "repository"),
     requirement("source.dirty-state", "repository", false),
@@ -350,7 +353,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-run-stop-execution-truth-v1",
+    "product.revision": "helarc-product-shell-command-outcome-v1",
     "agent.revision": agent.revision,
     "agent.instructions.release": `${agent.instructions.release.id}@${agent.instructions.release.revision}`,
     "agent.instructions.resolver": agent.instructions.resolverRevision,
@@ -361,18 +364,19 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "model-interaction.protocol.revision": "provider-native-tool-interaction.v1",
     "run-interaction-records.revision": "model-turn-and-settlement.v1",
     "task-fulfillment-contract.revision": "agent-core.task-fulfillment.v1",
-    "task-fulfillment-evaluator.revision": "helarc.task-fulfillment-evaluator.v1",
+    "task-fulfillment-evaluator.revision": HELARC_TASK_FULFILLMENT_EVALUATOR_REVISION,
     "completion-gate.revision": "task-fulfillment-before-verification.v1",
     "run-stop-review.revision": "agent-runtime.run-stop-review.v1",
     "activity-accounting.revision": "agent-runtime.exact-activity.v1",
     "shell-execution-session.revision": "helarc.shell-execution-session.v1",
+    "shell-command-outcome.revision": HELARC_SHELL_COMMAND_OUTCOME_REVISION,
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-run-stop-execution-truth-v1",
+    "source.revision": "helarc-shell-command-outcome-v1",
     "provider.revision": "scripted-native-tool-provider-v1",
     "model.revision": "scripted-native-tool-turn-v1",
     "tool-profile.revision": "delegation-transfer-v1",
     "delegation-contract.revision": "bounded-delegation-transfer-v1",
-    "action-registration.revision": "helarc-shell-action-registration-v1",
+    "action-registration.revision": "helarc-shell-action-registration-v2",
     "sandbox.enforcement": "disabled",
     "permission.preset": "case-declared",
     "reviewer.profile": "case-declared-deterministic",
@@ -393,7 +397,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
         key: item.key,
         owner: item.owner,
         required: item.required,
-        sourceRevision: "helarc-run-stop-execution-truth-v1",
+        sourceRevision: "helarc-shell-command-outcome-v1",
         schemaRef: item.schemaRef,
         status: "unavailable" as const,
         representation: null,

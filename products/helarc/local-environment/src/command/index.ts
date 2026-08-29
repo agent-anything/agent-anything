@@ -21,3 +21,4 @@ export type {
   CodeAgentCommandLimits,
   ProcessTerminationLimits,
 } from "./ProcessContracts.js";
+export { HELARC_SHELL_COMMAND_OUTCOME_REVISION } from "./ShellCommandOutcome.js";

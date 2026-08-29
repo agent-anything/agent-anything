@@ -1024,6 +1024,7 @@ const expectedValueExports = {
   "@agent-anything/helarc-local-environment/command": [
     "HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID",
     "HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID",
+    "HELARC_SHELL_COMMAND_OUTCOME_REVISION",
     "ProcessTaskRegistryError",
     "RunProcessTaskRegistry",
     "createHelarcLocalCommandActionCapability",

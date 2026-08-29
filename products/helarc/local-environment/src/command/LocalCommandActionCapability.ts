@@ -53,6 +53,7 @@ import {
   ShellExecutionSession,
   type ShellExecutionSessionSnapshot,
 } from "./ShellExecutionSession.js";
+import { interpretShellCommandOutcome } from "./ShellCommandOutcome.js";
 import {
   inspectPreparedFileSystemTarget,
   prepareFileSystemTarget,
@@ -64,7 +65,7 @@ import {
 export const HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID = "helarc.local.shell.adapter";
 export const HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID = "helarc.local.task-stop.adapter";
 
-const SHELL_ADAPTER = Object.freeze({ id: HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID, version: "1", requestSchemaRevision: "1" });
+const SHELL_ADAPTER = Object.freeze({ id: HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID, version: "2", requestSchemaRevision: "1" });
 const STOP_ADAPTER = Object.freeze({ id: HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID, version: "1", requestSchemaRevision: "1" });
 const SHELL_EXECUTOR = Object.freeze({ id: "helarc.local.shell.executor", version: "1", invocationContractVersion: "1", physicalPayloadSchemaRevision: "1" });
 const STOP_EXECUTOR = Object.freeze({ id: "helarc.local.task-stop.executor", version: "1", invocationContractVersion: "1", physicalPayloadSchemaRevision: "1" });
@@ -132,7 +133,12 @@ interface ShellPayload {
 }
 
 interface StopPayload { readonly identity: CanonicalProcessIdentity; }
-interface ShellBasis { readonly commandDisplay: string; readonly cwdDisplay: string; }
+interface ShellBasis {
+  readonly shell: "Bash" | "PowerShell";
+  readonly command: string;
+  readonly commandDisplay: string;
+  readonly cwdDisplay: string;
+}
 interface StopBasis { readonly taskId: string; readonly cwdDisplay: string; }
 
 export async function createHelarcLocalCommandActionCapability(input: CreateHelarcLocalCommandActionCapabilityInput): Promise<HelarcLocalCommandActionCapability> {
@@ -143,7 +149,7 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
   const processTasks = new RunProcessTaskRegistry(limits.maxActiveTasks, limits.maxSettledTasks);
   const shellSession = await ShellExecutionSession.create(input.workspace, input.platform);
   const registrations = createActionRegistrationSnapshot([
-    registration("helarc.local.shell.registration.v1", input.shellOperation, input.shellBinding, SHELL_ADAPTER, SHELL_EXECUTOR, ["process", "filesystem"]),
+    registration("helarc.local.shell.registration.v2", input.shellOperation, input.shellBinding, SHELL_ADAPTER, SHELL_EXECUTOR, ["process", "filesystem"]),
     registration("helarc.local.task-stop.registration.v1", input.taskStopOperation, input.taskStopBinding, STOP_ADAPTER, STOP_EXECUTOR, ["process"]),
   ]);
   const now = input.now ?? (() => new Date().toISOString());
@@ -232,7 +238,7 @@ function createShellAdapter(
           runtimeEnvironmentPlatform: context.environment.platform,
           runtimeEnvironmentFingerprint: context.environment.configurationFingerprint, termination,
         });
-        const data = await shellPreparedData(parsed.description, payload, cwd, output, executable.identity, context.environment, context.now());
+        const data = await shellPreparedData(parsed.description, shell.toolName, payload, cwd, output, executable.identity, context.environment, context.now());
         return Object.freeze({ status: "prepared" as const, prepared: await createPreparedAction(binding, context, data) });
       } catch (error) {
         return invalidPreparation("shell_action_invalid", safeMessage(error, "Shell request or target is invalid."));
@@ -273,6 +279,7 @@ function createShellAdapter(
 
 async function shellPreparedData(
   description: string | null,
+  shell: "Bash" | "PowerShell",
   payload: ShellPayload,
   cwd: PreparedFileSystemTarget,
   output: PreparedFileSystemTarget,
@@ -299,7 +306,12 @@ async function shellPreparedData(
     approval: approval(runtimeEnvironment.environmentId, applicability, description ?? "Execute one native shell command.", [payload.executablePath, ...payload.args], commandDisplay, payload.cwd, payload.cwdDisplay, "Spawn one native shell process", createdAt),
     safeSummary: { kind: "process", headline: payload.runInBackground ? "Start background shell task" : "Run shell command", commandDisplay, cwdDisplay: payload.cwdDisplay },
     preparedInvocation: { contractVersion: "1", executorId: SHELL_EXECUTOR.id, executorVersion: SHELL_EXECUTOR.version, payload: payload as unknown as SerializableValue },
-    replayBasis: "none", semanticBasis: { commandDisplay, cwdDisplay: payload.cwdDisplay },
+    replayBasis: "none", semanticBasis: {
+      shell,
+      command: payload.command,
+      commandDisplay,
+      cwdDisplay: payload.cwdDisplay,
+    },
     deadlineAt: new Date(Date.parse(createdAt) + payload.timeoutMs).toISOString(),
   };
 }
@@ -451,8 +463,45 @@ function foregroundOutput(
   });
 }
 
-function settleShell(_prepared: PreparedAction<ShellBasis>, settlement: CanonicalActionSettlement): ActionSemanticResult {
-  return settleOperation(settlement, "shell");
+function settleShell(prepared: PreparedAction<ShellBasis>, settlement: CanonicalActionSettlement): ActionSemanticResult {
+  const physical = settleOperation(settlement, "shell");
+  if (physical.status !== "succeeded") return physical;
+  if (!isRecord(physical.output)) {
+    return semanticFailure(
+      settlement,
+      "shell_result_invalid",
+      "The completed shell action did not provide a valid result.",
+    );
+  }
+  if (physical.output.mode === "background") return physical;
+  if (!isForegroundShellOutput(physical.output)) {
+    return semanticFailure(
+      settlement,
+      "shell_result_invalid",
+      "The completed shell action did not provide a valid foreground result.",
+    );
+  }
+
+  const outcome = interpretShellCommandOutcome({
+    shell: prepared.semanticBasis.shell,
+    command: prepared.semanticBasis.command,
+    exitCode: physical.output.exit_code,
+    signal: physical.output.signal,
+    stdout: physical.output.stdout,
+    stderr: physical.output.stderr,
+    stdoutTruncated: physical.output.stdout_truncated,
+    stderrTruncated: physical.output.stderr_truncated,
+  });
+  if (outcome.status === "failed") {
+    return semanticFailure(settlement, outcome.code, outcome.message);
+  }
+  return Object.freeze({
+    ...physical,
+    output: Object.freeze({
+      ...physical.output,
+      exit_interpretation: outcome.interpretation,
+    }),
+  });
 }
 function settleStop(_prepared: PreparedAction<StopBasis>, settlement: CanonicalActionSettlement): ActionSemanticResult {
   return settleOperation(settlement, "task_stop");
@@ -470,6 +519,42 @@ function settleOperation(settlement: CanonicalActionSettlement, owner: string): 
       message: settlement.causeRef ?? `${owner} operation ${settlement.status}.`,
     },
   });
+}
+
+function semanticFailure(
+  settlement: CanonicalActionSettlement,
+  code: string,
+  message: string,
+): ActionSemanticResult {
+  return Object.freeze({
+    operationInvocationId: settlement.operationInvocation.id,
+    settlement,
+    status: "failed" as const,
+    output: null,
+    failure: Object.freeze({
+      owner: "helarc.local-environment",
+      code,
+      message,
+    }),
+  });
+}
+
+function isForegroundShellOutput(value: Record<string, any>): value is Record<string, any> & {
+  readonly mode: "foreground";
+  readonly exit_code: number | null;
+  readonly signal: string | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly stdout_truncated: boolean;
+  readonly stderr_truncated: boolean;
+} {
+  return value.mode === "foreground" &&
+    (value.exit_code === null || Number.isSafeInteger(value.exit_code)) &&
+    (value.signal === null || typeof value.signal === "string") &&
+    typeof value.stdout === "string" &&
+    typeof value.stderr === "string" &&
+    typeof value.stdout_truncated === "boolean" &&
+    typeof value.stderr_truncated === "boolean";
 }
 
 function pathAssertions(assertions: readonly TargetStateAssertion[], path: string) {
