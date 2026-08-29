@@ -58,6 +58,33 @@ describe("ActiveRunHandle", () => {
     );
   });
 
+  it("publishes one snapshot when execution and tree projections advance together", () => {
+    const result = succeededResult();
+    const handle = new ActiveRunHandle(
+      "run-1",
+      cancellation(),
+      result,
+      runTree(0),
+      () => undefined,
+    );
+    const delivered = vi.fn();
+    handle.subscribe(delivered);
+
+    handle.publish({
+      ...terminalUpdate(result),
+      status: "running",
+      result: null,
+    }, runTree(1));
+
+    expect(handle.getSnapshot()).toMatchObject({
+      sequence: 1,
+      runRevision: 1,
+      status: "running",
+      runTree: { revision: 1 },
+    });
+    expect(delivered).toHaveBeenCalledTimes(2);
+  });
+
   it("copies and freezes the authoritative Stop Review projection", () => {
     const result = succeededResult();
     const handle = new ActiveRunHandle(

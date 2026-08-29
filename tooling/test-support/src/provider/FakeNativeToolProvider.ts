@@ -72,6 +72,11 @@ export class FakeNativeToolProvider implements Provider {
         modelInput: this.inputAccounting.capability,
         continuation: Object.freeze({ supported: false as const }),
         compaction: Object.freeze({ supported: false as const }),
+        usageMetering: Object.freeze({
+          inputTokens: "unavailable" as const,
+          outputTokens: "unavailable" as const,
+          costUnits: "unavailable" as const,
+        }),
       }),
       requestRetryScheduler: input.descriptor?.requestRetryScheduler ??
         Object.freeze({ kind: "harness" as const }),

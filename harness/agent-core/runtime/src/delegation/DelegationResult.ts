@@ -76,6 +76,9 @@ export interface DelegationUsageSummary {
 export type DelegationLimitKind =
   | "controller_turns"
   | "actions"
+  | "model_input_tokens"
+  | "model_output_tokens"
+  | "cost_units"
   | "duration"
   | "context_bytes"
   | "result_bytes";

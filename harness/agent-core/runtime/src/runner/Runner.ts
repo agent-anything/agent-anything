@@ -44,14 +44,10 @@ import {
 import {
   deriveDelegatedRunConfig,
   projectDelegationRunAuthority,
-  projectDelegationRunLimits,
 } from "../delegation/DelegationRunConfiguration.js";
 import {
-  createDelegationResourceCapacity,
-  DelegationResourceLedger,
-  type DelegationResourceSettlement,
-  type DelegationResourceUsage,
-} from "../delegation/DelegationResourceLedger.js";
+  type RunTreeResourceAmounts,
+} from "./RunTreeResourceAccount.js";
 import {
   snapshotDelegationAuthorityDerivation,
   snapshotDelegationLimitDerivation,
@@ -129,6 +125,10 @@ export class Runner {
       throw new TypeError(configSnapshot.failure.message);
     }
     validateActionComposition(this.dependencies, configSnapshot.config);
+    validateRunTreeMetering(
+      configSnapshot.config.runTreeResources,
+      this.dependencies.controller.resourceMetering,
+    );
 
     const runId = this.dependencies.createRunId();
     assertNonEmpty(runId, "Runner-created runId");
@@ -142,30 +142,14 @@ export class Runner {
       startedAt,
       deadlineAt,
       limits: configSnapshot.config.runTreeLimits,
+      resources: configSnapshot.config.runTreeResources,
+      rootAuthorityRevision: `${runId}:authority`,
       now: this.dependencies.now,
     });
     const ordinaryConfig = snapshotRunConfig(configSnapshot.config);
     if (!ordinaryConfig.valid) {
       throw new TypeError(ordinaryConfig.failure.message);
     }
-    const rootDelegationLimits = projectDelegationRunLimits({
-      config: ordinaryConfig.config,
-      maxContextBytes: delegationPayloadCeiling(
-        this.dependencies.contextProjection.maxContributionPayloadBytes,
-        4,
-      ),
-      maxResultBytes: delegationPayloadCeiling(
-        this.dependencies.contextProjection.maxContributionPayloadBytes,
-        1,
-      ),
-    });
-    const delegationResources = new DelegationResourceLedger(
-      createDelegationResourceCapacity({
-        perDescendant: rootDelegationLimits,
-        maxTotalDescendants:
-          configSnapshot.config.runTreeLimits.maxTotalDescendantRuns,
-      }),
-    );
     return this.startPreparedRun(
       runId,
       agentSnapshot,
@@ -178,7 +162,7 @@ export class Runner {
       null,
       tree.rootLineage,
       tree,
-      delegationResources,
+      measureInitialRunContextBytes(inputSnapshot),
       startedAt,
       deadlineAt,
       configuredPublishers,
@@ -206,7 +190,6 @@ export class Runner {
     rootTask: AgentTask,
     rootConfig: RunConfig,
     tree: RunTreeExecution,
-    delegationResources: DelegationResourceLedger,
     runtimeEventPublishers: readonly RuntimeEventPublisher[],
     runTraceObservers: readonly RunTraceObserver[],
     actionExecutionObserver: RunInvocationOptions["actionExecutionObserver"],
@@ -297,20 +280,6 @@ export class Runner {
       });
     }
 
-    const resourceReservation = delegationResources.reserve(
-      request.ref.id,
-      request.limits,
-    );
-    if (resourceReservation.status === "rejected") {
-      return Object.freeze({
-        status: "rejected" as const,
-        code: resourceReservation.code,
-        relation: null,
-        reservedTreeRevision: null,
-        treeRevision: tree.getSnapshot().revision,
-      });
-    }
-
     const startedAt = this.dependencies.now();
     let reservation: ReturnType<RunTreeExecution["reserveDescendant"]>;
     try {
@@ -332,9 +301,10 @@ export class Runner {
           startedAt,
           config.limits.maxDurationMs,
         ),
+        resourceAllocation: delegationResourceAllocation(request.limits),
+        authorityRevision: request.authorityDerivation.revision,
       });
     } catch {
-      delegationResources.release(request.ref.id);
       return Object.freeze({
         status: "rejected" as const,
         code: "descendant_run_start_failed" as const,
@@ -344,7 +314,6 @@ export class Runner {
       });
     }
     if (reservation.status === "rejected") {
-      delegationResources.release(request.ref.id);
       return Object.freeze({
         ...reservation,
         relation: null,
@@ -371,22 +340,20 @@ export class Runner {
         predecessor,
         reservation.lineage,
         tree,
-        delegationResources,
+        contextBytes,
         startedAt,
         reservation.deadlineAt,
         runtimeEventPublishers,
         runTraceObservers,
         actionExecutionObserver,
       );
-      const resourceSettlement = handle.wait().then((result) =>
-        delegationResources.settle(
-          request.ref.id,
-          measureDelegationResourceUsage(
-            result,
-            contextBytes,
-            request.limits.maxResultBytes,
-          ),
-        ));
+      const resourceSettlement = handle.wait().then(() => {
+        const settlement = tree.getResourceSettlement(childRunId);
+        if (settlement === null) {
+          throw new TypeError("Descendant Run resources did not settle with the Run.");
+        }
+        return settlement;
+      });
       return Object.freeze({
         status: "started" as const,
         relation: reservation.relation,
@@ -396,7 +363,7 @@ export class Runner {
         treeRevision: tree.getSnapshot().revision,
       });
     } catch {
-      delegationResources.release(request.ref.id);
+      tree.settleResources(reservation.relation.child.id);
       tree.failStart(reservation.relation.child.id, this.dependencies.now());
       return Object.freeze({
         status: "rejected" as const,
@@ -420,7 +387,7 @@ export class Runner {
     delegationPredecessor: DelegationContextMaterial | null,
     lineage: RunLineage,
     tree: RunTreeExecution,
-    delegationResources: DelegationResourceLedger,
+    initialContextBytes: number,
     startedAt: string,
     deadlineAt: string,
     runtimeEventPublishers: readonly RuntimeEventPublisher[],
@@ -453,6 +420,7 @@ export class Runner {
       (result) => {
         try {
           tree.settleRun(runId, result.status, result.code, result.completedAt);
+          handle.publishRunTree(tree.getSnapshot());
         } finally {
           this.activeRunIds.delete(runId);
           unsubscribeTree();
@@ -486,16 +454,15 @@ export class Runner {
         rootTask,
         rootConfig,
         tree,
-        delegationResources,
         runtimeEventPublishers,
         runTraceObservers,
         actionExecutionObserver,
       ),
-      () => tree.getSnapshot(),
+      initialContextBytes,
+      tree,
       (update) => {
         tree.updateLifecycle(runId, update.status);
-        handle.publishRunTree(tree.getSnapshot());
-        handle.publish(update);
+        handle.publish(update, tree.getSnapshot());
       },
     );
     handle.bindInteractionSubmission((submission) =>
@@ -744,35 +711,53 @@ function createDelegatedRunInput(input: {
   });
 }
 
-function measureDelegationResourceUsage(
-  result: RunResult,
-  contextBytes: number,
-  maxResultBytes: number,
-): DelegationResourceUsage {
-  let controllerTurns = 0;
-  let actions = 0;
-  for (const item of result.items) {
-    if (item.payload.kind === "controller_turn") controllerTurns += 1;
-    if (item.payload.kind === "run_action") actions += 1;
-  }
-  let resultBytes: number;
-  try {
-    resultBytes = new TextEncoder().encode(JSON.stringify({
-      status: result.status,
-      code: result.code,
-      finalOutput: result.finalOutput,
-      evidenceRefs: result.evidenceRefs,
-      artifactRefs: result.artifactRefs,
-    })).byteLength;
-  } catch {
-    resultBytes = maxResultBytes + 1;
-  }
+function delegationResourceAllocation(
+  limits: DelegationRequest["limits"],
+): RunTreeResourceAmounts {
   return Object.freeze({
-    controllerTurns,
-    actions,
-    contextBytes,
-    resultBytes,
+    controllerTurns: limits.maxControllerTurns,
+    actions: limits.maxActions,
+    modelInputTokens: limits.maxModelInputTokens,
+    modelOutputTokens: limits.maxModelOutputTokens,
+    costUnits: limits.maxCostUnits,
+    contextBytes: limits.maxContextBytes,
+    resultBytes: limits.maxResultBytes,
   });
+}
+
+function measureInitialRunContextBytes(input: RunInput): number {
+  return encodedJsonBytes({ task: input.task, items: input.items });
+}
+
+function encodedJsonBytes(input: unknown): number {
+  const encoded = JSON.stringify(input);
+  if (encoded === undefined) {
+    throw new TypeError("Run Tree resource material is not JSON-serializable.");
+  }
+  return new TextEncoder().encode(encoded).byteLength;
+}
+
+function validateRunTreeMetering(
+  resources: RootRunConfig["runTreeResources"],
+  metering: ResolvedRunnerDependencies["controller"]["resourceMetering"],
+): void {
+  for (const dimension of [
+    "modelInputTokens",
+    "modelOutputTokens",
+    "costUnits",
+  ] as const) {
+    if (resources[dimension].enforcement !== "hard") continue;
+    const qualification = metering[dimension];
+    if (
+      qualification !== "measured" &&
+      qualification !== "conservatively_bounded" &&
+      qualification !== "not_applicable"
+    ) {
+      throw new TypeError(
+        `Hard Run Tree ${dimension} enforcement requires a measured, conservatively bounded, or not-applicable Controller path.`,
+      );
+    }
+  }
 }
 
 function sameAgentRevision(
@@ -782,13 +767,6 @@ function sameAgentRevision(
   return left.id === right.id && left.revision === right.revision;
 }
 
-function delegationPayloadCeiling(value: number, multiplier: number): number {
-  const ceiling = value * multiplier;
-  if (!Number.isSafeInteger(ceiling) || ceiling < 1) {
-    throw new TypeError("Delegation payload ceiling must be a positive safe integer.");
-  }
-  return ceiling;
-}
 
 function validateActionComposition(
   dependencies: ResolvedRunnerDependencies,

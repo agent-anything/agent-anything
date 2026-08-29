@@ -50,6 +50,11 @@ export class FakeProvider implements Provider {
         modelInput: this.inputAccounting.capability,
         continuation: { supported: false },
         compaction: { supported: false },
+        usageMetering: {
+          inputTokens: "unavailable",
+          outputTokens: "unavailable",
+          costUnits: "unavailable",
+        },
         ...input.descriptor?.capabilities,
       },
       requestRetryScheduler: input.descriptor?.requestRetryScheduler ?? {

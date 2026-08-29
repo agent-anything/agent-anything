@@ -125,6 +125,15 @@ export interface ActionExecutionRequest<TRequest = unknown> {
   readonly deadlineAt: string;
   readonly maxAttempts: number;
   readonly isProgressionBasisCurrent: () => boolean;
+  readonly authority: {
+    readonly captureBasis: () => CapturedActionAuthorityBasis;
+    readonly isBasisCurrent: (basis: CapturedActionAuthorityBasis) => boolean;
+  };
+}
+
+interface CapturedActionAuthorityBasis {
+  readonly authorityRevision: string;
+  readonly resourceRevision: number;
 }
 
 export type ActionExecutionResult<TOutput = unknown> =
@@ -356,6 +365,7 @@ export class ActionExecutionCoordinator {
         permissionCode,
       );
     }
+    let authorityBasis: CapturedActionAuthorityBasis = request.authority.captureBasis();
 
     if (!request.isProgressionBasisCurrent()) {
       return this.settlePrepared<TOutput>(
@@ -366,6 +376,17 @@ export class ActionExecutionCoordinator {
         "invalidated",
         "agent-runtime",
         "action_progression_basis_invalidated",
+      );
+    }
+    if (!request.authority.isBasisCurrent(authorityBasis)) {
+      return this.settlePrepared<TOutput>(
+        ledger,
+        request,
+        captured.adapter,
+        prepared,
+        "invalidated",
+        "agent-runtime",
+        "action_authority_basis_stale",
       );
     }
 
@@ -404,6 +425,29 @@ export class ActionExecutionCoordinator {
       );
     }
 
+    if (!request.isProgressionBasisCurrent()) {
+      return this.settlePrepared<TOutput>(
+        ledger,
+        request,
+        captured.adapter,
+        prepared,
+        "invalidated",
+        "agent-runtime",
+        "action_progression_basis_invalidated",
+      );
+    }
+    if (!request.authority.isBasisCurrent(authorityBasis)) {
+      return this.settlePrepared<TOutput>(
+        ledger,
+        request,
+        captured.adapter,
+        prepared,
+        "invalidated",
+        "agent-runtime",
+        "action_authority_basis_stale",
+      );
+    }
+
     if (permission.actionCoverageId !== null) {
       const consumption = await this.dependencies.permission.consumeActionCoverage({
         coverageId: permission.actionCoverageId,
@@ -423,6 +467,10 @@ export class ActionExecutionCoordinator {
           consumption.code,
         );
       }
+      // Consuming exact single-Action coverage is an intentional restrictive
+      // authority transition. Capture the resulting current basis rather than
+      // invalidating the Action because of its own successful consumption.
+      authorityBasis = request.authority.captureBasis();
     }
 
     const dispatchPlanFingerprint = this.id("dispatch-plan");
@@ -478,19 +526,30 @@ export class ActionExecutionCoordinator {
         resourceLimits: Object.freeze({
           maxResultBytes: captured.registration.maxPhysicalResultBytes,
         }),
-      allowedSecretReferences: prepared.invocation.secretReferences,
-    });
-    if (!request.isProgressionBasisCurrent()) {
-      return this.settlePrepared<TOutput>(
-        ledger,
-        request,
-        captured.adapter,
-        prepared,
-        "invalidated",
-        "agent-runtime",
-        "action_progression_basis_invalidated",
-      );
-    }
+        allowedSecretReferences: prepared.invocation.secretReferences,
+      });
+      if (!request.isProgressionBasisCurrent()) {
+        return this.settlePrepared<TOutput>(
+          ledger,
+          request,
+          captured.adapter,
+          prepared,
+          "invalidated",
+          "agent-runtime",
+          "action_progression_basis_invalidated",
+        );
+      }
+      if (!request.authority.isBasisCurrent(authorityBasis)) {
+        return this.settlePrepared<TOutput>(
+          ledger,
+          request,
+          captured.adapter,
+          prepared,
+          "invalidated",
+          "agent-runtime",
+          "action_authority_basis_stale",
+        );
+      }
       sandbox = await this.dependencies.sandbox.execute({
         attempt: sandboxAttempt,
         policy: sandboxPolicy,

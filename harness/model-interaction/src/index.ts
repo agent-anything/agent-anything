@@ -7,6 +7,8 @@ export {
 } from "./ProviderAttemptInterruption.js";
 export type {
   ProviderCapabilities,
+  ProviderUsageMeteringCapability,
+  ProviderUsageMeteringQualification,
   ProviderDescriptor,
   ProviderMechanicCapability,
   ProviderNativeToolInteractionCapability,

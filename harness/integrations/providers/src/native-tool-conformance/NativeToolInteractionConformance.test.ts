@@ -244,7 +244,7 @@ it("normalizes equivalent adapter responses to equivalent provider-neutral meani
       input: { file_path: "package.json" },
     }],
     finish: { kind: "normal" },
-    usage: { inputTokens: 8, outputTokens: 5, totalTokens: 13, metadata: {} },
+    usage: { inputTokens: 8, outputTokens: 5, totalTokens: 13, costUnits: null, metadata: {} },
   }, {
     content: [{ kind: "text", text: "Inspecting." }, {
       kind: "model_tool_call",
@@ -252,7 +252,7 @@ it("normalizes equivalent adapter responses to equivalent provider-neutral meani
       input: { file_path: "package.json" },
     }],
     finish: { kind: "normal" },
-    usage: { inputTokens: 8, outputTokens: 5, totalTokens: 13, metadata: {} },
+    usage: { inputTokens: 8, outputTokens: 5, totalTokens: 13, costUnits: null, metadata: {} },
   }]);
 });
 

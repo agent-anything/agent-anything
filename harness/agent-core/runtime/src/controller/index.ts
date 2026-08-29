@@ -9,6 +9,7 @@ export type {
   ModelCallRejectionCandidate,
   ModelInteractionProjection,
   ControllerRetryContext,
+  ControllerResourceMetering,
   InteractionRequestCandidate,
   OperationRequestCandidate,
   ToolRequestCandidate,

@@ -212,7 +212,10 @@ import {
   type DelegationSteeringRoute,
 } from "../delegation/index.js";
 import { createDelegationContractIdentity } from "../delegation/DelegationContract.js";
-import type { DelegationResourceSettlement } from "../delegation/DelegationResourceLedger.js";
+import type {
+  RunTreeResourceRecordResult,
+  RunTreeResourceSettlement,
+} from "./RunTreeResourceAccount.js";
 import {
   RunToolExposureCoordinator,
   ToolExposureBasisChangedError,
@@ -294,7 +297,7 @@ export type RuntimeDescendantRunStartResult =
       readonly status: "started";
       readonly relation: DescendantRunRelation;
       readonly handle: RunHandle;
-      readonly resourceSettlement: Promise<DelegationResourceSettlement>;
+      readonly resourceSettlement: Promise<RunTreeResourceSettlement>;
       readonly reservedTreeRevision: number;
       readonly treeRevision: number;
     }
@@ -353,7 +356,7 @@ type DescendantExecutionOutcome =
       readonly relationId: string;
       readonly childRunId: string;
       readonly result: DelegationResult;
-      readonly resourceSettlement: DelegationResourceSettlement;
+      readonly resourceSettlement: RunTreeResourceSettlement;
     }
   | {
       readonly status: "rejected";
@@ -438,6 +441,12 @@ export class RunExecution<TOutput> {
   private readonly emittedVerificationRecordKeys = new Set<string>();
   private readonly toolExposure: RunToolExposureCoordinator;
   private readonly transcript: RunTranscriptRecorder;
+  private accountedResourceItemCount = 0;
+  private resourceFailure: Extract<
+    RunTreeResourceRecordResult,
+    { readonly status: "limit_exceeded" | "measurement_unavailable" }
+  > | null = null;
+  private lastAuthorityPermission: RunState<TOutput>["permission"];
 
   constructor(
     private readonly runId: string,
@@ -457,7 +466,8 @@ export class RunExecution<TOutput> {
     startedAt: string,
     deadlineAt: string,
     private readonly startDescendantRun: RuntimeDescendantRunStarter,
-    private readonly getRunTreeSnapshot: () => RunTreeExecutionSnapshot,
+    initialContextBytes: number,
+    private readonly runTree: import("./RunTreeExecution.js").RunTreeExecution,
     private readonly onUpdate: (update: RunExecutionUpdate<TOutput>) => void,
   ) {
     this.startedAt = startedAt;
@@ -512,6 +522,13 @@ export class RunExecution<TOutput> {
       dependencies.createId,
       (state) => this.onStateCommitted(state),
     );
+    this.lastAuthorityPermission = initial.permission;
+    this.recordTreeResources({
+      contextBytes: Object.freeze({
+        status: "measured" as const,
+        value: initialContextBytes,
+      }),
+    });
 
     const approvalProtocol = createApprovalInteractionProtocol({
       validateDecision: (subject, submission, request) =>
@@ -538,7 +555,7 @@ export class RunExecution<TOutput> {
       maxPendingInteractions: config.limits.maxPendingInteractions,
       delegation: dependencies.operations.delegation?.preparation,
       getRunRevision: () => this.writer.getSnapshot().revision,
-      getRunTreeSnapshot,
+      getRunTreeSnapshot: () => this.runTree.getSnapshot(),
     });
 
     this.interruptionCoordinator = new RunInterruptionCoordinator({
@@ -775,6 +792,9 @@ export class RunExecution<TOutput> {
         if (this.config.cancellation.context.request !== null) {
           return await this.settle({ status: "cancelled" });
         }
+        if (this.resourceFailure !== null) {
+          return await this.settleResourceFailure(this.resourceFailure);
+        }
         this.drainSteering("apply");
         const deadline = evaluateRunDeadline({
           deadlineAt: this.writer.getSnapshot().deadlineAt,
@@ -790,6 +810,9 @@ export class RunExecution<TOutput> {
 
         const decision = await this.nextDecision();
         if (decision === null) continue;
+        if (this.resourceFailure !== null) {
+          return await this.settleResourceFailure(this.resourceFailure);
+        }
         const settlementsAfterDecision = this.drainInteractionSettlements();
         if (this.config.cancellation.context.request !== null) {
           this.settleUnprocessedModelCalls(
@@ -2536,6 +2559,36 @@ export class RunExecution<TOutput> {
     });
   }
 
+  private async settleResourceFailure(
+    failure: Extract<
+      RunTreeResourceRecordResult,
+      { readonly status: "limit_exceeded" | "measurement_unavailable" }
+    >,
+  ): Promise<RunResult<TOutput>> {
+    return this.settle(this.resourceFailureCandidate(failure));
+  }
+
+  private resourceFailureCandidate(
+    failure: Extract<
+      RunTreeResourceRecordResult,
+      { readonly status: "limit_exceeded" | "measurement_unavailable" }
+    >,
+  ): Extract<TerminalCandidate<TOutput>, { readonly status: "failed" }> {
+    return {
+      status: "failed",
+      code: "runtime_limit_exceeded",
+      failure: runtimeFailure(
+        failure.status === "limit_exceeded"
+          ? "runtime_tree_resource_limit_exceeded"
+          : "runtime_tree_resource_measurement_unavailable",
+        failure.status === "limit_exceeded"
+          ? "The Run Tree resource envelope was exceeded."
+          : "A hard Run Tree resource measurement was unavailable.",
+        Object.freeze({ dimension: failure.dimension }),
+      ),
+    };
+  }
+
   private synchronizeCurrentContext(): void {
     const state = this.writer.getSnapshot();
     const runStateId = this.currentContextContributionId(state.context, "agent-runtime", "run_state")
@@ -3472,6 +3525,13 @@ export class RunExecution<TOutput> {
       deadlineAt: this.writer.getSnapshot().deadlineAt,
       maxAttempts: this.config.retry.action.maxAttempts,
       isProgressionBasisCurrent: () => this.steeringEpoch === dispatchSteeringEpoch,
+      authority: Object.freeze({
+        captureBasis: () => this.runTree.captureAuthorityBasis(this.runId),
+        isBasisCurrent: (basis) => this.runTree.isAuthorityBasisCurrent(
+          this.runId,
+          basis,
+        ),
+      }),
     });
     if (outcome.status === "pending_interaction") {
       return this.operationFailureResult(
@@ -3672,6 +3732,12 @@ export class RunExecution<TOutput> {
     }
 
     const authorityCeiling = projectDelegationRunAuthority(this.config);
+    const treeResourceRemaining = this.runTree.getSnapshot().nodes.find(
+      (node) => node.runId === this.runId,
+    )?.resources.remaining;
+    if (treeResourceRemaining === undefined) {
+      throw new TypeError("Current Run Tree resource allocation is unavailable.");
+    }
     const limitCeiling = projectDelegationRunLimits({
       config: this.config,
       maxContextBytes: delegationPayloadCeiling(
@@ -3682,6 +3748,9 @@ export class RunExecution<TOutput> {
         this.dependencies.contextProjection.maxContributionPayloadBytes,
         1,
       ),
+      maxModelInputTokens: treeResourceRemaining.modelInputTokens,
+      maxModelOutputTokens: treeResourceRemaining.modelOutputTokens,
+      maxCostUnits: treeResourceRemaining.costUnits,
     });
     let prepared: Awaited<ReturnType<typeof composition.preparation.prepare>>;
     try {
@@ -3766,7 +3835,7 @@ export class RunExecution<TOutput> {
           currentPolicy: parentAuthority,
           agent: prepared.agent,
           preparation: prepared.preparation,
-          rootDeadlineAt: this.getRunTreeSnapshot().deadlineAt,
+          rootDeadlineAt: this.runTree.getSnapshot().deadlineAt,
           parentDeadlineAt: this.writer.getSnapshot().deadlineAt,
           requestDeadlineAt,
         }),
@@ -3775,11 +3844,17 @@ export class RunExecution<TOutput> {
         config: this.rootConfig,
         maxContextBytes: limitCeiling.maxContextBytes,
         maxResultBytes: limitCeiling.maxResultBytes,
+        maxModelInputTokens: limitCeiling.maxModelInputTokens,
+        maxModelOutputTokens: limitCeiling.maxModelOutputTokens,
+        maxCostUnits: limitCeiling.maxCostUnits,
       });
       const parentLimits = projectDelegationRunLimits({
         config: this.config,
         maxContextBytes: limitCeiling.maxContextBytes,
         maxResultBytes: limitCeiling.maxResultBytes,
+        maxModelInputTokens: limitCeiling.maxModelInputTokens,
+        maxModelOutputTokens: limitCeiling.maxModelOutputTokens,
+        maxCostUnits: limitCeiling.maxCostUnits,
       });
       limits = deriveDelegationLimits({
         derivationId: this.id("delegation_limits"),
@@ -3987,7 +4062,7 @@ export class RunExecution<TOutput> {
         modelUsageStatus: delegationModelUsageStatus(delegationResult),
         limitStatus: delegationResult.limitDisposition.status,
         exhaustedLimit: delegationResult.limitDisposition.exhaustedLimit,
-        treeRevision: this.getRunTreeSnapshot().revision,
+        treeRevision: this.runTree.getSnapshot().revision,
       });
       return Object.freeze({
         status: "settled" as const,
@@ -4045,7 +4120,7 @@ export class RunExecution<TOutput> {
     childRunId: string | null,
     depth: number | null,
     code: import("@agent-anything/observability/events").RuntimeDescendantRunFailureCode,
-    treeRevision: number = this.getRunTreeSnapshot().revision,
+    treeRevision: number = this.runTree.getSnapshot().revision,
   ): void {
     this.eventStream.emit("run.descendant.rejected", {
       relationId,
@@ -4347,6 +4422,21 @@ export class RunExecution<TOutput> {
       maxContributionPayloadBytes:
         this.dependencies.contextProjection.maxContributionPayloadBytes,
     });
+    const admittedPayloadBytes = transition.operations.reduce(
+      (total, operation) =>
+        total + ("contribution" in operation
+          ? operation.contribution.accounting.payloadBytes
+          : 0),
+      0,
+    );
+    if (admittedPayloadBytes > 0) {
+      this.recordTreeResources({
+        contextBytes: Object.freeze({
+          status: "measured" as const,
+          value: admittedPayloadBytes,
+        }),
+      });
+    }
     this.pendingContextTransitions.set(transition.id, transition);
     return next;
   }
@@ -4958,6 +5048,25 @@ export class RunExecution<TOutput> {
       terminal = { status: "cancelled" };
     }
 
+    if (this.resourceFailure !== null) {
+      terminal = this.resourceFailureCandidate(this.resourceFailure);
+    }
+    const stateBeforeTerminal = this.writer.getSnapshot();
+    const resultResource = this.runTree.recordResources(this.runId, {
+      resultBytes: Object.freeze({
+        status: "measured" as const,
+        value: measureTerminalResultBytes(
+          terminal,
+          stateBeforeTerminal.evidenceRefs,
+          stateBeforeTerminal.artifactRefs,
+        ),
+      }),
+    });
+    if (resultResource.status !== "recorded") {
+      terminal = this.resourceFailureCandidate(resultResource);
+    }
+    this.runTree.settleResources(this.runId);
+
     const completedAt = this.now();
     const cancellationRequest = this.config.cancellation.context.request;
     const payload: RunItemPayload<TOutput> = terminal.status === "succeeded"
@@ -5246,12 +5355,71 @@ export class RunExecution<TOutput> {
   }
 
   private onStateCommitted(state: RunState<TOutput>): void {
+    if (state.permission !== this.lastAuthorityPermission) {
+      this.lastAuthorityPermission = state.permission;
+      this.runTree.advanceAuthorityRevision(this.runId);
+    }
+    this.accountCommittedResources(state);
     this.transcript.record(state.items);
     if (this.runStartedEventEmitted) {
       this.emitCommittedContextTransition(state.context);
       this.emitCommittedRunItems(state);
     }
     this.publishCurrentState();
+  }
+
+  private accountCommittedResources(state: RunState<TOutput>): void {
+    while (this.accountedResourceItemCount < state.items.length) {
+      const item = state.items[this.accountedResourceItemCount++]!;
+      if (item.payload.kind === "run_action") {
+        this.recordTreeResources({
+          actions: Object.freeze({ status: "measured" as const, value: 1 }),
+        });
+        continue;
+      }
+      if (item.payload.kind !== "controller_turn") continue;
+      this.recordTreeResources({
+        controllerTurns: Object.freeze({ status: "measured" as const, value: 1 }),
+      });
+      let responseCorrelationCount = 0;
+      for (const modelItem of item.payload.modelItems) {
+        if (modelItem.kind !== "model_response_correlation") continue;
+        responseCorrelationCount += 1;
+        const usage = modelItem.usage;
+        const metering = this.dependencies.controller.resourceMetering;
+        this.recordTreeResources({
+          modelInputTokens: providerUsageMeasurement(
+            usage?.inputTokens ?? null,
+            metering.modelInputTokens,
+          ),
+          modelOutputTokens: providerUsageMeasurement(
+            usage?.outputTokens ?? null,
+            metering.modelOutputTokens,
+          ),
+          costUnits: providerUsageMeasurement(
+            usage?.costUnits ?? null,
+            metering.costUnits,
+          ),
+        });
+      }
+      if (responseCorrelationCount === 0) {
+        const metering = this.dependencies.controller.resourceMetering;
+        this.recordTreeResources({
+          modelInputTokens: absentProviderUsageMeasurement(metering.modelInputTokens),
+          modelOutputTokens: absentProviderUsageMeasurement(metering.modelOutputTokens),
+          costUnits: absentProviderUsageMeasurement(metering.costUnits),
+        });
+      }
+    }
+  }
+
+  private recordTreeResources(
+    usage: Parameters<import("./RunTreeExecution.js").RunTreeExecution["recordResources"]>[1],
+  ): void {
+    const result = this.runTree.recordResources(this.runId, usage);
+    if (result.status !== "recorded" && this.resourceFailure === null) {
+      this.resourceFailure = result;
+    }
   }
 
   private emitCommittedRunItems(state: RunState<TOutput>): void {
@@ -6025,6 +6193,7 @@ function descendantRejectionStatus(
     case "descendant_run_depth_limit_exceeded":
     case "descendant_run_total_limit_exceeded":
     case "descendant_run_active_limit_exceeded":
+    case "descendant_run_resource_limit_exceeded":
       return "unavailable";
   }
 }
@@ -6186,6 +6355,46 @@ function operationModelSettlement(
     case "unknown_effect":
       return "failed";
   }
+}
+
+function providerUsageMeasurement(
+  value: number | null,
+  qualification: import("@agent-anything/model-interaction").ProviderUsageMeteringQualification,
+): import("./RunTreeResourceAccount.js").RunTreeResourceMeasurement {
+  if (value !== null) {
+    return Object.freeze({ status: "measured", value });
+  }
+  return qualification === "not_applicable"
+    ? Object.freeze({ status: "not_applicable" })
+    : Object.freeze({ status: "unavailable" });
+}
+
+function absentProviderUsageMeasurement(
+  qualification: import("@agent-anything/model-interaction").ProviderUsageMeteringQualification,
+): import("./RunTreeResourceAccount.js").RunTreeResourceMeasurement {
+  return qualification === "not_applicable"
+    ? Object.freeze({ status: "not_applicable" })
+    : Object.freeze({ status: "unknown" });
+}
+
+function measureTerminalResultBytes<TOutput>(
+  terminal: TerminalCandidate<TOutput>,
+  evidenceRefs: readonly string[],
+  artifactRefs: readonly string[],
+): number {
+  const encoded = JSON.stringify({
+    status: terminal.status,
+    code: terminal.status === "succeeded" ? null : terminal.status === "cancelled"
+      ? "runtime_cancelled"
+      : terminal.code,
+    finalOutput: terminal.status === "succeeded" ? terminal.output : null,
+    evidenceRefs,
+    artifactRefs,
+  });
+  if (encoded === undefined) {
+    throw new TypeError("Run result resource material is not JSON-serializable.");
+  }
+  return new TextEncoder().encode(encoded).byteLength;
 }
 
 function isActiveStatus(status: RunState["status"]): boolean {

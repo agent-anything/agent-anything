@@ -9,17 +9,19 @@ export interface ProviderUsage {
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
   readonly totalTokens: number | null;
+  readonly costUnits: number | null;
   readonly metadata: { readonly [key: string]: ModelJsonValue };
 }
 
 export function snapshotProviderUsage(input: ProviderUsage | null): ProviderUsage | null {
   if (input === null) return null;
   strictRecord(input, "ProviderUsage", [
-    "inputTokens", "outputTokens", "totalTokens", "metadata",
+    "inputTokens", "outputTokens", "totalTokens", "costUnits", "metadata",
   ]);
   const inputTokens = nullableCount(input.inputTokens, "ProviderUsage.inputTokens");
   const outputTokens = nullableCount(input.outputTokens, "ProviderUsage.outputTokens");
   const totalTokens = nullableCount(input.totalTokens, "ProviderUsage.totalTokens");
+  const costUnits = nullableCount(input.costUnits, "ProviderUsage.costUnits");
   if (
     inputTokens !== null &&
     outputTokens !== null &&
@@ -36,6 +38,7 @@ export function snapshotProviderUsage(input: ProviderUsage | null): ProviderUsag
     inputTokens,
     outputTokens,
     totalTokens,
+    costUnits,
     metadata: metadata as { readonly [key: string]: ModelJsonValue },
   });
 }

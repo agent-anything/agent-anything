@@ -57,6 +57,10 @@ export class HelarcTracingController<TOutput = unknown> implements Controller<TO
     >,
   ) {}
 
+  get resourceMetering(): Controller<TOutput>["resourceMetering"] {
+    return this.inner.resourceMetering;
+  }
+
   async next(
     input: ControllerInput<TOutput>,
     context: ControllerCallContext,

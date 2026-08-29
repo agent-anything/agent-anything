@@ -96,6 +96,9 @@ export function createHelarcDescendantAgentContribution(
           const limits = createDelegationLimits({
             maxControllerTurns: input.limitCeiling.maxControllerTurns,
             maxActions: input.limitCeiling.maxActions,
+            maxModelInputTokens: input.limitCeiling.maxModelInputTokens,
+            maxModelOutputTokens: input.limitCeiling.maxModelOutputTokens,
+            maxCostUnits: input.limitCeiling.maxCostUnits,
             maxDurationMs: input.limitCeiling.maxDurationMs,
             maxContextBytes: input.limitCeiling.maxContextBytes,
             maxResultBytes: input.limitCeiling.maxResultBytes,

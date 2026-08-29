@@ -211,7 +211,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
         ...historicalMetrics,
         humanInteractionEvents: humanAttentionEvents,
         modelTurnCount: 8,
-        latencyMs: 267,
+        latencyMs: 295,
       },
       invariants: accepted.invariants,
       descendantRunCount: accepted.descendantRunCount,
@@ -221,7 +221,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       .toBe("delegation-transfer-deterministic-evaluation-v1");
     expect(historicalLatencyMs).toBe(283);
     expect(historicalModelTurnCount).toBe(5);
-    expect(candidate.metrics.latencyMs).toBe(267);
+    expect(candidate.metrics.latencyMs).toBe(295);
     expect(candidate.digest).not.toBe(accepted.reportDigest);
     expect(HELARC_DELEGATION_TRANSFER_BASELINE_ACCEPTANCE.predecessorAcceptanceRef)
       .toEqual(HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE.acceptanceRef);

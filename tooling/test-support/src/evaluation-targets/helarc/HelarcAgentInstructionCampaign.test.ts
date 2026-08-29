@@ -171,6 +171,7 @@ async function capture(
             inputTokens: 20,
             outputTokens: 8,
             totalTokens: 28,
+            costUnits: null,
             metadata: {},
           },
         },

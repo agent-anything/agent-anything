@@ -99,6 +99,9 @@ describe("delegation resources", () => {
       effective: createDelegationLimits({
         maxControllerTurns: 99,
         maxActions: derivation.effective.maxActions,
+        maxModelInputTokens: derivation.effective.maxModelInputTokens,
+        maxModelOutputTokens: derivation.effective.maxModelOutputTokens,
+        maxCostUnits: derivation.effective.maxCostUnits,
         maxDurationMs: derivation.effective.maxDurationMs,
         maxContextBytes: derivation.effective.maxContextBytes,
         maxResultBytes: derivation.effective.maxResultBytes,
@@ -167,6 +170,9 @@ describe("delegation request", () => {
     const widerRequest = createDelegationLimits({
       maxControllerTurns: 20,
       maxActions: 20,
+      maxModelInputTokens: 20_000,
+      maxModelOutputTokens: 5_000,
+      maxCostUnits: 20_000,
       maxDurationMs: 60_000,
       maxContextBytes: 16_384,
       maxResultBytes: 65_536,
@@ -443,6 +449,9 @@ function limits() {
   return createDelegationLimits({
     maxControllerTurns: 8,
     maxActions: 16,
+    maxModelInputTokens: 8_000,
+    maxModelOutputTokens: 2_000,
+    maxCostUnits: 8_000,
     maxDurationMs: 60_000,
     maxContextBytes: 16_384,
     maxResultBytes: 65_536,
@@ -521,6 +530,9 @@ function limitSources(): readonly DelegationLimitSourceInput[] {
     ceiling: createDelegationLimits({
       maxControllerTurns: turnCeilings[index]!,
       maxActions: 16,
+      maxModelInputTokens: 8_000,
+      maxModelOutputTokens: 2_000,
+      maxCostUnits: 8_000,
       maxDurationMs: 60_000,
       maxContextBytes: 16_384,
       maxResultBytes: 65_536,
@@ -557,8 +569,10 @@ function authorityDimensions(
     "tool",
     "permission",
     "action_execution",
+    "sandbox",
     "verification",
     "disclosure",
+    "resource",
   ] as const;
   return kinds.map((kind) => ({
     kind,

@@ -198,6 +198,7 @@ function createResponse(output: string): ProviderResponse {
       inputTokens: 10,
       outputTokens: 5,
       totalTokens: 15,
+      costUnits: null,
       metadata: {},
     },
     metadata: {},

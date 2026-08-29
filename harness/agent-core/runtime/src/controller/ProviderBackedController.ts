@@ -150,6 +150,15 @@ export class ProviderBackedController<TOutput = unknown>
 {
   private readonly continuation: ModelContinuationLifecycle;
 
+  get resourceMetering(): Controller<TOutput>["resourceMetering"] {
+    const usage = this.input.provider.descriptor.capabilities.usageMetering;
+    return Object.freeze({
+      modelInputTokens: usage.inputTokens,
+      modelOutputTokens: usage.outputTokens,
+      costUnits: usage.costUnits,
+    });
+  }
+
   constructor(private readonly input: ProviderBackedControllerInput<TOutput>) {
     this.continuation = input.continuation ?? new ModelContinuationLifecycle();
     if (typeof input.retryExecutor?.execute !== "function") {

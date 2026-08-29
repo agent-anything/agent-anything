@@ -753,6 +753,15 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
         maxActiveDescendantRuns: 0,
         maxDescendantDepth: 0,
       },
+      runTreeResources: {
+        controllerTurns: { maximum: 256, enforcement: "hard" },
+        actions: { maximum: 256, enforcement: "hard" },
+        modelInputTokens: { maximum: 2_000_000, enforcement: "observational" },
+        modelOutputTokens: { maximum: 500_000, enforcement: "observational" },
+        costUnits: { maximum: 2_000_000, enforcement: "observational" },
+        contextBytes: { maximum: 8_000_000, enforcement: "hard" },
+        resultBytes: { maximum: 2_000_000, enforcement: "hard" },
+      },
       audit: "optional",
       telemetry: "optional",
       cancellationLimits: {
@@ -982,6 +991,9 @@ function targetObservation(
 function targetOutcomeCode(
   material: HelarcEvaluationRunMaterial,
 ): string | null {
+  if (material.runResult.status === "succeeded") {
+    return null;
+  }
   if (material.runResult.failure !== null) {
     return material.runResult.failure.failure.code;
   }
@@ -991,7 +1003,7 @@ function targetOutcomeCode(
   if (material.runResult.status === "blocked") {
     return blockedRunOutcomeCode(material.runResult.items) ?? material.runResult.code;
   }
-  return material.product.output.safeErrors[0]?.code ?? material.runResult.code;
+  throw new TypeError("Helarc Evaluation received an invalid terminal RunResult.");
 }
 
 function targetOutcomeOwner(

@@ -14,6 +14,7 @@ import type { CancellationLimits, RunCancellationController } from "../run/index
 import type { ResolvedRunPermissionConfig } from "../run/index.js";
 import type { CompletionGateConfiguration } from "@agent-anything/verification/completion";
 import type { VerificationProfile } from "@agent-anything/verification/definition";
+import type { RunTreeResourceEnvelope } from "./RunTreeResourceAccount.js";
 
 export type RunInfrastructureRequirement = "optional" | "required";
 
@@ -74,6 +75,7 @@ export interface RunConfig {
 
 export interface RootRunConfig extends RunConfig {
   readonly runTreeLimits: RunTreeLimits;
+  readonly runTreeResources: RunTreeResourceEnvelope;
 }
 
 export type ValidatedRunConfig = RunConfig;

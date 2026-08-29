@@ -123,6 +123,7 @@ describe("provider-neutral Model Interaction contracts", () => {
         inputTokens: 10,
         outputTokens: 5,
         totalTokens: 15,
+        costUnits: null,
         metadata: {},
       },
       responseRef: {
@@ -185,10 +186,16 @@ describe("provider-neutral Model Interaction contracts", () => {
       modelInput: { supported: false },
       continuation: { supported: false },
       compaction: { supported: false },
+      usageMetering: {
+        inputTokens: "measured",
+        outputTokens: "measured",
+        costUnits: "unavailable",
+      },
     })).toMatchObject({
       nativeToolInteraction: { supported: true },
       structuredGeneration: { supported: false },
       streaming: { supported: true },
+      usageMetering: { inputTokens: "measured", costUnits: "unavailable" },
     });
   });
 

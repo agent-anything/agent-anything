@@ -38,4 +38,16 @@ export type {
   RunTreeExecutionSnapshot,
   RunTreeNodeProjection,
 } from "./RunTreeExecution.js";
+export type {
+  RunTreeNodeResourceSnapshot,
+  RunTreeResourceAmounts,
+  RunTreeResourceDimension,
+  RunTreeResourceDimensionSnapshot,
+  RunTreeResourceEnvelope,
+  RunTreeResourceLimit,
+  RunTreeResourceMeasurement,
+  RunTreeResourceSettlement,
+  RunTreeResourceSnapshot,
+  RunTreeResourceUsage,
+} from "./RunTreeResourceAccount.js";
 export { Runner } from "./Runner.js";

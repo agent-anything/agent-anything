@@ -12,8 +12,10 @@ export type DelegationAuthorityDimensionKind =
   | "tool"
   | "permission"
   | "action_execution"
+  | "sandbox"
   | "verification"
-  | "disclosure";
+  | "disclosure"
+  | "resource";
 
 export type DelegationAuthoritySourceRole =
   | "root"
@@ -73,8 +75,10 @@ const dimensionKinds: readonly DelegationAuthorityDimensionKind[] = [
   "tool",
   "permission",
   "action_execution",
+  "sandbox",
   "verification",
   "disclosure",
+  "resource",
 ];
 
 const sourceRoles: readonly DelegationAuthoritySourceRole[] = [

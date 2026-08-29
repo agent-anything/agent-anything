@@ -216,6 +216,7 @@ const descendantFailureCodes: readonly RuntimeDescendantRunFailureCode[] = [
   "descendant_run_depth_limit_exceeded",
   "descendant_run_total_limit_exceeded",
   "descendant_run_active_limit_exceeded",
+  "descendant_run_resource_limit_exceeded",
   "delegation_preparation_failed",
   "delegation_request_invalid",
   "delegation_authority_invalid",

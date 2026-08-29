@@ -86,6 +86,7 @@ describe("Helarc Agent Instruction Evaluation", () => {
                 inputTokens: 20,
                 outputTokens: 8,
                 totalTokens: 28,
+                costUnits: null,
                 metadata: {},
               },
             },

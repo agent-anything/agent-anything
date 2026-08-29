@@ -42,6 +42,11 @@ export function projectDelegationRunAuthority(
         enforcement: config.actionExecution.enforcement,
         metadata: config.actionExecution.metadata,
       };
+  const resourceProjection = {
+    maxControllerTurns: config.limits.maxIterations,
+    maxActions: config.limits.maxActions,
+    maxDurationMs: config.limits.maxDurationMs,
+  };
   const verificationAllowed = [
     `${config.verification.profile.ref.owner}/${config.verification.profile.ref.kind}/${config.verification.profile.ref.id}@${config.verification.profile.ref.revision}`,
     `specification:${config.verification.profile.specification.id}@${config.verification.profile.specification.revision}`,
@@ -70,11 +75,25 @@ export function projectDelegationRunAuthority(
         ? []
         : [createDelegationContractIdentity(
             "agent-anything.delegation-action-execution-authority.v1",
-            actionProjection,
+            {
+              policySnapshotId: actionProjection.policySnapshotId,
+              securityContext: actionProjection.securityContext,
+              metadata: actionProjection.metadata,
+            },
+          )],
+      required: actionProjection === null ? [] : ["canonical-action-required"],
+    },
+    {
+      kind: "sandbox",
+      allowed: actionProjection === null
+        ? []
+        : [createDelegationContractIdentity(
+            "agent-anything.delegation-sandbox-authority.v1",
+            actionProjection.enforcement,
           )],
       required: actionProjection === null
         ? []
-        : [`enforcement:${config.actionExecution!.enforcement}`],
+        : [`enforcement:${actionProjection.enforcement}`],
     },
     {
       kind: "verification",
@@ -86,6 +105,14 @@ export function projectDelegationRunAuthority(
       allowed: DISCLOSURE_ALLOWED,
       required: DISCLOSURE_REQUIRED,
     },
+    {
+      kind: "resource",
+      allowed: [createDelegationContractIdentity(
+        "agent-anything.delegation-resource-authority.v1",
+        resourceProjection,
+      )],
+      required: ["run-tree-allocation-required"],
+    },
   ]);
 }
 
@@ -93,10 +120,16 @@ export function projectDelegationRunLimits(input: {
   readonly config: RunConfig;
   readonly maxContextBytes: number;
   readonly maxResultBytes: number;
+  readonly maxModelInputTokens: number;
+  readonly maxModelOutputTokens: number;
+  readonly maxCostUnits: number;
 }): DelegationLimits {
   return createDelegationLimits({
     maxControllerTurns: input.config.limits.maxIterations,
     maxActions: input.config.limits.maxActions,
+    maxModelInputTokens: input.maxModelInputTokens,
+    maxModelOutputTokens: input.maxModelOutputTokens,
+    maxCostUnits: input.maxCostUnits,
     maxDurationMs: input.config.limits.maxDurationMs,
     maxContextBytes: input.maxContextBytes,
     maxResultBytes: input.maxResultBytes,

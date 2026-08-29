@@ -100,6 +100,9 @@ export interface DelegationTaskPreparation {
 export interface DelegationLimits {
   readonly maxControllerTurns: number;
   readonly maxActions: number;
+  readonly maxModelInputTokens: number;
+  readonly maxModelOutputTokens: number;
+  readonly maxCostUnits: number;
   readonly maxDurationMs: number;
   readonly maxContextBytes: number;
   readonly maxResultBytes: number;
@@ -466,6 +469,9 @@ export function snapshotDelegationLimits(
   strictRecord(input, "DelegationLimits", [
     "maxControllerTurns",
     "maxActions",
+    "maxModelInputTokens",
+    "maxModelOutputTokens",
+    "maxCostUnits",
     "maxDurationMs",
     "maxContextBytes",
     "maxResultBytes",
@@ -474,6 +480,9 @@ export function snapshotDelegationLimits(
   const material = deepFreeze({
     maxControllerTurns: positiveInteger(input.maxControllerTurns, "maxControllerTurns"),
     maxActions: positiveInteger(input.maxActions, "maxActions"),
+    maxModelInputTokens: positiveInteger(input.maxModelInputTokens, "maxModelInputTokens"),
+    maxModelOutputTokens: positiveInteger(input.maxModelOutputTokens, "maxModelOutputTokens"),
+    maxCostUnits: positiveInteger(input.maxCostUnits, "maxCostUnits"),
     maxDurationMs: positiveInteger(input.maxDurationMs, "maxDurationMs"),
     maxContextBytes: positiveInteger(input.maxContextBytes, "maxContextBytes"),
     maxResultBytes: positiveInteger(input.maxResultBytes, "maxResultBytes"),
@@ -494,6 +503,9 @@ export function createDelegationLimits(
   strictRecord(input, "DelegationLimitsInput", [
     "maxControllerTurns",
     "maxActions",
+    "maxModelInputTokens",
+    "maxModelOutputTokens",
+    "maxCostUnits",
     "maxDurationMs",
     "maxContextBytes",
     "maxResultBytes",
@@ -501,6 +513,9 @@ export function createDelegationLimits(
   const material = deepFreeze({
     maxControllerTurns: positiveInteger(input.maxControllerTurns, "maxControllerTurns"),
     maxActions: positiveInteger(input.maxActions, "maxActions"),
+    maxModelInputTokens: positiveInteger(input.maxModelInputTokens, "maxModelInputTokens"),
+    maxModelOutputTokens: positiveInteger(input.maxModelOutputTokens, "maxModelOutputTokens"),
+    maxCostUnits: positiveInteger(input.maxCostUnits, "maxCostUnits"),
     maxDurationMs: positiveInteger(input.maxDurationMs, "maxDurationMs"),
     maxContextBytes: positiveInteger(input.maxContextBytes, "maxContextBytes"),
     maxResultBytes: positiveInteger(input.maxResultBytes, "maxResultBytes"),

@@ -1152,6 +1152,7 @@ function scriptedStep(output: unknown, sequence: number): FakeNativeToolProvider
       inputTokens,
       outputTokens,
       totalTokens: inputTokens + outputTokens,
+      costUnits: null,
       metadata: { source: "deterministic-script" },
     },
     metadata: { scriptSequence: sequence },

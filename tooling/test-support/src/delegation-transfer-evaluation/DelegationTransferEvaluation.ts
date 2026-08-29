@@ -359,6 +359,7 @@ function scriptedSuccess(output: unknown, sequence: number): FakeNativeToolProvi
       inputTokens: 10 + sequence,
       outputTokens: 4 + sequence,
       totalTokens: 14 + (sequence * 2),
+      costUnits: null,
       metadata: { source: "delegation-transfer-evaluation" },
     },
     metadata: { scriptSequence: sequence },

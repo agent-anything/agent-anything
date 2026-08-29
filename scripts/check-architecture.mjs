@@ -217,6 +217,7 @@ const focusedPublicSubpaths = new Map([
       "@agent-anything/helarc/review",
       "@agent-anything/helarc/run",
       "@agent-anything/helarc/task",
+      "@agent-anything/helarc/task-fulfillment",
       "@agent-anything/helarc/thread",
       "@agent-anything/helarc/tools",
       "@agent-anything/helarc/verification",

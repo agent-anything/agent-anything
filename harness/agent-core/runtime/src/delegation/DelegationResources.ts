@@ -69,6 +69,9 @@ export function deriveDelegationLimits(input: {
   const effective = createDelegationLimits({
     maxControllerTurns: minimum(sources, "maxControllerTurns"),
     maxActions: minimum(sources, "maxActions"),
+    maxModelInputTokens: minimum(sources, "maxModelInputTokens"),
+    maxModelOutputTokens: minimum(sources, "maxModelOutputTokens"),
+    maxCostUnits: minimum(sources, "maxCostUnits"),
     maxDurationMs: minimum(sources, "maxDurationMs"),
     maxContextBytes: minimum(sources, "maxContextBytes"),
     maxResultBytes: minimum(sources, "maxResultBytes"),

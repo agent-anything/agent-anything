@@ -61,6 +61,8 @@ describe("RunTreeExecution", () => {
       parentRunAction: action("run-root", 1),
       parentDeadlineAt: "2026-08-23T00:00:40.000Z",
       childLocalDeadlineAt: "2026-08-23T00:00:50.000Z",
+      resourceAllocation: resourceAmounts(100),
+      authorityRevision: "run-child-authority-v1",
     });
     expect(child).toMatchObject({
       status: "accepted",
@@ -208,6 +210,58 @@ describe("RunTreeExecution", () => {
       parentRunId: "run-child",
     });
   });
+
+  it("invalidates an Action authority basis when authority, resources, or cancellation change", () => {
+    const tree = createTree({
+      maxTotalDescendantRuns: 1,
+      maxActiveDescendantRuns: 1,
+      maxDescendantDepth: 1,
+    });
+    const rootCancellation = cancellation("run-root");
+    tree.registerCancellation("run-root", rootCancellation);
+
+    const authorityBasis = tree.captureAuthorityBasis("run-root");
+    expect(tree.isAuthorityBasisCurrent("run-root", authorityBasis)).toBe(true);
+    tree.advanceAuthorityRevision("run-root");
+    expect(tree.isAuthorityBasisCurrent("run-root", authorityBasis)).toBe(false);
+
+    const resourceBasis = tree.captureAuthorityBasis("run-root");
+    tree.recordResources("run-root", {
+      controllerTurns: { status: "measured", value: 1 },
+    });
+    expect(tree.isAuthorityBasisCurrent("run-root", resourceBasis)).toBe(false);
+
+    const cancellationBasis = tree.captureAuthorityBasis("run-root");
+    rootCancellation.requestCancellation({
+      origin: "user",
+      reasonCode: "user_requested",
+    });
+    expect(tree.isAuthorityBasisCurrent("run-root", cancellationBasis)).toBe(false);
+  });
+
+  it("materializes root resource projection without a standalone tree notification", () => {
+    const tree = createTree({
+      maxTotalDescendantRuns: 1,
+      maxActiveDescendantRuns: 1,
+      maxDescendantDepth: 1,
+    });
+    const revisions: number[] = [];
+    tree.subscribe((snapshot) => revisions.push(snapshot.revision));
+    const before = tree.getSnapshot().revision;
+
+    tree.recordResources("run-root", {
+      controllerTurns: { status: "measured", value: 1 },
+    });
+
+    expect(revisions).toEqual([before]);
+    expect(tree.captureAuthorityBasis("run-root").resourceRevision).toBe(1);
+
+    tree.updateLifecycle("run-root", "running");
+
+    expect(revisions).toEqual([before]);
+    expect(tree.getSnapshot().revision).toBe(before + 1);
+    expect(tree.getSnapshot().resources.controllerTurns.consumed).toBe(1);
+  });
 });
 
 function createTree(limits: {
@@ -220,6 +274,8 @@ function createTree(limits: {
     startedAt: STARTED_AT,
     deadlineAt: DEADLINE_AT,
     limits,
+    resources: treeResources(),
+    rootAuthorityRevision: "root-authority-v1",
     now: () => now,
   });
 }
@@ -239,6 +295,32 @@ function reserve(
     parentRunAction: action(parentRunId, actionSequence),
     parentDeadlineAt: DEADLINE_AT,
     childLocalDeadlineAt: DEADLINE_AT,
+    resourceAllocation: resourceAmounts(100),
+    authorityRevision: `${childRunId}-authority-v1`,
+  });
+}
+
+function treeResources() {
+  return Object.freeze({
+    controllerTurns: { maximum: 1_000, enforcement: "hard" as const },
+    actions: { maximum: 1_000, enforcement: "hard" as const },
+    modelInputTokens: { maximum: 1_000, enforcement: "observational" as const },
+    modelOutputTokens: { maximum: 1_000, enforcement: "observational" as const },
+    costUnits: { maximum: 1_000, enforcement: "observational" as const },
+    contextBytes: { maximum: 1_000, enforcement: "hard" as const },
+    resultBytes: { maximum: 1_000, enforcement: "hard" as const },
+  });
+}
+
+function resourceAmounts(value: number) {
+  return Object.freeze({
+    controllerTurns: value,
+    actions: value,
+    modelInputTokens: value,
+    modelOutputTokens: value,
+    costUnits: value,
+    contextBytes: value,
+    resultBytes: value,
   });
 }
 

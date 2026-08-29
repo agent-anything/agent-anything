@@ -88,6 +88,11 @@ export class OllamaProvider implements Provider {
         modelInput: this.inputAccounting.capability,
         continuation: Object.freeze({ supported: false as const }),
         compaction: Object.freeze({ supported: false as const }),
+        usageMetering: Object.freeze({
+          inputTokens: "measured" as const,
+          outputTokens: "measured" as const,
+          costUnits: "not_applicable" as const,
+        }),
       }),
       requestRetryScheduler: Object.freeze({ kind: "harness" as const }),
       metadata: Object.freeze({}),
@@ -512,6 +517,7 @@ function readOllamaUsage(value: Record<string, unknown>) {
         totalTokens: inputTokens === null || outputTokens === null
           ? null
           : inputTokens + outputTokens,
+        costUnits: null,
         metadata: {},
       };
 }

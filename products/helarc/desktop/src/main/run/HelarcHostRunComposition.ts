@@ -207,6 +207,7 @@ export async function prepareHelarcHostRun(
   const now = input.now ?? (() => new Date().toISOString());
   const runLimits = resolveHelarcRunLimits(input.runLimits);
   const runTreeLimits = resolveHelarcRunTreeLimits(input.runTreeLimits);
+  const runTreeResources = resolveHelarcRunTreeResources(runLimits, runTreeLimits);
   const runWorkspace = runContext.workspace;
   const workspace = runWorkspace.primary;
   const workspaceRoots = resolvePermissionWorkspaceRoots(runWorkspace);
@@ -396,6 +397,7 @@ export async function prepareHelarcHostRun(
       },
       limits: runLimits,
       runTreeLimits,
+      runTreeResources,
       audit: "optional",
       telemetry: "optional",
       cancellationLimits: {
@@ -653,4 +655,41 @@ function resolveHelarcRunTreeLimits(
     }
   }
   return Object.freeze(value);
+}
+
+function resolveHelarcRunTreeResources(
+  runLimits: RunLimits,
+  treeLimits: RunTreeLimits,
+): import("@agent-anything/agent-runtime/runner").RunTreeResourceEnvelope {
+  const runCapacity = treeLimits.maxTotalDescendantRuns + 1;
+  return Object.freeze({
+    controllerTurns: Object.freeze({
+      maximum: runLimits.maxIterations * runCapacity,
+      enforcement: "hard" as const,
+    }),
+    actions: Object.freeze({
+      maximum: runLimits.maxActions * runCapacity,
+      enforcement: "hard" as const,
+    }),
+    modelInputTokens: Object.freeze({
+      maximum: 2_000_000 * runCapacity,
+      enforcement: "observational" as const,
+    }),
+    modelOutputTokens: Object.freeze({
+      maximum: 500_000 * runCapacity,
+      enforcement: "observational" as const,
+    }),
+    costUnits: Object.freeze({
+      maximum: 2_000_000 * runCapacity,
+      enforcement: "observational" as const,
+    }),
+    contextBytes: Object.freeze({
+      maximum: 8_000_000 * runCapacity,
+      enforcement: "hard" as const,
+    }),
+    resultBytes: Object.freeze({
+      maximum: 2_000_000 * runCapacity,
+      enforcement: "hard" as const,
+    }),
+  });
 }

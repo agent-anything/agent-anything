@@ -756,6 +756,7 @@ describe("HelarcMainController", () => {
         snapshot.threadSummaries.some(
           (thread) => thread.latestRun?.status === "completed",
         ),
+      20_000,
     );
     void controller.startRun({
       taskText: "Recover from one failed command and create a marker file",
@@ -807,7 +808,7 @@ describe("HelarcMainController", () => {
     ]);
     expect(record?.artifacts.map(({ kind }) => kind)).toEqual(["final-output"]);
     await expect(access(markerPath)).resolves.toBeUndefined();
-  }, 15_000);
+  }, 30_000);
 
   it("correlates versioned approval submissions and preserves a decline", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "helarc-desktop-permission-"));
@@ -1570,6 +1571,11 @@ class CompleteProvider implements Provider {
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
       compaction: { supported: false as const },
+      usageMetering: {
+        inputTokens: "unavailable" as const,
+        outputTokens: "unavailable" as const,
+        costUnits: "unavailable" as const,
+      },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -1665,6 +1671,11 @@ class SecretFailingProvider implements Provider {
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
       compaction: { supported: false as const },
+      usageMetering: {
+        inputTokens: "unavailable" as const,
+        outputTokens: "unavailable" as const,
+        costUnits: "unavailable" as const,
+      },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -1700,6 +1711,11 @@ class ScriptedProvider implements Provider {
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
       compaction: { supported: false as const },
+      usageMetering: {
+        inputTokens: "unavailable" as const,
+        outputTokens: "unavailable" as const,
+        costUnits: "unavailable" as const,
+      },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},

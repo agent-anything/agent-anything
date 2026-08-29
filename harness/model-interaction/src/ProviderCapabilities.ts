@@ -29,6 +29,19 @@ export interface ProviderCapabilities {
   readonly modelInput: ModelInputCapability;
   readonly continuation: ModelContinuationCapability;
   readonly compaction: ProviderMechanicCapability;
+  readonly usageMetering: ProviderUsageMeteringCapability;
+}
+
+export type ProviderUsageMeteringQualification =
+  | "measured"
+  | "conservatively_bounded"
+  | "unavailable"
+  | "not_applicable";
+
+export interface ProviderUsageMeteringCapability {
+  readonly inputTokens: ProviderUsageMeteringQualification;
+  readonly outputTokens: ProviderUsageMeteringQualification;
+  readonly costUnits: ProviderUsageMeteringQualification;
 }
 
 export type ProviderMechanicCapability =
@@ -52,6 +65,7 @@ export function snapshotProviderCapabilities(
   strictRecord(input, "ProviderCapabilities", [
     "nativeToolInteraction", "structuredGeneration", "streaming",
     "modelInput", "continuation", "compaction",
+    "usageMetering",
   ]);
   return Object.freeze({
     nativeToolInteraction: snapshotNativeToolCapability(input.nativeToolInteraction),
@@ -69,7 +83,34 @@ export function snapshotProviderCapabilities(
       input.compaction,
       "ProviderCapabilities.compaction",
     ),
+    usageMetering: snapshotUsageMetering(input.usageMetering),
   });
+}
+
+function snapshotUsageMetering(
+  input: ProviderUsageMeteringCapability,
+): ProviderUsageMeteringCapability {
+  strictRecord(input, "ProviderCapabilities.usageMetering", [
+    "inputTokens", "outputTokens", "costUnits",
+  ]);
+  return Object.freeze({
+    inputTokens: usageQualification(input.inputTokens, "inputTokens"),
+    outputTokens: usageQualification(input.outputTokens, "outputTokens"),
+    costUnits: usageQualification(input.costUnits, "costUnits"),
+  });
+}
+
+function usageQualification(
+  input: ProviderUsageMeteringQualification,
+  field: string,
+): ProviderUsageMeteringQualification {
+  if (
+    input !== "measured" && input !== "conservatively_bounded" &&
+    input !== "unavailable" && input !== "not_applicable"
+  ) {
+    throw new TypeError(`Provider usage metering ${field} is invalid.`);
+  }
+  return input;
 }
 
 function snapshotNativeToolCapability(

@@ -14,13 +14,24 @@ import type {
   RunResultCode,
 } from "../run/index.js";
 import type { RunTreeLimits } from "./RunConfig.js";
+import {
+  RunTreeResourceAccount,
+  type RunTreeNodeResourceSnapshot,
+  type RunTreeResourceAmounts,
+  type RunTreeResourceEnvelope,
+  type RunTreeResourceMeasurement,
+  type RunTreeResourceRecordResult,
+  type RunTreeResourceSettlement,
+  type RunTreeResourceSnapshot,
+} from "./RunTreeResourceAccount.js";
 
 export type DescendantRunReservationFailureCode =
   | "descendant_run_start_cancelled"
   | "descendant_run_deadline_exceeded"
   | "descendant_run_depth_limit_exceeded"
   | "descendant_run_total_limit_exceeded"
-  | "descendant_run_active_limit_exceeded";
+  | "descendant_run_active_limit_exceeded"
+  | "descendant_run_resource_limit_exceeded";
 
 export interface DescendantRunReservationInput {
   readonly relationId: string;
@@ -30,6 +41,8 @@ export interface DescendantRunReservationInput {
   readonly parentRunAction: RunActionRef;
   readonly parentDeadlineAt: string;
   readonly childLocalDeadlineAt: string;
+  readonly resourceAllocation: RunTreeResourceAmounts;
+  readonly authorityRevision: string;
 }
 
 export type DescendantRunReservation =
@@ -38,6 +51,8 @@ export type DescendantRunReservation =
       readonly relation: DescendantRunRelation;
       readonly lineage: DescendantRunLineage;
       readonly deadlineAt: string;
+      readonly resources: RunTreeNodeResourceSnapshot;
+      readonly authorityRevision: string;
       readonly treeRevision: number;
     }
   | {
@@ -56,6 +71,8 @@ export interface RunTreeNodeProjection {
   readonly resultCode: RunResultCode | null;
   readonly startedAt: string | null;
   readonly completedAt: string | null;
+  readonly resources: RunTreeNodeResourceSnapshot;
+  readonly authorityRevision: string;
 }
 
 export interface RunTreeExecutionSnapshot {
@@ -65,6 +82,7 @@ export interface RunTreeExecutionSnapshot {
   readonly limits: RunTreeLimits;
   readonly totalDescendantRuns: number;
   readonly activeDescendantRuns: number;
+  readonly resources: RunTreeResourceSnapshot;
   readonly nodes: readonly RunTreeNodeProjection[];
 }
 
@@ -110,6 +128,8 @@ interface MutableRunTreeNode {
   resultCode: RunResultCode | null;
   startedAt: string | null;
   completedAt: string | null;
+  readonly admittedAuthorityRevision: string;
+  authorityRevisionSequence: number;
 }
 
 interface CancellationRegistration {
@@ -122,6 +142,8 @@ export interface CreateRunTreeExecutionInput {
   readonly startedAt: string;
   readonly deadlineAt: string;
   readonly limits: RunTreeLimits;
+  readonly resources: RunTreeResourceEnvelope;
+  readonly rootAuthorityRevision: string;
   readonly now: () => string;
 }
 
@@ -130,9 +152,11 @@ export class RunTreeExecution {
 
   private readonly input: CreateRunTreeExecutionInput;
   private readonly nodes = new Map<string, MutableRunTreeNode>();
+  private readonly resources: RunTreeResourceAccount;
   private readonly cancellation = new Map<string, CancellationRegistration>();
   private readonly listeners = new Set<RunTreeExecutionListener>();
   private revision = 0;
+  private projectionDirty = false;
   private totalDescendantRuns = 0;
   private activeDescendantRuns = 0;
   private snapshot: RunTreeExecutionSnapshot;
@@ -148,6 +172,8 @@ export class RunTreeExecution {
       ...input,
       limits: Object.freeze({ ...input.limits }),
     });
+    assertToken(input.rootAuthorityRevision, "rootAuthorityRevision");
+    this.resources = new RunTreeResourceAccount(input.rootRunId, input.resources);
     this.rootLineage = createRootRunLineage({ id: input.rootRunId });
     this.nodes.set(input.rootRunId, {
       lineage: this.rootLineage,
@@ -156,6 +182,8 @@ export class RunTreeExecution {
       resultCode: null,
       startedAt: input.startedAt,
       completedAt: null,
+      admittedAuthorityRevision: input.rootAuthorityRevision,
+      authorityRevisionSequence: 0,
     });
     this.snapshot = this.createSnapshot();
   }
@@ -202,6 +230,15 @@ export class RunTreeExecution {
       depth,
     });
     const lineage = createDescendantRunLineage(relation);
+    assertToken(input.authorityRevision, "authorityRevision");
+    const resourceReservation = this.resources.reserve(
+      input.parentRunId,
+      childRunId,
+      input.resourceAllocation,
+    );
+    if (resourceReservation.status === "rejected") {
+      return rejected(resourceReservation.code, this.revision);
+    }
     this.totalDescendantRuns += 1;
     this.activeDescendantRuns += 1;
     this.nodes.set(childRunId, {
@@ -211,6 +248,8 @@ export class RunTreeExecution {
       resultCode: null,
       startedAt: null,
       completedAt: null,
+      admittedAuthorityRevision: input.authorityRevision,
+      authorityRevisionSequence: 0,
     });
     this.commitProjectionChange();
     return Object.freeze({
@@ -218,8 +257,70 @@ export class RunTreeExecution {
       relation,
       lineage,
       deadlineAt: new Date(effectiveDeadlineMs).toISOString(),
+      resources: this.resources.getNodeSnapshot(childRunId),
+      authorityRevision: this.currentAuthorityRevision(childRunId),
       treeRevision: this.revision,
     });
+  }
+
+  recordResources(
+    runId: string,
+    usage: Partial<Record<
+      import("./RunTreeResourceAccount.js").RunTreeResourceDimension,
+      RunTreeResourceMeasurement
+    >>,
+  ): RunTreeResourceRecordResult {
+    this.requireNode(runId);
+    const result = this.resources.record(runId, usage);
+    this.projectionDirty = true;
+    return result;
+  }
+
+  settleResources(runId: string): RunTreeResourceSettlement {
+    this.requireNode(runId);
+    const settlement = this.resources.settle(runId);
+    this.projectionDirty = true;
+    return settlement;
+  }
+
+  getResourceSettlement(runId: string): RunTreeResourceSettlement | null {
+    this.requireNode(runId);
+    return this.resources.getSettlement(runId);
+  }
+
+  advanceAuthorityRevision(runId: string): string {
+    const node = this.requireNode(runId);
+    if (isTerminal(node.status)) {
+      throw new TypeError("A terminal Run cannot advance authority revision.");
+    }
+    node.authorityRevisionSequence += 1;
+    this.projectionDirty = true;
+    return this.currentAuthorityRevision(runId);
+  }
+
+  captureAuthorityBasis(runId: string): {
+    readonly authorityRevision: string;
+    readonly resourceRevision: number;
+  } {
+    const node = this.requireNode(runId);
+    if (isTerminal(node.status)) {
+      throw new TypeError("A terminal Run cannot capture Action authority.");
+    }
+    return Object.freeze({
+      authorityRevision: this.currentAuthorityRevision(runId),
+      resourceRevision: this.resources.getNodeSnapshot(runId).revision,
+    });
+  }
+
+  isAuthorityBasisCurrent(
+    runId: string,
+    basis: { readonly authorityRevision: string; readonly resourceRevision: number },
+  ): boolean {
+    const node = this.nodes.get(runId);
+    return node !== undefined && !isTerminal(node.status) &&
+      this.currentAuthorityRevision(runId) === basis.authorityRevision &&
+      this.resources.getNodeSnapshot(runId).revision === basis.resourceRevision &&
+      !this.isCancellationRequested(runId);
   }
 
   registerCancellation(
@@ -251,9 +352,21 @@ export class RunTreeExecution {
 
   updateLifecycle(runId: string, status: RunLifecycleStatus): void {
     const node = this.requireNode(runId);
-    if (isTerminal(node.status) || isTerminal(status) || node.status === status) return;
+    if (isTerminal(node.status)) return;
+    if (isTerminal(status)) {
+      if (this.projectionDirty) {
+        this.commitProjectionChange(runId !== this.input.rootRunId);
+      }
+      return;
+    }
+    if (node.status === status) {
+      if (this.projectionDirty) {
+        this.commitProjectionChange(runId !== this.input.rootRunId);
+      }
+      return;
+    }
     node.status = status;
-    this.commitProjectionChange();
+    this.commitProjectionChange(runId !== this.input.rootRunId);
   }
 
   settleRun(
@@ -275,7 +388,7 @@ export class RunTreeExecution {
       this.activeDescendantRuns -= 1;
     }
     this.removeCancellation(runId);
-    this.commitProjectionChange();
+    this.commitProjectionChange(runId !== this.input.rootRunId);
   }
 
   failStart(runId: string, completedAt: string): void {
@@ -294,6 +407,11 @@ export class RunTreeExecution {
 
   getSnapshot(): RunTreeExecutionSnapshot {
     return this.snapshot;
+  }
+
+  private currentAuthorityRevision(runId: string): string {
+    const node = this.requireNode(runId);
+    return `${node.admittedAuthorityRevision}:active:${node.authorityRevisionSequence}`;
   }
 
   subscribe(listener: RunTreeExecutionListener): () => void {
@@ -368,11 +486,14 @@ export class RunTreeExecution {
     this.cancellation.delete(runId);
   }
 
-  private commitProjectionChange(): void {
+  private commitProjectionChange(notifyListeners = true): void {
     this.revision += 1;
     this.snapshot = this.createSnapshot();
-    for (const listener of [...this.listeners]) {
-      notify(listener, this.snapshot);
+    this.projectionDirty = false;
+    if (notifyListeners) {
+      for (const listener of [...this.listeners]) {
+        notify(listener, this.snapshot);
+      }
     }
   }
 
@@ -394,6 +515,8 @@ export class RunTreeExecution {
         resultCode: node.resultCode,
         startedAt: node.startedAt,
         completedAt: node.completedAt,
+        resources: this.resources.getNodeSnapshot(runId),
+        authorityRevision: this.currentAuthorityRevision(runId),
       }));
     return Object.freeze({
       rootRunId: this.input.rootRunId,
@@ -402,6 +525,7 @@ export class RunTreeExecution {
       limits: this.input.limits,
       totalDescendantRuns: this.totalDescendantRuns,
       activeDescendantRuns: this.activeDescendantRuns,
+      resources: this.resources.getSnapshot(this.input.rootRunId),
       nodes: Object.freeze(nodes),
     });
   }

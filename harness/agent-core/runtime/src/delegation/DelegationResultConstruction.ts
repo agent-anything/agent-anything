@@ -1,7 +1,10 @@
 import type { DelegationRunCorrelation } from "@agent-anything/agent-core/delegation";
 import type { OperationResult } from "@agent-anything/operation-catalog/result";
 import type { RunItem, RunResult } from "../run/index.js";
-import type { DelegationResourceSettlement } from "./DelegationResourceLedger.js";
+import type {
+  RunTreeResourceMeasurement,
+  RunTreeResourceSettlement,
+} from "../runner/RunTreeResourceAccount.js";
 import {
   createDelegationResult,
   type DelegationEffectSummary,
@@ -18,7 +21,7 @@ export interface DelegationResultConstructionInput {
   readonly correlation: DelegationRunCorrelation;
   readonly childResult: RunResult;
   readonly narrative: string | null;
-  readonly resourceSettlement: DelegationResourceSettlement;
+  readonly resourceSettlement: RunTreeResourceSettlement;
   readonly createdAt: string;
 }
 
@@ -125,64 +128,89 @@ function effectSummary(items: readonly RunItem[]): DelegationEffectSummary {
 }
 
 function usageSummary(
-  settlement: DelegationResourceSettlement,
+  settlement: RunTreeResourceSettlement,
 ): DelegationUsageSummary {
   return Object.freeze({
     controllerTurns: Object.freeze({
       status: "measured" as const,
-      value: settlement.usage.controllerTurns,
+      value: measured(settlement.usage.controllerTurns, "controllerTurns"),
     }),
     actions: Object.freeze({
       status: "measured" as const,
-      value: settlement.usage.actions,
+      value: measured(settlement.usage.actions, "actions"),
     }),
-    modelInputTokens: unavailableMeasurement(),
-    modelOutputTokens: unavailableMeasurement(),
-    costUnits: unavailableMeasurement(),
+    modelInputTokens: delegationMeasurement(settlement.usage.modelInputTokens),
+    modelOutputTokens: delegationMeasurement(settlement.usage.modelOutputTokens),
+    costUnits: delegationMeasurement(settlement.usage.costUnits),
   });
 }
 
-function unavailableMeasurement() {
-  return Object.freeze({
-    status: "unavailable" as const,
-    reason: "not_metered" as const,
-  });
+function delegationMeasurement(input: RunTreeResourceMeasurement) {
+  return input.status === "measured"
+    ? Object.freeze({ status: "measured" as const, value: input.value })
+    : Object.freeze({
+        status: "unavailable" as const,
+        reason: input.status === "not_applicable"
+          ? "not_applicable" as const
+          : "provider_omitted" as const,
+      });
 }
 
 function limitDisposition(
   request: DelegationRequest,
   result: RunResult,
-  settlement: DelegationResourceSettlement,
+  settlement: RunTreeResourceSettlement,
 ): DelegationLimitDisposition {
   const usage = settlement.usage;
+  const controllerTurns = measured(usage.controllerTurns, "controllerTurns");
+  const actions = measured(usage.actions, "actions");
+  const contextBytes = measured(usage.contextBytes, "contextBytes");
+  const resultBytes = measured(usage.resultBytes, "resultBytes");
   const durationMs = Math.max(
     0,
     Date.parse(result.completedAt) - Date.parse(result.startedAt),
   );
-  const exhaustedLimit = usage.controllerTurns > request.limits.maxControllerTurns ||
+  const exhaustedLimit = controllerTurns > request.limits.maxControllerTurns ||
       result.code === "runtime_limit_exceeded" &&
-        usage.controllerTurns >= request.limits.maxControllerTurns
+        controllerTurns >= request.limits.maxControllerTurns
     ? "controller_turns" as const
-    : usage.actions > request.limits.maxActions
+    : actions > request.limits.maxActions
       ? "actions" as const
+      : exceeds(usage.modelInputTokens, request.limits.maxModelInputTokens)
+        ? "model_input_tokens" as const
+        : exceeds(usage.modelOutputTokens, request.limits.maxModelOutputTokens)
+          ? "model_output_tokens" as const
+          : exceeds(usage.costUnits, request.limits.maxCostUnits)
+            ? "cost_units" as const
       : durationMs > request.limits.maxDurationMs ||
           result.code === "runtime_deadline_exceeded"
         ? "duration" as const
-        : usage.contextBytes > request.limits.maxContextBytes
+        : contextBytes > request.limits.maxContextBytes
           ? "context_bytes" as const
-          : usage.resultBytes > request.limits.maxResultBytes ||
+          : resultBytes > request.limits.maxResultBytes ||
               settlement.status === "limit_exceeded"
             ? "result_bytes" as const
             : null;
   return Object.freeze({
     status: exhaustedLimit === null ? "within_limits" as const : "exhausted" as const,
     exhaustedLimit,
-    controllerTurns: usage.controllerTurns,
-    actions: usage.actions,
+    controllerTurns,
+    actions,
     durationMs,
-    contextBytes: usage.contextBytes,
-    resultBytes: usage.resultBytes,
+    contextBytes,
+    resultBytes,
   });
+}
+
+function measured(input: RunTreeResourceMeasurement, field: string): number {
+  if (input.status !== "measured") {
+    throw new TypeError(`Delegation ${field} usage must be measured.`);
+  }
+  return input.value;
+}
+
+function exceeds(input: RunTreeResourceMeasurement, maximum: number): boolean {
+  return input.status === "measured" && input.value > maximum;
 }
 
 function hasCanonicalActionSettlement(result: OperationResult): boolean {

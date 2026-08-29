@@ -21,6 +21,7 @@ import type {
   ValidatedRootRunConfig,
   ValidatedRunConfig,
 } from "./RunConfig.js";
+import { snapshotRunTreeResourceEnvelope } from "./RunTreeResourceAccount.js";
 import { snapshotCompletionGateConfiguration } from "@agent-anything/verification/completion";
 import { snapshotVerificationProfile } from "@agent-anything/verification/definition";
 import { assertRunStopReviewLimits } from "../stop/index.js";
@@ -153,11 +154,13 @@ export function snapshotRootRunConfig(
   if (!run.valid) return run;
   try {
     const runTreeLimits = snapshotRunTreeLimits(config.runTreeLimits);
+    const runTreeResources = snapshotRunTreeResourceEnvelope(config.runTreeResources);
     return Object.freeze({
       valid: true as const,
       config: Object.freeze({
         ...run.config,
         runTreeLimits,
+        runTreeResources,
       }),
     });
   } catch (error) {

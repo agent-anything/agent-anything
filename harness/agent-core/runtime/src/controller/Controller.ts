@@ -197,8 +197,15 @@ export type ControllerDecision<TOutput = unknown> =
     };
 
 export interface Controller<TOutput = unknown> {
+  readonly resourceMetering: ControllerResourceMetering;
   next(
     input: ControllerInput<TOutput>,
     context: ControllerCallContext,
   ): Promise<ControllerDecision<TOutput>>;
+}
+
+export interface ControllerResourceMetering {
+  readonly modelInputTokens: import("@agent-anything/model-interaction").ProviderUsageMeteringQualification;
+  readonly modelOutputTokens: import("@agent-anything/model-interaction").ProviderUsageMeteringQualification;
+  readonly costUnits: import("@agent-anything/model-interaction").ProviderUsageMeteringQualification;
 }

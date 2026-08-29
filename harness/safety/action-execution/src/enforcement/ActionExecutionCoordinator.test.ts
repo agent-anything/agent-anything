@@ -52,6 +52,7 @@ describe("ActionExecutionCoordinator", () => {
       "adapter.prepare",
       "policy.evaluate",
       "permission.assess",
+      "authority.capture",
       "adapter.revalidate",
       "records.pre-effect",
       "executor.execute",
@@ -169,6 +170,64 @@ describe("ActionExecutionCoordinator", () => {
     });
     expect(fixture.order).not.toContain("executor.execute");
   });
+
+  it("reassesses instead of dispatching when the captured authority revision becomes stale", async () => {
+    let checks = 0;
+    const fixture = createFixture({
+      authorityCurrent: () => ++checks === 1,
+    });
+
+    const result = await fixture.coordinator.execute(fixture.request);
+
+    expect(result).toMatchObject({
+      status: "settled",
+      settlement: {
+        status: "invalidated",
+        causeOwner: "agent-runtime",
+        causeRef: "action_authority_basis_stale",
+      },
+    });
+    expect(fixture.order).toContain("adapter.revalidate");
+    expect(fixture.order).not.toContain("records.pre-effect");
+    expect(fixture.order).not.toContain("executor.execute");
+    expect(checks).toBe(2);
+  });
+
+  it("refreshes authority after consuming exact Action approval coverage", async () => {
+    let authorityRevision = 1;
+    const fixture = createFixture({
+      actionCoverageId: "coverage-1",
+      onCoverageConsumed: () => {
+        authorityRevision += 1;
+      },
+      captureAuthorityBasis: () => ({
+        authorityRevision: `authority-revision-${authorityRevision}`,
+        resourceRevision: 1,
+      }),
+      authorityCurrent: (basis) =>
+        basis.authorityRevision === `authority-revision-${authorityRevision}`,
+    });
+
+    const result = await fixture.coordinator.execute(fixture.request);
+
+    expect(result).toMatchObject({
+      status: "settled",
+      settlement: { status: "succeeded" },
+    });
+    expect(fixture.order).toEqual([
+      "adapter.prepare",
+      "policy.evaluate",
+      "permission.assess",
+      "authority.capture",
+      "adapter.revalidate",
+      "permission.consume",
+      "authority.capture",
+      "records.pre-effect",
+      "executor.execute",
+      "records.post-effect",
+      "adapter.settle",
+    ]);
+  });
 });
 
 interface FixtureOptions {
@@ -176,6 +235,16 @@ interface FixtureOptions {
   readonly permissionStatus?: "authorized" | "approval_required";
   readonly sandboxEffectState?: "none" | "unknown";
   readonly retryOnce?: boolean;
+  readonly actionCoverageId?: string;
+  readonly onCoverageConsumed?: () => void;
+  readonly captureAuthorityBasis?: () => {
+    readonly authorityRevision: string;
+    readonly resourceRevision: number;
+  };
+  readonly authorityCurrent?: (basis: {
+    readonly authorityRevision: string;
+    readonly resourceRevision: number;
+  }) => boolean;
 }
 
 function createFixture(options: FixtureOptions = {}) {
@@ -353,11 +422,13 @@ function createFixture(options: FixtureOptions = {}) {
         recordId: "permission-record-1",
         revision: "authority-1",
         authorityCoverageDigest: "coverage-1",
-        actionCoverageId: null,
+        actionCoverageId: options.actionCoverageId ?? null,
         assessedAt: NOW,
       };
     },
     async consumeActionCoverage() {
+      order.push("permission.consume");
+      options.onCoverageConsumed?.();
       return { status: "consumed", recordId: "coverage-consumption-1" };
     },
   };
@@ -467,6 +538,16 @@ function createFixture(options: FixtureOptions = {}) {
       deadlineAt: "2026-08-13T01:00:00.000Z",
       maxAttempts: 1,
       isProgressionBasisCurrent: () => true,
+      authority: {
+        captureBasis() {
+          order.push("authority.capture");
+          return options.captureAuthorityBasis?.() ?? {
+            authorityRevision: "authority-revision-1",
+            resourceRevision: 1,
+          };
+        },
+        isBasisCurrent: options.authorityCurrent ?? (() => true),
+      },
     },
   };
 }

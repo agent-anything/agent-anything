@@ -152,10 +152,14 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
     });
   }
 
-  publish(update: RunExecutionUpdate<TOutput>): void {
+  publish(
+    update: RunExecutionUpdate<TOutput>,
+    runTree: RunTreeExecutionSnapshot = this.snapshot.runTree,
+  ): void {
     if (this.snapshot.result !== null) {
       return;
     }
+    this.assertRunTreeRevision(runTree);
     this.snapshot = freezeSnapshot({
       runId: this.runId,
       sequence: this.snapshot.sequence + 1,
@@ -169,7 +173,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       verification: update.verification,
       pendingInteractions: update.pendingInteractions,
       activeDelegations: update.activeDelegations,
-      runTree: this.snapshot.runTree,
+      runTree,
       result: update.result,
     });
     for (const listener of [...this.listeners]) {
@@ -178,12 +182,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
   }
 
   publishRunTree(runTree: RunTreeExecutionSnapshot): void {
-    if (runTree.rootRunId !== this.snapshot.runTree.rootRunId) {
-      throw new TypeError("RunHandle received a Run Tree for another root.");
-    }
-    if (runTree.revision < this.snapshot.runTree.revision) {
-      throw new TypeError("RunHandle received a stale Run Tree revision.");
-    }
+    this.assertRunTreeRevision(runTree);
     if (runTree.revision === this.snapshot.runTree.revision) return;
     this.snapshot = freezeSnapshot({
       ...this.snapshot,
@@ -191,6 +190,15 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       runTree,
     });
     for (const listener of [...this.listeners]) notify(listener, this.snapshot);
+  }
+
+  private assertRunTreeRevision(runTree: RunTreeExecutionSnapshot): void {
+    if (runTree.rootRunId !== this.snapshot.runTree.rootRunId) {
+      throw new TypeError("RunHandle received a Run Tree for another root.");
+    }
+    if (runTree.revision < this.snapshot.runTree.revision) {
+      throw new TypeError("RunHandle received a stale Run Tree revision.");
+    }
   }
 
   getSnapshot(): RunOperationSnapshot<TOutput> {

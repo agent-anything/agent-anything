@@ -1061,6 +1061,11 @@ class ScriptedProvider implements Provider {
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
       compaction: { supported: false as const },
+      usageMetering: {
+        inputTokens: "unavailable" as const,
+        outputTokens: "unavailable" as const,
+        costUnits: "unavailable" as const,
+      },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},
@@ -1130,6 +1135,11 @@ class RetryThenCompleteProvider implements Provider {
       modelInput: this.inputAccounting.capability,
       continuation: { supported: false as const },
       compaction: { supported: false as const },
+      usageMetering: {
+        inputTokens: "unavailable" as const,
+        outputTokens: "unavailable" as const,
+        costUnits: "unavailable" as const,
+      },
     },
     requestRetryScheduler: { kind: "harness" as const },
     metadata: {},

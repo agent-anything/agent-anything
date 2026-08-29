@@ -84,6 +84,11 @@ export class OpenAICompatibleProvider implements Provider {
         modelInput: this.inputAccounting.capability,
         continuation: Object.freeze({ supported: false as const }),
         compaction: Object.freeze({ supported: false as const }),
+        usageMetering: Object.freeze({
+          inputTokens: "unavailable" as const,
+          outputTokens: "unavailable" as const,
+          costUnits: "unavailable" as const,
+        }),
       }),
       requestRetryScheduler: Object.freeze({ kind: "harness" as const }),
       metadata: Object.freeze({}),
@@ -592,6 +597,7 @@ function readUsage(value: unknown) {
     inputTokens: readCount(value.prompt_tokens),
     outputTokens: readCount(value.completion_tokens),
     totalTokens: readCount(value.total_tokens),
+    costUnits: null,
     metadata: {},
   };
 }

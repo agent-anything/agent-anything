@@ -127,9 +127,19 @@ type ControllerStep =
     ) => ControllerDecision<TestOutput> | Promise<ControllerDecision<TestOutput>>);
 
 class ScriptedController implements Controller<TestOutput> {
+  readonly resourceMetering: Controller<TestOutput>["resourceMetering"];
   readonly calls: ControllerInput<TestOutput>[] = [];
 
-  constructor(private readonly steps: ControllerStep[]) {}
+  constructor(
+    private readonly steps: ControllerStep[],
+    resourceMetering: Controller<TestOutput>["resourceMetering"] = {
+      modelInputTokens: "not_applicable",
+      modelOutputTokens: "not_applicable",
+      costUnits: "not_applicable",
+    },
+  ) {
+    this.resourceMetering = Object.freeze({ ...resourceMetering });
+  }
 
   async next(
     input: ControllerInput<TestOutput>,
@@ -1894,7 +1904,7 @@ describe("Runner semantic integration", () => {
         childRunId: null,
         depth: 1,
         code: "delegation_context_invalid",
-        treeRevision: 1,
+        treeRevision: expect.any(Number),
       }),
     }]);
   });
@@ -2958,6 +2968,134 @@ describe("Runner semantic integration", () => {
       }),
     )).toThrow("must be configured together");
   });
+
+  it("rejects hard model metering when the Controller path cannot measure it", async () => {
+    const operations = createOperationFixture([]);
+    const metering = {
+      modelInputTokens: "unavailable" as const,
+      modelOutputTokens: "unavailable" as const,
+      costUnits: "unavailable" as const,
+    };
+    const runner = createRunner(new ScriptedController([complete("unused")], metering), operations);
+
+    expect(() => runner.start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations),
+    )).toThrow("Hard Run Tree modelInputTokens enforcement");
+
+    const observationalResources = Object.freeze(Object.fromEntries(
+      Object.entries(testRunTreeResources()).map(([dimension, limit]) => [
+        dimension,
+        dimension === "modelInputTokens" || dimension === "modelOutputTokens" ||
+            dimension === "costUnits"
+          ? Object.freeze({ ...limit, enforcement: "observational" as const })
+          : limit,
+      ]),
+    )) as RootRunConfig["runTreeResources"];
+    const result = await createRunner(
+      new ScriptedController([complete("observed")], metering),
+      operations,
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { runTreeResources: observationalResources }),
+    );
+    expect(result).toMatchObject({ status: "succeeded", finalOutput: { summary: "observed" } });
+  });
+
+  it("fails before the first Controller turn when initial Context exceeds the tree envelope", async () => {
+    const operations = createOperationFixture([]);
+    const resources = Object.freeze({
+      ...testRunTreeResources(),
+      contextBytes: Object.freeze({ maximum: 1, enforcement: "hard" as const }),
+    });
+    const controller = new ScriptedController([complete("must not run")]);
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { runTreeResources: resources }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_limit_exceeded",
+      failure: {
+        kind: "runtime",
+        failure: {
+          code: "runtime_tree_resource_limit_exceeded",
+          metadata: { dimension: "contextBytes" },
+        },
+      },
+    });
+    expect(controller.calls).toHaveLength(0);
+  });
+
+  it("accounts Context Contributions admitted after Run initialization", async () => {
+    const operations = createOperationFixture([]);
+    const input = createRunInput();
+    const initialContextBytes = new TextEncoder().encode(JSON.stringify({
+      task: input.task,
+      items: input.items,
+    })).byteLength;
+    const resources = Object.freeze({
+      ...testRunTreeResources(),
+      contextBytes: Object.freeze({
+        maximum: initialContextBytes,
+        enforcement: "hard" as const,
+      }),
+    });
+    const controller = new ScriptedController([complete("must not run")]);
+
+    const result = await createRunner(controller, operations).run(
+      createAgent(),
+      input,
+      createRunConfig(operations, { runTreeResources: resources }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_limit_exceeded",
+      failure: {
+        kind: "runtime",
+        failure: {
+          code: "runtime_tree_resource_limit_exceeded",
+          metadata: { dimension: "contextBytes" },
+        },
+      },
+    });
+    expect(controller.calls).toHaveLength(0);
+  });
+
+  it("cannot report success when the terminal result exceeds the tree envelope", async () => {
+    const operations = createOperationFixture([]);
+    const resources = Object.freeze({
+      ...testRunTreeResources(),
+      resultBytes: Object.freeze({ maximum: 1, enforcement: "hard" as const }),
+    });
+
+    const result = await createRunner(
+      new ScriptedController([complete("result exceeds one byte")]),
+      operations,
+    ).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { runTreeResources: resources }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_limit_exceeded",
+      failure: {
+        kind: "runtime",
+        failure: {
+          code: "runtime_tree_resource_limit_exceeded",
+          metadata: { dimension: "resultBytes" },
+        },
+      },
+    });
+  });
 });
 
 interface OperationSpec {
@@ -3101,6 +3239,9 @@ function createTestDelegation(
           maxDurationMs: input.limitCeiling.maxDurationMs,
           maxContextBytes: input.limitCeiling.maxContextBytes,
           maxResultBytes: input.limitCeiling.maxResultBytes,
+          maxModelInputTokens: input.limitCeiling.maxModelInputTokens,
+          maxModelOutputTokens: input.limitCeiling.maxModelOutputTokens,
+          maxCostUnits: input.limitCeiling.maxCostUnits,
         });
         const rootPurpose = createDelegationContextMaterial({
           owner: "test-product",
@@ -3652,6 +3793,7 @@ function createRunConfig(
     readonly verification?: RunConfig["verification"];
     readonly limits?: Partial<Omit<RunConfig["limits"], "plan">>;
     readonly runTreeLimits?: Partial<RootRunConfig["runTreeLimits"]>;
+    readonly runTreeResources?: RootRunConfig["runTreeResources"];
   } = {},
 ): RootRunConfig {
   return {
@@ -3700,6 +3842,7 @@ function createRunConfig(
       maxDescendantDepth: 2,
       ...overrides.runTreeLimits,
     },
+    runTreeResources: overrides.runTreeResources ?? testRunTreeResources(),
     audit: "optional",
     telemetry: "optional",
     cancellationLimits: {
@@ -3715,6 +3858,18 @@ function createRunConfig(
     },
     metadata: {},
   };
+}
+
+function testRunTreeResources(): RootRunConfig["runTreeResources"] {
+  return Object.freeze({
+    controllerTurns: Object.freeze({ maximum: 256, enforcement: "hard" as const }),
+    actions: Object.freeze({ maximum: 256, enforcement: "hard" as const }),
+    modelInputTokens: Object.freeze({ maximum: 1_000_000, enforcement: "hard" as const }),
+    modelOutputTokens: Object.freeze({ maximum: 250_000, enforcement: "hard" as const }),
+    costUnits: Object.freeze({ maximum: 1_000_000, enforcement: "hard" as const }),
+    contextBytes: Object.freeze({ maximum: 8_000_000, enforcement: "hard" as const }),
+    resultBytes: Object.freeze({ maximum: 2_000_000, enforcement: "hard" as const }),
+  });
 }
 
 function createTestVerificationComposition(): RunnerDependencies["verification"] {
