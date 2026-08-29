@@ -259,7 +259,7 @@ export function projectHelarcRunStatusQueryReceipt(
       startedAt: receipt.projection.startedAt,
       runTree: projectRunTree(receipt.projection.runTree),
       activeDelegations: projectActiveDelegations(receipt.projection.activeDelegations),
-      progress: projectRunProgress(receipt.projection.progress),
+      stopReview: projectRunStopReview(receipt.projection.stopReview),
       verification: projectHostVerification(receipt.projection.verification),
       pendingInteractions: receipt.projection.pendingInteractions.map(projectPendingInteraction),
       terminal: receipt.projection.terminal === null
@@ -335,7 +335,7 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
       instructionBinding: projectInstructionBinding(run.host.instructionBinding),
       runTree: projectRunTree(run.host.runTree),
       activeDelegations: projectActiveDelegations(run.host.activeDelegations),
-      progress: projectRunProgress(run.host.progress),
+      stopReview: projectRunStopReview(run.host.stopReview),
       verification: projectHostVerification(run.host.verification),
       pendingInteractions: run.host.pendingInteractions.map(projectPendingInteraction),
       terminal: run.host.terminal === null
@@ -449,17 +449,14 @@ function projectInstructionBinding(
   };
 }
 
-function projectRunProgress(
-  progress: NonNullable<MainSnapshot["run"]>["host"]["progress"],
-): HelarcRunSnapshot["host"]["progress"] {
+function projectRunStopReview(
+  stopReview: NonNullable<MainSnapshot["run"]>["host"]["stopReview"],
+): HelarcRunSnapshot["host"]["stopReview"] {
   return {
-    checkpointSequence: progress.checkpointSequence,
-    disposition: progress.disposition,
-    reasonCode: progress.reasonCode,
-    consecutiveNonAdvancingCheckpoints:
-      progress.consecutiveNonAdvancingCheckpoints,
-    correctionRounds: progress.correctionRounds,
-    activeCorrectionRound: progress.activeCorrectionRound,
+    reviewSequence: stopReview.reviewSequence,
+    requiredFeedbackRounds: stopReview.requiredFeedbackRounds,
+    advisoryFeedbackRounds: stopReview.advisoryFeedbackRounds,
+    limitations: stopReview.limitations.map((limitation) => ({ ...limitation })),
   };
 }
 

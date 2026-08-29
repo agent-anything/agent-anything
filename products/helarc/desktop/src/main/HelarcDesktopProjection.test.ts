@@ -12,10 +12,10 @@ describe("Helarc Desktop IPC projection", () => {
       "activeDelegations",
       "instructionBinding",
       "pendingInteractions",
-      "progress",
       "runRevision",
       "runTree",
       "startedAt",
+      "stopReview",
       "taskId",
       "terminal",
       "verification",
@@ -51,13 +51,15 @@ describe("Helarc Desktop IPC projection", () => {
       safeReasons: ["verification_pending"],
       updatedAt: "2026-07-19T00:00:00.000Z",
     });
-    expect(projected.run?.host.progress).toEqual({
-      checkpointSequence: 3,
-      disposition: "repeated",
-      reasonCode: "equivalent_fact_repeated",
-      consecutiveNonAdvancingCheckpoints: 2,
-      correctionRounds: 1,
-      activeCorrectionRound: 1,
+    expect(projected.run?.host.stopReview).toEqual({
+      reviewSequence: 3,
+      requiredFeedbackRounds: 1,
+      advisoryFeedbackRounds: 1,
+      limitations: [{
+        owner: "plan",
+        code: "plan_reconciliation_feedback_exhausted",
+        message: "Plan reconciliation remained incomplete.",
+      }],
     });
     expect(projected.run?.host.instructionBinding).toMatchObject({
       agent: { id: "helarc", revision: "agent-revision-1" },
@@ -256,22 +258,17 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
         }],
       },
       activeDelegations: [],
-      progress: {
-        checkpointSequence: 3,
-        disposition: "repeated",
-        reasonCode: "equivalent_fact_repeated",
-        consecutiveNonAdvancingCheckpoints: 2,
-        correctionRounds: 1,
-        activeCorrectionRound: 1,
-        factRefs: [{
-          kind: "tool_observation",
-          owner: "tool",
-          subjectId: "tool-call-1",
-          revision: "observation-1",
-          privateFactState: SECRET,
+      stopReview: {
+        reviewSequence: 3,
+        requiredFeedbackRounds: 1,
+        advisoryFeedbackRounds: 1,
+        latestReview: { runId: "harness-run-1", sequence: 3 },
+        limitations: [{
+          owner: "plan",
+          code: "plan_reconciliation_feedback_exhausted",
+          message: "Plan reconciliation remained incomplete.",
         }],
-        latestAssessment: SECRET,
-        latestAdvancement: SECRET,
+        privateReviewState: SECRET,
       },
       plan: { privatePlanState: SECRET },
       pendingInteractions,

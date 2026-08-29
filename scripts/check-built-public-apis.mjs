@@ -87,7 +87,7 @@ const packageExportKeys = {
     "./current-turn-tool-exposure-evaluation",
     "./delegation-transfer-evaluation",
     "./evaluation-targets/helarc",
-    "./run-progress-evaluation",
+    "./run-stop-review-evaluation",
   ],
   "harness/safety/action-execution": [
     "./coordination",
@@ -103,10 +103,11 @@ const packageExportKeys = {
     "./delegation",
     "./instructions",
     "./plan",
-    "./progress",
     "./retry",
     "./run",
     "./runner",
+    "./stop",
+    "./transcript",
   ],
   "harness/host": [
     "./authority",
@@ -519,6 +520,10 @@ const expectedLowerValueExports = {
     "HELARC_PROVIDER_NATIVE_TOOL_INTERACTION_BASELINE_ACCEPTANCE",
     "HELARC_RUN_PROGRESS_ACCEPTED_BASELINE",
     "HELARC_RUN_PROGRESS_BASELINE_ACCEPTANCE",
+    "HELARC_RUN_STOP_EXECUTION_TRUTH_ACCEPTED_BASELINE",
+    "HELARC_RUN_STOP_EXECUTION_TRUTH_BASELINE_ACCEPTANCE",
+    "HELARC_RUN_STOP_OPERATIONAL_ACCEPTED_BASELINE",
+    "HELARC_RUN_STOP_OPERATIONAL_BASELINE_ACCEPTANCE",
     "HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE",
     "HELARC_RUN_TREE_CONTROL_BASELINE_ACCEPTANCE",
     "HELARC_SHELL_TOOLS_ACCEPTED_BASELINE",
@@ -564,6 +569,7 @@ const expectedLowerValueExports = {
     "sealHelarcProductEffectivenessEvidenceBundle",
     "verifyHelarcAgentInstructionCampaignArtifact",
     "verifyHelarcOperationalConformanceAcceptedBaseline",
+    "verifyHelarcRunStopOperationalAcceptedBaseline",
   ],
   "@agent-anything/test-support/context-continuity-evaluation": [
     "CONTEXT_CONTINUITY_EVALUATION_REVISION",
@@ -572,8 +578,8 @@ const expectedLowerValueExports = {
     "observeContextContinuityFixtures",
     "runContextContinuityEvaluationCandidate",
   ],
-  "@agent-anything/test-support/run-progress-evaluation": [
-    "runRunProgressDeterministicEvaluation",
+  "@agent-anything/test-support/run-stop-review-evaluation": [
+    "runRunStopReviewDeterministicEvaluation",
   ],
   "@agent-anything/model-interaction/input": [
     "ModelInputCompositionError",
@@ -701,13 +707,17 @@ const expectedValueExports = {
     "assertValidPlanLimits",
     "projectPlan",
   ],
-  "@agent-anything/agent-runtime/progress": [
-    "assertRunProgressLimits",
-    "assessRunProgress",
-    "createInitialRunProgressState",
-    "createRunProgressBasis",
-    "createRunProgressSemanticFacts",
-    "projectRunProgress",
+  "@agent-anything/agent-runtime/stop": [
+    "assertRunStopReviewLimits",
+    "createInitialRunStopReviewState",
+    "projectRunStopReview",
+    "snapshotRunStopCheck",
+    "snapshotRunStopFeedback",
+    "snapshotRunStopReviewRecord",
+  ],
+  "@agent-anything/agent-runtime/transcript": [
+    "RunTranscriptRecorder",
+    "createRunTranscriptRecord",
   ],
   "@agent-anything/agent-runtime/retry": [
     "RetryExecutor",
@@ -825,7 +835,7 @@ const expectedValueExports = {
     "createHostRunProjection",
     "createHostRunProjectionStore",
     "createHostTerminalRunProjection",
-    "projectHostRunProgress",
+    "projectHostRunStopReview",
     "projectRuntimeEventForHost",
     "reduceHostRunProjection",
     "snapshotHostCancellation",

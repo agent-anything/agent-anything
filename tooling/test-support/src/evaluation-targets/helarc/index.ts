@@ -89,6 +89,15 @@ export {
   HELARC_OPERATIONAL_CONFORMANCE_BASELINE_ACCEPTANCE,
   verifyHelarcOperationalConformanceAcceptedBaseline,
 } from "./baseline/HelarcOperationalConformanceBaseline.js";
+export {
+  HELARC_RUN_STOP_EXECUTION_TRUTH_ACCEPTED_BASELINE,
+  HELARC_RUN_STOP_EXECUTION_TRUTH_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcRunStopExecutionTruthBaseline.js";
+export {
+  HELARC_RUN_STOP_OPERATIONAL_ACCEPTED_BASELINE,
+  HELARC_RUN_STOP_OPERATIONAL_BASELINE_ACCEPTANCE,
+  verifyHelarcRunStopOperationalAcceptedBaseline,
+} from "./baseline/HelarcRunStopOperationalBaseline.js";
 export type { HelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export { createHelarcEvaluationTargetAdapter } from "./HelarcEvaluationTarget.js";
 export type {

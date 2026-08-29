@@ -4,7 +4,7 @@ import { RUNTIME_EVENT_SCHEMA_VERSION } from "./RuntimeEvent.js";
 import type {
   ContextProjectionCompletedRuntimeEventPayload,
   ControllerFinishedRuntimeEventPayload,
-  RunProgressAssessedRuntimeEventPayload,
+  RunStopReviewedRuntimeEventPayload,
 } from "./RuntimeEventPayload.js";
 import { RuntimeEventStream } from "./RuntimeEventStream.js";
 
@@ -172,47 +172,30 @@ describe("RuntimeEventStream", () => {
     expect(events[0]?.payload).not.toHaveProperty("omittedDescriptors");
   });
 
-  it("allowlists bounded Run Progress facts without semantic fingerprints", () => {
+  it("allowlists bounded Stop Review counters without private checks", () => {
     const events: RuntimeEvent[] = [];
     const stream = createStream([{ publish: (event) => events.push(event) }]);
-    const factRefs = [{
-      kind: "operation_result" as const,
-      owner: "workspace",
-      subjectId: "file-1",
-      revision: "2",
-    }];
 
-    stream.emit("run.progress.assessed", {
-      checkpointSequence: 2,
-      disposition: "repeated",
-      reasonCode: "equivalent_fact_repeated",
-      factRefs,
-      consecutiveNonAdvancingCheckpoints: 2,
-      correctionRounds: 1,
-      activeCorrectionRound: 1,
-      semanticFingerprint: "must-not-escape",
-      rawContext: { secret: true },
-    } as RunProgressAssessedRuntimeEventPayload);
-    factRefs[0]!.revision = "mutated";
+    stream.emit("run.stop.reviewed", {
+      reviewSequence: 2,
+      decision: "continue_run",
+      checkCount: 3,
+      limitationCount: 0,
+      requiredFeedbackRounds: 1,
+      advisoryFeedbackRounds: 1,
+      rawChecks: [{ private: true }],
+    } as RunStopReviewedRuntimeEventPayload);
 
     expect(events[0]?.payload).toEqual({
-      checkpointSequence: 2,
-      disposition: "repeated",
-      reasonCode: "equivalent_fact_repeated",
-      factRefs: [{
-        kind: "operation_result",
-        owner: "workspace",
-        subjectId: "file-1",
-        revision: "2",
-      }],
-      consecutiveNonAdvancingCheckpoints: 2,
-      correctionRounds: 1,
-      activeCorrectionRound: 1,
+      reviewSequence: 2,
+      decision: "continue_run",
+      checkCount: 3,
+      limitationCount: 0,
+      requiredFeedbackRounds: 1,
+      advisoryFeedbackRounds: 1,
     });
-    expect(Object.isFrozen(events[0]?.payload.factRefs)).toBe(true);
-    expect(Object.isFrozen(events[0]?.payload.factRefs[0])).toBe(true);
-    expect(events[0]?.payload).not.toHaveProperty("semanticFingerprint");
-    expect(events[0]?.payload).not.toHaveProperty("rawContext");
+    expect(Object.isFrozen(events[0]?.payload)).toBe(true);
+    expect(events[0]?.payload).not.toHaveProperty("rawChecks");
   });
 
   it("snapshots a payload-free Context transition trace record", () => {

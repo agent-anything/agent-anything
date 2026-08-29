@@ -743,10 +743,9 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
           maxStepLength: 300,
           maxExplanationLength: 1_000,
         },
-        progress: {
-          checkpointWindowSize: 6,
-          nonAdvancingCheckpointThreshold: 3,
-          maxCorrectionRounds: 2,
+        stopReview: {
+          maxRequiredFeedbackRounds: 2,
+          maxAdvisoryFeedbackRounds: 1,
         },
       },
       runTreeLimits: options.runTreeLimits ?? {

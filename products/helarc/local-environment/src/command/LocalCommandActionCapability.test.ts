@@ -25,7 +25,18 @@ describe("createHelarcLocalCommandActionCapability", () => {
     };
 
     const capability = await createHelarcLocalCommandActionCapability({
-      workspace: { primary: { id: "workspace" }, additional: [] } as never,
+      workspace: {
+        primary: {
+          id: "workspace",
+          name: "Workspace",
+          rootRef: process.cwd(),
+          trustState: "trusted",
+          source: "test",
+          policyRefs: [],
+          metadata: {},
+        },
+        additional: [],
+      },
       platform: "win32",
       shellOperation,
       shellBinding,

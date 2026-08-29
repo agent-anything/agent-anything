@@ -9,13 +9,13 @@ import {
   runContextContinuityEvaluationCandidate,
 } from "../dist/context-continuity-evaluation/index.js";
 import {
-  runRunProgressDeterministicEvaluation,
-} from "../dist/run-progress-evaluation/index.js";
+  runRunStopReviewDeterministicEvaluation,
+} from "../dist/run-stop-review-evaluation/index.js";
 
 const systemCandidate = await runHelarcEvaluationBaselineCandidate();
 const signature = projectHelarcEvaluationBaselineSignature(systemCandidate);
 const contextContinuity = await runContextContinuityEvaluationCandidate();
-const runProgress = await runRunProgressDeterministicEvaluation();
+const runStopReview = await runRunStopReviewDeterministicEvaluation();
 const comparison = compareHelarcEvaluationBaseline(
   HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE,
   systemCandidate,
@@ -40,7 +40,7 @@ process.stdout.write(`${JSON.stringify({
   predecessorComparison: projectPredecessorComparison(comparison),
   acceptedSuccessorComparison: projectPredecessorComparison(acceptedComparison),
   contextContinuity: projectContextContinuityCandidate(contextContinuity),
-  runProgress,
+  runStopReview,
   limitations: [
     "The deterministic candidate does not claim general model intelligence.",
     "Context-specific metrics have no fabricated predecessor samples.",

@@ -50,6 +50,10 @@ import { executeProcess, type CapturedProcessOutput, type ProcessExecutionOutcom
 import type { CodeAgentCommandLimits, ProcessTerminationLimits } from "./ProcessContracts.js";
 import { RunProcessTaskRegistry, ProcessTaskRegistryError } from "./RunProcessTaskRegistry.js";
 import {
+  ShellExecutionSession,
+  type ShellExecutionSessionSnapshot,
+} from "./ShellExecutionSession.js";
+import {
   inspectPreparedFileSystemTarget,
   prepareFileSystemTarget,
   sameCanonicalPathIdentity,
@@ -92,6 +96,7 @@ export interface HelarcLocalCommandActionCapability {
   readonly processTasks: RunProcessTaskRegistry;
   readonly taskStopBinding: OperationBindingRevisionRef;
   readonly taskAvailability: Pick<RunProcessTaskRegistry, "getRunAvailability">;
+  readonly shellSession: Pick<ShellExecutionSession, "snapshot">;
 }
 
 interface ShellPayload {
@@ -100,6 +105,8 @@ interface ShellPayload {
   readonly executableBaseline: FileBaseline;
   readonly args: readonly string[];
   readonly command: string;
+  readonly cwdMarker: string;
+  readonly sessionRevision: number;
   readonly rootName: string;
   readonly workspaceId: string;
   readonly workspaceRoot: string;
@@ -134,6 +141,7 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
   const environment = await createCommandEnvironmentPolicy({ id: input.environmentPolicyId ?? "helarc.local.shell.environment.default", overrides: input.environment });
   const shell = selectNativeShell(input.platform);
   const processTasks = new RunProcessTaskRegistry(limits.maxActiveTasks, limits.maxSettledTasks);
+  const shellSession = await ShellExecutionSession.create(input.workspace, input.platform);
   const registrations = createActionRegistrationSnapshot([
     registration("helarc.local.shell.registration.v1", input.shellOperation, input.shellBinding, SHELL_ADAPTER, SHELL_EXECUTOR, ["process", "filesystem"]),
     registration("helarc.local.task-stop.registration.v1", input.taskStopOperation, input.taskStopBinding, STOP_ADAPTER, STOP_EXECUTOR, ["process"]),
@@ -147,16 +155,17 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
     environment: Object.freeze({ id: environment.id, revision: environment.digest }),
     registrations,
     adapters: Object.freeze([
-      Object.freeze({ adapter: createShellAdapter(input.workspace, shell, limits, termination, environment) }),
+      Object.freeze({ adapter: createShellAdapter(input.workspace, shellSession, shell, limits, termination, environment) }),
       Object.freeze({ adapter: createTaskStopAdapter(processTasks) }),
     ]),
     executors: Object.freeze([
-      createShellExecutor(environment, processTasks, now, nowMs),
+      createShellExecutor(environment, processTasks, shellSession, now, nowMs),
       createTaskStopExecutor(processTasks, now),
     ]),
     processTasks,
     taskStopBinding: input.taskStopBinding,
     taskAvailability: processTasks,
+    shellSession,
   });
 }
 
@@ -177,6 +186,7 @@ function registration(
 
 function createShellAdapter(
   workspace: WorkspaceSelection,
+  session: ShellExecutionSession,
   shell: ReturnType<typeof selectNativeShell>,
   limits: CodeAgentCommandLimits,
   termination: ProcessTerminationLimits,
@@ -191,14 +201,27 @@ function createShellAdapter(
         const runId = context.parentRunAction?.run.id;
         if (runId === undefined) return invalidPreparation("shell_run_required", "Shell execution requires an owning RunAction.");
         if (context.workspace === null) return invalidPreparation("workspace_required", "Shell execution requires a Run Workspace.");
-        const cwd = await prepareFileSystemTarget({ workspace, workspaceRoots: context.workspace.roots, platform: context.environment.platform, path: ".", operation: "directory" });
+        const sessionSnapshot = session.snapshot();
+        const cwd = await prepareFileSystemTarget({
+          workspace,
+          workspaceRoots: context.workspace.roots,
+          platform: context.environment.platform,
+          rootName: sessionSnapshot.rootName,
+          path: sessionSnapshot.relativePath,
+          operation: "directory",
+        });
         const outputPath = `.helarc-process-${digestToken(context.action.id)}.log`;
         const output = await prepareFileSystemTarget({ workspace, workspaceRoots: context.workspace.roots, platform: context.environment.platform, path: outputPath, operation: "write" });
         const executable = await resolveCommandExecutable({ command: shell.command, cwd: cwd.canonicalTarget, platform: context.environment.platform, environment: environment.environment });
-        const args = Object.freeze([...shell.argumentsBeforeCommand, parsed.command]);
+        const cwdMarker = `__HELARC_FINAL_CWD_${digestToken(context.action.id)}__=`;
+        const args = Object.freeze([
+          ...shell.argumentsBeforeCommand,
+          commandWithFinalWorkingDirectory(shell.toolName, parsed.command, cwdMarker),
+        ]);
         const payload: ShellPayload = Object.freeze({
           runId, executablePath: executable.canonicalPath, executableBaseline: executable.identity.baseline,
-          args, command: parsed.command, rootName: cwd.rootName, workspaceId: cwd.workspaceId,
+          args, command: parsed.command, cwdMarker, sessionRevision: sessionSnapshot.revision,
+          rootName: cwd.rootName, workspaceId: cwd.workspaceId,
           workspaceRoot: cwd.workspaceRoot, canonicalRoot: cwd.canonicalRoot, cwdPath: cwd.pathIdentity.path,
           cwd: cwd.canonicalTarget, cwdDisplay: `${cwd.rootName}:${cwd.relativePath}`, cwdBaseline: cwd.baseline,
           outputPath: output.relativePath, outputAbsolutePath: output.canonicalTarget, outputBaseline: output.baseline,
@@ -219,6 +242,11 @@ function createShellAdapter(
       if (context.interruption.signal.aborted) return interruptedRevalidation("shell_action_interrupted");
       try {
         const payload = readShellPayload(prepared.invocation);
+        const sessionSnapshot = session.snapshot();
+        if (
+          sessionSnapshot.revision !== payload.sessionRevision ||
+          !samePath(sessionSnapshot.canonicalPath, payload.cwd)
+        ) return invalidated("shell_session_changed");
         const executableAssertion = assertions.find((candidate): candidate is Extract<TargetStateAssertion, { kind: "executable_identity" }> => candidate.kind === "executable_identity");
         const cwdAssertions = pathAssertions(assertions, payload.cwdPath);
         const outputAssertions = pathAssertions(assertions, payload.outputAbsolutePath);
@@ -268,7 +296,7 @@ async function shellPreparedData(
       { kind: "file_baseline", path: output.pathIdentity, expected: output.baseline },
       { kind: "executable_identity", expected: executable },
     ],
-    approval: approval(runtimeEnvironment.environmentId, applicability, description ?? "Execute one native shell command.", [payload.executablePath, ...payload.args], commandDisplay, payload.cwd, payload.cwdDisplay, "Spawn one native shell process"),
+    approval: approval(runtimeEnvironment.environmentId, applicability, description ?? "Execute one native shell command.", [payload.executablePath, ...payload.args], commandDisplay, payload.cwd, payload.cwdDisplay, "Spawn one native shell process", createdAt),
     safeSummary: { kind: "process", headline: payload.runInBackground ? "Start background shell task" : "Run shell command", commandDisplay, cwdDisplay: payload.cwdDisplay },
     preparedInvocation: { contractVersion: "1", executorId: SHELL_EXECUTOR.id, executorVersion: SHELL_EXECUTOR.version, payload: payload as unknown as SerializableValue },
     replayBasis: "none", semanticBasis: { commandDisplay, cwdDisplay: payload.cwdDisplay },
@@ -276,7 +304,13 @@ async function shellPreparedData(
   };
 }
 
-function createShellExecutor(environment: CommandEnvironmentPolicySnapshot, tasks: RunProcessTaskRegistry, now: () => string, nowMs: () => number): ActionExecutor {
+function createShellExecutor(
+  environment: CommandEnvironmentPolicySnapshot,
+  tasks: RunProcessTaskRegistry,
+  session: ShellExecutionSession,
+  now: () => string,
+  nowMs: () => number,
+): ActionExecutor {
   const executor: ActionExecutor = {
     descriptor: SHELL_EXECUTOR,
     validatePayload(candidate): candidate is unknown { return isRecord(candidate); },
@@ -309,7 +343,20 @@ function createShellExecutor(environment: CommandEnvironmentPolicySnapshot, task
           outputFile: { absolutePath: payload.outputAbsolutePath, relativePath: payload.outputPath, maximumBytes: payload.maxOutputFileBytes },
           interruption: context.interruption, termination: payload.termination, startedMs, nowMs,
         });
-        return processOutcome(outcome, startedAt, now());
+        if (outcome.kind !== "completed") return processOutcome(outcome, startedAt, now(), null);
+        const captured = extractFinalWorkingDirectory(outcome.stdout, payload.cwdMarker);
+        const committed = captured.path === null
+          ? null
+          : await session.commitFinalWorkingDirectory({
+              expectedRevision: payload.sessionRevision,
+              path: captured.path,
+            });
+        return processOutcome(
+          Object.freeze({ ...outcome, stdout: captured.stdout }),
+          startedAt,
+          now(),
+          committed,
+        );
       } catch (error) {
         return failed(dispatched ? "unknown" : "none", error instanceof ProcessTaskRegistryError ? error.code : dispatched ? "shell_settlement_unknown" : "shell_execution_failed", safeMessage(error, "Shell execution failed."));
       }
@@ -332,7 +379,7 @@ function createTaskStopAdapter(tasks: RunProcessTaskRegistry): OperationActionAd
         const data: ActionAdapterPreparedData<StopBasis> = {
           effectSet: { kind: "effects", values: [{ kind: "process", operation: "signal", target: task.process }] },
           requestedAuthority: null, targetAssertions: [],
-          approval: approval(task.process.environmentId, task.process.startFingerprint, "Stop one background shell task.", ["TaskStop", task.taskId], `TaskStop ${task.taskId}`, task.outputFile, task.outputFile, "Signal one exact background process"),
+          approval: approval(task.process.environmentId, task.process.startFingerprint, "Stop one background shell task.", ["TaskStop", task.taskId], `TaskStop ${task.taskId}`, task.outputFile, task.outputFile, "Signal one exact background process", context.now()),
           safeSummary: { kind: "process", headline: "Stop background shell task", commandDisplay: `TaskStop ${task.taskId}`, cwdDisplay: task.outputFile },
           preparedInvocation: { contractVersion: "1", executorId: STOP_EXECUTOR.id, executorVersion: STOP_EXECUTOR.version, payload: { identity: task.process } as unknown as SerializableValue },
           replayBasis: "none", semanticBasis: { taskId, cwdDisplay: task.outputFile },
@@ -373,7 +420,12 @@ function createTaskStopExecutor(tasks: RunProcessTaskRegistry, now: () => string
   return Object.freeze(executor);
 }
 
-function processOutcome(outcome: ProcessExecutionOutcome, startedAt: string, finishedAt: string): PhysicalAttemptOutcome<unknown> {
+function processOutcome(
+  outcome: ProcessExecutionOutcome,
+  startedAt: string,
+  finishedAt: string,
+  session: ShellExecutionSessionSnapshot | null,
+): PhysicalAttemptOutcome<unknown> {
   if (outcome.kind === "cancelled_before_start") return interrupted("none", "shell_interrupted_before_dispatch");
   if (outcome.kind === "failed") return failed(outcome.effectState, "shell_process_failed", "Shell process failed.");
   if (outcome.kind === "timeout") return outcome.terminationConfirmed
@@ -381,16 +433,21 @@ function processOutcome(outcome: ProcessExecutionOutcome, startedAt: string, fin
     : failed("unknown", "shell_timeout_termination_unconfirmed", "Shell termination could not be confirmed.");
   if (outcome.kind === "cancellation_unconfirmed") return interrupted("unknown", "shell_cancellation_unconfirmed");
   if (outcome.kind === "cancelled") return interrupted("settled", "shell_cancelled");
-  return completed(foregroundOutput(outcome), startedAt, finishedAt);
+  return completed(foregroundOutput(outcome, session), startedAt, finishedAt);
 }
 
-function foregroundOutput(output: CapturedProcessOutput & { readonly exitCode: number | null; readonly signal: string | null }) {
+function foregroundOutput(
+  output: CapturedProcessOutput & { readonly exitCode: number | null; readonly signal: string | null },
+  session: ShellExecutionSessionSnapshot | null,
+) {
   return Object.freeze({
     mode: "foreground" as const, exit_code: output.exitCode, signal: output.signal, duration_ms: output.durationMs,
     stdout: output.stdout, stderr: output.stderr, stdout_truncated: output.stdoutTruncated,
     stderr_truncated: output.stderrTruncated,
     stdout_overflow_file: output.stdoutTruncated ? output.outputFile : null,
     stderr_overflow_file: output.stderrTruncated ? output.outputFile : null,
+    final_working_directory: session?.canonicalPath ?? null,
+    shell_session_revision: session?.revision ?? null,
   });
 }
 
@@ -441,7 +498,9 @@ function readShellPayload(invocation: PreparedActionInvocation): ShellPayload {
   if (!Array.isArray(value.args) || !value.args.every((entry) => typeof entry === "string") || !isBaseline(value.executableBaseline) || !isBaseline(value.cwdBaseline) || !isBaseline(value.outputBaseline) || !isRecord(value.termination)) throw new TypeError("Prepared shell payload is invalid.");
   return Object.freeze({
     runId: text(value.runId), executablePath: text(value.executablePath), executableBaseline: value.executableBaseline,
-    args: Object.freeze([...(value.args as string[])]), command: text(value.command), rootName: text(value.rootName),
+    args: Object.freeze([...(value.args as string[])]), command: text(value.command),
+    cwdMarker: text(value.cwdMarker), sessionRevision: nonNegativeInteger(value.sessionRevision),
+    rootName: text(value.rootName),
     workspaceId: text(value.workspaceId), workspaceRoot: text(value.workspaceRoot), canonicalRoot: text(value.canonicalRoot),
     cwdPath: text(value.cwdPath), cwd: text(value.cwd), cwdDisplay: text(value.cwdDisplay), cwdBaseline: value.cwdBaseline,
     outputPath: text(value.outputPath), outputAbsolutePath: text(value.outputAbsolutePath), outputBaseline: value.outputBaseline,
@@ -466,13 +525,13 @@ function parseTaskId(input: unknown): string {
   return text(input.task_id);
 }
 
-function approval(environmentId: string, applicability: string, reason: string, command: readonly string[], safeCommandDisplay: string, cwd: string, cwdDisplay: string, summary: string) {
+function approval(environmentId: string, applicability: string, reason: string, command: readonly string[], safeCommandDisplay: string, cwd: string, cwdDisplay: string, summary: string, createdAt: string) {
   return {
     category: "commandExecution" as const, environmentId,
     applicabilityKeys: [{ category: "commandExecution" as const, value: applicability }], reason,
     payload: { command, safeCommandDisplay, cwd, cwdDisplay, environmentId, commandActions: [{ kind: "process" as const, summary }], additionalPermissions: null },
     decisionOptions: actionDecisionOptions(), trustedProposals: [],
-    deadlineAt: new Date(Date.now() + 120_000).toISOString(), metadata: {},
+    deadlineAt: new Date(Date.parse(createdAt) + 120_000).toISOString(), metadata: {},
   };
 }
 
@@ -493,6 +552,7 @@ function isRecord(value: unknown): value is Record<string, any> { return typeof 
 function isBaseline(value: unknown): value is FileBaseline { return isRecord(value) && (value.kind === "absent" || value.kind === "present"); }
 function text(value: unknown): string { if (typeof value !== "string" || value.length === 0) throw new TypeError("Prepared text is invalid."); return value; }
 function integer(value: unknown): number { if (!Number.isSafeInteger(value) || (value as number) < 1) throw new TypeError("Prepared integer is invalid."); return value as number; }
+function nonNegativeInteger(value: unknown): number { if (!Number.isSafeInteger(value) || (value as number) < 0) throw new TypeError("Prepared non-negative integer is invalid."); return value as number; }
 function boolean(value: unknown): boolean { if (typeof value !== "boolean") throw new TypeError("Prepared boolean is invalid."); return value; }
 function platform(value: unknown): "win32" | "posix" { if (value !== "win32" && value !== "posix") throw new TypeError("Prepared platform is invalid."); return value; }
 function samePath(left: string, right: string): boolean {
@@ -502,6 +562,34 @@ function samePath(left: string, right: string): boolean {
 }
 function safeMessage(error: unknown, fallback: string): string { return error instanceof Error ? error.message : fallback; }
 function digestToken(value: string): string { return createHash("sha256").update(value).digest("hex").slice(0, 24); }
+function commandWithFinalWorkingDirectory(
+  shell: "Bash" | "PowerShell",
+  command: string,
+  marker: string,
+): string {
+  if (shell === "PowerShell") {
+    return `& { ${command} }; $__helarc_exit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }; [Console]::Out.WriteLine("\`n${marker}" + (Get-Location).ProviderPath); exit $__helarc_exit`;
+  }
+  return `{ ${command}; }; __helarc_exit=$?; printf '\\n%s%s\\n' '${marker}' "$PWD"; exit "$__helarc_exit"`;
+}
+function extractFinalWorkingDirectory(
+  stdout: string,
+  marker: string,
+): { readonly stdout: string; readonly path: string | null } {
+  const markerIndex = stdout.lastIndexOf(marker);
+  if (markerIndex < 0) return Object.freeze({ stdout, path: null });
+  const lineEnd = stdout.indexOf("\n", markerIndex);
+  const path = stdout.slice(
+    markerIndex + marker.length,
+    lineEnd < 0 ? stdout.length : lineEnd,
+  ).replace(/\r$/u, "").trim();
+  const lineStart = stdout.lastIndexOf("\n", markerIndex - 1) + 1;
+  const suffixStart = lineEnd < 0 ? stdout.length : lineEnd + 1;
+  return Object.freeze({
+    stdout: `${stdout.slice(0, lineStart)}${stdout.slice(suffixStart)}`,
+    path: path.length === 0 ? null : path,
+  });
+}
 function rootIdentityInput(root: CanonicalWorkspaceRootIdentity) {
   if (root.resolvedPath === null) throw new TypeError("Canonical Workspace root requires a resolved path.");
   return { rootId: root.rootId, platform: root.platform, path: root.canonicalPath, resolvedPath: root.resolvedPath, resolutionFingerprint: root.resolutionFingerprint };

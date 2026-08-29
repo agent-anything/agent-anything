@@ -6,9 +6,9 @@ import {
   createSucceededRunResult,
 } from "../run/index.js";
 import {
-  createInitialRunProgressState,
-  projectRunProgress,
-} from "../progress/index.js";
+  createInitialRunStopReviewState,
+  projectRunStopReview,
+} from "../stop/index.js";
 import { ActiveRunHandle, type RunExecutionUpdate } from "./RunHandle.js";
 import type { RunTreeExecutionSnapshot } from "./RunTreeExecution.js";
 
@@ -58,7 +58,7 @@ describe("ActiveRunHandle", () => {
     );
   });
 
-  it("copies and freezes the authoritative Run Progress projection", () => {
+  it("copies and freezes the authoritative Stop Review projection", () => {
     const result = succeededResult();
     const handle = new ActiveRunHandle(
       "run-1",
@@ -67,11 +67,10 @@ describe("ActiveRunHandle", () => {
       runTree(0),
       () => undefined,
     );
-    const sourceFactRefs = [{
-      kind: "operation_result" as const,
-      owner: "workspace",
-      subjectId: "file-1",
-      revision: "2",
+    const limitations = [{
+      owner: "plan" as const,
+      code: "plan_remains_active",
+      message: "The Run stopped with an active Plan.",
     }];
 
     handle.publish({
@@ -79,16 +78,12 @@ describe("ActiveRunHandle", () => {
       status: "running",
       lastRunItemSequence: 4,
       plan: null,
-      progress: {
-        checkpointSequence: 2,
-        disposition: "repeated",
-        reasonCode: "equivalent_fact_repeated",
-        consecutiveNonAdvancingCheckpoints: 2,
-        correctionRounds: 1,
-        activeCorrectionRound: 1,
-        latestAssessment: { runId: "run-1", checkpointSequence: 2 },
-        latestAdvancement: { runId: "run-1", checkpointSequence: 1 },
-        factRefs: sourceFactRefs,
+      stopReview: {
+        reviewSequence: 2,
+        requiredFeedbackRounds: 1,
+        advisoryFeedbackRounds: 1,
+        latestReview: { runId: "run-1", sequence: 2 },
+        limitations,
       },
       retry: null,
       verification: null,
@@ -97,14 +92,13 @@ describe("ActiveRunHandle", () => {
       result: null,
     });
 
-    sourceFactRefs[0]!.revision = "changed-after-publish";
-    const progress = handle.getSnapshot().progress;
-    expect(progress.factRefs[0]?.revision).toBe("2");
-    expect(Object.isFrozen(progress)).toBe(true);
-    expect(Object.isFrozen(progress.factRefs)).toBe(true);
-    expect(Object.isFrozen(progress.factRefs[0])).toBe(true);
-    expect(Object.isFrozen(progress.latestAssessment)).toBe(true);
-    expect(Object.isFrozen(progress.latestAdvancement)).toBe(true);
+    limitations[0]!.message = "changed-after-publish";
+    const stopReview = handle.getSnapshot().stopReview;
+    expect(stopReview.limitations[0]?.message).toBe("The Run stopped with an active Plan.");
+    expect(Object.isFrozen(stopReview)).toBe(true);
+    expect(Object.isFrozen(stopReview.limitations)).toBe(true);
+    expect(Object.isFrozen(stopReview.limitations[0])).toBe(true);
+    expect(Object.isFrozen(stopReview.latestReview)).toBe(true);
   });
 
   it("settles an execution rejection through the emergency result exactly once", async () => {
@@ -177,7 +171,7 @@ function terminalUpdate(
     status: "succeeded",
     lastRunItemSequence: 0,
     plan: null,
-    progress: projectRunProgress(createInitialRunProgressState(), null),
+    stopReview: projectRunStopReview(createInitialRunStopReviewState()),
     retry: null,
     verification: null,
       pendingInteractions: [],

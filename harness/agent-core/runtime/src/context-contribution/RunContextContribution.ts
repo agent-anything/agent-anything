@@ -4,7 +4,7 @@ import type { ContextContribution, ContextInstructionRole } from "@agent-anythin
 import { measureContextPayload } from "@agent-anything/context/contribution";
 import type { ContextAdmissionProfile } from "@agent-anything/context/active-context";
 import type { PlanProjection } from "../plan/index.js";
-import type { RunProgressCorrectionFeedback } from "../progress/index.js";
+import type { RunStopFeedback } from "../stop/index.js";
 import type { RunObservation, RunState } from "../run/index.js";
 import type {
   DelegationContextMaterial,
@@ -158,11 +158,11 @@ export function createSteeringContextContribution(input: { readonly id: string; 
   });
 }
 
-export function createProgressCorrectionContextContribution(input: {
+export function createStopFeedbackContextContribution(input: {
   readonly id: string;
   readonly revision: string;
   readonly runId: string;
-  readonly feedback: RunProgressCorrectionFeedback;
+  readonly feedback: RunStopFeedback;
   readonly createdAt: string;
 }): ContextContribution {
   return createRunContextContribution({
@@ -170,29 +170,27 @@ export function createProgressCorrectionContextContribution(input: {
     revision: input.revision,
     runId: input.runId,
     owner: "agent-runtime",
-    sourceKind: "run_progress_correction",
+    sourceKind: "run_stop_feedback",
     sourceId: input.runId,
     sourceRevision: input.revision,
     observedAt: input.createdAt,
     payload: toContextJsonValue({
-      kind: "run_progress_correction",
-      correctionRound: input.feedback.correctionRound,
-      reasonCode: input.feedback.reasonCode,
-      factRefs: input.feedback.factRefs,
-      guidance: [
-        "Reassess the objective and current committed facts.",
-        "Choose a materially different path, request clarification, propose completion, or stop when no safe path remains.",
-      ],
+      kind: "run_stop_feedback",
+      owner: input.feedback.owner,
+      severity: input.feedback.severity,
+      round: input.feedback.round,
+      code: input.feedback.code,
+      message: input.feedback.message,
     }),
     payloadKind: "structured",
     retention: "current",
-    replacementKey: "run_progress_correction",
+    replacementKey: "run_stop_feedback",
     instructionRole: "data",
     necessity: "mandatory",
     precedence: 92,
     audiences: Object.freeze(["model"]),
-    provenanceKind: "run_progress_assessment",
-    provenanceId: `${input.runId}:${input.feedback.assessment.checkpointSequence}`,
+    provenanceKind: "run_stop_review",
+    provenanceId: `${input.runId}:${input.feedback.review.sequence}`,
     provenanceRevision: input.revision,
   });
 }
@@ -333,10 +331,10 @@ export function createSteeringContextAdmissionProfile(): ContextAdmissionProfile
   });
 }
 
-export function createProgressCorrectionContextAdmissionProfile(): ContextAdmissionProfile {
+export function createStopFeedbackContextAdmissionProfile(): ContextAdmissionProfile {
   return admissionProfile({
     owner: "agent-runtime",
-    sourceKinds: ["run_progress_correction"],
+    sourceKinds: ["run_stop_feedback"],
     audiences: ["model"],
     retention: ["current"],
     instructionRoles: ["data"],

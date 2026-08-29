@@ -38,11 +38,11 @@ import {
   type FakeNativeToolProviderStep,
 } from "../../provider/FakeNativeToolProvider.js";
 
-export const HELARC_EVALUATION_TIME = "2026-08-12T00:00:00.000Z";
+export const HELARC_EVALUATION_TIME = "2026-08-29T00:00:00.000Z";
 export const HELARC_EVALUATION_CORPUS_REVISION =
-  "helarc-task-fulfillment-gated-completion-corpus-v1";
+  "helarc-run-stop-execution-truth-corpus-v1";
 export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION =
-  "helarc-task-fulfillment-gated-completion-target-v1";
+  "helarc-run-stop-execution-truth-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
@@ -146,7 +146,7 @@ const REFS = Object.freeze({
   latencyMetric: ref("helarc.phase26.metric.latency"),
   retryMetric: ref("helarc.phase26.metric.retry-count"),
   environmentProtocol: ref("helarc.phase26.environment-protocol"),
-  campaign: ref("helarc.phase26.campaign", "v4"),
+  campaign: ref("helarc.phase26.campaign", "v5"),
 });
 
 export function createHelarcEvaluationCorpus(): HelarcEvaluationCorpus {
@@ -286,6 +286,9 @@ function createObjective(): EvaluationObjective {
     requirement("task-fulfillment-contract.revision", "agent-core"),
     requirement("task-fulfillment-evaluator.revision", "helarc.product"),
     requirement("completion-gate.revision", "agent-runtime"),
+    requirement("run-stop-review.revision", "agent-runtime"),
+    requirement("activity-accounting.revision", "agent-runtime"),
+    requirement("shell-execution-session.revision", "helarc.local-environment"),
     requirement("target-adapter.revision", "evaluation.target"),
     requirement("source.revision", "repository"),
     requirement("source.dirty-state", "repository", false),
@@ -336,7 +339,7 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v13-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v14-${process.platform}-${process.arch}-node${nodeMajor}`;
   const agent = createHelarcAgent({
     target: "production",
     providerId: "helarc-deterministic-scripted-provider",
@@ -347,7 +350,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-task-fulfillment-gated-completion-v1",
+    "product.revision": "helarc-product-run-stop-execution-truth-v1",
     "agent.revision": agent.revision,
     "agent.instructions.release": `${agent.instructions.release.id}@${agent.instructions.release.revision}`,
     "agent.instructions.resolver": agent.instructions.resolverRevision,
@@ -360,8 +363,11 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "task-fulfillment-contract.revision": "agent-core.task-fulfillment.v1",
     "task-fulfillment-evaluator.revision": "helarc.task-fulfillment-evaluator.v1",
     "completion-gate.revision": "task-fulfillment-before-verification.v1",
+    "run-stop-review.revision": "agent-runtime.run-stop-review.v1",
+    "activity-accounting.revision": "agent-runtime.exact-activity.v1",
+    "shell-execution-session.revision": "helarc.shell-execution-session.v1",
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-task-fulfillment-gated-completion-v1",
+    "source.revision": "helarc-run-stop-execution-truth-v1",
     "provider.revision": "scripted-native-tool-provider-v1",
     "model.revision": "scripted-native-tool-turn-v1",
     "tool-profile.revision": "delegation-transfer-v1",
@@ -371,7 +377,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "permission.preset": "case-declared",
     "reviewer.profile": "case-declared-deterministic",
     "context-projector.revision": "helarc-context-projector-v1",
-    "run-limits.revision": "helarc-verification-guided-run-limits-v1",
+    "run-limits.revision": "helarc-stop-review-run-limits-v1",
     "retry-policy.revision": "phase26-retry-policy-v1",
     "cancellation-limits.revision": "phase26-cancellation-v1",
     "fixture-manifest.revision": HELARC_EVALUATION_CORPUS_REVISION,
@@ -387,7 +393,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
         key: item.key,
         owner: item.owner,
         required: item.required,
-        sourceRevision: "helarc-task-fulfillment-gated-completion-v1",
+        sourceRevision: "helarc-run-stop-execution-truth-v1",
         schemaRef: item.schemaRef,
         status: "unavailable" as const,
         representation: null,

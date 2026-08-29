@@ -37,9 +37,9 @@ describe("RunResult", () => {
       failure: null,
       relatedFailures: [],
     });
-    expect(createBlockedRunResult(input, "runtime_no_progress")).toMatchObject({
+    expect(createBlockedRunResult(input, "runtime_stop_feedback_exhausted")).toMatchObject({
       status: "blocked",
-      code: "runtime_no_progress",
+      code: "runtime_stop_feedback_exhausted",
       finalOutput: null,
       failure: null,
     });

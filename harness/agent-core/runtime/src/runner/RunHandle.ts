@@ -15,10 +15,10 @@ import type {
 } from "../run/index.js";
 import type { PlanProjection } from "../plan/index.js";
 import {
-  createInitialRunProgressState,
-  projectRunProgress,
-  type RunProgressProjection,
-} from "../progress/index.js";
+  createInitialRunStopReviewState,
+  projectRunStopReview,
+  type RunStopReviewProjection,
+} from "../stop/index.js";
 import type { RetryEvent } from "../retry/index.js";
 import type { VerificationHostProjection } from "@agent-anything/verification/projection";
 import type { RunTreeExecutionSnapshot } from "./RunTreeExecution.js";
@@ -60,7 +60,7 @@ export interface RunOperationSnapshot<TOutput = unknown> {
   readonly lastRunItemSequence: number;
   readonly instructionBinding: AgentInstructionBindingProjection | null;
   readonly plan: PlanProjection | null;
-  readonly progress: RunProgressProjection;
+  readonly stopReview: RunStopReviewProjection;
   readonly retry: RunRetryProjection | null;
   readonly verification: VerificationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
@@ -91,7 +91,7 @@ export interface RunExecutionUpdate<TOutput> {
   readonly lastRunItemSequence: number;
   readonly instructionBinding: AgentInstructionBindingProjection | null;
   readonly plan: PlanProjection | null;
-  readonly progress: RunProgressProjection;
+  readonly stopReview: RunStopReviewProjection;
   readonly retry: RunRetryProjection | null;
   readonly verification: VerificationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
@@ -128,7 +128,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       lastRunItemSequence: 0,
       instructionBinding: null,
       plan: null,
-      progress: projectRunProgress(createInitialRunProgressState(), null),
+      stopReview: projectRunStopReview(createInitialRunStopReviewState()),
       retry: null,
       verification: null,
       pendingInteractions: Object.freeze([]),
@@ -164,7 +164,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       lastRunItemSequence: update.lastRunItemSequence,
       instructionBinding: update.instructionBinding,
       plan: update.plan,
-      progress: update.progress,
+      stopReview: update.stopReview,
       retry: update.retry,
       verification: update.verification,
       pendingInteractions: update.pendingInteractions,
@@ -299,7 +299,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
         lastRunItemSequence: result.items.at(-1)?.ref.sequence ?? 0,
         instructionBinding: this.snapshot.instructionBinding,
         plan: this.snapshot.plan,
-        progress: this.snapshot.progress,
+        stopReview: this.snapshot.stopReview,
         retry: this.snapshot.retry,
         verification: this.snapshot.verification,
         pendingInteractions: Object.freeze([]),
@@ -348,15 +348,14 @@ function freezeSnapshot<TOutput>(
 ): RunOperationSnapshot<TOutput> {
   return Object.freeze({
     ...snapshot,
-    progress: Object.freeze({
-      ...snapshot.progress,
-      latestAssessment: snapshot.progress.latestAssessment === null
+    stopReview: Object.freeze({
+      ...snapshot.stopReview,
+      latestReview: snapshot.stopReview.latestReview === null
         ? null
-        : Object.freeze({ ...snapshot.progress.latestAssessment }),
-      latestAdvancement: snapshot.progress.latestAdvancement === null
-        ? null
-        : Object.freeze({ ...snapshot.progress.latestAdvancement }),
-      factRefs: Object.freeze(snapshot.progress.factRefs.map((ref) => Object.freeze({ ...ref }))),
+        : Object.freeze({ ...snapshot.stopReview.latestReview }),
+      limitations: Object.freeze(snapshot.stopReview.limitations.map((limitation) =>
+        Object.freeze({ ...limitation })
+      )),
     }),
     retry: snapshot.retry === null
       ? null

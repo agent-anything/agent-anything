@@ -18,9 +18,9 @@ import type { VerificationRunnerProjection } from "@agent-anything/verification/
 import type { ToolRevisionRef } from "@agent-anything/tools/identity";
 import type { ToolBindingUnavailableReason } from "@agent-anything/tools/selection";
 import type {
-  RunProgressAssessment,
-  RunProgressCorrectionFeedback,
-} from "../progress/index.js";
+  RunStopFeedback,
+  RunStopReviewRecord,
+} from "../stop/index.js";
 import type { AgentInstructionBindingRef } from "../instructions/index.js";
 import type { ModelCallRef, ModelToolResult } from "@agent-anything/model-interaction";
 import type { TaskFulfillmentAssessment } from "../completion/index.js";
@@ -107,12 +107,12 @@ export type RunItemPayload<TOutput = unknown> =
       readonly assessment: TaskFulfillmentAssessment;
     }
   | {
-      readonly kind: "progress_assessment";
-      readonly assessment: RunProgressAssessment;
+      readonly kind: "stop_review";
+      readonly review: RunStopReviewRecord;
     }
   | {
-      readonly kind: "progress_correction";
-      readonly feedback: RunProgressCorrectionFeedback;
+      readonly kind: "stop_feedback";
+      readonly feedback: RunStopFeedback;
     }
   | {
       readonly kind: "terminal_transition";

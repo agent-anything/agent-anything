@@ -111,49 +111,44 @@ describe("HostRunProjectionReducer", () => {
     expect(projection).toMatchObject({ status: "running", pendingInteractions: [] });
   });
 
-  it("copies bounded Run Progress only from RunHandle snapshots and rejects regression", () => {
-    const source = progressSnapshot(2, "repeated");
+  it("copies bounded Stop Review only from RunHandle snapshots and rejects regression", () => {
+    const source = stopReviewSnapshot(2);
     let projection = apply(initialProjection(), runOperationUpdate(1, {
       sequence: 1,
-      progress: source,
+      stopReview: source,
     }));
 
-    expect(projection.progress).toEqual({
-      checkpointSequence: 2,
-      disposition: "repeated",
-      reasonCode: "equivalent_fact_repeated",
-      consecutiveNonAdvancingCheckpoints: 2,
-      correctionRounds: 1,
-      activeCorrectionRound: 1,
-      factRefs: [{
-        kind: "operation_result",
-        owner: "workspace",
-        subjectId: "file-1",
-        revision: "2",
+    expect(projection.stopReview).toEqual({
+      reviewSequence: 2,
+      requiredFeedbackRounds: 1,
+      advisoryFeedbackRounds: 1,
+      latestReview: { runId: "run-1", sequence: 2 },
+      limitations: [{
+        owner: "plan",
+        code: "plan_reconciliation_feedback_exhausted",
+        message: "Plan reconciliation remained incomplete.",
       }],
     });
-    expect(Object.isFrozen(projection.progress)).toBe(true);
-    expect(Object.isFrozen(projection.progress.factRefs)).toBe(true);
-    expect(Object.isFrozen(projection.progress.factRefs[0])).toBe(true);
-    expect("latestAssessment" in projection.progress).toBe(false);
+    expect(Object.isFrozen(projection.stopReview)).toBe(true);
+    expect(Object.isFrozen(projection.stopReview.limitations)).toBe(true);
+    expect(Object.isFrozen(projection.stopReview.limitations[0])).toBe(true);
 
-    projection = apply(projection, runtimeUpdate(2, "run.progress.assessed", {
-      checkpointSequence: 99,
-      disposition: "advanced",
-      reasonCode: "new_trusted_fact",
-      factRefs: [],
-      consecutiveNonAdvancingCheckpoints: 0,
-      correctionRounds: 0,
-      activeCorrectionRound: null,
+    projection = apply(projection, runtimeUpdate(2, "run.stop.reviewed", {
+      reviewSequence: 99,
+      decision: "allow_stop",
+      checkCount: 2,
+      limitationCount: 0,
+      requiredFeedbackRounds: 1,
+      advisoryFeedbackRounds: 1,
     }));
-    expect(projection.progress.checkpointSequence).toBe(2);
+    expect(projection.stopReview.reviewSequence).toBe(2);
 
     expect(reduceHostRunProjection(projection, runOperationUpdate(3, {
       sequence: 2,
-      progress: initialProgress(),
+      stopReview: initialStopReview(),
     }))).toMatchObject({
       status: "rejected",
-      code: "run_progress_checkpoint_regression",
+      code: "run_stop_review_sequence_regression",
     });
   });
 
@@ -440,7 +435,7 @@ function runOperationUpdate(
       lastRunItemSequence: 0,
       instructionBinding: null,
       plan: null,
-      progress: initialProgress(),
+      stopReview: initialStopReview(),
       retry: null,
       verification: null,
       pendingInteractions: [],
@@ -452,41 +447,28 @@ function runOperationUpdate(
   };
 }
 
-function initialProgress(): RunOperationSnapshot["progress"] {
+function initialStopReview(): RunOperationSnapshot["stopReview"] {
   return Object.freeze({
-    checkpointSequence: 0,
-    disposition: null,
-    reasonCode: null,
-    consecutiveNonAdvancingCheckpoints: 0,
-    correctionRounds: 0,
-    activeCorrectionRound: null,
-    latestAssessment: null,
-    latestAdvancement: null,
-    factRefs: Object.freeze([]),
+    reviewSequence: 0,
+    requiredFeedbackRounds: 0,
+    advisoryFeedbackRounds: 0,
+    latestReview: null,
+    limitations: Object.freeze([]),
   });
 }
 
-function progressSnapshot(
-  checkpointSequence: number,
-  disposition: "advanced" | "repeated",
-): RunOperationSnapshot["progress"] {
-  const assessment = Object.freeze({ runId: "run-1", checkpointSequence });
+function stopReviewSnapshot(
+  reviewSequence: number,
+): RunOperationSnapshot["stopReview"] {
   return Object.freeze({
-    checkpointSequence,
-    disposition,
-    reasonCode: disposition === "advanced"
-      ? "new_trusted_fact" as const
-      : "equivalent_fact_repeated" as const,
-    consecutiveNonAdvancingCheckpoints: disposition === "advanced" ? 0 : 2,
-    correctionRounds: 1,
-    activeCorrectionRound: disposition === "advanced" ? null : 1,
-    latestAssessment: assessment,
-    latestAdvancement: disposition === "advanced" ? assessment : null,
-    factRefs: Object.freeze([Object.freeze({
-      kind: "operation_result" as const,
-      owner: "workspace",
-      subjectId: "file-1",
-      revision: "2",
+    reviewSequence,
+    requiredFeedbackRounds: 1,
+    advisoryFeedbackRounds: 1,
+    latestReview: Object.freeze({ runId: "run-1", sequence: reviewSequence }),
+    limitations: Object.freeze([Object.freeze({
+      owner: "plan" as const,
+      code: "plan_reconciliation_feedback_exhausted",
+      message: "Plan reconciliation remained incomplete.",
     })]),
   });
 }

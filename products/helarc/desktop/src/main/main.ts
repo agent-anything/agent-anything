@@ -13,6 +13,7 @@ import { resolveHelarcProviderConfig } from "./provider/resolveHelarcProviderCon
 import { FileHelarcThreadStore } from "./thread/index.js";
 import { FileHelarcWorkspaceProfileStore } from "./workspace/HelarcWorkspaceProfileStore.js";
 import { createHelarcWindowOptions } from "./windowOptions.js";
+import { FileHelarcRunTranscriptStore } from "./run-transcript/index.js";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
@@ -55,6 +56,9 @@ async function createWindow(): Promise<void> {
   const contextManifestStore = new FileHelarcContextManifestStore(
     join(userDataPath, "context-manifests.json"),
   );
+  const runTranscriptStore = new FileHelarcRunTranscriptStore(
+    join(userDataPath, "run-transcripts"),
+  );
   await Promise.all([
     modelContinuationStore.listContinuations(),
     contextManifestStore.listManifests(),
@@ -68,6 +72,7 @@ async function createWindow(): Promise<void> {
     threadStore,
     modelContinuationStore,
     contextManifestPersistence: contextManifestStore,
+    runTranscriptPort: runTranscriptStore,
   });
   registerHelarcIpc({
     window,

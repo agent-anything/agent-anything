@@ -4,7 +4,7 @@ import { createAgentInstructionBinding } from "../instructions/index.js";
 import { createInitialRunState } from "./RunInitialization.js";
 
 describe("Run initialization", () => {
-  it("creates one coherent immutable Run Progress state", () => {
+  it("creates one coherent immutable Stop Review state", () => {
     const agent = {
       id: "agent-1",
       revision: "1",
@@ -44,17 +44,14 @@ describe("Run initialization", () => {
       activeContextId: "context-1",
     });
 
-    expect(state.progress).toEqual({
-      checkpointSequence: 0,
-      consecutiveNonAdvancingCheckpoints: 0,
-      correctionRounds: 0,
-      activeCorrectionRound: null,
-      latestAssessment: null,
-      latestAdvancement: null,
-      basisFingerprint: null,
-      recentCheckpoints: [],
+    expect(state.stopReview).toEqual({
+      reviewSequence: 0,
+      requiredFeedbackRounds: 0,
+      advisoryFeedbackRounds: 0,
+      latestReview: null,
+      limitations: [],
     });
-    expect(Object.isFrozen(state.progress)).toBe(true);
-    expect(Object.isFrozen(state.progress.recentCheckpoints)).toBe(true);
+    expect(Object.isFrozen(state.stopReview)).toBe(true);
+    expect(Object.isFrozen(state.stopReview.limitations)).toBe(true);
   });
 });

@@ -42,7 +42,7 @@ const maximumInputBytes = positiveInteger(
 );
 const corpus = createHelarcEvaluationCorpus();
 const caseDefinition = corpus.cases.find(({ scenario }) => scenario === "inspect_and_complete");
-if (caseDefinition === undefined) throw new TypeError("Run Progress diagnostic Case is unavailable.");
+if (caseDefinition === undefined) throw new TypeError("Stop Review diagnostic Case is unavailable.");
 
 const trials = [];
 for (let repetitionOrdinal = 1; repetitionOrdinal <= 3; repetitionOrdinal += 1) {
@@ -50,21 +50,21 @@ for (let repetitionOrdinal = 1; repetitionOrdinal <= 3; repetitionOrdinal += 1) 
     const material = await executeHelarcEvaluationCase({
       trial: createEvaluationTrial({
         ref: {
-          id: `helarc.run-progress-diagnostic.trial.${repetitionOrdinal}`,
+          id: `helarc.run-stop-review-diagnostic.trial.${repetitionOrdinal}`,
           revision: "v1",
         },
-        campaignRef: { id: "helarc.run-progress-diagnostic.campaign", revision: "v1" },
+        campaignRef: { id: "helarc.run-stop-review-diagnostic.campaign", revision: "v1" },
         targetSnapshotRef: corpus.targetSnapshot.ref,
         caseRef: caseDefinition.definition.ref,
         repetitionOrdinal,
-        seed: `helarc-run-progress-diagnostic-${repetitionOrdinal}`,
-        pairingKey: `run-progress-diagnostic.rep-${repetitionOrdinal}`,
+        seed: `helarc-run-stop-review-diagnostic-${repetitionOrdinal}`,
+        pairingKey: `run-stop-review-diagnostic.rep-${repetitionOrdinal}`,
         environmentProtocolRef: {
-          id: "helarc.run-progress-diagnostic.environment-protocol",
+          id: "helarc.run-stop-review-diagnostic.environment-protocol",
           revision: "v1",
         },
         createdAt: new Date().toISOString(),
-        metadata: { diagnostic: "run_progress" },
+        metadata: { diagnostic: "run_stop_review" },
       }),
       caseDefinition,
       provider: createProvider({
@@ -101,11 +101,11 @@ emit({
   repetitions: trials.length,
   completedRepetitions: completed.length,
   repeatedTrajectory: completed.length === trials.length && signatures.size === 1,
-  correctionVisible: completed.some(({ correctionRounds }) => correctionRounds > 0),
-  recoveredAfterCorrection: completed.some(({ recoveredAfterCorrection }) => recoveredAfterCorrection),
+  stopReviewVisible: completed.some(({ stopReviewCount }) => stopReviewCount > 0),
+  feedbackThenAllowedStop: completed.some(({ feedbackThenAllowedStop }) => feedbackThenAllowedStop),
   trials,
   limitations: [
-    "This diagnostic is observational and cannot replace deterministic Run Progress conformance.",
+    "This diagnostic is observational and cannot replace deterministic Stop Review conformance.",
     "One fixed Case and three stochastic executions do not establish general Product effectiveness.",
   ],
 });
@@ -120,21 +120,28 @@ function projectTrial(material, repetitionOrdinal) {
       runCode: material.runResult.code,
     };
   }
-  const assessments = material.runResult.items.flatMap(({ payload }) =>
-    payload.kind === "progress_assessment" ? [payload.assessment] : []);
-  const corrections = material.runResult.items.filter(({ payload }) =>
-    payload.kind === "progress_correction");
-  const recoveredAfterCorrection = corrections.length > 0 && assessments.some((assessment) =>
-    assessment.disposition === "advanced" && assessment.activeCorrectionRound === null);
+  const reviews = material.runResult.items.flatMap(({ payload }) =>
+    payload.kind === "stop_review" ? [payload.review] : []);
+  const feedback = material.runResult.items.flatMap(({ payload }) =>
+    payload.kind === "stop_feedback" ? [payload.feedback] : []);
+  const feedbackThenAllowedStop = feedback.length > 0 &&
+    reviews.some(({ decision }) => decision === "allow_stop");
   const trajectory = {
     runStatus: material.runResult.status,
     runCode: material.runResult.code,
     actionNames: material.actionNames,
-    assessments: assessments.map((assessment) => ({
-      disposition: assessment.disposition,
-      reasonCode: assessment.reasonCode,
-      correctionRounds: assessment.correctionRounds,
-      activeCorrectionRound: assessment.activeCorrectionRound,
+    reviews: reviews.map((review) => ({
+      decision: review.decision,
+      requiredFeedbackRounds: review.requiredFeedbackRounds,
+      advisoryFeedbackRounds: review.advisoryFeedbackRounds,
+      checkCodes: review.checks.map(({ code }) => code),
+      limitationCodes: review.limitations.map(({ code }) => code),
+    })),
+    feedback: feedback.map((item) => ({
+      owner: item.owner,
+      severity: item.severity,
+      round: item.round,
+      code: item.code,
     })),
   };
   return {
@@ -144,9 +151,11 @@ function projectTrial(material, repetitionOrdinal) {
     runCode: material.runResult.code,
     controllerTurns: material.runResult.counters.controllerTurns,
     actionCount: material.runResult.counters.runActions,
-    progressAssessmentCount: assessments.length,
-    correctionRounds: Math.max(0, ...assessments.map(({ correctionRounds }) => correctionRounds)),
-    recoveredAfterCorrection,
+    stopReviewCount: reviews.length,
+    stopFeedbackCount: feedback.length,
+    requiredFeedbackRounds: Math.max(0, ...reviews.map((review) => review.requiredFeedbackRounds)),
+    advisoryFeedbackRounds: Math.max(0, ...reviews.map((review) => review.advisoryFeedbackRounds)),
+    feedbackThenAllowedStop,
     trajectoryDigest: digest(trajectory),
   };
 }

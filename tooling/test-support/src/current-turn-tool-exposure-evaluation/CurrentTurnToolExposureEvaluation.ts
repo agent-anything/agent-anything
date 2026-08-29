@@ -39,7 +39,7 @@ export interface CurrentTurnToolExposureEvaluationReport {
   readonly recoveryPreservedSelection: true;
   readonly recoveryChangedContent: true;
   readonly permissionIndependent: true;
-  readonly progressIndependent: true;
+  readonly stopReviewIndependent: true;
   readonly equivalentContentUsesDistinctRequestProofs: true;
   readonly systemTarget: {
     readonly trialCount: number;
@@ -109,7 +109,7 @@ export async function runCurrentTurnToolExposureDeterministicEvaluation(): Promi
     Read: available("read-path", "1"),
     TaskStop: unavailable("task-registry", "1", "no_eligible_subject"),
   });
-  const repeatedProgress = resolve(selection, "progress-repeated", {
+  const repeatedStopReview = resolve(selection, "stop-review-repeated", {
     Read: available("read-path", "1"),
     TaskStop: unavailable("task-registry", "1", "no_eligible_subject"),
   });
@@ -140,7 +140,7 @@ export async function runCurrentTurnToolExposureDeterministicEvaluation(): Promi
     recoveryPreservedSelection: (partial.selectionRevision === recovered.selectionRevision) as true,
     recoveryChangedContent: (partial.contentRevision !== recovered.contentRevision) as true,
     permissionIndependent: (permissionAsk.contentRevision === permissionDeny.contentRevision) as true,
-    progressIndependent: (partial.contentRevision === repeatedProgress.contentRevision) as true,
+    stopReviewIndependent: (partial.contentRevision === repeatedStopReview.contentRevision) as true,
     equivalentContentUsesDistinctRequestProofs: (
       proofA.contentRevision === proofB.contentRevision && proofA.id !== proofB.id
     ) as true,
@@ -170,7 +170,7 @@ export async function runCurrentTurnToolExposureDeterministicEvaluation(): Promi
   assertTrue(material.recoveryPreservedSelection, "Recovery changed immutable Run selection.");
   assertTrue(material.recoveryChangedContent, "Recovery did not create fresh exposure content.");
   assertTrue(material.permissionIndependent, "Permission state filtered Tool exposure.");
-  assertTrue(material.progressIndependent, "Run Progress filtered Tool exposure.");
+  assertTrue(material.stopReviewIndependent, "Stop Review filtered Tool exposure.");
   assertTrue(
     material.equivalentContentUsesDistinctRequestProofs,
     "Equivalent exposure content did not retain request-specific proof correlation.",

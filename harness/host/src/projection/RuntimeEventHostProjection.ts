@@ -13,20 +13,20 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
     "instructionBindingRevision",
   ],
   "run.item.appended": ["itemId", "itemKind", "itemSequence"],
-  "run.progress.assessed": [
-    "checkpointSequence",
-    "disposition",
-    "reasonCode",
-    "factRefs",
-    "consecutiveNonAdvancingCheckpoints",
-    "correctionRounds",
-    "activeCorrectionRound",
+  "run.stop.reviewed": [
+    "reviewSequence",
+    "decision",
+    "checkCount",
+    "limitationCount",
+    "requiredFeedbackRounds",
+    "advisoryFeedbackRounds",
   ],
-  "run.progress.correction_requested": [
-    "checkpointSequence",
-    "correctionRound",
-    "reasonCode",
-    "factRefs",
+  "run.stop.feedback_requested": [
+    "reviewSequence",
+    "owner",
+    "severity",
+    "round",
+    "code",
   ],
   "run.descendant.reserved": descendantFields(),
   "run.descendant.started": descendantFields(),
@@ -225,7 +225,6 @@ function terminalFields(): readonly string[] {
 }
 
 function projectField(field: string, value: unknown): unknown {
-  if (field === "factRefs") return projectProgressFactRefs(value);
   if (
     value === null ||
     typeof value === "string" ||
@@ -238,23 +237,6 @@ function projectField(field: string, value: unknown): unknown {
     return Object.freeze([...value]);
   }
   return undefined;
-}
-
-function projectProgressFactRefs(value: unknown): readonly Readonly<Record<string, string | null>>[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const projected: Readonly<Record<string, string | null>>[] = [];
-  for (const candidate of value) {
-    if (!isRecord(candidate)) return undefined;
-    const { kind, owner, subjectId, revision } = candidate;
-    if (
-      typeof kind !== "string" || kind.length === 0 ||
-      typeof owner !== "string" || owner.length === 0 ||
-      !(subjectId === null || typeof subjectId === "string") ||
-      !(revision === null || typeof revision === "string")
-    ) return undefined;
-    projected.push(Object.freeze({ kind, owner, subjectId, revision }));
-  }
-  return Object.freeze(projected);
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

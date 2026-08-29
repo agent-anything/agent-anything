@@ -81,7 +81,7 @@ export function createSucceededRunResult<TOutput>(input: CreateRunResultBaseInpu
 export function createBlockedRunResult<TOutput = never>(input: CreateRunResultBaseInput<TOutput>, code: RunBlockedCode): BlockedRunResult<TOutput> {
   if (
     code !== "runtime_no_safe_path" &&
-    code !== "runtime_no_progress" &&
+    code !== "runtime_stop_feedback_exhausted" &&
     code !== "verification_blocked"
   ) {
     throw new TypeError("Blocked RunResult code is invalid.");

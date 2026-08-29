@@ -10,10 +10,11 @@ import * as controllerApi from "./controller/index.js";
 import * as delegationApi from "./delegation/index.js";
 import * as instructionsApi from "./instructions/index.js";
 import * as planApi from "./plan/index.js";
-import * as progressApi from "./progress/index.js";
 import * as retryApi from "./retry/index.js";
 import * as runApi from "./run/index.js";
 import * as runnerApi from "./runner/index.js";
+import * as stopApi from "./stop/index.js";
+import * as transcriptApi from "./transcript/index.js";
 
 describe("Agent Core Runtime public API", () => {
   it("keeps every public value on its focused subpath", () => {
@@ -68,13 +69,17 @@ describe("Agent Core Runtime public API", () => {
       "assertValidPlanLimits",
       "projectPlan",
     ]);
-    expect(Object.keys(progressApi).sort()).toEqual([
-      "assertRunProgressLimits",
-      "assessRunProgress",
-      "createInitialRunProgressState",
-      "createRunProgressBasis",
-      "createRunProgressSemanticFacts",
-      "projectRunProgress",
+    expect(Object.keys(stopApi).sort()).toEqual([
+      "assertRunStopReviewLimits",
+      "createInitialRunStopReviewState",
+      "projectRunStopReview",
+      "snapshotRunStopCheck",
+      "snapshotRunStopFeedback",
+      "snapshotRunStopReviewRecord",
+    ]);
+    expect(Object.keys(transcriptApi).sort()).toEqual([
+      "RunTranscriptRecorder",
+      "createRunTranscriptRecord",
     ]);
     expect(Object.keys(retryApi).sort()).toEqual([
       "RetryExecutor",
@@ -113,6 +118,7 @@ describe("Agent Core Runtime public API", () => {
     expect(runnerApi).not.toHaveProperty("ActionEnforcementPipeline");
     expect(runnerApi).not.toHaveProperty("RunState");
     expect(runnerApi).not.toHaveProperty("RuntimeEventEmitter");
-    expect(progressApi).not.toHaveProperty("Runner");
+    expect(stopApi).not.toHaveProperty("Runner");
+    expect(transcriptApi).not.toHaveProperty("Runner");
   });
 });

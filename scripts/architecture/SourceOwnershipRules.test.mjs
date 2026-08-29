@@ -34,7 +34,7 @@ test("accepts current owner-directed source forms", () => {
     {
       sourcePath: "harness/agent-core/runtime/src/runner/RunExecution.ts",
       text: [
-        "const completion = await this.evaluateCompletionGate(turn, output);",
+        "const completion = await this.evaluateRunStop(turn, output);",
         'if (completion.kind === "succeeded") { return this.settle({ status: "succeeded" }); }',
       ].join("\n"),
     },
@@ -302,7 +302,7 @@ test("rejects physical execution and semantic processor dependencies in Verifica
   );
 });
 
-test("requires the Runner Completion Gate before success settlement", () => {
+test("requires Runner Stop Review before success settlement", () => {
   const violations = evaluateSourceOwnershipRules({
     sourcePath: "harness/agent-core/runtime/src/runner/RunExecution.ts",
     text: 'return this.settle({ status: "succeeded" });',
@@ -310,7 +310,7 @@ test("requires the Runner Completion Gate before success settlement", () => {
 
   assert.deepEqual(
     violations.map(({ rule }) => rule),
-    ["runner_completion_gate_required"],
+    ["runner_stop_review_required"],
   );
 });
 

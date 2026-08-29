@@ -284,6 +284,13 @@ function createInstructionConformanceCases(
             { step: "Summarize the result.", status: "in_progress" },
           ],
         },
+        {
+          kind: "plan_update",
+          plan: [
+            { step: "Inspect the declared source.", status: "completed" },
+            { step: "Summarize the result.", status: "completed" },
+          ],
+        },
         { kind: "completion", summary: inspect.expectedClaim.agentSummary },
       ], ["Read"]),
       options: Object.freeze({}),
@@ -453,7 +460,7 @@ function trialMetrics(
       item.payload.kind === "state_transition" && item.payload.transition === "plan"
     ).length,
     correctionEvents: material.retryCount + items.filter((item) =>
-      item.payload.kind === "progress_correction"
+      item.payload.kind === "stop_feedback"
     ).length,
     delegationCalls: actionNames.filter((name) => name === "Agent").length,
     verificationObserved: verificationObserved,

@@ -700,10 +700,10 @@ export function RunTerminalPanel({
           <dt>Model use</dt>
           <dd>{run.product.qualification.status}</dd>
         </div>
-        {run.host.progress.disposition ? (
+        {run.host.stopReview.reviewSequence > 0 ? (
           <div>
-            <dt>Progress</dt>
-            <dd>{runProgressLabel(run.host.progress)}</dd>
+            <dt>Stop review</dt>
+            <dd>{runStopReviewLabel(run.host.stopReview)}</dd>
           </div>
         ) : null}
         {terminal.code ? (
@@ -731,9 +731,9 @@ export function RunTerminalPanel({
           <dd>{formatTimestamp(terminal.completedAt)}</dd>
         </div>
       </dl>
-      {terminal.code === "runtime_no_progress" ? (
+      {terminal.code === "runtime_stop_feedback_exhausted" ? (
         <span>
-          The Run stopped after bounded correction produced no new structural progress.
+          The Run stopped after required completion feedback was exhausted.
         </span>
       ) : null}
       {safeOutput !== null && safeOutput.safeErrors.length > 0 ? (
@@ -1415,12 +1415,11 @@ function enforcementLabel(
   }
 }
 
-function runProgressLabel(progress: ActiveRunProjection["host"]["progress"]): string {
-  const status = progress.disposition ?? "not assessed";
-  const correction = progress.activeCorrectionRound === null
-    ? progress.correctionRounds === 0 ? "" : `, ${progress.correctionRounds} corrections used`
-    : `, correction ${progress.activeCorrectionRound} active`;
-  return `${status}, checkpoint ${progress.checkpointSequence}${correction}`;
+function runStopReviewLabel(stopReview: ActiveRunProjection["host"]["stopReview"]): string {
+  const limitations = stopReview.limitations.length === 0
+    ? ""
+    : `, ${stopReview.limitations.length} limitations`;
+  return `review ${stopReview.reviewSequence}, ${stopReview.requiredFeedbackRounds} required and ${stopReview.advisoryFeedbackRounds} advisory feedback rounds${limitations}`;
 }
 
 function verificationLabel(

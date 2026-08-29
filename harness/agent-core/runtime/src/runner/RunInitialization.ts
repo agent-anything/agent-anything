@@ -7,7 +7,7 @@ import {
   type RunState,
 } from "../run/index.js";
 import type { ResolvedRunConfig } from "./RunConfig.js";
-import { createInitialRunProgressState } from "../progress/index.js";
+import { createInitialRunStopReviewState } from "../stop/index.js";
 import {
   assertAgentInstructionBindingMatches,
   snapshotAgentInstructionBindingRef,
@@ -67,7 +67,7 @@ export function createInitialRunState<TOutput>(input: {
       snapshot: Object.freeze({ runId: input.runId, revision: 0 }),
       gate: null,
     }),
-    progress: createInitialRunProgressState(),
+    stopReview: createInitialRunStopReviewState(),
     context,
     plan: null,
     items: Object.freeze([]),

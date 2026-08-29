@@ -350,30 +350,28 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Event summary");
   });
 
-  it("explains bounded no-progress termination with the safe progress summary", () => {
+  it("explains exhausted required Stop Review feedback", () => {
     const html = renderToStaticMarkup(
       <RunTerminalPanel
         title="Run blocked"
         run={runProjection({
           status: "blocked",
           runtimeStatus: "blocked",
-          terminalCode: "runtime_no_progress",
-          progress: {
-            checkpointSequence: 3,
-            disposition: "repeated",
-            reasonCode: "equivalent_fact_repeated",
-            consecutiveNonAdvancingCheckpoints: 2,
-            correctionRounds: 2,
-            activeCorrectionRound: null,
+          terminalCode: "runtime_stop_feedback_exhausted",
+          stopReview: {
+            reviewSequence: 3,
+            requiredFeedbackRounds: 2,
+            advisoryFeedbackRounds: 0,
+            limitations: [],
           },
         })}
       />,
     );
 
-    expect(html).toContain("Progress");
-    expect(html).toContain("repeated, checkpoint 3, 2 corrections used");
+    expect(html).toContain("Stop review");
+    expect(html).toContain("review 3, 2 required and 0 advisory feedback rounds");
     expect(html).toContain(
-      "The Run stopped after bounded correction produced no new structural progress.",
+      "The Run stopped after required completion feedback was exhausted.",
     );
   });
 });
@@ -436,7 +434,7 @@ function runProjection(input: {
   activity?: ReturnType<typeof event>[];
   runTree?: NonNullable<HelarcMainSnapshot["run"]>["host"]["runTree"];
   activeDelegations?: NonNullable<HelarcMainSnapshot["run"]>["host"]["activeDelegations"];
-  progress?: NonNullable<HelarcMainSnapshot["run"]>["host"]["progress"];
+  stopReview?: NonNullable<HelarcMainSnapshot["run"]>["host"]["stopReview"];
   terminalCode?: NonNullable<
     NonNullable<HelarcMainSnapshot["run"]>["host"]["terminal"]
   >["code"];
@@ -464,13 +462,11 @@ function runProjection(input: {
       instructionBinding: null,
       runTree: input.runTree ?? rootRunTree(),
       activeDelegations: input.activeDelegations ?? [],
-      progress: input.progress ?? {
-        checkpointSequence: 0,
-        disposition: null,
-        reasonCode: null,
-        consecutiveNonAdvancingCheckpoints: 0,
-        correctionRounds: 0,
-        activeCorrectionRound: null,
+      stopReview: input.stopReview ?? {
+        reviewSequence: 0,
+        requiredFeedbackRounds: 0,
+        advisoryFeedbackRounds: 0,
+        limitations: [],
       },
       verification: null,
       pendingInteractions: [],

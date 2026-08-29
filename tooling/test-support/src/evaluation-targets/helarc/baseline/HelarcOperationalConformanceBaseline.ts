@@ -2,9 +2,6 @@ import type {
   HelarcOperationalConformanceReport,
 } from "../operational-evaluation/HelarcOperationalConformanceExecution.js";
 import {
-  HELARC_OPERATIONAL_CONFORMANCE_REVISION,
-} from "../operational-evaluation/HelarcOperationalConformanceExecution.js";
-import {
   HELARC_VERIFICATION_GUIDED_COMPLETION_ACCEPTED_BASELINE,
 } from "./HelarcVerificationGuidedCompletionBaseline.js";
 
@@ -15,11 +12,11 @@ const REPORT_REF = Object.freeze({
 });
 const ACCEPTANCE_REF = Object.freeze({
   id: "helarc.operational.harness-conformance.baseline-acceptance",
-  revision: HELARC_OPERATIONAL_CONFORMANCE_REVISION,
+  revision: "helarc-operational-conformance-v1",
 });
 const TARGET_SNAPSHOT_REF = Object.freeze({
   id: "helarc.operational.harness-conformance.target",
-  revision: HELARC_OPERATIONAL_CONFORMANCE_REVISION,
+  revision: "helarc-operational-conformance-v1",
 });
 
 export const HELARC_OPERATIONAL_CONFORMANCE_ACCEPTED_BASELINE = deepFreeze({
@@ -41,7 +38,7 @@ export const HELARC_OPERATIONAL_CONFORMANCE_ACCEPTED_BASELINE = deepFreeze({
     id: "helarc.operational.harness-conformance.campaign",
     revision: "helarc-operational-evaluation-v1",
   }),
-  protocolRevision: HELARC_OPERATIONAL_CONFORMANCE_REVISION,
+  protocolRevision: "helarc-operational-conformance-v1",
   status: "passed" as const,
   trialCount: 7,
   completedTrialCount: 7,

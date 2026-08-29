@@ -236,8 +236,6 @@ describe("Helarc Host Run composition", () => {
       "context.transition.committed",
       "run.item.appended",
       "run.item.appended",
-      "run.item.appended",
-      "run.progress.assessed",
       "context.transition.committed",
       "context.projection.completed",
       "controller.started",
@@ -249,6 +247,8 @@ describe("Helarc Host Run composition", () => {
       "context.transition.committed",
       "run.item.appended",
       "run.item.appended",
+      "run.stop.reviewed",
+      "run.item.appended",
       "run.completed",
     ]);
     const modelCallSettlement = result.activity.find(
@@ -257,7 +257,7 @@ describe("Helarc Host Run composition", () => {
     );
     expect(modelCallSettlement).toBeDefined();
     expect(modelCallSettlement!.sequence).toBeLessThan(
-      result.activity.find((item) => item.kind === "run.progress.assessed")!.sequence,
+      result.activity.find((item) => item.kind === "run.stop.reviewed")!.sequence,
     );
     const fulfillmentAssessment = result.activity.find(
       (item) => item.kind === "run.item.appended" &&
@@ -267,14 +267,15 @@ describe("Helarc Host Run composition", () => {
     expect(fulfillmentAssessment!.sequence).toBeLessThan(
       result.activity.find((item) => item.kind === "verification.gate.evaluated")!.sequence,
     );
-    expect(result.activity.find((item) => item.kind === "run.progress.assessed"))
+    expect(result.activity.find((item) => item.kind === "run.stop.reviewed"))
       .toMatchObject({
-        title: "Run progress advanced",
-        detail: "new_trusted_fact",
+        title: "Run stop review allow_stop",
+        detail: "allow_stop",
         metadata: {
-          checkpointSequence: 1,
-          disposition: "advanced",
-          reasonCode: "new_trusted_fact",
+          reviewSequence: 1,
+          decision: "allow_stop",
+          checkCount: 2,
+          limitationCount: 0,
         },
       });
     const contextProjection = result.activity.find(
@@ -725,6 +726,10 @@ describe("Helarc Host Run composition", () => {
         kind: "completion",
         summary: "Plan was recorded.",
       },
+      {
+        kind: "completion",
+        summary: "Plan was recorded after reconciliation feedback.",
+      },
     ]);
 
     const result = await executeReadOnlyTestHostRun({
@@ -735,6 +740,15 @@ describe("Helarc Host Run composition", () => {
     expect(result.product.status).toBe("completed");
     expect(provider.lastControllerInputPlans).toEqual([
       null,
+      {
+        id: `${result.harnessRunId}:plan:1`,
+        version: 1,
+        status: "active",
+        steps: [
+          { step: "Inspect workspace", status: "in_progress" },
+          { step: "Finish task", status: "pending" },
+        ],
+      },
       {
         id: `${result.harnessRunId}:plan:1`,
         version: 1,

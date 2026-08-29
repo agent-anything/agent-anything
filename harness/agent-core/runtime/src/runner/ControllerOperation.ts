@@ -13,6 +13,7 @@ import {
   type ControllerInput,
 } from "../controller/index.js";
 import { projectPlan } from "../plan/index.js";
+import { projectRunStopReview } from "../stop/index.js";
 import {
   projectPendingRunSubject,
   projectPermissionContext,
@@ -101,13 +102,7 @@ export function prepareControllerOperation<TOutput>(
     }),
     plan: input.state.plan === null ? null : projectPlan(input.state.plan),
     planLimits: input.config.limits.plan,
-    progress: Object.freeze({
-      checkpointSequence: input.state.progress.checkpointSequence,
-      consecutiveNonAdvancingCheckpoints:
-        input.state.progress.consecutiveNonAdvancingCheckpoints,
-      correctionRounds: input.state.progress.correctionRounds,
-      activeCorrectionRound: input.state.progress.activeCorrectionRound,
-    }),
+    stopReview: projectRunStopReview(input.state.stopReview),
     verification: Object.freeze({
       snapshot: Object.freeze({ ...input.state.verification.snapshot }),
       gate: input.state.verification.gate === null

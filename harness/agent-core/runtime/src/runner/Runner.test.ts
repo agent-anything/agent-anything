@@ -169,9 +169,10 @@ describe("Runner semantic integration", () => {
       "controller_turn",
       "task_fulfillment_assessment",
       "verification_feedback",
+      "stop_review",
       "terminal_transition",
     ]);
-    expect(result.items.map(({ ref }) => ref.sequence)).toEqual([1, 2, 3, 4, 5]);
+    expect(result.items.map(({ ref }) => ref.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(controller.calls).toHaveLength(1);
     expect(controller.calls[0]?.instructionBinding).toMatchObject({
       run: { id: "run_001" },
@@ -202,6 +203,33 @@ describe("Runner semantic integration", () => {
     ]));
     expect(events.findIndex(({ name }) => name === "controller.tool_exposure.resolved"))
       .toBeGreaterThan(events.findIndex(({ name }) => name === "run.item.appended"));
+  });
+
+  it("flushes the exact private Transcript before Run completion is observed", async () => {
+    const operations = createOperationFixture([]);
+    const records: Array<{ readonly sequence: number; readonly item: { readonly ref: { readonly sequence: number } } }> = [];
+
+    const result = await createRunner(
+      new ScriptedController([complete("Done")]),
+      operations,
+      {
+        runTranscriptPort: {
+          async append(record) {
+            await Promise.resolve();
+            records.push(record);
+            return { status: "stored" };
+          },
+        },
+      },
+    ).run(createAgent(), createRunInput(), createRunConfig(operations));
+
+    expect(records.map(({ sequence }) => sequence)).toEqual(
+      result.items.map(({ ref }) => ref.sequence),
+    );
+    expect(records.map(({ item }) => item.ref.sequence)).toEqual(
+      result.items.map(({ ref }) => ref.sequence),
+    );
+    expect(records.at(-1)?.item).toEqual(result.items.at(-1));
   });
 
   it("continues from a non-fulfilled completion and succeeds only after reassessment", async () => {
@@ -275,6 +303,12 @@ describe("Runner semantic integration", () => {
         failure: { code: "task_fulfillment_provider_failed" },
       },
     });
+    expect(result.items).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        kind: "stop_review",
+        review: expect.objectContaining({ decision: "failed" }),
+      }),
+    }));
   });
 
   it("rejects evaluator cancellation that is not backed by accepted Run cancellation", async () => {
@@ -548,7 +582,12 @@ describe("Runner semantic integration", () => {
     ));
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(handle.getSnapshot().status).toBe("waiting");
+    expect(handle.getSnapshot().stopReview.latestReview).not.toBeNull();
     expect(controller.calls).toHaveLength(1);
+    expect(events).toContainEqual(expect.objectContaining({
+      name: "run.stop.reviewed",
+      payload: expect.objectContaining({ decision: "wait" }),
+    }));
     settlement.resolve(completedVerificationInterpretation());
     const result = await handle.wait();
 
@@ -598,7 +637,7 @@ describe("Runner semantic integration", () => {
     )).toHaveLength(1);
   });
 
-  it("bounds repeated non-eligible completion proposals without bypassing the Completion Gate", async () => {
+  it("bounds required Stop Review feedback without bypassing the Completion Gate", async () => {
     const operations = createOperationFixture([]);
     const gate: CompletionGatePort = {
       async evaluate(input) {
@@ -620,14 +659,13 @@ describe("Runner semantic integration", () => {
     };
     const controller = new ScriptedController([
       complete("Not ready", "model_complete_1"),
-      complete("Not ready", "model_complete_2"),
       (input) => {
         expect(input.context.blocks.some((block) =>
           block.payload.kind === "structured" &&
           isRecord(block.payload.value) &&
-          block.payload.value.kind === "run_progress_correction"
+          block.payload.value.kind === "run_stop_feedback"
         )).toBe(true);
-        return complete("Not ready", "model_complete_3");
+        return complete("Not ready", "model_complete_2");
       },
     ]);
     const result = await createRunner(controller, operations, {
@@ -643,24 +681,28 @@ describe("Runner semantic integration", () => {
       createRunInput(),
       createRunConfig(operations, {
         limits: {
-          maxIterations: 3,
-          progress: {
-            checkpointWindowSize: 4,
-            nonAdvancingCheckpointThreshold: 1,
-            maxCorrectionRounds: 1,
+          maxIterations: 2,
+          stopReview: {
+            maxRequiredFeedbackRounds: 1,
+            maxAdvisoryFeedbackRounds: 1,
           },
         },
       }),
     );
 
-    expect(result).toMatchObject({ status: "blocked", code: "runtime_no_progress" });
-    expect(controller.calls).toHaveLength(3);
-    expect(result.items.filter(({ payload }) => payload.kind === "verification_feedback"))
-      .toHaveLength(4);
+    expect(result).toMatchObject({
+      status: "blocked",
+      code: "runtime_stop_feedback_exhausted",
+    });
+    expect(controller.calls).toHaveLength(2);
+    expect(result.items.filter(({ payload }) => payload.kind === "stop_review"))
+      .toHaveLength(2);
+    expect(result.items.filter(({ payload }) => payload.kind === "stop_feedback"))
+      .toHaveLength(1);
     expect(result.items.at(-1)?.payload).toMatchObject({
       kind: "terminal_transition",
       status: "blocked",
-      code: "runtime_no_progress",
+      code: "runtime_stop_feedback_exhausted",
     });
   });
 
@@ -707,6 +749,12 @@ describe("Runner semantic integration", () => {
         failure: { code: "verification_gate_provider_failed", stage: "completion_gate" },
       },
     });
+    expect(result.items).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        kind: "stop_review",
+        review: expect.objectContaining({ decision: "failed" }),
+      }),
+    }));
   });
 
   it("fails closed when a Completion Gate requests waiting without exact active work", async () => {
@@ -751,6 +799,12 @@ describe("Runner semantic integration", () => {
         failure: { code: "verification_gate_wait_without_pending_work" },
       },
     });
+    expect(result.items).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        kind: "stop_review",
+        review: expect.objectContaining({ decision: "failed" }),
+      }),
+    }));
   });
 
   it("does not turn Controller failure into completion-recovery feedback", async () => {
@@ -1980,6 +2034,14 @@ describe("Runner semantic integration", () => {
         });
         return complete("Planned", "model_complete_2");
       },
+      (input) => {
+        expect(input.context.blocks.some((block) =>
+          block.payload.kind === "structured" &&
+          isRecord(block.payload.value) &&
+          block.payload.value.kind === "run_stop_feedback"
+        )).toBe(true);
+        return complete("Planned after advisory feedback", "model_complete_3");
+      },
     ]);
 
     const result = await createRunner(controller, operations).run(
@@ -1995,9 +2057,19 @@ describe("Runner semantic integration", () => {
     expect(observations(result)).toContainEqual(expect.objectContaining({
       payload: expect.objectContaining({ kind: "plan_update" }),
     }));
+    expect(result.items.filter(({ payload }) => payload.kind === "stop_feedback"))
+      .toHaveLength(1);
+    expect(result.items.find(({ payload }) =>
+      payload.kind === "stop_review" && payload.review.decision === "allow_stop"
+    )?.payload).toMatchObject({
+      kind: "stop_review",
+      review: {
+        limitations: [{ code: "plan_reconciliation_feedback_exhausted" }],
+      },
+    });
   });
 
-  it("feeds back bounded correction and blocks repeated Plan churn before generic limits", async () => {
+  it("does not invent a no-progress terminal state for ordinary Plan churn", async () => {
     const operations = createOperationFixture([]);
     const events: RuntimeEvent[] = [];
     const planCandidate = () => ({
@@ -2011,19 +2083,15 @@ describe("Runner semantic integration", () => {
     const controller = new ScriptedController([
       advance([planCandidate()], "model_plan_1"),
       (input) => {
-        expect(input.context.blocks, JSON.stringify(input.context.blocks, null, 2)).toContainEqual(expect.objectContaining({
-          instructionRole: "data",
-          payload: expect.objectContaining({
-            kind: "structured",
-            value: expect.objectContaining({
-              kind: "run_progress_correction",
-              correctionRound: 1,
-              reasonCode: "plan_declaration_only",
-            }),
-          }),
-        }));
+        expect(input.context.blocks.some((block) =>
+          block.payload.kind === "structured" &&
+          isRecord(block.payload.value) &&
+          block.payload.value.kind === "run_stop_feedback"
+        )).toBe(false);
         return advance([planCandidate()], "model_plan_2");
       },
+      complete("Plan work is complete", "model_complete_3"),
+      complete("Plan work remains complete", "model_complete_4"),
     ]);
 
     const result = await createRunner(controller, operations, {
@@ -2033,46 +2101,45 @@ describe("Runner semantic integration", () => {
       createRunInput(),
       createRunConfig(operations, {
         limits: {
-          maxIterations: 2,
-          maxActions: 2,
-          progress: {
-            checkpointWindowSize: 3,
-            nonAdvancingCheckpointThreshold: 1,
-            maxCorrectionRounds: 1,
+          maxIterations: 4,
+          maxActions: 4,
+          stopReview: {
+            maxRequiredFeedbackRounds: 1,
+            maxAdvisoryFeedbackRounds: 1,
           },
         },
       }),
     );
 
     expect(result, JSON.stringify(result, null, 2)).toMatchObject({
-      status: "blocked",
-      code: "runtime_no_progress",
+      status: "succeeded",
+      code: null,
     });
-    expect(controller.calls).toHaveLength(2);
-    const correctionItems = result.items.filter(({ payload }) =>
-      payload.kind === "progress_assessment" || payload.kind === "progress_correction"
+    expect(controller.calls).toHaveLength(4);
+    const stopItems = result.items.filter(({ payload }) =>
+      payload.kind === "stop_review" || payload.kind === "stop_feedback"
     );
-    expect(correctionItems.slice(0, 2).map(({ payload }) => payload.kind)).toEqual([
-      "progress_assessment",
-      "progress_correction",
+    expect(stopItems.slice(0, 2).map(({ payload }) => payload.kind)).toEqual([
+      "stop_review",
+      "stop_feedback",
     ]);
-    expect(correctionItems[0]?.committedInRevision).toBe(correctionItems[1]?.committedInRevision);
-    expect(events.filter((event) => event.name.startsWith("run.progress.")).map(
+    expect(stopItems[0]?.committedInRevision).toBe(stopItems[1]?.committedInRevision);
+    expect(events.filter((event) => event.name.startsWith("run.stop.")).map(
       (event) => event.name,
     )).toEqual([
-      "run.progress.assessed",
-      "run.progress.correction_requested",
-      "run.progress.assessed",
+      "run.stop.reviewed",
+      "run.stop.feedback_requested",
+      "run.stop.reviewed",
     ]);
     expect(result.items.at(-1)?.payload).toMatchObject({
       kind: "terminal_transition",
-      status: "blocked",
-      code: "runtime_no_progress",
+      status: "succeeded",
+      code: null,
       failure: null,
     });
   });
 
-  it("recovers in the ordinary Loop when a correction is followed by a new owner-confirmed result", async () => {
+  it("continues the ordinary Loop when Stop feedback is followed by a new owner result", async () => {
     const operation = operationRef("inspect-new-snapshot");
     const handler = internalHandler(
       "handler.inspect-new-snapshot",
@@ -2100,13 +2167,14 @@ describe("Runner semantic integration", () => {
           plan: [{ step: "Inspect", status: "in_progress" }],
         },
       }], "model_plan_1"),
+      complete("Completion before the inspection", "model_complete_2"),
       advance([operationCandidate(operation, {})], "model_operation"),
       (input) => {
         expect(input.context.blocks.some((block) =>
           block.payload.kind === "structured" &&
           isRecord(block.payload.value) &&
-          block.payload.value.kind === "run_progress_correction"
-        )).toBe(false);
+          block.payload.value.kind === "run_stop_feedback"
+        )).toBe(true);
         return complete("Recovered", "model_complete");
       },
     ]);
@@ -2116,31 +2184,27 @@ describe("Runner semantic integration", () => {
       createRunInput(),
       createRunConfig(operations, {
         limits: {
-          progress: {
-            checkpointWindowSize: 4,
-            nonAdvancingCheckpointThreshold: 1,
-            maxCorrectionRounds: 1,
+          stopReview: {
+            maxRequiredFeedbackRounds: 1,
+            maxAdvisoryFeedbackRounds: 1,
           },
         },
       }),
     );
 
     expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
-    expect(result.items).toContainEqual(expect.objectContaining({
-      payload: expect.objectContaining({
-        kind: "progress_assessment",
-        assessment: expect.objectContaining({
-          disposition: "advanced",
-          activeCorrectionRound: null,
-        }),
-      }),
-    }));
     expect(result.items.some(({ payload }) =>
-      payload.kind === "terminal_transition" && payload.code === "runtime_no_progress"
+      payload.kind === "observation" && payload.observation.kind === "operation"
+    )).toBe(true);
+    expect(result.items.some(({ payload }) => payload.kind === "stop_feedback"))
+      .toBe(true);
+    expect(result.items.some(({ payload }) =>
+      payload.kind === "terminal_transition" &&
+      payload.code === "runtime_stop_feedback_exhausted"
     )).toBe(false);
   });
 
-  it("lets cancellation outrank no-progress termination while correction is active", async () => {
+  it("lets cancellation outrank Stop Review while advisory feedback is active", async () => {
     const operations = createOperationFixture([]);
     const correctionTurnStarted = deferred<void>();
     const controller = new ScriptedController([
@@ -2152,11 +2216,12 @@ describe("Runner semantic integration", () => {
           plan: [{ step: "Inspect", status: "in_progress" }],
         },
       }], "model_plan_1"),
+      complete("Completion before Plan reconciliation", "model_complete_2"),
       (input, context) => new Promise<ControllerDecision<TestOutput>>((resolve) => {
         expect(input.context.blocks.some((block) =>
           block.payload.kind === "structured" &&
           isRecord(block.payload.value) &&
-          block.payload.value.kind === "run_progress_correction"
+          block.payload.value.kind === "run_stop_feedback"
         )).toBe(true);
         correctionTurnStarted.resolve();
         context.cancellation.signal.addEventListener("abort", () => {
@@ -2169,10 +2234,9 @@ describe("Runner semantic integration", () => {
       createRunInput(),
       createRunConfig(operations, {
         limits: {
-          progress: {
-            checkpointWindowSize: 3,
-            nonAdvancingCheckpointThreshold: 1,
-            maxCorrectionRounds: 1,
+          stopReview: {
+            maxRequiredFeedbackRounds: 1,
+            maxAdvisoryFeedbackRounds: 1,
           },
         },
       }),
@@ -2188,14 +2252,15 @@ describe("Runner semantic integration", () => {
       code: "runtime_cancelled",
     });
     expect(result.items.some(({ payload }) =>
-      payload.kind === "progress_correction"
+      payload.kind === "stop_feedback"
     )).toBe(true);
     expect(result.items.some(({ payload }) =>
-      payload.kind === "terminal_transition" && payload.code === "runtime_no_progress"
+      payload.kind === "terminal_transition" &&
+      payload.code === "runtime_stop_feedback_exhausted"
     )).toBe(false);
   });
 
-  it("lets the Run deadline outrank no-progress termination while correction is active", async () => {
+  it("lets the Run deadline outrank Stop Review while advisory feedback is active", async () => {
     const operations = createOperationFixture([]);
     let currentNow = NOW;
     const expiredNow = new Date(Date.parse(NOW) + 20_000).toISOString();
@@ -2209,11 +2274,12 @@ describe("Runner semantic integration", () => {
     });
     const controller = new ScriptedController([
       advance([planCandidate()], "model_plan_1"),
+      complete("Completion before Plan reconciliation", "model_complete_2"),
       (input) => {
         expect(input.context.blocks.some((block) =>
           block.payload.kind === "structured" &&
           isRecord(block.payload.value) &&
-          block.payload.value.kind === "run_progress_correction"
+          block.payload.value.kind === "run_stop_feedback"
         )).toBe(true);
         currentNow = expiredNow;
         return advance([planCandidate()], "model_plan_2");
@@ -2227,10 +2293,9 @@ describe("Runner semantic integration", () => {
       createRunInput(),
       createRunConfig(operations, {
         limits: {
-          progress: {
-            checkpointWindowSize: 3,
-            nonAdvancingCheckpointThreshold: 1,
-            maxCorrectionRounds: 1,
+          stopReview: {
+            maxRequiredFeedbackRounds: 1,
+            maxAdvisoryFeedbackRounds: 1,
           },
         },
       }),
@@ -2241,14 +2306,15 @@ describe("Runner semantic integration", () => {
       code: "runtime_deadline_exceeded",
     });
     expect(result.items.some(({ payload }) =>
-      payload.kind === "progress_correction"
+      payload.kind === "stop_feedback"
     )).toBe(true);
     expect(result.items.some(({ payload }) =>
-      payload.kind === "terminal_transition" && payload.code === "runtime_no_progress"
+      payload.kind === "terminal_transition" &&
+      payload.code === "runtime_stop_feedback_exhausted"
     )).toBe(false);
   });
 
-  it("lets unknown operation effect outrank no-progress termination while correction is active", async () => {
+  it("lets an unknown Operation effect outrank Stop Review feedback", async () => {
     const operation = operationRef("unknown-effect-after-correction");
     const actionExecution = createVerificationActionExecutionFixture(operation, {
       status: "failed",
@@ -2275,11 +2341,12 @@ describe("Runner semantic integration", () => {
           plan: [{ step: "Inspect", status: "in_progress" }],
         },
       }], "model_plan_1"),
+      complete("Completion before Plan reconciliation", "model_complete_2"),
       (input) => {
         expect(input.context.blocks.some((block) =>
           block.payload.kind === "structured" &&
           isRecord(block.payload.value) &&
-          block.payload.value.kind === "run_progress_correction"
+          block.payload.value.kind === "run_stop_feedback"
         )).toBe(true);
         return advance([operationCandidate(operation, { target: "workspace" })], "model_operation");
       },
@@ -2291,10 +2358,9 @@ describe("Runner semantic integration", () => {
       createRunConfig(operations, {
         actionExecution: createVerificationActionExecutionConfig(),
         limits: {
-          progress: {
-            checkpointWindowSize: 3,
-            nonAdvancingCheckpointThreshold: 1,
-            maxCorrectionRounds: 1,
+          stopReview: {
+            maxRequiredFeedbackRounds: 1,
+            maxAdvisoryFeedbackRounds: 1,
           },
         },
       }),
@@ -2306,10 +2372,11 @@ describe("Runner semantic integration", () => {
     });
     expect(actionExecution.execute).toHaveBeenCalledTimes(1);
     expect(result.items.some(({ payload }) =>
-      payload.kind === "progress_correction"
+      payload.kind === "stop_feedback"
     )).toBe(true);
     expect(result.items.some(({ payload }) =>
-      payload.kind === "terminal_transition" && payload.code === "runtime_no_progress"
+      payload.kind === "terminal_transition" &&
+      payload.code === "runtime_stop_feedback_exhausted"
     )).toBe(false);
     const settlementIndex = result.items.findIndex(({ payload }) =>
       payload.kind === "model_call_settlement" &&
@@ -2864,14 +2931,15 @@ describe("Runner semantic integration", () => {
       createRunInput(),
       createRunConfig(operations, {
         limits: {
-          progress: {
-            checkpointWindowSize: 2,
-            nonAdvancingCheckpointThreshold: 3,
-            maxCorrectionRounds: 1,
+          stopReview: {
+            maxRequiredFeedbackRounds: -1,
+            maxAdvisoryFeedbackRounds: 1,
           },
         },
       }),
-    )).toThrow("cannot exceed checkpointWindowSize");
+    )).toThrow(
+      "RunStopReviewLimits.maxRequiredFeedbackRounds must be a non-negative safe integer",
+    );
 
     expect(() => runner.start(
       createAgent(),
@@ -3620,10 +3688,9 @@ function createRunConfig(
         maxStepLength: 200,
         maxExplanationLength: 500,
       },
-      progress: {
-        checkpointWindowSize: 6,
-        nonAdvancingCheckpointThreshold: 3,
-        maxCorrectionRounds: 2,
+      stopReview: {
+        maxRequiredFeedbackRounds: 2,
+        maxAdvisoryFeedbackRounds: 1,
       },
       ...overrides.limits,
     },

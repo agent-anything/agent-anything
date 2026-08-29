@@ -8,8 +8,8 @@ export type RuntimeRunItemKind =
   | "cancellation_transition"
   | "verification_feedback"
   | "task_fulfillment_assessment"
-  | "progress_assessment"
-  | "progress_correction"
+  | "stop_review"
+  | "stop_feedback"
   | "terminal_transition";
 
 export type RuntimeTerminalStatus = "succeeded" | "blocked" | "failed" | "cancelled";
@@ -28,62 +28,21 @@ export interface RunItemAppendedRuntimeEventPayload {
   readonly itemSequence: number;
 }
 
-export type RuntimeRunProgressDisposition =
-  | "advanced"
-  | "unchanged"
-  | "repeated"
-  | "deferred";
-
-export type RuntimeRunProgressReasonCode =
-  | "new_trusted_fact"
-  | "equivalent_fact_repeated"
-  | "activity_without_structural_change"
-  | "plan_declaration_only"
-  | "progression_basis_changed"
-  | "required_work_pending"
-  | "no_committed_facts";
-
-export type RuntimeRunProgressFactKind =
-  | "controller_turn"
-  | "run_action"
-  | "plan_update"
-  | "active_agent"
-  | "steering"
-  | "operation_result"
-  | "operation_rejected"
-  | "tool_rejected"
-  | "interaction_settlement"
-  | "descendant_settlement"
-  | "verification_feedback"
-  | "task_fulfillment_assessment"
-  | "completion_gate"
-  | "evidence_ref"
-  | "artifact_ref"
-  | "required_pending"
-  | "unsupported_committed_fact";
-
-export interface RuntimeRunProgressFactRef {
-  readonly kind: RuntimeRunProgressFactKind;
-  readonly owner: string;
-  readonly subjectId: string | null;
-  readonly revision: string | null;
+export interface RunStopReviewedRuntimeEventPayload {
+  readonly reviewSequence: number;
+  readonly decision: "allow_stop" | "continue_run" | "wait" | "failed";
+  readonly checkCount: number;
+  readonly limitationCount: number;
+  readonly requiredFeedbackRounds: number;
+  readonly advisoryFeedbackRounds: number;
 }
 
-export interface RunProgressAssessedRuntimeEventPayload {
-  readonly checkpointSequence: number;
-  readonly disposition: RuntimeRunProgressDisposition;
-  readonly reasonCode: RuntimeRunProgressReasonCode;
-  readonly factRefs: readonly RuntimeRunProgressFactRef[];
-  readonly consecutiveNonAdvancingCheckpoints: number;
-  readonly correctionRounds: number;
-  readonly activeCorrectionRound: number | null;
-}
-
-export interface RunProgressCorrectionRequestedRuntimeEventPayload {
-  readonly checkpointSequence: number;
-  readonly correctionRound: number;
-  readonly reasonCode: RuntimeRunProgressReasonCode;
-  readonly factRefs: readonly RuntimeRunProgressFactRef[];
+export interface RunStopFeedbackRequestedRuntimeEventPayload {
+  readonly reviewSequence: number;
+  readonly owner: "task_fulfillment" | "verification" | "plan";
+  readonly severity: "required" | "advisory";
+  readonly round: number;
+  readonly code: string;
 }
 
 export interface RunDescendantRuntimeEventPayload {
@@ -321,8 +280,8 @@ export interface VerificationGateEvaluatedRuntimeEventPayload {
 export interface RuntimeEventPayloadMap {
   readonly "run.started": RunStartedRuntimeEventPayload;
   readonly "run.item.appended": RunItemAppendedRuntimeEventPayload;
-  readonly "run.progress.assessed": RunProgressAssessedRuntimeEventPayload;
-  readonly "run.progress.correction_requested": RunProgressCorrectionRequestedRuntimeEventPayload;
+  readonly "run.stop.reviewed": RunStopReviewedRuntimeEventPayload;
+  readonly "run.stop.feedback_requested": RunStopFeedbackRequestedRuntimeEventPayload;
   readonly "run.descendant.reserved": RunDescendantReservedRuntimeEventPayload;
   readonly "run.descendant.started": RunDescendantStartedRuntimeEventPayload;
   readonly "run.descendant.rejected": RunDescendantRejectedRuntimeEventPayload;

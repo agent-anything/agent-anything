@@ -15,6 +15,7 @@ import {
   type RunLimits,
   type RunTreeLimits,
 } from "@agent-anything/agent-runtime/runner";
+import type { RunTranscriptPort } from "@agent-anything/agent-runtime/transcript";
 import { CurrentVerificationCompletionGate } from "@agent-anything/verification/completion";
 import type { ContextManifestPersistencePort } from "@agent-anything/context/persistence";
 import {
@@ -95,10 +96,9 @@ const DEFAULT_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
   maxDurationMs: HELARC_RUN_MAX_DURATION_MS,
   maxPendingInteractions: 8,
   plan: Object.freeze({ maxSteps: 24, maxStepLength: 500, maxExplanationLength: 2_000 }),
-  progress: Object.freeze({
-    checkpointWindowSize: 8,
-    nonAdvancingCheckpointThreshold: 4,
-    maxCorrectionRounds: 2,
+  stopReview: Object.freeze({
+    maxRequiredFeedbackRounds: 2,
+    maxAdvisoryFeedbackRounds: 1,
   }),
 });
 const HARD_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
@@ -108,10 +108,9 @@ const HARD_HELARC_RUN_LIMITS: RunLimits = Object.freeze({
   maxDurationMs: 2 * 60 * 60_000,
   maxPendingInteractions: 32,
   plan: Object.freeze({ maxSteps: 64, maxStepLength: 2_000, maxExplanationLength: 8_000 }),
-  progress: Object.freeze({
-    checkpointWindowSize: 64,
-    nonAdvancingCheckpointThreshold: 32,
-    maxCorrectionRounds: 8,
+  stopReview: Object.freeze({
+    maxRequiredFeedbackRounds: 8,
+    maxAdvisoryFeedbackRounds: 4,
   }),
 });
 const DEFAULT_HELARC_RUN_TREE_LIMITS: RunTreeLimits = Object.freeze({
@@ -125,9 +124,9 @@ const HARD_HELARC_RUN_TREE_LIMITS: RunTreeLimits = Object.freeze({
   maxDescendantDepth: 8,
 });
 
-export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan" | "progress">> & {
+export type HelarcHostRunLimitsInput = Partial<Omit<RunLimits, "plan" | "stopReview">> & {
   readonly plan?: Partial<RunLimits["plan"]>;
-  readonly progress?: Partial<RunLimits["progress"]>;
+  readonly stopReview?: Partial<RunLimits["stopReview"]>;
 };
 export type HelarcHostRunTreeLimitsInput = Partial<RunTreeLimits>;
 
@@ -145,6 +144,7 @@ export interface PrepareHelarcHostRunInput {
   readonly qualificationCatalog?: HelarcModelQualificationCatalog;
   readonly modelContinuationStore?: ModelContinuationStore;
   readonly contextManifestPersistence?: ContextManifestPersistencePort;
+  readonly runTranscriptPort?: RunTranscriptPort;
   readonly permissionPreset: HelarcPermissionPreset;
   readonly automaticApprovalReviewer?: ApprovalReviewerBinding & {
     readonly kind: "auto_review";
@@ -356,6 +356,7 @@ export async function prepareHelarcHostRun(
     ),
     interactions: product.interactions,
     runtimeEventPublisher: productRuntimeEventPublisher,
+    runTranscriptPort: input.runTranscriptPort,
     resourceFinalizers: Object.freeze([Object.freeze({
       async finalize(context: RunFinalizationContext) {
         const completed = await commandActions.processTasks.finalizeRun(context.runId);
@@ -600,9 +601,9 @@ function resolveHelarcRunLimits(input: HelarcHostRunLimitsInput | undefined): Ru
     ...DEFAULT_HELARC_RUN_LIMITS,
     ...input,
     plan: { ...DEFAULT_HELARC_RUN_LIMITS.plan, ...input?.plan },
-    progress: { ...DEFAULT_HELARC_RUN_LIMITS.progress, ...input?.progress },
+    stopReview: { ...DEFAULT_HELARC_RUN_LIMITS.stopReview, ...input?.stopReview },
   };
-  const fields: Array<keyof Omit<RunLimits, "plan" | "progress">> = [
+  const fields: Array<keyof Omit<RunLimits, "plan" | "stopReview">> = [
     "maxIterations", "maxActions", "maxConsecutiveActionFailures", "maxDurationMs",
     "maxPendingInteractions",
   ];
@@ -616,26 +617,19 @@ function resolveHelarcRunLimits(input: HelarcHostRunLimitsInput | undefined): Ru
       throw new TypeError(`Helarc Plan limit '${field}' is outside the admitted range.`);
     }
   }
-  for (const field of [
-    "checkpointWindowSize",
-    "nonAdvancingCheckpointThreshold",
-    "maxCorrectionRounds",
-  ] as const) {
+  for (const field of ["maxRequiredFeedbackRounds", "maxAdvisoryFeedbackRounds"] as const) {
     if (
-      !Number.isSafeInteger(value.progress[field]) ||
-      value.progress[field] < 1 ||
-      value.progress[field] > HARD_HELARC_RUN_LIMITS.progress[field]
+      !Number.isSafeInteger(value.stopReview[field]) ||
+      value.stopReview[field] < 0 ||
+      value.stopReview[field] > HARD_HELARC_RUN_LIMITS.stopReview[field]
     ) {
-      throw new TypeError(`Helarc Run progress limit '${field}' is outside the admitted range.`);
+      throw new TypeError(`Helarc Stop Review limit '${field}' is outside the admitted range.`);
     }
-  }
-  if (value.progress.nonAdvancingCheckpointThreshold > value.progress.checkpointWindowSize) {
-    throw new TypeError("Helarc Run progress threshold cannot exceed its checkpoint window.");
   }
   return Object.freeze({
     ...value,
     plan: Object.freeze(value.plan),
-    progress: Object.freeze(value.progress),
+    stopReview: Object.freeze(value.stopReview),
   });
 }
 

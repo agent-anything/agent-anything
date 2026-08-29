@@ -1064,10 +1064,11 @@ function checkExecutionSourceTopology() {
         "delegation",
         "instructions",
         "plan",
-        "progress",
         "retry",
         "run",
         "runner",
+        "stop",
+        "transcript",
       ],
       forbiddenPaths: [
         "src/runner/PermissionRequestAction.ts",

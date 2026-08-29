@@ -71,8 +71,8 @@ import {
   runDelegationTransferDeterministicEvaluation,
 } from "../../../delegation-transfer-evaluation/DelegationTransferEvaluation.js";
 import {
-  runRunProgressDeterministicEvaluation,
-} from "../../../run-progress-evaluation/RunProgressEvaluation.js";
+  runRunStopReviewDeterministicEvaluation,
+} from "../../../run-stop-review-evaluation/RunStopReviewEvaluation.js";
 import {
   HELARC_EVALUATION_TIME,
   createHelarcEvaluationCorpus,
@@ -94,7 +94,7 @@ import {
 } from "./HelarcOperationalEvaluation.js";
 
 export const HELARC_OPERATIONAL_CONFORMANCE_REVISION =
-  "helarc-operational-conformance-v1";
+  "helarc-operational-conformance-v2";
 
 export interface HelarcOperationalConformanceFacts {
   readonly caseId: HelarcOperationalConformanceCaseId;
@@ -764,7 +764,7 @@ function defaultCaseRunners(): Readonly<Record<
 async function runCurrentTurnAuthorityProbe(): Promise<HelarcOperationalConformanceFacts> {
   const report = await runCurrentTurnToolExposureDeterministicEvaluation();
   const passed = report.workflowOnlyToolExcluded && report.permissionIndependent &&
-    report.progressIndependent && report.recoveryPreservedSelection &&
+    report.stopReviewIndependent && report.recoveryPreservedSelection &&
     report.recoveryChangedContent && report.systemTarget.safetyGate === "passed" &&
     report.systemTarget.traceIssueCount === 0;
   return facts("current_turn_authority", passed, {
@@ -781,19 +781,20 @@ async function runCurrentTurnAuthorityProbe(): Promise<HelarcOperationalConforma
 }
 
 async function runBoundedRepetitionProbe(): Promise<HelarcOperationalConformanceFacts> {
-  const report = await runRunProgressDeterministicEvaluation();
-  const repeated = report.dispositionCounts.repeated > 0;
-  const passed = repeated && report.runtimeProbe.code === "runtime_no_progress" &&
-    report.runtimeProbe.genericLimitAvoided && report.runtimeProbe.correctionRounds > 0;
+  const report = runRunStopReviewDeterministicEvaluation();
+  const passed = report.requiredFeedbackRounds > 0 &&
+    report.advisoryFeedbackRounds > 0 &&
+    report.requiredExhaustionCode === "runtime_stop_feedback_exhausted" &&
+    report.advisoryExhaustionAllowsStop;
   return facts("bounded_repetition", passed, {
-    terminal: { status: report.runtimeProbe.status, code: report.runtimeProbe.code },
+    terminal: { status: "blocked", code: report.requiredExhaustionCode },
     actionsAndOperations: {
-      controllerTurns: report.runtimeProbe.controllerTurns,
-      progressAssessments: report.runtimeProbe.progressAssessments,
-      correctionRounds: report.runtimeProbe.correctionRounds,
+      stopReviewActivityItems: report.exactActivityKinds.length,
+      requiredFeedbackRounds: report.requiredFeedbackRounds,
+      advisoryFeedbackRounds: report.advisoryFeedbackRounds,
     },
     gates: { unbounded_progress: passed, invalid_settlement: passed },
-    diagnostics: { trajectory: passed ? 1 : 0, retries: report.runtimeProbe.correctionRounds },
+    diagnostics: { trajectory: passed ? 1 : 0, retries: 0 },
   });
 }
 

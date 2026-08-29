@@ -61,6 +61,7 @@ import type {
   DelegationResult,
 } from "../delegation/index.js";
 import type { TaskFulfillmentEvaluatorPort } from "../completion/index.js";
+import type { RunTranscriptPort } from "../transcript/index.js";
 
 export type RunnerIdentityKind =
   | "run_cancellation_request"
@@ -95,7 +96,8 @@ export type RunnerIdentityKind =
   | "context_refresh"
   | "verification_gate"
   | "verification_proposal"
-  | "task_fulfillment_assessment";
+  | "task_fulfillment_assessment"
+  | "stop_review";
 
 export interface CreateRunnerIdentityInput {
   readonly kind: RunnerIdentityKind;
@@ -317,6 +319,7 @@ export interface RunnerDependencies {
   readonly auditPort?: AuditPort;
   readonly telemetryPort?: TelemetryPort;
   readonly runTraceObserver?: RunTraceObserver;
+  readonly runTranscriptPort?: RunTranscriptPort;
   readonly resourceFinalizers?: readonly RunResourceFinalizerPort[];
   readonly retryExecutor?: RetryExecutor;
   readonly now?: () => string;

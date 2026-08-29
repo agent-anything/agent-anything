@@ -196,7 +196,7 @@ describe("Helarc incident admission", () => {
     expect(decision.admittedRegression).toEqual({
       caseRef: evidence.minimization!.caseRef,
       suiteRef: evidence.placement!.suiteRef,
-      owner: "agent-core.run-progress",
+      owner: "agent-runtime.stop-review",
       failingReportRef: evidence.revisionProof!.failingReportRef,
       passingReportRef: evidence.revisionProof!.passingReportRef,
     });
@@ -266,8 +266,8 @@ function completeAdmissionEvidence(): HelarcIncidentAdmissionEvidence {
       reportRef: ref("reproduction-report"),
     }),
     mechanism: Object.freeze({
-      owner: "agent-core.run-progress",
-      invariant: "Equivalent non-advancing Actions terminate through bounded progress handling.",
+      owner: "agent-runtime.stop-review",
+      invariant: "Repeated unsupported Stop proposals terminate through bounded required feedback.",
       languageNeutral: true,
     }),
     minimization: Object.freeze({
@@ -275,7 +275,7 @@ function completeAdmissionEvidence(): HelarcIncidentAdmissionEvidence {
       fixtureDigest: "a".repeat(64),
       taskDigest: "b".repeat(64),
       trajectoryDigest: "c".repeat(64),
-      expectedOutcomes: Object.freeze(["runtime_no_progress"]),
+      expectedOutcomes: Object.freeze(["runtime_stop_feedback_exhausted"]),
       forbiddenOutcomes: Object.freeze(["unbounded_action_emission"]),
     }),
     environment: Object.freeze({
@@ -299,7 +299,7 @@ function completeAdmissionEvidence(): HelarcIncidentAdmissionEvidence {
     placement: Object.freeze({
       suiteRef: ref("permanent-regression-suite"),
       lifecycle: "permanent_regression" as const,
-      owner: "agent-core.run-progress",
+      owner: "agent-runtime.stop-review",
       limitations: Object.freeze(["Deterministic language-neutral mechanism only."]),
     }),
   });

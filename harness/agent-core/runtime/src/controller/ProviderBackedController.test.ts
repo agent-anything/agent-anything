@@ -1314,11 +1314,12 @@ function createControllerInput(): ControllerInput<TestOutput> {
       maxStepLength: 200,
       maxExplanationLength: 500,
     }),
-    progress: {
-      checkpointSequence: 0,
-      consecutiveNonAdvancingCheckpoints: 0,
-      correctionRounds: 0,
-      activeCorrectionRound: null,
+    stopReview: {
+      reviewSequence: 0,
+      requiredFeedbackRounds: 0,
+      advisoryFeedbackRounds: 0,
+      latestReview: null,
+      limitations: [],
     },
     verification: { snapshot: { runId: "run_001", revision: 0 }, gate: null },
     permission: testPermissionProjection(),

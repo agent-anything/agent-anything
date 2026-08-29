@@ -2,11 +2,9 @@ import type { ActionExecutionNotification } from "@agent-anything/action-executi
 import type { SandboxEnforcement } from "@agent-anything/action-execution/sandbox";
 import type { PlanProjection } from "@agent-anything/agent-runtime/plan";
 import type {
-  RunProgressDisposition,
-  RunProgressFactKind,
-  RunProgressProjection,
-  RunProgressReasonCode,
-} from "@agent-anything/agent-runtime/progress";
+  RunStopLimitation,
+  RunStopReviewProjection,
+} from "@agent-anything/agent-runtime/stop";
 import type {
   RunCancellationSummary,
   RunFailureCause,
@@ -42,21 +40,12 @@ export type HostRunProjectionStatus =
 
 export type HostPlanProjection = PlanProjection;
 
-export interface HostRunProgressFactProjection {
-  readonly kind: RunProgressFactKind;
-  readonly owner: string;
-  readonly subjectId: string | null;
-  readonly revision: string | null;
-}
-
-export interface HostRunProgressProjection {
-  readonly checkpointSequence: number;
-  readonly disposition: RunProgressDisposition | null;
-  readonly reasonCode: RunProgressReasonCode | null;
-  readonly consecutiveNonAdvancingCheckpoints: number;
-  readonly correctionRounds: number;
-  readonly activeCorrectionRound: number | null;
-  readonly factRefs: readonly HostRunProgressFactProjection[];
+export interface HostRunStopReviewProjection {
+  readonly reviewSequence: number;
+  readonly requiredFeedbackRounds: number;
+  readonly advisoryFeedbackRounds: number;
+  readonly latestReview: Readonly<{ readonly runId: string; readonly sequence: number }> | null;
+  readonly limitations: readonly RunStopLimitation[];
 }
 
 export interface HostPendingInteractionProjection {
@@ -207,7 +196,7 @@ export interface HostRunProjection {
   readonly startedAt: string;
   readonly runTree: HostRunTreeProjection;
   readonly plan: HostPlanProjection | null;
-  readonly progress: HostRunProgressProjection;
+  readonly stopReview: HostRunStopReviewProjection;
   readonly pendingInteractions: readonly HostPendingInteractionProjection[];
   readonly activeDelegations: readonly HostActiveDelegationProjection[];
   readonly retry: HostRetryProjection | null;
@@ -285,7 +274,7 @@ export type HostRunProjectionRejectionCode =
   | "invalid_update"
   | "interaction_correlation_mismatch"
   | "run_operation_sequence_regression"
-  | "run_progress_checkpoint_regression"
+  | "run_stop_review_sequence_regression"
   | "terminal_projection_mismatch";
 
 export type HostRunProjectionReduction =
@@ -338,7 +327,7 @@ export function createHostRunProjection(
     startedAt: input.startedAt,
     runTree: projectRunTree(input.runTree),
     plan: null,
-    progress: createInitialHostRunProgressProjection(),
+    stopReview: createInitialHostRunStopReviewProjection(),
     pendingInteractions: Object.freeze([]),
     activeDelegations: Object.freeze([]),
     retry: null,
@@ -360,60 +349,37 @@ export function projectHostRunTree(
   return projectRunTree(input);
 }
 
-export function projectHostRunProgress(
-  input: RunProgressProjection,
-): HostRunProgressProjection {
+export function projectHostRunStopReview(
+  input: RunStopReviewProjection,
+): HostRunStopReviewProjection {
   const counters = [
-    input.checkpointSequence,
-    input.consecutiveNonAdvancingCheckpoints,
-    input.correctionRounds,
+    input.reviewSequence,
+    input.requiredFeedbackRounds,
+    input.advisoryFeedbackRounds,
   ];
   if (counters.some((value) => !Number.isSafeInteger(value) || value < 0)) {
-    throw new TypeError("Run Progress counters must be non-negative safe integers.");
-  }
-  if (
-    input.activeCorrectionRound !== null &&
-    (
-      !Number.isSafeInteger(input.activeCorrectionRound) ||
-      input.activeCorrectionRound < 1 ||
-      input.activeCorrectionRound > input.correctionRounds
-    )
-  ) {
-    throw new TypeError("Run Progress active correction round is invalid.");
-  }
-  if (
-    input.checkpointSequence === 0
-      ? input.disposition !== null || input.reasonCode !== null || input.factRefs.length !== 0
-      : input.disposition === null || input.reasonCode === null
-  ) {
-    throw new TypeError("Run Progress assessment does not match its checkpoint sequence.");
+    throw new TypeError("Stop Review counters must be non-negative safe integers.");
   }
   return Object.freeze({
-    checkpointSequence: input.checkpointSequence,
-    disposition: input.disposition,
-    reasonCode: input.reasonCode,
-    consecutiveNonAdvancingCheckpoints: input.consecutiveNonAdvancingCheckpoints,
-    correctionRounds: input.correctionRounds,
-    activeCorrectionRound: input.activeCorrectionRound,
-    factRefs: Object.freeze(input.factRefs.map((ref) => {
-      assertIdentity(ref.kind, "progress.fact.kind");
-      assertIdentity(ref.owner, "progress.fact.owner");
-      if (ref.subjectId !== null) assertIdentity(ref.subjectId, "progress.fact.subjectId");
-      if (ref.revision !== null) assertIdentity(ref.revision, "progress.fact.revision");
-      return Object.freeze({ ...ref });
+    reviewSequence: input.reviewSequence,
+    requiredFeedbackRounds: input.requiredFeedbackRounds,
+    advisoryFeedbackRounds: input.advisoryFeedbackRounds,
+    latestReview: input.latestReview === null ? null : Object.freeze({ ...input.latestReview }),
+    limitations: Object.freeze(input.limitations.map((limitation) => {
+      assertIdentity(limitation.owner, "stopReview.limitation.owner");
+      assertIdentity(limitation.code, "stopReview.limitation.code");
+      return Object.freeze({ ...limitation });
     })),
   });
 }
 
-function createInitialHostRunProgressProjection(): HostRunProgressProjection {
+function createInitialHostRunStopReviewProjection(): HostRunStopReviewProjection {
   return Object.freeze({
-    checkpointSequence: 0,
-    disposition: null,
-    reasonCode: null,
-    consecutiveNonAdvancingCheckpoints: 0,
-    correctionRounds: 0,
-    activeCorrectionRound: null,
-    factRefs: Object.freeze([]),
+    reviewSequence: 0,
+    requiredFeedbackRounds: 0,
+    advisoryFeedbackRounds: 0,
+    latestReview: null,
+    limitations: Object.freeze([]),
   });
 }
 

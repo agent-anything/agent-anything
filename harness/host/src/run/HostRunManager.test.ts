@@ -171,7 +171,13 @@ function createFakeHandle(runId: string) {
     lastRunItemSequence: 0,
     instructionBinding: null,
     plan: null,
-    progress: initialProgress(),
+    stopReview: {
+      reviewSequence: 0,
+      requiredFeedbackRounds: 0,
+      advisoryFeedbackRounds: 0,
+      latestReview: null,
+      limitations: [],
+    },
     retry: null,
     pendingInteractions: [],
     activeDelegations: [],
@@ -318,20 +324,6 @@ function runStartedEvent(): RuntimeEvent {
       instructionBindingId: "run-1:agent-instruction-binding:0",
       instructionBindingRevision: `sha256:${"0".repeat(64)}`,
     }),
-  });
-}
-
-function initialProgress(): RunOperationSnapshot["progress"] {
-  return Object.freeze({
-    checkpointSequence: 0,
-    disposition: null,
-    reasonCode: null,
-    consecutiveNonAdvancingCheckpoints: 0,
-    correctionRounds: 0,
-    activeCorrectionRound: null,
-    latestAssessment: null,
-    latestAdvancement: null,
-    factRefs: Object.freeze([]),
   });
 }
 

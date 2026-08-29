@@ -13,7 +13,7 @@ import type { RunItem } from "./RunItem.js";
 import type { RunBlockedCode, RunFailureCode } from "./RunStatus.js";
 import type { VerificationCurrentSnapshotRef } from "@agent-anything/verification/assessment";
 import type { CompletionGateInvocationRef } from "@agent-anything/verification/completion";
-import type { RunProgressState } from "../progress/index.js";
+import type { RunStopReviewState } from "../stop/index.js";
 import type { AgentInstructionBindingRef } from "../instructions/index.js";
 
 export interface RunCounters {
@@ -47,7 +47,7 @@ interface RunStateBase<TOutput> {
   readonly pending: readonly PendingRunSubject[];
   readonly permission: RunPermissionState;
   readonly verification: RunVerificationState;
-  readonly progress: RunProgressState;
+  readonly stopReview: RunStopReviewState;
   readonly evidenceRefs: readonly EvidenceRef[];
   readonly artifactRefs: readonly ArtifactRef[];
   readonly metadata: Readonly<Record<string, unknown>>;

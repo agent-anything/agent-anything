@@ -61,7 +61,6 @@ import {
   snapshotCompletionGateDecision,
   snapshotCompletionGateInput,
   type CompletionGateDecision,
-  type CompletionGateConditionRef,
   type CompletionGateInput,
 } from "@agent-anything/verification/completion";
 import {
@@ -145,11 +144,14 @@ import {
 } from "../plan/index.js";
 import { snapshotRetryEvent, type RetryEventSink } from "../retry/index.js";
 import {
-  projectRunProgress,
-  type RunProgressAssessment,
-  type RunProgressCorrectionFeedback,
-  type RunProgressState,
-} from "../progress/index.js";
+  projectRunStopReview,
+  snapshotRunStopFeedback,
+  snapshotRunStopReviewRecord,
+  type RunStopCheck,
+  type RunStopFeedback,
+  type RunStopLimitation,
+} from "../stop/index.js";
+import { RunTranscriptRecorder } from "../transcript/index.js";
 import {
   createBlockedRunResult,
   createCancelledRunResult,
@@ -250,7 +252,6 @@ import {
 } from "./RunInterruptionCoordinator.js";
 import { RunInteractionCoordinator, type RuntimeInteractionSettlement } from "./RunInteractionCoordinator.js";
 import { evaluateRunDeadline, evaluateRunNumericLimits, type RunLimitViolation } from "./RunLoopLimits.js";
-import { assessCommittedRunProgress } from "./RunProgressCheckpoint.js";
 import { recordRunnerLifecycle } from "./RunnerObservability.js";
 import { completeRunnerTrace, createRunnerTraceAssembler } from "./RunnerTracing.js";
 import { RunStateWriter } from "./RunStateWriter.js";
@@ -263,8 +264,8 @@ import {
   createDelegationPredecessorContextContribution,
   createObservationContextAdmissionProfile,
   createObservationContextContribution,
-  createProgressCorrectionContextAdmissionProfile,
-  createProgressCorrectionContextContribution,
+  createStopFeedbackContextAdmissionProfile,
+  createStopFeedbackContextContribution,
   createSteeringContextAdmissionProfile,
   createSteeringContextContribution,
   createTaskContextAdmissionProfile,
@@ -436,6 +437,7 @@ export class RunExecution<TOutput> {
   private verificationHostProjection: VerificationHostProjection | null = null;
   private readonly emittedVerificationRecordKeys = new Set<string>();
   private readonly toolExposure: RunToolExposureCoordinator;
+  private readonly transcript: RunTranscriptRecorder;
 
   constructor(
     private readonly runId: string,
@@ -471,6 +473,7 @@ export class RunExecution<TOutput> {
       agentRevisionKey(agent),
       agent.instructions.ref.revision,
     );
+    this.transcript = new RunTranscriptRecorder(dependencies.runTranscriptPort ?? null);
     this.traceAssembler = createRunnerTraceAssembler({
       runId,
       taskId: input.task.id,
@@ -767,7 +770,6 @@ export class RunExecution<TOutput> {
         });
       }
 
-      let controllerTurnCompleted = false;
       while (this.terminalResult === null) {
         this.drainInteractionSettlements();
         if (this.config.cancellation.context.request !== null) {
@@ -780,12 +782,6 @@ export class RunExecution<TOutput> {
         });
         if (deadline !== null) return await this.settleLimitViolation(deadline);
 
-        if (controllerTurnCompleted) {
-          const progressTerminal = await this.commitProgressCheckpoint();
-          controllerTurnCompleted = false;
-          if (progressTerminal !== null) return progressTerminal;
-        }
-
         const numericLimit = evaluateRunNumericLimits({
           counters: this.writer.getSnapshot().counters,
           limits: this.config.limits,
@@ -794,7 +790,6 @@ export class RunExecution<TOutput> {
 
         const decision = await this.nextDecision();
         if (decision === null) continue;
-        controllerTurnCompleted = true;
         const settlementsAfterDecision = this.drainInteractionSettlements();
         if (this.config.cancellation.context.request !== null) {
           this.settleUnprocessedModelCalls(
@@ -824,7 +819,7 @@ export class RunExecution<TOutput> {
           continue;
         }
         if (decision.decision.kind === "propose_completion") {
-          const completion = await this.evaluateCompletionGate(
+          const completion = await this.evaluateRunStop(
             decision.turn,
             decision.decision.output,
             decision.prepared.input.interaction,
@@ -833,7 +828,7 @@ export class RunExecution<TOutput> {
             return await this.settle({ status: "succeeded", output: decision.decision.output });
           }
           if (completion.kind === "blocked") {
-            return await this.settle({ status: "blocked", code: "verification_blocked" });
+            return await this.settle({ status: "blocked", code: completion.code });
           }
           if (completion.kind === "failed") {
             return await this.settle({
@@ -1029,12 +1024,13 @@ export class RunExecution<TOutput> {
     await this.commitVerificationFeedback(null);
   }
 
-  private async evaluateCompletionGate(
+  private async evaluateRunStop(
     turn: ControllerTurnRef,
     output: TOutput,
     interaction: ModelInteractionProjection,
   ): Promise<
-    | { readonly kind: "succeeded" | "continue" | "cancelled" | "blocked" }
+    | { readonly kind: "succeeded" | "continue" | "cancelled" }
+    | { readonly kind: "blocked"; readonly code: "verification_blocked" | "runtime_stop_feedback_exhausted" }
     | {
         readonly kind: "wait";
         readonly snapshotRevision: number;
@@ -1105,9 +1101,9 @@ export class RunExecution<TOutput> {
       return { kind: "cancelled" };
     }
     if (fulfillmentResult.kind === "cancelled") {
-      return {
-        kind: "failed",
-        owner: "task_fulfillment",
+      return this.recordTaskFulfillmentStopFailure({
+        turn,
+        proposal,
         failure: createTaskFulfillmentFailure({
           code: "task_fulfillment_cancellation_unattributed",
           message: "Task Fulfillment evaluation returned cancellation without an accepted Run cancellation.",
@@ -1118,30 +1114,30 @@ export class RunExecution<TOutput> {
             cancellationRunId: fulfillmentResult.cancellation.runId,
           }),
         }),
-      };
+      });
     }
     if (fulfillmentResult.kind === "failed") {
-      return {
-        kind: "failed",
-        owner: "task_fulfillment",
+      return this.recordTaskFulfillmentStopFailure({
+        turn,
+        proposal,
         failure: fulfillmentResult.failure,
-      };
+      });
     }
     let fulfillment: TaskFulfillmentAssessment;
     try {
       fulfillment = snapshotTaskFulfillmentAssessment(fulfillmentResult.assessment);
       this.assertCurrentTaskFulfillmentAssessment(fulfillmentInput, fulfillment);
     } catch (error) {
-      return {
-        kind: "failed",
-        owner: "task_fulfillment",
+      return this.recordTaskFulfillmentStopFailure({
+        turn,
+        proposal,
         failure: createTaskFulfillmentFailure({
           code: "task_fulfillment_assessment_invalid",
           message: error instanceof Error ? error.message : "Task Fulfillment Assessment is invalid.",
           retryable: false,
           metadata: Object.freeze({ evaluatorId: this.dependencies.completion.taskFulfillment.ref.id }),
         }),
-      };
+      });
     }
     const currentAfterFulfillment = await execution.readCurrentSnapshot();
     if (this.writer.getSnapshot().revision !== fulfillmentBasisRevision ||
@@ -1197,10 +1193,7 @@ export class RunExecution<TOutput> {
           id: attempt.id,
           revision: String(attempt.ordinal),
         }))),
-      conditions: Object.freeze([
-        ...this.config.verification.completion.conditions,
-        this.taskFulfillmentCondition(fulfillment),
-      ]),
+      conditions: this.config.verification.completion.conditions,
       lifecycle: {
         runRevision: runState.revision,
         status: runState.status,
@@ -1217,9 +1210,11 @@ export class RunExecution<TOutput> {
       decision = snapshotCompletionGateDecision(await this.invokeCompletionGate(gateInput));
     } catch (error) {
       if (this.config.cancellation.context.request !== null) return { kind: "cancelled" };
-      return {
-        kind: "failed",
-        owner: "verification",
+      return this.recordVerificationStopFailure({
+        turn,
+        proposal,
+        fulfillment,
+        revision: String(current.ref.revision),
         failure: error instanceof VerificationExecutionError
           ? error.failure
           : createVerificationFailure({
@@ -1229,7 +1224,7 @@ export class RunExecution<TOutput> {
               retryable: false,
               cause: this.config.verification.completion.policy,
             }),
-      };
+      });
     }
     const afterGate = this.writer.getSnapshot();
     const currentAfterGate = await execution.readCurrentSnapshot();
@@ -1257,14 +1252,34 @@ export class RunExecution<TOutput> {
     }
     await this.commitVerificationFeedback(decision);
 
-    if (decision.status === "completion_eligible") return { kind: "succeeded" };
+    if (decision.status === "completion_eligible") {
+      return this.resolveStopReview({
+        turn,
+        proposal,
+        fulfillment,
+        verification: Object.freeze({
+          status: "passed" as const,
+          code: "verification_completion_eligible",
+          message: "Configured mandatory Verification permits completion.",
+          revision: String(recorded.current.ref.revision),
+        }),
+      });
+    }
     if (decision.status === "invalid" || decision.status === "failed") {
-      return { kind: "failed", owner: "verification", failure: decision.failure };
+      return this.recordVerificationStopFailure({
+        turn,
+        proposal,
+        fulfillment,
+        revision: String(recorded.current.ref.revision),
+        failure: decision.failure,
+      });
     }
     if (decision.disposition === "fail") {
-      return {
-        kind: "failed",
-        owner: "verification",
+      return this.recordVerificationStopFailure({
+        turn,
+        proposal,
+        fulfillment,
+        revision: String(recorded.current.ref.revision),
         failure: createVerificationFailure({
           code: "verification_completion_policy_failed",
           stage: "completion_gate",
@@ -1272,13 +1287,28 @@ export class RunExecution<TOutput> {
           retryable: false,
           cause: this.config.verification.completion.policy,
         }),
-      };
+      });
     }
-    if (decision.disposition === "block") return { kind: "blocked" };
+    if (decision.disposition === "block") {
+      this.commitStopReviewRecord({
+        turn,
+        proposal,
+        decision: "failed",
+        checks: this.stopChecks(fulfillment, Object.freeze({
+          status: "failed",
+          code: decision.reasons[0]?.code ?? "verification_blocked",
+          message: decision.reasons[0]?.message ?? "Verification blocked completion.",
+          revision: String(recorded.current.ref.revision),
+        })),
+      });
+      return { kind: "blocked", code: "verification_blocked" };
+    }
     if (decision.disposition === "wait" && gateInput.pendingWork.length === 0) {
-      return {
-        kind: "failed",
-        owner: "verification",
+      return this.recordVerificationStopFailure({
+        turn,
+        proposal,
+        fulfillment,
+        revision: String(recorded.current.ref.revision),
         failure: createVerificationFailure({
           code: "verification_gate_wait_without_pending_work",
           stage: "completion_gate",
@@ -1286,9 +1316,20 @@ export class RunExecution<TOutput> {
           retryable: false,
           cause: this.config.verification.completion.policy,
         }),
-      };
+      });
     }
     if (decision.disposition === "wait") {
+      this.commitStopReviewRecord({
+        turn,
+        proposal,
+        decision: "wait",
+        checks: this.stopChecks(fulfillment, Object.freeze({
+          status: "wait",
+          code: decision.reasons[0]?.code ?? "verification_waiting",
+          message: decision.reasons[0]?.message ?? "Verification is waiting for exact active mandatory work.",
+          revision: String(recorded.current.ref.revision),
+        })),
+      });
       return {
         kind: "wait",
         snapshotRevision: recorded.current.ref.revision,
@@ -1303,7 +1344,17 @@ export class RunExecution<TOutput> {
             : []),
       };
     }
-    return { kind: "continue" };
+    return this.resolveStopReview({
+      turn,
+      proposal,
+      fulfillment,
+      verification: Object.freeze({
+        status: "continue" as const,
+        code: decision.reasons[0]?.code ?? "verification_continue_required",
+        message: decision.reasons[0]?.message ?? "Verification requires more work before completion.",
+        revision: String(recorded.current.ref.revision),
+      }),
+    });
   }
 
   private async waitForMandatoryVerification(input: {
@@ -1448,27 +1499,288 @@ export class RunExecution<TOutput> {
     }
   }
 
-  private taskFulfillmentCondition(
-    assessment: TaskFulfillmentAssessment,
-  ): CompletionGateConditionRef {
-    const satisfied = assessment.status === "fulfilled";
-    return Object.freeze({
-      owner: assessment.evaluator.owner,
-      kind: "task_fulfillment",
-      id: assessment.ref.id,
-      revision: assessment.ref.revision,
-      required: true,
-      satisfied,
-      disposition: satisfied ? null : "continue",
-      reason: satisfied
-        ? null
-        : Object.freeze({
-            code: assessment.status === "incomplete"
-              ? "task_fulfillment_incomplete"
-              : "task_fulfillment_uncertain",
-            message: assessment.feedback!,
+  private resolveStopReview(input: {
+    readonly turn: ControllerTurnRef;
+    readonly proposal: Readonly<{ readonly id: string; readonly revision: string }>;
+    readonly fulfillment: TaskFulfillmentAssessment;
+    readonly verification: Readonly<{
+      readonly status: "passed" | "continue";
+      readonly code: string;
+      readonly message: string;
+      readonly revision: string;
+    }>;
+  }): { readonly kind: "succeeded" | "continue" } |
+      { readonly kind: "blocked"; readonly code: "runtime_stop_feedback_exhausted" } {
+    const checks = [...this.stopChecks(input.fulfillment, input.verification)];
+    const required = checks.find((check) =>
+      check.severity === "required" && check.status === "continue"
+    );
+    if (required !== undefined) {
+      const state = this.writer.getSnapshot().stopReview;
+      if (
+        state.requiredFeedbackRounds >=
+          this.config.limits.stopReview.maxRequiredFeedbackRounds
+      ) {
+        this.commitStopReviewRecord({
+          turn: input.turn,
+          proposal: input.proposal,
+          decision: "failed",
+          checks,
+          limitations: Object.freeze([Object.freeze({
+            owner: required.owner,
+            code: "required_stop_feedback_exhausted",
+            message: "Required Stop Review feedback was exhausted before completion became eligible.",
+          })]),
+        });
+        return { kind: "blocked", code: "runtime_stop_feedback_exhausted" };
+      }
+      this.commitStopReviewRecord({
+        turn: input.turn,
+        proposal: input.proposal,
+        decision: "continue_run",
+        checks,
+        feedback: Object.freeze({
+          owner: required.owner,
+          severity: "required",
+          code: required.code,
+          message: required.message,
+        }),
+      });
+      return { kind: "continue" };
+    }
+
+    const plan = this.writer.getSnapshot().plan;
+    if (plan !== null && plan.status === "active") {
+      const planCheck: RunStopCheck = Object.freeze({
+        owner: "plan",
+        severity: "advisory",
+        status: "continue",
+        code: "plan_reconciliation_requested",
+        message: "The active Plan has not been reconciled with the proposed completion. Update or complete the Plan, continue work, or explain why its remaining state no longer applies.",
+        subjectId: plan.id,
+        revision: String(plan.version),
+      });
+      checks.push(planCheck);
+      const state = this.writer.getSnapshot().stopReview;
+      if (
+        state.advisoryFeedbackRounds <
+          this.config.limits.stopReview.maxAdvisoryFeedbackRounds
+      ) {
+        this.commitStopReviewRecord({
+          turn: input.turn,
+          proposal: input.proposal,
+          decision: "continue_run",
+          checks,
+          feedback: Object.freeze({
+            owner: "plan",
+            severity: "advisory",
+            code: planCheck.code,
+            message: planCheck.message,
           }),
+        });
+        return { kind: "continue" };
+      }
+      const limitation: RunStopLimitation = Object.freeze({
+        owner: "plan",
+        code: "plan_reconciliation_feedback_exhausted",
+        message: "The Run stopped after exhausting advisory Plan reconciliation feedback.",
+      });
+      this.commitStopReviewRecord({
+        turn: input.turn,
+        proposal: input.proposal,
+        decision: "allow_stop",
+        checks,
+        limitations: Object.freeze([limitation]),
+      });
+      return { kind: "succeeded" };
+    }
+
+    this.commitStopReviewRecord({
+      turn: input.turn,
+      proposal: input.proposal,
+      decision: "allow_stop",
+      checks,
     });
+    return { kind: "succeeded" };
+  }
+
+  private stopChecks(
+    fulfillment: TaskFulfillmentAssessment,
+    verification: Readonly<{
+      readonly status: RunStopCheck["status"];
+      readonly code: string;
+      readonly message: string;
+      readonly revision: string;
+    }>,
+  ): readonly RunStopCheck[] {
+    const fulfillmentPassed = fulfillment.status === "fulfilled";
+    return Object.freeze([
+      Object.freeze({
+        owner: "task_fulfillment" as const,
+        severity: "required" as const,
+        status: fulfillmentPassed ? "passed" as const : "continue" as const,
+        code: fulfillmentPassed
+          ? "task_fulfillment_satisfied"
+          : fulfillment.status === "incomplete"
+            ? "task_fulfillment_incomplete"
+            : "task_fulfillment_uncertain",
+        message: fulfillmentPassed
+          ? "The Product Task Fulfillment assessment permits completion."
+          : fulfillment.feedback!,
+        subjectId: fulfillment.ref.id,
+        revision: fulfillment.ref.revision,
+      }),
+      Object.freeze({
+        owner: "verification" as const,
+        severity: "required" as const,
+        status: verification.status,
+        code: verification.code,
+        message: verification.message,
+        subjectId: this.config.verification.profile.ref.id,
+        revision: verification.revision,
+      }),
+    ]);
+  }
+
+  private recordTaskFulfillmentStopFailure(input: {
+    readonly turn: ControllerTurnRef;
+    readonly proposal: Readonly<{ readonly id: string; readonly revision: string }>;
+    readonly failure: TaskFulfillmentFailure;
+  }): { readonly kind: "failed"; readonly owner: "task_fulfillment"; readonly failure: TaskFulfillmentFailure } {
+    const evaluator = this.dependencies.completion.taskFulfillment.ref;
+    this.commitStopReviewRecord({
+      turn: input.turn,
+      proposal: input.proposal,
+      decision: "failed",
+      checks: Object.freeze([Object.freeze({
+        owner: "task_fulfillment" as const,
+        severity: "required" as const,
+        status: "failed" as const,
+        code: input.failure.code,
+        message: input.failure.message,
+        subjectId: evaluator.id,
+        revision: evaluator.revision,
+      })]),
+    });
+    return Object.freeze({
+      kind: "failed" as const,
+      owner: "task_fulfillment" as const,
+      failure: input.failure,
+    });
+  }
+
+  private recordVerificationStopFailure(input: {
+    readonly turn: ControllerTurnRef;
+    readonly proposal: Readonly<{ readonly id: string; readonly revision: string }>;
+    readonly fulfillment: TaskFulfillmentAssessment;
+    readonly revision: string;
+    readonly failure: VerificationFailure;
+  }): { readonly kind: "failed"; readonly owner: "verification"; readonly failure: VerificationFailure } {
+    this.commitStopReviewRecord({
+      turn: input.turn,
+      proposal: input.proposal,
+      decision: "failed",
+      checks: this.stopChecks(input.fulfillment, Object.freeze({
+        status: "failed",
+        code: input.failure.code,
+        message: input.failure.message,
+        revision: input.revision,
+      })),
+    });
+    return Object.freeze({
+      kind: "failed" as const,
+      owner: "verification" as const,
+      failure: input.failure,
+    });
+  }
+
+  private commitStopReviewRecord(input: {
+    readonly turn: ControllerTurnRef;
+    readonly proposal: Readonly<{ readonly id: string; readonly revision: string }>;
+    readonly decision: "allow_stop" | "continue_run" | "wait" | "failed";
+    readonly checks: readonly RunStopCheck[];
+    readonly feedback?: Readonly<{
+      readonly owner: RunStopFeedback["owner"];
+      readonly severity: RunStopFeedback["severity"];
+      readonly code: string;
+      readonly message: string;
+    }>;
+    readonly limitations?: readonly RunStopLimitation[];
+  }): void {
+    const before = this.writer.getSnapshot();
+    const ref = Object.freeze({
+      runId: this.runId,
+      sequence: before.stopReview.reviewSequence + 1,
+    });
+    const requiredFeedbackRounds = before.stopReview.requiredFeedbackRounds +
+      (input.feedback?.severity === "required" ? 1 : 0);
+    const advisoryFeedbackRounds = before.stopReview.advisoryFeedbackRounds +
+      (input.feedback?.severity === "advisory" ? 1 : 0);
+    const limitations = Object.freeze([
+      ...before.stopReview.limitations,
+      ...(input.limitations ?? []),
+    ]);
+    const review = snapshotRunStopReviewRecord({
+      ref,
+      run: before.run,
+      turn: input.turn,
+      proposal: input.proposal,
+      decision: input.decision,
+      checks: input.checks,
+      limitations,
+      requiredFeedbackRounds,
+      advisoryFeedbackRounds,
+      reviewedAt: this.now(),
+    });
+    const feedback = input.feedback === undefined
+      ? null
+      : snapshotRunStopFeedback({
+          review: ref,
+          owner: input.feedback.owner,
+          severity: input.feedback.severity,
+          round: input.feedback.severity === "required"
+            ? requiredFeedbackRounds
+            : advisoryFeedbackRounds,
+          code: input.feedback.code,
+          message: input.feedback.message,
+        });
+    const nextStopReview = Object.freeze({
+      reviewSequence: ref.sequence,
+      requiredFeedbackRounds,
+      advisoryFeedbackRounds,
+      latestReview: ref,
+      limitations,
+    });
+    if (feedback === null) {
+      this.writer.commit({ kind: "stop_review", review }, () => Object.freeze({
+        stopReview: nextStopReview,
+      }));
+      return;
+    }
+    const contribution = createStopFeedbackContextContribution({
+      id: this.currentContextContributionId(
+        before.context,
+        "agent-runtime",
+        "run_stop_feedback",
+      ) ?? this.id("context_contribution"),
+      revision: `${ref.sequence}:${feedback.round}`,
+      runId: this.runId,
+      feedback,
+      createdAt: this.now(),
+    });
+    this.writer.commitItems(Object.freeze([
+      { kind: "stop_review", review },
+      { kind: "stop_feedback", feedback },
+    ]), (current) => Object.freeze({
+      stopReview: nextStopReview,
+      context: this.applyContextContributions(
+        current.context,
+        Object.freeze([contribution]),
+        createStopFeedbackContextAdmissionProfile(),
+        "run_stop_feedback",
+        `${this.runId}:${ref.sequence}`,
+      ),
+    }));
   }
 
   private async invokeCompletionGate(input: CompletionGateInput): Promise<CompletionGateDecision> {
@@ -2214,94 +2526,6 @@ export class RunExecution<TOutput> {
     }
   }
 
-  private async commitProgressCheckpoint(): Promise<RunResult<TOutput> | null> {
-    const before = this.writer.getSnapshot();
-    const proposed = await assessCommittedRunProgress({
-      state: before,
-      config: this.config,
-    });
-    if (this.config.cancellation.context.request !== null) {
-      return this.settle({ status: "cancelled" });
-    }
-    const deadline = evaluateRunDeadline({
-      deadlineAt: before.deadlineAt,
-      now: this.now(),
-    });
-    if (deadline !== null) return this.settleLimitViolation(deadline);
-
-    const nonAdvancing = proposed.assessment.disposition === "unchanged" ||
-      proposed.assessment.disposition === "repeated";
-    const thresholdReached = nonAdvancing && (
-      proposed.state.activeCorrectionRound !== null ||
-      proposed.state.consecutiveNonAdvancingCheckpoints >=
-        this.config.limits.progress.nonAdvancingCheckpointThreshold
-    );
-    if (!thresholdReached) {
-      this.writer.commit({
-        kind: "progress_assessment",
-        assessment: proposed.assessment,
-      }, (current) => Object.freeze({
-        progress: proposed.state,
-        context: before.progress.activeCorrectionRound !== null &&
-            proposed.state.activeCorrectionRound === null
-          ? this.clearProgressCorrectionContext(current.context)
-          : current.context,
-      }));
-      return null;
-    }
-
-    if (proposed.state.correctionRounds >= this.config.limits.progress.maxCorrectionRounds) {
-      this.writer.commit({
-        kind: "progress_assessment",
-        assessment: proposed.assessment,
-      }, () => Object.freeze({ progress: proposed.state }));
-      return this.settle({ status: "blocked", code: "runtime_no_progress" });
-    }
-
-    const correctionRound = proposed.state.correctionRounds + 1;
-    const feedback: RunProgressCorrectionFeedback = Object.freeze({
-      assessment: proposed.assessment.ref,
-      correctionRound,
-      reasonCode: proposed.assessment.reasonCode,
-      factRefs: proposed.assessment.factRefs,
-    });
-    const progress: RunProgressState = Object.freeze({
-      ...proposed.state,
-      correctionRounds: correctionRound,
-      activeCorrectionRound: correctionRound,
-    });
-    const assessment = Object.freeze({
-      ...proposed.assessment,
-      correctionRounds: correctionRound,
-      activeCorrectionRound: correctionRound,
-    });
-    const contribution = createProgressCorrectionContextContribution({
-      id: this.currentContextContributionId(
-        before.context,
-        "agent-runtime",
-        "run_progress_correction",
-      ) ?? this.id("context_contribution"),
-      revision: String(correctionRound),
-      runId: this.runId,
-      feedback,
-      createdAt: this.now(),
-    });
-    this.writer.commitItems(Object.freeze([
-      { kind: "progress_assessment", assessment },
-      { kind: "progress_correction", feedback },
-    ]), (current) => Object.freeze({
-      progress,
-      context: this.applyContextContributions(
-        current.context,
-        Object.freeze([contribution]),
-        createProgressCorrectionContextAdmissionProfile(),
-        "run_progress_correction",
-        `${this.runId}:${correctionRound}`,
-      ),
-    }));
-    return null;
-  }
-
   private async settleLimitViolation(
     violation: RunLimitViolation,
   ): Promise<RunResult<TOutput>> {
@@ -2352,28 +2576,6 @@ export class RunExecution<TOutput> {
     return item !== undefined && "contribution" in item
       ? item.contribution.ref.id
       : null;
-  }
-
-  private clearProgressCorrectionContext(context: ActiveContext): ActiveContext {
-    const current = context.items.find((item) =>
-      "contribution" in item &&
-      item.lifecycle.kind === "active" &&
-      item.contribution.source.owner === "agent-runtime" &&
-      item.contribution.handling.replacementKey === "run_progress_correction"
-    );
-    if (current === undefined || !("contribution" in current)) return context;
-    return this.applyContextOperations(
-      context,
-      Object.freeze([Object.freeze({
-        kind: "invalidate" as const,
-        item: current.ref,
-        expectedContribution: current.contribution.ref,
-        reason: "run_progress_recovered",
-      })]),
-      createProgressCorrectionContextAdmissionProfile(),
-      "run_progress_recovered",
-      this.runId,
-    );
   }
 
   private async processCandidate(
@@ -4795,6 +4997,7 @@ export class RunExecution<TOutput> {
       completedAt,
     ));
     await this.closeVerification(completedAt);
+    await this.transcript.flush();
     const state = this.writer.getSnapshot();
     const base = {
       runId: this.runId,
@@ -5043,6 +5246,7 @@ export class RunExecution<TOutput> {
   }
 
   private onStateCommitted(state: RunState<TOutput>): void {
+    this.transcript.record(state.items);
     if (this.runStartedEventEmitted) {
       this.emitCommittedContextTransition(state.context);
       this.emitCommittedRunItems(state);
@@ -5058,25 +5262,24 @@ export class RunExecution<TOutput> {
         itemKind: item.payload.kind,
         itemSequence: item.ref.sequence,
       }, item.createdAt);
-      if (item.payload.kind === "progress_assessment") {
-        const assessment = item.payload.assessment;
-        this.emit("run.progress.assessed", {
-          checkpointSequence: assessment.ref.checkpointSequence,
-          disposition: assessment.disposition,
-          reasonCode: assessment.reasonCode,
-          factRefs: assessment.factRefs,
-          consecutiveNonAdvancingCheckpoints:
-            assessment.consecutiveNonAdvancingCheckpoints,
-          correctionRounds: assessment.correctionRounds,
-          activeCorrectionRound: assessment.activeCorrectionRound,
+      if (item.payload.kind === "stop_review") {
+        const review = item.payload.review;
+        this.emit("run.stop.reviewed", {
+          reviewSequence: review.ref.sequence,
+          decision: review.decision,
+          checkCount: review.checks.length,
+          limitationCount: review.limitations.length,
+          requiredFeedbackRounds: review.requiredFeedbackRounds,
+          advisoryFeedbackRounds: review.advisoryFeedbackRounds,
         }, item.createdAt);
-      } else if (item.payload.kind === "progress_correction") {
+      } else if (item.payload.kind === "stop_feedback") {
         const feedback = item.payload.feedback;
-        this.emit("run.progress.correction_requested", {
-          checkpointSequence: feedback.assessment.checkpointSequence,
-          correctionRound: feedback.correctionRound,
-          reasonCode: feedback.reasonCode,
-          factRefs: feedback.factRefs,
+        this.emit("run.stop.feedback_requested", {
+          reviewSequence: feedback.review.sequence,
+          owner: feedback.owner,
+          severity: feedback.severity,
+          round: feedback.round,
+          code: feedback.code,
         }, item.createdAt);
       } else if (item.payload.kind === "controller_turn") {
         const exposure = item.payload.toolExposure;
@@ -5136,10 +5339,7 @@ export class RunExecution<TOutput> {
         agent: this.activeAgent,
       }),
       plan: state.plan === null ? null : projectPlan(state.plan),
-      progress: projectRunProgress(
-        state.progress,
-        this.latestProgressAssessment(state),
-      ),
+      stopReview: projectRunStopReview(state.stopReview),
       retry: this.retryProjection,
       verification: this.verificationHostProjection,
       pendingInteractions: Object.freeze([
@@ -5163,23 +5363,6 @@ export class RunExecution<TOutput> {
       ),
       result: this.terminalResult,
     });
-  }
-
-  private latestProgressAssessment(
-    state: RunState<TOutput>,
-  ): RunProgressAssessment | null {
-    if (state.progress.latestAssessment === null) return null;
-    for (let index = state.items.length - 1; index >= 0; index -= 1) {
-      const payload = state.items[index]!.payload;
-      if (
-        payload.kind === "progress_assessment" &&
-        payload.assessment.ref.checkpointSequence ===
-          state.progress.latestAssessment.checkpointSequence
-      ) {
-        return payload.assessment;
-      }
-    }
-    throw new TypeError("Run Progress state references a missing assessment RunItem.");
   }
 
   private emit<TName extends RuntimeEventName>(

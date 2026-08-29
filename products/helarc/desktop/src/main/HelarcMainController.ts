@@ -64,6 +64,7 @@ import {
 } from "@agent-anything/helarc/task";
 import type { RunInputItem } from "@agent-anything/agent-core/input";
 import type { ContextManifestPersistencePort } from "@agent-anything/context/persistence";
+import type { RunTranscriptPort } from "@agent-anything/agent-runtime/transcript";
 import type { WorkspaceSelection } from "@agent-anything/workspace/selection";
 import type { Provider } from "@agent-anything/model-interaction";
 import type { ModelContinuationStore } from "@agent-anything/model-interaction/continuation";
@@ -288,6 +289,7 @@ export interface HelarcMainControllerInput {
   threadStore?: HelarcThreadStore;
   modelContinuationStore?: ModelContinuationStore;
   contextManifestPersistence?: ContextManifestPersistencePort;
+  runTranscriptPort?: RunTranscriptPort;
   qualificationCatalog?: HelarcModelQualificationCatalog;
 }
 
@@ -325,6 +327,7 @@ export class HelarcMainController {
   private readonly contextManifestPersistence:
     | ContextManifestPersistencePort
     | undefined;
+  private readonly runTranscriptPort: RunTranscriptPort | undefined;
   private readonly qualificationCatalog: HelarcModelQualificationCatalog | undefined;
   private provider: HelarcProviderSnapshot;
   private providerInstance: Provider | null;
@@ -375,6 +378,7 @@ export class HelarcMainController {
     this.threadStore = input.threadStore ?? new InMemoryHelarcThreadStore();
     this.modelContinuationStore = input.modelContinuationStore;
     this.contextManifestPersistence = input.contextManifestPersistence;
+    this.runTranscriptPort = input.runTranscriptPort;
     this.qualificationCatalog = input.qualificationCatalog;
     this.provider = input.providerConfigError
       ? {
@@ -599,6 +603,7 @@ export class HelarcMainController {
         qualificationCatalog: this.qualificationCatalog,
         modelContinuationStore: this.modelContinuationStore,
         contextManifestPersistence: this.contextManifestPersistence,
+        runTranscriptPort: this.runTranscriptPort,
         inputItems,
         permissionPreset: preparedStart.prepared.run.permissionPreset,
         sessionAuthorityPort: this.sessionAuthorityStore,
@@ -1405,8 +1410,8 @@ function createAssistantTerminalMessageContent(
   }
 
   if (terminal.status === "blocked") {
-    if (terminal.code === "runtime_no_progress") {
-      return "Run blocked because the current trajectory made no new structural progress after bounded correction.";
+    if (terminal.code === "runtime_stop_feedback_exhausted") {
+      return "Run blocked because required completion feedback was exhausted.";
     }
     return "Run blocked.";
   }

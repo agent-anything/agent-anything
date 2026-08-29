@@ -409,21 +409,15 @@ export interface HelarcModelUseSnapshot {
   };
 }
 
-export interface HelarcRunProgressSnapshot {
-  readonly checkpointSequence: number;
-  readonly disposition: "advanced" | "unchanged" | "repeated" | "deferred" | null;
-  readonly reasonCode:
-    | "new_trusted_fact"
-    | "equivalent_fact_repeated"
-    | "activity_without_structural_change"
-    | "plan_declaration_only"
-    | "progression_basis_changed"
-    | "required_work_pending"
-    | "no_committed_facts"
-    | null;
-  readonly consecutiveNonAdvancingCheckpoints: number;
-  readonly correctionRounds: number;
-  readonly activeCorrectionRound: number | null;
+export interface HelarcRunStopReviewSnapshot {
+  readonly reviewSequence: number;
+  readonly requiredFeedbackRounds: number;
+  readonly advisoryFeedbackRounds: number;
+  readonly limitations: readonly {
+    readonly owner: "task_fulfillment" | "verification" | "plan";
+    readonly code: string;
+    readonly message: string;
+  }[];
 }
 
 export interface HelarcInstructionBindingSnapshot {
@@ -487,7 +481,7 @@ export interface HelarcRunSnapshot {
     readonly instructionBinding: HelarcInstructionBindingSnapshot | null;
     readonly runTree: HelarcRunTreeSnapshot;
     readonly activeDelegations: readonly HelarcActiveDelegationSnapshot[];
-    readonly progress: HelarcRunProgressSnapshot;
+    readonly stopReview: HelarcRunStopReviewSnapshot;
     readonly verification: HelarcHostVerificationSnapshot | null;
     readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
     readonly terminal: {
@@ -867,7 +861,7 @@ export interface HelarcHostRunStatusSnapshot {
   readonly startedAt: string;
   readonly runTree: HelarcRunTreeSnapshot;
   readonly activeDelegations: readonly HelarcActiveDelegationSnapshot[];
-  readonly progress: HelarcRunProgressSnapshot;
+  readonly stopReview: HelarcRunStopReviewSnapshot;
   readonly verification: HelarcHostVerificationSnapshot | null;
   readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
   readonly terminal: HelarcRunSnapshot["host"]["terminal"];

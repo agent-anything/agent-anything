@@ -1,7 +1,7 @@
 export type RunResultStatus = "succeeded" | "blocked" | "failed" | "cancelled";
 export type RunBlockedCode =
   | "runtime_no_safe_path"
-  | "runtime_no_progress"
+  | "runtime_stop_feedback_exhausted"
   | "verification_blocked";
 export type RunFailureCode =
   | "runtime_execution_failed"

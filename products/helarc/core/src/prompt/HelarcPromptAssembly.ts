@@ -28,7 +28,7 @@ export type HelarcPromptSectionId =
   | "run_input_items"
   | "context_projection"
   | "current_plan"
-  | "current_progress"
+  | "current_stop_review"
   | "current_verification"
   | "permission_context"
   | "pending_interactions";
@@ -96,7 +96,7 @@ function assemble(
   const currentStateSections = Object.freeze([
     promptSection("context_projection", "user", contextContent),
     promptSection("current_plan", "user", `Current plan:\n${JSON.stringify(input.plan)}`),
-    promptSection("current_progress", "user", `Current progress:\n${JSON.stringify(input.progress)}`),
+    promptSection("current_stop_review", "user", `Current stop review:\n${JSON.stringify(input.stopReview)}`),
     promptSection("current_verification", "user", buildHelarcVerificationText({
       context,
       toolExposure: input.toolExposure,

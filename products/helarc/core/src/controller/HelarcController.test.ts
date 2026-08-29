@@ -384,7 +384,7 @@ describe("Helarc native Tool controller", () => {
     if (userMessage?.role !== "user") throw new TypeError("Expected one user message.");
     expect(userMessage.content.map(({ text }) => text)).toEqual(expect.arrayContaining([
       expect.stringMatching(/^Task:\n/),
-      expect.stringMatching(/^Current progress:\n/),
+      expect.stringMatching(/^Current stop review:\n/),
       "Pending interactions:\n[]",
     ]));
   });
@@ -747,11 +747,12 @@ function createControllerInput(
       maxStepLength: 500,
       maxExplanationLength: 2_000,
     },
-    progress: {
-      checkpointSequence: 0,
-      consecutiveNonAdvancingCheckpoints: 0,
-      correctionRounds: 0,
-      activeCorrectionRound: null,
+    stopReview: {
+      reviewSequence: 0,
+      requiredFeedbackRounds: 0,
+      advisoryFeedbackRounds: 0,
+      latestReview: null,
+      limitations: [],
     },
     verification: { snapshot: { runId: "run-1", revision: 0 }, gate: null },
     permission: {

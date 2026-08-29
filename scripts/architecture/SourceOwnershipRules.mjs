@@ -224,13 +224,13 @@ export function evaluateSourceOwnershipRules({
     if (
       path === "harness/agent-core/runtime/src/runner/RunExecution.ts" &&
       (
-        !/const\s+completion\s*=\s*await\s+this\.evaluateCompletionGate\s*\(/.test(text) ||
+        !/const\s+completion\s*=\s*await\s+this\.evaluateRunStop\s*\(/.test(text) ||
         !/if\s*\(completion\.kind\s*===\s*["']succeeded["']\)\s*\{[\s\S]*?this\.settle\s*\(\{\s*status:\s*["']succeeded["']/.test(text)
       )
     ) {
       reject(
-        "runner_completion_gate_required",
-        "RunExecution must evaluate the Completion Gate and may settle succeeded only from its succeeded branch.",
+        "runner_stop_review_required",
+        "RunExecution must evaluate Stop Review and may settle succeeded only from its succeeded branch.",
       );
     }
 
