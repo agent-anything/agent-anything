@@ -9,6 +9,7 @@ import {
   type HelarcToolGuidanceBinding,
   type ResolvedHelarcToolGuidance,
 } from "../tools/guidance/index.js";
+import type { HelarcShellRuntimeProfile } from "../tools/HelarcBaselineToolContracts.js";
 import {
   HELARC_CONTROLLER_CONTROL_GUIDANCE,
   type HelarcControllerControlGuidance,
@@ -35,8 +36,9 @@ export function createHelarcBaselineControllerProtocolComposition(input: {
   readonly modelId: string;
   readonly toolSelectionRevision: string;
   readonly tools: readonly RegisteredTool[];
+  readonly shellRuntime: HelarcShellRuntimeProfile;
 }): HelarcControllerProtocolComposition {
-  const baseline = createHelarcBaselineToolGuidance(input.tools);
+  const baseline = createHelarcBaselineToolGuidance(input.tools, input.shellRuntime);
   return createHelarcControllerProtocolComposition({
     toolGuidance: resolveHelarcToolGuidance({
       catalog: baseline.catalog,

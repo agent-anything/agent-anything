@@ -2,6 +2,7 @@ export * from "./HelarcCommandOperation.js";
 export type {
   HelarcBaselineToolContract,
   HelarcBaselineToolName,
+  HelarcShellRuntimeProfile,
   HelarcShellToolName,
   HelarcToolSettlementBinding,
 } from "./HelarcBaselineToolContracts.js";

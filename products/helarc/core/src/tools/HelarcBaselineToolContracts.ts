@@ -2,6 +2,23 @@ import type { ToolAnnotations, ToolJsonObject } from "@agent-anything/tools/cata
 
 export type HelarcShellToolName = "Bash" | "PowerShell";
 
+export type HelarcShellRuntimeProfile =
+  | {
+      readonly toolName: "Bash";
+      readonly executable: "bash";
+      readonly dialect: "bash";
+    }
+  | {
+      readonly toolName: "PowerShell";
+      readonly executable: "pwsh";
+      readonly dialect: "powershell-7";
+    }
+  | {
+      readonly toolName: "PowerShell";
+      readonly executable: "powershell";
+      readonly dialect: "windows-powershell";
+    };
+
 export type HelarcBaselineToolName =
   | "Read"
   | "Glob"

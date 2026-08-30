@@ -28,11 +28,30 @@ export interface PreparedCommandExecutable {
   readonly canonicalPath: string;
 }
 
-export interface NativeShellSelection {
-  readonly toolName: "Bash" | "PowerShell";
-  readonly command: string;
-  readonly argumentsBeforeCommand: readonly string[];
-}
+export type NativeShellSelection =
+  | {
+      readonly toolName: "Bash";
+      readonly command: "bash";
+      readonly dialect: "bash";
+      readonly argumentsBeforeCommand: readonly string[];
+    }
+  | {
+      readonly toolName: "PowerShell";
+      readonly command: "pwsh";
+      readonly dialect: "powershell-7";
+      readonly argumentsBeforeCommand: readonly string[];
+    }
+  | {
+      readonly toolName: "PowerShell";
+      readonly command: "powershell";
+      readonly dialect: "windows-powershell";
+      readonly argumentsBeforeCommand: readonly string[];
+    };
+
+export type NativeShellRuntimeProfile =
+  | { readonly toolName: "Bash"; readonly executable: "bash"; readonly dialect: "bash" }
+  | { readonly toolName: "PowerShell"; readonly executable: "pwsh"; readonly dialect: "powershell-7" }
+  | { readonly toolName: "PowerShell"; readonly executable: "powershell"; readonly dialect: "windows-powershell" };
 
 export async function selectNativeShell(input: {
   readonly platform: FileSystemPlatform;
@@ -43,6 +62,7 @@ export async function selectNativeShell(input: {
     return Object.freeze({
       toolName: "Bash" as const,
       command: "bash",
+      dialect: "bash" as const,
       argumentsBeforeCommand: Object.freeze(["-lc"]),
     });
   }
@@ -50,21 +70,51 @@ export async function selectNativeShell(input: {
   for (const command of ["pwsh", "powershell"] as const) {
     try {
       await findExecutableCandidate({ ...input, command });
-      return Object.freeze({
-        toolName: "PowerShell" as const,
-        command,
-        argumentsBeforeCommand: Object.freeze([
-          "-NoLogo",
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-        ]),
-      });
+      const argumentsBeforeCommand = Object.freeze([
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+      ]);
+      return command === "pwsh"
+        ? Object.freeze({
+            toolName: "PowerShell" as const,
+            command: "pwsh" as const,
+            dialect: "powershell-7" as const,
+            argumentsBeforeCommand,
+          })
+        : Object.freeze({
+            toolName: "PowerShell" as const,
+            command: "powershell" as const,
+            dialect: "windows-powershell" as const,
+            argumentsBeforeCommand,
+          });
     } catch {
       // PowerShell 7 is preferred; Windows PowerShell is the explicit fallback.
     }
   }
   throw new TypeError("No supported PowerShell executable could be resolved.");
+}
+
+export function projectNativeShellRuntimeProfile(
+  shell: NativeShellSelection,
+): NativeShellRuntimeProfile {
+  switch (shell.dialect) {
+    case "bash":
+      return Object.freeze({ toolName: "Bash", executable: "bash", dialect: "bash" });
+    case "powershell-7":
+      return Object.freeze({
+        toolName: "PowerShell",
+        executable: "pwsh",
+        dialect: "powershell-7",
+      });
+    case "windows-powershell":
+      return Object.freeze({
+        toolName: "PowerShell",
+        executable: "powershell",
+        dialect: "windows-powershell",
+      });
+  }
 }
 
 export async function createCommandEnvironmentPolicy(input: {

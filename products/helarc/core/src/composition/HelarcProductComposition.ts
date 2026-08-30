@@ -166,6 +166,7 @@ export async function createHelarcProductComposition(
     modelId,
     toolSelectionRevision: actions.toolSelection.revision,
     tools: actions.toolSelection.tools.map(({ registration }) => registration),
+    shellRuntime: input.commandActions.shellRuntime,
   });
   const rootToolGuidanceBinding = controllerProtocol.bindRun(input.runId);
   const qualification = resolveHelarcModelQualification({

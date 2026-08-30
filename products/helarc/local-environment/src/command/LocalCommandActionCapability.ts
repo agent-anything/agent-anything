@@ -44,10 +44,12 @@ import { parseCommandInput } from "./CommandInput.js";
 import { resolveCommandLimits } from "./CommandLimits.js";
 import {
   createCommandEnvironmentPolicy,
+  projectNativeShellRuntimeProfile,
   resolveCommandExecutable,
   revalidateCommandExecutable,
   selectNativeShell,
   type CommandEnvironmentPolicySnapshot,
+  type NativeShellRuntimeProfile,
 } from "./CommandActionIdentity.js";
 import { executeProcess, type CapturedProcessOutput, type ProcessExecutionOutcome } from "./ProcessExecutor.js";
 import type { CodeAgentCommandLimits, ProcessTerminationLimits } from "./ProcessContracts.js";
@@ -98,6 +100,7 @@ export interface CreateHelarcLocalCommandActionCapabilityInput {
 
 export interface HelarcLocalCommandActionCapability {
   readonly shellTool: "Bash" | "PowerShell";
+  readonly shellRuntime: NativeShellRuntimeProfile;
   readonly shellActionAdapterId: string;
   readonly taskStopActionAdapterId: string;
   readonly environment: { readonly id: string; readonly revision: string };
@@ -171,6 +174,7 @@ export async function createHelarcLocalCommandActionCapability(input: CreateHela
   const nowMs = input.nowMs ?? (() => Date.now());
   return Object.freeze({
     shellTool: shell.toolName,
+    shellRuntime: projectNativeShellRuntimeProfile(shell),
     shellActionAdapterId: HELARC_LOCAL_SHELL_ACTION_ADAPTER_ID,
     taskStopActionAdapterId: HELARC_LOCAL_TASK_STOP_ACTION_ADAPTER_ID,
     environment: Object.freeze({ id: environment.id, revision: environment.digest }),

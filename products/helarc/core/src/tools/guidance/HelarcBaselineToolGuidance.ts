@@ -3,6 +3,7 @@ import type { RegisteredTool } from "@agent-anything/tools/registration";
 import {
   HELARC_BASELINE_TOOL_CONTRACTS,
   type HelarcBaselineToolName,
+  type HelarcShellRuntimeProfile,
 } from "../HelarcBaselineToolContracts.js";
 import {
   createHelarcToolGuidanceCatalog,
@@ -14,11 +15,11 @@ import {
 } from "./HelarcToolGuidance.js";
 
 export const HELARC_BASELINE_TOOL_GUIDANCE_PROFILE_REVISION =
-  "helarc.product-tool-guidance-profile.v1";
+  "helarc.product-tool-guidance-profile.v2";
 export const HELARC_BASELINE_TOOL_GUIDANCE_RELEASE_ID =
   "helarc.product-tool-guidance";
 
-const REVIEWED_AT = "2026-08-28T00:00:00.000Z";
+const REVIEWED_AT = "2026-08-30T00:00:00.000Z";
 
 interface GuidanceDefinition {
   readonly description: string;
@@ -32,12 +33,17 @@ export interface HelarcBaselineToolGuidance {
 
 export function createHelarcBaselineToolGuidance(
   selectedTools: readonly RegisteredTool[],
+  shellRuntime: HelarcShellRuntimeProfile,
 ): HelarcBaselineToolGuidance {
   const selectedByName = selectedToolsByName(selectedTools);
+  if (!selectedByName.has(shellRuntime.toolName)) {
+    throw new TypeError("Helarc Shell runtime does not match the selected native Shell Tool.");
+  }
   const sources = Object.freeze(HELARC_BASELINE_TOOL_CONTRACTS.map((contract) =>
     createHelarcBaselineToolGuidanceSource(
       contract.name,
       selectedByName.get(contract.name)?.descriptor.ref ?? alternateShellRef(contract.name),
+      contract.name === shellRuntime.toolName ? shellRuntime : null,
     )
   ));
   const release = createHelarcToolGuidanceRelease({
@@ -56,15 +62,19 @@ export function createHelarcBaselineToolGuidance(
 export function createHelarcBaselineToolGuidanceSource(
   name: HelarcBaselineToolName,
   tool: ToolRevisionRef,
+  shellRuntime: HelarcShellRuntimeProfile | null,
 ): HelarcToolGuidanceSource {
-  const definition = DEFINITIONS[name];
+  if (shellRuntime !== null && name !== shellRuntime.toolName) {
+    throw new TypeError("Helarc Shell runtime cannot describe a different Tool.");
+  }
+  const definition = shellRuntime === null ? DEFINITIONS[name] : shellRuntimeGuidance(shellRuntime);
   return createHelarcToolGuidanceSource({
     id: `helarc.tool-guidance.${sourceName(name)}`,
     tool,
     modelDescription: definition.description,
     inputFieldDescriptions: definition.fields,
     provenance: Object.freeze({
-      reference: "authored:helarc-product-tool-guidance-v1",
+      reference: "authored:helarc-product-tool-guidance-v2",
       license: null,
       reviewedAt: REVIEWED_AT,
     }),
@@ -211,15 +221,39 @@ const DEFINITIONS = Object.freeze({
 function shellGuidance(
   name: "Bash" | "PowerShell",
   syntax: string,
+  runtimeConstraint = "",
 ): GuidanceDefinition {
   return Object.freeze({
-    description: `Execute one bounded native ${name} command in the active Workspace using ${syntax}. Use it for build, test, static-analysis, runtime, package, Git, and other command-line work that has no more precise admitted Tool. Prefer Read, Glob, Grep, Edit, or Write for their dedicated file responsibilities. Compose a command whose effects and failure behavior are understandable, avoid destructive or irreversible operations unless explicitly required and authorized, and never infer success from intent. Foreground results settle with exit code, stdout, stderr, duration, and truncation state. Background results return a task_id rather than command completion and must be observed through later context or stopped with TaskStop. Timeouts, nonzero exits, truncated output, uncertain effects, and missing verification require explicit interpretation and recovery.`,
+    description: `Execute one bounded native ${name} command in the active Workspace using ${syntax}.${runtimeConstraint} Use it for build, test, static-analysis, runtime, package, Git, and other command-line work that has no more precise admitted Tool. Prefer Read, Glob, Grep, Edit, or Write for their dedicated file responsibilities. Compose a command whose effects and failure behavior are understandable, avoid destructive or irreversible operations unless explicitly required and authorized, and never infer success from intent. Foreground results settle with exit code, stdout, stderr, duration, and truncation state. Background results return a task_id rather than command completion and must be observed through later context or stopped with TaskStop. Timeouts, nonzero exits, truncated output, uncertain effects, and missing verification require explicit interpretation and recovery.`,
     fields: Object.freeze({
-      "/properties/command": `Required command string interpreted by the Host-selected native ${name} executable. Use ${syntax} and quote paths and values correctly for that shell.`,
+      "/properties/command": `Required command string interpreted by the Host-selected native ${name} executable. Use ${syntax} and quote paths and values correctly for that shell.${runtimeConstraint}`,
       "/properties/description": "Optional concise explanation of the command's intended effect for progress and review surfaces.",
       "/properties/run_in_background": "Set true only when the command should continue asynchronously. A background result means started, not completed.",
       "/properties/timeout_ms": "Optional positive execution timeout in milliseconds. Omit it for the Host default; the Host enforces its maximum.",
       "/properties/verification_claim": "Optional exact claim that this command is intended to verify: tests, static_analysis, runtime_verification, security_scan, or performance_benchmark. Use it only when the command result can support that claim.",
     }),
   });
+}
+
+function shellRuntimeGuidance(runtime: HelarcShellRuntimeProfile): GuidanceDefinition {
+  switch (runtime.dialect) {
+    case "bash":
+      return shellGuidance(
+        "Bash",
+        "Bash syntax",
+        " The Host executes this Tool with `bash`; conditional command chains may use `&&` and `||`.",
+      );
+    case "powershell-7":
+      return shellGuidance(
+        "PowerShell",
+        "PowerShell 7 syntax",
+        " The Host executes this Tool with `pwsh`; pipeline-chain operators `&&` and `||` are supported.",
+      );
+    case "windows-powershell":
+      return shellGuidance(
+        "PowerShell",
+        "Windows PowerShell syntax",
+        " The Host executes this Tool with Windows PowerShell `powershell`. Do not use `&&` or `||`; they are not valid statement separators. Prefer separate Tool Calls for success-dependent steps, or explicitly guard the later statement with `$LASTEXITCODE` or PowerShell exception semantics. Do not substitute `;` for conditional chaining because it runs the later statement regardless of the earlier native command's exit code.",
+      );
+  }
 }

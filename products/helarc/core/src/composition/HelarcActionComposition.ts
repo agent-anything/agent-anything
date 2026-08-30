@@ -27,7 +27,10 @@ import {
   type ToolSelectionRevision,
 } from "@agent-anything/tools/selection";
 import { createHelarcCommandOperationContribution } from "../tools/HelarcCommandOperation.js";
-import type { HelarcShellToolName } from "../tools/HelarcBaselineToolContracts.js";
+import type {
+  HelarcShellRuntimeProfile,
+  HelarcShellToolName,
+} from "../tools/HelarcBaselineToolContracts.js";
 import type { OperationBindingRevisionRef } from "@agent-anything/operation-catalog/identity";
 import type { OperationToolAvailabilityParticipant } from "@agent-anything/agent-runtime/runner";
 
@@ -43,6 +46,7 @@ export interface HelarcFileActionContribution extends HelarcPhysicalActionContri
 
 export interface HelarcCommandActionContribution extends HelarcPhysicalActionContribution {
   readonly shellTool: HelarcShellToolName;
+  readonly shellRuntime: HelarcShellRuntimeProfile;
   readonly shellActionAdapterId: string;
   readonly taskStopActionAdapterId: string;
   readonly environment: {

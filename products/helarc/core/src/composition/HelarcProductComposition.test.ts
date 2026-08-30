@@ -246,7 +246,14 @@ describe("HelarcProductComposition", () => {
     const selectedRegistrations = composition.actions.toolSelection.tools.map(
       ({ registration }) => registration,
     );
-    const baselineGuidance = createHelarcBaselineToolGuidance(selectedRegistrations);
+    const baselineGuidance = createHelarcBaselineToolGuidance(
+      selectedRegistrations,
+      {
+        toolName: "PowerShell",
+        executable: "powershell",
+        dialect: "windows-powershell",
+      },
+    );
     expect(baselineGuidance.release.tools).toHaveLength(11);
     expect(baselineGuidance.release.sources).toHaveLength(11);
     expect(composition.controllerProtocol.toolGuidance.entries).toHaveLength(10);
@@ -255,6 +262,11 @@ describe("HelarcProductComposition", () => {
         "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "TaskStop",
         "AskUserQuestion", "Agent", "SendMessage",
       ]));
+    const powerShellGuidance = composition.controllerProtocol.toolGuidance.entries.find(
+      ({ name }) => name === "PowerShell",
+    );
+    expect(powerShellGuidance?.modelDescription).toContain("Windows PowerShell `powershell`");
+    expect(powerShellGuidance?.modelDescription).toContain("Do not use `&&` or `||`");
     expect(composition.runMetadata).toMatchObject({
       controllerProtocolRevision: composition.controllerProtocol.revision,
       toolGuidanceReleaseId: baselineGuidance.release.ref.id,
@@ -468,6 +480,11 @@ function createLocalContributions() {
     },
     commandActions: {
       shellTool: "PowerShell" as const,
+      shellRuntime: {
+        toolName: "PowerShell" as const,
+        executable: "powershell" as const,
+        dialect: "windows-powershell" as const,
+      },
       shellActionAdapterId: "test.shell.adapter",
       taskStopActionAdapterId: "test.task-stop.adapter",
       taskStopBinding: HELARC_TASK_STOP_BINDING,
