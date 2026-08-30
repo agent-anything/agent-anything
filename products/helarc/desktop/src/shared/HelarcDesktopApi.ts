@@ -291,6 +291,19 @@ export interface HelarcRunTreeNodeSnapshot {
   readonly resultCode: string | null;
   readonly startedAt: string | null;
   readonly completedAt: string | null;
+  readonly resourcesSettled: boolean;
+  readonly resultTransfer: "pending" | "settled" | "failed" | "unknown" | "not_required";
+  readonly cancellationScope: "subtree" | "tree" | null;
+}
+
+export interface HelarcRunTreeResourceSnapshot {
+  readonly capacity: number;
+  readonly consumed: number;
+  readonly reserved: number;
+  readonly remaining: number;
+  readonly released: number;
+  readonly measurementStatus: "measured" | "unavailable" | "not_applicable" | "unknown";
+  readonly enforcement: "hard" | "observational";
 }
 
 export interface HelarcRunTreeSnapshot {
@@ -304,6 +317,37 @@ export interface HelarcRunTreeSnapshot {
   };
   readonly totalDescendantRuns: number;
   readonly activeDescendantRuns: number;
+  readonly resources: Readonly<Record<
+    "controllerTurns" | "actions" | "modelInputTokens" | "modelOutputTokens" |
+      "costUnits" | "contextBytes" | "resultBytes",
+    HelarcRunTreeResourceSnapshot
+  >>;
+  readonly approvals: {
+    readonly totalRequests: number;
+    readonly activeReviews: number;
+    readonly settledRequests: number;
+    readonly uniqueOperationFingerprints: number;
+    readonly maxEquivalentOperationRequests: number;
+    readonly consecutiveDeclines: number;
+    readonly consecutiveReviewerFailures: number;
+    readonly exhaustedCode: string | null;
+  };
+  readonly cancellation: {
+    readonly totalRequests: number;
+    readonly treeRequested: boolean;
+    readonly subtreeRequests: number;
+    readonly latestScope: "subtree" | "tree" | null;
+    readonly latestOrigin: string | null;
+    readonly latestReasonCode: string | null;
+    readonly latestRequestedAt: string | null;
+  };
+  readonly settlement: {
+    readonly complete: boolean;
+    readonly unsettledDescendantRuns: number;
+    readonly pendingResultTransfers: number;
+    readonly failedResultTransfers: number;
+    readonly unknownResultTransfers: number;
+  };
   readonly nodes: readonly HelarcRunTreeNodeSnapshot[];
 }
 

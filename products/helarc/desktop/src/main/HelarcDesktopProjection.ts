@@ -470,6 +470,13 @@ function projectRunTree(
     limits: { ...tree.limits },
     totalDescendantRuns: tree.totalDescendantRuns,
     activeDescendantRuns: tree.activeDescendantRuns,
+    resources: Object.fromEntries(Object.entries(tree.resources).map(([key, value]) => [
+      key,
+      { ...value },
+    ])) as HelarcRunSnapshot["host"]["runTree"]["resources"],
+    approvals: { ...tree.approvals },
+    cancellation: { ...tree.cancellation },
+    settlement: { ...tree.settlement },
     nodes: tree.nodes.map((node) => ({
       runId: node.runId,
       parentRunId: node.parentRunId,
@@ -480,6 +487,9 @@ function projectRunTree(
       resultCode: node.resultCode,
       startedAt: node.startedAt,
       completedAt: node.completedAt,
+      resourcesSettled: node.resourcesSettled,
+      resultTransfer: node.resultTransfer,
+      cancellationScope: node.cancellationScope,
     })),
   };
 }

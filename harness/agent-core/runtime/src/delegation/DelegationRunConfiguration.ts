@@ -31,7 +31,6 @@ export function projectDelegationRunAuthority(
     rules: config.permissions.rules,
     networkRules: config.permissions.networkRules,
     managedConstraints: config.permissions.managedConstraints,
-    approvalLimits: config.permissions.approvalLimits,
     authorityApplicationLimits: config.permissions.authorityApplicationLimits,
   };
   const actionProjection = config.actionExecution === null

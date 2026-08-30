@@ -42,13 +42,6 @@ export type ApprovalReviewerBinding =
       readonly reviewTimeoutMs: number;
     });
 
-export interface ApprovalLimits {
-  readonly maxRequestsPerRun: number;
-  readonly maxRequestsPerActionFingerprint: number;
-  readonly maxConsecutiveDeclines: number;
-  readonly maxConsecutiveReviewFailures: number;
-}
-
 export interface AuthorityApplicationLimits {
   readonly commitTimeoutMs: number;
 }
@@ -68,7 +61,6 @@ export interface ResolvedRunPermissionConfig {
   readonly managedConstraints: ManagedPermissionConstraints;
   readonly sessionAuthority: ResolvedSessionAuthorityConfig | null;
   readonly persistentPolicyAmendments: PersistentPolicyAmendmentPort | null;
-  readonly approvalLimits: ApprovalLimits;
   readonly authorityApplicationLimits: AuthorityApplicationLimits;
 }
 
@@ -124,7 +116,6 @@ export function snapshotResolvedRunPermissionConfig(
     }
   }
   const networkRules = snapshotNetworkRules(input.permissions.networkRules);
-  const approvalLimits = snapshotApprovalLimits(input.permissions.approvalLimits);
   const authorityApplicationLimits = snapshotAuthorityApplicationLimits(
     input.permissions.authorityApplicationLimits,
   );
@@ -156,7 +147,6 @@ export function snapshotResolvedRunPermissionConfig(
     managedConstraints,
     sessionAuthority,
     persistentPolicyAmendments,
-    approvalLimits,
     authorityApplicationLimits,
   });
 }
@@ -658,21 +648,6 @@ function snapshotSessionAuthorityContext(
   }
   assertNonEmpty(context.environmentId, "SessionAuthorityContext.environmentId");
   return Object.freeze({ ...context });
-}
-
-function snapshotApprovalLimits(limits: ApprovalLimits): ApprovalLimits {
-  if (!limits || typeof limits !== "object") {
-    throw new TypeError("ApprovalLimits must be an object.");
-  }
-  for (const field of [
-    "maxRequestsPerRun",
-    "maxRequestsPerActionFingerprint",
-    "maxConsecutiveDeclines",
-    "maxConsecutiveReviewFailures",
-  ] as const) {
-    assertPositiveInteger(limits[field], `ApprovalLimits.${field}`);
-  }
-  return Object.freeze({ ...limits });
 }
 
 function snapshotAuthorityApplicationLimits(

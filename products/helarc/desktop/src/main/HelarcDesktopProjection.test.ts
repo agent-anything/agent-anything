@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HelarcMainSnapshot } from "./HelarcMainController.js";
 import { projectHelarcDesktopSnapshot } from "./HelarcDesktopProjection.js";
+import { createHelarcRunTreeTestSnapshot } from "../shared/testing/HelarcRunTreeTestSnapshot.js";
 
 const SECRET = "sentinel-desktop-private-value";
 
@@ -234,29 +235,12 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
         effectiveFromRunRevision: 0,
         supersedes: null,
       },
-      runTree: {
-        rootRunId: "harness-run-1",
+      runTree: createHelarcRunTreeTestSnapshot({
+        runId: "harness-run-1",
         revision: 1,
+        startedAt: "2026-07-19T00:00:00.000Z",
         deadlineAt: "2026-07-19T00:01:00.000Z",
-        limits: {
-          maxDescendantDepth: 2,
-          maxTotalDescendantRuns: 4,
-          maxActiveDescendantRuns: 2,
-        },
-        totalDescendantRuns: 0,
-        activeDescendantRuns: 0,
-        nodes: [{
-          runId: "harness-run-1",
-          parentRunId: null,
-          relationId: null,
-          parentRunActionId: null,
-          depth: 0,
-          status: "running",
-          resultCode: null,
-          startedAt: "2026-07-19T00:00:00.000Z",
-          completedAt: null,
-        }],
-      },
+      }),
       activeDelegations: [],
       stopReview: {
         reviewSequence: 3,

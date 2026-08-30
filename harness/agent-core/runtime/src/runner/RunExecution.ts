@@ -3983,6 +3983,7 @@ export class RunExecution<TOutput> {
     });
     this.addPending(pending);
     const unsubscribe = child.subscribe(() => this.publishCurrentState());
+    let transferStatus: "settled" | "failed" | "unknown" = "unknown";
     try {
       const result = await child.wait();
       const resourceSettlement = await started.resourceSettlement;
@@ -4013,6 +4014,7 @@ export class RunExecution<TOutput> {
           createdAt: this.now(),
         });
       } catch {
+        transferStatus = "failed";
         return rejectedDescendant(
           relationId,
           "delegation_result_invalid",
@@ -4025,6 +4027,8 @@ export class RunExecution<TOutput> {
         result: delegationResult,
         material: resultMaterial,
       }));
+      transferStatus = "settled";
+      this.runTree.settleDescendantTransfer(child.runId, transferStatus);
       this.eventStream.emit("run.descendant.settled", {
         relationId: started.relation.ref.id,
         parentRunActionId: started.relation.parentRunAction.id,
@@ -4072,6 +4076,12 @@ export class RunExecution<TOutput> {
         resourceSettlement,
       });
     } finally {
+      const childNode = this.runTree.getSnapshot().nodes.find(
+        (node) => node.runId === child.runId,
+      );
+      if (childNode?.resultTransfer === "pending") {
+        this.runTree.settleDescendantTransfer(child.runId, transferStatus);
+      }
       unsubscribe();
       this.childHandles.delete(relationId);
       this.removePending(pending, "resolved", null);
@@ -4669,32 +4679,53 @@ export class RunExecution<TOutput> {
             code: "approval_reviewer_unavailable",
           });
         }
-        const activity = this.writer.getSnapshot().permission.approvalActivity;
-        const fingerprint = input.assessment.requirement.subject.actionFingerprint;
-        const byFingerprint = activity.requestsByActionFingerprint[fingerprint] ?? 0;
-        const limits = this.config.permissions.approvalLimits;
-        if (
-          activity.requestCount >= limits.maxRequestsPerRun ||
-          byFingerprint >= limits.maxRequestsPerActionFingerprint ||
-          activity.consecutiveDeclines >= limits.maxConsecutiveDeclines ||
-          activity.consecutiveReviewFailures >= limits.maxConsecutiveReviewFailures
-        ) {
-          return Object.freeze({ status: "denied" as const, code: "approval_limit_reached" });
-        }
         if (input.parentRunAction === null) {
           return Object.freeze({ status: "failed" as const, code: "approval_parent_action_missing" });
         }
         const requestId = this.id("interaction_request", this.nextInteractionRequest++);
+        const actionFingerprint = input.assessment.requirement.subject.actionFingerprint;
+        const operationFingerprint = await approvalOperationFingerprint({
+          requirement: input.assessment.requirement,
+          workspace: this.config.workspace,
+          permissions: this.config.permissions,
+        });
+        const authorityBasis = this.runTree.captureAuthorityBasis(this.runId);
+        const admission = this.runTree.admitApproval({
+          requestId,
+          runId: this.runId,
+          actionId: input.action.id,
+          authorityRevision: authorityBasis.authorityRevision,
+          workspaceId: this.config.workspace?.primary.id ?? null,
+          environmentId: this.config.permissions.permissionProfile.environmentId,
+          operationFingerprint,
+        });
+        if (admission.status === "limit_exceeded") {
+          return Object.freeze({
+            status: "limit_exceeded" as const,
+            code: admission.code,
+          });
+        }
+        if (admission.status === "rejected") {
+          return Object.freeze({
+            status: admission.code === "approval_tree_cancelled"
+              ? "cancelled" as const
+              : "invalidated" as const,
+            code: admission.code,
+          });
+        }
+        let settlementKind: import("./RunTreeApprovalAccount.js").RunTreeApprovalSettlementKind =
+          "request_failure";
+        let settled = false;
+        const settleApproval = (
+          kind: import("./RunTreeApprovalAccount.js").RunTreeApprovalSettlementKind,
+        ): void => {
+          if (settled) return;
+          settled = true;
+          this.runTree.settleApproval(requestId, kind);
+        };
+        try {
         const pendingVersion = 1;
         const createdAt = this.now();
-        this.updateApprovalActivity((current) => ({
-          ...current,
-          requestCount: current.requestCount + 1,
-          requestsByActionFingerprint: Object.freeze({
-            ...current.requestsByActionFingerprint,
-            [fingerprint]: byFingerprint + 1,
-          }),
-        }));
         const opened = this.interactions.open({
           requestId,
           protocol: APPROVAL_INTERACTION_PROTOCOL,
@@ -4707,7 +4738,7 @@ export class RunExecution<TOutput> {
             owner: "permission",
             kind: "approval",
             id: input.action.id,
-            revision: fingerprint,
+            revision: actionFingerprint,
           }),
           correlation: this.runActionCorrelationByRef(input.parentRunAction),
           parentRunAction: input.parentRunAction,
@@ -4722,13 +4753,11 @@ export class RunExecution<TOutput> {
           createdAt,
         });
         if (opened.status !== "opened") {
-          this.updateApprovalActivity((current) => ({
-            ...current,
-            consecutiveReviewFailures: current.consecutiveReviewFailures + 1,
-          }));
+          settlementKind = "request_failure";
           return Object.freeze({ status: "failed" as const, code: opened.code });
         }
 
+        let reviewerFailed = false;
         if (reviewer.kind === "auto_review") {
           const review: ApprovalReviewInput = Object.freeze({
             request: opened.envelope.presentation as ApprovalReviewInput["request"],
@@ -4763,11 +4792,9 @@ export class RunExecution<TOutput> {
           });
           if (reviewResult.kind === "failed") {
             this.interactions.fail(opened.pending.request, "permission", reviewResult.failure.code);
-            this.updateApprovalActivity((current) => ({
-              ...current,
-              consecutiveReviewFailures: current.consecutiveReviewFailures + 1,
-            }));
+            reviewerFailed = true;
           } else if (reviewResult.kind === "cancelled") {
+            settlementKind = "interrupted";
             this.interactions.invalidate(opened.pending.request, "approval_review_cancelled");
           } else {
             this.interactions.submit({
@@ -4782,6 +4809,15 @@ export class RunExecution<TOutput> {
         const settlement = await opened.completion;
         this.drainInteractionSettlements();
         if (settlement.status !== "resolved") {
+          settlementKind = reviewerFailed
+            ? "reviewer_failure"
+            : settlement.status === "expired"
+              ? "expired"
+              : settlement.status === "cancelled"
+                ? "cancelled"
+                : settlement.status === "invalidated"
+                  ? settlementKind === "interrupted" ? "interrupted" : "invalidated"
+                  : "request_failure";
           return Object.freeze({
             status: settlement.status === "expired" || settlement.status === "invalidated" || settlement.status === "cancelled"
               ? settlement.status
@@ -4791,14 +4827,11 @@ export class RunExecution<TOutput> {
         }
         const resolution = settlement.resolutionValue as ApprovalInteractionResolution;
         if (resolution.decision.kind === "decline") {
-          this.updateApprovalActivity((current) => ({
-            ...current,
-            consecutiveDeclines: current.consecutiveDeclines + 1,
-            consecutiveReviewFailures: 0,
-          }));
+          settlementKind = "declined";
           return Object.freeze({ status: "denied" as const, code: "approval_declined" });
         }
         if (resolution.decision.kind === "cancel") {
+          settlementKind = "cancelled";
           this.config.cancellation.requestCancellation({
             origin: "approval",
             reasonCode: "approval_cancelled",
@@ -4808,22 +4841,26 @@ export class RunExecution<TOutput> {
         }
         const application = settlement.applicationValue as ApprovalApplicationOutcome;
         if (application.kind !== "applied") {
+          settlementKind = application.kind === "interrupted"
+            ? "interrupted"
+            : application.kind === "outcome_unknown"
+              ? "outcome_unknown"
+              : "request_failure";
           return Object.freeze({
             status: application.kind === "interrupted" ? "interrupted" :
               application.kind === "outcome_unknown" ? "unknown_effect" : "failed",
             code: "code" in application ? application.code : "approval_authority_not_applied",
           });
         }
-        this.updateApprovalActivity((current) => ({
-          ...current,
-          consecutiveDeclines: 0,
-          consecutiveReviewFailures: 0,
-        }));
+        settlementKind = "approved";
         return Object.freeze({
           status: "applied" as const,
           approvalRecordId: settlement.outcome.resolution.resolutionId,
           authoritySnapshotId: `run-permission:${this.writer.getSnapshot().revision}`,
         });
+        } finally {
+          settleApproval(settlementKind);
+        }
       },
     });
   }
@@ -4944,18 +4981,6 @@ export class RunExecution<TOutput> {
       sessionAuthority: state.permission.sessionAuthorityRecords,
       sessionAuthorityContext: this.config.permissions.sessionAuthority?.context ?? null,
     });
-  }
-
-  private updateApprovalActivity(
-    update: (current: RunState["permission"]["approvalActivity"]) =>
-      RunState["permission"]["approvalActivity"],
-  ): void {
-    this.writer.commitState((state) => Object.freeze({
-      permission: Object.freeze({
-        ...state.permission,
-        approvalActivity: Object.freeze(update(state.permission.approvalActivity)),
-      }),
-    }));
   }
 
   private enterCancelling(request: import("../run/index.js").RunCancellationRequest): void {
@@ -6468,6 +6493,77 @@ function approvalSubmissionDigest(
     "agent-anything.approval-interaction-submission.v1",
     submission,
   );
+}
+
+function approvalOperationFingerprint(input: {
+  readonly requirement: import("@agent-anything/permission/approval").ApprovalRequirement;
+  readonly workspace: import("@agent-anything/workspace/selection").WorkspaceSelection | null;
+  readonly permissions: import("../run/index.js").ResolvedRunPermissionConfig;
+}): Promise<string> {
+  const requirement = input.requirement;
+  return createCanonicalSha256Digest(
+    "agent-anything.run-tree-approval-operation.v1",
+    Object.freeze({
+      category: requirement.category,
+      environmentId: requirement.subject.environmentId,
+      applicabilityKeys: requirement.subject.applicabilityKeys,
+      payload: stripApprovalPresentation(requirement.payload),
+      decisions: requirement.decisionOptions.map(({ kind, scope }) => ({ kind, scope })),
+      proposals: requirement.trustedProposals.map((proposal) =>
+        stripApprovalPresentation(proposal)
+      ),
+      workspace: input.workspace === null
+        ? null
+        : Object.freeze({
+            primary: approvalWorkspaceIdentity(input.workspace.primary),
+            additional: input.workspace.additional.map(approvalWorkspaceIdentity),
+          }),
+      policyBasis: Object.freeze({
+        profileId: input.permissions.permissionProfile.id,
+        approvalPolicy: input.permissions.approvalPolicy,
+        managedConstraintSetId:
+          input.permissions.permissionProfile.managedConstraintSetId,
+        rules: input.permissions.rules.map(({ id }) => id),
+        networkRules: input.permissions.networkRules.map(({ id }) => id),
+      }),
+    }),
+  );
+}
+
+function approvalWorkspaceIdentity(
+  workspace: import("@agent-anything/workspace/identity").WorkspaceIdentity,
+) {
+  return Object.freeze({
+    id: workspace.id,
+    rootRef: workspace.rootRef,
+    trustState: workspace.trustState,
+    source: workspace.source,
+    policyRefs: workspace.policyRefs,
+  });
+}
+
+function stripApprovalPresentation(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripApprovalPresentation);
+  if (value === null || typeof value !== "object") return value;
+  const omitted = new Set([
+    "id",
+    "ref",
+    "label",
+    "description",
+    "displayName",
+    "displayPath",
+    "destinationDisplayPath",
+    "safeCommandDisplay",
+    "cwdDisplay",
+    "reason",
+    "deadlineAt",
+    "metadata",
+  ]);
+  return Object.freeze(Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !omitted.has(key))
+      .map(([key, child]) => [key, stripApprovalPresentation(child)]),
+  ));
 }
 
 function finalizationObservabilityContext(

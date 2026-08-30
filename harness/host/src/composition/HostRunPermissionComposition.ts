@@ -17,7 +17,7 @@ import {
   type SessionAuthorityPort,
 } from "@agent-anything/permission";
 import type { InvocationInterruptionContext } from "@agent-anything/agent-core/control";
-import { isReviewCapablePolicy, type ApprovalLimits, type ApprovalReviewerBinding, type AuthorityApplicationLimits, type ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
+import { isReviewCapablePolicy, type ApprovalReviewerBinding, type AuthorityApplicationLimits, type ResolvedRunPermissionConfig } from "@agent-anything/agent-runtime/run";
 
 export interface HostPermissionProfileSelection {
   readonly profileId: string;
@@ -40,7 +40,6 @@ export interface HostRunPermissionCompositionInput {
   readonly managedConstraints: ManagedPermissionConstraints;
   readonly sessionAuthority: HostSessionAuthorityComposition | null;
   readonly persistentPolicyAmendments: PersistentPolicyAmendmentPort | null;
-  readonly approvalLimits: ApprovalLimits;
   readonly authorityApplicationLimits: AuthorityApplicationLimits;
   readonly interruption: InvocationInterruptionContext;
 }
@@ -70,7 +69,6 @@ export async function resolveHostRunPermissionConfig(
     managedConstraints,
     sessionAuthority,
     persistentPolicyAmendments: input.persistentPolicyAmendments,
-    approvalLimits: Object.freeze({ ...input.approvalLimits }),
     authorityApplicationLimits: Object.freeze({
       ...input.authorityApplicationLimits,
     }),

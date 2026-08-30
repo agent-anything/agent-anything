@@ -398,6 +398,13 @@ export async function prepareHelarcHostRun(
       limits: runLimits,
       runTreeLimits,
       runTreeResources,
+      runTreeApprovals: {
+        maxTotalRequests: 8,
+        maxRequestsPerOperationFingerprint: 2,
+        maxConsecutiveDeclines: 3,
+        maxConsecutiveReviewerFailures: 3,
+        maxActiveReviews: 2,
+      },
       audit: "optional",
       telemetry: "optional",
       cancellationLimits: {

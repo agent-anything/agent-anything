@@ -19,14 +19,18 @@ describe("RunTreeExecution", () => {
 
     expect(reserve(tree, tree.rootLineage, "run-root", "run-child-active", 2))
       .toEqual({ status: "rejected", code: "descendant_run_active_limit_exceeded", treeRevision: 1 });
+    tree.settleResources("run-child-1");
     tree.settleRun("run-child-1", "succeeded", null, "2026-08-23T00:00:10.000Z");
+    tree.settleDescendantTransfer("run-child-1", "settled");
 
     const second = reserve(tree, tree.rootLineage, "run-root", "run-child-2", 3);
     expect(second.status).toBe("accepted");
+    tree.settleResources("run-child-2");
     tree.settleRun("run-child-2", "failed", "runtime_execution_failed", "2026-08-23T00:00:20.000Z");
+    tree.settleDescendantTransfer("run-child-2", "settled");
 
     expect(reserve(tree, tree.rootLineage, "run-root", "run-child-total", 4))
-      .toEqual({ status: "rejected", code: "descendant_run_total_limit_exceeded", treeRevision: 4 });
+      .toEqual({ status: "rejected", code: "descendant_run_total_limit_exceeded", treeRevision: 6 });
     expect(tree.getSnapshot()).toMatchObject({
       totalDescendantRuns: 2,
       activeDescendantRuns: 0,
@@ -91,7 +95,7 @@ describe("RunTreeExecution", () => {
     )).toEqual({
       status: "rejected",
       code: "descendant_run_start_cancelled",
-      treeRevision: 0,
+      treeRevision: 1,
     });
 
     const expiredTree = createTree({
@@ -120,6 +124,7 @@ describe("RunTreeExecution", () => {
     });
     expect(reserve(tree, tree.rootLineage, "run-root", "run-child", 1).status)
       .toBe("accepted");
+    tree.settleResources("run-child");
     tree.failStart("run-child", "2026-08-23T00:00:01.000Z");
 
     expect(tree.getSnapshot()).toMatchObject({
@@ -127,7 +132,7 @@ describe("RunTreeExecution", () => {
       activeDescendantRuns: 0,
     });
     expect(reserve(tree, tree.rootLineage, "run-root", "run-other", 2))
-      .toEqual({ status: "rejected", code: "descendant_run_total_limit_exceeded", treeRevision: 2 });
+      .toEqual({ status: "rejected", code: "descendant_run_total_limit_exceeded", treeRevision: 3 });
   });
 
   it("commits terminal lifecycle only from settled RunResult facts", () => {
@@ -146,6 +151,7 @@ describe("RunTreeExecution", () => {
       completedAt: null,
     });
 
+    tree.settleResources("run-child");
     tree.settleRun(
       "run-child",
       "failed",
@@ -158,6 +164,7 @@ describe("RunTreeExecution", () => {
       resultCode: "runtime_execution_failed",
       completedAt: "2026-08-23T00:00:01.000Z",
     });
+    tree.settleDescendantTransfer("run-child", "settled");
   });
 
   it("prevents root settlement while a descendant remains active", () => {
@@ -169,12 +176,14 @@ describe("RunTreeExecution", () => {
     expect(reserve(tree, tree.rootLineage, "run-root", "run-child", 1).status)
       .toBe("accepted");
 
+    expect(() => tree.settleResources("run-root"))
+      .toThrow("before child allocations");
     expect(() => tree.settleRun(
       "run-root",
       "succeeded",
       null,
       "2026-08-23T00:00:01.000Z",
-    )).toThrow("root Run cannot settle while descendants remain active");
+    )).toThrow("resource account");
   });
 
   it("propagates root cancellation to every active descendant", () => {
@@ -209,6 +218,68 @@ describe("RunTreeExecution", () => {
       origin: "parent_run",
       parentRunId: "run-child",
     });
+    expect(tree.getSnapshot().cancellation).toMatchObject({
+      treeRequested: true,
+      totalRequests: 3,
+    });
+    expect(tree.getSnapshot().nodes.map(({ cancellation }) => cancellation?.scope))
+      .toEqual(["tree", "subtree", "subtree"]);
+  });
+
+  it("isolates subtree cancellation from an unrelated sibling", () => {
+    const tree = createTree({
+      maxTotalDescendantRuns: 3,
+      maxActiveDescendantRuns: 3,
+      maxDescendantDepth: 2,
+    });
+    const first = reserve(tree, tree.rootLineage, "run-root", "run-child-1", 1);
+    const sibling = reserve(tree, tree.rootLineage, "run-root", "run-child-2", 2);
+    expect(first.status).toBe("accepted");
+    expect(sibling.status).toBe("accepted");
+    if (first.status !== "accepted" || sibling.status !== "accepted") return;
+    const childCancellation = cancellation("run-child-1");
+    const siblingCancellation = cancellation("run-child-2");
+    tree.registerCancellation("run-child-1", childCancellation);
+    tree.registerCancellation("run-child-2", siblingCancellation);
+    const grandchild = reserve(tree, first.lineage, "run-child-1", "run-grandchild", 1);
+    expect(grandchild.status).toBe("accepted");
+    if (grandchild.status !== "accepted") return;
+    const grandchildCancellation = cancellation("run-grandchild");
+    tree.registerCancellation("run-grandchild", grandchildCancellation);
+
+    childCancellation.requestCancellation({ origin: "user", reasonCode: "user_requested" });
+
+    expect(grandchildCancellation.context.request?.parentRunId).toBe("run-child-1");
+    expect(siblingCancellation.context.request).toBeNull();
+    expect(tree.getSnapshot().cancellation.treeRequested).toBe(false);
+  });
+
+  it("requires resources and one descendant transfer settlement before the root barrier", () => {
+    const tree = createTree({
+      maxTotalDescendantRuns: 1,
+      maxActiveDescendantRuns: 1,
+      maxDescendantDepth: 1,
+    });
+    expect(reserve(tree, tree.rootLineage, "run-root", "run-child", 1).status)
+      .toBe("accepted");
+    expect(() => tree.settleRun(
+      "run-child", "succeeded", null, "2026-08-23T00:00:01.000Z",
+    )).toThrow("resource account");
+    tree.settleResources("run-child");
+    tree.settleRun("run-child", "succeeded", null, "2026-08-23T00:00:01.000Z");
+    tree.settleResources("run-root");
+    expect(() => tree.settleRun(
+      "run-root", "succeeded", null, "2026-08-23T00:00:02.000Z",
+    )).toThrow("descendant obligations remain");
+    tree.settleDescendantTransfer("run-child", "unknown");
+    tree.settleRun("run-root", "succeeded", null, "2026-08-23T00:00:02.000Z");
+    expect(tree.getSnapshot().settlement).toMatchObject({
+      complete: true,
+      unsettledDescendantRuns: 0,
+      unknownResultTransfers: 1,
+    });
+    expect(() => tree.settleDescendantTransfer("run-child", "settled"))
+      .toThrow("more than once");
   });
 
   it("invalidates an Action authority basis when authority, resources, or cancellation change", () => {
@@ -237,6 +308,32 @@ describe("RunTreeExecution", () => {
       reasonCode: "user_requested",
     });
     expect(tree.isAuthorityBasisCurrent("run-root", cancellationBasis)).toBe(false);
+  });
+
+  it("rejects Approval admission after cancellation without reporting capacity exhaustion", () => {
+    const tree = createTree({
+      maxTotalDescendantRuns: 1,
+      maxActiveDescendantRuns: 1,
+      maxDescendantDepth: 1,
+    });
+    const rootCancellation = cancellation("run-root");
+    tree.registerCancellation("run-root", rootCancellation);
+    const basis = tree.captureAuthorityBasis("run-root");
+    rootCancellation.requestCancellation({ origin: "user", reasonCode: "user_requested" });
+
+    expect(tree.admitApproval({
+      requestId: "approval-1",
+      runId: "run-root",
+      actionId: "action-1",
+      authorityRevision: basis.authorityRevision,
+      workspaceId: "workspace-1",
+      environmentId: "local",
+      operationFingerprint: "operation-1",
+    })).toEqual({
+      status: "rejected",
+      code: "approval_tree_cancelled",
+      revision: 0,
+    });
   });
 
   it("materializes root resource projection without a standalone tree notification", () => {
@@ -275,8 +372,19 @@ function createTree(limits: {
     deadlineAt: DEADLINE_AT,
     limits,
     resources: treeResources(),
+    approvals: approvalLimits(),
     rootAuthorityRevision: "root-authority-v1",
     now: () => now,
+  });
+}
+
+function approvalLimits() {
+  return Object.freeze({
+    maxTotalRequests: 20,
+    maxRequestsPerOperationFingerprint: 4,
+    maxConsecutiveDeclines: 3,
+    maxConsecutiveReviewerFailures: 3,
+    maxActiveReviews: 2,
   });
 }
 

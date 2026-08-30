@@ -12,6 +12,7 @@ import type {
   Runner,
 } from "@agent-anything/agent-runtime/runner";
 import { createHostRunManager } from "./HostRunManager.js";
+import { createTestRootRunTreeSnapshot } from "../testing/RunTreeTestSnapshot.js";
 
 describe("HostRunManager", () => {
   it("wraps one exact RunHandle and transports one generic Interaction submission", async () => {
@@ -328,29 +329,7 @@ function runStartedEvent(): RuntimeEvent {
 }
 
 function rootTree(runId: string): RunOperationSnapshot["runTree"] {
-  return Object.freeze({
-    rootRunId: runId,
-    revision: 0,
-    deadlineAt: "2026-08-13T00:01:00.000Z",
-    limits: Object.freeze({
-      maxDescendantDepth: 2,
-      maxTotalDescendantRuns: 4,
-      maxActiveDescendantRuns: 2,
-    }),
-    totalDescendantRuns: 0,
-    activeDescendantRuns: 0,
-    nodes: Object.freeze([Object.freeze({
-      runId,
-      parentRunId: null,
-      relationId: null,
-      parentRunActionId: null,
-      depth: 0,
-      status: "initializing" as const,
-      resultCode: null,
-      startedAt: NOW,
-      completedAt: null,
-    })]),
-  });
+  return createTestRootRunTreeSnapshot(runId, NOW);
 }
 
 function succeededResult() {

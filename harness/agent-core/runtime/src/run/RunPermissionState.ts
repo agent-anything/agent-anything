@@ -13,14 +13,6 @@ export interface RunPermissionState {
   readonly runPermissionGrants: readonly RunPermissionGrant[];
   readonly sessionAuthorityRecords: readonly SessionAuthorityRecord[];
   readonly appliedPolicyAmendments: readonly AppliedPolicyAmendmentRecord[];
-  readonly approvalActivity: ApprovalActivity;
-}
-
-export interface ApprovalActivity {
-  readonly requestCount: number;
-  readonly requestsByActionFingerprint: Readonly<Record<string, number>>;
-  readonly consecutiveDeclines: number;
-  readonly consecutiveReviewFailures: number;
 }
 
 export interface EffectivePermissionContext {
@@ -54,12 +46,6 @@ export function createInitialRunPermissionState(config: ResolvedRunPermissionCon
     runPermissionGrants: [],
     sessionAuthorityRecords: [...(config.sessionAuthority?.initialRecords ?? [])],
     appliedPolicyAmendments: [],
-    approvalActivity: {
-      requestCount: 0,
-      requestsByActionFingerprint: {},
-      consecutiveDeclines: 0,
-      consecutiveReviewFailures: 0,
-    },
   });
 }
 
@@ -108,15 +94,6 @@ export function projectPermissionContext(
 export function assertRunPermissionStateInvariant(state: RunPermissionState): void {
   for (const field of ["actionCoverage", "runPermissionGrants", "sessionAuthorityRecords", "appliedPolicyAmendments"] as const) {
     if (!Array.isArray(state[field])) throw new TypeError(`RunPermissionState.${field} must be an array.`);
-  }
-  const activity = state.approvalActivity;
-  if (
-    activity === null || typeof activity !== "object" ||
-    !Number.isSafeInteger(activity.requestCount) || activity.requestCount < 0 ||
-    !Number.isSafeInteger(activity.consecutiveDeclines) || activity.consecutiveDeclines < 0 ||
-    !Number.isSafeInteger(activity.consecutiveReviewFailures) || activity.consecutiveReviewFailures < 0
-  ) {
-    throw new TypeError("RunPermissionState.approvalActivity is invalid.");
   }
 }
 

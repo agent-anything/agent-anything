@@ -35,6 +35,7 @@ export type {
   RunRetryProjection,
 } from "./RunHandle.js";
 export type {
+  RunTreeApprovalTreeAdmission,
   RunTreeExecutionSnapshot,
   RunTreeNodeProjection,
 } from "./RunTreeExecution.js";
@@ -50,4 +51,12 @@ export type {
   RunTreeResourceSnapshot,
   RunTreeResourceUsage,
 } from "./RunTreeResourceAccount.js";
+export type {
+  RunTreeApprovalAdmission,
+  RunTreeApprovalAdmissionInput,
+  RunTreeApprovalLimitCode,
+  RunTreeApprovalLimits,
+  RunTreeApprovalSettlementKind,
+  RunTreeApprovalSnapshot,
+} from "./RunTreeApprovalAccount.js";
 export { Runner } from "./Runner.js";

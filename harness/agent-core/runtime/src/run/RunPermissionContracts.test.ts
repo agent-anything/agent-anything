@@ -298,12 +298,6 @@ function createPermissionConfig(
     managedConstraints: constraints,
     sessionAuthority: null,
     persistentPolicyAmendments: null,
-    approvalLimits: {
-      maxRequestsPerRun: 8,
-      maxRequestsPerActionFingerprint: 2,
-      maxConsecutiveDeclines: 3,
-      maxConsecutiveReviewFailures: 3,
-    },
     authorityApplicationLimits: { commitTimeoutMs: 1_000 },
     ...overrides,
   };

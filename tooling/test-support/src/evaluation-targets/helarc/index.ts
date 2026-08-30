@@ -94,6 +94,10 @@ export {
   HELARC_RUN_STOP_EXECUTION_TRUTH_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcRunStopExecutionTruthBaseline.js";
 export {
+  HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE,
+  HELARC_RUN_TREE_RESOURCE_AUTHORITY_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcRunTreeResourceAuthorityBaseline.js";
+export {
   HELARC_RUN_STOP_OPERATIONAL_ACCEPTED_BASELINE,
   HELARC_RUN_STOP_OPERATIONAL_BASELINE_ACCEPTANCE,
   verifyHelarcRunStopOperationalAcceptedBaseline,

@@ -17,6 +17,7 @@ import {
   FileHelarcThreadStore,
   HelarcThreadStoreCorruptionError,
 } from "./FileHelarcThreadStore.js";
+import { createHelarcRunTreeTestSnapshot } from "../../shared/testing/HelarcRunTreeTestSnapshot.js";
 
 const STARTED_AT = "2026-07-18T00:00:00.000Z";
 const PROGRESS_AT = "2026-07-18T00:00:10.000Z";
@@ -339,29 +340,11 @@ function projectionCommit(
         instructionBinding: null,
         status: "running",
         startedAt: STARTED_AT,
-        runTree: {
-          rootRunId: "run-1",
-          revision: 0,
+        runTree: createHelarcRunTreeTestSnapshot({
+          runId: "run-1",
+          startedAt: STARTED_AT,
           deadlineAt: "2026-08-17T00:01:00.000Z",
-          limits: {
-            maxDescendantDepth: 2,
-            maxTotalDescendantRuns: 4,
-            maxActiveDescendantRuns: 2,
-          },
-          totalDescendantRuns: 0,
-          activeDescendantRuns: 0,
-          nodes: [{
-            runId: "run-1",
-            parentRunId: null,
-            relationId: null,
-            parentRunActionId: null,
-            depth: 0,
-            status: "running",
-            resultCode: null,
-            startedAt: STARTED_AT,
-            completedAt: null,
-          }],
-        },
+        }),
         activeDelegations: [],
         plan: null,
         stopReview: {

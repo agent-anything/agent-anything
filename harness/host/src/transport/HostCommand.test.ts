@@ -17,6 +17,7 @@ import {
   type HostRunCancellationCommand,
   type HostRunSteeringCommand,
 } from "./HostCommand.js";
+import { createTestRootRunTreeSnapshot } from "../testing/RunTreeTestSnapshot.js";
 
 describe("Host command transport", () => {
   it("snapshots only the exact versioned cancellation and Interaction shapes", () => {
@@ -262,29 +263,7 @@ function fakeActiveRun(runId = "run-1") {
 }
 
 function rootTree(runId: string) {
-  return {
-    rootRunId: runId,
-    revision: 0,
-    deadlineAt: "2026-08-13T00:01:00.000Z",
-    limits: {
-      maxDescendantDepth: 2,
-      maxTotalDescendantRuns: 4,
-      maxActiveDescendantRuns: 2,
-    },
-    totalDescendantRuns: 0,
-    activeDescendantRuns: 0,
-    nodes: [{
-      runId,
-      parentRunId: null,
-      relationId: null,
-      parentRunActionId: null,
-      depth: 0,
-      status: "initializing" as const,
-      resultCode: null,
-      startedAt: NOW,
-      completedAt: null,
-    }],
-  };
+  return createTestRootRunTreeSnapshot(runId, NOW);
 }
 
 const REQUEST: InteractionRequestRef = Object.freeze({

@@ -72,6 +72,7 @@ describe("Runner and generic Host conformance", () => {
     const entered = deferred<void>();
     const release = deferred<void>();
     const controller: Controller<TestOutput> = {
+      resourceMetering: TEST_RESOURCE_METERING,
       async next(input) {
         entered.resolve();
         await release.promise;
@@ -102,10 +103,18 @@ describe("Runner and generic Host conformance", () => {
 });
 
 class CompletionController implements Controller<TestOutput> {
+  readonly resourceMetering = TEST_RESOURCE_METERING;
+
   async next(input: ControllerInput<TestOutput>): Promise<ControllerDecision<TestOutput>> {
     return completionDecision(input, "Done");
   }
 }
+
+const TEST_RESOURCE_METERING = Object.freeze({
+  modelInputTokens: "not_applicable" as const,
+  modelOutputTokens: "not_applicable" as const,
+  costUnits: "not_applicable" as const,
+});
 
 function createManager(controller: Controller<TestOutput>) {
   const runner = new Runner({
@@ -231,7 +240,7 @@ function createRunInput(): RunInput {
   };
 }
 
-function createRunConfig(tools: RunConfig["tools"]): RunConfig {
+function createRunConfig(tools: RunConfig["tools"]): import("@agent-anything/agent-runtime/runner").RootRunConfig {
   return {
     workspace: {
       primary: {
@@ -275,6 +284,22 @@ function createRunConfig(tools: RunConfig["tools"]): RunConfig {
       maxTotalDescendantRuns: 1,
       maxActiveDescendantRuns: 1,
       maxDescendantDepth: 1,
+    },
+    runTreeResources: {
+      controllerTurns: { maximum: 32, enforcement: "hard" },
+      actions: { maximum: 32, enforcement: "hard" },
+      modelInputTokens: { maximum: 100_000, enforcement: "observational" },
+      modelOutputTokens: { maximum: 100_000, enforcement: "observational" },
+      costUnits: { maximum: 100_000, enforcement: "observational" },
+      contextBytes: { maximum: 1_000_000, enforcement: "hard" },
+      resultBytes: { maximum: 1_000_000, enforcement: "hard" },
+    },
+    runTreeApprovals: {
+      maxTotalRequests: 4,
+      maxRequestsPerOperationFingerprint: 2,
+      maxConsecutiveDeclines: 2,
+      maxConsecutiveReviewerFailures: 2,
+      maxActiveReviews: 2,
     },
     audit: "optional",
     telemetry: "optional",
@@ -353,12 +378,6 @@ function permissionConfig(): ResolvedRunPermissionConfig {
     managedConstraints,
     sessionAuthority: null,
     persistentPolicyAmendments: null,
-    approvalLimits: {
-      maxRequestsPerRun: 4,
-      maxRequestsPerActionFingerprint: 2,
-      maxConsecutiveDeclines: 2,
-      maxConsecutiveReviewFailures: 2,
-    },
     authorityApplicationLimits: { commitTimeoutMs: 1_000 },
   };
 }

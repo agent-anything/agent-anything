@@ -3843,6 +3843,7 @@ function createRunConfig(
       ...overrides.runTreeLimits,
     },
     runTreeResources: overrides.runTreeResources ?? testRunTreeResources(),
+    runTreeApprovals: testRunTreeApprovals(),
     audit: "optional",
     telemetry: "optional",
     cancellationLimits: {
@@ -3869,6 +3870,16 @@ function testRunTreeResources(): RootRunConfig["runTreeResources"] {
     costUnits: Object.freeze({ maximum: 1_000_000, enforcement: "hard" as const }),
     contextBytes: Object.freeze({ maximum: 8_000_000, enforcement: "hard" as const }),
     resultBytes: Object.freeze({ maximum: 2_000_000, enforcement: "hard" as const }),
+  });
+}
+
+function testRunTreeApprovals(): RootRunConfig["runTreeApprovals"] {
+  return Object.freeze({
+    maxTotalRequests: 16,
+    maxRequestsPerOperationFingerprint: 4,
+    maxConsecutiveDeclines: 3,
+    maxConsecutiveReviewerFailures: 3,
+    maxActiveReviews: 4,
   });
 }
 
@@ -4307,12 +4318,6 @@ function createTestPermissionConfig(): ResolvedRunPermissionConfig {
     managedConstraints,
     sessionAuthority: null,
     persistentPolicyAmendments: null,
-    approvalLimits: {
-      maxRequestsPerRun: 8,
-      maxRequestsPerActionFingerprint: 2,
-      maxConsecutiveDeclines: 3,
-      maxConsecutiveReviewFailures: 3,
-    },
     authorityApplicationLimits: { commitTimeoutMs: 1_000 },
   };
 }

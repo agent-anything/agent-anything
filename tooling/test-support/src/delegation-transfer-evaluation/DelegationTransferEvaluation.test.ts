@@ -17,13 +17,13 @@ describe("Delegation Transfer deterministic Evaluation", () => {
       completionRate: 1,
       toolCallCount: 2,
       modelTurnCount: 8,
-      latencyMs: 295,
+      latencyMs: 277,
       humanInteractionEvents: 0,
       terminalOutcome: "succeeded",
     });
     expect(Object.values(report.invariants).every(Boolean)).toBe(true);
     expect(report).toMatchObject({
-      revision: "delegation-transfer-deterministic-evaluation-v3",
+      revision: "delegation-transfer-deterministic-evaluation-v4",
       descendantRunCount: 2,
       settledResultCount: 2,
       prohibitedDisclosureCount: 0,

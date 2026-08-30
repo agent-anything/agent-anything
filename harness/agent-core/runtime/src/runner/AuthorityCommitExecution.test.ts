@@ -320,12 +320,6 @@ function createConfig(
     managedConstraints,
     sessionAuthority: null,
     persistentPolicyAmendments: { commit },
-    approvalLimits: {
-      maxRequestsPerRun: 4,
-      maxRequestsPerActionFingerprint: 2,
-      maxConsecutiveDeclines: 2,
-      maxConsecutiveReviewFailures: 2,
-    },
     authorityApplicationLimits: { commitTimeoutMs: 1_000 },
   };
 }

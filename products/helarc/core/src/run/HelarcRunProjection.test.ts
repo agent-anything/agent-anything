@@ -2,6 +2,10 @@ import {
   createHostRunProjection,
   type HostRunProjection,
 } from "@agent-anything/host/projection";
+import type {
+  RunTreeNodeResourceSnapshot,
+  RunTreeResourceSnapshot,
+} from "@agent-anything/agent-runtime/runner";
 import { describe, expect, it } from "vitest";
 import type { HelarcActivityItem, HelarcProductResult } from "../composition/index.js";
 import {
@@ -227,6 +231,38 @@ function hostProjection(
         },
         totalDescendantRuns: 0,
         activeDescendantRuns: 0,
+        resources: runTreeResources(),
+        approvals: {
+          limits: {
+            maxTotalRequests: 8,
+            maxRequestsPerOperationFingerprint: 2,
+            maxConsecutiveDeclines: 3,
+            maxConsecutiveReviewerFailures: 3,
+            maxActiveReviews: 2,
+          },
+          revision: 0,
+          totalRequests: 0,
+          activeReviews: 0,
+          settledRequests: 0,
+          uniqueOperationFingerprints: 0,
+          maxEquivalentOperationRequests: 0,
+          consecutiveDeclines: 0,
+          consecutiveReviewerFailures: 0,
+          exhaustedCode: null,
+        },
+        cancellation: {
+          totalRequests: 0,
+          treeRequested: false,
+          subtreeRequests: 0,
+          latest: null,
+        },
+        settlement: {
+          complete: false,
+          unsettledDescendantRuns: 0,
+          pendingResultTransfers: 0,
+          failedResultTransfers: 0,
+          unknownResultTransfers: 0,
+        },
         nodes: [{
           runId: "harness-run-1",
           parentRunId: null,
@@ -237,11 +273,69 @@ function hostProjection(
           resultCode: null,
           startedAt: "2026-07-17T00:00:00.000Z",
           completedAt: null,
+          resources: runTreeNodeResources(),
+          authorityRevision: "authority-root-1",
+          cancellation: null,
+          resultTransfer: "not_required",
         }],
       },
     }),
     ...overrides,
   };
+}
+
+function runTreeResources(): RunTreeResourceSnapshot {
+  const resource = () => ({
+    capacity: 100,
+    consumed: 0,
+    reserved: 0,
+    remaining: 100,
+    released: 0,
+    measurementStatus: "measured" as const,
+    enforcement: "hard" as const,
+  });
+  return {
+    controllerTurns: resource(),
+    actions: resource(),
+    modelInputTokens: resource(),
+    modelOutputTokens: resource(),
+    costUnits: resource(),
+    contextBytes: resource(),
+    resultBytes: resource(),
+  };
+}
+
+function runTreeNodeResources(): RunTreeNodeResourceSnapshot {
+  const amounts = Object.freeze({
+    controllerTurns: 100,
+    actions: 100,
+    modelInputTokens: 100,
+    modelOutputTokens: 100,
+    costUnits: 100,
+    contextBytes: 100,
+    resultBytes: 100,
+  });
+  const measurement = () => Object.freeze({
+    status: "measured" as const,
+    value: 0,
+  });
+  return Object.freeze({
+    runId: "harness-run-1",
+    parentRunId: null,
+    allocation: amounts,
+    remaining: amounts,
+    usage: Object.freeze({
+      controllerTurns: measurement(),
+      actions: measurement(),
+      modelInputTokens: measurement(),
+      modelOutputTokens: measurement(),
+      costUnits: measurement(),
+      contextBytes: measurement(),
+      resultBytes: measurement(),
+    }),
+    settled: false,
+    revision: 0,
+  });
 }
 
 function activity(sequence: number): HelarcActivityItem {

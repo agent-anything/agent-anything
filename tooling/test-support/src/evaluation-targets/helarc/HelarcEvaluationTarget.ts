@@ -762,6 +762,13 @@ async function invokeHelarcTarget<TCase extends HelarcEvaluationExecutableCase>(
         contextBytes: { maximum: 8_000_000, enforcement: "hard" },
         resultBytes: { maximum: 2_000_000, enforcement: "hard" },
       },
+      runTreeApprovals: {
+        maxTotalRequests: 8,
+        maxRequestsPerOperationFingerprint: 2,
+        maxConsecutiveDeclines: 3,
+        maxConsecutiveReviewerFailures: 3,
+        maxActiveReviews: 2,
+      },
       audit: "optional",
       telemetry: "optional",
       cancellationLimits: {
@@ -1458,12 +1465,6 @@ async function createEvaluationPermissionConfig(input: EvaluationPermissionInput
       maxInitialRecords: 64,
     },
     persistentPolicyAmendments: policyAmendments,
-    approvalLimits: {
-      maxRequestsPerRun: 8,
-      maxRequestsPerActionFingerprint: 2,
-      maxConsecutiveDeclines: 3,
-      maxConsecutiveReviewFailures: 3,
-    },
     authorityApplicationLimits: { commitTimeoutMs: 5_000 },
     interruption: Object.freeze({ signal: interruption.signal, interruption: null }),
   });

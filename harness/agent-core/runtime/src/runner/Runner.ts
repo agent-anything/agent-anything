@@ -143,6 +143,7 @@ export class Runner {
       deadlineAt,
       limits: configSnapshot.config.runTreeLimits,
       resources: configSnapshot.config.runTreeResources,
+      approvals: configSnapshot.config.runTreeApprovals,
       rootAuthorityRevision: `${runId}:authority`,
       now: this.dependencies.now,
     });

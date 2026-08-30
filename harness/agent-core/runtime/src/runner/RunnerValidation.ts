@@ -22,6 +22,7 @@ import type {
   ValidatedRunConfig,
 } from "./RunConfig.js";
 import { snapshotRunTreeResourceEnvelope } from "./RunTreeResourceAccount.js";
+import { snapshotRunTreeApprovalLimits } from "./RunTreeApprovalAccount.js";
 import { snapshotCompletionGateConfiguration } from "@agent-anything/verification/completion";
 import { snapshotVerificationProfile } from "@agent-anything/verification/definition";
 import { assertRunStopReviewLimits } from "../stop/index.js";
@@ -155,12 +156,14 @@ export function snapshotRootRunConfig(
   try {
     const runTreeLimits = snapshotRunTreeLimits(config.runTreeLimits);
     const runTreeResources = snapshotRunTreeResourceEnvelope(config.runTreeResources);
+    const runTreeApprovals = snapshotRunTreeApprovalLimits(config.runTreeApprovals);
     return Object.freeze({
       valid: true as const,
       config: Object.freeze({
         ...run.config,
         runTreeLimits,
         runTreeResources,
+        runTreeApprovals,
       }),
     });
   } catch (error) {

@@ -17,6 +17,7 @@ import type {
   RunOperationSnapshot,
   RunRetryProjection,
   RunTreeExecutionSnapshot,
+  RunTreeResourceDimension,
 } from "@agent-anything/agent-runtime/runner";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { InteractionRequestRef } from "@agent-anything/interaction/protocol";
@@ -110,6 +111,35 @@ export interface HostRunTreeNodeProjection {
   readonly resultCode: RunResultCode | null;
   readonly startedAt: string | null;
   readonly completedAt: string | null;
+  readonly resourcesSettled: boolean;
+  readonly resultTransfer: "pending" | "settled" | "failed" | "unknown" | "not_required";
+  readonly cancellationScope: "subtree" | "tree" | null;
+}
+
+export interface HostRunTreeResourceDimensionProjection {
+  readonly capacity: number;
+  readonly consumed: number;
+  readonly reserved: number;
+  readonly remaining: number;
+  readonly released: number;
+  readonly measurementStatus: "measured" | "unavailable" | "not_applicable" | "unknown";
+  readonly enforcement: "hard" | "observational";
+}
+
+export type HostRunTreeResourcesProjection = Readonly<Record<
+  RunTreeResourceDimension,
+  HostRunTreeResourceDimensionProjection
+>>;
+
+export interface HostRunTreeApprovalProjection {
+  readonly totalRequests: number;
+  readonly activeReviews: number;
+  readonly settledRequests: number;
+  readonly uniqueOperationFingerprints: number;
+  readonly maxEquivalentOperationRequests: number;
+  readonly consecutiveDeclines: number;
+  readonly consecutiveReviewerFailures: number;
+  readonly exhaustedCode: string | null;
 }
 
 export interface HostRunTreeProjection {
@@ -119,6 +149,24 @@ export interface HostRunTreeProjection {
   readonly limits: HostRunTreeLimitsProjection;
   readonly totalDescendantRuns: number;
   readonly activeDescendantRuns: number;
+  readonly resources: HostRunTreeResourcesProjection;
+  readonly approvals: HostRunTreeApprovalProjection;
+  readonly cancellation: {
+    readonly totalRequests: number;
+    readonly treeRequested: boolean;
+    readonly subtreeRequests: number;
+    readonly latestScope: "subtree" | "tree" | null;
+    readonly latestOrigin: string | null;
+    readonly latestReasonCode: string | null;
+    readonly latestRequestedAt: string | null;
+  };
+  readonly settlement: {
+    readonly complete: boolean;
+    readonly unsettledDescendantRuns: number;
+    readonly pendingResultTransfers: number;
+    readonly failedResultTransfers: number;
+    readonly unknownResultTransfers: number;
+  };
   readonly nodes: readonly HostRunTreeNodeProjection[];
 }
 
@@ -402,6 +450,9 @@ function projectRunTree(input: RunTreeExecutionSnapshot): HostRunTreeProjection 
     resultCode: node.resultCode,
     startedAt: node.startedAt,
     completedAt: node.completedAt,
+    resourcesSettled: node.resources.settled,
+    resultTransfer: node.resultTransfer,
+    cancellationScope: node.cancellation?.scope ?? null,
   }));
   return Object.freeze({
     rootRunId: input.rootRunId,
@@ -410,6 +461,32 @@ function projectRunTree(input: RunTreeExecutionSnapshot): HostRunTreeProjection 
     limits: Object.freeze({ ...input.limits }),
     totalDescendantRuns: input.totalDescendantRuns,
     activeDescendantRuns: input.activeDescendantRuns,
+    resources: Object.freeze(Object.fromEntries(
+      Object.entries(input.resources).map(([dimension, resource]) => [
+        dimension,
+        Object.freeze({ ...resource }),
+      ]),
+    )) as HostRunTreeResourcesProjection,
+    approvals: Object.freeze({
+      totalRequests: input.approvals.totalRequests,
+      activeReviews: input.approvals.activeReviews,
+      settledRequests: input.approvals.settledRequests,
+      uniqueOperationFingerprints: input.approvals.uniqueOperationFingerprints,
+      maxEquivalentOperationRequests: input.approvals.maxEquivalentOperationRequests,
+      consecutiveDeclines: input.approvals.consecutiveDeclines,
+      consecutiveReviewerFailures: input.approvals.consecutiveReviewerFailures,
+      exhaustedCode: input.approvals.exhaustedCode,
+    }),
+    cancellation: Object.freeze({
+      totalRequests: input.cancellation.totalRequests,
+      treeRequested: input.cancellation.treeRequested,
+      subtreeRequests: input.cancellation.subtreeRequests,
+      latestScope: input.cancellation.latest?.scope ?? null,
+      latestOrigin: input.cancellation.latest?.origin ?? null,
+      latestReasonCode: input.cancellation.latest?.reasonCode ?? null,
+      latestRequestedAt: input.cancellation.latest?.requestedAt ?? null,
+    }),
+    settlement: Object.freeze({ ...input.settlement }),
     nodes: Object.freeze(nodes),
   });
 }

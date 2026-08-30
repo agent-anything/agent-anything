@@ -63,7 +63,7 @@ export interface ActionApprovalResolutionPort {
         readonly authoritySnapshotId: string;
       }
     | {
-        readonly status: "denied" | "cancelled" | "expired" | "invalidated";
+        readonly status: "denied" | "cancelled" | "expired" | "invalidated" | "limit_exceeded";
         readonly code: string;
       }
     | { readonly status: "failed" | "interrupted" | "unknown_effect"; readonly code: string }
@@ -333,7 +333,7 @@ export class ActionExecutionCoordinator {
                 : approval.status === "unknown_effect"
                   ? "unknown_effect"
                   : "failed",
-          "permission",
+          approval.status === "limit_exceeded" ? "agent-runtime" : "permission",
           approval.code,
         );
       }

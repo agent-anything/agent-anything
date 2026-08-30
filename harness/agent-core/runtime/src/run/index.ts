@@ -38,7 +38,6 @@ export type {
   RuntimeRunActionSubject,
 } from "./RunItem.js";
 export type {
-  ApprovalLimits,
   ApprovalReviewerBinding,
   AuthorityApplicationLimits,
   ResolvedRunPermissionConfig,

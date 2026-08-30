@@ -112,12 +112,6 @@ function baseInput() {
     managedConstraints: managedConstraints(),
     sessionAuthority: null,
     persistentPolicyAmendments: null,
-    approvalLimits: {
-      maxRequestsPerRun: 8,
-      maxRequestsPerActionFingerprint: 2,
-      maxConsecutiveDeclines: 3,
-      maxConsecutiveReviewFailures: 3,
-    },
     authorityApplicationLimits: { commitTimeoutMs: 5_000 },
     interruption: interruptionContext(),
   };

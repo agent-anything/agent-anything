@@ -11,6 +11,9 @@ import {
 import type { RunActionRef } from "@agent-anything/agent-core/run-action";
 import type {
   RunCancellationController,
+  RunCancellationRequest,
+  RunCancellationRequestInput,
+  RunCancellationReceipt,
   RunResultCode,
 } from "../run/index.js";
 import type { RunTreeLimits } from "./RunConfig.js";
@@ -24,6 +27,40 @@ import {
   type RunTreeResourceSettlement,
   type RunTreeResourceSnapshot,
 } from "./RunTreeResourceAccount.js";
+import {
+  RunTreeApprovalAccount,
+  type RunTreeApprovalAdmission,
+  type RunTreeApprovalAdmissionInput,
+  type RunTreeApprovalLimits,
+  type RunTreeApprovalSettlementKind,
+  type RunTreeApprovalSnapshot,
+} from "./RunTreeApprovalAccount.js";
+
+export type RunTreeCancellationScope = "subtree" | "tree";
+export type DescendantResultTransferStatus =
+  | "pending"
+  | "settled"
+  | "failed"
+  | "unknown"
+  | "not_required";
+
+export interface RunTreeCancellationProjection {
+  readonly requestId: string;
+  readonly initiatingRunId: string;
+  readonly scope: RunTreeCancellationScope;
+  readonly origin: RunCancellationRequest["origin"];
+  readonly reasonCode: RunCancellationRequest["reasonCode"];
+  readonly requestedAt: string;
+}
+
+export type RunTreeApprovalTreeAdmission = RunTreeApprovalAdmission | {
+  readonly status: "rejected";
+  readonly code:
+    | "approval_tree_cancelled"
+    | "approval_tree_run_settled"
+    | "approval_tree_authority_stale";
+  readonly revision: number;
+};
 
 export type DescendantRunReservationFailureCode =
   | "descendant_run_start_cancelled"
@@ -73,6 +110,23 @@ export interface RunTreeNodeProjection {
   readonly completedAt: string | null;
   readonly resources: RunTreeNodeResourceSnapshot;
   readonly authorityRevision: string;
+  readonly cancellation: RunTreeCancellationProjection | null;
+  readonly resultTransfer: DescendantResultTransferStatus;
+}
+
+export interface RunTreeSettlementProjection {
+  readonly complete: boolean;
+  readonly unsettledDescendantRuns: number;
+  readonly pendingResultTransfers: number;
+  readonly failedResultTransfers: number;
+  readonly unknownResultTransfers: number;
+}
+
+export interface RunTreeCancellationSummaryProjection {
+  readonly totalRequests: number;
+  readonly treeRequested: boolean;
+  readonly subtreeRequests: number;
+  readonly latest: RunTreeCancellationProjection | null;
 }
 
 export interface RunTreeExecutionSnapshot {
@@ -83,6 +137,9 @@ export interface RunTreeExecutionSnapshot {
   readonly totalDescendantRuns: number;
   readonly activeDescendantRuns: number;
   readonly resources: RunTreeResourceSnapshot;
+  readonly approvals: RunTreeApprovalSnapshot;
+  readonly cancellation: RunTreeCancellationSummaryProjection;
+  readonly settlement: RunTreeSettlementProjection;
   readonly nodes: readonly RunTreeNodeProjection[];
 }
 
@@ -130,6 +187,8 @@ interface MutableRunTreeNode {
   completedAt: string | null;
   readonly admittedAuthorityRevision: string;
   authorityRevisionSequence: number;
+  cancellation: RunTreeCancellationProjection | null;
+  resultTransfer: DescendantResultTransferStatus;
 }
 
 interface CancellationRegistration {
@@ -143,6 +202,7 @@ export interface CreateRunTreeExecutionInput {
   readonly deadlineAt: string;
   readonly limits: RunTreeLimits;
   readonly resources: RunTreeResourceEnvelope;
+  readonly approvals: RunTreeApprovalLimits;
   readonly rootAuthorityRevision: string;
   readonly now: () => string;
 }
@@ -153,12 +213,16 @@ export class RunTreeExecution {
   private readonly input: CreateRunTreeExecutionInput;
   private readonly nodes = new Map<string, MutableRunTreeNode>();
   private readonly resources: RunTreeResourceAccount;
+  private readonly approvals: RunTreeApprovalAccount;
   private readonly cancellation = new Map<string, CancellationRegistration>();
   private readonly listeners = new Set<RunTreeExecutionListener>();
   private revision = 0;
   private projectionDirty = false;
   private totalDescendantRuns = 0;
   private activeDescendantRuns = 0;
+  private unsettledDescendantRuns = 0;
+  private cancellationRequestCount = 0;
+  private latestCancellation: RunTreeCancellationProjection | null = null;
   private snapshot: RunTreeExecutionSnapshot;
 
   constructor(input: CreateRunTreeExecutionInput) {
@@ -174,6 +238,7 @@ export class RunTreeExecution {
     });
     assertToken(input.rootAuthorityRevision, "rootAuthorityRevision");
     this.resources = new RunTreeResourceAccount(input.rootRunId, input.resources);
+    this.approvals = new RunTreeApprovalAccount(input.approvals);
     this.rootLineage = createRootRunLineage({ id: input.rootRunId });
     this.nodes.set(input.rootRunId, {
       lineage: this.rootLineage,
@@ -184,6 +249,8 @@ export class RunTreeExecution {
       completedAt: null,
       admittedAuthorityRevision: input.rootAuthorityRevision,
       authorityRevisionSequence: 0,
+      cancellation: null,
+      resultTransfer: "not_required",
     });
     this.snapshot = this.createSnapshot();
   }
@@ -241,6 +308,7 @@ export class RunTreeExecution {
     }
     this.totalDescendantRuns += 1;
     this.activeDescendantRuns += 1;
+    this.unsettledDescendantRuns += 1;
     this.nodes.set(childRunId, {
       lineage,
       acceptedOrder: this.totalDescendantRuns,
@@ -250,6 +318,8 @@ export class RunTreeExecution {
       completedAt: null,
       admittedAuthorityRevision: input.authorityRevision,
       authorityRevisionSequence: 0,
+      cancellation: null,
+      resultTransfer: "pending",
     });
     this.commitProjectionChange();
     return Object.freeze({
@@ -286,6 +356,45 @@ export class RunTreeExecution {
   getResourceSettlement(runId: string): RunTreeResourceSettlement | null {
     this.requireNode(runId);
     return this.resources.getSettlement(runId);
+  }
+
+  admitApproval(
+    input: RunTreeApprovalAdmissionInput,
+  ): RunTreeApprovalTreeAdmission {
+    const node = this.requireNode(input.runId);
+    if (isTerminal(node.status)) {
+      return Object.freeze({
+        status: "rejected" as const,
+        code: "approval_tree_run_settled" as const,
+        revision: this.approvals.getSnapshot().revision,
+      });
+    }
+    if (this.isCancellationRequested(input.runId)) {
+      return Object.freeze({
+        status: "rejected" as const,
+        code: "approval_tree_cancelled" as const,
+        revision: this.approvals.getSnapshot().revision,
+      });
+    }
+    if (input.authorityRevision !== this.currentAuthorityRevision(input.runId)) {
+      return Object.freeze({
+        status: "rejected" as const,
+        code: "approval_tree_authority_stale" as const,
+        revision: this.approvals.getSnapshot().revision,
+      });
+    }
+    const admission = this.approvals.admit(input);
+    if (admission.status === "accepted") this.commitProjectionChange();
+    return admission;
+  }
+
+  settleApproval(
+    requestId: string,
+    kind: RunTreeApprovalSettlementKind,
+  ): RunTreeApprovalSnapshot {
+    const snapshot = this.approvals.settle(requestId, kind);
+    this.commitProjectionChange();
+    return snapshot;
   }
 
   advanceAuthorityRevision(runId: string): string {
@@ -334,11 +443,11 @@ export class RunTreeExecution {
     if (this.cancellation.has(runId)) {
       throw new TypeError("Run cancellation control is already registered.");
     }
-    const onAbort = () => this.cancelDescendants(runId);
+    const onAbort = () => this.propagateCancellation(runId);
     this.cancellation.set(runId, { controller, onAbort });
     controller.context.signal.addEventListener("abort", onAbort, { once: true });
     if (controller.context.request !== null) {
-      this.cancelDescendants(runId);
+      this.propagateCancellation(runId);
     }
   }
 
@@ -377,9 +486,22 @@ export class RunTreeExecution {
   ): void {
     assertDateTime(completedAt, "completedAt");
     const node = this.requireNode(runId);
-    if (isTerminal(node.status)) return;
-    if (runId === this.input.rootRunId && this.activeDescendantRuns !== 0) {
-      throw new TypeError("The root Run cannot settle while descendants remain active.");
+    if (isTerminal(node.status)) {
+      throw new TypeError("A Run cannot settle more than once.");
+    }
+    if (this.resources.getSettlement(runId) === null) {
+      throw new TypeError("A Run cannot settle before its resource account.");
+    }
+    if (this.hasUnsettledDescendantObligations(runId)) {
+      throw new TypeError("A Run cannot settle while descendant obligations remain.");
+    }
+    if (
+      runId === this.input.rootRunId &&
+      (this.activeDescendantRuns !== 0 ||
+        this.unsettledDescendantRuns !== 0 ||
+        this.approvals.getSnapshot().activeReviews !== 0)
+    ) {
+      throw new TypeError("The root Run cannot settle before the aggregate barrier closes.");
     }
     node.status = status;
     node.resultCode = resultCode;
@@ -393,6 +515,26 @@ export class RunTreeExecution {
 
   failStart(runId: string, completedAt: string): void {
     this.settleRun(runId, "failed", "runtime_execution_failed", completedAt);
+    this.settleDescendantTransfer(runId, "not_required");
+  }
+
+  settleDescendantTransfer(
+    runId: string,
+    status: Exclude<DescendantResultTransferStatus, "pending">,
+  ): void {
+    const node = this.requireNode(runId);
+    if (node.lineage.kind === "root") {
+      throw new TypeError("The root Run has no parent result-transfer obligation.");
+    }
+    if (!isTerminal(node.status) || this.resources.getSettlement(runId) === null) {
+      throw new TypeError("Descendant transfer cannot settle before Run and resources.");
+    }
+    if (node.resultTransfer !== "pending") {
+      throw new TypeError("Descendant result transfer cannot settle more than once.");
+    }
+    node.resultTransfer = status;
+    this.unsettledDescendantRuns -= 1;
+    this.commitProjectionChange();
   }
 
   hasActiveDescendants(ancestorRunId = this.input.rootRunId): boolean {
@@ -425,7 +567,35 @@ export class RunTreeExecution {
     };
   }
 
-  private cancelDescendants(parentRunId: string): void {
+  requestCancellation(
+    runId: string,
+    input: RunCancellationRequestInput,
+  ): RunCancellationReceipt {
+    const registration = this.cancellation.get(runId);
+    if (registration === undefined) {
+      throw new TypeError(`Run '${runId}' has no active cancellation control.`);
+    }
+    return registration.controller.requestCancellation(input);
+  }
+
+  private propagateCancellation(parentRunId: string): void {
+    const initiating = this.cancellation.get(parentRunId)?.controller.context.request;
+    if (initiating === null || initiating === undefined) return;
+    const node = this.requireNode(parentRunId);
+    if (node.cancellation === null) {
+      const projection = Object.freeze({
+        requestId: initiating.id,
+        initiatingRunId: parentRunId,
+        scope: parentRunId === this.input.rootRunId ? "tree" as const : "subtree" as const,
+        origin: initiating.origin,
+        reasonCode: initiating.reasonCode,
+        requestedAt: initiating.requestedAt,
+      });
+      node.cancellation = projection;
+      this.latestCancellation = projection;
+      this.cancellationRequestCount += 1;
+      this.commitProjectionChange();
+    }
     for (const [runId, registration] of [...this.cancellation]) {
       if (runId === parentRunId || !this.isDescendantOf(runId, parentRunId)) {
         continue;
@@ -439,7 +609,22 @@ export class RunTreeExecution {
   }
 
   private isCancellationRequested(runId: string): boolean {
+    const node = this.nodes.get(runId);
+    if (node?.cancellation !== null && node?.cancellation !== undefined) return true;
     return (this.cancellation.get(runId)?.controller.context.request ?? null) !== null;
+  }
+
+  private hasUnsettledDescendantObligations(ancestorRunId: string): boolean {
+    for (const [runId, node] of this.nodes) {
+      if (
+        runId !== ancestorRunId &&
+        this.isDescendantOf(runId, ancestorRunId) &&
+        (!isTerminal(node.status) || node.resultTransfer === "pending")
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private isDescendantOf(runId: string, ancestorRunId: string): boolean {
@@ -517,7 +702,13 @@ export class RunTreeExecution {
         completedAt: node.completedAt,
         resources: this.resources.getNodeSnapshot(runId),
         authorityRevision: this.currentAuthorityRevision(runId),
+        cancellation: node.cancellation,
+        resultTransfer: node.resultTransfer,
       }));
+    const resultTransfers = nodes
+      .filter((node) => node.parentRunId !== null)
+      .map((node) => node.resultTransfer);
+    const approvals = this.approvals.getSnapshot();
     return Object.freeze({
       rootRunId: this.input.rootRunId,
       revision: this.revision,
@@ -526,6 +717,22 @@ export class RunTreeExecution {
       totalDescendantRuns: this.totalDescendantRuns,
       activeDescendantRuns: this.activeDescendantRuns,
       resources: this.resources.getSnapshot(this.input.rootRunId),
+      approvals,
+      cancellation: Object.freeze({
+        totalRequests: this.cancellationRequestCount,
+        treeRequested: nodes.some((node) => node.cancellation?.scope === "tree"),
+        subtreeRequests: nodes.filter((node) => node.cancellation?.scope === "subtree").length,
+        latest: this.latestCancellation,
+      }),
+      settlement: Object.freeze({
+        complete: this.resources.getSettlement(this.input.rootRunId) !== null &&
+          this.activeDescendantRuns === 0 &&
+          this.unsettledDescendantRuns === 0 && approvals.activeReviews === 0,
+        unsettledDescendantRuns: this.unsettledDescendantRuns,
+        pendingResultTransfers: resultTransfers.filter((status) => status === "pending").length,
+        failedResultTransfers: resultTransfers.filter((status) => status === "failed").length,
+        unknownResultTransfers: resultTransfers.filter((status) => status === "unknown").length,
+      }),
       nodes: Object.freeze(nodes),
     });
   }

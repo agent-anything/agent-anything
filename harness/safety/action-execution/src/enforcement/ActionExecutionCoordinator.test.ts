@@ -108,6 +108,28 @@ describe("ActionExecutionCoordinator", () => {
     ]);
   });
 
+  it("attributes tree Approval-capacity exhaustion to Runtime rather than Permission denial", async () => {
+    const fixture = createFixture({
+      permissionStatus: "approval_required",
+      approvalResult: {
+        status: "limit_exceeded",
+        code: "approval_tree_operation_limit_exceeded",
+      },
+    });
+
+    const result = await fixture.coordinator.execute(fixture.request);
+
+    expect(result).toMatchObject({
+      status: "settled",
+      settlement: {
+        status: "failed",
+        causeOwner: "agent-runtime",
+        causeRef: "approval_tree_operation_limit_exceeded",
+      },
+    });
+    expect(fixture.order).not.toContain("executor.execute");
+  });
+
   it("settles an unknown physical effect without semantic success", async () => {
     const fixture = createFixture({ sandboxEffectState: "unknown" });
 
@@ -233,6 +255,9 @@ describe("ActionExecutionCoordinator", () => {
 interface FixtureOptions {
   readonly policyStatus?: "allowed" | "denied";
   readonly permissionStatus?: "authorized" | "approval_required";
+  readonly approvalResult?: Awaited<ReturnType<
+    NonNullable<ActionExecutionCoordinatorDependencies["approval"]>["resolve"]
+  >>;
   readonly sandboxEffectState?: "none" | "unknown";
   readonly retryOnce?: boolean;
   readonly actionCoverageId?: string;
@@ -493,7 +518,14 @@ function createFixture(options: FixtureOptions = {}) {
     adapters: [{ adapter }],
     policy,
     permission,
-    approval: null,
+    approval: options.approvalResult === undefined
+      ? null
+      : Object.freeze({
+          async resolve() {
+            order.push("approval.resolve");
+            return options.approvalResult!;
+          },
+        }),
     sandbox,
     records: {
       async recordPreEffect() {

@@ -87,12 +87,6 @@ export async function createHelarcHostPermissionComposition(
       maxInitialRecords: 64,
     },
     persistentPolicyAmendments: input.persistentPolicyAmendments,
-    approvalLimits: {
-      maxRequestsPerRun: 8,
-      maxRequestsPerActionFingerprint: 2,
-      maxConsecutiveDeclines: 3,
-      maxConsecutiveReviewFailures: 3,
-    },
     authorityApplicationLimits: { commitTimeoutMs: 5_000 },
     interruption: createPreparationInterruptionContext(),
   });

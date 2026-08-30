@@ -342,12 +342,19 @@ describe("HostRunProjectionReducer", () => {
       revision: 2,
       totalDescendantRuns: 1,
       activeDescendantRuns: 1,
+      resources: {
+        controllerTurns: { capacity: 100, consumed: 0 },
+      },
+      approvals: { totalRequests: 0, activeReviews: 0 },
+      settlement: { complete: false },
       nodes: [
-        { runId: "run-1", depth: 0 },
-        { runId: "run-child", depth: 1, status: "running" },
+        { runId: "run-1", depth: 0, resultTransfer: "not_required" },
+        { runId: "run-child", depth: 1, status: "running", resultTransfer: "pending" },
       ],
     });
     expect(JSON.stringify(projection.runTree)).not.toContain("delegated prompt");
+    expect(JSON.stringify(projection.runTree)).not.toContain("authorityRevision");
+    expect(JSON.stringify(projection.runTree)).not.toContain("operationFingerprint");
     expect(projection.activeDelegations).toEqual([{
       request: { id: "request-1", revision: "request-1-v1" },
       relation: { id: "relation-1" },
@@ -485,6 +492,10 @@ function rootTree(revision = 0): RunOperationSnapshot["runTree"] {
     }),
     totalDescendantRuns: 0,
     activeDescendantRuns: 0,
+    resources: treeResources(),
+    approvals: approvalSnapshot(),
+    cancellation: cancellationSnapshot(),
+    settlement: settlementSnapshot(),
     nodes: Object.freeze([Object.freeze({
       runId: "run-1",
       parentRunId: null,
@@ -495,6 +506,10 @@ function rootTree(revision = 0): RunOperationSnapshot["runTree"] {
       resultCode: null,
       startedAt: NOW,
       completedAt: null,
+      resources: nodeResources("run-1", null),
+      authorityRevision: "run-1:authority:active:0",
+      cancellation: null,
+      resultTransfer: "not_required" as const,
     })]),
   });
 }
@@ -516,8 +531,69 @@ function treeWithChild(revision: number): RunOperationSnapshot["runTree"] {
         resultCode: null,
         startedAt: NOW,
         completedAt: null,
+        resources: nodeResources("run-child", "run-1"),
+        authorityRevision: "run-child:authority:active:0",
+        cancellation: null,
+        resultTransfer: "pending" as const,
       }),
     ]),
+  });
+}
+
+function treeResources() {
+  const resource = () => Object.freeze({
+    capacity: 100,
+    consumed: 0,
+    reserved: 0,
+    remaining: 100,
+    released: 0,
+    measurementStatus: "measured" as const,
+    enforcement: "hard" as const,
+  });
+  return Object.freeze({
+    controllerTurns: resource(), actions: resource(), modelInputTokens: resource(),
+    modelOutputTokens: resource(), costUnits: resource(), contextBytes: resource(),
+    resultBytes: resource(),
+  });
+}
+
+function nodeResources(runId: string, parentRunId: string | null) {
+  const amounts = Object.freeze({
+    controllerTurns: 100, actions: 100, modelInputTokens: 100,
+    modelOutputTokens: 100, costUnits: 100, contextBytes: 100, resultBytes: 100,
+  });
+  const usage = Object.freeze(Object.fromEntries(
+    Object.keys(amounts).map((key) => [key, Object.freeze({ status: "measured" as const, value: 0 })]),
+  )) as RunOperationSnapshot["runTree"]["nodes"][number]["resources"]["usage"];
+  return Object.freeze({
+    runId, parentRunId, allocation: amounts, remaining: amounts, usage,
+    settled: false, revision: 0,
+  });
+}
+
+function approvalSnapshot() {
+  return Object.freeze({
+    limits: Object.freeze({
+      maxTotalRequests: 4, maxRequestsPerOperationFingerprint: 2,
+      maxConsecutiveDeclines: 2, maxConsecutiveReviewerFailures: 2,
+      maxActiveReviews: 2,
+    }),
+    revision: 0, totalRequests: 0, activeReviews: 0, settledRequests: 0,
+    uniqueOperationFingerprints: 0, maxEquivalentOperationRequests: 0,
+    consecutiveDeclines: 0, consecutiveReviewerFailures: 0, exhaustedCode: null,
+  });
+}
+
+function cancellationSnapshot() {
+  return Object.freeze({
+    totalRequests: 0, treeRequested: false, subtreeRequests: 0, latest: null,
+  });
+}
+
+function settlementSnapshot() {
+  return Object.freeze({
+    complete: false, unsettledDescendantRuns: 0, pendingResultTransfers: 0,
+    failedResultTransfers: 0, unknownResultTransfers: 0,
   });
 }
 

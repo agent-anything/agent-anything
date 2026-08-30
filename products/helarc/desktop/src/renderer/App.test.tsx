@@ -2,6 +2,7 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { HelarcMainSnapshot } from "../shared/HelarcDesktopApi.js";
+import { createHelarcRunTreeTestSnapshot } from "../shared/testing/HelarcRunTreeTestSnapshot.js";
 import {
   App,
   ApprovalPromptPanel,
@@ -144,6 +145,9 @@ describe("Helarc workbench shell", () => {
               resultCode: null,
               startedAt: "2026-07-05T01:00:01.000Z",
               completedAt: null,
+              resourcesSettled: false,
+              resultTransfer: "pending",
+              cancellationScope: "subtree",
             }, {
               runId: "harness-run-3",
               parentRunId: "harness-run-2",
@@ -154,6 +158,9 @@ describe("Helarc workbench shell", () => {
               resultCode: "controller_failed",
               startedAt: "2026-07-05T01:00:01.000Z",
               completedAt: "2026-07-05T01:00:02.000Z",
+              resourcesSettled: true,
+              resultTransfer: "settled",
+              cancellationScope: null,
             }],
           },
           activeDelegations: [{
@@ -174,6 +181,8 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("1 active / 2 descendants");
     expect(html).toContain("Descendant depth 1");
     expect(html).toContain("Descendant depth 2");
+    expect(html).toContain("Approvals 0 active / 0 total");
+    expect(html).toContain("Settlement 0 pending");
     expect(html).toContain("Created by action-1");
     expect(html).toContain("Steerable at revision 6");
     expect(html).toContain("cancelling");
@@ -572,27 +581,10 @@ function modelQualificationSnapshot(): NonNullable<HelarcMainSnapshot["run"]>["p
 }
 
 function rootRunTree(): NonNullable<HelarcMainSnapshot["run"]>["host"]["runTree"] {
-  return {
-    rootRunId: "harness-run-1",
+  return createHelarcRunTreeTestSnapshot({
+    runId: "harness-run-1",
     revision: 1,
+    startedAt: "2026-07-05T01:00:00.000Z",
     deadlineAt: "2026-07-05T01:01:00.000Z",
-    limits: {
-      maxDescendantDepth: 2,
-      maxTotalDescendantRuns: 4,
-      maxActiveDescendantRuns: 2,
-    },
-    totalDescendantRuns: 0,
-    activeDescendantRuns: 0,
-    nodes: [{
-      runId: "harness-run-1",
-      parentRunId: null,
-      relationId: null,
-      parentRunActionId: null,
-      depth: 0,
-      status: "running",
-      resultCode: null,
-      startedAt: "2026-07-05T01:00:00.000Z",
-      completedAt: null,
-    }],
-  };
+  });
 }
