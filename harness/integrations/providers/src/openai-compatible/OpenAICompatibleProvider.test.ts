@@ -243,11 +243,97 @@ describe("OpenAICompatibleProvider", () => {
       kind: "failed",
       failure: {
         code: "provider_authentication_failed",
-        message: "Provider authentication failed with HTTP 401.",
+        message: expect.stringContaining(
+          "Provider authentication failed with HTTP 401. Request diagnostic:",
+        ),
         statusCode: 401,
+        metadata: {
+          openAICompatibleError: {
+            message: null,
+            type: null,
+            code: null,
+            param: null,
+            truncated: false,
+          },
+          requestDiagnostic: {
+            revision: "1",
+            operation: "chat_completions",
+            interactionKind: "structured_generation",
+            sourceMessageCount: 1,
+            toolResultCount: 0,
+            nonSucceededToolResultCount: 0,
+            callableCount: 0,
+            encodedBodyBytes: expect.any(Number),
+            encodedBodySha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          },
+        },
       },
     });
     expect(JSON.stringify(result)).not.toContain("secret-key");
+  });
+
+  it("retains bounded OpenAI error-object diagnostics for an HTTP 400", async () => {
+    const provider = new OpenAICompatibleProvider({
+      baseUrl: "https://provider.local/v1",
+      apiKey: "secret-key",
+      model: "model-a",
+      timeoutMs: 1000,
+      nativeToolInteraction: { supported: true },
+      inputLimit: testInputLimit(),
+    }, async () => ({
+      ok: false,
+      status: 400,
+      async json() {
+        return {
+          error: {
+            message: "Request using secret-key\ncontains an invalid message history",
+            type: "invalid_request_error",
+            code: "invalid_message",
+            param: "messages[3]",
+            ignored: "must not be retained",
+          },
+          trace: "must not be retained",
+        };
+      },
+    }));
+
+    const result = await provider.send(request(provider), context());
+
+    expect(result).toMatchObject({
+      kind: "failed",
+      failure: {
+        code: "provider_http_error",
+        statusCode: 400,
+        message: expect.stringContaining(
+          "Provider reported: Request using [redacted] contains an invalid message history.",
+        ),
+        metadata: {
+          openAICompatibleError: {
+            message: "Request using [redacted] contains an invalid message history",
+            type: "invalid_request_error",
+            code: "invalid_message",
+            param: "messages[3]",
+            truncated: false,
+          },
+          requestDiagnostic: {
+            revision: "1",
+            operation: "chat_completions",
+            interactionKind: "structured_generation",
+            sourceMessageCount: 1,
+            toolResultCount: 0,
+            nonSucceededToolResultCount: 0,
+            callableCount: 0,
+            encodedBodyBytes: expect.any(Number),
+            encodedBodySha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          },
+        },
+      },
+    });
+    expect(result.kind === "failed" ? result.failure.message : "").toContain(
+      "type=invalid_request_error, code=invalid_message, param=messages[3]",
+    );
+    expect(JSON.stringify(result)).not.toContain("secret-key");
+    expect(JSON.stringify(result)).not.toContain("must not be retained");
   });
 
   it("truthfully rejects continuation for Chat Completions before transport", async () => {

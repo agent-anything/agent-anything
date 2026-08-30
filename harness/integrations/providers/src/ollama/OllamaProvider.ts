@@ -27,11 +27,23 @@ import {
   classifyProviderHttpFailure,
   readProviderHttpFailureMetadata,
 } from "../http/ProviderHttpFailureMetadata.js";
+import {
+  boundProviderHttpDiagnosticText,
+  createProviderHttpRequestDiagnostic,
+  MAX_PROVIDER_HTTP_DIAGNOSTIC_MESSAGE_LENGTH,
+  renderProviderHttpRequestDiagnostic,
+  type ProviderHttpRequestDiagnostic,
+} from "../http/ProviderHttpDiagnostics.js";
 import { decodeStructuredGenerationOutput } from "../structured-generation/StructuredGenerationResponse.js";
 import { projectOllamaOutputFormat } from "./OllamaJsonSchemaDialect.js";
 
 const PROVIDER_ID = "ollama.api";
 const MAX_RESPONSE_TEXT_LENGTH = 64_000;
+
+interface OllamaHttpErrorDiagnostic {
+  readonly message: string | null;
+  readonly truncated: boolean;
+}
 
 export interface OllamaProviderConfig {
   readonly baseUrl: string;
@@ -146,11 +158,30 @@ export class OllamaProvider implements Provider {
 
       if (!response.ok) {
         const classification = classifyProviderHttpFailure(response.status);
+        const diagnostic = await readOllamaHttpErrorDiagnostic(response);
+        const interruptedAfterFailureBody = providerResultFromInterruption(attempt.cause);
+        if (interruptedAfterFailureBody !== null) return interruptedAfterFailureBody;
+        const requestDiagnostic = createProviderHttpRequestDiagnostic({
+          operation: request.interaction.kind === "native_tool_turn" ? "chat" : "generate",
+          request,
+          encodedBody: encoded.body,
+        });
         return failed(
           classification.category,
           classification.code,
-          classification.message,
-          readProviderHttpFailureMetadata(response),
+          formatOllamaHttpFailureMessage(
+            classification.message,
+            diagnostic,
+            requestDiagnostic,
+          ),
+          {
+            ...readProviderHttpFailureMetadata(response),
+            metadata: {
+              ollamaError: diagnostic.message,
+              ollamaErrorTruncated: diagnostic.truncated,
+              requestDiagnostic,
+            },
+          },
         );
       }
 
@@ -593,6 +624,40 @@ function renderInstructions(instructions: ModelInstructions): string {
 
 function renderToolResultContent(value: ModelJsonValue): string {
   return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+async function readOllamaHttpErrorDiagnostic(
+  response: { readonly json: () => Promise<unknown> },
+): Promise<OllamaHttpErrorDiagnostic> {
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return Object.freeze({ message: null, truncated: false });
+  }
+  if (!isRecord(body) || typeof body.error !== "string") {
+    return Object.freeze({ message: null, truncated: false });
+  }
+  const bounded = boundProviderHttpDiagnosticText(
+    body.error,
+    MAX_PROVIDER_HTTP_DIAGNOSTIC_MESSAGE_LENGTH,
+  );
+  return Object.freeze({
+    message: bounded.value,
+    truncated: bounded.truncated,
+  });
+}
+
+function formatOllamaHttpFailureMessage(
+  message: string,
+  diagnostic: OllamaHttpErrorDiagnostic,
+  request: ProviderHttpRequestDiagnostic,
+): string {
+  const providerDetail = diagnostic.message === null
+    ? ""
+    : ` Ollama reported: ${diagnostic.message}${diagnostic.truncated ? " [truncated]" : ""}.`;
+  return `${message}${providerDetail} Request diagnostic: ` +
+    `${renderProviderHttpRequestDiagnostic(request)}.`;
 }
 
 function readCount(value: unknown): number | null {

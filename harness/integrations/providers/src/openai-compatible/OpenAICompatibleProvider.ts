@@ -26,11 +26,27 @@ import {
   classifyProviderHttpFailure,
   readProviderHttpFailureMetadata,
 } from "../http/ProviderHttpFailureMetadata.js";
+import {
+  boundProviderHttpDiagnosticText,
+  createProviderHttpRequestDiagnostic,
+  MAX_PROVIDER_HTTP_DIAGNOSTIC_ATTRIBUTE_LENGTH,
+  MAX_PROVIDER_HTTP_DIAGNOSTIC_MESSAGE_LENGTH,
+  renderProviderHttpRequestDiagnostic,
+  type ProviderHttpRequestDiagnostic,
+} from "../http/ProviderHttpDiagnostics.js";
 import type { FetchLike } from "../http/ProviderHttpTransport.js";
 import { decodeStructuredGenerationOutput } from "../structured-generation/StructuredGenerationResponse.js";
 
 const PROVIDER_ID = "openai-compatible.chat-completions";
 const MAX_RESPONSE_TEXT_LENGTH = 64_000;
+
+interface OpenAICompatibleHttpErrorDiagnostic {
+  readonly message: string | null;
+  readonly type: string | null;
+  readonly code: string | null;
+  readonly param: string | null;
+  readonly truncated: boolean;
+}
 
 export interface OpenAICompatibleProviderConfig {
   readonly baseUrl: string;
@@ -141,11 +157,32 @@ export class OpenAICompatibleProvider implements Provider {
 
       if (!response.ok) {
         const classification = classifyProviderHttpFailure(response.status);
+        const diagnostic = await readOpenAICompatibleHttpErrorDiagnostic(
+          response,
+          this.config.apiKey,
+        );
+        const interruptedAfterFailureBody = providerResultFromInterruption(attempt.cause);
+        if (interruptedAfterFailureBody !== null) return interruptedAfterFailureBody;
+        const requestDiagnostic = createProviderHttpRequestDiagnostic({
+          operation: "chat_completions",
+          request,
+          encodedBody: encoded.body,
+        });
         return failed(
           classification.category,
           classification.code,
-          classification.message,
-          readProviderHttpFailureMetadata(response),
+          formatOpenAICompatibleHttpFailureMessage(
+            classification.message,
+            diagnostic,
+            requestDiagnostic,
+          ),
+          {
+            ...readProviderHttpFailureMetadata(response),
+            metadata: {
+              openAICompatibleError: diagnostic,
+              requestDiagnostic,
+            },
+          },
         );
       }
 
@@ -626,6 +663,79 @@ function renderInstructions(instructions: ModelInstructions): string {
 
 function renderToolResultContent(value: ModelJsonValue): string {
   return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+async function readOpenAICompatibleHttpErrorDiagnostic(
+  response: { readonly json: () => Promise<unknown> },
+  apiKey: string,
+): Promise<OpenAICompatibleHttpErrorDiagnostic> {
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return emptyOpenAICompatibleHttpErrorDiagnostic();
+  }
+  if (!isRecord(body) || !isRecord(body.error)) {
+    return emptyOpenAICompatibleHttpErrorDiagnostic();
+  }
+  const secrets = apiKey.length === 0 ? [] : [apiKey];
+  const message = boundProviderHttpDiagnosticText(
+    body.error.message,
+    MAX_PROVIDER_HTTP_DIAGNOSTIC_MESSAGE_LENGTH,
+    secrets,
+  );
+  const type = boundProviderHttpDiagnosticText(
+    body.error.type,
+    MAX_PROVIDER_HTTP_DIAGNOSTIC_ATTRIBUTE_LENGTH,
+    secrets,
+  );
+  const code = boundProviderHttpDiagnosticText(
+    body.error.code,
+    MAX_PROVIDER_HTTP_DIAGNOSTIC_ATTRIBUTE_LENGTH,
+    secrets,
+  );
+  const param = boundProviderHttpDiagnosticText(
+    body.error.param,
+    MAX_PROVIDER_HTTP_DIAGNOSTIC_ATTRIBUTE_LENGTH,
+    secrets,
+  );
+  return Object.freeze({
+    message: message.value,
+    type: type.value,
+    code: code.value,
+    param: param.value,
+    truncated: message.truncated || type.truncated || code.truncated || param.truncated,
+  });
+}
+
+function emptyOpenAICompatibleHttpErrorDiagnostic(): OpenAICompatibleHttpErrorDiagnostic {
+  return Object.freeze({
+    message: null,
+    type: null,
+    code: null,
+    param: null,
+    truncated: false,
+  });
+}
+
+function formatOpenAICompatibleHttpFailureMessage(
+  message: string,
+  diagnostic: OpenAICompatibleHttpErrorDiagnostic,
+  request: ProviderHttpRequestDiagnostic,
+): string {
+  const providerMessage = diagnostic.message === null
+    ? ""
+    : ` Provider reported: ${diagnostic.message}${diagnostic.truncated ? " [truncated]" : ""}.`;
+  const attributes = [
+    diagnostic.type === null ? null : `type=${diagnostic.type}`,
+    diagnostic.code === null ? null : `code=${diagnostic.code}`,
+    diagnostic.param === null ? null : `param=${diagnostic.param}`,
+  ].filter((value): value is string => value !== null);
+  const providerAttributes = attributes.length === 0
+    ? ""
+    : ` Provider error attributes: ${attributes.join(", ")}.`;
+  return `${message}${providerMessage}${providerAttributes} Request diagnostic: ` +
+    `${renderProviderHttpRequestDiagnostic(request)}.`;
 }
 
 function readCount(value: unknown): number | null {

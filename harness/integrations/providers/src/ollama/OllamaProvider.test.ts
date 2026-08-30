@@ -1,4 +1,6 @@
 import type {
+  ModelMessage,
+  ModelToolCall,
   ProviderRequest,
 } from "@agent-anything/model-interaction";
 import {
@@ -321,7 +323,7 @@ describe("OllamaProvider", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("maps HTTP failure without reading response body", async () => {
+  it("maps HTTP failure without retaining undocumented response fields", async () => {
     const provider = new OllamaProvider(config(), async () => ({
       ok: false,
       status: 500,
@@ -336,11 +338,146 @@ describe("OllamaProvider", () => {
       kind: "failed",
       failure: {
         code: "provider_server_error",
-        message: "Provider request failed with HTTP 500.",
+        message: expect.stringContaining(
+          "Provider request failed with HTTP 500. Request diagnostic:",
+        ),
         statusCode: 500,
+        metadata: {
+          ollamaError: null,
+          ollamaErrorTruncated: false,
+          requestDiagnostic: {
+            revision: "1",
+            operation: "generate",
+            interactionKind: "structured_generation",
+            sourceMessageCount: 1,
+            toolResultCount: 0,
+            nonSucceededToolResultCount: 0,
+            callableCount: 0,
+            encodedBodyBytes: expect.any(Number),
+            encodedBodySha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          },
+        },
       },
     });
     expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it("retains bounded diagnostics when Ollama rejects history after a failed Tool result", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const provider = new OllamaProvider(config(), async (_url, init) => {
+      calls.push(JSON.parse(init.body) as Record<string, unknown>);
+      if (calls.length === 1) {
+        return okResponse({
+          message: {
+            role: "assistant",
+            content: "Running the command.",
+            tool_calls: [{
+              type: "function",
+              function: { name: "Read", arguments: { file_path: "missing.txt" } },
+            }],
+          },
+          done: true,
+          done_reason: "stop",
+        });
+      }
+      return {
+        ok: false,
+        status: 400,
+        async json() {
+          return {
+            error: "invalid message history after tool failure\nrequest rejected",
+            ignored: "must not be retained",
+          };
+        },
+      };
+    });
+
+    const first = await provider.send(createNativeProviderRequest(provider), context());
+    if (first.kind !== "succeeded" || first.response.kind !== "native_tool_turn") {
+      throw new TypeError("Expected one native Ollama turn.");
+    }
+    const callBlock = first.response.turn.assistant.content.find(
+      (block) => block.kind === "model_tool_call",
+    );
+    if (callBlock?.kind !== "model_tool_call") throw new TypeError("Expected one Tool call.");
+
+    const result = await provider.send(createNativeProviderRequest(provider, {
+      requestId: "native-request-after-failed-tool",
+      messages: [
+        ...defaultMessages(),
+        first.response.turn.assistant,
+        createFailedToolResultMessage(callBlock.call),
+      ],
+    }), context());
+
+    expect(result).toMatchObject({
+      kind: "failed",
+      failure: {
+        code: "provider_http_error",
+        statusCode: 400,
+        message: expect.stringContaining(
+          "Ollama reported: invalid message history after tool failure request rejected.",
+        ),
+        metadata: {
+          ollamaError: "invalid message history after tool failure request rejected",
+          ollamaErrorTruncated: false,
+          requestDiagnostic: {
+            revision: "1",
+            operation: "chat",
+            interactionKind: "native_tool_turn",
+            sourceMessageCount: 3,
+            toolResultCount: 1,
+            nonSucceededToolResultCount: 1,
+            callableCount: 2,
+            encodedBodyBytes: expect.any(Number),
+            encodedBodySha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          },
+        },
+      },
+    });
+    expect(result.kind === "failed" ? result.failure.message : "").toContain(
+      "nonSucceededToolResults=1",
+    );
+    expect(JSON.stringify(result)).not.toContain("must not be retained");
+    expect(calls[1]).toMatchObject({
+      messages: [
+        expect.any(Object),
+        expect.any(Object),
+        {
+          role: "assistant",
+          tool_calls: [expect.any(Object)],
+        },
+        {
+          role: "tool",
+          tool_name: "Read",
+          content: JSON.stringify({
+            code: "tool_failed",
+            message: "private Tool failure content",
+          }),
+        },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain("private Tool failure content");
+  });
+
+  it("bounds Ollama error diagnostics before retaining them", async () => {
+    const provider = new OllamaProvider(config(), async () => ({
+      ok: false,
+      status: 400,
+      async json() {
+        return { error: `\n${"x".repeat(2_100)}\t` };
+      },
+    }));
+
+    const result = await provider.send(request(provider), context());
+    if (result.kind !== "failed") throw new TypeError("Expected an Ollama failure.");
+
+    expect(result.failure.metadata).toMatchObject({
+      ollamaErrorTruncated: true,
+    });
+    const retained = result.failure.metadata.ollamaError;
+    expect(typeof retained === "string" ? retained.length : -1).toBe(2_048);
+    expect(result.failure.message).toContain("[truncated]");
   });
 
   it("truthfully reports the selected Generate endpoint as continuation unsupported", () => {
@@ -673,6 +810,33 @@ function okResponse(value: unknown) {
     async json() {
       return value;
     },
+  };
+}
+
+function createFailedToolResultMessage(
+  call: ModelToolCall,
+): Extract<ModelMessage, { readonly role: "tool" }> {
+  return {
+    role: "tool",
+    content: [{
+      kind: "model_tool_result",
+      result: {
+        modelCallRef: call.modelCallRef,
+        providerCallRef: call.providerCallRef,
+        name: call.name,
+        settlement: "failed",
+        content: {
+          code: "tool_failed",
+          message: "private Tool failure content",
+        },
+        sourceRefs: [{
+          owner: "ollama-provider-test",
+          kind: "tool_result",
+          id: "failed-tool-result-1",
+          revision: "1",
+        }],
+      },
+    }],
   };
 }
 
