@@ -121,7 +121,7 @@ describe("delegation request", () => {
     const second = request();
 
     expect(first.ref).toEqual(second.ref);
-    expect(first.rootPurposeAnchor.id).toBe("root-purpose-material");
+    expect(first.contextPlan.entries).toHaveLength(1);
     expect(first).not.toHaveProperty("childRun");
     expect(first).not.toHaveProperty("relation");
     expect(Object.isFrozen(first.contextPlan.entries)).toBe(true);
@@ -141,21 +141,21 @@ describe("delegation request", () => {
     })).toThrow(/does not match the resolved child Agent/);
   });
 
-  it("rejects duplicate Context material and Product-assigned predecessor material", () => {
-    const root = material("root_purpose", "root-purpose-material", "mandatory");
+  it("rejects duplicate Context material and Product-assigned source-result material", () => {
+    const parent = material("parent_fact", "parent-fact", "mandatory");
     expect(() => createDelegationContextPlan({
-      entries: [root, root],
+      entries: [parent, parent],
       maxContextBytes: 8_192,
     })).toThrow(/must be unique/);
 
     expect(() => request({
       preparation: preparation({
         contextEntries: [
-          root,
-          material("predecessor_result", "result-old", "optional"),
+          parent,
+          material("dependency_result", "result-old", "optional"),
         ],
       }),
-    })).toThrow(/cannot assign trusted predecessor Context material/);
+    })).toThrow(/cannot assign trusted source-result Context material/);
   });
 
   it("rejects request content changed after revision construction", () => {
@@ -193,13 +193,14 @@ describe("delegation request", () => {
     })).toThrow(/does not contain the exact Product request constraints/);
   });
 
-  it("rejects a terminal predecessor from another root Run", () => {
+  it("rejects a dependency result from another root Run", () => {
     expect(() => request({
       preparation: preparation({
-        predecessor: { id: "result-old", revision: "result-old-v1" },
+        dependencyResult: { id: "result-old", revision: "result-old-v1" },
       }),
-      predecessor: {
+      dependencyResult: {
         correlation: {
+          kind: "dependency",
           request: { id: "request-old", revision: "request-old-v1" },
           result: { id: "result-old", revision: "result-old-v1" },
           root: { id: "run-another-root" },
@@ -374,7 +375,8 @@ describe("delegation steering route", () => {
 function request(overrides: {
   readonly toolCall?: ToolCall;
   readonly preparation?: DelegationPreparation;
-  readonly predecessor?: Parameters<typeof materializeDelegationRequest>[0]["predecessor"];
+  readonly dependencyResult?: Parameters<typeof materializeDelegationRequest>[0]["dependencyResult"];
+  readonly replacedResult?: Parameters<typeof materializeDelegationRequest>[0]["replacedResult"];
 } = {}) {
   return materializeDelegationRequest({
     requestId: "request-1",
@@ -383,7 +385,9 @@ function request(overrides: {
     preparation: overrides.preparation ?? preparation(),
     authorityDerivation: authorityDerivation(),
     limitDerivation: limitDerivation(),
-    predecessor: overrides.predecessor ?? null,
+    dependencyResult: overrides.dependencyResult ?? null,
+    replacedResult: overrides.replacedResult ?? null,
+    continuation: null,
     createdAt: "2026-08-25T00:00:10.000Z",
   });
 }
@@ -392,7 +396,8 @@ function preparation(overrides: {
   readonly contextEntries?: readonly ReturnType<typeof material>[];
   readonly limits?: ReturnType<typeof limits>;
   readonly requestedAuthority?: readonly DelegationAuthorityDimensionInput[];
-  readonly predecessor?: DelegationPreparation["predecessor"];
+  readonly dependencyResult?: DelegationPreparation["dependencyResult"];
+  readonly replacedResult?: DelegationPreparation["replacedResult"];
 } = {}): DelegationPreparation {
   return {
     schemaVersion: 1,
@@ -417,19 +422,19 @@ function preparation(overrides: {
     }),
     contextPlan: createDelegationContextPlan({
       entries: overrides.contextEntries ?? [
-        material("root_purpose", "root-purpose-material", "mandatory"),
         material("parent_fact", "parent-fact-1", "optional"),
       ],
       maxContextBytes: 16_384,
     }),
     requestedAuthority: overrides.requestedAuthority ?? authorityDimensions("request"),
     limits: overrides.limits ?? limits(),
-    predecessor: overrides.predecessor ?? null,
+    dependencyResult: overrides.dependencyResult ?? null,
+    replacedResult: overrides.replacedResult ?? null,
   };
 }
 
 function material(
-  role: "root_purpose" | "parent_fact" | "predecessor_result",
+  role: "parent_fact" | "dependency_result" | "replaced_result",
   id: string,
   necessity: "mandatory" | "optional",
 ) {
@@ -593,6 +598,7 @@ function childCorrelation(accepted: ReturnType<typeof request>) {
     origin: accepted.origin,
     relation: {
       ref: { id: "relation-1" },
+      kind: "delegation",
       root: { id: "run-root" },
       parent: { id: "run-root" },
       child: { id: "run-child" },

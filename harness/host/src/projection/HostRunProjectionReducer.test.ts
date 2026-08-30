@@ -337,6 +337,7 @@ describe("HostRunProjectionReducer", () => {
         childStatus: "running",
         steerable: true,
       }],
+      continuationTargets: [],
     }));
     expect(projection.runTree).toMatchObject({
       revision: 2,
@@ -447,6 +448,7 @@ function runOperationUpdate(
       verification: null,
       pendingInteractions: [],
       activeDelegations: [],
+      continuationTargets: [],
       runTree: rootTree(),
       result: null,
       ...overrides,

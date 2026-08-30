@@ -10,6 +10,17 @@ export type {
   DelegationAuthoritySourceRole,
 } from "./DelegationAuthority.js";
 export {
+  createDescendantContinuationTargetProjection,
+  snapshotDescendantMessageRequest,
+} from "./DelegationContinuation.js";
+export type {
+  ActiveDescendantTargetProjection,
+  DescendantContinuationTargetProjection,
+  DescendantTargetsProjection,
+  DescendantMessageRequest,
+  DescendantMessageTarget,
+} from "./DelegationContinuation.js";
+export {
   deriveDelegationAuthority,
   snapshotDelegationAuthorityDimensions,
   snapshotDelegationAuthorityDerivation,

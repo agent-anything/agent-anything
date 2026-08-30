@@ -270,4 +270,5 @@ const TOOL_SCOPE: Readonly<Record<HelarcBaselineToolName, HelarcModelQualificati
     TaskStop: "process_execution",
     AskUserQuestion: "user_interaction",
     Agent: "delegation",
+    SendMessage: "delegation",
   });

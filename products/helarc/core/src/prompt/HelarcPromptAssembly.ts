@@ -31,7 +31,8 @@ export type HelarcPromptSectionId =
   | "current_stop_review"
   | "current_verification"
   | "permission_context"
-  | "pending_interactions";
+  | "pending_interactions"
+  | "descendant_targets";
 
 export interface HelarcPromptSection {
   readonly id: string;
@@ -104,6 +105,7 @@ function assemble(
     })),
     promptSection("permission_context", "user", `Permission context:\n${JSON.stringify(input.permission)}`),
     promptSection("pending_interactions", "user", `Pending interactions:\n${JSON.stringify(input.pending)}`),
+    promptSection("descendant_targets", "user", `Descendant targets:\n${JSON.stringify(input.descendants)}`),
   ]);
   const allPromptSections = Object.freeze([...promptSections, ...currentStateSections]);
   const sections = Object.freeze([

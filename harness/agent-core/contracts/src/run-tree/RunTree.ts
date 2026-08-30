@@ -5,6 +5,11 @@ export interface DescendantRunRelationRef {
   readonly id: string;
 }
 
+export type DescendantRunRelationKind =
+  | "delegation"
+  | "replacement"
+  | "continuation";
+
 export interface RootRunLineage {
   readonly kind: "root";
   readonly root: RunRef;
@@ -24,6 +29,7 @@ export type RunLineage = RootRunLineage | DescendantRunLineage;
 
 export interface DescendantRunRelation {
   readonly ref: DescendantRunRelationRef;
+  readonly kind: DescendantRunRelationKind;
   readonly root: RunRef;
   readonly parent: RunRef;
   readonly child: RunRef;
@@ -33,6 +39,7 @@ export interface DescendantRunRelation {
 
 export interface CreateDescendantRunRelationInput {
   readonly relationId: string;
+  readonly kind: DescendantRunRelationKind;
   readonly root: RunRef;
   readonly parent: RunRef;
   readonly child: RunRef;
@@ -52,6 +59,7 @@ export function createDescendantRunRelation(
   input: CreateDescendantRunRelationInput,
 ): DescendantRunRelation {
   const ref = snapshotRelationRef({ id: input.relationId });
+  assertRelationKind(input.kind);
   const root = snapshotRunRef(input.root, "root");
   const parent = snapshotRunRef(input.parent, "parent");
   const child = snapshotRunRef(input.child, "child");
@@ -68,6 +76,7 @@ export function createDescendantRunRelation(
   }
   return Object.freeze({
     ref,
+    kind: input.kind,
     root,
     parent,
     child,
@@ -81,6 +90,7 @@ export function createDescendantRunLineage(
 ): DescendantRunLineage {
   const snapshot = createDescendantRunRelation({
     relationId: relation.ref.id,
+    kind: relation.kind,
     root: relation.root,
     parent: relation.parent,
     child: relation.child,
@@ -95,6 +105,18 @@ export function createDescendantRunLineage(
     relation: snapshot.ref,
     depth: snapshot.depth,
   });
+}
+
+function assertRelationKind(
+  value: unknown,
+): asserts value is DescendantRunRelationKind {
+  if (
+    value !== "delegation" &&
+    value !== "replacement" &&
+    value !== "continuation"
+  ) {
+    throw new TypeError("Descendant relation kind is unsupported.");
+  }
 }
 
 function snapshotRunRef(input: RunRef, field: string): RunRef {

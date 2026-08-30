@@ -24,8 +24,9 @@ export function projectModelInteraction(input: {
   readonly runId: string;
   readonly runRevision: number;
   readonly items: readonly RunItem[];
+  readonly seedMessages?: readonly ModelMessage[];
 }): ModelInteractionProjection {
-  const messages: ModelMessage[] = [];
+  const messages: ModelMessage[] = (input.seedMessages ?? []).map(snapshotModelMessage);
   const unsettled = new Map<string, ModelToolCall>();
   const settled = new Set<string>();
   const callOrder = new Map<string, number>();

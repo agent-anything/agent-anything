@@ -104,7 +104,6 @@ import type {
 } from "./RunnerDependencies.js";
 import {
   createDelegationContextPlan,
-  createDelegationContextMaterial,
   createDelegationLimits,
   createDelegationResultExpectation,
 } from "../delegation/index.js";
@@ -1456,9 +1455,9 @@ describe("Runner semantic integration", () => {
     ]);
   });
 
-  it("continues a settled delegation through a new child Run with exact predecessor Context", async () => {
+  it("starts a dependent child Run with the exact trusted dependency result", async () => {
     const childAgent = createAgent("agent_child", "1", "Child Agent");
-    let predecessor: Readonly<{ readonly id: string; readonly revision: string }> | null = null;
+    let dependency: Readonly<{ readonly id: string; readonly revision: string }> | null = null;
     const events: RuntimeEvent[] = [];
     const controller = new ScriptedController([
       (input) => advance([toolCandidate(
@@ -1470,7 +1469,7 @@ describe("Runner semantic integration", () => {
       (input) => {
         const output = projectedObservations(input.context).at(-1)?.payload.output;
         expect(isRecord(output)).toBe(true);
-        predecessor = Object.freeze({
+        dependency = Object.freeze({
           id: (output as Record<string, unknown>).delegation_result_id as string,
           revision: (output as Record<string, unknown>).delegation_result_revision as string,
         });
@@ -1478,7 +1477,7 @@ describe("Runner semantic integration", () => {
           "Agent",
           {
             prompt: "Continue from the accepted result.",
-            predecessor_result: predecessor,
+            dependency_result: dependency,
           },
           input.toolExposure.controllerRequestId,
         )], "model_tool_2");
@@ -1490,8 +1489,8 @@ describe("Runner semantic integration", () => {
           isRecord(block.payload.value) &&
           block.payload.value.kind === "delegation_result" &&
           isRecord(block.payload.value.result) &&
-          block.payload.value.result.id === predecessor?.id &&
-          block.payload.value.result.revision === predecessor?.revision
+          block.payload.value.result.id === dependency?.id &&
+          block.payload.value.result.revision === dependency?.revision
         )).toBe(true);
         return complete("Continuation child result", "model_child_continuation");
       },
@@ -1531,14 +1530,238 @@ describe("Runner semantic integration", () => {
     ]);
     const settled = events.filter((event) => event.name === "run.descendant.settled");
     expect(settled).toHaveLength(2);
-    expect(settled[0]?.payload.predecessorResultId).toBeNull();
+    expect(settled[0]?.payload.dependencyResultId).toBeNull();
     expect(settled[1]?.payload).toMatchObject({
       childRunId: "run_003",
-      predecessorResultId: predecessor?.id,
-      contextSourceCount: 2,
+      dependencyResultId: dependency?.id,
+      replacedResultId: null,
+      contextSourceCount: 1,
     });
     expect(settled[1]?.payload.requestId).not.toBe(settled[0]?.payload.requestId);
     expect(settled[1]?.payload.resultId).not.toBe(settled[0]?.payload.resultId);
+  });
+
+  it("continues one settled child context once through SendMessage", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    let continuationTargetId = "";
+    const controller = new ScriptedController([
+      (input) => advance([toolCandidate(
+        "Agent",
+        { prompt: "Inspect the contracts." },
+        input.toolExposure.controllerRequestId,
+      )], "model_tool_1"),
+      complete("Child context retained", "model_child_complete"),
+      (input) => {
+        expect(input.descendants.continuations).toHaveLength(1);
+        const target = input.descendants.continuations[0]!;
+        continuationTargetId = target.ref.id;
+        expect(target).toMatchObject({
+          sourceChild: { id: "run_002" },
+          agent: { id: childAgent.id, revision: childAgent.revision },
+        });
+        expect(JSON.stringify(target)).not.toContain("Child context retained");
+        expect(input.toolExposure.catalog.tools.map(({ name }) => name))
+          .toContain("SendMessage");
+        return advance([toolCandidate(
+          "SendMessage",
+          {
+            target: { kind: "continuation", id: continuationTargetId },
+            message: "Refine the retained finding.",
+          },
+          input.toolExposure.controllerRequestId,
+        )], "model_send_message_1");
+      },
+      (input) => {
+        expect(input.runId).toBe("run_003");
+        expect(input.interaction.messages).toEqual(expect.arrayContaining([
+          expect.objectContaining({ role: "assistant" }),
+          expect.objectContaining({
+            role: "user",
+            content: [expect.objectContaining({
+              kind: "text",
+              text: "Refine the retained finding.",
+            })],
+          }),
+        ]));
+        return complete("Continuation complete", "model_continuation_complete");
+      },
+      (input) => {
+        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+          kind: "descendant_run",
+          status: "succeeded",
+          output: { summary: "Continuation complete" },
+        });
+        expect(input.descendants.continuations.some(
+          ({ ref }) => ref.id === continuationTargetId,
+        )).toBe(false);
+        return advance([toolCandidate(
+          "SendMessage",
+          {
+            target: { kind: "continuation", id: continuationTargetId },
+            message: "Attempt to consume the same continuation again.",
+          },
+          input.toolExposure.controllerRequestId,
+        )], "model_send_message_2");
+      },
+      (input) => {
+        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+          kind: "descendant_run",
+          status: "failed",
+        });
+        return complete("Parent complete", "model_parent_complete");
+      },
+    ]);
+    const operations = createOperationFixture([], [], {
+      delegation: createTestDelegation(childAgent),
+    });
+    const tools = createSemanticToolSelectionSet(operations, [
+      {
+        name: "Agent",
+        binding: {
+          kind: "descendant_agent",
+          agent: { id: childAgent.id, revision: childAgent.revision },
+          revision: "descendant-binding-1",
+        },
+      },
+      {
+        name: "SendMessage",
+        binding: {
+          kind: "descendant_message",
+          agent: { id: childAgent.id, revision: childAgent.revision },
+          revision: "descendant-message-binding-1",
+        },
+      },
+    ]);
+
+    const handle = createRunner(controller, operations).start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        tools,
+        runTreeLimits: {
+          maxTotalDescendantRuns: 2,
+          maxActiveDescendantRuns: 1,
+          maxDescendantDepth: 1,
+        },
+      }),
+    );
+    const result = await handle.wait();
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(controller.calls.map(({ runId }) => runId)).toEqual([
+      "run_001",
+      "run_002",
+      "run_001",
+      "run_003",
+      "run_001",
+      "run_001",
+    ]);
+    expect(handle.getSnapshot().runTree.nodes.flatMap(({ relationKind }) =>
+      relationKind === null ? [] : [relationKind]
+    ))
+      .toEqual(["delegation", "continuation"]);
+  });
+
+  it("preserves child-local model history across successive continuation Runs", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    let firstContinuationId = "";
+    let secondContinuationId = "";
+    const controller = new ScriptedController([
+      (input) => advance([toolCandidate(
+        "Agent",
+        { prompt: "Establish one child-local finding." },
+        input.toolExposure.controllerRequestId,
+      )], "model_tool_1"),
+      complete("Original child finding", "model_child_complete"),
+      (input) => {
+        firstContinuationId = input.descendants.continuations[0]!.ref.id;
+        return advance([toolCandidate(
+          "SendMessage",
+          {
+            target: { kind: "continuation", id: firstContinuationId },
+            message: "Refine the original finding.",
+          },
+          input.toolExposure.controllerRequestId,
+        )], "model_send_message_1");
+      },
+      (input) => {
+        expect(JSON.stringify(input.interaction.messages)).toContain("Original child finding");
+        expect(JSON.stringify(input.interaction.messages)).toContain("Refine the original finding.");
+        return complete("First continuation finding", "model_continuation_1");
+      },
+      (input) => {
+        expect(input.descendants.continuations.some(
+          ({ ref }) => ref.id === firstContinuationId,
+        )).toBe(false);
+        secondContinuationId = input.descendants.continuations[0]!.ref.id;
+        return advance([toolCandidate(
+          "SendMessage",
+          {
+            target: { kind: "continuation", id: secondContinuationId },
+            message: "Refine the finding one final time.",
+          },
+          input.toolExposure.controllerRequestId,
+        )], "model_send_message_2");
+      },
+      (input) => {
+        const history = JSON.stringify(input.interaction.messages);
+        expect(history).toContain("Original child finding");
+        expect(history).toContain("Refine the original finding.");
+        expect(history).toContain("First continuation finding");
+        expect(history).toContain("Refine the finding one final time.");
+        return complete("Second continuation finding", "model_continuation_2");
+      },
+      complete("Parent complete", "model_parent_complete"),
+    ]);
+    const operations = createOperationFixture([], [], {
+      delegation: createTestDelegation(childAgent),
+    });
+    const tools = createSemanticToolSelectionSet(operations, [
+      {
+        name: "Agent",
+        binding: {
+          kind: "descendant_agent",
+          agent: { id: childAgent.id, revision: childAgent.revision },
+          revision: "descendant-binding-1",
+        },
+      },
+      {
+        name: "SendMessage",
+        binding: {
+          kind: "descendant_message",
+          agent: { id: childAgent.id, revision: childAgent.revision },
+          revision: "descendant-message-binding-1",
+        },
+      },
+    ]);
+
+    const handle = createRunner(controller, operations).start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        tools,
+        runTreeLimits: {
+          maxTotalDescendantRuns: 3,
+          maxActiveDescendantRuns: 1,
+          maxDescendantDepth: 1,
+        },
+      }),
+    );
+    const result = await handle.wait();
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(controller.calls.map(({ runId }) => runId)).toEqual([
+      "run_001",
+      "run_002",
+      "run_001",
+      "run_003",
+      "run_001",
+      "run_004",
+      "run_001",
+    ]);
+    expect(handle.getSnapshot().runTree.nodes.flatMap(({ relationKind }) =>
+      relationKind === null ? [] : [relationKind]
+    )).toEqual(["delegation", "continuation", "continuation"]);
   });
 
   it("routes steering only through the exact active delegation relation", async () => {
@@ -1605,13 +1828,15 @@ describe("Runner semantic integration", () => {
       ...route,
       request: { ...route.request, id: "request-wrong" },
     })).toMatchObject({ status: "rejected", code: "delegation_route_mismatch" });
-    expect(handle.steerDescendant(route)).toMatchObject({
+    const routed = handle.steerDescendant(route);
+    expect(routed).toMatchObject({
       status: "routed",
       submission: { status: "accepted_for_application" },
     });
     release.resolve();
 
     const result = await handle.wait();
+
     expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
     expect(handle.getSnapshot().activeDelegations).toEqual([]);
     expect(handle.steerDescendant(route)).toMatchObject({
@@ -1622,7 +1847,7 @@ describe("Runner semantic integration", () => {
       .toMatchObject({
         requestId: active.request.id,
         childAgentId: childAgent.id,
-        contextSourceCount: 1,
+        contextSourceCount: 0,
       });
   });
 
@@ -1720,6 +1945,7 @@ describe("Runner semantic integration", () => {
     handle.subscribe((snapshot) => rootSnapshots.push(snapshot));
     const result = await handle.wait();
 
+
     expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
     expect(controller.calls.map(({ runId }) => runId)).toEqual([
       "run_001",
@@ -1782,6 +2008,141 @@ describe("Runner semantic integration", () => {
         { runId: "run_003", status: "succeeded", depth: 2 },
       ],
     });
+  });
+
+  it("composes nested partial replacement under narrowed authority and conserved tree resources", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    let replacedResult: Readonly<{ readonly id: string; readonly revision: string }> | null = null;
+    const controller = new ScriptedController([
+      (input) => advance([toolCandidate(
+        "Agent",
+        { prompt: "Own one bounded child objective." },
+        input.toolExposure.controllerRequestId,
+      )], "model_root_delegate"),
+      (input) => advance([toolCandidate(
+        "Agent",
+        { prompt: "Produce an initial nested contribution." },
+        input.toolExposure.controllerRequestId,
+      )], "model_child_delegate"),
+      complete("Partial nested contribution", "model_grandchild_partial"),
+      (input) => {
+        const observation = projectedObservations(input.context).at(-1);
+        expect(observation?.payload).toMatchObject({
+          kind: "descendant_run",
+          status: "partial",
+          output: { summary: "Partial nested contribution" },
+        });
+        const output = observation?.payload.output;
+        expect(isRecord(output)).toBe(true);
+        replacedResult = Object.freeze({
+          id: (output as Record<string, unknown>).delegation_result_id as string,
+          revision: (output as Record<string, unknown>).delegation_result_revision as string,
+        });
+        expect(input.toolExposure.catalog.tools.map(({ name }) => name))
+          .toEqual(["Agent"]);
+        return advance([toolCandidate(
+          "Agent",
+          {
+            prompt: "Replace the partial nested contribution.",
+            replaced_result: replacedResult,
+          },
+          input.toolExposure.controllerRequestId,
+        )], "model_child_replace");
+      },
+      complete("Replacement contribution", "model_replacement_complete"),
+      (input) => {
+        expect(projectedObservations(input.context).at(-1)?.payload).toMatchObject({
+          kind: "descendant_run",
+          status: "succeeded",
+          output: { summary: "Replacement contribution" },
+        });
+        expect(input.toolExposure.catalog.tools.map(({ name }) => name))
+          .not.toContain("SendMessage");
+        return complete("Child synthesis complete", "model_child_complete");
+      },
+      (input) => {
+        expect(input.toolExposure.catalog.tools.map(({ name }) => name))
+          .toContain("SendMessage");
+        return complete("Root synthesis complete", "model_root_complete");
+      },
+    ]);
+    const operations = createOperationFixture([], [], {
+      delegation: createTestDelegation(childAgent, {
+        narrowToolAuthority: true,
+        partialSummary: "Partial nested contribution",
+      }),
+    });
+    const tools = createSemanticToolSelectionSet(operations, [
+      {
+        name: "Agent",
+        binding: {
+          kind: "descendant_agent",
+          agent: { id: childAgent.id, revision: childAgent.revision },
+          revision: "descendant-binding-1",
+        },
+      },
+      {
+        name: "SendMessage",
+        binding: {
+          kind: "descendant_message",
+          agent: { id: childAgent.id, revision: childAgent.revision },
+          revision: "descendant-message-binding-1",
+        },
+      },
+    ]);
+    const handle = createRunner(controller, operations).start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        tools,
+        runTreeLimits: {
+          maxTotalDescendantRuns: 3,
+          maxActiveDescendantRuns: 2,
+          maxDescendantDepth: 2,
+        },
+      }),
+    );
+    const result = await handle.wait();
+    const tree = handle.getSnapshot().runTree;
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(result.finalOutput).toEqual({ summary: "Root synthesis complete" });
+    expect(controller.calls.map(({ runId }) => runId)).toEqual([
+      "run_001",
+      "run_002",
+      "run_003",
+      "run_002",
+      "run_004",
+      "run_002",
+      "run_001",
+    ]);
+    expect(tree).toMatchObject({
+      rootRunId: "run_001",
+      totalDescendantRuns: 3,
+      activeDescendantRuns: 0,
+      settlement: {
+        complete: true,
+        unsettledDescendantRuns: 0,
+        pendingResultTransfers: 0,
+      },
+    });
+    expect(tree.nodes.map(({ runId, parentRunId, relationKind, status }) => ({
+      runId,
+      parentRunId,
+      relationKind,
+      status,
+    })), JSON.stringify(tree, null, 2)).toEqual([
+      { runId: "run_001", parentRunId: null, relationKind: null, status: "succeeded" },
+      { runId: "run_002", parentRunId: "run_001", relationKind: "delegation", status: "succeeded" },
+      { runId: "run_003", parentRunId: "run_002", relationKind: "delegation", status: "succeeded" },
+      { runId: "run_004", parentRunId: "run_002", relationKind: "replacement", status: "succeeded" },
+    ]);
+    expect(tree.resources.controllerTurns).toMatchObject({
+      enforcement: "hard",
+      capacity: 256,
+      activeReserved: 0,
+    });
+    expect(tree.nodes.every(({ resources }) => resources.settled)).toBe(true);
   });
 
   it("inherits the root invocation Action observer into descendant execution", async () => {
@@ -2989,7 +3350,10 @@ describe("Runner semantic integration", () => {
         dimension,
         dimension === "modelInputTokens" || dimension === "modelOutputTokens" ||
             dimension === "costUnits"
-          ? Object.freeze({ ...limit, enforcement: "observational" as const })
+          ? Object.freeze({
+              enforcement: "observational" as const,
+              threshold: limit.enforcement === "hard" ? limit.maximum : limit.threshold,
+            })
           : limit,
       ]),
     )) as RootRunConfig["runTreeResources"];
@@ -3008,7 +3372,11 @@ describe("Runner semantic integration", () => {
     const operations = createOperationFixture([]);
     const resources = Object.freeze({
       ...testRunTreeResources(),
-      contextBytes: Object.freeze({ maximum: 1, enforcement: "hard" as const }),
+      contextBytes: Object.freeze({
+        enforcement: "hard" as const,
+        maximum: 1,
+        minimumChildGrant: 1,
+      }),
     });
     const controller = new ScriptedController([complete("must not run")]);
 
@@ -3044,6 +3412,7 @@ describe("Runner semantic integration", () => {
       contextBytes: Object.freeze({
         maximum: initialContextBytes,
         enforcement: "hard" as const,
+        minimumChildGrant: 1,
       }),
     });
     const controller = new ScriptedController([complete("must not run")]);
@@ -3072,7 +3441,11 @@ describe("Runner semantic integration", () => {
     const operations = createOperationFixture([]);
     const resources = Object.freeze({
       ...testRunTreeResources(),
-      resultBytes: Object.freeze({ maximum: 1, enforcement: "hard" as const }),
+      resultBytes: Object.freeze({
+        enforcement: "hard" as const,
+        maximum: 1,
+        minimumChildGrant: 1,
+      }),
     });
 
     const result = await createRunner(
@@ -3200,7 +3573,11 @@ function createOperationFixture(
 
 function createTestDelegation(
   agent: Agent<TestOutput>,
-  options: { readonly mandatoryUnsupportedContext?: boolean } = {},
+  options: {
+    readonly mandatoryUnsupportedContext?: boolean;
+    readonly narrowToolAuthority?: boolean;
+    readonly partialSummary?: string;
+  } = {},
 ): RunnerDelegationComposition {
   return Object.freeze({
     preparation: Object.freeze({
@@ -3225,14 +3602,18 @@ function createTestDelegation(
         }
         const candidate = input.toolCall.input as {
           readonly prompt?: unknown;
-          readonly predecessor_result?: unknown;
+          readonly dependency_result?: unknown;
+          readonly replaced_result?: unknown;
         };
         if (typeof candidate.prompt !== "string" || candidate.prompt.length === 0) {
           throw new TypeError("Test delegation requires a prompt.");
         }
-        const predecessor = candidate.predecessor_result === undefined
+        const dependencyResult = candidate.dependency_result === undefined
           ? null
-          : testDelegationResultRef(candidate.predecessor_result);
+          : testDelegationResultRef(candidate.dependency_result);
+        const replacedResult = candidate.replaced_result === undefined
+          ? null
+          : testDelegationResultRef(candidate.replaced_result);
         const limits = createDelegationLimits({
           maxControllerTurns: input.limitCeiling.maxControllerTurns,
           maxActions: input.limitCeiling.maxActions,
@@ -3243,19 +3624,9 @@ function createTestDelegation(
           maxModelOutputTokens: input.limitCeiling.maxModelOutputTokens,
           maxCostUnits: input.limitCeiling.maxCostUnits,
         });
-        const rootPurpose = createDelegationContextMaterial({
-          owner: "test-product",
-          kind: "root_task_purpose",
-          id: input.root.task.id,
-          payload: Object.freeze({
-            kind: "test_root_purpose",
-            taskKind: input.root.task.kind,
-            taskInput: input.root.task.input,
-          }),
-        });
         return Object.freeze({
           agent,
-          rootPurpose,
+          contextMaterials: Object.freeze([]),
           preparation: Object.freeze({
             schemaVersion: 1 as const,
             childAgent: Object.freeze({ id: agent.id, revision: agent.revision }),
@@ -3278,11 +3649,6 @@ function createTestDelegation(
             }),
             contextPlan: createDelegationContextPlan({
               entries: Object.freeze([
-                Object.freeze({
-                  role: "root_purpose" as const,
-                  material: rootPurpose.ref,
-                  necessity: "mandatory" as const,
-                }),
                 ...(options.mandatoryUnsupportedContext
                   ? [Object.freeze({
                       role: "parent_fact" as const,
@@ -3301,17 +3667,68 @@ function createTestDelegation(
             requestedAuthority: Object.freeze(input.authorityCeiling.map((dimension) =>
               Object.freeze({
                 kind: dimension.kind,
-                allowed: Object.freeze([...dimension.allowed]),
+                allowed: Object.freeze(
+                  options.narrowToolAuthority && dimension.kind === "tool"
+                    ? dimension.allowed.slice(0, 1)
+                    : [...dimension.allowed],
+                ),
                 required: Object.freeze([...dimension.required]),
               }))),
             limits,
-            predecessor,
+            dependencyResult,
+            replacedResult,
+          }),
+        });
+      },
+    }),
+    continuation: Object.freeze({
+      async prepare(input) {
+        if (
+          input.targetAgent.id !== agent.id ||
+          input.targetAgent.revision !== agent.revision
+        ) {
+          throw new TypeError("Test descendant continuation is not admitted.");
+        }
+        const limits = createDelegationLimits({
+          maxControllerTurns: input.limitCeiling.maxControllerTurns,
+          maxActions: input.limitCeiling.maxActions,
+          maxDurationMs: input.limitCeiling.maxDurationMs,
+          maxContextBytes: input.limitCeiling.maxContextBytes,
+          maxResultBytes: input.limitCeiling.maxResultBytes,
+          maxModelInputTokens: input.limitCeiling.maxModelInputTokens,
+          maxModelOutputTokens: input.limitCeiling.maxModelOutputTokens,
+          maxCostUnits: input.limitCeiling.maxCostUnits,
+        });
+        return Object.freeze({
+          agent,
+          contextMaterials: Object.freeze([]),
+          preparation: Object.freeze({
+            schemaVersion: 1 as const,
+            childAgent: Object.freeze({ id: agent.id, revision: agent.revision }),
+            task: input.sourceRequest.task,
+            objective: input.sourceRequest.objective,
+            expectedResult: input.sourceRequest.expectedResult,
+            contextPlan: createDelegationContextPlan({
+              entries: Object.freeze([]),
+              maxContextBytes: limits.maxContextBytes,
+            }),
+            requestedAuthority: Object.freeze(input.authorityCeiling.map((dimension) =>
+              Object.freeze({
+                kind: dimension.kind,
+                allowed: Object.freeze([...dimension.allowed]),
+                required: Object.freeze([...dimension.required]),
+              }))
+            ),
+            limits,
+            dependencyResult: null,
+            replacedResult: null,
           }),
         });
       },
     }),
     narrativeProjection: Object.freeze({
-      project({ finalOutput }) {
+      project({ childResult }) {
+        const finalOutput = childResult.finalOutput;
         if (
           finalOutput !== null &&
           typeof finalOutput === "object" &&
@@ -3325,14 +3742,25 @@ function createTestDelegation(
     }),
     resultProjection: Object.freeze({
       project(result) {
+        const output = Object.freeze({
+          summary: result.narrative?.text ?? "",
+          delegation_result_id: result.ref.id,
+          delegation_result_revision: result.ref.revision,
+        });
+        if (
+          result.terminal.status === "succeeded" &&
+          result.narrative?.text === options.partialSummary
+        ) {
+          return Object.freeze({
+            status: "partial" as const,
+            output,
+            failure: operationFailure("agent-runtime", "descendant_partial"),
+          });
+        }
         return result.terminal.status === "succeeded"
           ? Object.freeze({
               status: "succeeded" as const,
-              output: Object.freeze({
-                summary: result.narrative?.text ?? "",
-                delegation_result_id: result.ref.id,
-                delegation_result_revision: result.ref.revision,
-              }),
+              output,
               failure: null,
             })
           : Object.freeze({
@@ -3349,7 +3777,7 @@ function testDelegationResultRef(
   input: unknown,
 ): Readonly<{ readonly id: string; readonly revision: string }> {
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
-    throw new TypeError("Test delegation predecessor result must be an object.");
+    throw new TypeError("Test delegation source result must be an object.");
   }
   const ref = input as Readonly<Record<string, unknown>>;
   if (
@@ -3357,7 +3785,7 @@ function testDelegationResultRef(
     typeof ref.id !== "string" || ref.id.length === 0 ||
     typeof ref.revision !== "string" || ref.revision.length === 0
   ) {
-    throw new TypeError("Test delegation predecessor result ref is invalid.");
+    throw new TypeError("Test delegation source result ref is invalid.");
   }
   return Object.freeze({ id: ref.id, revision: ref.revision });
 }
@@ -3616,37 +4044,56 @@ function createSemanticToolSelection(
   name: string,
   binding: Exclude<ToolBindingRef, { readonly kind: "operation" }>,
 ) {
-  const toolName = name.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
-  const registration: ToolRegistrationInput = {
-    admissionId: `tool-admission-${toolName}`,
-    descriptor: {
-      ref: { tool: { namespace: "code-agent", name: toolName }, revision: "1" },
-      name,
-      description: `Test Tool ${name}.`,
-      inputSchema: { type: "object" },
-      outputSchema: { type: "object" },
-      schemaRevisions: {
-        dialect: "json-schema-2020-12",
-        input: "input-1",
-        output: "output-1",
-        translation: "native-1",
+  return createSemanticToolSelectionSet(operations, [{ name, binding }]);
+}
+
+function createSemanticToolSelectionSet(
+  operations: OperationFixture,
+  entries: readonly {
+    readonly name: string;
+    readonly binding: Exclude<ToolBindingRef, { readonly kind: "operation" }>;
+  }[],
+) {
+  const registrationsInput: ToolRegistrationInput[] = entries.map(({ name, binding }) => {
+    const toolName = name.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
+    return {
+      admissionId: `tool-admission-${toolName}`,
+      descriptor: {
+        ref: { tool: { namespace: "code-agent", name: toolName }, revision: "1" },
+        name,
+        description: `Test Tool ${name}.`,
+        inputSchema: { type: "object" },
+        outputSchema: { type: "object" },
+        schemaRevisions: {
+          dialect: "json-schema-2020-12",
+          input: "input-1",
+          output: "output-1",
+          translation: "native-1",
+        },
+        source: {
+          kind: "product",
+          sourceId: "helarc-code-agent",
+          sourceRevision: "1",
+          activationEpoch: null,
+        },
+        binding,
       },
-      source: {
-        kind: "product",
-        sourceId: "helarc-code-agent",
-        sourceRevision: "1",
-        activationEpoch: null,
-      },
-      binding,
-    },
-    allowedOrigins: ["model"],
-    admittedAt: NOW,
-  };
-  const registrations = createToolRegistrationSnapshot(operations.catalog, [registration]);
-  return createFixedLocalToolSelection(registrations, operations.catalog, [{
-    tool: registration.descriptor.ref,
-    origins: ["model"],
-  }]);
+      allowedOrigins: ["model"],
+      admittedAt: NOW,
+    };
+  });
+  const registrations = createToolRegistrationSnapshot(
+    operations.catalog,
+    registrationsInput,
+  );
+  return createFixedLocalToolSelection(
+    registrations,
+    operations.catalog,
+    registrationsInput.map((registration) => ({
+      tool: registration.descriptor.ref,
+      origins: ["model"],
+    })),
+  );
 }
 
 function emptyToolSelection(operations: OperationFixture) {
@@ -3863,13 +4310,13 @@ function createRunConfig(
 
 function testRunTreeResources(): RootRunConfig["runTreeResources"] {
   return Object.freeze({
-    controllerTurns: Object.freeze({ maximum: 256, enforcement: "hard" as const }),
-    actions: Object.freeze({ maximum: 256, enforcement: "hard" as const }),
-    modelInputTokens: Object.freeze({ maximum: 1_000_000, enforcement: "hard" as const }),
-    modelOutputTokens: Object.freeze({ maximum: 250_000, enforcement: "hard" as const }),
-    costUnits: Object.freeze({ maximum: 1_000_000, enforcement: "hard" as const }),
-    contextBytes: Object.freeze({ maximum: 8_000_000, enforcement: "hard" as const }),
-    resultBytes: Object.freeze({ maximum: 2_000_000, enforcement: "hard" as const }),
+    controllerTurns: Object.freeze({ maximum: 256, minimumChildGrant: 1, enforcement: "hard" as const }),
+    actions: Object.freeze({ maximum: 256, minimumChildGrant: 1, enforcement: "hard" as const }),
+    modelInputTokens: Object.freeze({ maximum: 1_000_000, minimumChildGrant: 1, enforcement: "hard" as const }),
+    modelOutputTokens: Object.freeze({ maximum: 250_000, minimumChildGrant: 1, enforcement: "hard" as const }),
+    costUnits: Object.freeze({ maximum: 1_000_000, minimumChildGrant: 1, enforcement: "hard" as const }),
+    contextBytes: Object.freeze({ maximum: 8_000_000, minimumChildGrant: 1, enforcement: "hard" as const }),
+    resultBytes: Object.freeze({ maximum: 2_000_000, minimumChildGrant: 1, enforcement: "hard" as const }),
   });
 }
 

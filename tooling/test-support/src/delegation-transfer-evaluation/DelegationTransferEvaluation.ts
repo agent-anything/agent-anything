@@ -17,10 +17,14 @@ import {
 } from "../evaluation-targets/helarc/HelarcEvaluationTarget.js";
 
 const ROOT_PURPOSE_MARKER = "Inspect src/index.ts and report the exported value.";
+const DELEGATED_OBJECTIVE_MARKERS = Object.freeze([
+  "Inspect src/index.ts and identify the exported value without changing files.",
+  "Read src/index.ts and report the exported symbol and value without changing files.",
+]);
 const EXPECTED_DESCENDANTS = 2;
 
 export interface DelegationTransferMetrics {
-  readonly objectiveRetentionRate: number;
+  readonly objectiveFidelityRate: number;
   readonly unnecessaryDelegationCount: number;
   readonly semanticDriftCount: number;
   readonly resultAttributionRate: number;
@@ -35,15 +39,15 @@ export interface DelegationTransferMetrics {
 
 export interface DelegationTransferInvariantSummary {
   readonly exactLifecycleCorrelation: boolean;
-  readonly rootPurposeRetained: boolean;
-  readonly freshContextSourcesPresent: boolean;
+  readonly delegatedObjectivesIsolated: boolean;
+  readonly ordinaryDelegationContextIsolated: boolean;
   readonly resultsAttributed: boolean;
   readonly effectsTruthful: boolean;
   readonly terminalTruthPreserved: boolean;
 }
 
 export interface DelegationTransferEvaluationReport {
-  readonly revision: "delegation-transfer-deterministic-evaluation-v4";
+  readonly revision: "delegation-transfer-deterministic-evaluation-v5";
   readonly metrics: DelegationTransferMetrics;
   readonly invariants: DelegationTransferInvariantSummary;
   readonly descendantRunCount: number;
@@ -88,7 +92,7 @@ export async function runDelegationTransferDeterministicEvaluation(): Promise<
   const started = descendantEvents(material, "run.descendant.started");
   const settled = descendantEvents(material, "run.descendant.settled");
   const materialized = deepFreeze({
-    revision: "delegation-transfer-deterministic-evaluation-v4" as const,
+    revision: "delegation-transfer-deterministic-evaluation-v5" as const,
     metrics,
     invariants,
     descendantRunCount: started.length,
@@ -224,11 +228,11 @@ function scriptedRecursiveSteps(): readonly FakeNativeToolProviderStep[] {
 function projectMetrics(material: HelarcEvaluationRunMaterial): DelegationTransferMetrics {
   const started = descendantEvents(material, "run.descendant.started");
   const settled = descendantEvents(material, "run.descendant.settled");
-  const controllerRequestMaterials = material.providerRequests
-    .filter((request) => request.purpose !== "helarc.task-fulfillment")
-    .map((request) => JSON.stringify(request));
-  const retained = controllerRequestMaterials
-    .filter((request) => request.includes(ROOT_PURPOSE_MARKER)).length;
+  const controllerRequestMaterials = initialControllerRequestMaterials(material);
+  const objectiveMarkers = [ROOT_PURPOSE_MARKER, ...DELEGATED_OBJECTIVE_MARKERS];
+  const faithful = controllerRequestMaterials.filter((request) =>
+    objectiveMarkers.filter((marker) => request.includes(marker)).length === 1
+  ).length;
   const drifted = material.providerResults.filter((result) =>
     result.kind === "succeeded" &&
     result.response.kind === "native_tool_turn" &&
@@ -249,7 +253,7 @@ function projectMetrics(material: HelarcEvaluationRunMaterial): DelegationTransf
     modelTurnCallCount(result.response.turn.assistant.content) > 0
   ).length;
   return deepFreeze({
-    objectiveRetentionRate: ratio(retained, controllerRequestMaterials.length),
+    objectiveFidelityRate: ratio(faithful, controllerRequestMaterials.length),
     unnecessaryDelegationCount: Math.max(0, started.length - EXPECTED_DESCENDANTS),
     semanticDriftCount: drifted,
     resultAttributionRate: ratio(attributed, settled.length),
@@ -291,14 +295,23 @@ function projectInvariants(
   const settled = descendantEvents(material, "run.descendant.settled");
   const startedRelations = new Set(started.map((event) => tokenField(event, "relationId")));
   const settledRelations = new Set(settled.map((event) => tokenField(event, "relationId")));
+  const controllerRequestMaterials = initialControllerRequestMaterials(material);
+  const delegatedRequestMaterials = controllerRequestMaterials.filter((request) =>
+    DELEGATED_OBJECTIVE_MARKERS.some((marker) => request.includes(marker))
+  );
+  const representedDelegatedObjectives = new Set(DELEGATED_OBJECTIVE_MARKERS.filter((marker) =>
+    delegatedRequestMaterials.some((request) => request.includes(marker))
+  ));
   return deepFreeze({
     exactLifecycleCorrelation: started.length === EXPECTED_DESCENDANTS &&
       settled.length === EXPECTED_DESCENDANTS &&
       startedRelations.size === EXPECTED_DESCENDANTS &&
       [...startedRelations].every((relation) => relation !== null && settledRelations.has(relation)),
-    rootPurposeRetained: metrics.objectiveRetentionRate === 1,
-    freshContextSourcesPresent: started.every((event) =>
-      numberField(event, "contextSourceCount") >= 1
+    delegatedObjectivesIsolated: metrics.objectiveFidelityRate === 1 &&
+      representedDelegatedObjectives.size === EXPECTED_DESCENDANTS &&
+      delegatedRequestMaterials.every((request) => !request.includes(ROOT_PURPOSE_MARKER)),
+    ordinaryDelegationContextIsolated: started.every((event) =>
+      numberField(event, "contextSourceCount") === 0
     ),
     resultsAttributed: metrics.resultAttributionRate === 1,
     effectsTruthful: metrics.effectTruthRate === 1,
@@ -315,6 +328,20 @@ function descendantEvents(
       ? [event.payload]
       : []
   );
+}
+
+function initialControllerRequestMaterials(
+  material: HelarcEvaluationRunMaterial,
+): readonly string[] {
+  const firstByRunId = new Map<string, string>();
+  for (const request of material.providerRequests) {
+    if (request.purpose !== "helarc.code-agent.turn") continue;
+    const runId = tokenField(request.metadata, "runId");
+    if (runId !== null && !firstByRunId.has(runId)) {
+      firstByRunId.set(runId, JSON.stringify(request));
+    }
+  }
+  return Object.freeze([...firstByRunId.values()]);
 }
 
 function traceDuration(material: HelarcEvaluationRunMaterial): number {

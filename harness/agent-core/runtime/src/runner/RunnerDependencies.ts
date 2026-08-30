@@ -81,6 +81,7 @@ export type RunnerIdentityKind =
   | "descendant_relation"
   | "delegation_request"
   | "delegation_result"
+  | "descendant_continuation"
   | "delegation_authority"
   | "delegation_limits"
   | "composite"
@@ -148,7 +149,7 @@ export interface AgentResolverPort {
 export interface DelegationPreparationResult {
   readonly agent: Agent;
   readonly preparation: DelegationPreparation;
-  readonly rootPurpose: DelegationContextMaterial;
+  readonly contextMaterials: readonly DelegationContextMaterial[];
 }
 
 export type DescendantOperationOutcome =
@@ -183,6 +184,18 @@ export interface DelegationPreparationPort {
   }): Promise<DelegationPreparationResult>;
 }
 
+export interface DelegationContinuationPreparationPort {
+  prepare(input: {
+    readonly parentRunId: string;
+    readonly targetAgent: AgentRevisionRef;
+    readonly sourceRequest: DelegationRequest;
+    readonly sourceResult: DelegationResult;
+    readonly message: string;
+    readonly authorityCeiling: readonly DelegationAuthorityDimensionInput[];
+    readonly limitCeiling: DelegationLimits;
+  }): Promise<DelegationPreparationResult>;
+}
+
 export interface DelegationResultProjectionPort {
   project(result: DelegationResult): DescendantOperationOutcome;
 }
@@ -190,12 +203,13 @@ export interface DelegationResultProjectionPort {
 export interface DelegationNarrativeProjectionPort {
   project(input: {
     readonly request: DelegationRequest;
-    readonly finalOutput: unknown;
+    readonly childResult: import("../run/index.js").RunResult;
   }): string | null;
 }
 
 export interface RunnerDelegationComposition {
   readonly preparation: DelegationPreparationPort;
+  readonly continuation: DelegationContinuationPreparationPort;
   readonly narrativeProjection: DelegationNarrativeProjectionPort;
   readonly resultProjection: DelegationResultProjectionPort;
 }

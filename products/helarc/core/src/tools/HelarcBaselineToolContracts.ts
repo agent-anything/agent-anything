@@ -11,7 +11,8 @@ export type HelarcBaselineToolName =
   | HelarcShellToolName
   | "TaskStop"
   | "AskUserQuestion"
-  | "Agent";
+  | "Agent"
+  | "SendMessage";
 
 export type HelarcToolSettlementBinding =
   | {
@@ -30,6 +31,11 @@ export type HelarcToolSettlementBinding =
     }
   | {
       readonly kind: "descendant_run";
+      readonly target: "agent.general-purpose";
+      readonly canonicalEffect: null;
+    }
+  | {
+      readonly kind: "descendant_message";
       readonly target: "agent.general-purpose";
       readonly canonicalEffect: null;
     };
@@ -283,38 +289,72 @@ const ASK_USER_QUESTION = contract({
   },
 });
 
+const DELEGATION_RESULT_OUTPUT = objectSchema(["delegation_result_id", "delegation_result_revision", "child_run_id", "status", "summary", "artifact_refs", "verification_status", "effect_status", "uncertainty", "failure_code"], {
+  delegation_result_id: { type: "string", minLength: 1, maxLength: 1_024 },
+  delegation_result_revision: { type: "string", minLength: 1, maxLength: 256 },
+  child_run_id: { type: "string", minLength: 1, maxLength: 1_024 },
+  status: { enum: ["succeeded", "blocked", "failed", "cancelled"] },
+  summary: { type: "string", maxLength: 64_000 },
+  artifact_refs: {
+    type: "array",
+    items: { type: "string", minLength: 1, maxLength: 1_024 },
+  },
+  verification_status: { type: "string" },
+  effect_status: { type: "string" },
+  uncertainty: {
+    type: "array",
+    items: { type: "string", minLength: 1, maxLength: 256 },
+  },
+  failure_code: { anyOf: [{ type: "string" }, { type: "null" }] },
+});
+
 const AGENT = contract({
   name: "Agent",
   description: "Delegate bounded work to one general-purpose descendant Agent.",
   inputSchema: objectSchema(["prompt"], {
     prompt: { type: "string", minLength: 1, maxLength: 64_000 },
     description: { type: "string", minLength: 1, maxLength: 1_024 },
-    predecessor_result: objectSchema(["id", "revision"], {
+    dependency_result: objectSchema(["id", "revision"], {
+      id: { type: "string", minLength: 1, maxLength: 1_024 },
+      revision: { type: "string", minLength: 1, maxLength: 256 },
+    }),
+    replaced_result: objectSchema(["id", "revision"], {
       id: { type: "string", minLength: 1, maxLength: 1_024 },
       revision: { type: "string", minLength: 1, maxLength: 256 },
     }),
   }),
-  outputSchema: objectSchema(["delegation_result_id", "delegation_result_revision", "child_run_id", "status", "summary", "artifact_refs", "verification_status", "effect_status", "uncertainty", "failure_code"], {
-    delegation_result_id: { type: "string", minLength: 1, maxLength: 1_024 },
-    delegation_result_revision: { type: "string", minLength: 1, maxLength: 256 },
-    child_run_id: { type: "string", minLength: 1, maxLength: 1_024 },
-    status: { enum: ["succeeded", "blocked", "failed", "cancelled"] },
-    summary: { type: "string", maxLength: 64_000 },
-    artifact_refs: {
-      type: "array",
-      items: { type: "string", minLength: 1, maxLength: 1_024 },
-    },
-    verification_status: { type: "string" },
-    effect_status: { type: "string" },
-    uncertainty: {
-      type: "array",
-      items: { type: "string", minLength: 1, maxLength: 256 },
-    },
-    failure_code: { anyOf: [{ type: "string" }, { type: "null" }] },
-  }),
+  outputSchema: DELEGATION_RESULT_OUTPUT,
   annotations: {},
   binding: {
     kind: "descendant_run",
+    target: "agent.general-purpose",
+    canonicalEffect: null,
+  },
+});
+
+const SEND_MESSAGE = contract({
+  name: "SendMessage",
+  description: "Send one bounded instruction to one exact active descendant or continuation target.",
+  inputSchema: objectSchema(["target", "message"], {
+    target: objectSchema(["kind", "id"], {
+      kind: { enum: ["active", "continuation"] },
+      id: { type: "string", minLength: 1, maxLength: 1_024 },
+    }),
+    message: { type: "string", minLength: 1, maxLength: 64_000 },
+  }),
+  outputSchema: Object.freeze({
+    oneOf: [
+      objectSchema(["delivery", "child_run_id", "command_id"], {
+        delivery: { const: "active" },
+        child_run_id: { type: "string", minLength: 1, maxLength: 1_024 },
+        command_id: { type: "string", minLength: 1, maxLength: 1_024 },
+      }),
+      DELEGATION_RESULT_OUTPUT,
+    ],
+  }),
+  annotations: {},
+  binding: {
+    kind: "descendant_message",
     target: "agent.general-purpose",
     canonicalEffect: null,
   },
@@ -405,6 +445,7 @@ export const HELARC_BASELINE_TOOL_CONTRACTS = Object.freeze([
   TASK_STOP,
   ASK_USER_QUESTION,
   AGENT,
+  SEND_MESSAGE,
 ] as const);
 
 export function createHelarcBaselineToolContracts(

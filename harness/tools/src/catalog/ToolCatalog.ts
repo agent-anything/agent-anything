@@ -206,11 +206,12 @@ function snapshotBinding(input: ToolBindingRef, path: string): ToolBindingRef {
         revision: token(raw.revision, `${path}.revision`),
       });
     }
-    case "descendant_agent": {
+    case "descendant_agent":
+    case "descendant_message": {
       assertExactRecord(input, path, ["kind", "agent", "revision"]);
       const agent = assertExactRecord(raw.agent, `${path}.agent`, ["id", "revision"]);
       return Object.freeze({
-        kind: "descendant_agent" as const,
+        kind: raw.kind,
         agent: Object.freeze({
           id: token(agent.id, `${path}.agent.id`),
           revision: token(agent.revision, `${path}.agent.revision`),

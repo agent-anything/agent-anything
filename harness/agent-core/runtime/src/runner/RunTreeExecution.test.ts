@@ -59,6 +59,7 @@ describe("RunTreeExecution", () => {
     });
     const child = tree.reserveDescendant({
       relationId: "relation-1",
+      relationKind: "delegation",
       createChildRunId: () => "run-child",
       parentRunId: "run-root",
       parentLineage: tree.rootLineage,
@@ -357,7 +358,10 @@ describe("RunTreeExecution", () => {
 
     expect(revisions).toEqual([before]);
     expect(tree.getSnapshot().revision).toBe(before + 1);
-    expect(tree.getSnapshot().resources.controllerTurns.consumed).toBe(1);
+    expect(tree.getSnapshot().resources.controllerTurns).toMatchObject({
+      enforcement: "hard",
+      measuredConsumed: 1,
+    });
   });
 });
 
@@ -397,6 +401,7 @@ function reserve(
 ) {
   return tree.reserveDescendant({
     relationId: `relation-${childRunId}`,
+    relationKind: "delegation",
     createChildRunId: () => childRunId,
     parentRunId,
     parentLineage,
@@ -410,13 +415,13 @@ function reserve(
 
 function treeResources() {
   return Object.freeze({
-    controllerTurns: { maximum: 1_000, enforcement: "hard" as const },
-    actions: { maximum: 1_000, enforcement: "hard" as const },
-    modelInputTokens: { maximum: 1_000, enforcement: "observational" as const },
-    modelOutputTokens: { maximum: 1_000, enforcement: "observational" as const },
-    costUnits: { maximum: 1_000, enforcement: "observational" as const },
-    contextBytes: { maximum: 1_000, enforcement: "hard" as const },
-    resultBytes: { maximum: 1_000, enforcement: "hard" as const },
+    controllerTurns: { maximum: 1_000, minimumChildGrant: 1, enforcement: "hard" as const },
+    actions: { maximum: 1_000, minimumChildGrant: 1, enforcement: "hard" as const },
+    modelInputTokens: { threshold: 1_000, enforcement: "observational" as const },
+    modelOutputTokens: { threshold: 1_000, enforcement: "observational" as const },
+    costUnits: { threshold: 1_000, enforcement: "observational" as const },
+    contextBytes: { maximum: 1_000, minimumChildGrant: 1, enforcement: "hard" as const },
+    resultBytes: { maximum: 1_000, minimumChildGrant: 1, enforcement: "hard" as const },
   });
 }
 

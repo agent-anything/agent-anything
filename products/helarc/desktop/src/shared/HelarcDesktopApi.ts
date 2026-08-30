@@ -285,6 +285,7 @@ export interface HelarcRunTreeNodeSnapshot {
   readonly runId: string;
   readonly parentRunId: string | null;
   readonly relationId: string | null;
+  readonly relationKind: "delegation" | "replacement" | "continuation" | null;
   readonly parentRunActionId: string | null;
   readonly depth: number;
   readonly status: HelarcRunTreeNodeStatusSnapshot;
@@ -296,15 +297,24 @@ export interface HelarcRunTreeNodeSnapshot {
   readonly cancellationScope: "subtree" | "tree" | null;
 }
 
-export interface HelarcRunTreeResourceSnapshot {
-  readonly capacity: number;
-  readonly consumed: number;
-  readonly reserved: number;
-  readonly remaining: number;
-  readonly released: number;
-  readonly measurementStatus: "measured" | "unavailable" | "not_applicable" | "unknown";
-  readonly enforcement: "hard" | "observational";
-}
+export type HelarcRunTreeResourceSnapshot =
+  | {
+      readonly enforcement: "hard";
+      readonly capacity: number;
+      readonly measuredConsumed: number;
+      readonly chargedUnknown: number;
+      readonly activeReserved: number;
+      readonly available: number;
+      readonly cumulativeReleased: number;
+      readonly measurementStatus: "measured" | "unavailable" | "not_applicable" | "unknown";
+    }
+  | {
+      readonly enforcement: "observational";
+      readonly threshold: number;
+      readonly observed: number;
+      readonly overage: number;
+      readonly measurementStatus: "measured" | "unavailable" | "not_applicable" | "unknown";
+    };
 
 export interface HelarcRunTreeSnapshot {
   readonly rootRunId: string;
@@ -355,9 +365,18 @@ export interface HelarcActiveDelegationSnapshot {
   readonly request: Readonly<{ readonly id: string; readonly revision: string }>;
   readonly relation: Readonly<{ readonly id: string }>;
   readonly child: Readonly<{ readonly id: string }>;
+  readonly relationKind: "delegation" | "replacement" | "continuation";
   readonly childRunRevision: number;
   readonly childStatus: HelarcRunTreeNodeStatusSnapshot;
   readonly steerable: true;
+}
+
+export interface HelarcDescendantContinuationTargetSnapshot {
+  readonly ref: Readonly<{ readonly id: string; readonly revision: string }>;
+  readonly sourceChild: Readonly<{ readonly id: string }>;
+  readonly sourceResult: Readonly<{ readonly id: string; readonly revision: string }>;
+  readonly agent: Readonly<{ readonly id: string; readonly revision: string }>;
+  readonly limitations: readonly string[];
 }
 
 export interface HelarcModelContinuationSnapshot {
@@ -525,6 +544,7 @@ export interface HelarcRunSnapshot {
     readonly instructionBinding: HelarcInstructionBindingSnapshot | null;
     readonly runTree: HelarcRunTreeSnapshot;
     readonly activeDelegations: readonly HelarcActiveDelegationSnapshot[];
+    readonly continuationTargets: readonly HelarcDescendantContinuationTargetSnapshot[];
     readonly stopReview: HelarcRunStopReviewSnapshot;
     readonly verification: HelarcHostVerificationSnapshot | null;
     readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];
@@ -905,6 +925,7 @@ export interface HelarcHostRunStatusSnapshot {
   readonly startedAt: string;
   readonly runTree: HelarcRunTreeSnapshot;
   readonly activeDelegations: readonly HelarcActiveDelegationSnapshot[];
+  readonly continuationTargets: readonly HelarcDescendantContinuationTargetSnapshot[];
   readonly stopReview: HelarcRunStopReviewSnapshot;
   readonly verification: HelarcHostVerificationSnapshot | null;
   readonly pendingInteractions: readonly HelarcPendingInteractionSnapshot[];

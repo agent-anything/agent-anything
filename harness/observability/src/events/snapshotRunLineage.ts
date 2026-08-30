@@ -20,6 +20,7 @@ export function snapshotRunLineage(
   }
   return createDescendantRunLineage(createDescendantRunRelation({
     relationId: input.relation.id,
+    kind: "delegation",
     root: input.root,
     parent: input.parent,
     child: { id: runId },

@@ -43,10 +43,20 @@ export interface ToolDescendantAgentBindingRef {
   readonly revision: string;
 }
 
+export interface ToolDescendantMessageBindingRef {
+  readonly kind: "descendant_message";
+  readonly agent: {
+    readonly id: string;
+    readonly revision: string;
+  };
+  readonly revision: string;
+}
+
 export type ToolBindingRef =
   | ToolOperationBindingRef
   | ToolInteractionBindingRef
-  | ToolDescendantAgentBindingRef;
+  | ToolDescendantAgentBindingRef
+  | ToolDescendantMessageBindingRef;
 
 export interface ToolSourceRef {
   readonly kind: "harness" | "product" | "mcp" | "plugin" | "remote";

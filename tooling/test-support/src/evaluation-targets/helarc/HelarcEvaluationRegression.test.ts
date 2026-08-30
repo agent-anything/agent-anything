@@ -68,6 +68,10 @@ import {
   HELARC_RUN_TREE_RESOURCE_AUTHORITY_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcRunTreeResourceAuthorityBaseline.js";
 import {
+  HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE,
+  HELARC_RUN_TREE_DELEGATION_LIFECYCLE_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcRunTreeDelegationLifecycleBaseline.js";
+import {
   runDelegationTransferDeterministicEvaluation,
 } from "../../delegation-transfer-evaluation/DelegationTransferEvaluation.js";
 import {
@@ -78,7 +82,7 @@ import {
 } from "./HelarcEvaluationExecution.js";
 
 describe("Helarc accepted Evaluation baseline succession", () => {
-  it("preserves accepted history and proves the Run Tree resource-authority successor", async () => {
+  it("preserves accepted history and proves the Run Tree delegation-lifecycle successor", async () => {
     const baselines = [
       HELARC_DETERMINISTIC_SYSTEM_ACCEPTED_BASELINE,
       HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE,
@@ -98,15 +102,16 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       HELARC_TASK_FULFILLMENT_ACCEPTED_BASELINE,
       HELARC_RUN_STOP_EXECUTION_TRUTH_ACCEPTED_BASELINE,
       HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE,
+      HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE,
     ];
     const historyBefore = baselines.map((baseline) => JSON.stringify(baseline));
     const candidate = await runHelarcEvaluationBaselineCandidate();
     const predecessorComparison = compareHelarcEvaluationBaseline(
-      HELARC_RUN_STOP_EXECUTION_TRUTH_ACCEPTED_BASELINE,
+      HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE,
       candidate,
     );
     const acceptedComparison = compareHelarcEvaluationBaseline(
-      HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE,
+      HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE,
       candidate,
     );
 
@@ -125,15 +130,15 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     expect(candidate.cases.every(({ traceIssueCodes }) => traceIssueCodes.length === 0)).toBe(true);
     expect(baselines.map((baseline) => JSON.stringify(baseline))).toEqual(historyBefore);
     expect(candidate.report.ref)
-      .toEqual(HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE.reportRef);
+      .toEqual(HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.ref)
-      .toEqual(HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.report.supersedes)
-      .toEqual(HELARC_RUN_STOP_EXECUTION_TRUTH_ACCEPTED_BASELINE.reportRef);
+      .toEqual(HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE.reportRef);
     expect(candidate.acceptance.supersedes)
-      .toEqual(HELARC_RUN_STOP_EXECUTION_TRUTH_ACCEPTED_BASELINE.acceptanceRef);
+      .toEqual(HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE.acceptanceRef);
     expect(candidate.metrics.map(({ ref }) => ref)).toEqual(
-      HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
+      HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE.metrics.map(({ ref }) => ref),
     );
     expect(HELARC_VALIDATION_GATE_BASELINE_ACCEPTANCE.predecessorReportRef)
       .toEqual(HELARC_CONTEXT_CONTINUITY_ACCEPTED_BASELINE.reportRef);
@@ -167,6 +172,8 @@ describe("Helarc accepted Evaluation baseline succession", () => {
       .toEqual(HELARC_TASK_FULFILLMENT_ACCEPTED_BASELINE.reportRef);
     expect(HELARC_RUN_TREE_RESOURCE_AUTHORITY_BASELINE_ACCEPTANCE.predecessorReportRef)
       .toEqual(HELARC_RUN_STOP_EXECUTION_TRUTH_ACCEPTED_BASELINE.reportRef);
+    expect(HELARC_RUN_TREE_DELEGATION_LIFECYCLE_BASELINE_ACCEPTANCE.predecessorReportRef)
+      .toEqual(HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE.reportRef);
     expect(Object.isFrozen(HELARC_VALIDATION_COMPLETION_ACCEPTED_BASELINE)).toBe(true);
     expect(Object.isFrozen(HELARC_RUN_TREE_CONTROL_ACCEPTED_BASELINE)).toBe(true);
     expect(Object.isFrozen(HELARC_RUN_PROGRESS_ACCEPTED_BASELINE)).toBe(true);
@@ -178,26 +185,27 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     expect(Object.isFrozen(HELARC_TASK_FULFILLMENT_ACCEPTED_BASELINE)).toBe(true);
     expect(Object.isFrozen(HELARC_RUN_STOP_EXECUTION_TRUTH_ACCEPTED_BASELINE)).toBe(true);
     expect(Object.isFrozen(HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE)).toBe(true);
+    expect(Object.isFrozen(HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE)).toBe(true);
   }, 120_000);
 
   it("reports a safety regression even when paired latency improves", () => {
     const improvedLatencyAndUnsafe = changeAcceptedBaselineForRegression();
     const comparison = compareHelarcEvaluationBaseline(
-      HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE,
+      HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE,
       improvedLatencyAndUnsafe,
     );
 
     expect(comparison.status).toBe("regressed");
     if (comparison.status !== "regressed") return;
     expect(comparison.differences).toContain("gate:safety:failed");
-    const latencyIndex = HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE.metrics.findIndex(
+    const latencyIndex = HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE.metrics.findIndex(
       (metric) => metric.definitionRef.id.endsWith(".latency"),
     );
     const latency = comparison.pairedComparisons[latencyIndex];
     expect(latency?.pairs.every((pair) => pair.difference < 0)).toBe(true);
   });
 
-  it("preserves the accepted Delegation Transfer v1 while producing active v4 evidence", async () => {
+  it("preserves the accepted Delegation Transfer v1 while producing active v5 evidence", async () => {
     const predecessorBefore = JSON.stringify(
       HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE,
     );
@@ -206,29 +214,36 @@ describe("Helarc accepted Evaluation baseline succession", () => {
     );
     const candidate = await runDelegationTransferDeterministicEvaluation();
     const accepted = HELARC_DELEGATION_TRANSFER_ACCEPTED_BASELINE.delegationTransfer;
-    const {
-      humanAttentionEvents,
-      latencyMs: historicalLatencyMs,
-      modelTurnCount: historicalModelTurnCount,
-      ...historicalMetrics
-    } = accepted.metrics;
-
     expect(candidate).toMatchObject({
-      revision: "delegation-transfer-deterministic-evaluation-v4",
+      revision: "delegation-transfer-deterministic-evaluation-v5",
       metrics: {
-        ...historicalMetrics,
-        humanInteractionEvents: humanAttentionEvents,
+        objectiveFidelityRate: 1,
+        unnecessaryDelegationCount: 0,
+        semanticDriftCount: 0,
+        resultAttributionRate: 1,
+        effectTruthRate: 1,
+        completionRate: 1,
+        toolCallCount: 2,
+        humanInteractionEvents: 0,
         modelTurnCount: 8,
         latencyMs: 277,
+        terminalOutcome: "succeeded",
       },
-      invariants: accepted.invariants,
+      invariants: {
+        exactLifecycleCorrelation: true,
+        delegatedObjectivesIsolated: true,
+        ordinaryDelegationContextIsolated: true,
+        resultsAttributed: true,
+        effectsTruthful: true,
+        terminalTruthPreserved: true,
+      },
       descendantRunCount: accepted.descendantRunCount,
       settledResultCount: accepted.settledResultCount,
     });
     expect(accepted.evaluationRevision)
       .toBe("delegation-transfer-deterministic-evaluation-v1");
-    expect(historicalLatencyMs).toBe(283);
-    expect(historicalModelTurnCount).toBe(5);
+    expect(accepted.metrics.latencyMs).toBe(283);
+    expect(accepted.metrics.modelTurnCount).toBe(5);
     expect(candidate.metrics.latencyMs).toBe(277);
     expect(candidate.digest).not.toBe(accepted.reportDigest);
     expect(HELARC_DELEGATION_TRANSFER_BASELINE_ACCEPTANCE.predecessorAcceptanceRef)
@@ -243,7 +258,7 @@ describe("Helarc accepted Evaluation baseline succession", () => {
 
 function changeAcceptedBaselineForRegression(): HelarcEvaluationBaselineSignature {
   const baseline = projectHelarcEvaluationBaselineSignature(
-    HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE,
+    HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE,
   );
   return Object.freeze({
     ...baseline,

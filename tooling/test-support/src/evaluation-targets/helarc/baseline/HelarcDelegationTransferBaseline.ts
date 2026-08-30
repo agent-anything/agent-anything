@@ -2,18 +2,30 @@ import type {
   HelarcEvaluationBaselineMetricSignature,
   HelarcEvaluationBaselineSignature,
 } from "../HelarcEvaluationExecution.js";
-import type {
-  DelegationTransferInvariantSummary,
-  DelegationTransferMetrics,
-} from "../../../delegation-transfer-evaluation/DelegationTransferEvaluation.js";
 import { HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE } from "./HelarcCurrentTurnToolExposureBaseline.js";
 
-type HistoricalDelegationTransferMetrics = Omit<
-  DelegationTransferMetrics,
-  "humanInteractionEvents"
-> & {
+export interface HistoricalDelegationTransferMetrics {
+  readonly objectiveRetentionRate: number;
+  readonly unnecessaryDelegationCount: number;
+  readonly semanticDriftCount: number;
+  readonly resultAttributionRate: number;
+  readonly effectTruthRate: number;
+  readonly completionRate: number;
+  readonly toolCallCount: number;
+  readonly modelTurnCount: number;
+  readonly latencyMs: number;
   readonly humanAttentionEvents: number;
-};
+  readonly terminalOutcome: "succeeded" | "blocked" | "failed" | "cancelled";
+}
+
+export interface HistoricalDelegationTransferInvariantSummary {
+  readonly exactLifecycleCorrelation: boolean;
+  readonly rootPurposeRetained: boolean;
+  readonly freshContextSourcesPresent: boolean;
+  readonly resultsAttributed: boolean;
+  readonly effectsTruthful: boolean;
+  readonly terminalTruthPreserved: boolean;
+}
 
 const TARGET_MANIFEST_DIGEST = "088bc588f4ea0f9c9b0428ac19b6372913bd5e94ed982e4e678af57c61b10689";
 const TARGET_REVISION = HELARC_CURRENT_TURN_TOOL_EXPOSURE_ACCEPTED_BASELINE.targetSnapshotRef.revision
@@ -68,7 +80,7 @@ const delegationMetrics: HistoricalDelegationTransferMetrics = Object.freeze({
   terminalOutcome: "succeeded",
 });
 
-const delegationInvariants: DelegationTransferInvariantSummary = Object.freeze({
+const delegationInvariants: HistoricalDelegationTransferInvariantSummary = Object.freeze({
   exactLifecycleCorrelation: true,
   rootPurposeRetained: true,
   freshContextSourcesPresent: true,
@@ -134,7 +146,7 @@ export const HELARC_DELEGATION_TRANSFER_ACCEPTED_BASELINE = deepFreeze({
     readonly evaluationRevision: "delegation-transfer-deterministic-evaluation-v1";
     readonly reportDigest: string;
     readonly metrics: HistoricalDelegationTransferMetrics;
-    readonly invariants: DelegationTransferInvariantSummary;
+    readonly invariants: HistoricalDelegationTransferInvariantSummary;
     readonly descendantRunCount: number;
     readonly settledResultCount: number;
   };

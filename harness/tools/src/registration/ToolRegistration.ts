@@ -10,7 +10,8 @@ export interface RegisteredTool {
   readonly binding:
     | { readonly kind: "operation"; readonly operation: RegisteredOperation }
     | { readonly kind: "interaction"; readonly ref: Extract<ToolDescriptor["binding"], { readonly kind: "interaction" }> }
-    | { readonly kind: "descendant_agent"; readonly ref: Extract<ToolDescriptor["binding"], { readonly kind: "descendant_agent" }> };
+    | { readonly kind: "descendant_agent"; readonly ref: Extract<ToolDescriptor["binding"], { readonly kind: "descendant_agent" }> }
+    | { readonly kind: "descendant_message"; readonly ref: Extract<ToolDescriptor["binding"], { readonly kind: "descendant_message" }> };
   readonly allowedOrigins: readonly ("model" | "workflow")[];
   readonly admittedAt: string;
   readonly registrationFingerprint: string;
@@ -102,6 +103,8 @@ function resolveBinding(
       return Object.freeze({ kind: "interaction" as const, ref: descriptor.binding });
     case "descendant_agent":
       return Object.freeze({ kind: "descendant_agent" as const, ref: descriptor.binding });
+    case "descendant_message":
+      return Object.freeze({ kind: "descendant_message" as const, ref: descriptor.binding });
   }
   throw invalid("tool_binding_invalid", `Tool '${descriptor.name}' has an unsupported binding.`);
 }

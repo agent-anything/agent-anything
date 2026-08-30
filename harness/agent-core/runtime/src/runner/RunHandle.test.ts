@@ -116,6 +116,7 @@ describe("ActiveRunHandle", () => {
       verification: null,
       pendingInteractions: [],
       activeDelegations: [],
+      continuationTargets: [],
       result: null,
     });
 
@@ -203,6 +204,7 @@ function terminalUpdate(
     verification: null,
       pendingInteractions: [],
       activeDelegations: [],
+      continuationTargets: [],
       result,
   };
 }

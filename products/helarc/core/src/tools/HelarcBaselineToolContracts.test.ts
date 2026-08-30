@@ -7,7 +7,7 @@ import {
 } from "./HelarcBaselineToolContracts.js";
 
 describe("Helarc baseline Tool Contracts", () => {
-  it("exposes one fixed nine-Tool catalog with one Host-selected Shell", () => {
+  it("exposes one fixed ten-Tool catalog with one Host-selected Shell", () => {
     expect(createHelarcBaselineToolContracts("PowerShell").map((item) => item.name)).toEqual([
       "Read",
       "Glob",
@@ -18,10 +18,11 @@ describe("Helarc baseline Tool Contracts", () => {
       "TaskStop",
       "AskUserQuestion",
       "Agent",
+      "SendMessage",
     ]);
     expect(createHelarcBaselineToolContracts("Bash").map((item) => item.name)).toContain("Bash");
     expect(createHelarcBaselineToolContracts("Bash").map((item) => item.name)).not.toContain("PowerShell");
-    expect(HELARC_BASELINE_TOOL_CONTRACTS).toHaveLength(10);
+    expect(HELARC_BASELINE_TOOL_CONTRACTS).toHaveLength(11);
   });
 
   it("freezes exact input fields and settlement families", () => {
@@ -44,6 +45,11 @@ describe("Helarc baseline Tool Contracts", () => {
     });
     expect(findHelarcBaselineToolContract("Agent").binding).toEqual({
       kind: "descendant_run",
+      target: "agent.general-purpose",
+      canonicalEffect: null,
+    });
+    expect(findHelarcBaselineToolContract("SendMessage").binding).toEqual({
+      kind: "descendant_message",
       target: "agent.general-purpose",
       canonicalEffect: null,
     });

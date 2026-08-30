@@ -1321,8 +1321,8 @@ export function RunTreePanel({
         <span>Depth {tree.limits.maxDescendantDepth}</span>
         <span>Total {tree.limits.maxTotalDescendantRuns}</span>
         <span>Active {tree.limits.maxActiveDescendantRuns}</span>
-        <span>Turns {tree.resources.controllerTurns.consumed}/{tree.resources.controllerTurns.capacity}</span>
-        <span>Actions {tree.resources.actions.consumed}/{tree.resources.actions.capacity}</span>
+        <span>Turns {tree.resources.controllerTurns.enforcement === "hard" ? tree.resources.controllerTurns.measuredConsumed : tree.resources.controllerTurns.observed}/{tree.resources.controllerTurns.enforcement === "hard" ? tree.resources.controllerTurns.capacity : tree.resources.controllerTurns.threshold}</span>
+        <span>Actions {tree.resources.actions.enforcement === "hard" ? tree.resources.actions.measuredConsumed : tree.resources.actions.observed}/{tree.resources.actions.enforcement === "hard" ? tree.resources.actions.capacity : tree.resources.actions.threshold}</span>
         <span>Approvals {tree.approvals.activeReviews} active / {tree.approvals.totalRequests} total</span>
         <span>Settlement {tree.settlement.complete ? "complete" : `${tree.settlement.unsettledDescendantRuns} pending`}</span>
         {tree.cancellation.latestScope !== null ? (

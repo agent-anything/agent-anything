@@ -11,7 +11,7 @@ import { createHelarcBaselineToolGuidanceSource } from "./HelarcBaselineToolGuid
 
 describe("Helarc baseline Tool Guidance", () => {
   it("completely describes every baseline Tool and every accepted input field", () => {
-    expect(HELARC_BASELINE_TOOL_CONTRACTS).toHaveLength(10);
+    expect(HELARC_BASELINE_TOOL_CONTRACTS).toHaveLength(11);
     for (const contract of HELARC_BASELINE_TOOL_CONTRACTS) {
       const source = guidanceSource(contract.name);
       expect(source.modelDescription.length).toBeGreaterThan(180);

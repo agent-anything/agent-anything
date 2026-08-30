@@ -817,7 +817,7 @@ async function runRecursiveDelegationProbe(): Promise<HelarcOperationalConforman
       invalid_settlement: passed,
     },
     diagnostics: {
-      trajectory: report.metrics.objectiveRetentionRate,
+      trajectory: report.metrics.objectiveFidelityRate,
       toolCalls: report.metrics.toolCallCount,
       humanInteraction: report.metrics.humanInteractionEvents,
     },

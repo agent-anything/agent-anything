@@ -178,6 +178,11 @@ function bindingRegistrationMatchesDescriptor(
         registration.binding.ref.revision === descriptor.binding.revision &&
         registration.binding.ref.agent.id === descriptor.binding.agent.id &&
         registration.binding.ref.agent.revision === descriptor.binding.agent.revision;
+    case "descendant_message":
+      return descriptor.binding.kind === "descendant_message" &&
+        registration.binding.ref.revision === descriptor.binding.revision &&
+        registration.binding.ref.agent.id === descriptor.binding.agent.id &&
+        registration.binding.ref.agent.revision === descriptor.binding.agent.revision;
   }
 }
 

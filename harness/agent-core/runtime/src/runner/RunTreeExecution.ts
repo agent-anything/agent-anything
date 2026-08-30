@@ -72,6 +72,7 @@ export type DescendantRunReservationFailureCode =
 
 export interface DescendantRunReservationInput {
   readonly relationId: string;
+  readonly relationKind: DescendantRunRelation["kind"];
   readonly createChildRunId: () => string;
   readonly parentRunId: string;
   readonly parentLineage: RunLineage;
@@ -102,6 +103,7 @@ export interface RunTreeNodeProjection {
   readonly runId: string;
   readonly parentRunId: string | null;
   readonly relationId: string | null;
+  readonly relationKind: DescendantRunRelation["kind"] | null;
   readonly parentRunActionId: string | null;
   readonly depth: number;
   readonly status: RunLifecycleStatus;
@@ -180,6 +182,7 @@ export type RunTreeExecutionListener = (
 
 interface MutableRunTreeNode {
   readonly lineage: RunLineage;
+  readonly relationKind: DescendantRunRelation["kind"] | null;
   readonly acceptedOrder: number;
   status: RunLifecycleStatus;
   resultCode: RunResultCode | null;
@@ -242,6 +245,7 @@ export class RunTreeExecution {
     this.rootLineage = createRootRunLineage({ id: input.rootRunId });
     this.nodes.set(input.rootRunId, {
       lineage: this.rootLineage,
+      relationKind: null,
       acceptedOrder: 0,
       status: "initializing",
       resultCode: null,
@@ -290,6 +294,7 @@ export class RunTreeExecution {
 
     const relation = createDescendantRunRelation({
       relationId: input.relationId,
+      kind: input.relationKind,
       root: this.rootLineage.root,
       parent: { id: input.parentRunId },
       child: { id: childRunId },
@@ -311,6 +316,7 @@ export class RunTreeExecution {
     this.unsettledDescendantRuns += 1;
     this.nodes.set(childRunId, {
       lineage,
+      relationKind: relation.kind,
       acceptedOrder: this.totalDescendantRuns,
       status: "initializing",
       resultCode: null,
@@ -692,6 +698,7 @@ export class RunTreeExecution {
         runId,
         parentRunId: node.lineage.kind === "root" ? null : node.lineage.parent.id,
         relationId: node.lineage.kind === "root" ? null : node.lineage.relation.id,
+        relationKind: node.relationKind,
         parentRunActionId: node.lineage.kind === "root"
           ? null
           : node.lineage.parentRunAction.id,

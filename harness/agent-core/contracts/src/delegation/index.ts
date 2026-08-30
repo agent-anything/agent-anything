@@ -1,13 +1,18 @@
 export type {
   DelegationOriginCorrelation,
-  DelegationPredecessorCorrelation,
+  DelegationSourceResultCorrelation,
+  DelegationSourceResultKind,
   DelegationRequestRef,
   DelegationResultRef,
   DelegationRunCorrelation,
+  DescendantContinuationCorrelation,
+  DescendantContinuationRef,
 } from "./DelegationIdentity.js";
 export {
+  snapshotDescendantContinuationCorrelation,
+  snapshotDescendantContinuationRef,
   snapshotDelegationOriginCorrelation,
-  snapshotDelegationPredecessorCorrelation,
+  snapshotDelegationSourceResultCorrelation,
   snapshotDelegationRequestRef,
   snapshotDelegationResultRef,
   snapshotDelegationRunCorrelation,

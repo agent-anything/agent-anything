@@ -1,11 +1,13 @@
 import type { AgentRevisionRef } from "@agent-anything/agent-core/agent";
 import {
   snapshotDelegationOriginCorrelation,
-  snapshotDelegationPredecessorCorrelation,
+  snapshotDescendantContinuationCorrelation,
+  snapshotDelegationSourceResultCorrelation,
   snapshotDelegationRequestRef,
   snapshotDelegationResultRef,
   type DelegationOriginCorrelation,
-  type DelegationPredecessorCorrelation,
+  type DescendantContinuationCorrelation,
+  type DelegationSourceResultCorrelation,
   type DelegationRequestRef,
   type DelegationResultRef,
 } from "@agent-anything/agent-core/delegation";
@@ -48,11 +50,11 @@ export interface DelegationContextMaterial {
 }
 
 export type DelegationContextMaterialRole =
-  | "root_purpose"
   | "workspace"
   | "product_context"
   | "parent_fact"
-  | "predecessor_result";
+  | "dependency_result"
+  | "replaced_result";
 
 export interface DelegationContextPlanEntry {
   readonly role: DelegationContextMaterialRole;
@@ -118,7 +120,8 @@ export interface DelegationPreparation {
   readonly contextPlan: DelegationContextPlan;
   readonly requestedAuthority: readonly DelegationAuthorityDimensionInput[];
   readonly limits: DelegationLimits;
-  readonly predecessor: DelegationResultRef | null;
+  readonly dependencyResult: DelegationResultRef | null;
+  readonly replacedResult: DelegationResultRef | null;
 }
 
 export interface DelegationToolCallCorrelation {
@@ -138,13 +141,14 @@ export interface DelegationRequest {
   readonly childAgent: AgentRevisionRef;
   readonly task: DelegationTaskPreparation;
   readonly objective: DelegatedObjective;
-  readonly rootPurposeAnchor: DelegationContextMaterialRef;
   readonly expectedResult: DelegationResultExpectation;
   readonly contextPlan: DelegationContextPlan;
   readonly authorityDerivation: DelegationAuthorityDerivationRef;
   readonly limitDerivation: DelegationLimitDerivationRef;
   readonly limits: DelegationLimits;
-  readonly predecessor: DelegationPredecessorCorrelation | null;
+  readonly dependencyResult: DelegationSourceResultCorrelation | null;
+  readonly replacedResult: DelegationSourceResultCorrelation | null;
+  readonly continuation: DescendantContinuationCorrelation | null;
   readonly createdAt: string;
 }
 
@@ -162,10 +166,15 @@ export function materializeDelegationRequest(input: {
   readonly preparation: DelegationPreparation;
   readonly authorityDerivation: DelegationAuthorityDerivation;
   readonly limitDerivation: DelegationLimitDerivation;
-  readonly predecessor: {
-    readonly correlation: DelegationPredecessorCorrelation;
+  readonly dependencyResult: {
+    readonly correlation: DelegationSourceResultCorrelation;
     readonly material: DelegationContextMaterial;
   } | null;
+  readonly replacedResult: {
+    readonly correlation: DelegationSourceResultCorrelation;
+    readonly material: DelegationContextMaterial;
+  } | null;
+  readonly continuation: DescendantContinuationCorrelation | null;
   readonly createdAt: string;
 }): DelegationRequest {
   try {
@@ -176,7 +185,9 @@ export function materializeDelegationRequest(input: {
       "preparation",
       "authorityDerivation",
       "limitDerivation",
-      "predecessor",
+      "dependencyResult",
+      "replacedResult",
+      "continuation",
       "createdAt",
     ]);
     const requestId = token(input.requestId, "requestId");
@@ -186,47 +197,60 @@ export function materializeDelegationRequest(input: {
     const limitDerivation = snapshotDelegationLimitDerivation(input.limitDerivation);
     const createdAt = isoDateTime(input.createdAt, "createdAt");
     const toolCall = snapshotToolCallCorrelation(input.toolCall, origin, preparation.childAgent);
-    const resolvedPredecessor = input.predecessor === null
+    const resolvedDependency = resolveSourceResult(
+      "dependency",
+      preparation.dependencyResult,
+      input.dependencyResult,
+    );
+    const resolvedReplacement = resolveSourceResult(
+      "replacement",
+      preparation.replacedResult,
+      input.replacedResult,
+    );
+    const continuation = input.continuation === null
       ? null
-      : Object.freeze({
-          correlation: snapshotDelegationPredecessorCorrelation(
-            input.predecessor.correlation,
-          ),
-          material: snapshotDelegationContextMaterial(input.predecessor.material),
-        });
-    if ((preparation.predecessor === null) !== (resolvedPredecessor === null)) {
+      : snapshotDescendantContinuationCorrelation(input.continuation);
+    if (
+      continuation !== null &&
+      (resolvedDependency !== null || resolvedReplacement !== null)
+    ) {
       fail(
-        "delegation_predecessor_resolution_mismatch",
-        "Delegation predecessor proposal and trusted resolution disagree.",
+        "delegation_continuation_source_conflict",
+        "Continuation cannot also claim dependency or replacement semantics.",
       );
     }
     if (
-      preparation.predecessor !== null &&
-      resolvedPredecessor !== null &&
-      (preparation.predecessor.id !== resolvedPredecessor.correlation.result.id ||
-        preparation.predecessor.revision !== resolvedPredecessor.correlation.result.revision)
+      continuation !== null &&
+      (continuation.root.id !== origin.root.run.id ||
+        continuation.parent.id !== origin.parent.run.id ||
+        continuation.agent.id !== preparation.childAgent.id ||
+        continuation.agent.revision !== preparation.childAgent.revision)
     ) {
       fail(
-        "delegation_predecessor_result_mismatch",
-        "Delegation predecessor does not match the trusted settled result.",
+        "delegation_continuation_correlation_invalid",
+        "Continuation correlation does not match the current delegation origin or Agent.",
       );
     }
     const contextPlan = createDelegationContextPlan({
       entries: Object.freeze([
         ...preparation.contextPlan.entries,
-        ...(resolvedPredecessor === null
+        ...(resolvedDependency === null
           ? []
           : [Object.freeze({
-              role: "predecessor_result" as const,
-              material: resolvedPredecessor.material.ref,
+              role: "dependency_result" as const,
+              material: resolvedDependency.material.ref,
+              necessity: "mandatory" as const,
+            })]),
+        ...(resolvedReplacement === null
+          ? []
+          : [Object.freeze({
+              role: "replaced_result" as const,
+              material: resolvedReplacement.material.ref,
               necessity: "mandatory" as const,
             })]),
       ]),
       maxContextBytes: preparation.contextPlan.maxContextBytes,
     });
-    const rootPurposeAnchor = contextPlan.entries.find(
-      (entry) => entry.role === "root_purpose",
-    )!.material;
 
     const requestAuthoritySource = authority.sources.find(
       (source) => source.role === "request",
@@ -263,12 +287,13 @@ export function materializeDelegationRequest(input: {
     }
 
     if (
-      resolvedPredecessor !== null &&
-      resolvedPredecessor.correlation.root.id !== origin.root.run.id
+      [...[resolvedDependency, resolvedReplacement]].some(
+        (source) => source !== null && source.correlation.root.id !== origin.root.run.id,
+      )
     ) {
       fail(
-        "delegation_predecessor_wrong_root",
-        "Delegation predecessor must belong to the same root Run.",
+        "delegation_source_result_wrong_root",
+        "Delegation source results must belong to the same root Run.",
       );
     }
 
@@ -278,13 +303,14 @@ export function materializeDelegationRequest(input: {
       childAgent: preparation.childAgent,
       task: preparation.task,
       objective: preparation.objective,
-      rootPurposeAnchor,
       expectedResult: preparation.expectedResult,
       contextPlan,
       authorityDerivation: authority.ref,
       limitDerivation: limitDerivation.ref,
       limits: limitDerivation.effective,
-      predecessor: resolvedPredecessor?.correlation ?? null,
+      dependencyResult: resolvedDependency?.correlation ?? null,
+      replacedResult: resolvedReplacement?.correlation ?? null,
+      continuation,
       createdAt,
     });
     const revision = createDelegationContractIdentity(
@@ -305,6 +331,73 @@ export function materializeDelegationRequest(input: {
   }
 }
 
+function resolveSourceResult(
+  kind: "dependency" | "replacement",
+  proposed: DelegationResultRef | null,
+  resolved: {
+    readonly correlation: DelegationSourceResultCorrelation;
+    readonly material: DelegationContextMaterial;
+  } | null,
+): {
+  readonly correlation: DelegationSourceResultCorrelation;
+  readonly material: DelegationContextMaterial;
+} | null {
+  if ((proposed === null) !== (resolved === null)) {
+    fail(
+      "delegation_source_result_resolution_mismatch",
+      `Delegation ${kind} result proposal and trusted resolution disagree.`,
+    );
+  }
+  if (resolved === null) return null;
+  const snapshot = Object.freeze({
+    correlation: snapshotDelegationSourceResultCorrelation(resolved.correlation),
+    material: snapshotDelegationContextMaterial(resolved.material),
+  });
+  if (snapshot.correlation.kind !== kind) {
+    fail(
+      "delegation_source_result_kind_mismatch",
+      `Delegation ${kind} result uses another relation kind.`,
+    );
+  }
+  if (
+    proposed === null ||
+    proposed.id !== snapshot.correlation.result.id ||
+    proposed.revision !== snapshot.correlation.result.revision
+  ) {
+    fail(
+      "delegation_source_result_mismatch",
+      `Delegation ${kind} result does not match the trusted settled result.`,
+    );
+  }
+  return snapshot;
+}
+
+function assertRequestSourceResult(
+  contextPlan: DelegationContextPlan,
+  origin: DelegationOriginCorrelation,
+  kind: "dependency" | "replacement",
+  correlation: DelegationSourceResultCorrelation | null,
+): void {
+  const role = kind === "dependency" ? "dependency_result" : "replaced_result";
+  const entries = contextPlan.entries.filter((entry) => entry.role === role);
+  if (correlation !== null && correlation.kind !== kind) {
+    throw new TypeError(`Delegation ${kind} result relation kind is invalid.`);
+  }
+  if (correlation !== null && correlation.root.id !== origin.root.run.id) {
+    throw new TypeError(`Delegation ${kind} result belongs to another root Run.`);
+  }
+  if (correlation === null && entries.length > 0) {
+    throw new TypeError(
+      `Delegation Context cannot contain ${role} material without its result correlation.`,
+    );
+  }
+  if (correlation !== null && entries.length !== 1) {
+    throw new TypeError(
+      `Delegation ${kind} result requires exactly one selected Context material.`,
+    );
+  }
+}
+
 export function snapshotDelegationPreparation(
   input: DelegationPreparation,
 ): DelegationPreparation {
@@ -317,7 +410,8 @@ export function snapshotDelegationPreparation(
     "contextPlan",
     "requestedAuthority",
     "limits",
-    "predecessor",
+    "dependencyResult",
+    "replacedResult",
   ]);
   if (input.schemaVersion !== 1) {
     throw new TypeError("Delegation preparation must use schema version 1.");
@@ -331,15 +425,18 @@ export function snapshotDelegationPreparation(
     input.requestedAuthority,
   );
   const limits = snapshotDelegationLimits(input.limits);
-  const predecessor = input.predecessor === null
+  const dependencyResult = input.dependencyResult === null
     ? null
-    : snapshotDelegationResultRef(input.predecessor);
-  const predecessorEntries = contextPlan.entries.filter(
-    (entry) => entry.role === "predecessor_result",
+    : snapshotDelegationResultRef(input.dependencyResult);
+  const replacedResult = input.replacedResult === null
+    ? null
+    : snapshotDelegationResultRef(input.replacedResult);
+  const trustedSourceEntries = contextPlan.entries.filter(
+    (entry) => entry.role === "dependency_result" || entry.role === "replaced_result",
   );
-  if (predecessorEntries.length > 0) {
+  if (trustedSourceEntries.length > 0) {
     throw new TypeError(
-      "Product preparation cannot assign trusted predecessor Context material.",
+      "Product preparation cannot assign trusted source-result Context material.",
     );
   }
   if (contextPlan.maxContextBytes > limits.maxContextBytes) {
@@ -354,7 +451,8 @@ export function snapshotDelegationPreparation(
     contextPlan,
     requestedAuthority,
     limits,
-    predecessor,
+    dependencyResult,
+    replacedResult,
   });
 }
 
@@ -370,13 +468,14 @@ export function snapshotDelegationRequest(
       "childAgent",
       "task",
       "objective",
-      "rootPurposeAnchor",
       "expectedResult",
       "contextPlan",
       "authorityDerivation",
       "limitDerivation",
       "limits",
-      "predecessor",
+      "dependencyResult",
+      "replacedResult",
+      "continuation",
       "createdAt",
     ]);
     if (input.schemaVersion !== 1) {
@@ -390,30 +489,34 @@ export function snapshotDelegationRequest(
     const objective = snapshotObjective(input.objective);
     const expectedResult = snapshotExpectation(input.expectedResult);
     const contextPlan = snapshotContextPlan(input.contextPlan);
-    const rootPurposeAnchor = snapshotMaterialRef(input.rootPurposeAnchor);
-    const acceptedRootPurpose = contextPlan.entries.find(
-      (entry) => entry.role === "root_purpose",
-    )!.material;
-    if (materialRefKey(rootPurposeAnchor) !== materialRefKey(acceptedRootPurpose)) {
-      throw new TypeError("Delegation root-purpose anchor does not match the Context plan.");
-    }
     const authorityDerivation = snapshotAuthorityRef(input.authorityDerivation);
     const limitDerivation = snapshotLimitDerivationRef(input.limitDerivation);
     const limits = snapshotDelegationLimits(input.limits);
-    const predecessor = input.predecessor === null
+    const dependencyResult = input.dependencyResult === null
       ? null
-      : snapshotDelegationPredecessorCorrelation(input.predecessor);
-    const predecessorEntries = contextPlan.entries.filter(
-      (entry) => entry.role === "predecessor_result",
-    );
-    if (predecessor !== null && predecessor.root.id !== origin.root.run.id) {
-      throw new TypeError("Delegation predecessor must belong to the same root Run.");
+      : snapshotDelegationSourceResultCorrelation(input.dependencyResult);
+    const replacedResult = input.replacedResult === null
+      ? null
+      : snapshotDelegationSourceResultCorrelation(input.replacedResult);
+    const continuation = input.continuation === null
+      ? null
+      : snapshotDescendantContinuationCorrelation(input.continuation);
+    assertRequestSourceResult(contextPlan, origin, "dependency", dependencyResult);
+    assertRequestSourceResult(contextPlan, origin, "replacement", replacedResult);
+    if (
+      continuation !== null &&
+      (dependencyResult !== null || replacedResult !== null)
+    ) {
+      throw new TypeError("Continuation cannot also use dependency or replacement results.");
     }
-    if (predecessor === null && predecessorEntries.length > 0) {
-      throw new TypeError("A Delegation request cannot include predecessor material without a predecessor result.");
-    }
-    if (predecessor !== null && predecessorEntries.length !== 1) {
-      throw new TypeError("A Delegation continuation requires exactly one predecessor-result material reference.");
+    if (
+      continuation !== null &&
+      (continuation.root.id !== origin.root.run.id ||
+        continuation.parent.id !== origin.parent.run.id ||
+        continuation.agent.id !== childAgent.id ||
+        continuation.agent.revision !== childAgent.revision)
+    ) {
+      throw new TypeError("Continuation correlation does not match the request.");
     }
     if (contextPlan.maxContextBytes > limits.maxContextBytes) {
       throw new TypeError("Delegation Context plan exceeds the effective Context limit.");
@@ -425,13 +528,14 @@ export function snapshotDelegationRequest(
       childAgent,
       task,
       objective,
-      rootPurposeAnchor,
       expectedResult,
       contextPlan,
       authorityDerivation,
       limitDerivation,
       limits,
-      predecessor,
+      dependencyResult,
+      replacedResult,
+      continuation,
       createdAt,
     });
     const revision = createDelegationContractIdentity(
@@ -649,7 +753,7 @@ function snapshotContextPlan(input: DelegationContextPlan): DelegationContextPla
 function snapshotContextEntries(
   input: readonly DelegationContextPlanEntry[],
 ): readonly DelegationContextPlanEntry[] {
-  if (!Array.isArray(input) || input.length === 0 || input.length > 128) {
+  if (!Array.isArray(input) || input.length > 128) {
     throw new TypeError("Delegation Context plan requires bounded source material.");
   }
   const entries = input.map((entry, index) => {
@@ -659,11 +763,11 @@ function snapshotContextEntries(
       "necessity",
     ]);
     if (![
-      "root_purpose",
       "workspace",
       "product_context",
       "parent_fact",
-      "predecessor_result",
+      "dependency_result",
+      "replaced_result",
     ].includes(entry.role)) {
       throw new TypeError("Delegation Context material role is unsupported.");
     }
@@ -679,10 +783,6 @@ function snapshotContextEntries(
   const keys = entries.map((entry) => materialRefKey(entry.material));
   if (new Set(keys).size !== keys.length) {
     throw new TypeError("Delegation Context material references must be unique.");
-  }
-  const rootEntries = entries.filter((entry) => entry.role === "root_purpose");
-  if (rootEntries.length !== 1 || rootEntries[0]!.necessity !== "mandatory") {
-    throw new TypeError("Delegation Context plan requires one mandatory root-purpose material reference.");
   }
   return Object.freeze(entries);
 }
@@ -793,7 +893,8 @@ function snapshotToolCallCorrelation(
     fail("delegation_tool_call_exposure_missing", "Delegation Tool Call requires exact model exposure proof.");
   }
   if (
-    call.binding.kind !== "descendant_agent" ||
+    (call.binding.kind !== "descendant_agent" &&
+      call.binding.kind !== "descendant_message") ||
     call.binding.agent.id !== childAgent.id ||
     call.binding.agent.revision !== childAgent.revision
   ) {

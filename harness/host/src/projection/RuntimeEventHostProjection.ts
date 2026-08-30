@@ -184,8 +184,8 @@ export function projectRuntimeEventForHost(event: RuntimeEvent): RuntimeEvent {
 
 function descendantFields(): readonly string[] {
   return [
-    "relationId", "parentRunActionId", "childRunId", "childAgentId", "childAgentRevision",
-    "requestId", "requestRevision", "predecessorResultId", "contextSourceCount",
+    "relationId", "relationKind", "parentRunActionId", "childRunId", "childAgentId", "childAgentRevision",
+    "requestId", "requestRevision", "dependencyResultId", "replacedResultId", "contextSourceCount",
     "authorityDerivationId", "limitDerivationId", "depth", "treeRevision",
   ];
 }

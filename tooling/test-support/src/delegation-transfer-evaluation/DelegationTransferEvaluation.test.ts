@@ -9,7 +9,7 @@ describe("Delegation Transfer deterministic Evaluation", () => {
     const report = await runDelegationTransferDeterministicEvaluation();
 
     expect(report.metrics).toEqual({
-      objectiveRetentionRate: 1,
+      objectiveFidelityRate: 1,
       unnecessaryDelegationCount: 0,
       semanticDriftCount: 0,
       resultAttributionRate: 1,
@@ -23,7 +23,7 @@ describe("Delegation Transfer deterministic Evaluation", () => {
     });
     expect(Object.values(report.invariants).every(Boolean)).toBe(true);
     expect(report).toMatchObject({
-      revision: "delegation-transfer-deterministic-evaluation-v4",
+      revision: "delegation-transfer-deterministic-evaluation-v5",
       descendantRunCount: 2,
       settledResultCount: 2,
       prohibitedDisclosureCount: 0,

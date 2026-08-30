@@ -7,6 +7,7 @@ export type {
   CreateDescendantRunRelationInput,
   DescendantRunLineage,
   DescendantRunRelation,
+  DescendantRunRelationKind,
   DescendantRunRelationRef,
   RootRunLineage,
   RunLineage,

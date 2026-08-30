@@ -159,7 +159,7 @@ export async function createHelarcProductComposition(
     admittedAt,
     file: input.fileActions,
     command: input.commandActions,
-    semanticTools: Object.freeze([clarification.tool, descendant.tool]),
+    semanticTools: Object.freeze([clarification.tool, ...descendant.tools]),
   });
   const controllerProtocol = createHelarcBaselineControllerProtocolComposition({
     providerId,

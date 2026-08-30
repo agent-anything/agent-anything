@@ -259,6 +259,7 @@ export function projectHelarcRunStatusQueryReceipt(
       startedAt: receipt.projection.startedAt,
       runTree: projectRunTree(receipt.projection.runTree),
       activeDelegations: projectActiveDelegations(receipt.projection.activeDelegations),
+      continuationTargets: projectContinuationTargets(receipt.projection.continuationTargets),
       stopReview: projectRunStopReview(receipt.projection.stopReview),
       verification: projectHostVerification(receipt.projection.verification),
       pendingInteractions: receipt.projection.pendingInteractions.map(projectPendingInteraction),
@@ -335,6 +336,7 @@ function projectRun(run: NonNullable<MainSnapshot["run"]>): HelarcRunSnapshot {
       instructionBinding: projectInstructionBinding(run.host.instructionBinding),
       runTree: projectRunTree(run.host.runTree),
       activeDelegations: projectActiveDelegations(run.host.activeDelegations),
+      continuationTargets: projectContinuationTargets(run.host.continuationTargets),
       stopReview: projectRunStopReview(run.host.stopReview),
       verification: projectHostVerification(run.host.verification),
       pendingInteractions: run.host.pendingInteractions.map(projectPendingInteraction),
@@ -473,7 +475,7 @@ function projectRunTree(
     resources: Object.fromEntries(Object.entries(tree.resources).map(([key, value]) => [
       key,
       { ...value },
-    ])) as HelarcRunSnapshot["host"]["runTree"]["resources"],
+    ])) as unknown as HelarcRunSnapshot["host"]["runTree"]["resources"],
     approvals: { ...tree.approvals },
     cancellation: { ...tree.cancellation },
     settlement: { ...tree.settlement },
@@ -481,6 +483,7 @@ function projectRunTree(
       runId: node.runId,
       parentRunId: node.parentRunId,
       relationId: node.relationId,
+      relationKind: node.relationKind,
       parentRunActionId: node.parentRunActionId,
       depth: node.depth,
       status: node.status,
@@ -501,9 +504,22 @@ function projectActiveDelegations(
     request: { ...delegation.request },
     relation: { ...delegation.relation },
     child: { ...delegation.child },
+    relationKind: delegation.relationKind,
     childRunRevision: delegation.childRunRevision,
     childStatus: delegation.childStatus,
     steerable: true,
+  }));
+}
+
+function projectContinuationTargets(
+  targets: NonNullable<MainSnapshot["run"]>["host"]["continuationTargets"],
+): HelarcRunSnapshot["host"]["continuationTargets"] {
+  return targets.map((target) => ({
+    ref: { ...target.ref },
+    sourceChild: { ...target.sourceChild },
+    sourceResult: { ...target.sourceResult },
+    agent: { ...target.agent },
+    limitations: [...target.limitations],
   }));
 }
 

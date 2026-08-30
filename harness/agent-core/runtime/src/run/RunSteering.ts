@@ -2,7 +2,7 @@ import type { RunRef } from "@agent-anything/agent-core/run";
 import type { RunSteeringCommandRef } from "@agent-anything/agent-core/control";
 
 export interface RunSteeringAttribution {
-  readonly origin: "user" | "host";
+  readonly origin: "user" | "host" | "model";
   readonly actorId: string | null;
 }
 
@@ -78,7 +78,9 @@ export function snapshotRunSteeringInput(input: RunSteeringInput): RunSteeringIn
     input.attribution === null ||
     typeof input.attribution !== "object" ||
     Object.keys(input.attribution).sort().join(":") !== "actorId:origin" ||
-    (input.attribution.origin !== "user" && input.attribution.origin !== "host") ||
+    input.attribution.origin !== "user" &&
+      input.attribution.origin !== "host" &&
+      input.attribution.origin !== "model" ||
     (input.attribution.actorId !== null && !isIdentity(input.attribution.actorId))
   ) {
     throw new TypeError("Run steering attribution is invalid.");

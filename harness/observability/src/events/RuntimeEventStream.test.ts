@@ -264,13 +264,15 @@ describe("RuntimeEventStream", () => {
 
     stream.emit("run.descendant.settled", {
       relationId: "relation-next",
+      relationKind: "replacement",
       parentRunActionId: "action-next",
       childRunId: "run-grandchild",
       childAgentId: "agent-child",
       childAgentRevision: "agent-child-v1",
       requestId: "request-next",
       requestRevision: "request-next-v1",
-      predecessorResultId: "result-previous",
+      dependencyResultId: null,
+      replacedResultId: "result-previous",
       contextSourceCount: 2,
       authorityDerivationId: "authority-next",
       limitDerivationId: "limits-next",
@@ -314,13 +316,15 @@ describe("RuntimeEventStream", () => {
     });
     expect(events[0]?.payload).toEqual({
       relationId: "relation-next",
+      relationKind: "replacement",
       parentRunActionId: "action-next",
       childRunId: "run-grandchild",
       childAgentId: "agent-child",
       childAgentRevision: "agent-child-v1",
       requestId: "request-next",
       requestRevision: "request-next-v1",
-      predecessorResultId: "result-previous",
+      dependencyResultId: null,
+      replacedResultId: "result-previous",
       contextSourceCount: 2,
       authorityDerivationId: "authority-next",
       limitDerivationId: "limits-next",

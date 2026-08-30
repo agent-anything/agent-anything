@@ -274,10 +274,11 @@ export function snapshotToolBindingRef(input: ToolBindingRef): ToolBindingRef {
         revision: token(input.revision, "binding.revision"),
       });
     case "descendant_agent":
+    case "descendant_message":
       assertExactRecord(input, ["kind", "agent", "revision"], "Tool descendant binding");
       assertExactRecord(input.agent, ["id", "revision"], "Agent revision reference");
       return Object.freeze({
-        kind: "descendant_agent" as const,
+        kind: input.kind,
         agent: Object.freeze({
           id: token(input.agent.id, "binding.agent.id"),
           revision: token(input.agent.revision, "binding.agent.revision"),

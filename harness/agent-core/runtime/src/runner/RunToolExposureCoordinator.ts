@@ -38,6 +38,9 @@ export interface RunToolExposureCoordinatorDependencies {
   readonly interactions: RunInteractionCoordinator;
   readonly maxPendingInteractions: number;
   readonly delegation: DelegationPreparationPort | undefined;
+  readonly getDescendantMessageAvailability: (
+    agent: Readonly<{ readonly id: string; readonly revision: string }>,
+  ) => ToolPathAvailability;
   readonly getRunRevision: () => number;
   readonly getRunTreeSnapshot: () => RunTreeExecutionSnapshot;
 }
@@ -154,6 +157,16 @@ export class RunToolExposureCoordinator {
             }
           }
           path = combineDescendantAvailability(owner, tree);
+          break;
+        }
+        case "descendant_message": {
+          try {
+            path = snapshotPath(
+              this.dependencies.getDescendantMessageAvailability(binding.agent),
+            );
+          } catch (error) {
+            throw participantFailure("descendant_message", error);
+          }
           break;
         }
       }

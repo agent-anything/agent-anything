@@ -102,7 +102,12 @@ export interface DelegationReferenceTransfer<TRef extends string> {
 export interface DelegationResultExpectationCoverage {
   readonly form: DelegationExpectedResultForm;
   readonly required: boolean;
-  readonly disposition: "present" | "absent" | "failed" | "unavailable";
+  readonly disposition:
+    | "present"
+    | "absent"
+    | "failed"
+    | "unavailable"
+    | "not_applicable";
   readonly itemCount: number;
 }
 
@@ -680,7 +685,7 @@ function snapshotCoverage(
     if (typeof item.required !== "boolean") {
       throw new TypeError("Delegation expectation coverage required flag must be boolean.");
     }
-    if (!["present", "absent", "failed", "unavailable"].includes(item.disposition)) {
+    if (!["present", "absent", "failed", "unavailable", "not_applicable"].includes(item.disposition)) {
       throw new TypeError("Delegation expectation coverage disposition is unsupported.");
     }
     return Object.freeze({
@@ -734,10 +739,11 @@ function coverageFor(
   evidence: DelegationReferenceTransfer<EvidenceRef>,
   artifacts: DelegationReferenceTransfer<ArtifactRef>,
   verification: DelegationVerificationSummary,
-  _effects: DelegationEffectSummary,
+  effects: DelegationEffectSummary,
 ): DelegationResultExpectationCoverage {
   let present = false;
   let unavailable = false;
+  let notApplicable = false;
   let itemCount = 0;
   switch (form) {
     case "narrative":
@@ -754,12 +760,14 @@ function coverageFor(
       break;
     case "verification":
       unavailable = verification.status === "unavailable";
-      present = !unavailable;
+      notApplicable = verification.status === "not_required";
+      present = !unavailable && !notApplicable;
       itemCount = present ? 1 : 0;
       break;
     case "effects":
-      present = true;
-      itemCount = 1;
+      notApplicable = effects.status === "none";
+      present = !notApplicable;
+      itemCount = present ? 1 : 0;
       break;
   }
   return Object.freeze({
@@ -767,6 +775,8 @@ function coverageFor(
     required,
     disposition: present
       ? "present" as const
+      : notApplicable
+        ? "not_applicable" as const
       : unavailable
         ? "unavailable" as const
         : terminal.status === "succeeded"

@@ -672,30 +672,34 @@ function resolveHelarcRunTreeResources(
   return Object.freeze({
     controllerTurns: Object.freeze({
       maximum: runLimits.maxIterations * runCapacity,
+      minimumChildGrant: 1,
       enforcement: "hard" as const,
     }),
     actions: Object.freeze({
       maximum: runLimits.maxActions * runCapacity,
+      minimumChildGrant: 1,
       enforcement: "hard" as const,
     }),
     modelInputTokens: Object.freeze({
-      maximum: 2_000_000 * runCapacity,
+      threshold: 2_000_000 * runCapacity,
       enforcement: "observational" as const,
     }),
     modelOutputTokens: Object.freeze({
-      maximum: 500_000 * runCapacity,
+      threshold: 500_000 * runCapacity,
       enforcement: "observational" as const,
     }),
     costUnits: Object.freeze({
-      maximum: 2_000_000 * runCapacity,
+      threshold: 2_000_000 * runCapacity,
       enforcement: "observational" as const,
     }),
     contextBytes: Object.freeze({
       maximum: 8_000_000 * runCapacity,
+      minimumChildGrant: 1,
       enforcement: "hard" as const,
     }),
     resultBytes: Object.freeze({
       maximum: 2_000_000 * runCapacity,
+      minimumChildGrant: 1,
       enforcement: "hard" as const,
     }),
   });

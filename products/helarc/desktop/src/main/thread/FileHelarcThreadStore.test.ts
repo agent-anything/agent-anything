@@ -346,6 +346,7 @@ function projectionCommit(
           deadlineAt: "2026-08-17T00:01:00.000Z",
         }),
         activeDelegations: [],
+        continuationTargets: [],
         plan: null,
         stopReview: {
           reviewSequence: 0,

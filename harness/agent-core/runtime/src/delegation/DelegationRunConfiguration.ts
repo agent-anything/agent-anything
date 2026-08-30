@@ -41,11 +41,6 @@ export function projectDelegationRunAuthority(
         enforcement: config.actionExecution.enforcement,
         metadata: config.actionExecution.metadata,
       };
-  const resourceProjection = {
-    maxControllerTurns: config.limits.maxIterations,
-    maxActions: config.limits.maxActions,
-    maxDurationMs: config.limits.maxDurationMs,
-  };
   const verificationAllowed = [
     `${config.verification.profile.ref.owner}/${config.verification.profile.ref.kind}/${config.verification.profile.ref.id}@${config.verification.profile.ref.revision}`,
     `specification:${config.verification.profile.specification.id}@${config.verification.profile.specification.revision}`,
@@ -106,10 +101,7 @@ export function projectDelegationRunAuthority(
     },
     {
       kind: "resource",
-      allowed: [createDelegationContractIdentity(
-        "agent-anything.delegation-resource-authority.v1",
-        resourceProjection,
-      )],
+      allowed: ["run-tree-allocation"],
       required: ["run-tree-allocation-required"],
     },
   ]);
@@ -117,6 +109,8 @@ export function projectDelegationRunAuthority(
 
 export function projectDelegationRunLimits(input: {
   readonly config: RunConfig;
+  readonly maxControllerTurns: number;
+  readonly maxActions: number;
   readonly maxContextBytes: number;
   readonly maxResultBytes: number;
   readonly maxModelInputTokens: number;
@@ -124,8 +118,11 @@ export function projectDelegationRunLimits(input: {
   readonly maxCostUnits: number;
 }): DelegationLimits {
   return createDelegationLimits({
-    maxControllerTurns: input.config.limits.maxIterations,
-    maxActions: input.config.limits.maxActions,
+    maxControllerTurns: Math.min(
+      input.config.limits.maxIterations,
+      input.maxControllerTurns,
+    ),
+    maxActions: Math.min(input.config.limits.maxActions, input.maxActions),
     maxModelInputTokens: input.maxModelInputTokens,
     maxModelOutputTokens: input.maxModelOutputTokens,
     maxCostUnits: input.maxCostUnits,

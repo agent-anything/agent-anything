@@ -10,10 +10,16 @@ export const runTreeResourceDimensions = [
 
 export type RunTreeResourceDimension = typeof runTreeResourceDimensions[number];
 
-export interface RunTreeResourceLimit {
-  readonly maximum: number;
-  readonly enforcement: "hard" | "observational";
-}
+export type RunTreeResourceLimit =
+  | {
+      readonly enforcement: "hard";
+      readonly maximum: number;
+      readonly minimumChildGrant: number;
+    }
+  | {
+      readonly enforcement: "observational";
+      readonly threshold: number;
+    };
 
 export type RunTreeResourceEnvelope = Readonly<
   Record<RunTreeResourceDimension, RunTreeResourceLimit>
@@ -33,15 +39,24 @@ export type RunTreeResourceUsage = Readonly<
   Record<RunTreeResourceDimension, RunTreeResourceMeasurement>
 >;
 
-export interface RunTreeResourceDimensionSnapshot {
-  readonly capacity: number;
-  readonly consumed: number;
-  readonly reserved: number;
-  readonly remaining: number;
-  readonly released: number;
-  readonly measurementStatus: RunTreeResourceMeasurement["status"];
-  readonly enforcement: RunTreeResourceLimit["enforcement"];
-}
+export type RunTreeResourceDimensionSnapshot =
+  | {
+      readonly enforcement: "hard";
+      readonly capacity: number;
+      readonly measuredConsumed: number;
+      readonly chargedUnknown: number;
+      readonly activeReserved: number;
+      readonly available: number;
+      readonly cumulativeReleased: number;
+      readonly measurementStatus: RunTreeResourceMeasurement["status"];
+    }
+  | {
+      readonly enforcement: "observational";
+      readonly threshold: number;
+      readonly observed: number;
+      readonly overage: number;
+      readonly measurementStatus: RunTreeResourceMeasurement["status"];
+    };
 
 export type RunTreeResourceSnapshot = Readonly<
   Record<RunTreeResourceDimension, RunTreeResourceDimensionSnapshot>
@@ -50,19 +65,28 @@ export type RunTreeResourceSnapshot = Readonly<
 export interface RunTreeNodeResourceSnapshot {
   readonly runId: string;
   readonly parentRunId: string | null;
-  readonly allocation: RunTreeResourceAmounts;
-  readonly remaining: RunTreeResourceAmounts;
+  readonly requestedAllocation: RunTreeResourceAmounts;
+  readonly hardGrant: RunTreeResourceAmounts;
+  readonly hardAvailable: RunTreeResourceAmounts;
+  readonly observationalThresholds: RunTreeResourceAmounts;
+  readonly delegationCeiling: RunTreeResourceAmounts;
   readonly usage: RunTreeResourceUsage;
   readonly settled: boolean;
   readonly revision: number;
 }
 
 export type RunTreeResourceReservation =
-  | { readonly status: "accepted" }
+  | {
+      readonly status: "accepted";
+      readonly requestedAllocation: RunTreeResourceAmounts;
+      readonly hardGrant: RunTreeResourceAmounts;
+      readonly observationalThresholds: RunTreeResourceAmounts;
+    }
   | {
       readonly status: "rejected";
       readonly code: "descendant_run_resource_limit_exceeded";
       readonly dimension: RunTreeResourceDimension;
+      readonly reason: "insufficient_available" | "below_minimum_grant";
     };
 
 export type RunTreeResourceRecordResult =
@@ -80,13 +104,16 @@ export interface RunTreeResourceSettlement {
   readonly status: "settled" | "limit_exceeded" | "measurement_unavailable";
   readonly usage: RunTreeResourceUsage;
   readonly released: RunTreeResourceAmounts;
+  readonly chargedUnknown: RunTreeResourceAmounts;
 }
 
 interface MutableNodeAccount {
   readonly runId: string;
   readonly parentRunId: string | null;
-  readonly allocation: MutableAmounts;
-  readonly remaining: MutableAmounts;
+  readonly requestedAllocation: MutableAmounts;
+  readonly hardGrant: MutableAmounts;
+  readonly hardAvailable: MutableAmounts;
+  readonly observationalThresholds: MutableAmounts;
   readonly measured: MutableAmounts;
   readonly measurementStatus: MutableMeasurementStatus;
   settled: boolean;
@@ -104,14 +131,16 @@ type MutableMeasurementStatus = Record<
 export class RunTreeResourceAccount {
   private readonly envelope: RunTreeResourceEnvelope;
   private readonly nodes = new Map<string, MutableNodeAccount>();
-  private readonly consumed = zeroAmounts();
-  private readonly released = zeroAmounts();
+  private readonly measuredConsumed = zeroAmounts();
+  private readonly chargedUnknown = zeroAmounts();
+  private readonly cumulativeReleased = zeroAmounts();
+  private readonly observed = zeroAmounts();
 
   constructor(rootRunId: string, envelope: RunTreeResourceEnvelope) {
     token(rootRunId, "rootRunId");
     this.envelope = snapshotRunTreeResourceEnvelope(envelope);
-    const allocation = envelopeAmounts(this.envelope);
-    this.nodes.set(rootRunId, createNode(rootRunId, null, allocation));
+    const requested = envelopeAmounts(this.envelope);
+    this.nodes.set(rootRunId, createNode(rootRunId, null, requested, this.envelope));
   }
 
   reserve(
@@ -124,29 +153,43 @@ export class RunTreeResourceAccount {
     if (this.nodes.has(childRunId)) {
       throw new TypeError("Run Tree resources already contain the child Run.");
     }
-    const requestedAllocation = snapshotRunTreeResourceAmounts(allocationInput);
-    const exceeded = runTreeResourceDimensions.find(
-      (dimension) => requestedAllocation[dimension] > 0 && parent.remaining[dimension] === 0,
-    );
-    if (exceeded !== undefined) {
-      return Object.freeze({
-        status: "rejected" as const,
-        code: "descendant_run_resource_limit_exceeded" as const,
-        dimension: exceeded,
-      });
-    }
-    const allocation = Object.fromEntries(
-      runTreeResourceDimensions.map((dimension) => [
-        dimension,
-        Math.min(requestedAllocation[dimension], parent.remaining[dimension]),
-      ]),
-    ) as MutableAmounts;
+    const requested = snapshotRunTreeResourceAmounts(allocationInput);
     for (const dimension of runTreeResourceDimensions) {
-      parent.remaining[dimension] -= allocation[dimension];
+      const limit = this.envelope[dimension];
+      if (limit.enforcement !== "hard") continue;
+      if (requested[dimension] > parent.hardAvailable[dimension]) {
+        return rejectedReservation(dimension, "insufficient_available");
+      }
+      if (
+        requested[dimension] > 0 &&
+        requested[dimension] < limit.minimumChildGrant
+      ) {
+        return rejectedReservation(dimension, "below_minimum_grant");
+      }
+    }
+
+    const hardGrant = zeroAmounts();
+    const observationalThresholds = zeroAmounts();
+    for (const dimension of runTreeResourceDimensions) {
+      const limit = this.envelope[dimension];
+      if (limit.enforcement === "hard") {
+        hardGrant[dimension] = requested[dimension];
+        parent.hardAvailable[dimension] -= requested[dimension];
+      } else {
+        observationalThresholds[dimension] = requested[dimension];
+      }
     }
     parent.revision += 1;
-    this.nodes.set(childRunId, createNode(childRunId, parentRunId, allocation));
-    return Object.freeze({ status: "accepted" as const });
+    this.nodes.set(
+      childRunId,
+      createNode(childRunId, parentRunId, requested, this.envelope),
+    );
+    return Object.freeze({
+      status: "accepted" as const,
+      requestedAllocation: freezeAmounts({ ...requested }),
+      hardGrant: freezeAmounts(hardGrant),
+      observationalThresholds: freezeAmounts(observationalThresholds),
+    });
   }
 
   record(
@@ -159,50 +202,51 @@ export class RunTreeResourceAccount {
       const measurement = usage[dimension];
       if (measurement === undefined) continue;
       assertMeasurement(measurement, dimension);
-      if (measurement.status === "measured") {
-        const previousRemaining = node.remaining[dimension];
-        node.measured[dimension] = safeSum(
-          node.measured[dimension],
-          measurement.value,
-          `${dimension} Run usage`,
-        );
-        this.consumed[dimension] = safeSum(
-          this.consumed[dimension],
-          measurement.value,
-          `${dimension} tree usage`,
-        );
-        node.remaining[dimension] = Math.max(
-          0,
-          previousRemaining - measurement.value,
-        );
-        if (
-          measurement.value > previousRemaining &&
-          this.envelope[dimension].enforcement === "hard"
-        ) {
-          node.limitExceeded = true;
-          result = Object.freeze({
-            status: "limit_exceeded" as const,
-            dimension,
-          });
-        }
-        node.measurementStatus[dimension] = mergeStatus(
-          node.measurementStatus[dimension],
-          "measured",
-        );
-        continue;
-      }
+      const limit = this.envelope[dimension];
       node.measurementStatus[dimension] = mergeStatus(
         node.measurementStatus[dimension],
         measurement.status,
       );
-      if (
-        (measurement.status === "unavailable" || measurement.status === "unknown") &&
-        this.envelope[dimension].enforcement === "hard"
-      ) {
-        result = Object.freeze({
-          status: "measurement_unavailable" as const,
-          dimension,
-        });
+      if (measurement.status !== "measured") {
+        if (
+          limit.enforcement === "hard" &&
+          (measurement.status === "unavailable" || measurement.status === "unknown")
+        ) {
+          result = Object.freeze({
+            status: "measurement_unavailable" as const,
+            dimension,
+          });
+        }
+        continue;
+      }
+
+      node.measured[dimension] = safeSum(
+        node.measured[dimension],
+        measurement.value,
+        `${dimension} Run usage`,
+      );
+      if (limit.enforcement === "observational") {
+        this.observed[dimension] = safeSum(
+          this.observed[dimension],
+          measurement.value,
+          `${dimension} observed tree usage`,
+        );
+        continue;
+      }
+
+      const previousAvailable = node.hardAvailable[dimension];
+      this.measuredConsumed[dimension] = safeSum(
+        this.measuredConsumed[dimension],
+        measurement.value,
+        `${dimension} measured tree consumption`,
+      );
+      node.hardAvailable[dimension] = Math.max(
+        0,
+        previousAvailable - measurement.value,
+      );
+      if (measurement.value > previousAvailable) {
+        node.limitExceeded = true;
+        result = Object.freeze({ status: "limit_exceeded" as const, dimension });
       }
     }
     node.revision += 1;
@@ -217,38 +261,43 @@ export class RunTreeResourceAccount {
       throw new TypeError("Run Tree resources cannot settle before child allocations.");
     }
     const released = zeroAmounts();
+    const chargedUnknown = zeroAmounts();
     let measurementUnavailable = false;
     for (const dimension of runTreeResourceDimensions) {
+      const limit = this.envelope[dimension];
+      if (limit.enforcement === "observational") continue;
       const status = node.measurementStatus[dimension];
       const uncertain = status === "unavailable" || status === "unknown";
       if (uncertain) {
-        const retained = node.remaining[dimension];
-        this.consumed[dimension] = safeSum(
-          this.consumed[dimension],
-          retained,
-          `${dimension} conservatively retained usage`,
+        chargedUnknown[dimension] = node.hardAvailable[dimension];
+        this.chargedUnknown[dimension] = safeSum(
+          this.chargedUnknown[dimension],
+          chargedUnknown[dimension],
+          `${dimension} conservatively charged unknown consumption`,
         );
-        node.remaining[dimension] = 0;
-        measurementUnavailable ||= this.envelope[dimension].enforcement === "hard";
+        node.hardAvailable[dimension] = 0;
+        measurementUnavailable = true;
         continue;
       }
-      released[dimension] = node.remaining[dimension];
-      this.released[dimension] = safeSum(
-        this.released[dimension],
+
+      released[dimension] = node.hardAvailable[dimension];
+      this.cumulativeReleased[dimension] = safeSum(
+        this.cumulativeReleased[dimension],
         released[dimension],
-        `${dimension} released capacity`,
+        `${dimension} cumulative release flow`,
       );
       if (node.parentRunId !== null) {
         const parent = this.requireActiveNode(node.parentRunId);
-        parent.remaining[dimension] = safeSum(
-          parent.remaining[dimension],
+        parent.hardAvailable[dimension] = safeSum(
+          parent.hardAvailable[dimension],
           released[dimension],
-          `${dimension} parent remaining capacity`,
+          `${dimension} parent available capacity`,
         );
         parent.revision += 1;
       }
-      node.remaining[dimension] = 0;
+      node.hardAvailable[dimension] = 0;
     }
+
     node.settled = true;
     node.revision += 1;
     const settlement = Object.freeze({
@@ -259,6 +308,7 @@ export class RunTreeResourceAccount {
           : "settled" as const,
       usage: this.nodeUsage(node),
       released: freezeAmounts(released),
+      chargedUnknown: freezeAmounts(chargedUnknown),
     });
     node.settlement = settlement;
     return settlement;
@@ -273,8 +323,11 @@ export class RunTreeResourceAccount {
     return Object.freeze({
       runId: node.runId,
       parentRunId: node.parentRunId,
-      allocation: freezeAmounts(node.allocation),
-      remaining: freezeAmounts(node.remaining),
+      requestedAllocation: freezeAmounts(node.requestedAllocation),
+      hardGrant: freezeAmounts(node.hardGrant),
+      hardAvailable: freezeAmounts(node.hardAvailable),
+      observationalThresholds: freezeAmounts(node.observationalThresholds),
+      delegationCeiling: freezeAmounts(delegationCeiling(node)),
       usage: this.nodeUsage(node),
       settled: node.settled,
       revision: node.revision,
@@ -285,23 +338,39 @@ export class RunTreeResourceAccount {
     const root = this.requireNode(rootRunId);
     const snapshot = {} as Record<RunTreeResourceDimension, RunTreeResourceDimensionSnapshot>;
     for (const dimension of runTreeResourceDimensions) {
-      const reserved = [...this.nodes.values()]
+      const limit = this.envelope[dimension];
+      const status = aggregateStatus(
+        [...this.nodes.values()].map((node) => node.measurementStatus[dimension]),
+      );
+      if (limit.enforcement === "observational") {
+        snapshot[dimension] = Object.freeze({
+          enforcement: "observational" as const,
+          threshold: limit.threshold,
+          observed: this.observed[dimension],
+          overage: Math.max(0, this.observed[dimension] - limit.threshold),
+          measurementStatus: status,
+        });
+        continue;
+      }
+      const activeReserved = [...this.nodes.values()]
         .filter((node) => node.runId !== rootRunId && !node.settled)
-        .reduce((total, node) => safeSum(
-          total,
-          node.remaining[dimension],
-          `${dimension} reserved projection`,
-        ), 0);
+        .reduce(
+          (total, node) => safeSum(
+            total,
+            node.hardAvailable[dimension],
+            `${dimension} active reserved projection`,
+          ),
+          0,
+        );
       snapshot[dimension] = Object.freeze({
-        capacity: this.envelope[dimension].maximum,
-        consumed: this.consumed[dimension],
-        reserved,
-        remaining: root.remaining[dimension],
-        released: this.released[dimension],
-        measurementStatus: aggregateStatus(
-          [...this.nodes.values()].map((node) => node.measurementStatus[dimension]),
-        ),
-        enforcement: this.envelope[dimension].enforcement,
+        enforcement: "hard" as const,
+        capacity: limit.maximum,
+        measuredConsumed: this.measuredConsumed[dimension],
+        chargedUnknown: this.chargedUnknown[dimension],
+        activeReserved,
+        available: root.hardAvailable[dimension],
+        cumulativeReleased: this.cumulativeReleased[dimension],
+        measurementStatus: status,
       });
     }
     return Object.freeze(snapshot);
@@ -344,10 +413,28 @@ export function snapshotRunTreeResourceEnvelope(
     if (limit === null || typeof limit !== "object") {
       throw new TypeError(`RunTreeResourceEnvelope.${dimension} must be an object.`);
     }
-    result[dimension] = Object.freeze({
-      maximum: nonNegativeInteger(limit.maximum, `${dimension}.maximum`),
-      enforcement: enforcement(limit.enforcement, `${dimension}.enforcement`),
-    });
+    if (limit.enforcement === "hard") {
+      const maximum = nonNegativeInteger(limit.maximum, `${dimension}.maximum`);
+      const minimumChildGrant = nonNegativeInteger(
+        limit.minimumChildGrant,
+        `${dimension}.minimumChildGrant`,
+      );
+      if (minimumChildGrant > maximum) {
+        throw new TypeError(`${dimension}.minimumChildGrant cannot exceed maximum.`);
+      }
+      result[dimension] = Object.freeze({
+        enforcement: "hard" as const,
+        maximum,
+        minimumChildGrant,
+      });
+    } else if (limit.enforcement === "observational") {
+      result[dimension] = Object.freeze({
+        enforcement: "observational" as const,
+        threshold: nonNegativeInteger(limit.threshold, `${dimension}.threshold`),
+      });
+    } else {
+      throw new TypeError(`${dimension}.enforcement must be hard or observational.`);
+    }
   }
   for (const dimension of ["controllerTurns", "actions", "contextBytes", "resultBytes"] as const) {
     if (result[dimension].enforcement !== "hard") {
@@ -370,13 +457,25 @@ export function snapshotRunTreeResourceAmounts(
 function createNode(
   runId: string,
   parentRunId: string | null,
-  allocation: RunTreeResourceAmounts,
+  requested: RunTreeResourceAmounts,
+  envelope: RunTreeResourceEnvelope,
 ): MutableNodeAccount {
+  const hardGrant = zeroAmounts();
+  const observationalThresholds = zeroAmounts();
+  for (const dimension of runTreeResourceDimensions) {
+    if (envelope[dimension].enforcement === "hard") {
+      hardGrant[dimension] = requested[dimension];
+    } else {
+      observationalThresholds[dimension] = requested[dimension];
+    }
+  }
   return {
     runId,
     parentRunId,
-    allocation: { ...allocation },
-    remaining: { ...allocation },
+    requestedAllocation: { ...requested },
+    hardGrant,
+    hardAvailable: { ...hardGrant },
+    observationalThresholds,
     measured: zeroAmounts(),
     measurementStatus: Object.fromEntries(
       runTreeResourceDimensions.map((dimension) => [
@@ -394,9 +493,33 @@ function createNode(
   };
 }
 
+function delegationCeiling(node: MutableNodeAccount): MutableAmounts {
+  return Object.fromEntries(runTreeResourceDimensions.map((dimension) => [
+    dimension,
+    node.hardGrant[dimension] > 0 || node.observationalThresholds[dimension] === 0
+      ? node.hardAvailable[dimension]
+      : node.observationalThresholds[dimension],
+  ])) as MutableAmounts;
+}
+
+function rejectedReservation(
+  dimension: RunTreeResourceDimension,
+  reason: "insufficient_available" | "below_minimum_grant",
+): RunTreeResourceReservation {
+  return Object.freeze({
+    status: "rejected" as const,
+    code: "descendant_run_resource_limit_exceeded" as const,
+    dimension,
+    reason,
+  });
+}
+
 function envelopeAmounts(envelope: RunTreeResourceEnvelope): RunTreeResourceAmounts {
   return freezeAmounts(Object.fromEntries(
-    runTreeResourceDimensions.map((dimension) => [dimension, envelope[dimension].maximum]),
+    runTreeResourceDimensions.map((dimension) => {
+      const limit = envelope[dimension];
+      return [dimension, limit.enforcement === "hard" ? limit.maximum : limit.threshold];
+    }),
   ) as MutableAmounts);
 }
 
@@ -440,8 +563,11 @@ function assertMeasurement(
     nonNegativeInteger(input.value, `${dimension}.value`);
     return;
   }
-  if (input.status !== "unavailable" && input.status !== "not_applicable" &&
-      input.status !== "unknown") {
+  if (
+    input.status !== "unavailable" &&
+    input.status !== "not_applicable" &&
+    input.status !== "unknown"
+  ) {
     throw new TypeError(`${dimension} measurement status is invalid.`);
   }
 }
@@ -451,16 +577,6 @@ function nonNegativeInteger(input: unknown, field: string): number {
     throw new TypeError(`${field} must be a non-negative safe integer.`);
   }
   return input as number;
-}
-
-function enforcement(
-  input: unknown,
-  field: string,
-): RunTreeResourceLimit["enforcement"] {
-  if (input !== "hard" && input !== "observational") {
-    throw new TypeError(`${field} must be hard or observational.`);
-  }
-  return input;
 }
 
 function safeSum(left: number, right: number, field: string): number {

@@ -5,7 +5,8 @@ export function createTestRootRunTreeSnapshot(
   startedAt: string,
 ): RunTreeExecutionSnapshot {
   const resource = () => Object.freeze({
-    capacity: 100, consumed: 0, reserved: 0, remaining: 100, released: 0,
+    capacity: 100, measuredConsumed: 0, chargedUnknown: 0,
+    activeReserved: 0, available: 100, cumulativeReleased: 0,
     measurementStatus: "measured" as const, enforcement: "hard" as const,
   });
   const amounts = Object.freeze({
@@ -54,11 +55,17 @@ export function createTestRootRunTreeSnapshot(
       failedResultTransfers: 0, unknownResultTransfers: 0,
     }),
     nodes: Object.freeze([Object.freeze({
-      runId, parentRunId: null, relationId: null, parentRunActionId: null,
+      runId, parentRunId: null, relationId: null, relationKind: null,
+      parentRunActionId: null,
       depth: 0, status: "initializing" as const, resultCode: null,
       startedAt, completedAt: null,
       resources: Object.freeze({
-        runId, parentRunId: null, allocation: amounts, remaining: amounts,
+        runId, parentRunId: null, requestedAllocation: amounts,
+        hardGrant: amounts, hardAvailable: amounts,
+        observationalThresholds: Object.freeze(Object.fromEntries(
+          Object.keys(amounts).map((key) => [key, 0]),
+        )) as typeof amounts,
+        delegationCeiling: amounts,
         usage, settled: false, revision: 0,
       }),
       authorityRevision: `${runId}:authority:active:0`,

@@ -42,9 +42,9 @@ import {
 
 export const HELARC_EVALUATION_TIME = "2026-08-30T00:00:00.000Z";
 export const HELARC_EVALUATION_CORPUS_REVISION =
-  "helarc-run-tree-resource-authority-corpus-v1";
+  "helarc-run-tree-delegation-lifecycle-corpus-v1";
 export const HELARC_EVALUATION_TARGET_ADAPTER_REVISION =
-  "helarc-run-tree-resource-authority-target-v1";
+  "helarc-run-tree-delegation-lifecycle-target-v1";
 
 export type HelarcEvaluationScenario =
   | "inspect_and_complete"
@@ -346,7 +346,7 @@ function createObjective(): EvaluationObjective {
 
 function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetSnapshot {
   const nodeMajor = process.versions.node.split(".")[0] ?? "unknown";
-  const environmentRevision = `v15-${process.platform}-${process.arch}-node${nodeMajor}`;
+  const environmentRevision = `v16-${process.platform}-${process.arch}-node${nodeMajor}`;
   const agent = createHelarcAgent({
     target: "production",
     providerId: "helarc-deterministic-scripted-provider",
@@ -357,7 +357,7 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "The deterministic baseline identifies the admitted source revision but does not inspect ambient working-tree state.",
   );
   const values: Readonly<Record<string, unknown>> = Object.freeze({
-    "product.revision": "helarc-product-run-tree-resource-authority-v1",
+    "product.revision": "helarc-product-run-tree-delegation-lifecycle-v1",
     "agent.revision": agent.revision,
     "agent.instructions.release": `${agent.instructions.release.id}@${agent.instructions.release.revision}`,
     "agent.instructions.resolver": agent.instructions.resolverRevision,
@@ -375,21 +375,21 @@ function createTargetSnapshot(objective: EvaluationObjective): EvaluationTargetS
     "shell-execution-session.revision": "helarc.shell-execution-session.v1",
     "shell-command-outcome.revision": HELARC_SHELL_COMMAND_OUTCOME_REVISION,
     "target-adapter.revision": HELARC_EVALUATION_TARGET_ADAPTER_REVISION,
-    "source.revision": "helarc-run-tree-resource-authority-v1",
+    "source.revision": "helarc-run-tree-delegation-lifecycle-v1",
     "provider.revision": "scripted-native-tool-provider-v1",
     "model.revision": "scripted-native-tool-turn-v1",
-    "tool-profile.revision": "delegation-transfer-v1",
-    "delegation-contract.revision": "bounded-delegation-transfer-v1",
+    "tool-profile.revision": "delegation-lifecycle-v2",
+    "delegation-contract.revision": "isolated-delegation-continuation-v1",
     "action-registration.revision": "helarc-shell-action-registration-v2",
     "sandbox.enforcement": "disabled",
     "permission.preset": "case-declared",
     "reviewer.profile": "case-declared-deterministic",
     "context-projector.revision": "helarc-context-projector-v1",
-    "run-limits.revision": "helarc-run-tree-resource-authority-limits-v1",
-    "run-tree-resource-account.revision": "agent-runtime.run-tree-resource-account.v1",
-    "run-tree-authority.revision": "agent-runtime.run-tree-authority.v1",
+    "run-limits.revision": "helarc-run-tree-delegation-lifecycle-limits-v1",
+    "run-tree-resource-account.revision": "agent-runtime.run-tree-resource-account.v2",
+    "run-tree-authority.revision": "agent-runtime.run-tree-authority.v2",
     "run-tree-approval-account.revision": "agent-runtime.run-tree-approval-account.v1",
-    "run-tree-settlement.revision": "agent-runtime.run-tree-settlement.v1",
+    "run-tree-settlement.revision": "agent-runtime.run-tree-settlement.v2",
     "retry-policy.revision": "phase26-retry-policy-v1",
     "cancellation-limits.revision": "phase26-cancellation-v1",
     "fixture-manifest.revision": HELARC_EVALUATION_CORPUS_REVISION,

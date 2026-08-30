@@ -228,12 +228,14 @@ describe("HelarcProductComposition", () => {
     ), "controller-request-1");
     expect(exposure.catalog.tools.map(({ name }) => name)).toEqual(expect.arrayContaining([
       "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "TaskStop",
-      "AskUserQuestion", "Agent",
+      "AskUserQuestion", "Agent", "SendMessage",
     ]));
     expect(exposure.catalog.tools.find(({ name }) => name === "AskUserQuestion")?.binding.kind)
       .toBe("interaction");
     expect(exposure.catalog.tools.find(({ name }) => name === "Agent")?.binding.kind)
       .toBe("descendant_agent");
+    expect(exposure.catalog.tools.find(({ name }) => name === "SendMessage")?.binding.kind)
+      .toBe("descendant_message");
     expect(composition.interactions.protocols).toContainEqual({
       owner: "helarc",
       kind: "clarification",
@@ -245,13 +247,13 @@ describe("HelarcProductComposition", () => {
       ({ registration }) => registration,
     );
     const baselineGuidance = createHelarcBaselineToolGuidance(selectedRegistrations);
-    expect(baselineGuidance.release.tools).toHaveLength(10);
-    expect(baselineGuidance.release.sources).toHaveLength(10);
-    expect(composition.controllerProtocol.toolGuidance.entries).toHaveLength(9);
+    expect(baselineGuidance.release.tools).toHaveLength(11);
+    expect(baselineGuidance.release.sources).toHaveLength(11);
+    expect(composition.controllerProtocol.toolGuidance.entries).toHaveLength(10);
     expect(composition.controllerProtocol.toolGuidance.entries.map(({ name }) => name))
       .toEqual(expect.arrayContaining([
         "Edit", "Glob", "Grep", "Read", "Write", "PowerShell", "TaskStop",
-        "AskUserQuestion", "Agent",
+        "AskUserQuestion", "Agent", "SendMessage",
       ]));
     expect(composition.runMetadata).toMatchObject({
       controllerProtocolRevision: composition.controllerProtocol.revision,

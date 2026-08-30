@@ -185,13 +185,25 @@ const DEFINITIONS = Object.freeze({
     }),
   }),
   Agent: Object.freeze({
-    description: "Delegate one bounded, self-contained objective to a general-purpose descendant Agent when parallel investigation, isolation, or independent analysis improves progress. Work directly when the task is small, tightly sequential, or depends on rapidly changing local context. The prompt must include the objective, relevant constraints, expected result, and only the context the descendant needs; do not assume it can infer omitted conversation state. Use predecessor_result only to establish an explicit dependency on an earlier delegation. Treat the returned summary, artifacts, verification, effects, limitations, and failure status as a bounded descendant result, not as proof beyond its recorded evidence.",
+    description: "Delegate one bounded, self-contained objective to a new general-purpose descendant Agent when isolation or independent analysis improves progress. Work directly when the task is small, tightly sequential, or depends on rapidly changing local context. The prompt must include the objective, relevant constraints, expected result, and only the context the descendant needs; do not assume it can infer omitted conversation state. Use dependency_result for work that consumes an earlier result and replaced_result only when a new Run supersedes that result. Treat the returned summary, artifacts, verification, effects, limitations, and failure status as bounded descendant material, not as proof beyond its recorded evidence. Use SendMessage, not Agent, to continue one exact settled child context.",
     fields: Object.freeze({
       "/properties/description": "Optional concise label for the delegated work, used for human-readable progress and diagnostics.",
-      "/properties/predecessor_result": "Optional exact prior delegation result reference when this work depends on that settled result.",
-      "/properties/predecessor_result/properties/id": "Identity of the exact predecessor delegation result.",
-      "/properties/predecessor_result/properties/revision": "Immutable revision of the predecessor delegation result.",
+      "/properties/dependency_result": "Optional exact settled result consumed as a dependency by the new descendant.",
+      "/properties/dependency_result/properties/id": "Identity of the exact dependency result.",
+      "/properties/dependency_result/properties/revision": "Immutable revision of the dependency result.",
       "/properties/prompt": "Self-contained delegated objective with necessary context, constraints, and expected output.",
+      "/properties/replaced_result": "Optional exact settled result superseded by this new descendant.",
+      "/properties/replaced_result/properties/id": "Identity of the exact result being replaced.",
+      "/properties/replaced_result/properties/revision": "Immutable revision of the result being replaced.",
+    }),
+  }),
+  SendMessage: Object.freeze({
+    description: "Send one bounded follow-up instruction to one exact descendant target advertised by the current Run. An active target steers the same Child Run; a continuation target consumes one retained same-process child context and starts one successor Run. Use the exact current target identity, do not invent identifiers, and use Agent instead when the work should begin with a fresh isolated context. Delivery does not widen authority, revive a settled Run, or make prior uncertain effects safe to replay.",
+    fields: Object.freeze({
+      "/properties/message": "Bounded follow-up instruction for the selected descendant context.",
+      "/properties/target": "Exact active-child or continuation target currently advertised by the Run.",
+      "/properties/target/properties/id": "Opaque current target identity. Copy it exactly from the advertised descendant targets.",
+      "/properties/target/properties/kind": "Use active for the same running child or continuation for a retained settled-child context.",
     }),
   }),
 } satisfies Readonly<Record<HelarcBaselineToolName, GuidanceDefinition>>);

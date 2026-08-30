@@ -19,6 +19,7 @@ import type {
   RunTreeExecutionSnapshot,
   RunTreeResourceDimension,
 } from "@agent-anything/agent-runtime/runner";
+import type { DescendantContinuationTargetProjection } from "@agent-anything/agent-runtime/delegation";
 import type { RuntimeEvent } from "@agent-anything/observability/events";
 import type { InteractionRequestRef } from "@agent-anything/interaction/protocol";
 import type { InteractionTransportReceipt } from "@agent-anything/interaction/records";
@@ -105,6 +106,7 @@ export interface HostRunTreeNodeProjection {
   readonly runId: string;
   readonly parentRunId: string | null;
   readonly relationId: string | null;
+  readonly relationKind: "delegation" | "replacement" | "continuation" | null;
   readonly parentRunActionId: string | null;
   readonly depth: number;
   readonly status: RunLifecycleStatus;
@@ -116,15 +118,24 @@ export interface HostRunTreeNodeProjection {
   readonly cancellationScope: "subtree" | "tree" | null;
 }
 
-export interface HostRunTreeResourceDimensionProjection {
-  readonly capacity: number;
-  readonly consumed: number;
-  readonly reserved: number;
-  readonly remaining: number;
-  readonly released: number;
-  readonly measurementStatus: "measured" | "unavailable" | "not_applicable" | "unknown";
-  readonly enforcement: "hard" | "observational";
-}
+export type HostRunTreeResourceDimensionProjection =
+  | {
+      readonly enforcement: "hard";
+      readonly capacity: number;
+      readonly measuredConsumed: number;
+      readonly chargedUnknown: number;
+      readonly activeReserved: number;
+      readonly available: number;
+      readonly cumulativeReleased: number;
+      readonly measurementStatus: "measured" | "unavailable" | "not_applicable" | "unknown";
+    }
+  | {
+      readonly enforcement: "observational";
+      readonly threshold: number;
+      readonly observed: number;
+      readonly overage: number;
+      readonly measurementStatus: "measured" | "unavailable" | "not_applicable" | "unknown";
+    };
 
 export type HostRunTreeResourcesProjection = Readonly<Record<
   RunTreeResourceDimension,
@@ -171,6 +182,7 @@ export interface HostRunTreeProjection {
 }
 
 export type HostActiveDelegationProjection = ActiveDelegationProjection;
+export type HostContinuationTargetProjection = DescendantContinuationTargetProjection;
 
 export type HostEnforcementStatus =
   | "not_exercised"
@@ -247,6 +259,7 @@ export interface HostRunProjection {
   readonly stopReview: HostRunStopReviewProjection;
   readonly pendingInteractions: readonly HostPendingInteractionProjection[];
   readonly activeDelegations: readonly HostActiveDelegationProjection[];
+  readonly continuationTargets: readonly HostContinuationTargetProjection[];
   readonly retry: HostRetryProjection | null;
   readonly verification: VerificationHostProjection | null;
   readonly cancellation: HostCancellationProjection | null;
@@ -378,6 +391,7 @@ export function createHostRunProjection(
     stopReview: createInitialHostRunStopReviewProjection(),
     pendingInteractions: Object.freeze([]),
     activeDelegations: Object.freeze([]),
+    continuationTargets: Object.freeze([]),
     retry: null,
     verification: null,
     cancellation: null,
@@ -444,6 +458,7 @@ function projectRunTree(input: RunTreeExecutionSnapshot): HostRunTreeProjection 
     runId: node.runId,
     parentRunId: node.parentRunId,
     relationId: node.relationId,
+    relationKind: node.relationKind,
     parentRunActionId: node.parentRunActionId,
     depth: node.depth,
     status: node.status,
@@ -466,7 +481,7 @@ function projectRunTree(input: RunTreeExecutionSnapshot): HostRunTreeProjection 
         dimension,
         Object.freeze({ ...resource }),
       ]),
-    )) as HostRunTreeResourcesProjection,
+    )) as unknown as HostRunTreeResourcesProjection,
     approvals: Object.freeze({
       totalRequests: input.approvals.totalRequests,
       activeReviews: input.approvals.activeReviews,

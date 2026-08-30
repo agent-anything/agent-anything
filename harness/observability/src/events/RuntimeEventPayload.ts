@@ -47,13 +47,15 @@ export interface RunStopFeedbackRequestedRuntimeEventPayload {
 
 export interface RunDescendantRuntimeEventPayload {
   readonly relationId: string;
+  readonly relationKind: "delegation" | "replacement" | "continuation";
   readonly parentRunActionId: string;
   readonly childRunId: string;
   readonly childAgentId: string;
   readonly childAgentRevision: string;
   readonly requestId: string;
   readonly requestRevision: string;
-  readonly predecessorResultId: string | null;
+  readonly dependencyResultId: string | null;
+  readonly replacedResultId: string | null;
   readonly contextSourceCount: number;
   readonly authorityDerivationId: string;
   readonly limitDerivationId: string;

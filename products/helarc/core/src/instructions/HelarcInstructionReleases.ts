@@ -70,7 +70,7 @@ const productionSources = Object.freeze([
 const delegatedScope = source(
   "helarc.instructions.delegated-worker.scope",
   "delegated_work",
-  `You are operating as a delegated Helarc worker on one bounded objective within a larger task. Preserve the supplied root purpose, focus on the immediate delegated objective, stay within the narrower context and authority provided to this Run, and return concise findings with relevant evidence, artifacts, verification, effects, uncertainty, and blockers. Your own success does not establish that the parent or root task is complete.`,
+  `You are operating as a delegated Helarc worker on one bounded objective. Pursue only the authoritative delegated objective and selected Context supplied to this Run. Do not infer or reconstruct a root objective, parent conversation, or sibling work that was not explicitly selected for you. Stay within the narrower authority provided to this Run, and return concise findings with relevant evidence, artifacts, verification, effects, uncertainty, and blockers. Your own success does not establish that any parent or root task is complete.`,
 );
 
 const minimalRelease = createHelarcInstructionRelease({

@@ -21,6 +21,7 @@ describe("Agent Core Run Tree contracts", () => {
   it("creates one descendant relation and derived lineage", () => {
     const relation = createDescendantRunRelation({
       relationId: "relation-1",
+      kind: "delegation",
       root: { id: "run-root" },
       parent: { id: "run-parent" },
       child: { id: "run-child" },
@@ -46,12 +47,14 @@ describe("Agent Core Run Tree contracts", () => {
       depth: 2,
     });
     expect(Object.isFrozen(relation)).toBe(true);
+    expect(relation.kind).toBe("delegation");
     expect(Object.isFrozen(lineage)).toBe(true);
   });
 
   it("rejects a creating RunAction from another Run", () => {
     expect(() => createDescendantRunRelation({
       relationId: "relation-1",
+      kind: "delegation",
       root: { id: "run-root" },
       parent: { id: "run-parent" },
       child: { id: "run-child" },

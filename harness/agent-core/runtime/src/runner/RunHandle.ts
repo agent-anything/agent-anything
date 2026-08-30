@@ -27,6 +27,7 @@ import type {
   DelegationSteeringRoute,
 } from "../delegation/index.js";
 import type { AgentInstructionBindingProjection } from "../instructions/index.js";
+import type { DescendantContinuationTargetProjection } from "../delegation/index.js";
 
 export interface RunPendingInteractionProjection {
   readonly envelope: SafeInteractionEnvelope<unknown>;
@@ -46,6 +47,7 @@ export interface RunRetryProjection {
 export interface ActiveDelegationProjection {
   readonly request: Readonly<{ readonly id: string; readonly revision: string }>;
   readonly relation: Readonly<{ readonly id: string }>;
+  readonly relationKind: "delegation" | "replacement" | "continuation";
   readonly child: Readonly<{ readonly id: string }>;
   readonly childRunRevision: number;
   readonly childStatus: RunLifecycleStatus;
@@ -65,6 +67,7 @@ export interface RunOperationSnapshot<TOutput = unknown> {
   readonly verification: VerificationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
   readonly activeDelegations: readonly ActiveDelegationProjection[];
+  readonly continuationTargets: readonly DescendantContinuationTargetProjection[];
   readonly runTree: RunTreeExecutionSnapshot;
   readonly result: RunResult<TOutput> | null;
 }
@@ -96,6 +99,7 @@ export interface RunExecutionUpdate<TOutput> {
   readonly verification: VerificationHostProjection | null;
   readonly pendingInteractions: readonly RunPendingInteractionProjection[];
   readonly activeDelegations: readonly ActiveDelegationProjection[];
+  readonly continuationTargets: readonly DescendantContinuationTargetProjection[];
   readonly result: RunResult<TOutput> | null;
 }
 
@@ -133,6 +137,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       verification: null,
       pendingInteractions: Object.freeze([]),
       activeDelegations: Object.freeze([]),
+      continuationTargets: Object.freeze([]),
       runTree: initialRunTree,
       result: null,
     });
@@ -173,6 +178,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
       verification: update.verification,
       pendingInteractions: update.pendingInteractions,
       activeDelegations: update.activeDelegations,
+      continuationTargets: update.continuationTargets,
       runTree,
       result: update.result,
     });
@@ -312,6 +318,7 @@ export class ActiveRunHandle<TOutput> implements RunHandle<TOutput> {
         verification: this.snapshot.verification,
         pendingInteractions: Object.freeze([]),
         activeDelegations: Object.freeze([]),
+        continuationTargets: this.snapshot.continuationTargets,
         result,
       });
     }
@@ -377,7 +384,18 @@ function freezeSnapshot<TOutput>(
         ...delegation,
         request: Object.freeze({ ...delegation.request }),
         relation: Object.freeze({ ...delegation.relation }),
+        relationKind: delegation.relationKind,
         child: Object.freeze({ ...delegation.child }),
+      })
+    )),
+    continuationTargets: Object.freeze(snapshot.continuationTargets.map((target) =>
+      Object.freeze({
+        ...target,
+        ref: Object.freeze({ ...target.ref }),
+        sourceChild: Object.freeze({ ...target.sourceChild }),
+        sourceResult: Object.freeze({ ...target.sourceResult }),
+        agent: Object.freeze({ ...target.agent }),
+        limitations: Object.freeze([...target.limitations]),
       })
     )),
     runTree: snapshot.runTree,

@@ -41,6 +41,7 @@ describe("Agent Core Runtime public API", () => {
       "createDelegationLimits",
       "createDelegationResult",
       "createDelegationResultExpectation",
+      "createDescendantContinuationTargetProjection",
       "deriveDelegationAuthority",
       "deriveDelegationLimits",
       "materializeDelegationRequest",
@@ -55,6 +56,7 @@ describe("Agent Core Runtime public API", () => {
       "snapshotDelegationResult",
       "snapshotDelegationResultExpectation",
       "snapshotDelegationSteeringRoute",
+      "snapshotDescendantMessageRequest",
     ]);
     expect(Object.keys(instructionsApi).sort()).toEqual([
       "assertAgentInstructionBindingMatches",

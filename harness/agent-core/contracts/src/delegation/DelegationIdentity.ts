@@ -18,6 +18,21 @@ export interface DelegationResultRef {
   readonly revision: string;
 }
 
+export interface DescendantContinuationRef {
+  readonly id: string;
+  readonly revision: string;
+}
+
+export interface DescendantContinuationCorrelation {
+  readonly ref: DescendantContinuationRef;
+  readonly sourceRequest: DelegationRequestRef;
+  readonly sourceResult: DelegationResultRef;
+  readonly root: RunRef;
+  readonly parent: RunRef;
+  readonly sourceChild: RunRef;
+  readonly agent: AgentRevisionRef;
+}
+
 export interface DelegationOriginCorrelation {
   readonly root: {
     readonly run: RunRef;
@@ -42,7 +57,10 @@ export interface DelegationRunCorrelation {
   };
 }
 
-export interface DelegationPredecessorCorrelation {
+export type DelegationSourceResultKind = "dependency" | "replacement";
+
+export interface DelegationSourceResultCorrelation {
+  readonly kind: DelegationSourceResultKind;
   readonly request: DelegationRequestRef;
   readonly result: DelegationResultRef;
   readonly root: RunRef;
@@ -71,6 +89,46 @@ export function snapshotDelegationResultRef(
     id: token(input.id, "DelegationResultRef.id"),
     revision: token(input.revision, "DelegationResultRef.revision"),
   });
+}
+
+export function snapshotDescendantContinuationRef(
+  input: DescendantContinuationRef,
+): DescendantContinuationRef {
+  strictRecord(input, "DescendantContinuationRef", ["id", "revision"]);
+  return Object.freeze({
+    id: token(input.id, "DescendantContinuationRef.id"),
+    revision: token(input.revision, "DescendantContinuationRef.revision"),
+  });
+}
+
+export function snapshotDescendantContinuationCorrelation(
+  input: DescendantContinuationCorrelation,
+): DescendantContinuationCorrelation {
+  strictRecord(input, "DescendantContinuationCorrelation", [
+    "ref",
+    "sourceRequest",
+    "sourceResult",
+    "root",
+    "parent",
+    "sourceChild",
+    "agent",
+  ]);
+  const correlation = deepFreeze({
+    ref: snapshotDescendantContinuationRef(input.ref),
+    sourceRequest: snapshotDelegationRequestRef(input.sourceRequest),
+    sourceResult: snapshotDelegationResultRef(input.sourceResult),
+    root: snapshotRunRef(input.root, "root"),
+    parent: snapshotRunRef(input.parent, "parent"),
+    sourceChild: snapshotRunRef(input.sourceChild, "sourceChild"),
+    agent: snapshotAgentRef(input.agent, "agent"),
+  });
+  if (
+    correlation.root.id === correlation.sourceChild.id ||
+    correlation.parent.id === correlation.sourceChild.id
+  ) {
+    throw new TypeError("Continuation source child must be distinct from root and parent.");
+  }
+  return correlation;
 }
 
 export function snapshotDelegationOriginCorrelation(
@@ -154,21 +212,26 @@ export function snapshotDelegationRunCorrelation(
   return deepFreeze({ request, origin, relation, child });
 }
 
-export function snapshotDelegationPredecessorCorrelation(
-  input: DelegationPredecessorCorrelation,
-): DelegationPredecessorCorrelation {
-  strictRecord(input, "DelegationPredecessorCorrelation", [
+export function snapshotDelegationSourceResultCorrelation(
+  input: DelegationSourceResultCorrelation,
+): DelegationSourceResultCorrelation {
+  strictRecord(input, "DelegationSourceResultCorrelation", [
+    "kind",
     "request",
     "result",
     "root",
     "child",
   ]);
-  strictRecord(input.child, "DelegationPredecessorCorrelation.child", [
+  if (input.kind !== "dependency" && input.kind !== "replacement") {
+    throw new TypeError("Delegation source-result kind is unsupported.");
+  }
+  strictRecord(input.child, "DelegationSourceResultCorrelation.child", [
     "run",
     "task",
     "agent",
   ]);
   return deepFreeze({
+    kind: input.kind,
     request: snapshotDelegationRequestRef(input.request),
     result: snapshotDelegationResultRef(input.result),
     root: snapshotRunRef(input.root, "root"),
@@ -183,6 +246,7 @@ export function snapshotDelegationPredecessorCorrelation(
 function snapshotRelation(input: DescendantRunRelation): DescendantRunRelation {
   strictRecord(input, "DescendantRunRelation", [
     "ref",
+    "kind",
     "root",
     "parent",
     "child",
@@ -192,6 +256,7 @@ function snapshotRelation(input: DescendantRunRelation): DescendantRunRelation {
   strictRecord(input.ref, "DescendantRunRelation.ref", ["id"]);
   const relation: DescendantRunRelation = {
     ref: snapshotRelationRef(input.ref),
+    kind: snapshotRelationKind(input.kind),
     root: snapshotRunRef(input.root, "relation.root"),
     parent: snapshotRunRef(input.parent, "relation.parent"),
     child: snapshotRunRef(input.child, "relation.child"),
@@ -208,6 +273,19 @@ function snapshotRelation(input: DescendantRunRelation): DescendantRunRelation {
     throw new TypeError("Delegation relation RunAction must belong to its parent Run.");
   }
   return deepFreeze(relation);
+}
+
+function snapshotRelationKind(
+  input: unknown,
+): DescendantRunRelation["kind"] {
+  if (
+    input !== "delegation" &&
+    input !== "replacement" &&
+    input !== "continuation"
+  ) {
+    throw new TypeError("Delegation relation kind is unsupported.");
+  }
+  return input;
 }
 
 function snapshotLineage(input: RunLineage): RunLineage {

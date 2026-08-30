@@ -11,6 +11,7 @@ describe("Helarc Desktop IPC projection", () => {
 
     expect(Object.keys(projected.run?.host ?? {}).sort()).toEqual([
       "activeDelegations",
+      "continuationTargets",
       "instructionBinding",
       "pendingInteractions",
       "runRevision",
@@ -242,6 +243,7 @@ function snapshotWithRun(pendingInteractions: readonly unknown[]): HelarcMainSna
         deadlineAt: "2026-07-19T00:01:00.000Z",
       }),
       activeDelegations: [],
+      continuationTargets: [],
       stopReview: {
         reviewSequence: 3,
         requiredFeedbackRounds: 1,

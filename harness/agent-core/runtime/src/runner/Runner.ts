@@ -159,8 +159,8 @@ export class Runner {
       inputSnapshot.task,
       ordinaryConfig.config,
       null,
-      null,
-      null,
+      Object.freeze([]),
+      Object.freeze([]),
       tree.rootLineage,
       tree,
       measureInitialRunContextBytes(inputSnapshot),
@@ -198,8 +198,7 @@ export class Runner {
     let request: DelegationRequest;
     let agent: Agent;
     let config: ValidatedRunConfig;
-    let rootPurpose: DelegationContextMaterial;
-    let predecessor: DelegationContextMaterial | null;
+    let contextMaterials: readonly DelegationContextMaterial[];
     let contextBytes: number;
     let rejectionCode:
       | "delegation_request_invalid"
@@ -243,16 +242,12 @@ export class Runner {
       rejectionCode = "delegation_context_invalid";
       const contextAssessment = assessDelegationContextConstruction({
         request,
-        rootTask,
-        rootPurpose: input.rootPurpose,
-        predecessor: input.predecessor,
+        materials: input.contextMaterials,
       });
-      rootPurpose = contextAssessment.rootPurpose;
-      predecessor = contextAssessment.predecessor;
+      contextMaterials = contextAssessment.selected;
       contextBytes = measureDelegationInitialContextBytes({
-        rootPurpose: contextAssessment.rootPurpose,
         childTask: request.task,
-        predecessor: contextAssessment.predecessor,
+        materials: contextAssessment.selected,
       });
       if (contextBytes > request.limits.maxContextBytes) {
         throw new TypeError("Delegation initial Context exceeds its effective limit.");
@@ -286,6 +281,7 @@ export class Runner {
     try {
       reservation = tree.reserveDescendant({
         relationId: input.relationId,
+        relationKind: input.relationKind,
         createChildRunId: () => {
           const childRunId = this.dependencies.createRunId();
           assertNonEmpty(childRunId, "Runner-created descendant runId");
@@ -337,8 +333,8 @@ export class Runner {
         rootTask,
         rootConfig,
         request,
-        rootPurpose,
-        predecessor,
+        contextMaterials,
+        input.modelInteractionSeed,
         reservation.lineage,
         tree,
         contextBytes,
@@ -384,8 +380,8 @@ export class Runner {
     rootTask: AgentTask,
     rootConfig: RunConfig,
     delegationRequest: DelegationRequest | null,
-    delegationRootPurpose: DelegationContextMaterial | null,
-    delegationPredecessor: DelegationContextMaterial | null,
+    delegationContextMaterials: readonly DelegationContextMaterial[],
+    modelInteractionSeed: RuntimeDescendantRunStartInput["modelInteractionSeed"],
     lineage: RunLineage,
     tree: RunTreeExecution,
     initialContextBytes: number,
@@ -437,8 +433,8 @@ export class Runner {
       rootTask,
       rootConfig,
       delegationRequest,
-      delegationRootPurpose,
-      delegationPredecessor,
+      delegationContextMaterials,
+      modelInteractionSeed,
       lineage,
       runtimeEventPublishers,
       runTraceObservers,
@@ -615,6 +611,9 @@ function snapshotRunnerDelegationComposition(
     typeof input.preparation !== "object" ||
     typeof input.preparation.assessAvailability !== "function" ||
     typeof input.preparation.prepare !== "function" ||
+    input.continuation === null ||
+    typeof input.continuation !== "object" ||
+    typeof input.continuation.prepare !== "function" ||
     input.narrativeProjection === null ||
     typeof input.narrativeProjection !== "object" ||
     typeof input.narrativeProjection.project !== "function" ||
@@ -629,6 +628,9 @@ function snapshotRunnerDelegationComposition(
       assessAvailability:
         input.preparation.assessAvailability.bind(input.preparation),
       prepare: input.preparation.prepare.bind(input.preparation),
+    }),
+    continuation: Object.freeze({
+      prepare: input.continuation.prepare.bind(input.continuation),
     }),
     narrativeProjection: Object.freeze({
       project: input.narrativeProjection.project.bind(input.narrativeProjection),

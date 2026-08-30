@@ -2,7 +2,6 @@ import type { Agent } from "@agent-anything/agent-core/agent";
 import type { RunnerDelegationComposition } from "@agent-anything/agent-runtime/runner";
 import {
   createDelegationContextPlan,
-  createDelegationContextMaterial,
   createDelegationLimits,
   createDelegationResultExpectation,
   type DelegationResult,
@@ -13,7 +12,7 @@ import type { HelarcAgentOutput } from "../controller/HelarcController.js";
 import { findHelarcBaselineToolContract } from "../tools/HelarcBaselineToolContracts.js";
 
 export interface HelarcDescendantAgentContribution {
-  readonly tool: ToolRegistrationInput;
+  readonly tools: readonly ToolRegistrationInput[];
   readonly delegation: RunnerDelegationComposition;
 }
 
@@ -22,8 +21,9 @@ export function createHelarcDescendantAgentContribution(
   admittedAt: string,
 ): HelarcDescendantAgentContribution {
   const contract = findHelarcBaselineToolContract("Agent");
+  const sendMessageContract = findHelarcBaselineToolContract("SendMessage");
   return Object.freeze({
-    tool: Object.freeze({
+    tools: Object.freeze([Object.freeze({
       admissionId: "helarc.agent.v1",
       descriptor: Object.freeze({
         ref: Object.freeze({
@@ -57,7 +57,41 @@ export function createHelarcDescendantAgentContribution(
       }),
       allowedOrigins: Object.freeze(["model" as const]),
       admittedAt,
-    }),
+    }), Object.freeze({
+      admissionId: "helarc.send-message.v1",
+      descriptor: Object.freeze({
+        ref: Object.freeze({
+          tool: Object.freeze({ namespace: "helarc", name: "send-message" }),
+          revision: "1",
+        }),
+        name: sendMessageContract.name,
+        description: sendMessageContract.description,
+        inputSchema: sendMessageContract.inputSchema,
+        outputSchema: sendMessageContract.outputSchema,
+        schemaRevisions: Object.freeze({
+          dialect: "json-schema-2020-12",
+          input: "1",
+          output: "1",
+          translation: "native-1",
+        }),
+        annotations: sendMessageContract.annotations,
+        source: Object.freeze({
+          kind: "product" as const,
+          sourceId: "helarc",
+          sourceRevision: "1",
+          activationEpoch: null,
+        }),
+        binding: Object.freeze({
+          kind: "descendant_message" as const,
+          agent: Object.freeze({ id: agent.id, revision: agent.revision }),
+          revision: "descendant-message-binding-1",
+        }),
+        retirement: null,
+        metadata: Object.freeze({ profile: "code-agent" }),
+      }),
+      allowedOrigins: Object.freeze(["model" as const]),
+      admittedAt,
+    })]),
     delegation: Object.freeze({
       preparation: Object.freeze({
         assessAvailability(
@@ -83,16 +117,6 @@ export function createHelarcDescendantAgentContribution(
             throw new TypeError("The requested descendant Agent revision is not admitted.");
           }
           const delegated = snapshotDelegatedInput(input.toolCall.input);
-          const rootPurpose = createDelegationContextMaterial({
-            owner: "helarc",
-            kind: "root_task_purpose",
-            id: input.root.task.id,
-            payload: Object.freeze({
-              kind: "helarc_root_task_purpose",
-              taskKind: input.root.task.kind,
-              taskInput: input.root.task.input,
-            }),
-          });
           const limits = createDelegationLimits({
             maxControllerTurns: input.limitCeiling.maxControllerTurns,
             maxActions: input.limitCeiling.maxActions,
@@ -105,7 +129,7 @@ export function createHelarcDescendantAgentContribution(
           });
           return Object.freeze({
             agent,
-            rootPurpose,
+            contextMaterials: Object.freeze([]),
             preparation: Object.freeze({
               schemaVersion: 1 as const,
               childAgent: Object.freeze({ id: agent.id, revision: agent.revision }),
@@ -132,11 +156,7 @@ export function createHelarcDescendantAgentContribution(
                 maxNarrativeCharacters: 16_000,
               }),
               contextPlan: createDelegationContextPlan({
-                entries: Object.freeze([Object.freeze({
-                  role: "root_purpose" as const,
-                  material: rootPurpose.ref,
-                  necessity: "mandatory" as const,
-                })]),
+                entries: Object.freeze([]),
                 maxContextBytes: limits.maxContextBytes,
               }),
               requestedAuthority: Object.freeze(input.authorityCeiling.map((dimension) =>
@@ -146,7 +166,61 @@ export function createHelarcDescendantAgentContribution(
                   required: Object.freeze([...dimension.required]),
                 }))),
               limits,
-              predecessor: delegated.predecessor,
+              dependencyResult: delegated.dependencyResult,
+              replacedResult: delegated.replacedResult,
+            }),
+          });
+        },
+      }),
+      continuation: Object.freeze({
+        async prepare(
+          input: Parameters<RunnerDelegationComposition["continuation"]["prepare"]>[0],
+        ) {
+          if (
+            input.targetAgent.id !== agent.id ||
+            input.targetAgent.revision !== agent.revision ||
+            input.sourceRequest.childAgent.id !== agent.id ||
+            input.sourceRequest.childAgent.revision !== agent.revision ||
+            input.sourceRequest.origin.parent.run.id !== input.parentRunId ||
+            input.sourceResult.request.id !== input.sourceRequest.ref.id ||
+            input.sourceResult.request.revision !== input.sourceRequest.ref.revision
+          ) {
+            throw new TypeError("The requested descendant continuation is incompatible.");
+          }
+          boundedText(input.message, 64_000, "message");
+          const limits = createDelegationLimits({
+            maxControllerTurns: input.limitCeiling.maxControllerTurns,
+            maxActions: input.limitCeiling.maxActions,
+            maxModelInputTokens: input.limitCeiling.maxModelInputTokens,
+            maxModelOutputTokens: input.limitCeiling.maxModelOutputTokens,
+            maxCostUnits: input.limitCeiling.maxCostUnits,
+            maxDurationMs: input.limitCeiling.maxDurationMs,
+            maxContextBytes: input.limitCeiling.maxContextBytes,
+            maxResultBytes: input.limitCeiling.maxResultBytes,
+          });
+          return Object.freeze({
+            agent,
+            contextMaterials: Object.freeze([]),
+            preparation: Object.freeze({
+              schemaVersion: 1 as const,
+              childAgent: Object.freeze({ id: agent.id, revision: agent.revision }),
+              task: input.sourceRequest.task,
+              objective: input.sourceRequest.objective,
+              expectedResult: input.sourceRequest.expectedResult,
+              contextPlan: createDelegationContextPlan({
+                entries: Object.freeze([]),
+                maxContextBytes: limits.maxContextBytes,
+              }),
+              requestedAuthority: Object.freeze(input.authorityCeiling.map((dimension) =>
+                Object.freeze({
+                  kind: dimension.kind,
+                  allowed: Object.freeze([...dimension.allowed]),
+                  required: Object.freeze([...dimension.required]),
+                }))
+              ),
+              limits,
+              dependencyResult: null,
+              replacedResult: null,
             }),
           });
         },
@@ -155,7 +229,20 @@ export function createHelarcDescendantAgentContribution(
         project(
           input: Parameters<RunnerDelegationComposition["narrativeProjection"]["project"]>[0],
         ) {
-          return isHelarcOutput(input.finalOutput) ? input.finalOutput.summary : null;
+          if (input.childResult.status === "succeeded") {
+            return isHelarcOutput(input.childResult.finalOutput)
+              ? input.childResult.finalOutput.summary
+              : null;
+          }
+          const partial = [...input.childResult.items]
+            .reverse()
+            .flatMap(({ payload }) => payload.kind === "controller_turn"
+              ? payload.modelItems.flatMap((item) =>
+                  item.kind === "assistant_text" ? [item.text] : []
+                )
+              : [])
+            .find((text) => text.trim().length > 0)?.trim();
+          return partial === undefined ? null : partial.slice(0, 16_000);
         },
       }),
       resultProjection: Object.freeze({
@@ -168,24 +255,29 @@ export function createHelarcDescendantAgentContribution(
 function snapshotDelegatedInput(candidate: unknown): {
   readonly prompt: string;
   readonly description: string | null;
-  readonly predecessor: { readonly id: string; readonly revision: string } | null;
+  readonly dependencyResult: { readonly id: string; readonly revision: string } | null;
+  readonly replacedResult: { readonly id: string; readonly revision: string } | null;
 } {
   if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
     throw new TypeError("Agent Tool input must be an object.");
   }
   const input = candidate as Record<string, unknown>;
   if (Object.keys(input).some((key) =>
-    key !== "prompt" && key !== "description" && key !== "predecessor_result")) {
+    key !== "prompt" && key !== "description" &&
+    key !== "dependency_result" && key !== "replaced_result")) {
     throw new TypeError("Agent Tool input contains an unsupported field.");
   }
   const prompt = boundedText(input.prompt, 64_000, "prompt");
   const description = input.description === undefined
     ? null
     : boundedText(input.description, 1_024, "description");
-  const predecessor = input.predecessor_result === undefined
+  const dependencyResult = input.dependency_result === undefined
     ? null
-    : snapshotPredecessorResult(input.predecessor_result);
-  return Object.freeze({ prompt, description, predecessor });
+    : snapshotSourceResult(input.dependency_result, "dependency_result");
+  const replacedResult = input.replaced_result === undefined
+    ? null
+    : snapshotSourceResult(input.replaced_result, "replaced_result");
+  return Object.freeze({ prompt, description, dependencyResult, replacedResult });
 }
 
 function projectDescendantResult(
@@ -217,7 +309,12 @@ function projectDescendantResult(
       failure: null,
     });
   }
-  if (result.terminal.status === "succeeded" || result.terminal.status === "blocked") {
+  if (
+    result.terminal.status === "succeeded" ||
+    result.terminal.status === "blocked" ||
+    output.summary.length > 0 ||
+    output.artifact_refs.length > 0
+  ) {
     return Object.freeze({
       status: "partial" as const,
       output,
@@ -247,20 +344,20 @@ function projectDescendantResult(
   });
 }
 
-function snapshotPredecessorResult(candidate: unknown): {
+function snapshotSourceResult(candidate: unknown, field: string): {
   readonly id: string;
   readonly revision: string;
 } {
   if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
-    throw new TypeError("predecessor_result must be an object.");
+    throw new TypeError(`${field} must be an object.`);
   }
   const value = candidate as Record<string, unknown>;
   if (Object.keys(value).some((key) => key !== "id" && key !== "revision")) {
-    throw new TypeError("predecessor_result contains an unsupported field.");
+    throw new TypeError(`${field} contains an unsupported field.`);
   }
   return Object.freeze({
-    id: boundedText(value.id, 1_024, "predecessor_result.id"),
-    revision: boundedText(value.revision, 256, "predecessor_result.revision"),
+    id: boundedText(value.id, 1_024, `${field}.id`),
+    revision: boundedText(value.revision, 256, `${field}.revision`),
   });
 }
 

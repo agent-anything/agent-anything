@@ -9,10 +9,11 @@ export function createHelarcRunTreeTestSnapshot(input: {
 }) {
   const resource = () => ({
     capacity: 100,
-    consumed: 0,
-    reserved: 0,
-    remaining: 100,
-    released: 0,
+    measuredConsumed: 0,
+    chargedUnknown: 0,
+    activeReserved: 0,
+    available: 100,
+    cumulativeReleased: 0,
     measurementStatus: "measured" as const,
     enforcement: "hard" as const,
   });
@@ -66,6 +67,7 @@ export function createHelarcRunTreeTestSnapshot(input: {
       runId: input.runId,
       parentRunId: null,
       relationId: null,
+      relationKind: null,
       parentRunActionId: null,
       depth: 0,
       status: input.status ?? "running",

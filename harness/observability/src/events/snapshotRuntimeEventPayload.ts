@@ -233,14 +233,16 @@ function descendant(
 ): Readonly<Record<string, unknown>> {
   return freeze({
     relationId: token(input.relationId, `${name}.relationId`),
+    relationKind: oneOf(input.relationKind, ["delegation", "replacement", "continuation"] as const, `${name}.relationKind`),
     parentRunActionId: token(input.parentRunActionId, `${name}.parentRunActionId`),
     childRunId: token(input.childRunId, `${name}.childRunId`),
     childAgentId: token(input.childAgentId, `${name}.childAgentId`),
     childAgentRevision: token(input.childAgentRevision, `${name}.childAgentRevision`),
     requestId: token(input.requestId, `${name}.requestId`),
     requestRevision: token(input.requestRevision, `${name}.requestRevision`),
-    predecessorResultId: nullableToken(input.predecessorResultId, `${name}.predecessorResultId`),
-    contextSourceCount: positive(input.contextSourceCount, `${name}.contextSourceCount`),
+    dependencyResultId: nullableToken(input.dependencyResultId, `${name}.dependencyResultId`),
+    replacedResultId: nullableToken(input.replacedResultId, `${name}.replacedResultId`),
+    contextSourceCount: nonNegativeInteger(input.contextSourceCount, `${name}.contextSourceCount`),
     authorityDerivationId: token(input.authorityDerivationId, `${name}.authorityDerivationId`),
     limitDerivationId: token(input.limitDerivationId, `${name}.limitDerivationId`),
     depth: positive(input.depth, `${name}.depth`),

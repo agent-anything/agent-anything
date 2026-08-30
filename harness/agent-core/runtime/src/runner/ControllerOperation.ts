@@ -7,6 +7,8 @@ import {
   type ProjectionManifest,
 } from "@agent-anything/context/projection";
 import type { ToolExposureProof } from "@agent-anything/tools/selection";
+import type { ModelMessage } from "@agent-anything/model-interaction";
+import type { DescendantTargetsProjection } from "../delegation/index.js";
 import {
   projectModelInteraction,
   type ControllerDecision,
@@ -65,6 +67,8 @@ export interface PrepareControllerOperationInput<TOutput> {
   readonly exposure: ToolExposureProof;
   readonly contextProjection: RunnerContextProjection;
   readonly requestedAt: string;
+  readonly modelInteractionSeed: readonly ModelMessage[];
+  readonly descendants: DescendantTargetsProjection;
 }
 
 export function prepareControllerOperation<TOutput>(
@@ -99,6 +103,7 @@ export function prepareControllerOperation<TOutput>(
       runId: input.state.run.id,
       runRevision: input.state.revision,
       items: input.state.items,
+      seedMessages: input.modelInteractionSeed,
     }),
     plan: input.state.plan === null ? null : projectPlan(input.state.plan),
     planLimits: input.config.limits.plan,
@@ -115,6 +120,7 @@ export function prepareControllerOperation<TOutput>(
       pendingApprovalCount,
     ),
     pending: Object.freeze(input.state.pending.map(projectPendingRunSubject)),
+    descendants: input.descendants,
     workspace: input.config.workspace,
     identity: input.config.identity,
     metadata: Object.freeze({ ...input.state.metadata }),
