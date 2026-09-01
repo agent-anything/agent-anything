@@ -48,12 +48,12 @@ export type HelarcToolSettlementBinding =
     }
   | {
       readonly kind: "descendant_run";
-      readonly target: "agent.general-purpose";
+      readonly target: "agent.child";
       readonly canonicalEffect: null;
     }
   | {
       readonly kind: "descendant_message";
-      readonly target: "agent.general-purpose";
+      readonly target: "agent.child";
       readonly canonicalEffect: null;
     };
 
@@ -67,7 +67,7 @@ export interface HelarcBaselineToolContract {
 }
 
 export const HELARC_BASELINE_TOOL_CONTRACT_REVISION =
-  "helarc.baseline-tool-contracts.v1";
+  "helarc.baseline-tool-contracts.v2";
 
 const POSITIVE_INTEGER = Object.freeze({
   type: "integer",
@@ -327,7 +327,7 @@ const DELEGATION_RESULT_OUTPUT = objectSchema(["delegation_result_id", "delegati
 
 const AGENT = contract({
   name: "Agent",
-  description: "Delegate bounded work to one general-purpose descendant Agent.",
+  description: "Delegate one bounded objective to a new descendant Agent.",
   inputSchema: objectSchema(["prompt"], {
     prompt: { type: "string", minLength: 1, maxLength: 64_000 },
     description: { type: "string", minLength: 1, maxLength: 1_024 },
@@ -344,7 +344,7 @@ const AGENT = contract({
   annotations: {},
   binding: {
     kind: "descendant_run",
-    target: "agent.general-purpose",
+    target: "agent.child",
     canonicalEffect: null,
   },
 });
@@ -372,7 +372,7 @@ const SEND_MESSAGE = contract({
   annotations: {},
   binding: {
     kind: "descendant_message",
-    target: "agent.general-purpose",
+    target: "agent.child",
     canonicalEffect: null,
   },
 });

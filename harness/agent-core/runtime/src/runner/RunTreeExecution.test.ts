@@ -68,6 +68,7 @@ describe("RunTreeExecution", () => {
       childLocalDeadlineAt: "2026-08-23T00:00:50.000Z",
       resourceAllocation: resourceAmounts(100),
       authorityRevision: "run-child-authority-v1",
+      dispatch: dispatch(1),
     });
     expect(child).toMatchObject({
       status: "accepted",
@@ -410,6 +411,19 @@ function reserve(
     childLocalDeadlineAt: DEADLINE_AT,
     resourceAllocation: resourceAmounts(100),
     authorityRevision: `${childRunId}-authority-v1`,
+    dispatch: dispatch(actionSequence),
+  });
+}
+
+function dispatch(candidateIndex: number) {
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    requestedForm: "single" as const,
+    controllerRequestId: `controller-request-${candidateIndex}`,
+    controllerTurnId: `controller-turn-${candidateIndex}`,
+    candidateIndex,
+    siblingIndex: 0,
+    siblingCount: 1,
   });
 }
 

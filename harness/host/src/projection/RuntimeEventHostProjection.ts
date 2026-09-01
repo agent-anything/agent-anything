@@ -31,6 +31,7 @@ const lifecycleFields: Readonly<Record<RuntimeEventName, readonly string[]>> = {
   "run.descendant.reserved": descendantFields(),
   "run.descendant.started": descendantFields(),
   "run.descendant.rejected": [
+    ...descendantDispatchFields(),
     "relationId", "parentRunActionId", "childRunId", "depth", "code", "treeRevision",
   ],
   "run.descendant.settled": [
@@ -184,9 +185,17 @@ export function projectRuntimeEventForHost(event: RuntimeEvent): RuntimeEvent {
 
 function descendantFields(): readonly string[] {
   return [
+    ...descendantDispatchFields(),
     "relationId", "relationKind", "parentRunActionId", "childRunId", "childAgentId", "childAgentRevision",
     "requestId", "requestRevision", "dependencyResultId", "replacedResultId", "contextSourceCount",
     "authorityDerivationId", "limitDerivationId", "depth", "treeRevision",
+  ];
+}
+
+function descendantDispatchFields(): readonly string[] {
+  return [
+    "requestedDispatchForm", "controllerRequestId", "controllerTurnId",
+    "candidateIndex", "siblingIndex", "siblingCount",
   ];
 }
 

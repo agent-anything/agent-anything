@@ -45,7 +45,21 @@ export interface RunStopFeedbackRequestedRuntimeEventPayload {
   readonly code: string;
 }
 
-export interface RunDescendantRuntimeEventPayload {
+export type RuntimeDescendantRequestedDispatchForm =
+  | "single"
+  | "concurrent_sibling";
+
+export interface RunDescendantDispatchRuntimeEventPayload {
+  readonly requestedDispatchForm: RuntimeDescendantRequestedDispatchForm;
+  readonly controllerRequestId: string;
+  readonly controllerTurnId: string;
+  readonly candidateIndex: number;
+  readonly siblingIndex: number;
+  readonly siblingCount: number;
+}
+
+export interface RunDescendantRuntimeEventPayload
+  extends RunDescendantDispatchRuntimeEventPayload {
   readonly relationId: string;
   readonly relationKind: "delegation" | "replacement" | "continuation";
   readonly parentRunActionId: string;
@@ -84,7 +98,8 @@ export type RuntimeDescendantRunFailureCode =
   | "delegation_result_projection_failed"
   | "descendant_run_start_failed";
 
-export interface RunDescendantRejectedRuntimeEventPayload {
+export interface RunDescendantRejectedRuntimeEventPayload
+  extends RunDescendantDispatchRuntimeEventPayload {
   readonly relationId: string | null;
   readonly parentRunActionId: string;
   readonly childRunId: string | null;

@@ -119,6 +119,7 @@ import {
 } from "@agent-anything/model-interaction";
 import { materializeToolCall, type ToolCall } from "@agent-anything/tools/invocation";
 import {
+  findSelectedTool,
   ToolExposureValidationError,
   type ToolExposureProof,
 } from "@agent-anything/tools/selection";
@@ -191,7 +192,7 @@ import type {
   ResolvedRunnerDependencies,
 } from "./RunnerDependencies.js";
 import {
-  assertDelegationAuthorityRequestWithinCeiling,
+  assertDelegationAuthorityRestrictionWithinCeiling,
   projectDelegationRunAuthority,
   projectDelegationRunLimits,
 } from "../delegation/DelegationRunConfiguration.js";
@@ -283,12 +284,13 @@ import {
   createVerificationContextAdmissionProfile,
 } from "../context-contribution/index.js";
 import type {
+  DescendantDispatchProvenance,
   DescendantRunReservationFailureCode,
   RunTreeExecutionSnapshot,
 } from "./RunTreeExecution.js";
 import type { RunLineage } from "@agent-anything/agent-core/run-tree";
 
-export interface RuntimeDescendantRunStartInput {
+export interface RuntimeDescendantRunAdmissionInput {
   readonly relationId: string;
   readonly relationKind: DescendantRunRelation["kind"];
   readonly parentRunAction: RunActionRef;
@@ -298,9 +300,10 @@ export interface RuntimeDescendantRunStartInput {
   readonly authority: DelegationAuthorityDerivation;
   readonly limits: DelegationLimitDerivation;
   readonly modelInteractionSeed: readonly ModelMessage[];
+  readonly dispatch: DescendantDispatchProvenance;
 }
 
-export type RuntimeDescendantRunStartResult =
+export type RuntimeDescendantRunLaunchResult =
   | {
       readonly status: "started";
       readonly relation: DescendantRunRelation;
@@ -312,20 +315,37 @@ export type RuntimeDescendantRunStartResult =
   | {
       readonly status: "rejected";
       readonly code:
+        | "descendant_run_start_cancelled"
+        | "descendant_run_start_failed";
+      readonly relation: DescendantRunRelation;
+      readonly reservedTreeRevision: number;
+      readonly treeRevision: number;
+    };
+
+export type RuntimeDescendantRunAdmissionResult =
+  | {
+      readonly status: "admitted";
+      readonly relation: DescendantRunRelation;
+      readonly reservedTreeRevision: number;
+      readonly treeRevision: number;
+      readonly launch: () => RuntimeDescendantRunLaunchResult;
+      readonly cancelBeforeLaunch: () => RuntimeDescendantRunLaunchResult;
+    }
+  | {
+      readonly status: "rejected";
+      readonly code:
         | DescendantRunReservationFailureCode
         | "descendant_run_start_failed"
         | "delegation_request_invalid"
         | "delegation_authority_invalid"
         | "delegation_context_invalid"
         | "delegation_resource_limit_exceeded";
-      readonly relation: DescendantRunRelation | null;
-      readonly reservedTreeRevision: number | null;
       readonly treeRevision: number;
     };
 
-export type RuntimeDescendantRunStarter = (
-  input: RuntimeDescendantRunStartInput,
-) => RuntimeDescendantRunStartResult;
+export type RuntimeDescendantRunAdmitter = (
+  input: RuntimeDescendantRunAdmissionInput,
+) => RuntimeDescendantRunAdmissionResult;
 
 type TerminalCandidate<TOutput> =
   | { readonly status: "succeeded"; readonly output: TOutput }
@@ -358,6 +378,22 @@ interface CandidateProcessingOutcome<TOutput> {
   readonly terminal: TerminalCandidate<TOutput> | null;
 }
 
+type ConcurrentDescendantCandidateEntry =
+  | {
+      readonly kind: "tool_rejected";
+      readonly action: RuntimeRunAction;
+      readonly candidate: ToolRequestCandidate;
+      readonly code: string;
+      readonly message: string;
+    }
+  | {
+      readonly kind: "descendant";
+      readonly action: RuntimeRunAction;
+      readonly call: ToolCall;
+      readonly startedAt: string;
+      readonly preparation: DescendantPreparationOutcome;
+    };
+
 type DescendantExecutionOutcome =
   | {
       readonly status: "settled";
@@ -382,6 +418,23 @@ type DescendantExecutionOutcome =
         | "descendant_run_start_failed";
       readonly operationStatus: DescendantRejectionOperationStatus;
     };
+
+interface AdmittedDescendantExecution {
+  readonly status: "admitted";
+  readonly relationId: string;
+  readonly action: RuntimeRunAction;
+  readonly dispatch: DescendantDispatchProvenance;
+  readonly request: DelegationRequest;
+  readonly continuationRecord: RuntimeContinuationRecord | null;
+  readonly continuationModelInteractionSeed: readonly ModelMessage[];
+  readonly composition: NonNullable<ResolvedRunnerDependencies["operations"]["delegation"]>;
+  readonly admission: Extract<
+    RuntimeDescendantRunAdmissionResult,
+    { readonly status: "admitted" }
+  >;
+}
+
+type DescendantPreparationOutcome = DescendantExecutionOutcome | AdmittedDescendantExecution;
 
 type DescendantRejectionOperationStatus = Exclude<
   import("./RunnerDependencies.js").DescendantOperationOutcome["status"],
@@ -483,7 +536,7 @@ export class RunExecution<TOutput> {
     actionExecutionObserver: ActionExecutionObserver | undefined,
     startedAt: string,
     deadlineAt: string,
-    private readonly startDescendantRun: RuntimeDescendantRunStarter,
+    private readonly admitDescendantRun: RuntimeDescendantRunAdmitter,
     initialContextBytes: number,
     private readonly runTree: import("./RunTreeExecution.js").RunTreeExecution,
     private readonly onUpdate: (update: RunExecutionUpdate<TOutput>) => void,
@@ -973,11 +1026,40 @@ export class RunExecution<TOutput> {
           }
           let outcome: CandidateProcessingOutcome<TOutput>;
           try {
-            outcome = await this.processCandidate(
-              decision.decision.candidates[index]!,
+            const siblingCount = this.descendantSiblingGroupLength(
+              decision.decision.candidates,
               index,
-              basis,
             );
+            const remainingActionCapacity = this.config.limits.maxActions -
+              this.writer.getSnapshot().counters.runActions;
+            if (siblingCount > 1) {
+              if (remainingActionCapacity < siblingCount) {
+                this.settleCandidateRange(
+                  decision.decision.candidates.slice(index, index + siblingCount),
+                  0,
+                  decision.turn,
+                  "invalidated",
+                  "runtime_action_limit_reached",
+                );
+                outcome = Object.freeze({
+                  invalidatesRemainder: true,
+                  terminal: null,
+                });
+              } else {
+                outcome = await this.processConcurrentDescendantCandidates(
+                  decision.decision.candidates.slice(index, index + siblingCount) as readonly ToolRequestCandidate[],
+                  index,
+                  basis,
+                );
+              }
+              index += siblingCount - 1;
+            } else {
+              outcome = await this.processCandidate(
+                decision.decision.candidates[index]!,
+                index,
+                basis,
+              );
+            }
           } catch (error) {
             const cancelled = this.config.cancellation.context.request !== null;
             this.settleCandidateRange(
@@ -2671,6 +2753,152 @@ export class RunExecution<TOutput> {
       : null;
   }
 
+  private descendantSiblingGroupLength(
+    candidates: readonly ProgressionCandidate[],
+    startIndex: number,
+  ): number {
+    const first = candidates[startIndex];
+    if (!this.isModelDescendantAgentCandidate(first)) return 0;
+    let length = 1;
+    for (let index = startIndex + 1; index < candidates.length; index += 1) {
+      const candidate = candidates[index];
+      if (
+        !this.isModelDescendantAgentCandidate(candidate) ||
+        candidate.modelCallRef.controllerRequestId !== first.modelCallRef.controllerRequestId ||
+        candidate.modelCallRef.turnId !== first.modelCallRef.turnId
+      ) {
+        break;
+      }
+      length += 1;
+    }
+    return length;
+  }
+
+  private isModelDescendantAgentCandidate(
+    candidate: ProgressionCandidate | undefined,
+  ): candidate is ToolRequestCandidate {
+    if (candidate?.kind !== "tool_request" || candidate.tool.origin !== "model") {
+      return false;
+    }
+    return findSelectedTool(
+      this.config.tools,
+      candidate.tool.name,
+      candidate.tool.origin,
+    )?.registration.descriptor.binding.kind === "descendant_agent";
+  }
+
+  private async processConcurrentDescendantCandidates(
+    candidates: readonly ToolRequestCandidate[],
+    startIndex: number,
+    basis: CandidateBasis<TOutput>,
+  ): Promise<CandidateProcessingOutcome<TOutput>> {
+    const entries: ConcurrentDescendantCandidateEntry[] = [];
+    for (let siblingIndex = 0; siblingIndex < candidates.length; siblingIndex += 1) {
+      const candidate = candidates[siblingIndex]!;
+      const candidateIndex = startIndex + siblingIndex;
+      const toolCallId = this.id("tool_call");
+      const action = this.materializeControllerRunAction(
+        candidate,
+        candidateIndex,
+        basis,
+        toolCallId,
+      );
+      const materialized = materializeToolCall({
+        candidate: candidate.tool,
+        selection: this.config.tools,
+        exposure: basis.exposure,
+        parentRunAction: action.ref,
+        toolCallId,
+        createdAt: this.now(),
+        validateInput: this.dependencies.operations.validateToolInput,
+      });
+      if (materialized.status === "rejected") {
+        entries.push(Object.freeze({
+          kind: "tool_rejected" as const,
+          action,
+          candidate,
+          code: materialized.code,
+          message: materialized.message,
+        }));
+        continue;
+      }
+      if (materialized.call.binding.kind !== "descendant_agent") {
+        throw new TypeError("Concurrent descendant grouping resolved a non-Agent Tool binding.");
+      }
+      const dispatch: DescendantDispatchProvenance = Object.freeze({
+        schemaVersion: 1 as const,
+        requestedForm: "concurrent_sibling" as const,
+        controllerRequestId: candidate.modelCallRef.controllerRequestId,
+        controllerTurnId: basis.turn.id,
+        candidateIndex,
+        siblingIndex,
+        siblingCount: candidates.length,
+      });
+      entries.push(Object.freeze({
+        kind: "descendant" as const,
+        action,
+        call: materialized.call,
+        startedAt: this.now(),
+        preparation: await this.prepareDescendantRun(
+          action,
+          materialized.call,
+          dispatch,
+        ),
+      }));
+    }
+
+    const invalidatedBeforeLaunch = this.config.cancellation.context.request !== null ||
+      this.drainInteractionSettlements() > 0 ||
+      this.drainSteering("apply") > 0;
+    const invalidatesRemainder = invalidatedBeforeLaunch || entries.some((entry) =>
+      entry.kind === "descendant" && entry.preparation.status === "admitted"
+    );
+    const outcomes = await Promise.allSettled(entries.map(async (
+      entry,
+    ): Promise<DescendantExecutionOutcome | null> => {
+      if (entry.kind !== "descendant") return null;
+      const preparation = entry.preparation;
+      return preparation.status === "admitted"
+        ? this.launchAdmittedDescendant(preparation, invalidatedBeforeLaunch)
+        : preparation;
+    }));
+
+    let firstFailure: unknown = null;
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index]!;
+      const settled = outcomes[index]!;
+      if (entry.kind === "tool_rejected") {
+        this.commitObservation(entry.action, {
+          kind: "tool_rejected",
+          code: entry.code,
+          message: entry.message,
+        }, [], "tools");
+        this.commitModelCallSettlement(entry.action, null);
+        continue;
+      }
+      if (settled.status === "rejected") {
+        this.commitModelCallSettlement(
+          entry.action,
+          this.config.cancellation.context.request === null ? "failed" : "cancelled",
+        );
+        firstFailure ??= settled.reason;
+        continue;
+      }
+      this.commitDescendantExecutionOutcome(
+        entry.action,
+        entry.call,
+        settled.value!,
+        entry.startedAt,
+      );
+      this.commitModelCallSettlement(entry.action, null);
+    }
+    if (firstFailure !== null) throw firstFailure;
+    return Object.freeze({
+      invalidatesRemainder,
+      terminal: null,
+    });
+  }
+
   private async processCandidate(
     candidate: ProgressionCandidate,
     index: number,
@@ -3704,6 +3932,15 @@ export class RunExecution<TOutput> {
       action,
       call,
     );
+    this.commitDescendantExecutionOutcome(action, call, descendant, startedAt);
+  }
+
+  private commitDescendantExecutionOutcome(
+    action: RuntimeRunAction,
+    call: ToolCall,
+    descendant: DescendantExecutionOutcome,
+    startedAt: string,
+  ): void {
     if (descendant.status === "rejected") {
       this.commitDescendantToolObservation(
         action,
@@ -3891,7 +4128,19 @@ export class RunExecution<TOutput> {
   private async executeDescendantRun(
     action: RuntimeRunAction,
     call: ToolCall,
+    dispatch = this.singleDescendantDispatch(action),
   ): Promise<DescendantExecutionOutcome> {
+    const prepared = await this.prepareDescendantRun(action, call, dispatch);
+    return prepared.status === "admitted"
+      ? this.launchAdmittedDescendant(prepared)
+      : prepared;
+  }
+
+  private async prepareDescendantRun(
+    action: RuntimeRunAction,
+    call: ToolCall,
+    dispatch: DescendantDispatchProvenance,
+  ): Promise<DescendantPreparationOutcome> {
     if (
       call.binding.kind !== "descendant_agent" &&
       call.binding.kind !== "descendant_message"
@@ -3906,6 +4155,8 @@ export class RunExecution<TOutput> {
         null,
         this.lineage.depth + 1,
         "delegation_preparation_failed",
+        this.runTree.getSnapshot().revision,
+        dispatch,
       );
       return rejectedDescendant(
         null,
@@ -3922,28 +4173,51 @@ export class RunExecution<TOutput> {
     if (treeResourceCeiling === undefined) {
       throw new TypeError("Current Run Tree resource allocation is unavailable.");
     }
-    const limitCeiling = projectDelegationRunLimits({
-      config: this.config,
-      maxControllerTurns: treeResourceCeiling.controllerTurns,
-      maxActions: treeResourceCeiling.actions,
-      maxContextBytes: Math.min(
-        treeResourceCeiling.contextBytes,
-        delegationPayloadCeiling(
-          this.dependencies.contextProjection.maxContributionPayloadBytes,
-          4,
+    let limitCeiling: DelegationLimits;
+    try {
+      const distributable = descendantAllocationCeiling(
+        treeResourceCeiling,
+        dispatch,
+      );
+      limitCeiling = projectDelegationRunLimits({
+        config: this.config,
+        maxControllerTurns: distributable.controllerTurns,
+        maxActions: distributable.actions,
+        maxContextBytes: Math.min(
+          distributable.contextBytes,
+          delegationPayloadCeiling(
+            this.dependencies.contextProjection.maxContributionPayloadBytes,
+            4,
+          ),
         ),
-      ),
-      maxResultBytes: Math.min(
-        treeResourceCeiling.resultBytes,
-        delegationPayloadCeiling(
-          this.dependencies.contextProjection.maxContributionPayloadBytes,
-          1,
+        maxResultBytes: Math.min(
+          distributable.resultBytes,
+          delegationPayloadCeiling(
+            this.dependencies.contextProjection.maxContributionPayloadBytes,
+            1,
+          ),
         ),
-      ),
-      maxModelInputTokens: treeResourceCeiling.modelInputTokens,
-      maxModelOutputTokens: treeResourceCeiling.modelOutputTokens,
-      maxCostUnits: treeResourceCeiling.costUnits,
-    });
+        maxModelInputTokens: distributable.modelInputTokens,
+        maxModelOutputTokens: distributable.modelOutputTokens,
+        maxCostUnits: distributable.costUnits,
+      });
+    } catch {
+      this.emitDescendantRejected(
+        null,
+        action.ref,
+        null,
+        this.lineage.depth + 1,
+        "delegation_resource_limit_exceeded",
+        this.runTree.getSnapshot().revision,
+        dispatch,
+      );
+      return rejectedDescendant(
+        null,
+        "delegation_resource_limit_exceeded",
+        null,
+        "unavailable",
+      );
+    }
     const targetAgent = call.binding.agent;
     let continuationRecord: RuntimeContinuationRecord | null = null;
     let continuationModelInteractionSeed: readonly ModelMessage[] = Object.freeze([]);
@@ -4023,6 +4297,8 @@ export class RunExecution<TOutput> {
         null,
         this.lineage.depth + 1,
         "delegation_preparation_failed",
+        this.runTree.getSnapshot().revision,
+        dispatch,
       );
       return rejectedDescendant(
         null,
@@ -4045,6 +4321,8 @@ export class RunExecution<TOutput> {
         null,
         this.lineage.depth + 1,
         "delegation_request_invalid",
+        this.runTree.getSnapshot().revision,
+        dispatch,
       );
       return rejectedDescendant(
         null,
@@ -4059,16 +4337,21 @@ export class RunExecution<TOutput> {
     let limits: DelegationLimitDerivation;
     let selectedContextMaterials: readonly DelegationContextMaterial[];
     try {
-      assertDelegationAuthorityRequestWithinCeiling({
-        requested: prepared.preparation.requestedAuthority,
-        ceiling: authorityCeiling,
-      });
+      if (prepared.preparation.authorityRestriction !== null) {
+        assertDelegationAuthorityRestrictionWithinCeiling({
+          restriction: prepared.preparation.authorityRestriction,
+          ceiling: authorityCeiling,
+        });
+      }
       const createdAt = this.now();
       const rootAuthority = projectDelegationRunAuthority(this.rootConfig);
       const parentAuthority = projectDelegationRunAuthority(this.config);
       const requestDeadlineAt = minimumDeadline(
         this.writer.getSnapshot().deadlineAt,
-        localDelegationDeadline(createdAt, prepared.preparation.limits.maxDurationMs),
+        localDelegationDeadline(
+          createdAt,
+          prepared.preparation.allocationRequest.maxDurationMs,
+        ),
       );
       authority = deriveDelegationAuthority({
         derivationId: this.id("delegation_authority"),
@@ -4077,10 +4360,8 @@ export class RunExecution<TOutput> {
           parentRunId: this.runId,
           root: rootAuthority,
           parent: parentAuthority,
-          childAgent: authorityCeiling,
-          request: prepared.preparation.requestedAuthority,
+          restriction: prepared.preparation.authorityRestriction,
           currentPolicy: parentAuthority,
-          agent: prepared.agent,
           preparation: prepared.preparation,
           rootDeadlineAt: this.runTree.getSnapshot().deadlineAt,
           parentDeadlineAt: this.writer.getSnapshot().deadlineAt,
@@ -4114,10 +4395,8 @@ export class RunExecution<TOutput> {
           parentRunId: this.runId,
           root: rootLimits,
           parent: parentLimits,
-          childAgent: parentLimits,
-          request: prepared.preparation.limits,
+          allocationRequest: prepared.preparation.allocationRequest,
           currentPolicy: parentLimits,
-          agent: prepared.agent,
           preparation: prepared.preparation,
         }),
       });
@@ -4188,13 +4467,15 @@ export class RunExecution<TOutput> {
         null,
         this.lineage.depth + 1,
         code,
+        this.runTree.getSnapshot().revision,
+        dispatch,
       );
       return rejectedDescendant(null, code, null, "invalid");
     }
 
     const relationId = this.id("descendant_relation");
 
-    const started = this.startDescendantRun({
+    const admission = this.admitDescendantRun({
       relationId,
       relationKind: request.continuation !== null
         ? "continuation"
@@ -4210,31 +4491,82 @@ export class RunExecution<TOutput> {
       modelInteractionSeed: continuationRecord === null
         ? Object.freeze([])
         : continuationModelInteractionSeed,
+      dispatch,
     });
+    if (admission.status === "rejected") {
+      if (continuationRecord?.status === "starting") {
+        continuationRecord.status = "available";
+      }
+      this.emitDescendantRejected(
+        null,
+        action.ref,
+        null,
+        this.lineage.depth + 1,
+        admission.code,
+        admission.treeRevision,
+        dispatch,
+      );
+      return rejectedDescendant(
+        null,
+        admission.code,
+        null,
+        descendantRejectionStatus(admission.code),
+      );
+    }
+    this.emitDescendantLifecycle(
+      "run.descendant.reserved",
+      admission.relation,
+      request,
+      admission.reservedTreeRevision,
+      dispatch,
+    );
+    return Object.freeze({
+      status: "admitted" as const,
+      relationId,
+      action,
+      dispatch,
+      request,
+      continuationRecord,
+      continuationModelInteractionSeed,
+      composition,
+      admission,
+    });
+  }
+
+  private async launchAdmittedDescendant(
+    prepared: AdmittedDescendantExecution,
+    cancelBeforeLaunch = false,
+  ): Promise<DescendantExecutionOutcome> {
+    const {
+      relationId,
+      action,
+      dispatch,
+      request,
+      continuationRecord,
+      continuationModelInteractionSeed,
+      composition,
+      admission,
+    } = prepared;
+    const started = !cancelBeforeLaunch && this.config.cancellation.context.request === null
+      ? admission.launch()
+      : admission.cancelBeforeLaunch();
     if (started.status === "rejected") {
       if (continuationRecord?.status === "starting") {
         continuationRecord.status = "available";
       }
-      if (started.relation !== null && started.reservedTreeRevision !== null) {
-        this.emitDescendantLifecycle(
-          "run.descendant.reserved",
-          started.relation,
-          request,
-          started.reservedTreeRevision,
-        );
-      }
       this.emitDescendantRejected(
-        started.relation?.ref.id ?? null,
+        started.relation.ref.id,
         action.ref,
-        started.relation?.child.id ?? null,
-        started.relation?.depth ?? this.lineage.depth + 1,
+        started.relation.child.id,
+        started.relation.depth,
         started.code,
         started.treeRevision,
+        dispatch,
       );
       return rejectedDescendant(
         relationId,
         started.code,
-        started.relation?.child.id ?? null,
+        started.relation.child.id,
         descendantRejectionStatus(started.code),
       );
     }
@@ -4244,16 +4576,11 @@ export class RunExecution<TOutput> {
     }
 
     this.emitDescendantLifecycle(
-      "run.descendant.reserved",
-      started.relation,
-      request,
-      started.reservedTreeRevision,
-    );
-    this.emitDescendantLifecycle(
       "run.descendant.started",
       started.relation,
       request,
       started.treeRevision,
+      dispatch,
     );
 
     const child = started.handle;
@@ -4323,6 +4650,7 @@ export class RunExecution<TOutput> {
       transferStatus = "settled";
       this.runTree.settleDescendantTransfer(child.runId, transferStatus);
       this.eventStream.emit("run.descendant.settled", {
+        ...descendantDispatchEventPayload(dispatch),
         relationId: started.relation.ref.id,
         relationKind: started.relation.kind,
         parentRunActionId: started.relation.parentRunAction.id,
@@ -4388,8 +4716,10 @@ export class RunExecution<TOutput> {
     relation: DescendantRunRelation,
     request: DelegationRequest,
     treeRevision: number,
+    dispatch: DescendantDispatchProvenance,
   ): void {
     this.eventStream.emit(name, {
+      ...descendantDispatchEventPayload(dispatch),
       relationId: relation.ref.id,
       relationKind: relation.kind,
       parentRunActionId: relation.parentRunAction.id,
@@ -4405,6 +4735,23 @@ export class RunExecution<TOutput> {
       limitDerivationId: request.limitDerivation.id,
       depth: relation.depth,
       treeRevision,
+    });
+  }
+
+  private singleDescendantDispatch(
+    action: RuntimeRunAction,
+  ): DescendantDispatchProvenance {
+    if (action.provenance.kind !== "controller") {
+      throw new TypeError("Descendant Tool dispatch requires Controller provenance.");
+    }
+    return Object.freeze({
+      schemaVersion: 1 as const,
+      requestedForm: "single" as const,
+      controllerRequestId: action.provenance.modelCallRef.controllerRequestId,
+      controllerTurnId: action.provenance.turn.id,
+      candidateIndex: action.provenance.candidateIndex,
+      siblingIndex: 0,
+      siblingCount: 1,
     });
   }
 
@@ -4529,9 +4876,11 @@ export class RunExecution<TOutput> {
     childRunId: string | null,
     depth: number | null,
     code: import("@agent-anything/observability/events").RuntimeDescendantRunFailureCode,
-    treeRevision: number = this.runTree.getSnapshot().revision,
+    treeRevision: number,
+    dispatch: DescendantDispatchProvenance,
   ): void {
     this.eventStream.emit("run.descendant.rejected", {
+      ...descendantDispatchEventPayload(dispatch),
       relationId,
       parentRunActionId: parentRunAction.id,
       childRunId,
@@ -6457,10 +6806,8 @@ function delegationAuthoritySources(input: {
   readonly parentRunId: string;
   readonly root: readonly DelegationAuthorityDimensionInput[];
   readonly parent: readonly DelegationAuthorityDimensionInput[];
-  readonly childAgent: readonly DelegationAuthorityDimensionInput[];
-  readonly request: readonly DelegationAuthorityDimensionInput[];
+  readonly restriction: readonly DelegationAuthorityDimensionInput[] | null;
   readonly currentPolicy: readonly DelegationAuthorityDimensionInput[];
-  readonly agent: Agent;
   readonly preparation: DelegationPreparation;
   readonly rootDeadlineAt: string;
   readonly parentDeadlineAt: string;
@@ -6473,29 +6820,18 @@ function delegationAuthoritySources(input: {
   return Object.freeze([
     authoritySource("root", "agent-runtime", "root_run_configuration", input.rootRunId, input.root, input.rootDeadlineAt),
     authoritySource("parent", "agent-runtime", "parent_run_configuration", input.parentRunId, input.parent, input.parentDeadlineAt),
-    Object.freeze({
-      role: "child_agent" as const,
-      ref: Object.freeze({
-        owner: "agent",
-        kind: "agent_revision",
-        id: input.agent.id,
-        revision: input.agent.revision,
-      }),
-      dimensions: input.childAgent,
-      deadlineAt: input.parentDeadlineAt,
-    }),
-    Object.freeze({
-      role: "request" as const,
+    authoritySource("current_policy", "agent-runtime", "current_run_policy", input.parentRunId, input.currentPolicy, input.parentDeadlineAt),
+    ...(input.restriction === null ? [] : [Object.freeze({
+      role: "delegation_restriction" as const,
       ref: Object.freeze({
         owner: "product",
-        kind: "delegation_preparation",
+        kind: "delegation_authority_restriction",
         id: input.parentRunId,
         revision: preparationRevision,
       }),
-      dimensions: input.request,
+      dimensions: input.restriction,
       deadlineAt: input.requestDeadlineAt,
-    }),
-    authoritySource("current_policy", "agent-runtime", "current_run_policy", input.parentRunId, input.currentPolicy, input.parentDeadlineAt),
+    })]),
   ]);
 }
 
@@ -6528,10 +6864,8 @@ function delegationLimitSources(input: {
   readonly parentRunId: string;
   readonly root: DelegationLimits;
   readonly parent: DelegationLimits;
-  readonly childAgent: DelegationLimits;
-  readonly request: DelegationLimits;
+  readonly allocationRequest: DelegationLimits;
   readonly currentPolicy: DelegationLimits;
-  readonly agent: Agent;
   readonly preparation: DelegationPreparation;
 }): readonly DelegationLimitSourceInput[] {
   const preparationRevision = createDelegationContractIdentity(
@@ -6542,24 +6876,14 @@ function delegationLimitSources(input: {
     limitSource("root", "agent-runtime", "root_run_configuration", input.rootRunId, input.root),
     limitSource("parent", "agent-runtime", "parent_run_configuration", input.parentRunId, input.parent),
     Object.freeze({
-      role: "child_agent" as const,
-      ref: Object.freeze({
-        owner: "agent",
-        kind: "agent_revision",
-        id: input.agent.id,
-        revision: input.agent.revision,
-      }),
-      ceiling: input.childAgent,
-    }),
-    Object.freeze({
-      role: "request" as const,
+      role: "allocation_request" as const,
       ref: Object.freeze({
         owner: "product",
-        kind: "delegation_preparation",
+        kind: "delegation_limit_allocation_request",
         id: input.parentRunId,
         revision: preparationRevision,
       }),
-      ceiling: input.request,
+      ceiling: input.allocationRequest,
     }),
     limitSource("current_policy", "agent-runtime", "current_run_policy", input.parentRunId, input.currentPolicy),
   ]);
@@ -7039,4 +7363,40 @@ function sameDelegationMaterialRef(
     left.kind === right.kind &&
     left.id === right.id &&
     left.revision === right.revision;
+}
+
+function descendantDispatchEventPayload(
+  dispatch: DescendantDispatchProvenance,
+): import("@agent-anything/observability/events").RunDescendantDispatchRuntimeEventPayload {
+  return Object.freeze({
+    requestedDispatchForm: dispatch.requestedForm,
+    controllerRequestId: dispatch.controllerRequestId,
+    controllerTurnId: dispatch.controllerTurnId,
+    candidateIndex: dispatch.candidateIndex,
+    siblingIndex: dispatch.siblingIndex,
+    siblingCount: dispatch.siblingCount,
+  });
+}
+
+function descendantAllocationCeiling(
+  available: import("./RunTreeResourceAccount.js").RunTreeResourceAmounts,
+  dispatch: DescendantDispatchProvenance,
+): import("./RunTreeResourceAccount.js").RunTreeResourceAmounts {
+  const remainingSiblings = dispatch.requestedForm === "concurrent_sibling"
+    ? dispatch.siblingCount - dispatch.siblingIndex
+    : 1;
+  const share = (value: number): number => Math.floor(value / remainingSiblings);
+  const ceiling = Object.freeze({
+    controllerTurns: share(available.controllerTurns),
+    actions: share(available.actions),
+    modelInputTokens: share(available.modelInputTokens),
+    modelOutputTokens: share(available.modelOutputTokens),
+    costUnits: share(available.costUnits),
+    contextBytes: share(available.contextBytes),
+    resultBytes: share(available.resultBytes),
+  });
+  if (Object.values(ceiling).some((value) => value < 1)) {
+    throw new TypeError("Concurrent descendant allocation cannot satisfy a positive grant.");
+  }
+  return ceiling;
 }

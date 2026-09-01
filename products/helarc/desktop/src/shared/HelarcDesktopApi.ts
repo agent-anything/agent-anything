@@ -287,6 +287,14 @@ export interface HelarcRunTreeNodeSnapshot {
   readonly relationId: string | null;
   readonly relationKind: "delegation" | "replacement" | "continuation" | null;
   readonly parentRunActionId: string | null;
+  readonly dispatch: {
+    readonly requestedForm: "single" | "concurrent_sibling";
+    readonly controllerRequestId: string;
+    readonly controllerTurnId: string;
+    readonly candidateIndex: number;
+    readonly siblingIndex: number;
+    readonly siblingCount: number;
+  } | null;
   readonly depth: number;
   readonly status: HelarcRunTreeNodeStatusSnapshot;
   readonly resultCode: string | null;
@@ -933,7 +941,7 @@ export interface HelarcHostRunStatusSnapshot {
 }
 
 export interface HelarcDesktopApi {
-  readonly bridgeVersion: 9;
+  readonly bridgeVersion: 10;
   readonly productId: "helarc";
   chooseWorkspace(
     input: HelarcChooseWorkspaceInput,

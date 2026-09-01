@@ -20,9 +20,8 @@ export type DelegationAuthorityDimensionKind =
 export type DelegationAuthoritySourceRole =
   | "root"
   | "parent"
-  | "child_agent"
-  | "request"
-  | "current_policy";
+  | "current_policy"
+  | "delegation_restriction";
 
 export interface DelegationAuthoritySourceRef {
   readonly owner: string;
@@ -84,8 +83,13 @@ const dimensionKinds: readonly DelegationAuthorityDimensionKind[] = [
 const sourceRoles: readonly DelegationAuthoritySourceRole[] = [
   "root",
   "parent",
-  "child_agent",
-  "request",
+  "current_policy",
+  "delegation_restriction",
+];
+
+const requiredSourceRoles: readonly DelegationAuthoritySourceRole[] = [
+  "root",
+  "parent",
   "current_policy",
 ];
 
@@ -98,13 +102,19 @@ export function deriveDelegationAuthority(input: {
     "sources",
   ]);
   const derivationId = token(input.derivationId, "derivationId");
-  if (!Array.isArray(input.sources) || input.sources.length !== sourceRoles.length) {
-    throw new TypeError("Delegation authority requires every exact source role.");
+  if (!Array.isArray(input.sources)) {
+    throw new TypeError("Delegation authority sources must be an array.");
   }
   const sources = input.sources.map(snapshotSource);
   const roles = sources.map((source) => source.role);
-  if (new Set(roles).size !== sourceRoles.length || sourceRoles.some((role) => !roles.includes(role))) {
-    throw new TypeError("Delegation authority source roles must be complete and unique.");
+  if (
+    new Set(roles).size !== roles.length ||
+    requiredSourceRoles.some((role) => !roles.includes(role)) ||
+    roles.some((role) => !sourceRoles.includes(role))
+  ) {
+    throw new TypeError(
+      "Delegation authority requires unique root, parent, and current-policy sources plus at most one restriction.",
+    );
   }
   sources.sort((left, right) => sourceRoles.indexOf(left.role) - sourceRoles.indexOf(right.role));
 

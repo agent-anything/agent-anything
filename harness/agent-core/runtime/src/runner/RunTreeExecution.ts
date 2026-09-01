@@ -44,6 +44,16 @@ export type DescendantResultTransferStatus =
   | "unknown"
   | "not_required";
 
+export interface DescendantDispatchProvenance {
+  readonly schemaVersion: 1;
+  readonly requestedForm: "single" | "concurrent_sibling";
+  readonly controllerRequestId: string;
+  readonly controllerTurnId: string;
+  readonly candidateIndex: number;
+  readonly siblingIndex: number;
+  readonly siblingCount: number;
+}
+
 export interface RunTreeCancellationProjection {
   readonly requestId: string;
   readonly initiatingRunId: string;
@@ -81,6 +91,7 @@ export interface DescendantRunReservationInput {
   readonly childLocalDeadlineAt: string;
   readonly resourceAllocation: RunTreeResourceAmounts;
   readonly authorityRevision: string;
+  readonly dispatch: DescendantDispatchProvenance;
 }
 
 export type DescendantRunReservation =
@@ -105,6 +116,7 @@ export interface RunTreeNodeProjection {
   readonly relationId: string | null;
   readonly relationKind: DescendantRunRelation["kind"] | null;
   readonly parentRunActionId: string | null;
+  readonly dispatch: DescendantDispatchProvenance | null;
   readonly depth: number;
   readonly status: RunLifecycleStatus;
   readonly resultCode: RunResultCode | null;
@@ -184,6 +196,7 @@ interface MutableRunTreeNode {
   readonly lineage: RunLineage;
   readonly relationKind: DescendantRunRelation["kind"] | null;
   readonly acceptedOrder: number;
+  readonly dispatch: DescendantDispatchProvenance | null;
   status: RunLifecycleStatus;
   resultCode: RunResultCode | null;
   startedAt: string | null;
@@ -247,6 +260,7 @@ export class RunTreeExecution {
       lineage: this.rootLineage,
       relationKind: null,
       acceptedOrder: 0,
+      dispatch: null,
       status: "initializing",
       resultCode: null,
       startedAt: input.startedAt,
@@ -292,6 +306,7 @@ export class RunTreeExecution {
       throw new TypeError("The descendant Run identity already exists in this tree.");
     }
 
+    const dispatch = snapshotDescendantDispatchProvenance(input.dispatch);
     const relation = createDescendantRunRelation({
       relationId: input.relationId,
       kind: input.relationKind,
@@ -318,6 +333,7 @@ export class RunTreeExecution {
       lineage,
       relationKind: relation.kind,
       acceptedOrder: this.totalDescendantRuns,
+      dispatch,
       status: "initializing",
       resultCode: null,
       startedAt: null,
@@ -496,7 +512,7 @@ export class RunTreeExecution {
       throw new TypeError("A Run cannot settle more than once.");
     }
     if (this.resources.getSettlement(runId) === null) {
-      throw new TypeError("A Run cannot settle before its resource account.");
+      throw new TypeError(`Run '${runId}' cannot settle before its resource account.`);
     }
     if (this.hasUnsettledDescendantObligations(runId)) {
       throw new TypeError("A Run cannot settle while descendant obligations remain.");
@@ -521,6 +537,12 @@ export class RunTreeExecution {
 
   failStart(runId: string, completedAt: string): void {
     this.settleRun(runId, "failed", "runtime_execution_failed", completedAt);
+    this.settleDescendantTransfer(runId, "not_required");
+  }
+
+  cancelBeforeStart(runId: string, completedAt: string): void {
+    this.settleResources(runId);
+    this.settleRun(runId, "cancelled", "runtime_cancelled", completedAt);
     this.settleDescendantTransfer(runId, "not_required");
   }
 
@@ -702,6 +724,7 @@ export class RunTreeExecution {
         parentRunActionId: node.lineage.kind === "root"
           ? null
           : node.lineage.parentRunAction.id,
+        dispatch: node.dispatch,
         depth: node.lineage.depth,
         status: node.status,
         resultCode: node.resultCode,
@@ -789,4 +812,37 @@ function assertDateTime(value: unknown, field: string): asserts value is string 
   if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) {
     throw new TypeError(`${field} must be a valid date-time string.`);
   }
+}
+
+function snapshotDescendantDispatchProvenance(
+  input: DescendantDispatchProvenance,
+): DescendantDispatchProvenance {
+  if (input === null || typeof input !== "object" || input.schemaVersion !== 1) {
+    throw new TypeError("Descendant dispatch provenance must use schema version 1.");
+  }
+  assertToken(input.controllerRequestId, "dispatch.controllerRequestId");
+  assertToken(input.controllerTurnId, "dispatch.controllerTurnId");
+  if (input.requestedForm !== "single" && input.requestedForm !== "concurrent_sibling") {
+    throw new TypeError("Descendant dispatch form is unsupported.");
+  }
+  for (const [field, value] of [
+    ["candidateIndex", input.candidateIndex],
+    ["siblingIndex", input.siblingIndex],
+    ["siblingCount", input.siblingCount],
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new TypeError(`dispatch.${field} must be a non-negative safe integer.`);
+    }
+  }
+  if (input.siblingCount < 1 || input.siblingIndex >= input.siblingCount) {
+    throw new TypeError("Descendant sibling coordinates are invalid.");
+  }
+  if (
+    (input.requestedForm === "single" &&
+      (input.siblingCount !== 1 || input.siblingIndex !== 0)) ||
+    (input.requestedForm === "concurrent_sibling" && input.siblingCount < 2)
+  ) {
+    throw new TypeError("Descendant dispatch form and sibling coordinates disagree.");
+  }
+  return Object.freeze({ ...input });
 }

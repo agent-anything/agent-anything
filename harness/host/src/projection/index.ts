@@ -32,6 +32,7 @@ export {
   type HostRunProjectionStore,
   type HostRunProjectionUpdate,
   type HostRunTreeLimitsProjection,
+  type HostDescendantDispatchProjection,
   type HostRunTreeNodeProjection,
   type HostRunTreeProjection,
   type HostRuntimeEventProjectionUpdate,

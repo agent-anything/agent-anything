@@ -102,6 +102,10 @@ export {
   HELARC_RUN_TREE_DELEGATION_LIFECYCLE_BASELINE_ACCEPTANCE,
 } from "./baseline/HelarcRunTreeDelegationLifecycleBaseline.js";
 export {
+  HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE,
+  HELARC_CHILD_DELEGATION_PROGRESSION_BASELINE_ACCEPTANCE,
+} from "./baseline/HelarcChildDelegationProgressionBaseline.js";
+export {
   HELARC_RUN_STOP_OPERATIONAL_ACCEPTED_BASELINE,
   HELARC_RUN_STOP_OPERATIONAL_BASELINE_ACCEPTANCE,
   verifyHelarcRunStopOperationalAcceptedBaseline,

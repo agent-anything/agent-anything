@@ -69,6 +69,7 @@ export function createHelarcRunTreeTestSnapshot(input: {
       relationId: null,
       relationKind: null,
       parentRunActionId: null,
+      dispatch: null,
       depth: 0,
       status: input.status ?? "running",
       resultCode: null,

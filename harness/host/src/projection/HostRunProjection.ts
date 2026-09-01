@@ -102,12 +102,22 @@ export interface HostRunTreeLimitsProjection {
   readonly maxActiveDescendantRuns: number;
 }
 
+export interface HostDescendantDispatchProjection {
+  readonly requestedForm: "single" | "concurrent_sibling";
+  readonly controllerRequestId: string;
+  readonly controllerTurnId: string;
+  readonly candidateIndex: number;
+  readonly siblingIndex: number;
+  readonly siblingCount: number;
+}
+
 export interface HostRunTreeNodeProjection {
   readonly runId: string;
   readonly parentRunId: string | null;
   readonly relationId: string | null;
   readonly relationKind: "delegation" | "replacement" | "continuation" | null;
   readonly parentRunActionId: string | null;
+  readonly dispatch: HostDescendantDispatchProjection | null;
   readonly depth: number;
   readonly status: RunLifecycleStatus;
   readonly resultCode: RunResultCode | null;
@@ -460,6 +470,9 @@ function projectRunTree(input: RunTreeExecutionSnapshot): HostRunTreeProjection 
     relationId: node.relationId,
     relationKind: node.relationKind,
     parentRunActionId: node.parentRunActionId,
+    dispatch: node.dispatch === null
+      ? null
+      : Object.freeze({ ...node.dispatch }),
     depth: node.depth,
     status: node.status,
     resultCode: node.resultCode,

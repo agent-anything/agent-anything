@@ -485,6 +485,7 @@ function projectRunTree(
       relationId: node.relationId,
       relationKind: node.relationKind,
       parentRunActionId: node.parentRunActionId,
+      dispatch: node.dispatch === null ? null : { ...node.dispatch },
       depth: node.depth,
       status: node.status,
       resultCode: node.resultCode,

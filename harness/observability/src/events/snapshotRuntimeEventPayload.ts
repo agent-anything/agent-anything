@@ -51,6 +51,7 @@ export function snapshotRuntimeEventPayload<TName extends RuntimeEventName>(
       return descendant(name, payload) as unknown as RuntimeEventPayloadMap[TName];
     case "run.descendant.rejected":
       return freeze({
+        ...descendantDispatch("run.descendant.rejected", payload),
         relationId: nullableToken(payload.relationId, "run.descendant.rejected.relationId"),
         parentRunActionId: token(payload.parentRunActionId, "run.descendant.rejected.parentRunActionId"),
         childRunId: nullableToken(payload.childRunId, "run.descendant.rejected.childRunId"),
@@ -232,6 +233,7 @@ function descendant(
   input: Record<string, unknown>,
 ): Readonly<Record<string, unknown>> {
   return freeze({
+    ...descendantDispatch(name, input),
     relationId: token(input.relationId, `${name}.relationId`),
     relationKind: oneOf(input.relationKind, ["delegation", "replacement", "continuation"] as const, `${name}.relationKind`),
     parentRunActionId: token(input.parentRunActionId, `${name}.parentRunActionId`),
@@ -247,6 +249,41 @@ function descendant(
     limitDerivationId: token(input.limitDerivationId, `${name}.limitDerivationId`),
     depth: positive(input.depth, `${name}.depth`),
     treeRevision: nonNegativeInteger(input.treeRevision, `${name}.treeRevision`),
+  });
+}
+
+function descendantDispatch(
+  name:
+    | "run.descendant.reserved"
+    | "run.descendant.started"
+    | "run.descendant.rejected"
+    | "run.descendant.settled",
+  input: Record<string, unknown>,
+): Readonly<Record<string, unknown>> {
+  const requestedDispatchForm = oneOf(
+    input.requestedDispatchForm,
+    ["single", "concurrent_sibling"] as const,
+    `${name}.requestedDispatchForm`,
+  );
+  const siblingCount = positive(input.siblingCount, `${name}.siblingCount`);
+  const siblingIndex = nonNegativeInteger(input.siblingIndex, `${name}.siblingIndex`);
+  if (siblingIndex >= siblingCount) {
+    throw new TypeError(`${name}.siblingIndex must be less than siblingCount.`);
+  }
+  if (
+    (requestedDispatchForm === "single" &&
+      (siblingCount !== 1 || siblingIndex !== 0)) ||
+    (requestedDispatchForm === "concurrent_sibling" && siblingCount < 2)
+  ) {
+    throw new TypeError(`${name} dispatch shape does not match requestedDispatchForm.`);
+  }
+  return freeze({
+    requestedDispatchForm,
+    controllerRequestId: token(input.controllerRequestId, `${name}.controllerRequestId`),
+    controllerTurnId: token(input.controllerTurnId, `${name}.controllerTurnId`),
+    candidateIndex: nonNegativeInteger(input.candidateIndex, `${name}.candidateIndex`),
+    siblingIndex,
+    siblingCount,
   });
 }
 

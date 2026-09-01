@@ -263,6 +263,12 @@ describe("RuntimeEventStream", () => {
     });
 
     stream.emit("run.descendant.settled", {
+      requestedDispatchForm: "concurrent_sibling",
+      controllerRequestId: "controller-request-next",
+      controllerTurnId: "controller-turn-next",
+      candidateIndex: 1,
+      siblingIndex: 1,
+      siblingCount: 2,
       relationId: "relation-next",
       relationKind: "replacement",
       parentRunActionId: "action-next",
@@ -297,6 +303,12 @@ describe("RuntimeEventStream", () => {
       delegatedPrompt: "must-not-escape",
     } as never);
     stream.emit("run.descendant.rejected", {
+      requestedDispatchForm: "single",
+      controllerRequestId: "controller-request-rejected",
+      controllerTurnId: "controller-turn-rejected",
+      candidateIndex: 0,
+      siblingIndex: 0,
+      siblingCount: 1,
       relationId: null,
       parentRunActionId: "action-rejected",
       childRunId: null,
@@ -315,6 +327,12 @@ describe("RuntimeEventStream", () => {
       depth: 2,
     });
     expect(events[0]?.payload).toEqual({
+      requestedDispatchForm: "concurrent_sibling",
+      controllerRequestId: "controller-request-next",
+      controllerTurnId: "controller-turn-next",
+      candidateIndex: 1,
+      siblingIndex: 1,
+      siblingCount: 2,
       relationId: "relation-next",
       relationKind: "replacement",
       parentRunActionId: "action-next",
@@ -350,6 +368,12 @@ describe("RuntimeEventStream", () => {
     expect(events[0]?.payload).not.toHaveProperty("delegatedPrompt");
     expect(Object.isFrozen(events[0]?.lineage)).toBe(true);
     expect(events[1]?.payload).toEqual({
+      requestedDispatchForm: "single",
+      controllerRequestId: "controller-request-rejected",
+      controllerTurnId: "controller-turn-rejected",
+      candidateIndex: 0,
+      siblingIndex: 0,
+      siblingCount: 1,
       relationId: null,
       parentRunActionId: "action-rejected",
       childRunId: null,

@@ -57,6 +57,7 @@ export function createTestRootRunTreeSnapshot(
     nodes: Object.freeze([Object.freeze({
       runId, parentRunId: null, relationId: null, relationKind: null,
       parentRunActionId: null,
+      dispatch: null,
       depth: 0, status: "initializing" as const, resultCode: null,
       startedAt, completedAt: null,
       resources: Object.freeze({

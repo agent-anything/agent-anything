@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { DelegationAuthorityDimensionInput } from "./DelegationAuthority.js";
-import { assertDelegationAuthorityRequestWithinCeiling } from "./DelegationRunConfiguration.js";
+import { assertDelegationAuthorityRestrictionWithinCeiling } from "./DelegationRunConfiguration.js";
 
 describe("delegated Run authority", () => {
   it("admits an equal or narrower request", () => {
     const ceiling = authorityDimensions();
-    const requested = ceiling.map((dimension) => Object.freeze({
+    const restriction = ceiling.map((dimension) => Object.freeze({
       ...dimension,
       allowed: dimension.kind === "workspace"
         ? Object.freeze([dimension.allowed[0]!])
@@ -13,8 +13,8 @@ describe("delegated Run authority", () => {
       required: Object.freeze([...dimension.required, "request-restriction"]),
     }));
 
-    expect(() => assertDelegationAuthorityRequestWithinCeiling({
-      requested,
+    expect(() => assertDelegationAuthorityRestrictionWithinCeiling({
+      restriction,
       ceiling,
     })).not.toThrow();
   });
@@ -28,27 +28,27 @@ describe("delegated Run authority", () => {
     "disclosure",
   ] as const)("rejects widening the %s dimension", (kind) => {
     const ceiling = authorityDimensions();
-    const requested = ceiling.map((dimension) => dimension.kind === kind
+    const restriction = ceiling.map((dimension) => dimension.kind === kind
       ? Object.freeze({
           ...dimension,
           allowed: Object.freeze([...dimension.allowed, "unauthorized"]),
         })
       : dimension);
 
-    expect(() => assertDelegationAuthorityRequestWithinCeiling({
-      requested,
+    expect(() => assertDelegationAuthorityRestrictionWithinCeiling({
+      restriction,
       ceiling,
     })).toThrow(`widens '${kind}'`);
   });
 
   it("rejects removal of a required restriction", () => {
     const ceiling = authorityDimensions();
-    const requested = ceiling.map((dimension) => dimension.kind === "permission"
+    const restriction = ceiling.map((dimension) => dimension.kind === "permission"
       ? Object.freeze({ ...dimension, required: Object.freeze([]) })
       : dimension);
 
-    expect(() => assertDelegationAuthorityRequestWithinCeiling({
-      requested,
+    expect(() => assertDelegationAuthorityRestrictionWithinCeiling({
+      restriction,
       ceiling,
     })).toThrow("weakens 'permission'");
   });

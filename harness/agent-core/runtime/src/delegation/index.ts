@@ -97,3 +97,4 @@ export type {
   DelegationSteeringRoute,
 } from "./DelegationControl.js";
 export { snapshotDelegationSteeringRoute } from "./DelegationControl.js";
+export type { DelegationToolSelectionDerivation } from "./DelegationRunConfiguration.js";

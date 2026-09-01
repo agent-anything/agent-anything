@@ -1305,6 +1305,13 @@ export function RunTreePanel({
               {node.parentRunActionId !== null ? (
                 <small title={node.parentRunActionId}>Created by {node.parentRunActionId}</small>
               ) : null}
+              {node.dispatch !== null ? (
+                <small title={`${node.dispatch.controllerRequestId} | ${node.dispatch.controllerTurnId}`}>
+                  {node.dispatch.requestedForm === "concurrent_sibling"
+                    ? `Concurrent request ${node.dispatch.siblingIndex + 1} of ${node.dispatch.siblingCount}`
+                    : "Single child request"}
+                </small>
+              ) : null}
               {activeDelegation !== undefined ? (
                 <small title={activeDelegation.request.id}>
                   Steerable at revision {activeDelegation.childRunRevision}

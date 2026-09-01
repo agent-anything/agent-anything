@@ -1455,6 +1455,383 @@ describe("Runner semantic integration", () => {
     ]);
   });
 
+  it("launches contiguous Agent calls as concurrent siblings and commits Parent outcomes in candidate order", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    const enteredChildren: string[] = [];
+    const controllerCalls: ControllerInput<TestOutput>[] = [];
+    const events: RuntimeEvent[] = [];
+    let rootTurn = 0;
+    let releaseFirstChild!: () => void;
+    const secondChildEntered = new Promise<void>((resolve) => {
+      releaseFirstChild = resolve;
+    });
+    const controller: Controller<TestOutput> = {
+      resourceMetering: Object.freeze({
+        modelInputTokens: "not_applicable" as const,
+        modelOutputTokens: "not_applicable" as const,
+        costUnits: "not_applicable" as const,
+      }),
+      async next(input) {
+        controllerCalls.push(input);
+        if (input.runId === "run_002") {
+          enteredChildren.push(input.runId);
+          await secondChildEntered;
+          return complete("Child one", "model_child_1_complete");
+        }
+        if (input.runId === "run_003") {
+          enteredChildren.push(input.runId);
+          releaseFirstChild();
+          return complete("Child two", "model_child_2_complete");
+        }
+        if (input.runId !== "run_001") {
+          throw new Error(`Unexpected Run '${input.runId}'.`);
+        }
+        rootTurn += 1;
+        if (rootTurn === 1) {
+          return advance([
+            toolCandidate(
+              "Agent",
+              { prompt: "Inspect the contracts." },
+              input.toolExposure.controllerRequestId,
+            ),
+            toolCandidate(
+              "Agent",
+              { prompt: "Inspect the runtime." },
+              input.toolExposure.controllerRequestId,
+            ),
+          ], ["model_agent_1", "model_agent_2"]);
+        }
+        const descendantObservations = projectedObservations(input.context)
+          .filter(({ payload }) => payload.kind === "descendant_run");
+        expect(descendantObservations.map(({ payload }) =>
+          isRecord(payload.output) ? payload.output.summary : null
+        )).toEqual(["Child one", "Child two"]);
+        return complete("Parent complete", "model_parent_complete");
+      },
+    };
+    const operations = createOperationFixture([], [], {
+      delegation: createTestDelegation(childAgent),
+    });
+    const tools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent",
+      agent: { id: childAgent.id, revision: childAgent.revision },
+      revision: "descendant-binding-1",
+    });
+
+    const result = await createRunner(controller, operations, {
+      runtimeEventPublisher: {
+        publish(event) {
+          events.push(event);
+        },
+      },
+    }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools }),
+    );
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(
+      enteredChildren,
+      JSON.stringify(events.filter(({ name }) => name.startsWith("run.descendant.")), null, 2),
+    ).toEqual(["run_002", "run_003"]);
+    expect(controllerCalls.map(({ runId }) => runId)).toEqual([
+      "run_001",
+      "run_002",
+      "run_003",
+      "run_001",
+    ]);
+    const descendantEvents = events.filter(({ name }) =>
+      name.startsWith("run.descendant."));
+    expect(descendantEvents.map(({ name }) => name)).toEqual([
+      "run.descendant.reserved",
+      "run.descendant.reserved",
+      "run.descendant.started",
+      "run.descendant.started",
+      "run.descendant.settled",
+      "run.descendant.settled",
+    ]);
+    expect(descendantEvents.slice(0, 4).map(({ payload }) => ({
+      requestedDispatchForm: payload.requestedDispatchForm,
+      siblingIndex: payload.siblingIndex,
+      siblingCount: payload.siblingCount,
+    }))).toEqual([
+      { requestedDispatchForm: "concurrent_sibling", siblingIndex: 0, siblingCount: 2 },
+      { requestedDispatchForm: "concurrent_sibling", siblingIndex: 1, siblingCount: 2 },
+      { requestedDispatchForm: "concurrent_sibling", siblingIndex: 0, siblingCount: 2 },
+      { requestedDispatchForm: "concurrent_sibling", siblingIndex: 1, siblingCount: 2 },
+    ]);
+    expect(descendantEvents.slice(4).map(({ payload }) => payload.childRunId).sort())
+      .toEqual(["run_002", "run_003"]);
+    expect(observations(result)
+      .filter(({ payload }) => payload.kind === "descendant_run")
+      .map(({ payload }) => isRecord(payload.output) ? payload.output.summary : null))
+      .toEqual(["Child one", "Child two"]);
+  });
+
+  it("keeps mixed concurrent sibling outcomes independent and lets the Parent continue", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    let rootTurn = 0;
+    const controller: Controller<TestOutput> = {
+      resourceMetering: Object.freeze({
+        modelInputTokens: "not_applicable" as const,
+        modelOutputTokens: "not_applicable" as const,
+        costUnits: "not_applicable" as const,
+      }),
+      async next(input) {
+        if (input.runId === "run_002") {
+          return complete("Useful child result", "model_child_1_complete");
+        }
+        if (input.runId === "run_003") {
+          throw new Error("Child controller failed.");
+        }
+        if (input.runId !== "run_001") {
+          throw new Error(`Unexpected Run '${input.runId}'.`);
+        }
+        rootTurn += 1;
+        if (rootTurn === 1) {
+          return advance([
+            toolCandidate(
+              "Agent",
+              { prompt: "Inspect the contracts." },
+              input.toolExposure.controllerRequestId,
+            ),
+            toolCandidate(
+              "Agent",
+              { prompt: "Inspect the runtime." },
+              input.toolExposure.controllerRequestId,
+            ),
+          ], ["model_agent_1", "model_agent_2"]);
+        }
+        expect(projectedObservations(input.context)
+          .filter(({ payload }) => payload.kind === "descendant_run")
+          .map(({ payload }) => payload.status)).toEqual(["succeeded", "failed"]);
+        return complete("Parent incorporated the available result", "model_parent_complete");
+      },
+    };
+    const operations = createOperationFixture([], [], {
+      delegation: createTestDelegation(childAgent),
+    });
+    const tools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent",
+      agent: { id: childAgent.id, revision: childAgent.revision },
+      revision: "descendant-binding-1",
+    });
+    const runner = createRunner(controller, operations);
+    const handle = runner.start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools }),
+    );
+
+    const result = await handle.wait();
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(observations(result)
+      .filter(({ payload }) => payload.kind === "descendant_run")
+      .map(({ payload }) => payload.status)).toEqual(["succeeded", "failed"]);
+    expect(handle.getSnapshot().runTree.nodes.map(({ runId, status }) => ({ runId, status })))
+      .toEqual([
+        { runId: "run_001", status: "succeeded" },
+        { runId: "run_002", status: "succeeded" },
+        { runId: "run_003", status: "failed" },
+      ]);
+    expect(handle.getSnapshot().runTree.settlement.complete).toBe(true);
+  });
+
+  it("rejects a concurrent Agent group when action capacity cannot admit the requested shape", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    const events: RuntimeEvent[] = [];
+    const controller = new ScriptedController([
+      (input) => advance([
+        toolCandidate(
+          "Agent",
+          { prompt: "Inspect the contracts." },
+          input.toolExposure.controllerRequestId,
+        ),
+        toolCandidate(
+          "Agent",
+          { prompt: "Inspect the runtime." },
+          input.toolExposure.controllerRequestId,
+        ),
+      ], ["model_agent_1", "model_agent_2"]),
+      complete("Parent continued without serial fallback", "model_parent_complete"),
+    ]);
+    const operations = createOperationFixture([], [], {
+      delegation: createTestDelegation(childAgent),
+    });
+    const tools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent",
+      agent: { id: childAgent.id, revision: childAgent.revision },
+      revision: "descendant-binding-1",
+    });
+
+    const result = await createRunner(controller, operations, {
+      runtimeEventPublisher: { publish: (event) => events.push(event) },
+    }).run(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools, limits: { maxActions: 1 } }),
+    );
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(controller.calls.map(({ runId }) => runId)).toEqual(["run_001", "run_001"]);
+    expect(events.some(({ name }) => name.startsWith("run.descendant."))).toBe(false);
+    expect(result.items.flatMap(({ payload }) =>
+      payload.kind === "model_call_settlement" ? [payload.result] : []
+    )).toMatchObject([
+      { modelCallRef: { id: "model_agent_1" }, settlement: "invalidated" },
+      { modelCallRef: { id: "model_agent_2" }, settlement: "invalidated" },
+    ]);
+  });
+
+  it("keeps resource-limited concurrent branches independent and settles every reservation", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    const events: RuntimeEvent[] = [];
+    const controller = new ScriptedController([
+      (input) => advance([
+        toolCandidate(
+          "Agent",
+          { prompt: "Inspect the contracts." },
+          input.toolExposure.controllerRequestId,
+        ),
+        toolCandidate(
+          "Agent",
+          { prompt: "Inspect the runtime." },
+          input.toolExposure.controllerRequestId,
+        ),
+      ], ["model_agent_1", "model_agent_2"]),
+      complete("Second branch completed", "model_child_complete"),
+      (input) => {
+        expect(projectedObservations(input.context)
+          .filter(({ payload }) => payload.kind === "descendant_run")
+          .map(({ payload }) => payload.status)).toEqual(["unavailable", "succeeded"]);
+        return complete("Parent accepted independent outcomes", "model_parent_complete");
+      },
+    ]);
+    const operations = createOperationFixture([], [], {
+      delegation: createTestDelegation(childAgent),
+    });
+    const tools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent",
+      agent: { id: childAgent.id, revision: childAgent.revision },
+      revision: "descendant-binding-1",
+    });
+    const resources = testRunTreeResources();
+    const runner = createRunner(controller, operations, {
+      runtimeEventPublisher: { publish: (event) => events.push(event) },
+    });
+    const handle = runner.start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, {
+        tools,
+        runTreeResources: Object.freeze({
+          ...resources,
+          modelInputTokens: Object.freeze({
+            maximum: 1,
+            minimumChildGrant: 1,
+            enforcement: "hard" as const,
+          }),
+        }),
+      }),
+    );
+
+    const result = await handle.wait();
+
+    expect(result.status, JSON.stringify(result, null, 2)).toBe("succeeded");
+    expect(controller.calls.map(({ runId }) => runId)).toEqual([
+      "run_001",
+      "run_002",
+      "run_001",
+    ]);
+    expect(events.filter(({ name }) => name === "run.descendant.rejected")).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          requestedDispatchForm: "concurrent_sibling",
+          siblingIndex: 0,
+          siblingCount: 2,
+          code: "delegation_resource_limit_exceeded",
+        }),
+      }),
+    ]);
+    expect(events.filter(({ name }) => name === "run.descendant.started")
+      .map(({ payload }) => ({ childRunId: payload.childRunId, siblingIndex: payload.siblingIndex })))
+      .toEqual([{ childRunId: "run_002", siblingIndex: 1 }]);
+    expect(handle.getSnapshot().runTree.settlement.complete).toBe(true);
+    expect(handle.getSnapshot().runTree.nodes.map(({ runId, status }) => ({ runId, status })))
+      .toEqual([
+        { runId: "run_001", status: "succeeded" },
+        { runId: "run_002", status: "succeeded" },
+      ]);
+  });
+
+  it("cancels admitted concurrent reservations before launch without starting a Child", async () => {
+    const childAgent = createAgent("agent_child", "1", "Child Agent");
+    const events: RuntimeEvent[] = [];
+    let cancelOnReservation: (() => void) | null = null;
+    const controller = new ScriptedController([
+      (input) => advance([
+        toolCandidate(
+          "Agent",
+          { prompt: "Inspect the contracts." },
+          input.toolExposure.controllerRequestId,
+        ),
+        toolCandidate(
+          "Agent",
+          { prompt: "Inspect the runtime." },
+          input.toolExposure.controllerRequestId,
+        ),
+      ], ["model_agent_1", "model_agent_2"]),
+    ]);
+    const operations = createOperationFixture([], [], {
+      delegation: createTestDelegation(childAgent),
+    });
+    const tools = createSemanticToolSelection(operations, "Agent", {
+      kind: "descendant_agent",
+      agent: { id: childAgent.id, revision: childAgent.revision },
+      revision: "descendant-binding-1",
+    });
+    const runner = createRunner(controller, operations, {
+      runtimeEventPublisher: {
+        publish(event) {
+          events.push(event);
+          if (event.name === "run.descendant.reserved" && cancelOnReservation !== null) {
+            const cancel = cancelOnReservation;
+            cancelOnReservation = null;
+            cancel();
+          }
+        },
+      },
+    });
+    const handle = runner.start(
+      createAgent(),
+      createRunInput(),
+      createRunConfig(operations, { tools }),
+    );
+    cancelOnReservation = () => {
+      expect(handle.cancel({ origin: "user", reasonCode: "user_requested" }).status)
+        .toBe("accepted");
+    };
+
+    const result = await handle.wait();
+
+    expect(result.status).toBe("cancelled");
+    expect(controller.calls.map(({ runId }) => runId)).toEqual(["run_001"]);
+    expect(events.filter(({ name }) => name === "run.descendant.started")).toHaveLength(0);
+    expect(events.filter(({ name }) => name === "run.descendant.rejected"))
+      .toHaveLength(2);
+    expect(events.filter(({ name }) => name === "run.descendant.rejected")
+      .map(({ payload }) => payload.code))
+      .toEqual(["descendant_run_start_cancelled", "descendant_run_start_cancelled"]);
+    expect(handle.getSnapshot().runTree.settlement.complete).toBe(true);
+    expect(handle.getSnapshot().runTree.nodes.map(({ runId, status }) => ({ runId, status })))
+      .toEqual([
+        { runId: "run_001", status: "cancelled" },
+        { runId: "run_002", status: "cancelled" },
+      ]);
+  });
+
   it("starts a dependent child Run with the exact trusted dependency result", async () => {
     const childAgent = createAgent("agent_child", "1", "Child Agent");
     let dependency: Readonly<{ readonly id: string; readonly revision: string }> | null = null;
@@ -1539,6 +1916,16 @@ describe("Runner semantic integration", () => {
     });
     expect(settled[1]?.payload.requestId).not.toBe(settled[0]?.payload.requestId);
     expect(settled[1]?.payload.resultId).not.toBe(settled[0]?.payload.resultId);
+    expect(events.filter((event) => event.name === "run.descendant.reserved")
+      .map(({ payload }) => ({
+        requestedDispatchForm: payload.requestedDispatchForm,
+        candidateIndex: payload.candidateIndex,
+        siblingIndex: payload.siblingIndex,
+        siblingCount: payload.siblingCount,
+      }))).toEqual([
+        { requestedDispatchForm: "single", candidateIndex: 0, siblingIndex: 0, siblingCount: 1 },
+        { requestedDispatchForm: "single", candidateIndex: 0, siblingIndex: 0, siblingCount: 1 },
+      ]);
   });
 
   it("continues one settled child context once through SendMessage", async () => {
@@ -3664,17 +4051,19 @@ function createTestDelegation(
               ]),
               maxContextBytes: limits.maxContextBytes,
             }),
-            requestedAuthority: Object.freeze(input.authorityCeiling.map((dimension) =>
-              Object.freeze({
-                kind: dimension.kind,
-                allowed: Object.freeze(
-                  options.narrowToolAuthority && dimension.kind === "tool"
-                    ? dimension.allowed.slice(0, 1)
-                    : [...dimension.allowed],
-                ),
-                required: Object.freeze([...dimension.required]),
-              }))),
-            limits,
+            authorityRestriction: options.narrowToolAuthority
+              ? Object.freeze(input.authorityCeiling.map((dimension) =>
+                  Object.freeze({
+                    kind: dimension.kind,
+                    allowed: Object.freeze(
+                      dimension.kind === "tool"
+                        ? dimension.allowed.slice(0, 1)
+                        : [...dimension.allowed],
+                    ),
+                    required: Object.freeze([...dimension.required]),
+                  })))
+              : null,
+            allocationRequest: limits,
             dependencyResult,
             replacedResult,
           }),
@@ -3712,14 +4101,8 @@ function createTestDelegation(
               entries: Object.freeze([]),
               maxContextBytes: limits.maxContextBytes,
             }),
-            requestedAuthority: Object.freeze(input.authorityCeiling.map((dimension) =>
-              Object.freeze({
-                kind: dimension.kind,
-                allowed: Object.freeze([...dimension.allowed]),
-                required: Object.freeze([...dimension.required]),
-              }))
-            ),
-            limits,
+            authorityRestriction: null,
+            allocationRequest: limits,
             dependencyResult: null,
             replacedResult: null,
           }),

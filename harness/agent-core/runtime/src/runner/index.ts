@@ -35,6 +35,7 @@ export type {
   RunRetryProjection,
 } from "./RunHandle.js";
 export type {
+  DescendantDispatchProvenance,
   RunTreeApprovalTreeAdmission,
   RunTreeExecutionSnapshot,
   RunTreeNodeProjection,

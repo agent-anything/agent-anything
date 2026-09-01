@@ -141,6 +141,14 @@ describe("Helarc workbench shell", () => {
               relationId: "relation-1",
               relationKind: "delegation",
               parentRunActionId: "action-1",
+              dispatch: {
+                requestedForm: "concurrent_sibling",
+                controllerRequestId: "controller-request-1",
+                controllerTurnId: "controller-turn-1",
+                candidateIndex: 0,
+                siblingIndex: 0,
+                siblingCount: 2,
+              },
               depth: 1,
               status: "cancelling",
               resultCode: null,
@@ -155,6 +163,14 @@ describe("Helarc workbench shell", () => {
               relationId: "relation-2",
               relationKind: "delegation",
               parentRunActionId: "action-2",
+              dispatch: {
+                requestedForm: "concurrent_sibling",
+                controllerRequestId: "controller-request-1",
+                controllerTurnId: "controller-turn-1",
+                candidateIndex: 1,
+                siblingIndex: 1,
+                siblingCount: 2,
+              },
               depth: 2,
               status: "failed",
               resultCode: "controller_failed",
@@ -187,6 +203,8 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Approvals 0 active / 0 total");
     expect(html).toContain("Settlement 0 pending");
     expect(html).toContain("Created by action-1");
+    expect(html).toContain("Concurrent request 1 of 2");
+    expect(html).toContain("Concurrent request 2 of 2");
     expect(html).toContain("Steerable at revision 6");
     expect(html).toContain("cancelling");
     expect(html).toContain("controller_failed");

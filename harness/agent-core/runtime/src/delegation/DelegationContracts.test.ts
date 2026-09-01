@@ -50,11 +50,10 @@ describe("delegation authority", () => {
 
     expect(tool.allowed).toEqual(["tool:read"]);
     expect(verification.required).toEqual([
-      "verification:agent",
       "verification:parent",
       "verification:root",
     ]);
-    expect(authority.deadlineAt).toBe("2026-08-25T00:04:00.000Z");
+    expect(authority.deadlineAt).toBe("2026-08-25T00:06:00.000Z");
     expect(Object.isFrozen(authority.sources)).toBe(true);
     expect(snapshotDelegationAuthorityDerivation(authority)).toEqual(authority);
   });
@@ -62,8 +61,8 @@ describe("delegation authority", () => {
   it("rejects incomplete authority-source coverage", () => {
     expect(() => deriveDelegationAuthority({
       derivationId: "authority-1",
-      sources: authoritySources().slice(0, 4),
-    })).toThrow(/every exact source role/);
+      sources: authoritySources().slice(0, 2),
+    })).toThrow(/root, parent, and current-policy/);
   });
 
   it("rejects a forged effective authority snapshot", () => {
@@ -110,7 +109,7 @@ describe("delegation resources", () => {
 
     expect(() => deriveDelegationLimits({
       derivationId: "limit-derivation",
-      sources: limitSources().slice(0, 4),
+      sources: limitSources().slice(0, 3),
     })).toThrow(/every exact source role/);
   });
 });
@@ -178,19 +177,19 @@ describe("delegation request", () => {
       maxResultBytes: 65_536,
     });
     expect(() => request({
-      preparation: preparation({ limits: widerRequest }),
-    })).toThrow(/does not contain the exact Product request ceiling/);
+      preparation: preparation({ allocationRequest: widerRequest }),
+    })).toThrow(/does not contain the exact allocation request/);
   });
 
   it("rejects Product authority constraints absent from the trusted derivation", () => {
-    const requestedAuthority = authorityDimensions("request").map((dimension) =>
+    const authorityRestriction = authorityDimensions("delegation_restriction").map((dimension) =>
       dimension.kind === "tool"
         ? { ...dimension, allowed: ["tool:write"] }
         : dimension,
     );
     expect(() => request({
-      preparation: preparation({ requestedAuthority }),
-    })).toThrow(/does not contain the exact Product request constraints/);
+      preparation: preparation({ authorityRestriction }),
+    })).toThrow(/restriction presence disagree/);
   });
 
   it("rejects a dependency result from another root Run", () => {
@@ -394,8 +393,8 @@ function request(overrides: {
 
 function preparation(overrides: {
   readonly contextEntries?: readonly ReturnType<typeof material>[];
-  readonly limits?: ReturnType<typeof limits>;
-  readonly requestedAuthority?: readonly DelegationAuthorityDimensionInput[];
+  readonly allocationRequest?: ReturnType<typeof limits>;
+  readonly authorityRestriction?: readonly DelegationAuthorityDimensionInput[] | null;
   readonly dependencyResult?: DelegationPreparation["dependencyResult"];
   readonly replacedResult?: DelegationPreparation["replacedResult"];
 } = {}): DelegationPreparation {
@@ -426,8 +425,8 @@ function preparation(overrides: {
       ],
       maxContextBytes: 16_384,
     }),
-    requestedAuthority: overrides.requestedAuthority ?? authorityDimensions("request"),
-    limits: overrides.limits ?? limits(),
+    authorityRestriction: overrides.authorityRestriction ?? null,
+    allocationRequest: overrides.allocationRequest ?? limits(),
     dependencyResult: overrides.dependencyResult ?? null,
     replacedResult: overrides.replacedResult ?? null,
   };
@@ -519,11 +518,10 @@ function limitSources(): readonly DelegationLimitSourceInput[] {
   const roles: readonly DelegationLimitSourceRole[] = [
     "root",
     "parent",
-    "child_agent",
-    "request",
+    "allocation_request",
     "current_policy",
   ];
-  const turnCeilings = [12, 5, 7, 8, 6];
+  const turnCeilings = [12, 5, 8, 6];
   return roles.map((role, index) => ({
     role,
     ref: {
@@ -549,8 +547,6 @@ function authoritySources(): readonly DelegationAuthoritySourceInput[] {
   const roles: readonly DelegationAuthoritySourceRole[] = [
     "root",
     "parent",
-    "child_agent",
-    "request",
     "current_policy",
   ];
   return roles.map((role, index) => ({
@@ -586,8 +582,8 @@ function authorityDimensions(
       : kind === "tool"
         ? ["tool:read"]
         : [`${kind}:bounded`],
-    required: kind === "verification" && ["root", "parent", "child_agent"].includes(role)
-      ? [`verification:${role === "child_agent" ? "agent" : role}`]
+    required: kind === "verification" && ["root", "parent"].includes(role)
+      ? [`verification:${role}`]
       : [],
   }));
 }

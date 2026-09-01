@@ -118,8 +118,8 @@ export interface DelegationPreparation {
   readonly objective: DelegatedObjective;
   readonly expectedResult: DelegationResultExpectation;
   readonly contextPlan: DelegationContextPlan;
-  readonly requestedAuthority: readonly DelegationAuthorityDimensionInput[];
-  readonly limits: DelegationLimits;
+  readonly authorityRestriction: readonly DelegationAuthorityDimensionInput[] | null;
+  readonly allocationRequest: DelegationLimits;
   readonly dependencyResult: DelegationResultRef | null;
   readonly replacedResult: DelegationResultRef | null;
 }
@@ -252,31 +252,36 @@ export function materializeDelegationRequest(input: {
       maxContextBytes: preparation.contextPlan.maxContextBytes,
     });
 
-    const requestAuthoritySource = authority.sources.find(
-      (source) => source.role === "request",
-    )!;
-    const requestedAuthority = snapshotDelegationAuthorityDimensions(
-      preparation.requestedAuthority,
+    const restrictionSource = authority.sources.find(
+      (source) => source.role === "delegation_restriction",
     );
-    if (
-      requestAuthoritySource.dimensions.some(
-        (dimension, index) =>
-          dimension.revision !== requestedAuthority[index]!.revision,
-      )
-    ) {
+    if ((preparation.authorityRestriction === null) !== (restrictionSource === undefined)) {
       fail(
-        "delegation_authority_request_mismatch",
-        "Delegation authority derivation does not contain the exact Product request constraints.",
+        "delegation_authority_restriction_mismatch",
+        "Delegation authority derivation and trusted restriction presence disagree.",
       );
     }
+    if (preparation.authorityRestriction !== null) {
+      const restriction = snapshotDelegationAuthorityDimensions(
+        preparation.authorityRestriction,
+      );
+      if (restrictionSource!.dimensions.some(
+        (dimension, index) => dimension.revision !== restriction[index]!.revision,
+      )) {
+        fail(
+          "delegation_authority_restriction_mismatch",
+          "Delegation authority derivation does not contain the exact trusted restriction.",
+        );
+      }
+    }
 
-    const requestLimitSource = limitDerivation.sources.find(
-      (source) => source.role === "request",
+    const allocationSource = limitDerivation.sources.find(
+      (source) => source.role === "allocation_request",
     )!;
-    if (requestLimitSource.ceiling.revision !== preparation.limits.revision) {
+    if (allocationSource.ceiling.revision !== preparation.allocationRequest.revision) {
       fail(
-        "delegation_limit_request_mismatch",
-        "Delegation limit derivation does not contain the exact Product request ceiling.",
+        "delegation_limit_allocation_mismatch",
+        "Delegation limit derivation does not contain the exact allocation request.",
       );
     }
     if (contextPlan.maxContextBytes > limitDerivation.effective.maxContextBytes) {
@@ -408,8 +413,8 @@ export function snapshotDelegationPreparation(
     "objective",
     "expectedResult",
     "contextPlan",
-    "requestedAuthority",
-    "limits",
+    "authorityRestriction",
+    "allocationRequest",
     "dependencyResult",
     "replacedResult",
   ]);
@@ -421,10 +426,10 @@ export function snapshotDelegationPreparation(
   const objective = snapshotObjective(input.objective);
   const expectedResult = snapshotExpectation(input.expectedResult);
   const contextPlan = snapshotContextPlan(input.contextPlan);
-  const requestedAuthority = snapshotDelegationAuthorityDimensions(
-    input.requestedAuthority,
-  );
-  const limits = snapshotDelegationLimits(input.limits);
+  const authorityRestriction = input.authorityRestriction === null
+    ? null
+    : snapshotDelegationAuthorityDimensions(input.authorityRestriction);
+  const allocationRequest = snapshotDelegationLimits(input.allocationRequest);
   const dependencyResult = input.dependencyResult === null
     ? null
     : snapshotDelegationResultRef(input.dependencyResult);
@@ -439,7 +444,7 @@ export function snapshotDelegationPreparation(
       "Product preparation cannot assign trusted source-result Context material.",
     );
   }
-  if (contextPlan.maxContextBytes > limits.maxContextBytes) {
+  if (contextPlan.maxContextBytes > allocationRequest.maxContextBytes) {
     throw new TypeError("Delegation Context plan exceeds the request Context limit.");
   }
   return deepFreeze({
@@ -449,8 +454,8 @@ export function snapshotDelegationPreparation(
     objective,
     expectedResult,
     contextPlan,
-    requestedAuthority,
-    limits,
+    authorityRestriction,
+    allocationRequest,
     dependencyResult,
     replacedResult,
   });

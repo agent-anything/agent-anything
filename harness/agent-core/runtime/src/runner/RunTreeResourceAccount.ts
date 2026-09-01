@@ -255,10 +255,15 @@ export class RunTreeResourceAccount {
 
   settle(runId: string): RunTreeResourceSettlement {
     const node = this.requireActiveNode(runId);
-    if ([...this.nodes.values()].some(
-      (candidate) => candidate.parentRunId === runId && !candidate.settled,
-    )) {
-      throw new TypeError("Run Tree resources cannot settle before child allocations.");
+    const unsettledChildren = [...this.nodes.entries()].filter(
+      ([, candidate]) => candidate.parentRunId === runId && !candidate.settled,
+    );
+    if (unsettledChildren.length > 0) {
+      throw new TypeError(
+        `Run Tree resources for '${runId}' cannot settle before child allocations: ${
+          unsettledChildren.map(([childRunId]) => childRunId).join(", ")
+        }.`,
+      );
     }
     const released = zeroAmounts();
     const chargedUnknown = zeroAmounts();

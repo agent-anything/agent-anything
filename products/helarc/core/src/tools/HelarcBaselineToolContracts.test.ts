@@ -45,12 +45,12 @@ describe("Helarc baseline Tool Contracts", () => {
     });
     expect(findHelarcBaselineToolContract("Agent").binding).toEqual({
       kind: "descendant_run",
-      target: "agent.general-purpose",
+      target: "agent.child",
       canonicalEffect: null,
     });
     expect(findHelarcBaselineToolContract("SendMessage").binding).toEqual({
       kind: "descendant_message",
-      target: "agent.general-purpose",
+      target: "agent.child",
       canonicalEffect: null,
     });
   });

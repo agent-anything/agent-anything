@@ -19,8 +19,9 @@ import {
 } from "./RunHandle.js";
 import {
   RunExecution,
-  type RuntimeDescendantRunStartInput,
-  type RuntimeDescendantRunStartResult,
+  type RuntimeDescendantRunAdmissionInput,
+  type RuntimeDescendantRunAdmissionResult,
+  type RuntimeDescendantRunLaunchResult,
 } from "./RunExecution.js";
 import type {
   ResolvedRunConfig,
@@ -181,8 +182,8 @@ export class Runner {
     return this.start(agent, input, config, options).wait();
   }
 
-  private startDescendant(
-    input: RuntimeDescendantRunStartInput,
+  private admitDescendant(
+    input: RuntimeDescendantRunAdmissionInput,
     parentRunId: string,
     parentLineage: RunLineage,
     parentDeadlineAt: string,
@@ -194,7 +195,7 @@ export class Runner {
     runtimeEventPublishers: readonly RuntimeEventPublisher[],
     runTraceObservers: readonly RunTraceObserver[],
     actionExecutionObserver: RunInvocationOptions["actionExecutionObserver"],
-  ): RuntimeDescendantRunStartResult {
+  ): RuntimeDescendantRunAdmissionResult {
     let request: DelegationRequest;
     let agent: Agent;
     let config: ValidatedRunConfig;
@@ -270,8 +271,6 @@ export class Runner {
       return Object.freeze({
         status: "rejected" as const,
         code: rejectionCode,
-        relation: null,
-        reservedTreeRevision: null,
         treeRevision: tree.getSnapshot().revision,
       });
     }
@@ -300,76 +299,100 @@ export class Runner {
         ),
         resourceAllocation: delegationResourceAllocation(request.limits),
         authorityRevision: request.authorityDerivation.revision,
+        dispatch: input.dispatch,
       });
     } catch {
       return Object.freeze({
         status: "rejected" as const,
         code: "descendant_run_start_failed" as const,
-        relation: null,
-        reservedTreeRevision: null,
         treeRevision: tree.getSnapshot().revision,
       });
     }
     if (reservation.status === "rejected") {
       return Object.freeze({
         ...reservation,
-        relation: null,
-        reservedTreeRevision: null,
       });
     }
 
-    try {
-      const childRunId = reservation.relation.child.id;
-      const runInput = snapshotRunInput(createDelegatedRunInput({
-        request,
-        childRunId,
-        startedAt,
-      }));
-      const handle = this.startPreparedRun(
-        childRunId,
-        agent,
-        runInput,
-        config,
-        rootTask,
-        rootConfig,
-        request,
-        contextMaterials,
-        input.modelInteractionSeed,
-        reservation.lineage,
-        tree,
-        contextBytes,
-        startedAt,
-        reservation.deadlineAt,
-        runtimeEventPublishers,
-        runTraceObservers,
-        actionExecutionObserver,
-      );
-      const resourceSettlement = handle.wait().then(() => {
-        const settlement = tree.getResourceSettlement(childRunId);
-        if (settlement === null) {
-          throw new TypeError("Descendant Run resources did not settle with the Run.");
-        }
-        return settlement;
-      });
-      return Object.freeze({
-        status: "started" as const,
-        relation: reservation.relation,
-        handle,
-        resourceSettlement,
-        reservedTreeRevision: reservation.treeRevision,
-        treeRevision: tree.getSnapshot().revision,
-      });
-    } catch {
-      tree.settleResources(reservation.relation.child.id);
-      tree.failStart(reservation.relation.child.id, this.dependencies.now());
-      return Object.freeze({
-        status: "rejected" as const,
-        code: "descendant_run_start_failed" as const,
-        relation: reservation.relation,
-        reservedTreeRevision: reservation.treeRevision,
-        treeRevision: tree.getSnapshot().revision,
-      });
-    }
+    let disposition: "pending" | "launched" | "cancelled" = "pending";
+    const rejectAfterReservation = (
+      code: "descendant_run_start_cancelled" | "descendant_run_start_failed",
+    ): RuntimeDescendantRunLaunchResult => Object.freeze({
+      status: "rejected" as const,
+      code,
+      relation: reservation.relation,
+      reservedTreeRevision: reservation.treeRevision,
+      treeRevision: tree.getSnapshot().revision,
+    });
+    const cancelBeforeLaunch = (): RuntimeDescendantRunLaunchResult => {
+      if (disposition !== "pending") {
+        throw new TypeError("A descendant admission can be consumed only once.");
+      }
+      disposition = "cancelled";
+      tree.cancelBeforeStart(reservation.relation.child.id, this.dependencies.now());
+      return rejectAfterReservation("descendant_run_start_cancelled");
+    };
+    const launch = (): RuntimeDescendantRunLaunchResult => {
+      if (disposition !== "pending") {
+        throw new TypeError("A descendant admission can be consumed only once.");
+      }
+      disposition = "launched";
+      try {
+        const childRunId = reservation.relation.child.id;
+        const launchStartedAt = this.dependencies.now();
+        const runInput = snapshotRunInput(createDelegatedRunInput({
+          request,
+          childRunId,
+          startedAt: launchStartedAt,
+        }));
+        const handle = this.startPreparedRun(
+          childRunId,
+          agent,
+          runInput,
+          config,
+          rootTask,
+          rootConfig,
+          request,
+          contextMaterials,
+          input.modelInteractionSeed,
+          reservation.lineage,
+          tree,
+          contextBytes,
+          launchStartedAt,
+          reservation.deadlineAt,
+          runtimeEventPublishers,
+          runTraceObservers,
+          actionExecutionObserver,
+        );
+        const resourceSettlement = handle.wait().then(() => {
+          const settlement = tree.getResourceSettlement(childRunId);
+          if (settlement === null) {
+            throw new TypeError("Descendant Run resources did not settle with the Run.");
+          }
+          return settlement;
+        });
+        return Object.freeze({
+          status: "started" as const,
+          relation: reservation.relation,
+          handle,
+          resourceSettlement,
+          reservedTreeRevision: reservation.treeRevision,
+          treeRevision: tree.getSnapshot().revision,
+        });
+      } catch {
+        tree.settleResources(reservation.relation.child.id);
+        tree.failStart(reservation.relation.child.id, this.dependencies.now());
+        return rejectAfterReservation("descendant_run_start_failed");
+      }
+    };
+    return Object.freeze({
+      status: "admitted" as const,
+      relation: reservation.relation,
+      reservedTreeRevision: reservation.treeRevision,
+      treeRevision: tree.getSnapshot().revision,
+      launch,
+      cancelBeforeLaunch,
+    });
   }
 
   private startPreparedRun<TOutput>(
@@ -381,7 +404,7 @@ export class Runner {
     rootConfig: RunConfig,
     delegationRequest: DelegationRequest | null,
     delegationContextMaterials: readonly DelegationContextMaterial[],
-    modelInteractionSeed: RuntimeDescendantRunStartInput["modelInteractionSeed"],
+    modelInteractionSeed: RuntimeDescendantRunAdmissionInput["modelInteractionSeed"],
     lineage: RunLineage,
     tree: RunTreeExecution,
     initialContextBytes: number,
@@ -441,7 +464,7 @@ export class Runner {
       actionExecutionObserver,
       startedAt,
       deadlineAt,
-      (descendant) => this.startDescendant(
+      (descendant) => this.admitDescendant(
         descendant,
         runId,
         lineage,

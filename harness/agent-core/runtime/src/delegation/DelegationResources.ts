@@ -10,8 +10,7 @@ import {
 export type DelegationLimitSourceRole =
   | "root"
   | "parent"
-  | "child_agent"
-  | "request"
+  | "allocation_request"
   | "current_policy";
 
 export interface DelegationLimitSourceRef {
@@ -46,8 +45,7 @@ export interface DelegationLimitDerivation {
 const sourceRoles: readonly DelegationLimitSourceRole[] = [
   "root",
   "parent",
-  "child_agent",
-  "request",
+  "allocation_request",
   "current_policy",
 ];
 

@@ -17,7 +17,7 @@ const channels = Object.freeze({
 });
 
 contextBridge.exposeInMainWorld("helarc", Object.freeze({
-  bridgeVersion: 9,
+  bridgeVersion: 10,
   productId: "helarc",
   chooseWorkspace: (input) => ipcRenderer.invoke(
     channels.chooseWorkspace,

@@ -1,6 +1,6 @@
 import {
-  HELARC_RUN_STOP_EXECUTION_TRUTH_ACCEPTED_BASELINE,
-  HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE,
+  HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE,
+  HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE,
   compareHelarcEvaluationBaseline,
   projectHelarcEvaluationBaselineSignature,
   runHelarcEvaluationBaselineCandidate,
@@ -17,11 +17,11 @@ const signature = projectHelarcEvaluationBaselineSignature(systemCandidate);
 const contextContinuity = await runContextContinuityEvaluationCandidate();
 const runStopReview = await runRunStopReviewDeterministicEvaluation();
 const comparison = compareHelarcEvaluationBaseline(
-  HELARC_RUN_STOP_EXECUTION_TRUTH_ACCEPTED_BASELINE,
+  HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE,
   systemCandidate,
 );
 const acceptedComparison = compareHelarcEvaluationBaseline(
-  HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE,
+  HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE,
   systemCandidate,
 );
 
@@ -29,12 +29,12 @@ process.stdout.write(`${JSON.stringify({
   schemaVersion: 1,
   kind: "context_continuity_and_helarc_evaluation_candidate",
   predecessor: {
-    reportRef: HELARC_RUN_STOP_EXECUTION_TRUTH_ACCEPTED_BASELINE.reportRef,
-    acceptanceRef: HELARC_RUN_STOP_EXECUTION_TRUTH_ACCEPTED_BASELINE.acceptanceRef,
+    reportRef: HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE.reportRef,
+    acceptanceRef: HELARC_RUN_TREE_DELEGATION_LIFECYCLE_ACCEPTED_BASELINE.acceptanceRef,
   },
   acceptedSuccessor: {
-    reportRef: HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE.reportRef,
-    acceptanceRef: HELARC_RUN_TREE_RESOURCE_AUTHORITY_ACCEPTED_BASELINE.acceptanceRef,
+    reportRef: HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE.reportRef,
+    acceptanceRef: HELARC_CHILD_DELEGATION_PROGRESSION_ACCEPTED_BASELINE.acceptanceRef,
   },
   systemCandidate: projectSystemCandidate(signature),
   predecessorComparison: projectPredecessorComparison(comparison),

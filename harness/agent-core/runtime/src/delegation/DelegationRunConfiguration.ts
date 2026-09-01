@@ -132,22 +132,32 @@ export function projectDelegationRunLimits(input: {
   });
 }
 
-export function assertDelegationAuthorityRequestWithinCeiling(input: {
-  readonly requested: readonly DelegationAuthorityDimensionInput[];
+export function assertDelegationAuthorityRestrictionWithinCeiling(input: {
+  readonly restriction: readonly DelegationAuthorityDimensionInput[];
   readonly ceiling: readonly DelegationAuthorityDimensionInput[];
 }): void {
   for (const ceiling of input.ceiling) {
-    const requested = input.requested.find(({ kind }) => kind === ceiling.kind);
-    if (requested === undefined) {
-      throw new TypeError(`Delegation request omits authority dimension '${ceiling.kind}'.`);
+    const restriction = input.restriction.find(({ kind }) => kind === ceiling.kind);
+    if (restriction === undefined) {
+      throw new TypeError(`Delegation restriction omits authority dimension '${ceiling.kind}'.`);
     }
-    if (requested.allowed.some((value) => !ceiling.allowed.includes(value))) {
-      throw new TypeError(`Delegation request widens '${ceiling.kind}' allowed authority.`);
+    if (restriction.allowed.some((value) => !ceiling.allowed.includes(value))) {
+      throw new TypeError(`Delegation restriction widens '${ceiling.kind}' allowed authority.`);
     }
-    if (ceiling.required.some((value) => !requested.required.includes(value))) {
-      throw new TypeError(`Delegation request weakens '${ceiling.kind}' required authority.`);
+    if (ceiling.required.some((value) => !restriction.required.includes(value))) {
+      throw new TypeError(`Delegation restriction weakens '${ceiling.kind}' required authority.`);
     }
   }
+}
+
+export interface DelegationToolSelectionDerivation {
+  readonly schemaVersion: 1;
+  readonly parentSelectionId: string;
+  readonly parentSelectionRevision: string;
+  readonly childSelectionId: string;
+  readonly childSelectionRevision: string;
+  readonly disposition: "exact_inheritance" | "trusted_narrowing";
+  readonly revision: string;
 }
 
 export function deriveDelegatedRunConfig(input: {
@@ -161,6 +171,9 @@ export function deriveDelegatedRunConfig(input: {
   ) {
     throw new TypeError("Delegation request and authority derivation do not match.");
   }
+  if (input.request.toolCall.selectionRevision !== input.parent.tools.revision) {
+    throw new TypeError("Delegation request does not use the captured parent Tool Selection.");
+  }
   const workspace = restrictWorkspace(
     input.parent.workspace,
     effective(input.authority, "workspace").allowed,
@@ -169,6 +182,16 @@ export function deriveDelegatedRunConfig(input: {
     input.parent.tools,
     effective(input.authority, "tool").allowed,
   );
+  const toolSelectionDerivation = createToolSelectionDerivation(
+    input.parent.tools,
+    tools,
+  );
+  const hasRestriction = input.authority.sources.some(
+    ({ role }) => role === "delegation_restriction",
+  );
+  if (!hasRestriction && toolSelectionDerivation.disposition !== "exact_inheritance") {
+    throw new TypeError("Default Child Tool inheritance must preserve the parent Selection.");
+  }
   const permissions = Object.freeze({
     ...input.parent.permissions,
     sessionAuthority: input.parent.permissions.sessionAuthority === null
@@ -209,10 +232,34 @@ export function deriveDelegatedRunConfig(input: {
       delegationRequestRevision: input.request.ref.revision,
       rootRunId: input.request.origin.root.run.id,
       parentRunId: input.request.origin.parent.run.id,
+      toolSelectionDerivation,
     }),
   });
   assertConfigurationWithinEffectiveAuthority(config, input.authority.effective);
   return config;
+}
+
+function createToolSelectionDerivation(
+  parent: ToolSelectionRevision,
+  child: ToolSelectionRevision,
+): DelegationToolSelectionDerivation {
+  const material = deepFreeze({
+    parentSelectionId: parent.selectionId,
+    parentSelectionRevision: parent.revision,
+    childSelectionId: child.selectionId,
+    childSelectionRevision: child.revision,
+    disposition: parent.selectionId === child.selectionId && parent.revision === child.revision
+      ? "exact_inheritance" as const
+      : "trusted_narrowing" as const,
+  });
+  return deepFreeze({
+    schemaVersion: 1 as const,
+    ...material,
+    revision: createDelegationContractIdentity(
+      "agent-anything.delegation-tool-selection-derivation.v1",
+      material,
+    ),
+  });
 }
 
 function restrictWorkspace(

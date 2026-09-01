@@ -255,7 +255,11 @@ function descendantTreeAvailability(
     owner: "agent-runtime",
     kind: "run_tree_descendant_capacity",
     id: snapshot.rootRunId,
-    revision: String(snapshot.revision),
+    revision: [
+      `depth:${lineage.depth + 1}`,
+      `disposition:${capacity.disposition}`,
+      `reason:${capacity.reason ?? "none"}`,
+    ].join(";"),
   });
   if (capacity.disposition === "unavailable") {
     return unavailablePath(basis, "descendant_capacity_exhausted");

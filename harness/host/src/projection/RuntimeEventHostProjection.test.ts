@@ -245,6 +245,12 @@ describe("Host RuntimeEvent projection", () => {
       name: "run.descendant.settled",
       occurredAt: "2026-08-03T00:00:00.000Z",
       payload: Object.freeze({
+        requestedDispatchForm: "concurrent_sibling",
+        controllerRequestId: "controller-request-2",
+        controllerTurnId: "controller-turn-2",
+        candidateIndex: 1,
+        siblingIndex: 1,
+        siblingCount: 2,
         relationId: "relation-2",
         relationKind: "replacement",
         parentRunActionId: "action-2",
@@ -284,6 +290,12 @@ describe("Host RuntimeEvent projection", () => {
 
     expect(projected.lineage).toEqual(event.lineage);
     expect(projected.payload).toEqual({
+      requestedDispatchForm: "concurrent_sibling",
+      controllerRequestId: "controller-request-2",
+      controllerTurnId: "controller-turn-2",
+      candidateIndex: 1,
+      siblingIndex: 1,
+      siblingCount: 2,
       relationId: "relation-2",
       relationKind: "replacement",
       parentRunActionId: "action-2",
