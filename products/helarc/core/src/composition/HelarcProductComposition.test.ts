@@ -323,6 +323,42 @@ describe("HelarcProductComposition", () => {
     expect(JSON.stringify(result)).not.toContain("apiKey");
   });
 
+  it("projects provider context-window rejection as a bounded actionable message", async () => {
+    const composition = await createHelarcProductComposition({
+      runId: "run-1",
+      ...createTask("D:/workspace"),
+      provider: new UnusedProvider(),
+      ...createLocalContributions(),
+    });
+
+    const result = composition.projectResult(createFailedRunResult({
+      runId: "run-1",
+      taskId: "helarc-composition-test-task",
+      startingAgent: { id: "helarc-code-agent", revision: "1" },
+      finalActiveAgent: { id: "helarc-code-agent", revision: "1" },
+      startingInstructionBinding: testInstructionBinding("run-1"),
+      finalInstructionBinding: testInstructionBinding("run-1"),
+      startedAt: "2026-07-17T00:00:00.000Z",
+      completedAt: "2026-07-17T00:00:01.000Z",
+    }, "controller_failed", {
+      kind: "provider",
+      failure: {
+        category: "invalid_request",
+        code: "provider_request_failed",
+        message: "Provider rejected an oversized request.",
+        metadata: {
+          providerErrorCode: "provider_context_window_exceeded",
+          providerStatusCode: 400,
+        },
+      },
+    }), "disabled", null);
+
+    expect(result.output.safeErrors).toContainEqual({
+      code: "provider_context_window_exceeded",
+      message: "The model context window is too small for the current request.",
+    });
+  });
+
   it("orders root and descendant activity independently from Run-local Event sequence", async () => {
     const composition = await createHelarcProductComposition({
       runId: "run-1",

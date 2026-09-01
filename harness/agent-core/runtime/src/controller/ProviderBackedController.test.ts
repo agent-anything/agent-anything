@@ -385,6 +385,40 @@ describe("ProviderBackedController", () => {
     });
   });
 
+  it("preserves context-window rejection and does not retry the same request", async () => {
+    const provider = new FakeProvider({
+      results: [{
+        kind: "failed",
+        failure: {
+          category: "invalid_request",
+          code: "provider_context_window_exceeded",
+          message: "Provider context window exceeded.",
+          statusCode: 400,
+          metadata: {},
+        },
+      }],
+    });
+    const controller = createController(provider);
+
+    const error = await captureError(controller.next(
+      createControllerInput(),
+      callContext(undefined, {
+        maxRetries: 3,
+        retryableCategories: ["transport", "timeout", "rate_limit", "server_error"],
+      }),
+    ));
+
+    expect(provider.requests()).toHaveLength(1);
+    expect((error as ControllerError).failure.failure).toMatchObject({
+      code: "provider_context_window_exceeded",
+      metadata: {
+        providerFailureCategory: "invalid_request",
+        providerErrorCode: "provider_context_window_exceeded",
+        providerStatusCode: 400,
+      },
+    });
+  });
+
   it("retries a safe transport failure with one stable operation and fresh requests", async () => {
     const requests: ProviderRequest[] = [];
     const events: Array<Record<string, unknown>> = [];

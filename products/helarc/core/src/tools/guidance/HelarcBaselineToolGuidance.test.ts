@@ -67,6 +67,15 @@ describe("Helarc baseline Tool Guidance", () => {
     expect(windowsPowerShell.ref.revision).not.toBe(powerShell7.ref.revision);
   });
 
+  it("tells the Parent to round-trip exact Agent result references", () => {
+    const agent = guidanceSource("Agent");
+
+    expect(agent.modelDescription).toContain("Copy that entire result_ref unchanged");
+    expect(agent.modelDescription).toContain("summarize ordinary Tool evidence");
+    expect(agent.inputFieldDescriptions["/properties/dependency_result/properties/kind"])
+      .toContain("delegation_result");
+  });
+
   it("rejects a Shell runtime profile attached to another Tool", () => {
     expect(() => createHelarcBaselineToolGuidanceSource(
       "Read",

@@ -58,6 +58,15 @@ export type HelarcModelUsePolicy =
   | "require_qualified"
   | "allow_experimental";
 
+export const HELARC_DEFAULT_PROVIDER_SETTINGS = Object.freeze({
+  providerKind: "ollama" as const satisfies HelarcProviderKind,
+  displayName: "Ollama Provider",
+  baseUrl: "http://localhost:11434",
+  model: "gemma4:e4b",
+  timeoutMs: 300_000_000,
+  qualificationPolicy: "allow_experimental" as const satisfies HelarcModelUsePolicy,
+});
+
 export interface HelarcOllamaRuntimeProfileSnapshot {
   contextWindowTokens: number;
   maximumOutputTokens: number;

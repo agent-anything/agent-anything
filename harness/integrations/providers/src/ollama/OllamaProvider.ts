@@ -157,10 +157,19 @@ export class OllamaProvider implements Provider {
       if (interruptedAfterResponse !== null) return interruptedAfterResponse;
 
       if (!response.ok) {
-        const classification = classifyProviderHttpFailure(response.status);
+        const httpClassification = classifyProviderHttpFailure(response.status);
         const diagnostic = await readOllamaHttpErrorDiagnostic(response);
         const interruptedAfterFailureBody = providerResultFromInterruption(attempt.cause);
         if (interruptedAfterFailureBody !== null) return interruptedAfterFailureBody;
+        const contextWindowExceeded = response.status === 400 &&
+          isOllamaContextWindowExceeded(diagnostic.message);
+        const classification = contextWindowExceeded
+          ? Object.freeze({
+              category: "invalid_request",
+              code: "provider_context_window_exceeded",
+              message: "Provider rejected the request because the model context window was exceeded.",
+            })
+          : httpClassification;
         const requestDiagnostic = createProviderHttpRequestDiagnostic({
           operation: request.interaction.kind === "native_tool_turn" ? "chat" : "generate",
           request,
@@ -179,6 +188,12 @@ export class OllamaProvider implements Provider {
             metadata: {
               ollamaError: diagnostic.message,
               ollamaErrorTruncated: diagnostic.truncated,
+              ...(contextWindowExceeded
+                ? {
+                    contextWindowTokens: this.config.runtime.contextWindowTokens,
+                    maximumOutputTokens: this.config.runtime.maximumOutputTokens,
+                  }
+                : {}),
               requestDiagnostic,
             },
           },
@@ -658,6 +673,11 @@ function formatOllamaHttpFailureMessage(
     : ` Ollama reported: ${diagnostic.message}${diagnostic.truncated ? " [truncated]" : ""}.`;
   return `${message}${providerDetail} Request diagnostic: ` +
     `${renderProviderHttpRequestDiagnostic(request)}.`;
+}
+
+function isOllamaContextWindowExceeded(message: string | null): boolean {
+  return message !== null &&
+    message.toLowerCase().includes("input length exceeds the context length");
 }
 
 function readCount(value: unknown): number | null {

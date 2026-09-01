@@ -156,13 +156,21 @@ export class OpenAICompatibleProvider implements Provider {
       if (interruptedAfterResponse !== null) return interruptedAfterResponse;
 
       if (!response.ok) {
-        const classification = classifyProviderHttpFailure(response.status);
+        const httpClassification = classifyProviderHttpFailure(response.status);
         const diagnostic = await readOpenAICompatibleHttpErrorDiagnostic(
           response,
           this.config.apiKey,
         );
         const interruptedAfterFailureBody = providerResultFromInterruption(attempt.cause);
         if (interruptedAfterFailureBody !== null) return interruptedAfterFailureBody;
+        const contextWindowExceeded = isOpenAICompatibleContextWindowExceeded(diagnostic);
+        const classification = contextWindowExceeded
+          ? Object.freeze({
+              category: "invalid_request",
+              code: "provider_context_window_exceeded",
+              message: "Provider rejected the request because the model context window was exceeded.",
+            })
+          : httpClassification;
         const requestDiagnostic = createProviderHttpRequestDiagnostic({
           operation: "chat_completions",
           request,
@@ -716,6 +724,18 @@ function emptyOpenAICompatibleHttpErrorDiagnostic(): OpenAICompatibleHttpErrorDi
     param: null,
     truncated: false,
   });
+}
+
+function isOpenAICompatibleContextWindowExceeded(
+  diagnostic: OpenAICompatibleHttpErrorDiagnostic,
+): boolean {
+  const markers = [diagnostic.code, diagnostic.type]
+    .flatMap((value) => value === null ? [] : [value.toLowerCase()]);
+  return markers.some((value) =>
+    value === "context_length_exceeded" ||
+    value === "context_window_exceeded" ||
+    value === "input_too_long"
+  );
 }
 
 function formatOpenAICompatibleHttpFailureMessage(

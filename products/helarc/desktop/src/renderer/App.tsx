@@ -21,7 +21,10 @@ import type {
   HelarcProviderKind,
   HelarcStartRunResult,
 } from "../shared/HelarcDesktopApi.js";
-import { HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE } from "../shared/HelarcDesktopApi.js";
+import {
+  HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE,
+  HELARC_DEFAULT_PROVIDER_SETTINGS,
+} from "../shared/HelarcDesktopApi.js";
 
 const initialSnapshot: HelarcMainSnapshot = {
   status: "idle",
@@ -29,24 +32,14 @@ const initialSnapshot: HelarcMainSnapshot = {
   workspaceProfiles: [],
   taskTemplates: [],
   provider: {
-    configured: true,
-    nativeToolInteraction: { supported: true },
-    activeProfile: {
-      id: "initial",
-      providerKind: "openai-compatible",
-      displayName: "Initial Provider",
-      endpointLabel: "provider.local",
-      baseUrl: "https://provider.local/v1",
-      baseUrlOrigin: "https://provider.local",
-      model: "initial",
-      timeoutMs: 30_000,
-      ollamaRuntime: null,
-      credentialStatus: "missing",
-      qualificationPolicy: "require_qualified",
-      isActive: true,
-    },
+    configured: false,
+    nativeToolInteraction: { supported: false },
+    activeProfile: null,
     profiles: [],
-    error: null,
+    error: {
+      code: "provider_config_missing",
+      message: "Provider configuration is incomplete.",
+    },
   },
   acceptedTask: null,
   activeThread: null,
@@ -873,7 +866,7 @@ function ThreadSummaryView({ thread }: { thread: HelarcMainSnapshot["threadSumma
   );
 }
 
-function SettingsPanel({
+export function SettingsPanel({
   snapshot,
   onSaved,
 }: {
@@ -883,7 +876,7 @@ function SettingsPanel({
   const provider = snapshot.provider.configured ? snapshot.provider.activeProfile : null;
   const [isSaving, setIsSaving] = useState(false);
   const [selectedProviderKind, setSelectedProviderKind] = useState<HelarcProviderKind>(
-    provider?.providerKind ?? "openai-compatible",
+    provider?.providerKind ?? HELARC_DEFAULT_PROVIDER_SETTINGS.providerKind,
   );
   const formKey = provider
     ? `${provider.id}:${provider.providerKind}:${provider.displayName}:${provider.baseUrl}:${provider.model}:${provider.timeoutMs}:${provider.ollamaRuntime?.contextWindowTokens ?? "managed"}:${provider.ollamaRuntime?.maximumOutputTokens ?? "managed"}:${provider.credentialStatus}:${provider.qualificationPolicy}`
@@ -897,11 +890,18 @@ function SettingsPanel({
     }
 
     const formData = new FormData(event.currentTarget);
-    const submittedProviderKind = readProviderKind(formData, provider?.providerKind ?? "openai-compatible");
+    const submittedProviderKind = readProviderKind(
+      formData,
+      provider?.providerKind ?? HELARC_DEFAULT_PROVIDER_SETTINGS.providerKind,
+    );
     const submittedDisplayName = readFormString(formData, "displayName");
     const submittedBaseUrl = readFormString(formData, "baseUrl");
     const submittedModel = readFormString(formData, "model");
-    const submittedTimeoutMs = readFormNumber(formData, "timeoutMs", provider?.timeoutMs ?? 30_000);
+    const submittedTimeoutMs = readFormNumber(
+      formData,
+      "timeoutMs",
+      provider?.timeoutMs ?? HELARC_DEFAULT_PROVIDER_SETTINGS.timeoutMs,
+    );
     const submittedOllamaRuntime = submittedProviderKind === "ollama"
       ? {
           contextWindowTokens: readFormNumber(
@@ -920,7 +920,7 @@ function SettingsPanel({
       : null;
     const submittedQualificationPolicy = readQualificationPolicy(
       formData,
-      provider?.qualificationPolicy ?? "require_qualified",
+      provider?.qualificationPolicy ?? HELARC_DEFAULT_PROVIDER_SETTINGS.qualificationPolicy,
     );
     const submittedApiKey = readFormString(formData, "apiKey");
 
@@ -957,7 +957,7 @@ function SettingsPanel({
         <span>Type</span>
         <select
           name="providerKind"
-          defaultValue={provider?.providerKind ?? "openai-compatible"}
+          defaultValue={provider?.providerKind ?? HELARC_DEFAULT_PROVIDER_SETTINGS.providerKind}
           onChange={(event) => setSelectedProviderKind(readProviderKindValue(event.target.value))}
           disabled={isSaving}
         >
@@ -969,7 +969,7 @@ function SettingsPanel({
         <span>Name</span>
         <input
           name="displayName"
-          defaultValue={provider?.displayName ?? "OpenAI-compatible Provider"}
+          defaultValue={provider?.displayName ?? HELARC_DEFAULT_PROVIDER_SETTINGS.displayName}
           autoComplete="off"
           disabled={isSaving}
         />
@@ -978,7 +978,7 @@ function SettingsPanel({
         <span>Base URL</span>
         <input
           name="baseUrl"
-          defaultValue={provider?.baseUrl ?? "https://api.openai.com/v1"}
+          defaultValue={provider?.baseUrl ?? HELARC_DEFAULT_PROVIDER_SETTINGS.baseUrl}
           autoComplete="off"
           disabled={isSaving}
         />
@@ -987,7 +987,7 @@ function SettingsPanel({
         <span>Model</span>
         <input
           name="model"
-          defaultValue={provider?.model ?? ""}
+          defaultValue={provider?.model ?? HELARC_DEFAULT_PROVIDER_SETTINGS.model}
           autoComplete="off"
           disabled={isSaving}
         />
@@ -999,7 +999,7 @@ function SettingsPanel({
           type="number"
           min="1000"
           step="1000"
-          defaultValue={provider?.timeoutMs.toString() ?? "30000"}
+          defaultValue={(provider?.timeoutMs ?? HELARC_DEFAULT_PROVIDER_SETTINGS.timeoutMs).toString()}
           autoComplete="off"
           disabled={isSaving}
         />
@@ -1038,7 +1038,8 @@ function SettingsPanel({
         <span>Model qualification</span>
         <select
           name="qualificationPolicy"
-          defaultValue={provider?.qualificationPolicy ?? "require_qualified"}
+          defaultValue={provider?.qualificationPolicy ??
+            HELARC_DEFAULT_PROVIDER_SETTINGS.qualificationPolicy}
           disabled={isSaving}
         >
           <option value="require_qualified">Require qualified</option>
@@ -1062,7 +1063,8 @@ function SettingsPanel({
       </div>
       <div className="settings-status">
         <span>Qualification policy</span>
-        <strong>{provider?.qualificationPolicy ?? "require_qualified"}</strong>
+        <strong>{provider?.qualificationPolicy ??
+          HELARC_DEFAULT_PROVIDER_SETTINGS.qualificationPolicy}</strong>
       </div>
       {snapshot.provider.configured ? null : <p className="settings-error">{snapshot.provider.error.message}</p>}
       <button className="primary-button compact" type="submit" disabled={isSaving}>

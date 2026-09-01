@@ -59,6 +59,7 @@ export type ControllerFailureCode =
   | "model_request_failed"
   | "model_output_invalid"
   | "model_structured_output_retry_exhausted"
+  | "provider_context_window_exceeded"
   | "provider_request_failed"
   | "provider_timeout"
   | "provider_retry_exhausted"
@@ -1512,6 +1513,9 @@ function classifyProviderAttemptFailure(
   ) {
     return classification(failure, "response", "non_retryable");
   }
+  if (failure.code === "provider_context_window_exceeded") {
+    return classification(failure, "invalid_request", "non_retryable");
+  }
   if (
     failure.category === "invalid_request" ||
     failure.statusCode !== undefined && failure.statusCode >= 400
@@ -1734,12 +1738,17 @@ function providerRetryFailureError(
 ): ControllerError {
   const code: Extract<
     ControllerFailureCode,
-    "provider_request_failed" | "provider_timeout" | "provider_cancellation_unconfirmed"
+    | "provider_context_window_exceeded"
+    | "provider_request_failed"
+    | "provider_timeout"
+    | "provider_cancellation_unconfirmed"
   > = failure.code === "provider_cancellation_unconfirmed"
     ? "provider_cancellation_unconfirmed"
-    : failure.category === "timeout" || failure.code === "provider_timeout"
-      ? "provider_timeout"
-      : "provider_request_failed";
+    : failure.code === "provider_context_window_exceeded"
+      ? "provider_context_window_exceeded"
+      : failure.category === "timeout" || failure.code === "provider_timeout"
+        ? "provider_timeout"
+        : "provider_request_failed";
   return createControllerError(
     "provider",
     code,

@@ -480,6 +480,33 @@ describe("OllamaProvider", () => {
     expect(result.failure.message).toContain("[truncated]");
   });
 
+  it("maps an explicit native context rejection without retry semantics", async () => {
+    const provider = new OllamaProvider(config(), async () => ({
+      ok: false,
+      status: 400,
+      async json() {
+        return { error: "the input length exceeds the context length" };
+      },
+    }));
+
+    await expect(provider.send(request(provider), context())).resolves.toMatchObject({
+      kind: "failed",
+      failure: {
+        category: "invalid_request",
+        code: "provider_context_window_exceeded",
+        statusCode: 400,
+        metadata: {
+          contextWindowTokens: 16_384,
+          maximumOutputTokens: 2_048,
+          requestDiagnostic: {
+            encodedBodyBytes: expect.any(Number),
+            encodedBodySha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          },
+        },
+      },
+    });
+  });
+
   it("truthfully reports the selected Generate endpoint as continuation unsupported", () => {
     const provider = new OllamaProvider(config());
     expect(provider.descriptor.capabilities.continuation).toEqual({ supported: false });

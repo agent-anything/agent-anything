@@ -117,6 +117,7 @@ describe("FileHelarcProviderProfileStore", () => {
         providerKind: "openai-compatible",
         baseUrl: "http://127.0.0.1:11434/v1",
         baseUrlOrigin: "http://127.0.0.1:11434",
+        qualificationPolicy: "allow_experimental",
       },
     });
     await expect(readFile(profilePath, "utf8")).resolves.toContain("http://127.0.0.1:11434/v1");

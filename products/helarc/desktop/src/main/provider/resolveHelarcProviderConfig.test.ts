@@ -4,10 +4,12 @@ import { resolveHelarcProviderConfig } from "./resolveHelarcProviderConfig.js";
 describe("resolveHelarcProviderConfig", () => {
   it("resolves required provider config from environment", () => {
     const result = resolveHelarcProviderConfig({
+      HELARC_PROVIDER_KIND: "openai-compatible",
       HELARC_PROVIDER_BASE_URL: " https://provider.local/v1 ",
       HELARC_PROVIDER_API_KEY: " secret-key ",
       HELARC_PROVIDER_MODEL: " model-a ",
       HELARC_PROVIDER_TIMEOUT_MS: "1500",
+      HELARC_MODEL_QUALIFICATION_POLICY: "require_qualified",
     });
 
     expect(result).toEqual({
@@ -48,7 +50,7 @@ describe("resolveHelarcProviderConfig", () => {
       error: {
         code: "provider_config_missing",
         message: "Provider configuration is incomplete.",
-        missingKeys: ["HELARC_PROVIDER_BASE_URL", "HELARC_PROVIDER_MODEL"],
+        missingKeys: ["HELARC_PROVIDER_MODEL"],
       },
     });
     expect(JSON.stringify(result)).not.toContain("secret-key");
@@ -56,6 +58,7 @@ describe("resolveHelarcProviderConfig", () => {
 
   it("maps empty API keys to empty-allowed credential status", () => {
     const result = resolveHelarcProviderConfig({
+      HELARC_PROVIDER_KIND: "openai-compatible",
       HELARC_PROVIDER_BASE_URL: "http://127.0.0.1:11434/v1",
       HELARC_PROVIDER_MODEL: "local-model",
     });
@@ -73,10 +76,8 @@ describe("resolveHelarcProviderConfig", () => {
     });
   });
 
-  it("resolves Ollama provider kind from environment", () => {
+  it("uses the local Ollama defaults when only the model is configured", () => {
     const result = resolveHelarcProviderConfig({
-      HELARC_PROVIDER_KIND: "ollama",
-      HELARC_PROVIDER_BASE_URL: "http://localhost:11434",
       HELARC_PROVIDER_MODEL: "gemma3:4b",
     });
 
@@ -87,6 +88,7 @@ describe("resolveHelarcProviderConfig", () => {
         baseUrl: "http://localhost:11434",
         apiKey: "",
         model: "gemma3:4b",
+        timeoutMs: 300_000_000,
         ollamaRuntime: {
           contextWindowTokens: 16_384,
           maximumOutputTokens: 2_048,
@@ -97,6 +99,8 @@ describe("resolveHelarcProviderConfig", () => {
         baseUrl: "http://localhost:11434/",
         baseUrlOrigin: "http://localhost:11434",
         credentialStatus: "empty_allowed",
+        qualificationPolicy: "allow_experimental",
+        timeoutMs: 300_000_000,
         ollamaRuntime: {
           contextWindowTokens: 16_384,
           maximumOutputTokens: 2_048,
@@ -144,18 +148,18 @@ describe("resolveHelarcProviderConfig", () => {
     });
   });
 
-  it("requires explicit environment selection for experimental model use", () => {
+  it("accepts explicit strict model qualification", () => {
     const result = resolveHelarcProviderConfig({
       HELARC_PROVIDER_KIND: "ollama",
       HELARC_PROVIDER_BASE_URL: "http://localhost:11434",
       HELARC_PROVIDER_MODEL: "gemma4:e4b",
-      HELARC_MODEL_QUALIFICATION_POLICY: "allow_experimental",
+      HELARC_MODEL_QUALIFICATION_POLICY: "require_qualified",
     });
 
     expect(result).toMatchObject({
       ok: true,
       profile: {
-        qualificationPolicy: "allow_experimental",
+        qualificationPolicy: "require_qualified",
       },
     });
   });

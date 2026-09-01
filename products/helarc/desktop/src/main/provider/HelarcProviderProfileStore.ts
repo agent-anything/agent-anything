@@ -6,6 +6,7 @@ import {
   type HelarcProviderProfileError,
 } from "@agent-anything/helarc/configuration";
 import type { HelarcModelUsePolicy } from "@agent-anything/helarc/configuration";
+import { HELARC_DEFAULT_PROVIDER_SETTINGS } from "../../shared/HelarcDesktopApi.js";
 import {
   SerializedAtomicFile,
   type AtomicFileTransaction,
@@ -262,7 +263,8 @@ function createStoredProfile(
     timeoutMs: input.timeoutMs,
     ollamaRuntime: input.ollamaRuntime,
     credentialStatus,
-    qualificationPolicy: input.qualificationPolicy ?? "require_qualified",
+    qualificationPolicy: input.qualificationPolicy ??
+      HELARC_DEFAULT_PROVIDER_SETTINGS.qualificationPolicy,
     isActive: true,
   });
   if (!profileResult.ok) {

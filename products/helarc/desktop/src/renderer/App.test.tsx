@@ -10,6 +10,7 @@ import {
   ThreadTimeline,
   RunTerminalPanel,
   RunTimelinePanel,
+  SettingsPanel,
   ThreadPanel,
 } from "./App.js";
 
@@ -25,6 +26,24 @@ describe("Helarc workbench shell", () => {
     expect(html).toContain("Threads");
     expect(html).toContain("Settings");
     expect(html).toContain("Templates");
+  });
+
+  it("renders the fresh local Ollama Provider defaults", () => {
+    const html = renderToStaticMarkup(
+      <SettingsPanel
+        snapshot={unconfiguredSnapshot()}
+        onSaved={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('<option value="ollama" selected="">Ollama</option>');
+    expect(html).toContain('value="Ollama Provider"');
+    expect(html).toContain('value="http://localhost:11434"');
+    expect(html).toContain('value="gemma4:e4b"');
+    expect(html).toContain('value="300000000"');
+    expect(html).toContain(
+      '<option value="allow_experimental" selected="">Allow experimental</option>',
+    );
   });
 
   it("renders offered approval decision actions", () => {
@@ -455,6 +474,30 @@ function pendingApproval(
         },
       ],
     },
+  };
+}
+
+function unconfiguredSnapshot(): HelarcMainSnapshot {
+  return {
+    status: "idle",
+    workspace: null,
+    workspaceProfiles: [],
+    taskTemplates: [],
+    provider: {
+      configured: false,
+      nativeToolInteraction: { supported: false },
+      activeProfile: null,
+      profiles: [],
+      error: {
+        code: "provider_config_missing",
+        message: "Provider configuration is incomplete.",
+      },
+    },
+    acceptedTask: null,
+    activeThread: null,
+    threadSummaries: [],
+    run: null,
+    error: null,
   };
 }
 

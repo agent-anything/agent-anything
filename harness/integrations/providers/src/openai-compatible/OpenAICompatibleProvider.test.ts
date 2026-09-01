@@ -336,6 +336,32 @@ describe("OpenAICompatibleProvider", () => {
     expect(JSON.stringify(result)).not.toContain("must not be retained");
   });
 
+  it("maps an explicit OpenAI-compatible context-window code", async () => {
+    const provider = new OpenAICompatibleProvider(config(), async () => ({
+      ok: false,
+      status: 400,
+      async json() {
+        return {
+          error: {
+            message: "The request exceeds this model's context window.",
+            type: "invalid_request_error",
+            code: "context_length_exceeded",
+            param: "messages",
+          },
+        };
+      },
+    }));
+
+    await expect(provider.send(request(provider), context())).resolves.toMatchObject({
+      kind: "failed",
+      failure: {
+        category: "invalid_request",
+        code: "provider_context_window_exceeded",
+        statusCode: 400,
+      },
+    });
+  });
+
   it("truthfully rejects continuation for Chat Completions before transport", async () => {
     const fetchImpl = vi.fn(async () => okResponse({ choices: [] }));
     const provider = new OpenAICompatibleProvider(config(), fetchImpl);

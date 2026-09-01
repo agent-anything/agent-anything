@@ -5,7 +5,10 @@ import {
   type HelarcProviderProfile,
 } from "@agent-anything/helarc/configuration";
 import type { HelarcModelUsePolicy } from "@agent-anything/helarc/configuration";
-import { HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE } from "../../shared/HelarcDesktopApi.js";
+import {
+  HELARC_DEFAULT_OLLAMA_RUNTIME_PROFILE,
+  HELARC_DEFAULT_PROVIDER_SETTINGS,
+} from "../../shared/HelarcDesktopApi.js";
 
 export interface HelarcProviderConfig {
   providerKind: HelarcProviderKind;
@@ -33,7 +36,11 @@ export type ResolveHelarcProviderConfigResult =
 export function resolveHelarcProviderConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): ResolveHelarcProviderConfigResult {
-  const baseUrl = readEnv(env, "HELARC_PROVIDER_BASE_URL");
+  const providerKind = readProviderKind(env);
+  const baseUrl = readEnv(env, "HELARC_PROVIDER_BASE_URL") ??
+    (providerKind === HELARC_DEFAULT_PROVIDER_SETTINGS.providerKind
+      ? HELARC_DEFAULT_PROVIDER_SETTINGS.baseUrl
+      : undefined);
   const model = readEnv(env, "HELARC_PROVIDER_MODEL");
   const missingKeys = [
     baseUrl ? null : "HELARC_PROVIDER_BASE_URL",
@@ -53,7 +60,6 @@ export function resolveHelarcProviderConfig(
 
   const apiKey = readEnv(env, "HELARC_PROVIDER_API_KEY") ?? "";
   const timeoutMs = readTimeoutMs(env);
-  const providerKind = readProviderKind(env);
   const ollamaRuntime = readOllamaRuntime(env, providerKind);
   const qualificationPolicy = readQualificationPolicy(env);
   if (qualificationPolicy === null || (providerKind === "ollama" && ollamaRuntime === null)) {
@@ -140,13 +146,14 @@ function readQualificationPolicy(
   env: NodeJS.ProcessEnv,
 ): HelarcModelUsePolicy | null {
   const value = readEnv(env, "HELARC_MODEL_QUALIFICATION_POLICY");
-  if (value === undefined || value === "require_qualified") return "require_qualified";
-  return value === "allow_experimental" ? value : null;
+  if (value === undefined) return HELARC_DEFAULT_PROVIDER_SETTINGS.qualificationPolicy;
+  return value === "require_qualified" || value === "allow_experimental" ? value : null;
 }
 
 function readProviderKind(env: NodeJS.ProcessEnv): HelarcProviderKind {
   const value = readEnv(env, "HELARC_PROVIDER_KIND");
-  return value === "ollama" ? "ollama" : "openai-compatible";
+  if (value === "openai-compatible" || value === "ollama") return value;
+  return HELARC_DEFAULT_PROVIDER_SETTINGS.providerKind;
 }
 
 function readEnv(env: NodeJS.ProcessEnv, key: string): string | undefined {
@@ -157,9 +164,11 @@ function readEnv(env: NodeJS.ProcessEnv, key: string): string | undefined {
 function readTimeoutMs(env: NodeJS.ProcessEnv): number {
   const raw = readEnv(env, "HELARC_PROVIDER_TIMEOUT_MS");
   if (!raw) {
-    return 30_000;
+    return HELARC_DEFAULT_PROVIDER_SETTINGS.timeoutMs;
   }
 
   const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30_000;
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : HELARC_DEFAULT_PROVIDER_SETTINGS.timeoutMs;
 }

@@ -674,19 +674,33 @@ export class RunExecution<TOutput> {
   private descendantMessageAvailability(
     targetAgent: Readonly<{ readonly id: string; readonly revision: string }>,
   ): import("./RunnerDependencies.js").ToolPathAvailability {
-    const activeCount = [...this.childHandles.values()].filter(({ request, handle }) =>
-      sameAgentRef(request.childAgent, targetAgent) && handle.getResult() === null
-    ).length;
-    const continuationCount = [...this.continuationRecords.values()].filter((record) =>
-      record.status === "available" && sameAgentRef(record.correlation.agent, targetAgent)
-    ).length;
-    const available = activeCount + continuationCount > 0;
+    const activeTargets = [...this.childHandles.values()]
+      .filter(({ request, handle }) =>
+        sameAgentRef(request.childAgent, targetAgent) && handle.getResult() === null
+      )
+      .map(({ childRunId }) => childRunId)
+      .sort();
+    const continuationTargets = [...this.continuationRecords.values()]
+      .filter((record) =>
+        record.status === "available" && sameAgentRef(record.correlation.agent, targetAgent)
+      )
+      .map(({ correlation }) => Object.freeze({
+        id: correlation.ref.id,
+        revision: correlation.ref.revision,
+      }))
+      .sort((left, right) =>
+        `${left.id}@${left.revision}`.localeCompare(`${right.id}@${right.revision}`)
+      );
+    const available = activeTargets.length + continuationTargets.length > 0;
     return Object.freeze({
       basisRefs: Object.freeze([Object.freeze({
         owner: "agent-runtime",
         kind: "descendant_message_targets",
-        id: this.runId,
-        revision: `${this.writer.getSnapshot().revision}:${activeCount}:${continuationCount}`,
+        id: `${this.runId}:${targetAgent.id}@${targetAgent.revision}`,
+        revision: JSON.stringify({
+          active: activeTargets,
+          continuations: continuationTargets,
+        }),
       })]),
       disposition: available ? "available" as const : "unavailable" as const,
       reason: available ? null : "no_eligible_subject" as const,

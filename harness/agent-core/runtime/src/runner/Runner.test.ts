@@ -1834,7 +1834,7 @@ describe("Runner semantic integration", () => {
 
   it("starts a dependent child Run with the exact trusted dependency result", async () => {
     const childAgent = createAgent("agent_child", "1", "Child Agent");
-    let dependency: Readonly<{ readonly id: string; readonly revision: string }> | null = null;
+    let dependency: TestDelegationResultRef | null = null;
     const events: RuntimeEvent[] = [];
     const controller = new ScriptedController([
       (input) => advance([toolCandidate(
@@ -1846,10 +1846,7 @@ describe("Runner semantic integration", () => {
       (input) => {
         const output = projectedObservations(input.context).at(-1)?.payload.output;
         expect(isRecord(output)).toBe(true);
-        dependency = Object.freeze({
-          id: (output as Record<string, unknown>).delegation_result_id as string,
-          revision: (output as Record<string, unknown>).delegation_result_revision as string,
-        });
+        dependency = projectedDelegationResultRef(output);
         return advance([toolCandidate(
           "Agent",
           {
@@ -1949,14 +1946,21 @@ describe("Runner semantic integration", () => {
         expect(JSON.stringify(target)).not.toContain("Child context retained");
         expect(input.toolExposure.catalog.tools.map(({ name }) => name))
           .toContain("SendMessage");
-        return advance([toolCandidate(
+        return advance([{
+          kind: "state_transition",
+          transition: "plan_update",
+          input: {
+            explanation: "Record the settled child before continuing it.",
+            plan: [{ step: "Inspect child result", status: "completed" }],
+          },
+        }, toolCandidate(
           "SendMessage",
           {
             target: { kind: "continuation", id: continuationTargetId },
             message: "Refine the retained finding.",
           },
           input.toolExposure.controllerRequestId,
-        )], "model_send_message_1");
+        )], ["model_plan_1", "model_send_message_1"]);
       },
       (input) => {
         expect(input.runId).toBe("run_003");
@@ -2399,7 +2403,7 @@ describe("Runner semantic integration", () => {
 
   it("composes nested partial replacement under narrowed authority and conserved tree resources", async () => {
     const childAgent = createAgent("agent_child", "1", "Child Agent");
-    let replacedResult: Readonly<{ readonly id: string; readonly revision: string }> | null = null;
+    let replacedResult: TestDelegationResultRef | null = null;
     const controller = new ScriptedController([
       (input) => advance([toolCandidate(
         "Agent",
@@ -2421,10 +2425,7 @@ describe("Runner semantic integration", () => {
         });
         const output = observation?.payload.output;
         expect(isRecord(output)).toBe(true);
-        replacedResult = Object.freeze({
-          id: (output as Record<string, unknown>).delegation_result_id as string,
-          revision: (output as Record<string, unknown>).delegation_result_revision as string,
-        });
+        replacedResult = projectedDelegationResultRef(output);
         expect(input.toolExposure.catalog.tools.map(({ name }) => name))
           .toEqual(["Agent"]);
         return advance([toolCandidate(
@@ -4127,8 +4128,11 @@ function createTestDelegation(
       project(result) {
         const output = Object.freeze({
           summary: result.narrative?.text ?? "",
-          delegation_result_id: result.ref.id,
-          delegation_result_revision: result.ref.revision,
+          result_ref: Object.freeze({
+            kind: "delegation_result" as const,
+            id: result.ref.id,
+            revision: result.ref.revision,
+          }),
         });
         if (
           result.terminal.status === "succeeded" &&
@@ -4156,6 +4160,32 @@ function createTestDelegation(
   });
 }
 
+type TestDelegationResultRef = Readonly<{
+  readonly kind: "delegation_result";
+  readonly id: string;
+  readonly revision: string;
+}>;
+
+function projectedDelegationResultRef(input: unknown): TestDelegationResultRef {
+  if (!isRecord(input) || !isRecord(input.result_ref)) {
+    throw new TypeError("Projected descendant output must contain result_ref.");
+  }
+  const ref = input.result_ref;
+  if (
+    Object.keys(ref).some((key) => key !== "kind" && key !== "id" && key !== "revision") ||
+    ref.kind !== "delegation_result" ||
+    typeof ref.id !== "string" || ref.id.length === 0 ||
+    typeof ref.revision !== "string" || ref.revision.length === 0
+  ) {
+    throw new TypeError("Projected descendant result_ref is invalid.");
+  }
+  return Object.freeze({
+    kind: "delegation_result",
+    id: ref.id,
+    revision: ref.revision,
+  });
+}
+
 function testDelegationResultRef(
   input: unknown,
 ): Readonly<{ readonly id: string; readonly revision: string }> {
@@ -4164,7 +4194,8 @@ function testDelegationResultRef(
   }
   const ref = input as Readonly<Record<string, unknown>>;
   if (
-    Object.keys(ref).some((key) => key !== "id" && key !== "revision") ||
+    Object.keys(ref).some((key) => key !== "kind" && key !== "id" && key !== "revision") ||
+    ref.kind !== "delegation_result" ||
     typeof ref.id !== "string" || ref.id.length === 0 ||
     typeof ref.revision !== "string" || ref.revision.length === 0
   ) {

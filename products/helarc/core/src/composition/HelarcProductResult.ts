@@ -672,6 +672,9 @@ function sanitizeMessage(message: string, fallback: string): string {
 }
 
 function safeProductErrorMessage(code: string): string {
+  if (code === "provider_context_window_exceeded") {
+    return "The model context window is too small for the current request.";
+  }
   if (code === "provider_response_empty") {
     return "The model returned no usable response.";
   }

@@ -306,9 +306,14 @@ const ASK_USER_QUESTION = contract({
   },
 });
 
-const DELEGATION_RESULT_OUTPUT = objectSchema(["delegation_result_id", "delegation_result_revision", "child_run_id", "status", "summary", "artifact_refs", "verification_status", "effect_status", "uncertainty", "failure_code"], {
-  delegation_result_id: { type: "string", minLength: 1, maxLength: 1_024 },
-  delegation_result_revision: { type: "string", minLength: 1, maxLength: 256 },
+const DELEGATION_RESULT_REF = objectSchema(["kind", "id", "revision"], {
+  kind: { const: "delegation_result" },
+  id: { type: "string", minLength: 1, maxLength: 1_024 },
+  revision: { type: "string", minLength: 1, maxLength: 256 },
+});
+
+const DELEGATION_RESULT_OUTPUT = objectSchema(["result_ref", "child_run_id", "status", "summary", "artifact_refs", "verification_status", "effect_status", "uncertainty", "failure_code"], {
+  result_ref: DELEGATION_RESULT_REF,
   child_run_id: { type: "string", minLength: 1, maxLength: 1_024 },
   status: { enum: ["succeeded", "blocked", "failed", "cancelled"] },
   summary: { type: "string", maxLength: 64_000 },
@@ -331,14 +336,8 @@ const AGENT = contract({
   inputSchema: objectSchema(["prompt"], {
     prompt: { type: "string", minLength: 1, maxLength: 64_000 },
     description: { type: "string", minLength: 1, maxLength: 1_024 },
-    dependency_result: objectSchema(["id", "revision"], {
-      id: { type: "string", minLength: 1, maxLength: 1_024 },
-      revision: { type: "string", minLength: 1, maxLength: 256 },
-    }),
-    replaced_result: objectSchema(["id", "revision"], {
-      id: { type: "string", minLength: 1, maxLength: 1_024 },
-      revision: { type: "string", minLength: 1, maxLength: 256 },
-    }),
+    dependency_result: DELEGATION_RESULT_REF,
+    replaced_result: DELEGATION_RESULT_REF,
   }),
   outputSchema: DELEGATION_RESULT_OUTPUT,
   annotations: {},

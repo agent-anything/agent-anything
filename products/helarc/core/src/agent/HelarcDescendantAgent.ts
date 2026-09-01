@@ -274,8 +274,11 @@ function projectDescendantResult(
 ): import("@agent-anything/agent-runtime/runner").DescendantOperationOutcome {
   const artifacts = result.artifacts.refs;
   const output = Object.freeze({
-    delegation_result_id: result.ref.id,
-    delegation_result_revision: result.ref.revision,
+    result_ref: Object.freeze({
+      kind: "delegation_result" as const,
+      id: result.ref.id,
+      revision: result.ref.revision,
+    }),
     child_run_id: result.correlation.child.run.id,
     status: result.terminal.status,
     summary: result.narrative?.text ?? "",
@@ -341,8 +344,12 @@ function snapshotSourceResult(candidate: unknown, field: string): {
     throw new TypeError(`${field} must be an object.`);
   }
   const value = candidate as Record<string, unknown>;
-  if (Object.keys(value).some((key) => key !== "id" && key !== "revision")) {
+  if (Object.keys(value).some((key) =>
+    key !== "kind" && key !== "id" && key !== "revision")) {
     throw new TypeError(`${field} contains an unsupported field.`);
+  }
+  if (value.kind !== "delegation_result") {
+    throw new TypeError(`${field}.kind must be delegation_result.`);
   }
   return Object.freeze({
     id: boundedText(value.id, 1_024, `${field}.id`),
